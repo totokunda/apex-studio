@@ -1,11 +1,7 @@
 import { create } from "zustand";
-
+import { Point } from "./types";
 type ViewTool = 'pointer' | 'hand';
 
-interface Point {
-  x: number;
-  y: number;
-}
 
 interface ViewportState {
   scale: number; // 1 = 100%
@@ -13,6 +9,9 @@ interface ViewportState {
   maxScale: number;
   position: Point; // stage position in screen space
   tool: ViewTool;
+  clipPositions: Record<string, Point>;
+  getClipPosition: (clipId: string) => Point | undefined;
+  setClipPosition: (clipId: string, position: Point) => void;
   viewportSize: { width: number; height: number };
   setViewportSize: (size: { width: number; height: number }) => void;
   contentBounds: { x: number; y: number; width: number; height: number } | null;
@@ -37,6 +36,12 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
   position: { x: 0, y: 0 },
   tool: 'pointer',
   viewportSize: { width: 0, height: 0 },
+  clipPositions: {},
+  getClipPosition: (clipId) => {
+    const clipPositions = get().clipPositions;
+    return clipPositions[clipId];
+  },
+  setClipPosition: (clipId, position) => set({ clipPositions: { ...get().clipPositions, [clipId]: position } }),
   setViewportSize: (size) => set({ viewportSize: size }),
   contentBounds: null,
   setContentBounds: (bounds) => set({ contentBounds: bounds }),

@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Stage, Layer, Rect, Text, Line} from 'react-konva';
 import { ScrubControl } from './Scrubber';
 import Timeline from './Timeline';
-import { VideoClipProps } from '@/lib/types';
+import { TimelineProps, VideoClipProps } from '@/lib/types';
 import { useClipStore } from '@/lib/clip';
 // import { Scrollbar } from 'react-scrollbars-custom';
 
@@ -59,11 +59,21 @@ const getMajorZoomConfigFormat = (zoomConfig:{
 }
 
 const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, startPadding}) => {
-    const { timelineDuration, fps, zoomLevel } = useControlsStore();
+    const { timelineDuration, fps, zoomLevel, focusFrame, isPlaying, shiftTimelineDuration } = useControlsStore();
     const [startFrame, endFrame] = timelineDuration;
 
     // We will basically render from startDuration to startDuration + duration. 
-    
+    useEffect(() => {
+            // ensure focusframe is alwys within the timeline duration
+            if (focusFrame < startFrame) {
+                shiftTimelineDuration(focusFrame - startFrame);
+            }
+            if (focusFrame > endFrame) {
+                let duration = endFrame - startFrame;
+                const additionalDuration = duration + endFrame > focusFrame ? 0 : focusFrame - endFrame;
+                shiftTimelineDuration(duration + additionalDuration);
+        }
+    }, [startFrame, endFrame, focusFrame]);
     // Convert duration to milliseconds if needed for consistent calculations
     const tickMark:TickMark[] = useMemo(() => {
         let ticks:TickMark[] = [];
@@ -166,7 +176,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(({name, icon}) =
   // cause rendering glitches in Tauri's WebView. Toggle visibility via data.
   const [isDropZoneHover, setIsDropZoneHover] = useState(false);
   const controlStore = useControlsStore();
-  const {clips, setClips} = useClipStore();
+  const {clips, setClips, setTimelines, timelines} = useClipStore();
   // const scrollBarRef = useRef<any>(null);
   // const isSyncingScrollRef = useRef(false);
   const [isRulerDragging, setIsRulerDragging] = useState(false);
@@ -229,7 +239,12 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(({name, icon}) =
     const integerShift = Math.trunc(deltaFramesFloat);
     wheelRemainderRef.current = deltaFramesFloat - integerShift;
     if (integerShift !== 0) {
-      controlStore.shiftTimelineDuration(integerShift);
+      // update focus frame
+      if (controlStore.canTimelineDurationBeShifted(integerShift)) {
+        controlStore.shiftTimelineDuration(integerShift);
+          controlStore.setFocusFrame(controlStore.focusFrame + integerShift);
+      }
+      
     }
   }, [dimensions.stageWidth, controlStore.timelineDuration]);
 
@@ -264,7 +279,12 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(({name, icon}) =
     const integerShift = Math.trunc(deltaFramesFloat);
     panStateRef.current.fractionalFrames = deltaFramesFloat - integerShift;
     if (integerShift !== 0) {
-      controlStore.shiftTimelineDuration(integerShift);
+      
+      // update focus frame
+      if (controlStore.canTimelineDurationBeShifted(integerShift)) {
+          controlStore.shiftTimelineDuration(integerShift);
+          controlStore.setFocusFrame(controlStore.focusFrame + integerShift);
+      }
     }
     panStateRef.current.lastX = pos.x;
   }, [isRulerDragging, controlStore.timelineDuration, dimensions.stageWidth]);
@@ -280,22 +300,40 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(({name, icon}) =
       clipId: '1',
       startFrame: 0,
       endFrame: 81,
-      src: 'whipping_pose.mp4',
+      src: '/Users/tosinkuye/apex-studio/public/whipping_pose.mp4',
       framesToGiveEnd: 0,
-      framesToGiveStart: 0
+      framesToGiveStart: 0,
+      height: 832,
+      width: 480,
+      type: 'video',
+      timelineId: '1',
     },
      {
          clipId: '2',
          startFrame: 81,
          endFrame: 162,
-         src: 'whipping_pose.mp4',
+         src: '/Users/tosinkuye/apex-studio/public/whipping_pose.mp4',
          framesToGiveEnd: 0,
-         framesToGiveStart: 0
+         framesToGiveStart: 0,
+         height: 832,
+         width: 480,
+         timelineId: '1',
+         type: 'video',
        },
+  ];
+
+  const initialTimelines: TimelineProps[] = [
+    {
+      timelineId: '1',
+      timelineWidth: dimensions.stageWidth,
+      timelineY: 0,
+      timelineHeight: 64,
+    },
   ];
 
   useEffect(() => {
     setClips(initialClips);
+    setTimelines(initialTimelines);
   }, []);
 
   const hasClips = clips.length > 0;
@@ -310,9 +348,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(({name, icon}) =
   return (
     <div  className='relative h-full flex flex-col'>
       <div className='relative h-full w-full overflow-hidden' ref={containerRef} onWheel={handleWheelScroll}>
-      <div style={{display: hasClips ? undefined : 'none'}}>
-        <ScrubControl stageHeight={dimensions.stageHeight - 30} stageWidth={dimensions.stageWidth} />
-      </div>
+      
         {dimensions.stageWidth > 0 && dimensions.stageHeight > 0 && (
             <>
             {hasClips && (
@@ -333,7 +369,9 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(({name, icon}) =
                     <TimelineMoments stageWidth={dimensions.stageWidth} startPadding={24} />
                 </Layer>
                 <Layer visible={hasClips}>
-                    <Timeline  stageWidth={dimensions.stageWidth} timelineNumber={0} timelineHeight={96} />
+                    {timelines.map((timeline) => (
+                        <Timeline key={timeline.timelineId} timelineWidth={dimensions.stageWidth} timelineY={timeline.timelineY} timelineHeight={timeline.timelineHeight} timelineId={timeline.timelineId} />
+                    ))}
                 </Layer>
             </Stage>
             </>
@@ -373,6 +411,9 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(({name, icon}) =
         )}
           </>
         )}
+        <div style={{display: hasClips ? undefined : 'none'}}>
+        <ScrubControl stageHeight={dimensions.stageHeight - 30} stageWidth={dimensions.stageWidth} />
+      </div>
       </div>
       
     </div>

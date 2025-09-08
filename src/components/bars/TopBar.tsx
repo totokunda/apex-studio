@@ -80,10 +80,10 @@ const TopBar:React.FC<TopBarProps> = ({ title }) => {
                     </div>
                   </DropdownMenuLabel>  
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem textValue='Zoom to fit' className='dark text-[13px]' onClick={() => { centerContentAt100(); setZoomOpen(false); }}>Zoom to Fit</DropdownMenuItem>
-                  <DropdownMenuItem textValue='Zoom to 50%' className='dark text-[13px]' onClick={() => { setScalePercentCentered(50); setZoomOpen(false); }}>Zoom to 50%</DropdownMenuItem>
-                  <DropdownMenuItem textValue='Zoom to 100%' className='dark text-[13px]' onClick={() => { setScalePercentCentered(100); setZoomOpen(false); }}>Zoom to 100%</DropdownMenuItem>
-                  <DropdownMenuItem textValue='Zoom to 200%' className='dark text-[13px]' onClick={() => { setScalePercentCentered(200); setZoomOpen(false); }}>Zoom to 200%</DropdownMenuItem>
+                  <DropdownMenuItem key='zoom-to-fit' textValue='Zoom to fit' className='dark text-[13px]' onClick={() => { centerContentAt100(); setZoomOpen(false); }}>Zoom to Fit</DropdownMenuItem>
+                  <DropdownMenuItem key='zoom-to-50' textValue='Zoom to 50%' className='dark text-[13px]' onClick={() => { setScalePercentCentered(50); setZoomOpen(false); }}>Zoom to 50%</DropdownMenuItem>
+                  <DropdownMenuItem key='zoom-to-100' textValue='Zoom to 100%' className='dark text-[13px]' onClick={() => { setScalePercentCentered(100); setZoomOpen(false); }}>Zoom to 100%</DropdownMenuItem>
+                  <DropdownMenuItem key='zoom-to-200' textValue='Zoom to 200%' className='dark text-[13px]' onClick={() => { setScalePercentCentered(200); setZoomOpen(false); }}>Zoom to 200%</DropdownMenuItem>
                 </DropdownMenuContent>
            </DropdownMenu> 
            <DropdownMenu open={sizeOpen} onOpenChange={setSizeOpen}    >

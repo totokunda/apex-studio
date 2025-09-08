@@ -1,42 +1,52 @@
 import { create } from "zustand";
-import { ClipProps } from "./types";
+import { AnyClipProps, TimelineProps } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 
-
-
 interface ClipStore {  
+    // Clips
     clipDuration: number;
     _setClipDuration: (duration: number) => void;
-    clips: ClipProps[];
-    setClips: (clips: ClipProps[]) => void;
-    addClip: (clip: ClipProps) => void;
+    clips: AnyClipProps[];
+    getClipById: (clipId: string, timelineId?: string) => AnyClipProps | undefined;
+    setClips: (clips: AnyClipProps[]) => void;
+    addClip: (clip: AnyClipProps) => void;
     removeClip: (clipId: string) => void;
-    updateClip: (clipId: string, clipToUpdate: Partial<ClipProps>) => void;
+    updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) => void;
     resizeClip: (clipId: string, side: 'left' | 'right', newFrame: number) => void;
     splitClip: (cutFrame: number) => void;
     mergeClips: (clipIds: string[]) => void;
     moveClipToEnd: (clipId: string) => void;
-    clipboard: ClipProps[];
+    clipboard: AnyClipProps[];
     copyClips: (clipIds: string[]) => void;
     cutClips: (clipIds: string[]) => void;
     pasteClips: (atFrame?: number) => void;
+    getClipAtFrame: (frame: number) => [AnyClipProps, number] | null;
+
+    // Timelines
+    timelines: TimelineProps[];
+    getClipsForTimeline: (timelineId: string) => AnyClipProps[];
+    getTimelineById: (timelineId: string) => TimelineProps | undefined;
+    setTimelines: (timelines: TimelineProps[]) => void;
+    addTimeline: (timeline: TimelineProps) => void;
+    removeTimeline: (timelineId: string) => void;
+    updateTimeline: (timelineId: string, timelineToUpdate: Partial<TimelineProps>) => void;
 }
 
 // Helper function to calculate total duration of all clips
-const calculateTotalClipDuration = (clips: ClipProps[]): number => {
+const calculateTotalClipDuration = (clips: AnyClipProps[]): number => {
     const maxEndFrame = Math.max(...clips.map(clip => clip.endFrame || 0));
     return maxEndFrame;
 };
 
 
 // Helper function to resolve overlaps by shifting clips to maintain frame gaps
-const resolveOverlaps = (clips: ClipProps[]): ClipProps[] => {
+const resolveOverlaps = (clips: AnyClipProps[]): AnyClipProps[] => {
     if (clips.length === 0) return clips;
     
     // Sort clips by start frame
     const sortedClips = [...clips].sort((a, b) => (a.startFrame || 0) - (b.startFrame || 0));
-    const resolvedClips: ClipProps[] = [];
+    const resolvedClips: AnyClipProps[] = [];
     
     for (let i = 0; i < sortedClips.length; i++) {
         const currentClip = { ...sortedClips[i] };
@@ -62,7 +72,7 @@ const resolveOverlaps = (clips: ClipProps[]): ClipProps[] => {
     return resolvedClips;
 };
 
-export const getCorrectedClip = (clipId: string, clips: ClipProps[]): ClipProps | null => {
+export const getCorrectedClip = (clipId: string, clips: AnyClipProps[]): AnyClipProps | null => {
     // find the clip in the clips array
     const resolvedClips = resolveOverlaps(clips);
     const clip = resolvedClips.find((clip) => clip.clipId === clipId);
@@ -70,17 +80,34 @@ export const getCorrectedClip = (clipId: string, clips: ClipProps[]): ClipProps 
     return clip;
 }
 
-export const useClipStore = create<ClipStore>((set) => ({       
+export const useClipStore = create<ClipStore>((set, get) => ({       
     clipDuration: 0,
     _setClipDuration: (duration) => set({ clipDuration: duration }),
     clips: [],  
+    timelines: [],
+    getTimelineById: (timelineId: string) => get().timelines.find((timeline) => timeline.timelineId === timelineId),
+    setTimelines: (timelines: TimelineProps[]) => set({ timelines }),
+    addTimeline: (timeline: TimelineProps) => set((state) => {
+        const newTimelines = [...state.timelines, timeline];
+        return { timelines: newTimelines };
+    }),
+    removeTimeline: (timelineId: string) => set((state) => {
+        const newTimelines = state.timelines.filter((timeline) => timeline.timelineId !== timelineId);
+        return { timelines: newTimelines };
+    }),
+    updateTimeline: (timelineId: string, timelineToUpdate: Partial<TimelineProps>) => set((state) => {
+        const newTimelines = state.timelines.map((timeline) => timeline.timelineId === timelineId ? { ...timeline, ...timelineToUpdate } : timeline);
+        return { timelines: newTimelines };
+    }),
     clipboard: [],
-    setClips: (clips: ClipProps[]) => {
+    getClipsForTimeline: (timelineId: string) => get().clips.filter((clip) => clip.timelineId === timelineId),
+    getClipById: (clipId: string, timelineId?: string) => get().clips.find((clip) => clip.clipId === clipId && (timelineId ? clip.timelineId === timelineId : true)),
+    setClips: (clips: AnyClipProps[]) => {
         const resolvedClips = resolveOverlaps(clips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         set({ clips: resolvedClips, clipDuration });
     },
-    addClip: (clip: ClipProps) => set((state) => {
+    addClip: (clip: AnyClipProps) => set((state) => {
         const newClips = [...state.clips, clip];
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
@@ -92,7 +119,7 @@ export const useClipStore = create<ClipStore>((set) => ({
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
     }),
-    updateClip: (clipId: string, clipToUpdate: Partial<ClipProps>) => set((state) => {
+    updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) => set((state) => {
         const newClips = state.clips.map((clip) => clip.clipId === clipId ? { ...clip, ...clipToUpdate } : clip);
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
@@ -171,7 +198,7 @@ export const useClipStore = create<ClipStore>((set) => ({
         if (clipIds.length < 2) return { clips: state.clips };
         
         // Find all clips to merge
-        const clipsToMerge = clipIds.map(id => state.clips.find(clip => clip.clipId === id)).filter(Boolean) as ClipProps[];
+        const clipsToMerge = clipIds.map(id => state.clips.find(clip => clip.clipId === id)).filter(Boolean) as AnyClipProps[];
         
         if (clipsToMerge.length < 2) return { clips: state.clips };
         
@@ -208,14 +235,14 @@ export const useClipStore = create<ClipStore>((set) => ({
         if (!clipIds || clipIds.length === 0) return { clipboard: state.clipboard };
         const toCopy = clipIds
             .map(id => state.clips.find(c => c.clipId === id))
-            .filter(Boolean) as ClipProps[];
+            .filter(Boolean) as AnyClipProps[];
         return { clipboard: toCopy.map(c => ({ ...c })) };
     }),
     cutClips: (clipIds: string[]) => set((state) => {
         if (!clipIds || clipIds.length === 0) return { clips: state.clips, clipboard: state.clipboard };
         const toCut = clipIds
             .map(id => state.clips.find(c => c.clipId === id))
-            .filter(Boolean) as ClipProps[];
+            .filter(Boolean) as AnyClipProps[];
         const remaining = state.clips.filter(c => !clipIds.includes(c.clipId));
         const resolvedClips = resolveOverlaps(remaining);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
@@ -236,7 +263,7 @@ export const useClipStore = create<ClipStore>((set) => ({
             const end = start + duration;
             const newId = uuidv4();
             newIds.push(newId);
-            return { ...template, clipId: newId, startFrame: start, endFrame: end, framesToGiveEnd: 0, framesToGiveStart: 0 } as ClipProps;
+            return { ...template, clipId: newId, startFrame: start, endFrame: end, framesToGiveEnd: 0, framesToGiveStart: 0 } as AnyClipProps;
         });
         const newClips = [...state.clips, ...pasted];
         const resolvedClips = resolveOverlaps(newClips);
@@ -255,10 +282,13 @@ export const useClipStore = create<ClipStore>((set) => ({
         const clipDuration = calculateTotalClipDuration(newClips);
         return { clips: newClips, clipDuration };
     }),
+    getClipAtFrame: (frame: number) => {
+        const clips = get().clips;
+        const clip = clips.find((clip) => frame >= (clip.startFrame || 0) && frame <= (clip.endFrame || 0));
+        if (!clip) return null;
+        return [clip, frame - (clip.startFrame || 0)];
+    }
 }));
-
-
-
 
 export const getClipWidth = (startFrame:number, endFrame:number, timelineWidth:number, timelineDuration:number[]) => {
     const [timelineStartFrame, timelineEndFrame] = timelineDuration;
@@ -273,156 +303,3 @@ export const getClipX = (startFrame:number | null, endFrame:number | null, timel
     const relativePosition = (startFrame - timelineStartFrame) / (timelineEndFrame - timelineStartFrame); 
     return relativePosition * timelineWidth;
 }   
-
-export const getClipImage = (src:string | undefined) => {
-    // get an image from the video file if it exists
-    if (!src) return Promise.resolve(null);
-
-    // Simple memoization to avoid regenerating thumbnails for the same source
-    const globalAny = globalThis as unknown as { __clipImageCache?: Map<string, Promise<HTMLCanvasElement | null>> };
-    if (!globalAny.__clipImageCache) {
-        globalAny.__clipImageCache = new Map<string, Promise<HTMLCanvasElement | null>>();
-    }
-    const cache = globalAny.__clipImageCache;
-    if (cache.has(src)) {
-        return cache.get(src)!;
-    }
-
-    const promise = new Promise<HTMLCanvasElement | null>(async (resolve) => {
-        try {
-            const videoElement = document.createElement('video');
-            // Attempt to avoid tainting the canvas when possible
-            videoElement.crossOrigin = 'anonymous';
-            videoElement.muted = true;
-            (videoElement as any).playsInline = true;
-            videoElement.preload = 'auto';
-
-
-            const isProbablyLocalPath = (value: string) => {
-                if (!value) return false;
-                if (value.startsWith('file://')) return true;
-                if (value.startsWith('/')) return true; // unix-like absolute path
-                if (/^[a-zA-Z]:[\\\/]/.test(value)) return true; // windows absolute path
-                return false;
-            };
-            const normalizeLocalPath = (value: string) => {
-                if (value.startsWith('file://')) {
-                    try {
-                        return new URL(value).pathname;
-                    } catch (_) {
-                        return value.replace(/^file:\/\//, '');
-                    }
-                }
-                return value;
-            };
-            const resolveSrc = async (original: string): Promise<string> => {
-               
-                if (!isProbablyLocalPath(original)) return original;
-                const localPath = normalizeLocalPath(original);
-                try {
-                    const core = await import('@tauri-apps/api/core');
-                    
-                    
-                    if (core && typeof core.convertFileSrc === 'function') {
-                        return core.convertFileSrc(localPath);
-                    }
-                } catch (_) {
-                    // Not in Tauri or API not available
-                    console.log('error', _);
-                }
-                // Fallback to file URL if possible
-                if (localPath.startsWith('/')) {
-                    return `file://${localPath}`;
-                }
-                return original;
-            };
-            resolveSrc(src).then((resolvedSrc) => {
-                try {
-                   
-                    videoElement.src = resolvedSrc;
-                } catch (e) {
-                    console.log('error setting src', e);
-                }
-            });
-
-            const handleError = () => {
-                console.log('error', videoElement.error);
-                cleanup();
-                resolve(null);
-            };
-
-            const handleLoadedData = () => {
-                // Ensure we have dimensions to draw
-                const width = Math.max(1, videoElement.videoWidth || 1);
-                const height = Math.max(1, videoElement.videoHeight || 1);
-                const canvas = document.createElement('canvas');
-                canvas.width = width;
-                canvas.height = height;
-                const context = canvas.getContext('2d');
-
-                
-                if (!context) {
-                    cleanup();
-                    resolve(null);
-                    return;
-                }
-
-                const drawFrame = () => {
-                    try {
-                        context.drawImage(videoElement, 0, 0, width, height);
-                        cleanup();
-                        resolve(canvas);
-                    } catch (e) {
-                        cleanup();
-                        resolve(null);
-                    }
-                };
-
-                // Some browsers require a seek to render the very first frame reliably
-                const onSeeked = () => {
-                    videoElement.removeEventListener('seeked', onSeeked);
-                    drawFrame();
-                };
-
-                // Try drawing immediately; if it fails, seek then draw
-                try {
-                    context.drawImage(videoElement, 0, 0, width, height);
-                    cleanup();
-                    resolve(canvas);
-                } catch {
-                    videoElement.addEventListener('seeked', onSeeked);
-                    try {
-                        videoElement.currentTime = 0;
-                    } catch {
-                        // If seeking throws, fall back to draw after canplay
-                        videoElement.addEventListener('canplay', drawFrame, { once: true });
-                    }
-                }
-            };
-
-            const cleanup = () => {
-                videoElement.removeEventListener('loadeddata', handleLoadedData);
-                videoElement.removeEventListener('error', handleError);
-                try {
-                    videoElement.pause();
-                } catch (_) {}
-                videoElement.removeAttribute('src');
-                try {
-                    videoElement.load();
-                } catch (_) {}
-            };
-
-            videoElement.addEventListener('loadeddata', handleLoadedData, { once: true });
-            videoElement.addEventListener('error', handleError, { once: true });
-            // Kick off loading explicitly
-            try {
-                videoElement.load();
-            } catch (_) {}
-        } catch {
-            resolve(null);
-        }
-    });
-
-    cache.set(src, promise);
-    return promise;
-}

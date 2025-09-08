@@ -1,13 +1,11 @@
-
-
 import { FiMinusCircle, FiPlusCircle } from "react-icons/fi";
 import React, { useState, useRef, useEffect } from "react";
-import { cn } from "../../lib/utils";
+import { cn } from '@/lib/utils';
 import { BackButton, RewindBackward, RewindForward, ScissorsButton, TrashButton, MergeButton, PlayPauseButton, ExtendTimelineButton, ReduceTimelineButton } from "./Buttons";
 import { useControlsStore } from "@/lib/control";
 import { useClipStore } from "@/lib/clip";
-import { ZoomLevel } from '../../lib/types';
-import { MIN_ZOOM, MAX_ZOOM, MIN_DURATION, MAX_DURATION } from '../../lib/settings';
+import { ZoomLevel } from '@/lib/types';
+import { MIN_ZOOM, MAX_ZOOM, MIN_DURATION, MAX_DURATION } from '@/lib/settings';
 
 const TimelineZoom = () => {
     const { zoomLevel, setZoomLevel, setTimelineDuration,  focusFrame, focusAnchorRatio, totalTimelineFrames, setFocusAnchorRatio } = useControlsStore();
@@ -15,11 +13,11 @@ const TimelineZoom = () => {
     const [isHovering, setIsHovering] = useState(false);
     const barRef = useRef<HTMLDivElement>(null);
     // 
-   
     
     const setZoom = (level:number) => { 
         // Clamp to valid integer zoom step
         const clampedLevel = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(level)));
+        
 
         // Stable, per-level integer durations (same up/down), independent of current window
         const maxDuration = Math.max(1, MAX_DURATION);
@@ -96,9 +94,14 @@ const TimelineZoom = () => {
     return (
         <div className="flex items-center  gap-x-2 justify-center transition-opacity duration-300"> 
             
-            <FiMinusCircle onClick={() => setZoom(zoomLevel - 1)} className={cn('text-brand-light/70 h-4 w-4 duration-300 cursor-pointer', {
+            <FiMinusCircle onClick={() => {
+                if (zoomLevel === 1) return;
+                setZoom(zoomLevel - 1);
+            }} className={cn('text-brand-light/70 h-4 w-4 duration-300', {
                 "opacity-60": zoomLevel === 1,
-                "opacity-100": zoomLevel !== 1,
+                "opacity-100": zoomLevel > 1,
+                "cursor-not-allowed": zoomLevel === 1,
+                "cursor-pointer": zoomLevel > 1,
             })} />
             <div 
                 ref={barRef}
@@ -136,9 +139,14 @@ const TimelineZoom = () => {
                     }}
                 />
             </div>
-            <FiPlusCircle onClick={() => setZoom(zoomLevel + 1)} className={cn('text-brand-light/70 h-4 w-4 duration-300 cursor-pointer', {
+            <FiPlusCircle onClick={() => {
+                if (zoomLevel >= 10) return;
+                setZoom(zoomLevel + 1);
+            }} className={cn('text-brand-light/70 h-4 w-4 duration-300', {
                 "opacity-60": zoomLevel === 10,
-                "opacity-100": zoomLevel !== 10,
+                "opacity-100": zoomLevel < 10,
+                "cursor-not-allowed": zoomLevel >= 10,
+                "cursor-pointer": zoomLevel < 10,
             })} />
             
         </div>
@@ -146,6 +154,7 @@ const TimelineZoom = () => {
 }
 
 interface TimeControlProps {
+    
 }
 
 const TimeControl:React.FC<TimeControlProps> = () => {
@@ -157,12 +166,14 @@ const TimeControl:React.FC<TimeControlProps> = () => {
         const seconds = frames / fps;
         const minutes = Math.floor(seconds / 60);
         const remainingSeconds = seconds % 60;
-        return `${minutes}:${remainingSeconds.toFixed(2).padStart(5, '0')}`;
+        return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toFixed(2).padStart(5, '0')}`;
     };
 
     return (
-        <div className="flex items-center gap-x-2 ">
-            <span className="text-brand-light/60 text-xs ">{formatTime(focusFrame)} / {formatTime(clipDuration)}</span>
+        <div className="flex items-center gap-x-2 w-full">
+            <span className="text-brand-light/60 text-xs">
+            <span className="w-15 inline-block">{formatTime(focusFrame)}</span>/<span className="w-15 inline-block">{formatTime(clipDuration)}</span>
+            </span>
         </div>
     )
 }
@@ -227,8 +238,6 @@ const Controls = () => {
     <div className="flex items-center gap-x-2"> 
         <ScissorsButton />
         <TrashButton />
-        <MergeButton />
-        
         </div>
     <div className=' flex items-center justify-center gap-x-4 absolute left-1/2 -translate-x-1/2'>
         <BackButton />

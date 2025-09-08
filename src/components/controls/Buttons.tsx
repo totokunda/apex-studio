@@ -8,6 +8,7 @@ import { useControlsStore } from "@/lib/control";
 import { useClipStore } from "@/lib/clip";
 import { useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
+import { MAX_DURATION } from "@/lib/settings";
 
 const BackButton = () => {
     const {setFocusFrame,  focusFrame} = useControlsStore();
@@ -74,8 +75,6 @@ const RewindForward = () => {
 const PauseButton = () => {
     return (
         <div onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
         }} className="flex items-center cursor-pointer  justify-center opacity-60 hover:opacity-100 transition-opacity duration-300"> 
             <FaCirclePause className='text-brand-light/70 h-7 w-7' />
         </div>
@@ -91,7 +90,7 @@ const PlayButton = () => {
 }
 
 const ExtendTimelineButton:React.FC<{numSeconds?: number}> = ({numSeconds = 15}) => {
-    const { zoomLevel, fps, incrementTotalTimelineFrames, shiftTimelineDuration } = useControlsStore();
+    const { zoomLevel, fps, incrementTotalTimelineFrames, shiftTimelineDuration, setFocusFrame, focusFrame} = useControlsStore();
     const {clips} = useClipStore();
     const hasClips = clips.length > 0;
     const disabled = !hasClips || zoomLevel !== 1;
@@ -99,9 +98,10 @@ const ExtendTimelineButton:React.FC<{numSeconds?: number}> = ({numSeconds = 15})
         const increment = fps * numSeconds; // 15 second at 24fps default
         if (zoomLevel === 1) {
             incrementTotalTimelineFrames(increment);
+            setFocusFrame(focusFrame + increment);
             shiftTimelineDuration(increment);
         }
-    }, [fps, numSeconds, incrementTotalTimelineFrames, shiftTimelineDuration]);
+    }, [fps, numSeconds, incrementTotalTimelineFrames, shiftTimelineDuration, focusFrame]);
     return (
         <div className={cn("flex items-center cursor-pointer  relative justify-center opacity-60 hover:opacity-100 transition-opacity duration-300", disabled && "opacity-30 cursor-not-allowed hover:opacity-30")} onClick={handleExtendTimeline}> 
             <TbLadder className='h-6 w-6 rotate-90 text-brand-light' /> 
@@ -111,24 +111,26 @@ const ExtendTimelineButton:React.FC<{numSeconds?: number}> = ({numSeconds = 15})
 }
 
 const ReduceTimelineButton:React.FC<{numSeconds?: number}> = ({numSeconds = 15}) => {
-    const { timelineDuration, zoomLevel, fps, decrementTotalTimelineFrames, totalTimelineFrames, shiftTimelineDuration } = useControlsStore();
+    const { timelineDuration, zoomLevel, fps, decrementTotalTimelineFrames, totalTimelineFrames, shiftTimelineDuration, setFocusFrame, focusFrame } = useControlsStore();
     const {clipDuration, clips} = useClipStore();
     const hasClips = clips.length > 0;
-    const disabled = (totalTimelineFrames <= 1440 || totalTimelineFrames - (fps * numSeconds) < clipDuration) || zoomLevel !== 1 || !hasClips;
-    
+    const disabled = (totalTimelineFrames <= MAX_DURATION || totalTimelineFrames - (fps * numSeconds) < clipDuration) || zoomLevel !== 1 || !hasClips;
+
   const handleReduceTimeline = useCallback(() => {
         if (disabled) return;
         const decrement = fps * numSeconds; // 15 second at 24fps default
         if (zoomLevel === 1) {
             const timelineEndFrame = timelineDuration[1]
             decrementTotalTimelineFrames(decrement);
+            setFocusFrame(focusFrame - decrement);
             if (timelineEndFrame >= totalTimelineFrames - decrement) { 
                 shiftTimelineDuration(totalTimelineFrames - timelineEndFrame);
+                // ensure focus frame is within the new timeline duration
             }
             
         }
         
-    }, [zoomLevel, fps, numSeconds, timelineDuration, decrementTotalTimelineFrames, clipDuration, hasClips]);
+    }, [zoomLevel, fps, numSeconds, timelineDuration, decrementTotalTimelineFrames, clipDuration, hasClips, focusFrame]);
     return (
         <div className={cn("flex items-center cursor-pointer  relative justify-center opacity-60 hover:opacity-100 transition-opacity duration-300", {
             "opacity-30 cursor-not-allowed hover:opacity-30": disabled,
@@ -203,13 +205,14 @@ const MergeButton = () => {
 }
 
 const PlayPauseButton = () => {
-    const [isPlaying, setIsPlaying] = useState(false);
-
+    const { play, pause, isPlaying } = useControlsStore();
     return (
-        <div onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setIsPlaying(!isPlaying);
+        <div onClick={() => {
+            if (isPlaying) {
+                pause();
+            } else {
+                play();
+            }
         }} className="flex items-center cursor-pointer  justify-center opacity-60 hover:opacity-100 transition-opacity duration-300"> 
             {isPlaying ? <PauseButton /> : <PlayButton />}
         </div>

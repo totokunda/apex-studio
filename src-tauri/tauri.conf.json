@@ -13,9 +13,10 @@
   "app": {
     "windows": [
       {
-        "title": "apex-studio",
-        "width": 800,
-        "height": 600
+        "title": "Apex Studio",
+        "width": 2560,
+        "height": 1440,
+        "fullscreen": true
       }
     ],
     "security": {
@@ -24,7 +25,10 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$DOWNLOAD/**"
+          "$DOWNLOAD/**",
+          "$VIDEO/**",           
+          "$APPDATA/**",         
+          "**/.local/share/**/*" 
         ]
       }
     },

@@ -1,6 +1,47 @@
 import { create } from "zustand";
 import {  ZoomLevel } from "./types";
+import { TIMELINE_DURATION_SECONDS, DEFAULT_FPS, MAX_DURATION } from "./settings";
+import {useClipStore} from "./clip";
+import _ from "lodash";
 
+// Playback internals (module-scoped to avoid causing unnecessary rerenders)
+let __playbackRafId: number | null = null;
+let __lastTickMs = 0;
+let __frameAccumulator = 0;
+
+const __playbackTick = (now: number) => {
+    const controls = useControlsStore.getState();
+    const clips = useClipStore.getState();
+    if (!controls.isPlaying) return;
+
+    const fps = Math.max(1, controls.fps || 1);
+    const totalFrames = Math.max(0, clips.clipDuration || 0);
+
+    if (__lastTickMs === 0) {
+        __lastTickMs = now;
+        __playbackRafId = requestAnimationFrame(__playbackTick);
+        return;
+    }
+
+    const dt = (now - __lastTickMs) / 1000;
+    __frameAccumulator += dt * fps;
+    let steps = Math.floor(__frameAccumulator);
+    if (steps > 0) {
+        __frameAccumulator -= steps;
+        const current = controls.focusFrame || 0;
+        const next = Math.min(totalFrames, current + steps);
+        controls.setFocusFrame(next);
+        if (next >= totalFrames) {
+            controls.pause();
+            __lastTickMs = 0;
+            __frameAccumulator = 0;
+            return;
+        }
+    }
+
+    __lastTickMs = now;
+    __playbackRafId = requestAnimationFrame(__playbackTick);
+};
 
 interface ControlStore {
     zoomLevel: ZoomLevel;
@@ -11,6 +52,7 @@ interface ControlStore {
     timelineDuration: [number, number]; // [startFrame, endFrame]
     setTimelineDuration: (startFrame: number, endFrame: number) => void;
     shiftTimelineDuration: (duration: number) => void;
+    canTimelineDurationBeShifted: (duration: number) => boolean;
     resetTimelineDuration: () => void;
     fps: number;
     setFps: (fps: number) => void;
@@ -20,24 +62,38 @@ interface ControlStore {
     setFocusAnchorRatio: (ratio: number) => void;
     selectedClipIds: string[];
     setSelectedClipIds: (clipIds: string[]) => void;
+    addClipSelection: (clipId: string) => void;
+    removeClipSelection: (clipId: string) => void;
     toggleClipSelection: (clipId: string, isShiftClick?: boolean) => void;
     clearSelection: () => void;
+    play:() => void;
+    pause:() => void;
+    isPlaying: boolean;
+    setIsPlaying: (isPlaying: boolean) => void;
 }
 
-export const useControlsStore = create<ControlStore>((set) => ({
+export const useControlsStore = create<ControlStore>((set, get) => ({
     // Zoom State
     zoomLevel: 1,
     setZoomLevel: (level) => set({ zoomLevel: level }),
     // Timeline State
-    totalTimelineFrames: 1440, // total frames in the timeline
+    totalTimelineFrames: TIMELINE_DURATION_SECONDS * DEFAULT_FPS, // total frames in the timeline
     incrementTotalTimelineFrames: (duration: number) => set((state) => {
         return { totalTimelineFrames: state.totalTimelineFrames + duration };
     }),
     decrementTotalTimelineFrames: (duration: number) => set((state) => {
-        if (state.totalTimelineFrames - duration < 1440) return { totalTimelineFrames: 1440 };
+        if (state.totalTimelineFrames - duration < MAX_DURATION) return { totalTimelineFrames: MAX_DURATION };
         return { totalTimelineFrames: state.totalTimelineFrames - duration };
     }),
-    timelineDuration: [0, 1440], // [startFrame, endFrame]
+    canTimelineDurationBeShifted: (duration: number) => {
+        const [startFrame, endFrame] = get().timelineDuration;
+        const requestedShift = Math.trunc(duration);
+        const minShift = -startFrame; // cannot move left beyond 0
+        const maxShift = get().totalTimelineFrames - endFrame; // cannot move right beyond total
+        const clampedShift = Math.max(minShift, Math.min(maxShift, requestedShift));
+        return clampedShift !== 0;
+    },
+    timelineDuration: [0, TIMELINE_DURATION_SECONDS * DEFAULT_FPS], // [startFrame, endFrame]
     setTimelineDuration: (startFrame: number, endFrame: number) => set({ timelineDuration: [startFrame, endFrame] }),
     shiftTimelineDuration: (duration: number) => set((state) => {
         const [startFrame, endFrame] = state.timelineDuration;
@@ -52,9 +108,9 @@ export const useControlsStore = create<ControlStore>((set) => ({
         const newEndFrame = endFrame + clampedShift;
         return { timelineDuration: [newStartFrame, newEndFrame] };
     }),
-    resetTimelineDuration: () => set({ timelineDuration: [0, 1440] }),
+    resetTimelineDuration: () => set({ timelineDuration: [0, TIMELINE_DURATION_SECONDS * DEFAULT_FPS] }),
     // FPS State
-    fps: 16,
+    fps: DEFAULT_FPS,
     setFps: (fps) => set({ fps: fps }),
     // Focus State
     focusFrame: 0,
@@ -63,6 +119,12 @@ export const useControlsStore = create<ControlStore>((set) => ({
     setFocusAnchorRatio: (ratio) => set({ focusAnchorRatio: Math.max(0, Math.min(1, ratio)) }),
     selectedClipIds: [],
     setSelectedClipIds: (clipIds) => set({ selectedClipIds: clipIds }),
+    addClipSelection: (clipId) => set((state) => {
+        return { selectedClipIds: _.uniq([...state.selectedClipIds, clipId]) };
+    }),
+    removeClipSelection: (clipId) => set((state) => {
+        return { selectedClipIds: state.selectedClipIds.filter(id => id !== clipId) };
+    }),
     toggleClipSelection: (clipId, isShiftClick = false) => set((state) => {
         if (isShiftClick) {
             // Add to selection if shift-clicking
@@ -79,4 +141,30 @@ export const useControlsStore = create<ControlStore>((set) => ({
         }
     }),
     clearSelection: () => set({ selectedClipIds: [] }),
-}));
+    play:() => {
+        const state = get();
+        const clips = useClipStore.getState();
+        if (state.isPlaying) return;
+        if (!clips || (clips.clips || []).length === 0) return;
+        // If we're at or past the end, restart from the beginning
+        if (state.focusFrame >= clips.clipDuration) {
+            set({ focusFrame: 0 });
+        }
+        __lastTickMs = 0;
+        __frameAccumulator = 0;
+        if (__playbackRafId != null) cancelAnimationFrame(__playbackRafId);
+        set({ isPlaying: true });
+        __playbackRafId = requestAnimationFrame(__playbackTick);
+    },
+    pause:() => {
+        if (__playbackRafId != null) {
+            cancelAnimationFrame(__playbackRafId);
+            __playbackRafId = null;
+        }
+        __lastTickMs = 0;
+        __frameAccumulator = 0;
+        set({ isPlaying: false });
+    },
+    isPlaying: false,
+    setIsPlaying: (isPlaying) => set({ isPlaying }),
+    }));
