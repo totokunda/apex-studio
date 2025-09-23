@@ -1,13 +1,12 @@
 {
-  "name": "root",
-  "description": "Secure boilerplate for Electron app based on Vite",
-  "version": "3.1.0",
+  "name": "apex-studio",
+  "description": "Apex Studio",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "author": {
-    "email": "kozackunisoft@gmail.com",
-    "name": "Alex Kozack",
-    "url": "https://kozack.me"
+    "email": "totokunda@gmail.com",
+    "name": "Totokunda"
   },
   "main": "packages/entry-point.mjs",
   "workspaces": [
@@ -21,10 +20,7 @@
     "compile": "npm run build && electron-builder build --config electron-builder.mjs",
     "test": "npx playwright test ./tests/e2e.spec.ts",
     "start": "node packages/dev-mode.js",
-    "typecheck": "npm run typecheck -ws --if-present",
-    "create-renderer": "cd packages && node ./integrate-renderer/create-renderer.js",
-    "integrate-renderer": "npm start --workspace @app/integrate-renderer",
-    "init": "npm run create-renderer && npm run integrate-renderer && npm install"
+    "typecheck": "npm run typecheck -ws --if-present"
   },
   "devDependencies": {
     "@npmcli/map-workspaces": "5.0.0",
