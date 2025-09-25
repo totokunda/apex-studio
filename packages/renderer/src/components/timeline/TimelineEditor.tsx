@@ -115,6 +115,7 @@ const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, 
 
     return (
         <>
+        <Rect x={0} y={0} width={stageWidth} height={28} fill="#222124" listening={false} />
             {tickMark.map((tick, index) => {
                 // Calculate x position based on timeline progress
                 const progress = (tick.x - startFrame) / (endFrame - startFrame);
@@ -619,7 +620,6 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           });
         }
 
-
         if (chosen) {
           startFrame = Math.min(Math.max(startFrame, chosen.lo), chosen.hi - clipLen);
           endFrame = startFrame + clipLen;
@@ -760,7 +760,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       wheelRemainderRef.current = deltaFramesFloat - integerShift;
       if (integerShift !== 0) {
         if (controlStore.canTimelineDurationBeShifted(integerShift)) {
-          controlStore.shiftTimelineDuration(integerShift, true);
+          controlStore.shiftTimelineDuration(integerShift, true, true);
         }
       }
     } else if (maxScroll > 0) {
@@ -828,7 +828,6 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
   return (
     <div  className='relative h-full flex flex-col'>
       <div className='relative h-full w-full overflow-hidden' ref={containerRef} onWheel={handleWheelScroll}>
-      
         {dimensions.stageWidth > 0 && dimensions.stageHeight > 0 && (
             <>
             {hasClips && (
@@ -836,7 +835,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
             <Stage 
               width={dimensions.stageWidth} 
               height={dimensions.stageHeight} 
-              className='border-b border-brand-light/10 bg-brand-background/30 z-10 relative'
+              className='border-b border-brand-light/10 bg-brand z-10 relative'
               onClick={handleStageClick}
               onMouseDown={handleStageMouseDown}
               onMouseMove={handleStageMouseMove}
@@ -845,7 +844,6 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     
               style={{ cursor: isRulerDragging ? 'grabbing' : 'default' }}
             >
-                
                 <Layer ref={timelinesLayerRef} visible={hasClips} y={-clampedScroll}>
                     {timelines.map((timeline, index) => (
                         <Timeline key={timeline.timelineId} scrollY={clampedScroll} index={index} timelineWidth={dimensions.stageWidth} timelineY={timeline.timelineY} timelineHeight={timeline.timelineHeight} timelineId={timeline.timelineId} />
@@ -902,7 +900,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
                           width={scrollbarWidth}
                           height={thumbHeight}
                           cornerRadius={scrollbarWidth}
-                          fill={isScrollbarHovered ? 'rgba(227,227,227,0.55)' : 'rgba(227,227,227,0.18)'}
+                          fill={isScrollbarHovered ? 'rgba(227,227,227,0.4)' : 'rgba(227,227,227,0.1)'}
                           draggable
                           dragBoundFunc={(pos) => {
                             const clampedY = Math.max(trackTop, Math.min(trackTop + maxThumbY, pos.y));

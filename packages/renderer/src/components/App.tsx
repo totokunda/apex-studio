@@ -77,8 +77,9 @@ const App:React.FC = () => {
           <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5">
             <ResizablePanel defaultSize={70} minSize={50} maxSize={70}>
             <ResizablePanelGroup direction="horizontal" className="gap-0.5">
-            <MediaModelPanel order={1} />
-                <PreviewPanel />
+            <MediaModelPanel  />
+            <ResizableHandle className="bg-transparent" />
+                <PreviewPanel order={2} />
                 <ResizableHandle className="bg-transparent" />
             </ResizablePanelGroup>
             </ResizablePanel>
@@ -90,8 +91,9 @@ const App:React.FC = () => {
           <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5">
           <ResizablePanel defaultSize={70} minSize={50} maxSize={70}>
           <ResizablePanelGroup direction="horizontal" className="gap-0.5">
-             <PreviewPanel />
-             <MediaModelPanel order={1} />
+             <PreviewPanel  />
+             <ResizableHandle className="bg-transparent" />
+             <MediaModelPanel order={2}  />
             <ResizableHandle className="bg-transparent" />
           </ResizablePanelGroup>
           </ResizablePanel>

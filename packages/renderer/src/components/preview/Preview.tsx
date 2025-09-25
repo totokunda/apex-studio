@@ -208,7 +208,7 @@ const Preview:React.FC<PreviewProps> = () => {
            height={size.height}
         >
          <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale} width={rectWidth} height={rectHeight} >
-          <Rect x={0} y={0} height={rectHeight} width={rectWidth} fill={'#000000'} />
+          <Rect x={0} y={0}  width={rectWidth} height={rectHeight} fill={'#000000'} />
              {sortClips(clips).map((clip) => {
               const clipAtFrame = clipWithinFrame(clip, focusFrame);
               if (!clipAtFrame) return null;

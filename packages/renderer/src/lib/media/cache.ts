@@ -36,7 +36,11 @@ export const useMediaCache = () => {
 
 export type FrameKey = string; // `${path}@${width}x${height}#${frameIndex}`
 
-export type FrameCacheEntry = VideoSample | WrappedCanvas | WrappedAudioBuffer;
+export type WrappedAmplitudes = {
+    amplitudes: Float32Array;
+};
+
+export type FrameCacheEntry = VideoSample | WrappedCanvas | WrappedAudioBuffer | WrappedAmplitudes;
 
 export interface FramesCacheStore {
     capacityBytes: number;
@@ -82,6 +86,8 @@ export const FramesCache = create<FramesCacheStore>((set, get) => ({
                 state.totalBytes -= prev.allocationSize();
             } else if (isWrappedAudioBuffer(prev)) {
                 state.totalBytes -= estimateAudioBufferSize(prev);
+            } else if (isWrappedAmplitudes(prev)) {
+                state.totalBytes -= estimateAmplitudesSize(prev);
             } else {
                 state.totalBytes -= prev.canvas.width * prev.canvas.height * 4;
             }
@@ -103,7 +109,9 @@ export const FramesCache = create<FramesCacheStore>((set, get) => ({
                 ? entry.allocationSize()
                 : isWrappedAudioBuffer(entry)
                     ? estimateAudioBufferSize(entry)
-                    : entry.canvas.width * entry.canvas.height * 4
+                    : isWrappedAmplitudes(entry)
+                        ? estimateAmplitudesSize(entry)
+                        : entry.canvas.width * entry.canvas.height * 4
         );
         set({ frames, totalBytes, version: state.version + 1 });
         get().ensureCapacity();
@@ -121,7 +129,9 @@ export const FramesCache = create<FramesCacheStore>((set, get) => ({
                         ? removed.allocationSize()
                         : isWrappedAudioBuffer(removed)
                             ? estimateAudioBufferSize(removed)
-                            : removed.canvas.width * removed.canvas.height * 4
+                            : isWrappedAmplitudes(removed)
+                                ? estimateAmplitudesSize(removed)
+                                : removed.canvas.width * removed.canvas.height * 4
                 );
                 // Only close the sample if no other cache entry references the same object
                 if (removed instanceof VideoSample) {
@@ -223,6 +233,20 @@ function estimateAudioBufferSize(sample: WrappedAudioBuffer): number {
         const frames = buffer.length || 0;
         // Float32 per sample by default
         return Math.max(0, frames * channels * 4);
+    } catch {
+        return 0;
+    }
+}
+
+function isWrappedAmplitudes(entry: unknown): entry is WrappedAmplitudes {
+    const e: any = entry as any;
+    return !!e && typeof e === 'object' && 'amplitudes' in e && e.amplitudes instanceof Float32Array;
+}
+
+function estimateAmplitudesSize(sample: WrappedAmplitudes): number {
+    try {
+        // Float32 per sample
+        return Math.max(0, sample.amplitudes.length * 4);
     } catch {
         return 0;
     }

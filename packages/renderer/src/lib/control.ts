@@ -51,7 +51,7 @@ interface ControlStore {
     decrementTotalTimelineFrames: (duration: number) => void;
     timelineDuration: [number, number]; // [startFrame, endFrame]
     setTimelineDuration: (startFrame: number, endFrame: number) => void;
-    shiftTimelineDuration: (duration: number, shiftFocusFrame?: boolean) => void;
+    shiftTimelineDuration: (duration: number, shiftFocusFrame?: boolean, pause?: boolean) => void;
     canTimelineDurationBeShifted: (duration: number) => boolean;
     resetTimelineDuration: () => void;
     fps: number;
@@ -125,7 +125,14 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     },
     timelineDuration: [0, TIMELINE_DURATION_SECONDS * DEFAULT_FPS], // [startFrame, endFrame]
     setTimelineDuration: (startFrame: number, endFrame: number) => set({ timelineDuration: [startFrame, endFrame] }),
-    shiftTimelineDuration: (duration: number, shiftFocusFrame?: boolean) => set((state) => {
+    shiftTimelineDuration: (duration: number, shiftFocusFrame?: boolean, pause: boolean = false) => { 
+        // check if was playing 
+        const wasPlaying = get().isPlaying ;
+        if (wasPlaying && pause) {
+            get().pause();
+        }
+        set((state) => {
+        
         const [startFrame, endFrame] = state.timelineDuration;
         const requestedShift = Math.trunc(duration);
         const minShift = -startFrame; // cannot move left beyond 0
@@ -141,7 +148,16 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
             return { timelineDuration: [newStartFrame, newEndFrame], focusFrame: newFocusFrame };
         }
         return { timelineDuration: [newStartFrame, newEndFrame] };
-    }),
+    })
+    if (wasPlaying && pause) {
+        if (wasPlaying) {
+            setTimeout(() => {
+                const s = get();
+                if (!s.isPlaying) s.play();
+            }, 0);
+        }
+    }
+    },
     resetTimelineDuration: () => set({ timelineDuration: [0, TIMELINE_DURATION_SECONDS * DEFAULT_FPS] }),
     // FPS State
     fps: DEFAULT_FPS,

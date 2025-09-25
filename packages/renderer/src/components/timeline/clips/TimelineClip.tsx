@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useClipStore, getClipWidth, getClipX } from "@/lib/clip";
-import { generateTimelineThumbnail } from "@/lib/media/timeline";
-import { useMediaCache } from "@/lib/media/cache";
+import { generateTimelineSamples } from "@/lib/media/timeline";
+import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
 import { useControlsStore } from "@/lib/control";
-import { Image, Rect, Group } from 'react-konva';
+import { Image, Group,  Rect } from 'react-konva';
 import Konva from 'konva';
 import { MediaInfo, TimelineProps } from "@/lib/types";
 import { v4 as uuidv4 } from 'uuid';
@@ -15,6 +15,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
     const timelineDuration = useControlsStore((s) => s.timelineDuration);
     const selectedClipIds = useControlsStore((s) => s.selectedClipIds);
     const toggleClipSelection = useControlsStore((s) => s.toggleClipSelection);
+    const zoomLevel = useControlsStore((s) => s.zoomLevel);
 
     const resizeClip = useClipStore((s) => s.resizeClip);
     const moveClipToEnd = useClipStore((s) => s.moveClipToEnd);
@@ -30,21 +31,42 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
     const addTimeline = useClipStore((s) => s.addTimeline);
     // Subscribe directly to this clip's data
     const currentClip = useClipStore((s) => s.clips.find((c) => c.clipId === clipId && (timelineId ? c.timelineId === timelineId : true)));
-    const {getMedia} = useMediaCache();
     
     const currentStartFrame = currentClip?.startFrame ?? 0;
     const currentEndFrame = currentClip?.endFrame ?? 0;
+    //const realStartFrame = currentStartFrame + (currentClip?.framesToGiveStart !== Infinity ? currentClip?.framesToGiveStart || 0 : 0);
+    //const realEndFrame = currentEndFrame + (currentClip?.framesToGiveEnd !== -Infinity ? currentClip?.framesToGiveEnd || 0 : 0);
 
-    const clipWidth = useMemo(() => Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration, timelineId]);
+    const clipWidth = useMemo(() => Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration]);
     const clipX = useMemo(() => getClipX(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration, timelineId]);
-    
-    
-    const clipRef = useRef<Konva.Image>(null);
+    const clipRef = useRef<Konva.Rect>(null);
     const [resizeSide, setResizeSide] = useState<'left' | 'right' | null>(null);
-    const [isMouseOver, setIsMouseOver] = useState(false);
-    const thumnailCanvasRef = useRef<HTMLCanvasElement | undefined>(undefined);
+    const [imageCanvas] = useState<HTMLCanvasElement>(() => document.createElement('canvas'));
     const mediaInfoRef = useRef<MediaInfo | undefined>(undefined);
     const dragInitialWindowRef = useRef<[number, number] | null>(null);
+    const thumbnailClipWidth = useRef<number>(0);
+    const maxTimelineWidth = useMemo(() => (timelineWidth), [timelineWidth, timelinePadding]);
+    const groupRef = useRef<Konva.Group>(null);
+    const exactVideoUpdateTimerRef = useRef<number | null>(null);
+    const exactVideoUpdateSeqRef = useRef(0);
+    const lastExactRequestKeyRef = useRef<string | null>(null);
+    
+    // (moved) image positioning is computed after clipPosition is defined
+
+    useEffect(() => {
+        imageCanvas.width = Math.min(clipWidth, maxTimelineWidth);
+        imageCanvas.height = timelineHeight;
+    }, [zoomLevel, clipWidth, timelineHeight, timelineWidth, timelinePadding, maxTimelineWidth, type, imageCanvas]);
+
+    useEffect(() => {
+        return () => {
+            if (exactVideoUpdateTimerRef.current != null) {
+                window.clearTimeout(exactVideoUpdateTimerRef.current);
+                exactVideoUpdateTimerRef.current = null;
+            }
+        };
+    }, []);
+
 
     const restoreWindowIfChanged = useCallback((anchorStartFrame: number) => {
         try {
@@ -78,112 +100,362 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
         y: timelineY - timelineHeight
     });
 
+    // Width used for the thumbnail image we render inside the clip group.
+    const imageWidth = useMemo(() => Math.min(clipWidth, maxTimelineWidth), [clipWidth, maxTimelineWidth]);
+
+    // Compute image x so that the image stays centered over the portion of the
+    // group that is currently visible inside the stage viewport. This allows us
+    // to "virtually" pan across long clips without rendering an infinitely wide image.
+    const overHang = useMemo(() => {
+        let overhang = 0;
+        const positionX = clipPosition.x == 24 || clipWidth <= imageWidth? 0:  (-clipPosition.x);
+        if (clipWidth - positionX <= timelineWidth && positionX > 0) {
+            overhang = timelineWidth - (clipWidth - positionX);
+        }
+        return overhang;
+    }, [clipPosition.x, clipWidth, timelineWidth]);
+
+    const imageX = useMemo(() => {
+        let overhang = 0;
+        // Default behavior for clips that fit within timeline or are at the start
+        const positionX = clipPosition.x == 24 || clipWidth <= imageWidth? 0:  (-clipPosition.x);
+        if (clipWidth - positionX <= timelineWidth && positionX > 0) {
+            overhang = timelineWidth - (clipWidth - positionX);
+        }
+        const imageX = positionX - overhang;        
+        return imageX;
+    }, [clipPosition.x, clipWidth, timelinePadding, timelineWidth, imageWidth]);
+
+
+    useEffect(() => {
+        const realStartFrame = (currentClip?.startFrame || 0) - (currentClip?.framesToGiveStart ?? 0);
+        const realEndFrame = (currentClip?.endFrame || 0) - (currentClip?.framesToGiveEnd ?? 0);
+        if (type === 'audio') {
+            thumbnailClipWidth.current = Math.max(getClipWidth(realStartFrame, realEndFrame, timelineWidth, timelineDuration), 3)
+        } else if (type === 'image' || type === 'video') {
+            thumbnailClipWidth.current = Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3);
+        } 
+        
+    }, [zoomLevel, timelineWidth, type, timelineDuration, currentClip?.framesToGiveStart, currentClip?.framesToGiveEnd, currentClip?.startFrame, currentClip?.endFrame]);
+
     useEffect(() => {
         setClipPosition({x: clipX + timelinePadding, y: timelineY - timelineHeight});
     }, [timelinePadding, timelineY, timelineId]);
 
-    useEffect(() => {
-        const path = currentClip?.src!;
-        if (!currentClip?.src) return;
-        let cancelled = false;
-        const timeoutId = window.setTimeout(() => {
-            if (cancelled) return;
-            if (!mediaInfoRef.current) {
-                mediaInfoRef.current = getMedia(path);
-            }
-            
-            (async () => {
-                const maxClipWidth = Math.min(clipWidth, timelineWidth - timelinePadding * 2);
-                let width:number = 1;
-                let height:number = 1;
-            
-                if (type === 'video') { 
-                    width = mediaInfoRef.current?.video?.codedWidth ?? 1;
-                    height = mediaInfoRef.current?.video?.codedHeight ?? 1
-                } else if (type === 'image') {
-                    width = mediaInfoRef.current?.image?.width ?? 1;
-                    height = mediaInfoRef.current?.image?.height ?? 1
-                } else if (type === 'audio') {
-                    // Will change of course
-                    width = mediaInfoRef.current?.stats.audio?.averagePacketRate ?? 1;
-                    height = timelineHeight;
-                } 
-                const ratio = width / height;
-                let thumbnailWidth = Math.max(timelineHeight * ratio, THUMBNAIL_TILE_SIZE);
-                const numColumns = Math.max(1, Math.floor(maxClipWidth /  thumbnailWidth));
-                thumbnailWidth = maxClipWidth / numColumns;
-                // find the visible frame start and end
-                const [startFrame, endFrame] = timelineDuration;
-                const visibleStartFrame = Math.max(currentStartFrame, startFrame);
-                const visibleEndFrame = Math.min(currentEndFrame, endFrame);
-                if (visibleStartFrame >= visibleEndFrame) return;
+    
 
-                const step = Math.max(1, Math.floor((visibleEndFrame - visibleStartFrame) / numColumns));
-                let frameIndices = [];
-                for (let i = 0; i < numColumns; i++) {
-                    const frame = Math.floor(visibleStartFrame + i * step);
-                    if (frame >= visibleEndFrame) break;
-                    frameIndices.push(frame - currentStartFrame);
+   
+	useEffect(() => {
+		if (!currentClip?.src) return;
+
+        const generateTimelineThumbnailAudio = async () => {
+            if (type !== 'audio') return;
+    
+            const width = mediaInfoRef.current?.stats.audio?.averagePacketRate ?? 1;
+            const height = timelineHeight;
+            const tClipWidth = Math.min(thumbnailClipWidth.current, maxTimelineWidth);
+            
+            const timelineStartFrame =timelineDuration[0];
+            const timelineEndFrame = timelineDuration[1];
+            const needsStartEnd = timelineStartFrame > currentStartFrame || timelineEndFrame < currentEndFrame;
+            
+            const samples = await generateTimelineSamples(
+                currentClipId,
+                currentClip?.src!,
+                [0],
+                width,
+                height,
+                tClipWidth,
+                {
+                    mediaInfo: mediaInfoRef.current,
+                    startFrame: needsStartEnd ? Math.max(timelineStartFrame, currentStartFrame) : undefined,
+                    endFrame: needsStartEnd ? Math.min(timelineEndFrame, currentEndFrame) : undefined,
                 }
-                if (frameIndices.length < numColumns) {
-                    // repeat frame indices to fill the numColumns 
-                    const originalIndices = [...frameIndices];
-                    frameIndices = [];
-                    const framesPerColumn = Math.ceil(numColumns / originalIndices.length);
+            );
+    
+            if (samples?.[0]?.canvas) {
+                const inputCanvas = samples?.[0]?.canvas as HTMLCanvasElement;
 
-                    for (let i = 0; i < originalIndices.length; i++) {
-                        const frame = originalIndices[i];
-                        const repeatCount = i === originalIndices.length - 1 
-                            ? numColumns - frameIndices.length  // fill remaining columns with last frame
-                            : framesPerColumn;
-                        
-                        for (let j = 0; j < repeatCount && frameIndices.length < numColumns; j++) {
-                            frameIndices.push(frame);
-                        }
+                const ctx = imageCanvas.getContext('2d');
+                if (ctx) {
+                    ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+                    
+                    // If thumbnail canvas is shorter than input canvas, truncate instead of compressing
+                    const sourceWidth = Math.min(inputCanvas.width, imageCanvas.width);
+                    const sourceHeight = Math.min(inputCanvas.height, imageCanvas.height);
+                    
+                    // Determine source X based on resize side
+                    let sourceX = 0;
+                    if (resizeSide === 'left' && inputCanvas.width > imageCanvas.width) {
+                        // When resizing from left, truncate from the right side of the waveform
+                        sourceX = inputCanvas.width - sourceWidth;
+                    }
+        
+                    ctx.drawImage(
+                        inputCanvas,
+                        sourceX, 0, sourceWidth, sourceHeight, // source rectangle
+                        0, 0, sourceWidth, sourceHeight       // destination rectangle
+                    );
+                }
+
+            }
+            moveClipToEnd(currentClipId);
+        }
+
+        const generateTimelineThumbnailImage = async () => {
+            if (type !== 'image') return;
+            const tClipWidth = Math.min(thumbnailClipWidth.current, maxTimelineWidth);
+            const width = mediaInfoRef.current?.image?.width ?? 1;
+            const height = mediaInfoRef.current?.image?.height ?? 1;
+            const ratio = width / height;
+            let thumbnailWidth = Math.max(timelineHeight * ratio, THUMBNAIL_TILE_SIZE);
+    
+            const samples = await generateTimelineSamples(
+                currentClipId,
+                currentClip?.src!,
+                [0],
+                thumbnailWidth,
+                timelineHeight,
+                tClipWidth,
+                {
+                    mediaInfo: mediaInfoRef.current,
+                }
+            );
+    
+            if (samples?.[0]?.canvas) {
+                const inputCanvas = samples?.[0]?.canvas as HTMLCanvasElement;
+    
+                const ctx = imageCanvas.getContext('2d');
+                if (ctx) {
+                    
+                    const targetWidth = Math.max(1, imageCanvas.width);
+                    const targetHeight = Math.max(1, imageCanvas.height);
+                    ctx.clearRect(0, 0, targetWidth, targetHeight);
+
+                    // Determine tile dimensions from the input canvas/image
+                    const tileWidth = Math.max(1, (inputCanvas as any).width || (inputCanvas as any).naturalWidth || 1);
+                    const tileHeight = Math.max(1, (inputCanvas as any).height || (inputCanvas as any).naturalHeight || 1);
+                    const sourceHeight = Math.min(tileHeight, targetHeight);
+                    
+                    // Repeat the inputCanvas horizontally until we fill the target width
+                    let x = 0;
+                    while (x < targetWidth) {
+                        const remaining = targetWidth - x;
+                        const drawWidth = Math.min(tileWidth, remaining);
+                        ctx.drawImage(
+                            inputCanvas,
+                            x, 0, drawWidth, sourceHeight,
+                        );
+                        x += drawWidth;
                     }
                 }
+            }
+            clipRef.current?.getLayer()?.batchDraw();
+            moveClipToEnd(currentClipId);
+        }
 
-                thumbnailWidth = Math.round(thumbnailWidth);
-                timelineHeight = Math.round(timelineHeight);
+        const generateTimelineThumbnailVideo = async () => {
+            if (type !== 'video') return;
+            let tClipWidth = Math.min(thumbnailClipWidth.current, maxTimelineWidth);
+            const width = mediaInfoRef.current?.video?.codedWidth ?? 1;
+            const height = mediaInfoRef.current?.video?.codedHeight ?? 1;
+            const ratio = width / height;
+            const thumbnailWidth = Math.max(timelineHeight * ratio, THUMBNAIL_TILE_SIZE);
+            
+            // Calculate frame indices based on timeline duration and available columns
+            const numColumns = Math.ceil((tClipWidth - overHang) / thumbnailWidth);
+            let timelineStartFrame = Math.max(timelineDuration[0], currentStartFrame);
+            let timelineEndFrame = Math.min(timelineDuration[1], currentEndFrame);
+            const timelineSpan = timelineEndFrame - timelineStartFrame;
 
+      
+            let frameIndices: number[];
+            
+            if (timelineSpan >= numColumns && numColumns > 1) {
+                // When timeline duration is large enough, space frames evenly
+                frameIndices = Array.from({ length: numColumns }, (_, i) => {
+                    const progress = i / (numColumns - 1);
+                    return Math.round(timelineStartFrame + progress * timelineSpan);
+                });
+                frameIndices[frameIndices.length - 1] = frameIndices[frameIndices.length - 1] - 1;
+            } else if (numColumns > 1) {
+                // When timeline duration is less than numColumns, duplicate frames
+                frameIndices = Array.from({ length: numColumns }, (_, i) => {
+                    const frameIndex = Math.floor(i / Math.ceil(numColumns / (timelineSpan + 1)));
+                    const clampedIndex = Math.min(frameIndex, timelineSpan);
+                    return timelineStartFrame + clampedIndex;
+                });
+            } else {
+                // Single column case
+                frameIndices = [timelineStartFrame];
+            }
+
+            // 1) Immediate draw using nearest cached frames (synchronous)
+            
+            const nearest = getNearestCachedCanvasSamples(
+                    currentClip?.src!,
+                    frameIndices,
+                    thumbnailWidth,
+                    timelineHeight,
+                    { mediaInfo: mediaInfoRef.current, maxDistance: 8 }
+                );
+                const ctx = imageCanvas.getContext('2d');
+                if (ctx) {
+                    ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+                    let x = overHang;
+                    const targetWidth = Math.max(1, imageCanvas.width);
+                    const targetHeight = Math.max(1, imageCanvas.height);
+
+                    // When resizing from the left for video, truncate from the left by
+                    // skipping the overflow width from the left side of the tile sequence.
+                    let skipRemaining = 0;
+                    if (resizeSide === 'left' && type === 'video') {
+                        let totalTileWidth = 0;
+                        for (let i = 0; i < nearest.length; i++) {
+                            const sample = nearest[i];
+                            if (!sample) { continue; }
+                            const anyCanvas = (sample.canvas as any);
+                            const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
+                            totalTileWidth += tileWidth;
+                        }
+                        const drawableWidth = Math.max(0, targetWidth - x);
+                        skipRemaining = Math.max(0, totalTileWidth - drawableWidth);
+                    }
+
+                    for (let i = 0; i < nearest.length && x < targetWidth; i++) {
+                        const sample = nearest[i];
+                        if (!sample) { continue; }
+                        const inputCanvas = sample.canvas as HTMLCanvasElement;
+                        const anyCanvas = inputCanvas as any;
+                        const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
+                        const tileHeight = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
+                        const sourceHeight = Math.min(tileHeight, targetHeight);
+
+                        // Apply left-side truncation when needed
+                        let srcX = 0;
+                        let availableSrcWidth = tileWidth;
+                        if (skipRemaining > 0) {
+                            const consume = Math.min(skipRemaining, tileWidth);
+                            srcX = consume;
+                            availableSrcWidth = tileWidth - consume;
+                            skipRemaining -= consume;
+                            if (availableSrcWidth <= 0) {
+                                continue; // this tile is fully truncated away
+                            }
+                        }
+
+                        const remaining = targetWidth - x;
+                        if (remaining <= 0) break;
+                        const drawWidth = Math.min(availableSrcWidth, remaining);
+                        if (drawWidth <= 0) break;
+                        ctx.drawImage(
+                            inputCanvas,
+                            srcX, 0, drawWidth, sourceHeight,
+                            x, 0, drawWidth, sourceHeight
+                        );
+                        x += drawWidth;
+                    }
+                }
+                clipRef.current?.getLayer()?.batchDraw();
+            
+            // 2) Debounced fetch of exact frames and redraw when available
+            if (exactVideoUpdateTimerRef.current != null) {
+                window.clearTimeout(exactVideoUpdateTimerRef.current);
+                exactVideoUpdateTimerRef.current = null;
+            }
+            const DEBOUNCE_MS = 50;
+            const requestKey = `${currentClipId}|${timelineStartFrame}-${timelineEndFrame}|${thumbnailWidth}x${timelineHeight}|${overHang}|${frameIndices.join(',')}`;
+            exactVideoUpdateTimerRef.current = window.setTimeout(async () => {
+                const mySeq = ++exactVideoUpdateSeqRef.current;
                 try {
-                    const clipLocalStart = currentStartFrame
-                    const clipLocalEnd = currentEndFrame;
-                    const id = currentClip.clipId;
-                    const thumbnail = await generateTimelineThumbnail(
-                        id,
-                         path,
+                    if (lastExactRequestKeyRef.current === requestKey) {
+                        return;
+                    }
+                    const exactSamples = await generateTimelineSamples(
+                        currentClipId,
+                        currentClip?.src!,
                         frameIndices,
                         thumbnailWidth,
                         timelineHeight,
-                        clipWidth,
-                        {
-                            canvas: thumnailCanvasRef.current,
-                            mediaInfo: mediaInfoRef.current,
-                            startFrame: clipLocalStart,
-                            endFrame: clipLocalEnd,
-                        }
+                        tClipWidth,
                     );
-                    if (cancelled) return;
-                    if (!thumbnail) return;
-                    thumnailCanvasRef.current = thumbnail as HTMLCanvasElement;
-                    moveClipToEnd(currentClipId);
-                } catch (e) {
-                    if (cancelled) return;
-                    thumnailCanvasRef.current = undefined;
-                }
+                    if (mySeq !== exactVideoUpdateSeqRef.current) {
+                        return;
+                    }
+                    const ctx2 = imageCanvas.getContext('2d');
+                    if (ctx2 && exactSamples) {
+                        ctx2.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+                        let x2 = overHang;
+                        const targetWidth2 = Math.max(1, imageCanvas.width);
+                        const targetHeight2 = Math.max(1, imageCanvas.height);
 
-                if (!cancelled) {
-                    clipRef.current?.getLayer()?.batchDraw?.();
-                }
-            })();
-        }, 150);
+                        // Calculate left-side skip when resizing from left for video
+                        let skipRemaining2 = 0;
+                        if (resizeSide === 'left' && type === 'video') {
+                            let totalTileWidth2 = 0;
+                            for (let i = 0; i < exactSamples.length; i++) {
+                                const sample = exactSamples[i];
+                                const anyCanvas = (sample.canvas as any);
+                                const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
+                                totalTileWidth2 += tileWidth;
+                            }
+                            const drawableWidth2 = Math.max(0, targetWidth2 - x2);
+                            skipRemaining2 = Math.max(0, totalTileWidth2 - drawableWidth2);
+                        }
 
-        return () => {
-            cancelled = true;
-            clearTimeout(timeoutId);
-        };
-    }, [currentClip?.src, clipWidth, timelineDuration, timelineWidth, timelinePadding, timelineHeight, clipRef, mediaInfoRef]);
+                        for (let i = 0; i < exactSamples.length && x2 < targetWidth2; i++) {
+                            const sample = exactSamples[i];
+                            const inputCanvas = sample.canvas as HTMLCanvasElement;
+                            const anyCanvas = inputCanvas as any;
+                            const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
+                            const tileHeight = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
+                            const sourceHeight = Math.min(tileHeight, targetHeight2);
+
+                            // Apply left-side truncation when needed
+                            let srcX2 = 0;
+                            let availableSrcWidth2 = tileWidth;
+                            if (skipRemaining2 > 0) {
+                                const consume2 = Math.min(skipRemaining2, tileWidth);
+                                srcX2 = consume2;
+                                availableSrcWidth2 = tileWidth - consume2;
+                                skipRemaining2 -= consume2;
+                                if (availableSrcWidth2 <= 0) {
+                                    continue; // this tile is fully truncated away
+                                }
+                            }
+
+                            const remaining2 = targetWidth2 - x2;
+                            if (remaining2 <= 0) break;
+                            const drawWidth2 = Math.min(availableSrcWidth2, remaining2);
+                            if (drawWidth2 <= 0) break;
+                            ctx2.drawImage(
+                                inputCanvas,
+                                srcX2, 0, drawWidth2, sourceHeight,
+                                x2, 0, drawWidth2, sourceHeight
+                            );
+                            x2 += drawWidth2;
+                        }
+                    }
+                } finally {
+                    if (mySeq === exactVideoUpdateSeqRef.current) {
+                        clipRef.current?.getLayer()?.batchDraw();
+                        moveClipToEnd(currentClipId);
+                        lastExactRequestKeyRef.current = requestKey;
+                    }
+                }
+            }, DEBOUNCE_MS);
+        }
+
+
+        if (type === 'audio') {
+            generateTimelineThumbnailAudio()
+        } else if (type === 'image') {
+            generateTimelineThumbnailImage()
+        } else if (type === 'video') {
+            generateTimelineThumbnailVideo()
+        }
+    
+    }, [currentClip?.src,  zoomLevel, clipWidth, type, currentClip?.src, mediaInfoRef.current, resizeSide, thumbnailClipWidth.current,  maxTimelineWidth, timelineDuration, overHang]);
     
     const calculateFrameFromX = useCallback((xPosition: number) => {
         // Remove padding to get actual timeline position
@@ -273,7 +545,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
         // If user is within ±15px of a dashed line and closer to it than the timeline,
         // don't render the ghost overlay (we are "in between" timelines)
         if (dashedWins) {
-            
             setSnapGuideX(null);
             setGhostTimelineId(null);
             setGhostInStage(false);
@@ -400,16 +671,11 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
             }
         }
 
-        // Show ghost on the closest timeline
-
-        //console.log(targetTimelineId, validatedLeft);
-
         setGhostTimelineId(targetTimelineId);
         setGhostInStage(true);
         setGhostX(Math.round(validatedLeft));
         setSnapGuideX(appliedSnap && snapStageX != null ? Math.round(snapStageX) : null);
         setGhostStartEndFrame(0, clipLen);
-		
 		
 	}, [clipRef, clipWidth, timelineHeight, isSelected, timelinePadding, timelineDuration, currentEndFrame, currentStartFrame, timelineWidth, getClipsForTimeline, timelineId, currentClipId, setGhostTimelineId, setGhostInStage, setGhostX, setGhostStartEndFrame, setHoveredTimelineId]);
 
@@ -444,6 +710,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
             // Align with DnD behavior: when inserting a new timeline via dashed hover, start from left
             gX = 0;
         }
+        
         setHoveredTimelineId(null);
         let startFrame = Math.round(tStart + (gX / stageWidth) * visibleDuration);
         let newTEnd = tEnd;
@@ -514,8 +781,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
             });
         }
 
-        
-
         if (chosen) {
             startFrame = Math.min(Math.max(startFrame, chosen.lo), chosen.hi - clipLen);
             endFrame = startFrame + clipLen;
@@ -558,13 +823,12 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
         if (!resizeSide) return;
         const stage = clipRef.current?.getStage();
         if (!stage) return;
-
+ 
         const handleMouseMove = (e: MouseEvent) => {
             stage.container().style.cursor = 'col-resize';
             const rect = stage.container().getBoundingClientRect();
             const stageX = e.clientX - rect.left;
             const newFrame = calculateFrameFromX(stageX);
-
 
             if (resizeSide === 'right') {
                 let targetFrame = newFrame;
@@ -585,6 +849,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
                         if (hi > lo) { existingEdges.push(lo, hi); }
                     }
                 }
+                
                 const SNAP_THRESHOLD_PX = 6;
                 let best: {edge:number, dist:number} | null = null;
                 for (const edge of existingEdges) {
@@ -673,6 +938,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
         setGhostTimelineId(timelineId!);
         setGhostStartEndFrame(0, clipLen);
         setGhostInStage(true);
+
         const stage = e.target.getStage();
         const pos = stage?.getPointerPosition();
         if (pos) {
@@ -687,98 +953,122 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, type: 'video' | 'a
     }, [currentClipId, moveClipToEnd, isSelected, currentEndFrame, currentStartFrame, setDraggingClipId, setGhostTimelineId, setGhostStartEndFrame, setGhostInStage, setGhostX, timelineId, timelineWidth, timelinePadding]);
 
     const handleMouseOver = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-        setIsMouseOver(true);
         moveClipToEnd(currentClipId);
         e.target.getStage()!.container().style.cursor = 'pointer';
     }, [isSelected]);
     const handleMouseLeave = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-        setIsMouseOver(false);
         e.target.getStage()!.container().style.cursor = 'default';
     }, [isSelected]);
 
     return (
-            <Group onClick={handleClick}>
-                <Image 
-                image={thumnailCanvasRef.current} 
+        <>
+        {isSelected && (
+                <Rect
+                    ref={clipRef}
+                    x={clipPosition.x}
+                    y={clipPosition.y}
+                    width={clipWidth}
+                    fill={'transparent'}
+                    height={timelineHeight}
+                    cornerRadius={8}
+                    stroke={'#AE81CE'}
+                    strokeWidth={4}
+                />
+            )}
+            <Group  
+                ref={groupRef}
+                onClick={handleClick} 
                 draggable={resizeSide === null} 
                 onDragEnd={handleDragEnd} 
                 onDragMove={handleDragMove} 
                 onDragStart={handleDragStart}
-                ref={clipRef} 
                 x={clipPosition.x} 
                 y={clipPosition.y} 
-                width={clipWidth} 
+                width={clipWidth}
                 height={timelineHeight}
-                cornerRadius={8}
-                stroke={isSelected ? '#AE81CE' : isMouseOver ? 'rgba(227,227,227,1)' : undefined} 
-                strokeWidth={isSelected ? 4 : undefined} 
-                fill={type === 'audio' ? 'transparent' : '#E3E3E3'} 
+                clipX={0}
+                clipY={0}
+                clipWidth={clipWidth}
+                clipHeight={timelineHeight}
                 onMouseOver={handleMouseOver}
                 onMouseLeave={handleMouseLeave}
+                >
+                <Image 
+                    x={imageX}
+                    y={0}
+                    image={imageCanvas} 
+                    width={imageWidth}
+                    height={timelineHeight}
+                    cornerRadius={clipPosition.x == 24 || clipWidth <= imageWidth || overHang > 0 ? 8: 0}
+                    fill={'#E3E3E3'} 
                 />
-                <Rect
-                    x={clipPosition.x  + clipWidth - 5}
-                    y={clipPosition.y + timelineHeight / 2 - 7}
-                    width={5}
-                    height={14}
-                    cornerRadius={[2, 0, 0, 2]}
-                    stroke={isSelected ? '#AE81CE' : 'transparent'}
-                    strokeWidth={2.5}
-                    fill={isSelected ? 'white': 'transparent'}
-                    onMouseOver={(e) => {
-                        if (isSelected) {
-                            e.target.getStage()!.container().style.cursor = 'col-resize';
-                        }
-                    }}
-                    onMouseDown={(e) => {
-                        e.cancelBubble = true;
-                        if (!isSelected) {
-                            toggleClipSelection(currentClipId, false);
-                        }
-                        if (currentClipId) {
-                            moveClipToEnd(currentClipId);
-                        }
-                        setResizeSide('right');
+            </Group>            
+            <Rect
+                x={clipPosition.x  + clipWidth - 5}
+                y={clipPosition.y + timelineHeight / 2 - 7}
+                width={5}
+                height={14}
+                cornerRadius={[2, 0, 0, 2]}
+                stroke={isSelected ? '#AE81CE' : 'transparent'}
+                strokeWidth={2.5}
+                fill={isSelected ? 'white': 'transparent'}
+                onMouseOver={(e) => {
+                    if (isSelected) {
                         e.target.getStage()!.container().style.cursor = 'col-resize';
-                    }}
-                    onMouseLeave={(e) => {
-                        if (isSelected) {
-                            e.target.getStage()!.container().style.cursor = 'default';
-                        }
-                    }}
+                    }
+                }}
+                onMouseDown={(e) => {
+                    e.cancelBubble = true;
+                    if (!isSelected) {
+                        toggleClipSelection(currentClipId, false);
+                    }
+                    if (currentClipId) {
+                        moveClipToEnd(currentClipId);
+                    }
+                    setResizeSide('right');
+                    e.target.getStage()!.container().style.cursor = 'col-resize';
+                }}
+                onMouseLeave={(e) => {
+                    if (isSelected) {
+                        e.target.getStage()!.container().style.cursor = 'default';
+                    }
+                }}
+
                 />
-                <Rect
-                    x={clipPosition.x }
-                    y={clipPosition.y + timelineHeight / 2 - 7}
-                    width={5}
-                    height={14}
-                    cornerRadius={[0, 2, 2, 0]}
-                    stroke={isSelected ? '#AE81CE' : 'transparent'}
-                    strokeWidth={2.5}
-                    fill={isSelected ? 'white': 'transparent'}
-                    onMouseOver={(e) => {
-                        if (isSelected) {
-                            e.target.getStage()!.container().style.cursor = 'col-resize';
-                        }
-                    }}
-                    onMouseDown={(e) => {
-                        e.cancelBubble = true;
-                        if (!isSelected) {
-                            toggleClipSelection(currentClipId, false);
-                        }
-                        if (currentClipId) {
-                            moveClipToEnd(currentClipId);
-                        }
-                        setResizeSide('left');
+                
+            <Rect
+                x={clipPosition.x}
+                y={clipPosition.y + timelineHeight / 2 - 7}
+                width={5}
+                height={14}
+                cornerRadius={[0, 2, 2, 0]}
+                stroke={isSelected ? '#AE81CE' : 'transparent'}
+                strokeWidth={2.5}
+                fill={isSelected ? 'white': 'transparent'}
+                onMouseOver={(e) => {
+                    if (isSelected) {
                         e.target.getStage()!.container().style.cursor = 'col-resize';
-                    }}
-                    onMouseLeave={(e) => {
-                        if (isSelected) {
-                            e.target.getStage()!.container().style.cursor = 'default';
-                        }
-                    }}
+                    }
+                }}
+                onMouseDown={(e) => {
+                    e.cancelBubble = true;
+                    if (!isSelected) {
+                        toggleClipSelection(currentClipId, false);
+                    }
+                    if (currentClipId) {
+                        moveClipToEnd(currentClipId);
+                    }
+                    setResizeSide('left');
+                    e.target.getStage()!.container().style.cursor = 'col-resize';
+                }}
+                onMouseLeave={(e) => {
+                    if (isSelected) {
+                        e.target.getStage()!.container().style.cursor = 'default';
+                    }
+                }}
+
                 />
-            </Group>
+            </>
     )
 }
 

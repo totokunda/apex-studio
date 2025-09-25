@@ -7,7 +7,7 @@ import { PREFETCH_BACK, PREFETCH_AHEAD } from "../settings";
 import { buildFrameKey, getCachedSample, getCachedSamples } from "./cache";
 import {canvasDecoders, pruneStaleDecoders} from "./utils";
 
-function getOrCreateCanvasDecoder(path: string, mediaInfo: MediaInfo, width: number, height: number, poolSize?: number): CanvasDecoderContext | null {
+function getOrCreateCanvasDecoder(path: string, mediaInfo: MediaInfo, width: number, height: number): CanvasDecoderContext | null {
     if (!mediaInfo?.video) return null;
     const targetW = Math.max(1, Math.floor(width || mediaInfo.video.codedWidth || 0));
     const targetH = Math.max(1, Math.floor(height || mediaInfo.video.codedHeight || 0));
@@ -24,7 +24,6 @@ function getOrCreateCanvasDecoder(path: string, mediaInfo: MediaInfo, width: num
             width: targetW,
             height: targetH,
             fit: 'fill',
-            poolSize: poolSize || 3,
         });
         const ctx: CanvasDecoderContext = {
             sink,
@@ -50,8 +49,8 @@ function getOrCreateCanvasDecoder(path: string, mediaInfo: MediaInfo, width: num
 }
 
 
-function schedulePrefetchCanvas(path: string, mediaInfo: MediaInfo, centerFrame: number, width: number, height: number, poolSize?: number) {
-    const ctx = getOrCreateCanvasDecoder(path, mediaInfo, width, height, poolSize);
+function schedulePrefetchCanvas(path: string, mediaInfo: MediaInfo, centerFrame: number, width: number, height: number) {
+    const ctx = getOrCreateCanvasDecoder(path, mediaInfo, width, height);
     if (!ctx) return;
     const frameRate = ctx.frameRate || mediaInfo.stats.video?.averagePacketRate || 0;
     if (!Number.isFinite(frameRate) || frameRate <= 0) return;
@@ -112,7 +111,7 @@ export const fetchCanvasSample = async (path: string, frameIndex: number, width?
 
     let sample: WrappedCanvas | null = null;
     try {
-        const decoder = getOrCreateCanvasDecoder(path, mediaInfo, width, height, options?.poolSize || 3);
+        const decoder = getOrCreateCanvasDecoder(path, mediaInfo, width, height);
         if (!decoder) return null;
         decoder.lastAccessTs = nowMs();
         sample = await decoder.sink.getCanvas(timestamp);
@@ -138,20 +137,20 @@ export const fetchCanvasSample = async (path: string, frameIndex: number, width?
             const altKey = buildFrameKey(path, width, height, estIndex, true);
             frameCache.put(altKey, sample);
         }
-        schedulePrefetchCanvas(path, mediaInfo, frameIndex, width, height, options?.poolSize || 3);
+        schedulePrefetchCanvas(path, mediaInfo, frameIndex, width, height);
     }
 
     return sample;
 }
 
-export const fetchCanvasSamples = async (path: string, frameIndices: number[], width?: number, height?: number, options?: {mediaInfo?: MediaInfo, poolSize?:number}): Promise<(WrappedCanvas | null)[]> => {
+export const fetchCanvasSamples = async (path: string, frameIndices: number[], width?: number, height?: number, options?: {mediaInfo?: MediaInfo}): Promise<(WrappedCanvas | null)[]> => {
     // make samples a list of nulls to start with
     const samples = getCachedSamples(path, frameIndices, width, height, true);
-   
+
     if (samples.every(sample => sample !== null)) {
         return samples as (WrappedCanvas | null)[];
     }
-  
+
     const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
     if (!mediaInfo || !mediaInfo.video) return samples as (WrappedCanvas | null)[];
 
@@ -161,7 +160,7 @@ export const fetchCanvasSamples = async (path: string, frameIndices: number[], w
         return samples as (WrappedCanvas | null)[];
     }
 
-    const decoder = getOrCreateCanvasDecoder(path, mediaInfo, width, height, options?.poolSize || 3);
+    const decoder = getOrCreateCanvasDecoder(path, mediaInfo, width, height);
     if (!decoder) return samples as (WrappedCanvas | null)[];
     decoder.lastAccessTs = nowMs();
 
@@ -169,50 +168,171 @@ export const fetchCanvasSamples = async (path: string, frameIndices: number[], w
     if (!Number.isFinite(frameRate) || frameRate <= 0) {
         return samples as (WrappedCanvas | null)[];
     }
-    
-    // only get frame indices that are not cached
-    const frameIndexToIndex = new Map<number, number>();
+    // Figure out which positions are still missing (preserve duplicates and order)
+    const missingPositions: number[] = [];
+    const frameIndexToPositions = new Map<number, number[]>();
     for (let i = 0; i < frameIndices.length; i++) {
         if (!samples[i]) {
-            frameIndexToIndex.set(frameIndices[i], i);
+            missingPositions.push(i);
+            const fi = frameIndices[i]!;
+            const arr = frameIndexToPositions.get(fi) || [];
+            arr.push(i);
+            frameIndexToPositions.set(fi, arr);
         }
     }
 
-    if (frameIndexToIndex.size === 0) {
+    if (missingPositions.length === 0) {
         return samples as (WrappedCanvas | null)[];
     }
 
-    const sparseTimestamps = Array.from(frameIndexToIndex.keys()).map(idx => idx / frameRate);
-    let sparseSamples: AsyncIterable<WrappedCanvas | null> | any;
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        sparseSamples = await decoder.sink.canvasesAtTimestamps(sparseTimestamps);
-    } catch (error) {
-        console.warn('[media] Failed to request canvas samples at timestamps', { path, error });
-        return samples as (WrappedCanvas | null)[];
-    }
+    // Request canvases for all missing positions in the same order as provided
+    const requestedTimestamps: number[] = missingPositions.map(pos => frameIndices[pos]! / frameRate);
 
     const frameCache = FramesCache.getState();
 
+    let iterable: AsyncIterable<WrappedCanvas | null> | null = null;
     try {
-        for await (const sample of sparseSamples as AsyncIterable<WrappedCanvas | null>) {
-            if (sample) {
-                const estimatedFrameIndex = Math.round(sample.timestamp * frameRate);
-                let index = frameIndexToIndex.get(estimatedFrameIndex);
-                if (index === undefined) {
-                    index = frameIndexToIndex.get(estimatedFrameIndex - 1) ?? frameIndexToIndex.get(estimatedFrameIndex + 1);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        iterable = await decoder.sink.canvasesAtTimestamps(requestedTimestamps);
+    } catch (error) {
+        console.warn('[media] Failed to request canvas samples at timestamps', { path, error });
+        iterable = null;
+    }
+
+    // Track which positions remain unassigned and any successfully decoded sample by requested frame index
+    const unassigned = new Set<number>(missingPositions);
+    const firstSampleByRequestedIndex = new Map<number, WrappedCanvas>();
+
+    // Helper to assign a sample to a position and cache under requested and estimated indices
+    const assignSample = (pos: number, sample: WrappedCanvas | null) => {
+        if (!unassigned.has(pos)) return; // already filled
+        const reqIndex = frameIndices[pos]!;
+        if (sample) {
+            samples[pos] = sample;
+            firstSampleByRequestedIndex.set(reqIndex, firstSampleByRequestedIndex.get(reqIndex) || sample);
+            const estimatedIndex = Math.round(sample.timestamp * frameRate);
+            // Cache under requested index
+            const reqKey = buildFrameKey(path, width!, height!, reqIndex, true);
+            frameCache.put(reqKey, sample);
+            // Also cache under estimated index if different
+            if (estimatedIndex !== reqIndex) {
+                const estKey = buildFrameKey(path, width!, height!, estimatedIndex, true);
+                frameCache.put(estKey, sample);
+            }
+        } else {
+            samples[pos] = null;
+        }
+        unassigned.delete(pos);
+    };
+
+    // Consume iterable if available; be robust to out-of-order yields
+    if (iterable) {
+        let j = 0;
+        try {
+            for await (const sample of iterable as AsyncIterable<WrappedCanvas | null>) {
+                // Prefer mapping by exact/nearby estimated frame index when possible
+                let posToFill: number | undefined;
+                if (sample) {
+                    const est = Math.round(sample.timestamp * frameRate);
+                    let arr = frameIndexToPositions.get(est);
+                    if (!arr || arr.length === 0) arr = frameIndexToPositions.get(est - 1);
+                    if (!arr || arr.length === 0) arr = frameIndexToPositions.get(est + 1);
+                    if (arr && arr.length > 0) {
+                        posToFill = arr.shift()!;
+                        if (arr.length === 0) frameIndexToPositions.delete(est);
+                    }
                 }
-                if (index !== undefined) {
-                    samples[index] = sample;
-                    const frameKey = buildFrameKey(path, width, height, estimatedFrameIndex, true);
-                    frameCache.put(frameKey, sample);
+                // Fallback: assume same order as requested timestamps
+                if (posToFill === undefined && j < missingPositions.length) {
+                    posToFill = missingPositions[j];
+                }
+                if (posToFill !== undefined) {
+                    assignSample(posToFill, sample);
+                    j++;
                 }
             }
+        } catch (error) {
+            console.warn('[media] Error while iterating decoded canvas samples', { path, error });
         }
-    } catch (error) {
-        console.warn('[media] Error while iterating decoded canvas samples', { path, error });
+    }
+
+    // If any positions are still unassigned, try to reuse a decoded duplicate first
+    if (unassigned.size > 0) {
+        for (const pos of Array.from(unassigned)) {
+            const fi = frameIndices[pos]!;
+            const dup = firstSampleByRequestedIndex.get(fi);
+            if (dup) assignSample(pos, dup);
+        }
+    }
+
+    // As a last resort, individually fetch unresolved frames
+    if (unassigned.size > 0) {
+        await Promise.all(Array.from(unassigned).map(async (pos) => {
+            try {
+                const fi = frameIndices[pos]!;
+                const single = await fetchCanvasSample(path, fi, width, height, { mediaInfo });
+                assignSample(pos, single);
+            } catch {
+                assignSample(pos, null);
+            }
+        }));
     }
 
     return samples as (WrappedCanvas | null)[];
    
+}
+
+// Return nearest cached canvas samples synchronously for quick initial rendering.
+// For each requested frame index, search the cache for the closest available
+// frame within a bounded radius. If none is found within the max distance,
+// return null for that position.
+export const getNearestCachedCanvasSamples = (
+    path: string,
+    frameIndices: number[],
+    width?: number,
+    height?: number,
+    options?: { mediaInfo?: MediaInfo; maxDistance?: number }
+): (WrappedCanvas | null)[] => {
+    const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
+    if (!mediaInfo || !mediaInfo.video) {
+        return new Array(frameIndices.length).fill(null);
+    }
+
+    const targetW = Math.max(1, Math.floor(width || mediaInfo.video?.codedWidth || 0));
+    const targetH = Math.max(1, Math.floor(height || mediaInfo.video?.codedHeight || 0));
+    const duration = mediaInfo?.duration;
+    const numFrames = (duration || 0) * 24;
+    let maxDistance = 24;
+    if (frameIndices.length > 1){
+        maxDistance = (frameIndices[1] - frameIndices[0]);
+    } else {
+        maxDistance = numFrames
+    }
+
+    const results: (WrappedCanvas | null)[] = new Array(frameIndices.length).fill(null);
+
+    for (let i = 0; i < frameIndices.length; i++) {
+        const fi = frameIndices[i]!;
+        // Try exact match first
+        let found = getCachedSample(path, fi, targetW, targetH, true) as WrappedCanvas | null;
+        if (found && (found as any).canvas) {
+            results[i] = found as WrappedCanvas;
+            continue;
+        }
+        // Search outward up to maxDistance
+        let assigned: WrappedCanvas | null = null;
+        for (let d = 1; d <= maxDistance; d++) {
+            const left = fi - d;
+            if (left >= 0) {
+                const sL = getCachedSample(path, left, targetW, targetH, true) as WrappedCanvas | null;
+                if (sL && (sL as any).canvas) { assigned = sL; break; }
+            }
+            const right = fi + d;
+            const sR = getCachedSample(path, right, targetW, targetH, true) as WrappedCanvas | null;
+            if (sR && (sR as any).canvas) { assigned = sR; break; }
+        }
+        results[i] = assigned;
+    }
+
+    return results;
 }

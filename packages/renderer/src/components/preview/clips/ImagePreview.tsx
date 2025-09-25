@@ -24,6 +24,9 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
     const {selectedClipIds} = useControlsStore();
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
 
+    
+
+
     const aspectRatio = useMemo(() => {
       const originalWidth = mediaInfo?.image?.width;
       const originalHeight = mediaInfo?.image?.height;
