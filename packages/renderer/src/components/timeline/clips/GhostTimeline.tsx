@@ -43,19 +43,22 @@ const GhostTimeline:React.FC<TimelineProps> = ({timelineY, timelineHeight, timel
       }
       if (prev < stageWidth) gaps.push([prev, stageWidth]);
       const validGaps = gaps.filter(([lo, hi]) => hi - lo >= ghostWidth);
-      if (validGaps.length === 0) return null;
-      const center = (ghostX || 0) + ghostWidth / 2;
-      // Pick gap containing current center; else nearest by center distance
+      // Choose gap such that the ghost's LEFT edge (ghostX) lies within [gLo, gHi - ghostWidth]
       let chosen: [number, number] | null = null;
+      const left = ghostX || 0;
       for (const g of validGaps) {
-        if (center >= g[0] && center <= g[1]) { chosen = g; break; }
+        if (left >= g[0] && left <= g[1] - ghostWidth) { chosen = g; break; }
       }
       if (!chosen) {
-        chosen = validGaps.reduce((best, g) => {
-          const gc = (g[0] + g[1]) / 2;
-          const bc = (best[0] + best[1]) / 2;
-          return Math.abs(center - gc) < Math.abs(center - bc) ? g : best;
-        });
+        // No fitting gap: prevent overriding on the left. If the pointer is inside an
+        // occupied interval, snap gLo to that interval's hi; otherwise to the last hi before pointer.
+        let gLo = 0;
+        for (const [lo, hi] of merged) {
+          if (left < lo) break;
+          gLo = Math.max(gLo, hi);
+          if (left <= hi) break;
+        }
+        chosen = [gLo, stageWidth];
       }
       return chosen;
     }, [ghostTimelineId, timelineId, ghostX, ghostWidth, getClipsForTimeline, timelineDuration, timelineWidth, draggingClipId]);

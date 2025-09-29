@@ -55,7 +55,7 @@ const App:React.FC = () => {
     };
   }, [activeDragItem]);
   
-  const handleDragEnd = (e: DragEndEvent) => {
+  const handleDragEnd = (_e: DragEndEvent) => {
     setActiveDragItem(null);
   }
 
@@ -77,43 +77,53 @@ const App:React.FC = () => {
           <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5">
             <ResizablePanel defaultSize={70} minSize={50} maxSize={70}>
             <ResizablePanelGroup direction="horizontal" className="gap-0.5">
-            <MediaModelPanel  />
+            <MediaModelPanel order={1} />
             <ResizableHandle className="bg-transparent" />
-                <PreviewPanel order={2} />
-                <ResizableHandle className="bg-transparent" />
+                <PreviewPanel order={3} />
+              <ResizableHandle className="bg-transparent" />
+              <PropertiesPanel order={4} />
             </ResizablePanelGroup>
             </ResizablePanel>
             <ResizableHandle className="bg-transparent" />
             <TimelinePanel />
           </ResizablePanelGroup>
         )}
-        {layout === 'sidebar-right' && (
-          <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5">
-          <ResizablePanel defaultSize={70} minSize={50} maxSize={70}>
-          <ResizablePanelGroup direction="horizontal" className="gap-0.5">
-             <PreviewPanel  />
-             <ResizableHandle className="bg-transparent" />
-             <MediaModelPanel order={2}  />
+        {layout === 'media' && (
+          <ResizablePanelGroup direction="horizontal" className="flex-1 gap-0.5">
+            <MediaModelPanel order={undefined} defaultSize={30} minSize={20} />
             <ResizableHandle className="bg-transparent" />
+            <ResizablePanel defaultSize={70} minSize={30}>
+              <ResizablePanelGroup direction="vertical" className="gap-0.5">
+                <ResizablePanel defaultSize={60} minSize={40}>
+                  <ResizablePanelGroup direction="horizontal" className="gap-0.5">
+                    <PreviewPanel order={2} defaultSize={55} minSize={30} />
+                    <ResizableHandle className="bg-transparent" />
+                    <PropertiesPanel order={2} defaultSize={45} minSize={20} />
+                  </ResizablePanelGroup>
+                </ResizablePanel>
+                <ResizableHandle className="bg-transparent" />
+                <TimelinePanel />
+              </ResizablePanelGroup>
+            </ResizablePanel>
           </ResizablePanelGroup>
-          </ResizablePanel>
-          <ResizableHandle className="bg-transparent" />
-          <TimelinePanel />
-        </ResizablePanelGroup>
         )}
-        {layout === 'three-column' && (
-          <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5">
-            <ResizablePanel defaultSize={70} minSize={50}>
-              <ResizablePanelGroup direction="horizontal" className="gap-0.5">
-                <MediaModelPanel order={1} defaultSize={20} minSize={15} />
+        {layout === 'properties' && (
+          <ResizablePanelGroup direction="horizontal" className="flex-1 gap-0.5">
+            <ResizablePanel defaultSize={65} minSize={40}>
+              <ResizablePanelGroup direction="vertical" className="gap-0.5">
+                <ResizablePanel defaultSize={70} minSize={50}>
+                  <ResizablePanelGroup direction="horizontal" className="gap-0.5">
+                    <PreviewPanel order={1} defaultSize={40} minSize={30} />
+                    <ResizableHandle className="bg-transparent" />
+                    <MediaModelPanel order={1} defaultSize={35} minSize={25} />
+                  </ResizablePanelGroup>
+                </ResizablePanel>
                 <ResizableHandle className="bg-transparent" />
-                <PreviewPanel order={2} defaultSize={60} minSize={40} />
-                <ResizableHandle className="bg-transparent" />
-                <PropertiesPanel order={3} defaultSize={20} minSize={15} />
+                <TimelinePanel />
               </ResizablePanelGroup>
             </ResizablePanel>
             <ResizableHandle className="bg-transparent" />
-            <TimelinePanel />
+            <PropertiesPanel order={2} defaultSize={35} minSize={20} />
           </ResizablePanelGroup>
         )}
       </div>

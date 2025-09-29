@@ -1,8 +1,10 @@
 import { create } from "zustand";
-import { AnyClipProps, TimelineProps, ClipTransform } from "./types";
+import { AnyClipProps, TimelineProps, ClipTransform, TimelineType } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
+
 import { MediaItem } from "@/components/media/Item";
+import { MIN_DURATION } from "./settings";
 
 interface ClipStore {  
     // Clips
@@ -31,6 +33,12 @@ interface ClipStore {
     setGhostStartEndFrame: (startFrame: number, endFrame: number) => void;
     ghostX: number;
     setGhostX: (x: number) => void;
+    muteTimeline: (timelineId: string) => void;
+    unmuteTimeline: (timelineId: string) => void;
+    hideTimeline: (timelineId: string) => void;
+    unhideTimeline: (timelineId: string) => void;
+    isTimelineMuted: (timelineId: string) => boolean;
+    isTimelineHidden: (timelineId: string) => boolean;
     ghostInStage: boolean;
     setGhostInStage: (inStage: boolean) => void;
     hoveredTimelineId: string | null;
@@ -42,6 +50,7 @@ interface ClipStore {
     // Global snap guideline (absolute stage X in px). Null when inactive
     snapGuideX: number | null;
     setSnapGuideX: (x: number | null) => void;
+    _updateZoomLevel: (clips:AnyClipProps[], clipDuration: number) => void;
 
     // Timelines
     timelines: TimelineProps[];
@@ -59,6 +68,25 @@ const calculateTotalClipDuration = (clips: AnyClipProps[]): number => {
     const maxEndFrame = Math.max(...clips.map(clip => clip.endFrame || 0));
     return maxEndFrame;
 };
+
+export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipProps | MediaItem | string) => {
+    if (typeof clip === 'string') 
+        clip = {type:clip} as AnyClipProps;
+    if (timeline.type === 'media') {
+        return clip.type === 'video' || clip.type === 'image';
+    }
+    return timeline.type === clip.type;
+}
+
+export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string):TimelineType => {
+    if (typeof clip === 'string') 
+        clip = {type:clip} as AnyClipProps;
+    if (clip.type === 'video' || clip.type === 'image') {
+        return 'media';
+    }
+    return clip.type;
+}
+
 
 
 // Helper function to resolve overlaps by shifting clips to maintain frame gaps
@@ -132,11 +160,106 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     _setClipDuration: (duration) => set({ clipDuration: duration }),
     clips: [],  
     timelines: [],
+    isTimelineMuted: (timelineId) => get().timelines.find((timeline) => timeline.timelineId === timelineId)?.muted || false,
+    isTimelineHidden: (timelineId) => get().timelines.find((timeline) => timeline.timelineId === timelineId)?.hidden || false,
+    muteTimeline: (timelineId) => set((state) => {
+        const newTimelines = state.timelines.map((timeline) => timeline.timelineId === timelineId ? { ...timeline, muted: true } : timeline);
+        const resolvedTimelines = resolveOverlapsTimelines(newTimelines);
+        return { timelines: resolvedTimelines };   
+    }),
+    unmuteTimeline: (timelineId) => set((state) => {
+        const newTimelines = state.timelines.map((timeline) => timeline.timelineId === timelineId ? { ...timeline, muted: false } : timeline);
+        const resolvedTimelines = resolveOverlapsTimelines(newTimelines);
+        return { timelines: resolvedTimelines };
+        return state;
+    }),
+    hideTimeline: (timelineId) => set((state) => {
+        const newTimelines = state.timelines.map((timeline) => timeline.timelineId === timelineId ? { ...timeline, hidden: true } : timeline);
+        const resolvedTimelines = resolveOverlapsTimelines(newTimelines);
+        return { timelines: resolvedTimelines };
+        return state;
+    }),
+    unhideTimeline: (timelineId) => set((state) => {
+        const newTimelines = state.timelines.map((timeline) => timeline.timelineId === timelineId ? { ...timeline, hidden: false } : timeline);
+        const resolvedTimelines = resolveOverlapsTimelines(newTimelines);
+        return { timelines: resolvedTimelines };
+        return state;
+    }),
     ghostStartEndFrame: [0, 0],
     activeMediaItem: null,
     setActiveMediaItem: (mediaItem) => set({ activeMediaItem: mediaItem }),
     setGhostStartEndFrame: (startFrame, endFrame) => set({ ghostStartEndFrame: [startFrame, endFrame] }),
     ghostX: 0,
+    _updateZoomLevel: (clips:AnyClipProps[], clipDuration: number) => {
+        // Determine if this is the first clip being added (based on current store state before set)
+        const hadNoClips = (get().clips || []).length === 0;
+
+        // Longest clip length in frames (endFrame max)
+        const longestClipFrames = Math.max(0, Math.round(clipDuration || 0));
+
+        // Compute new baseline total timeline frames at zoom level 1 so that
+        // the longest clip occupies 60% of the timeline (5/3 multiplier).
+        // Clamp to at least MIN_DURATION to ensure we can always zoom to 5 frames.
+        const newTotalFrames = Math.max(MIN_DURATION, Math.round((longestClipFrames * 5) / 3));
+
+        const controls = useControlsStore.getState();
+        const prevTotalFrames = Math.max(0, controls.totalTimelineFrames || 0);
+        const minZoomLevel = controls.minZoomLevel;
+        const maxZoomLevel = controls.maxZoomLevel;
+        const [currentStart, currentEnd] = controls.timelineDuration || [0, newTotalFrames];
+        const currentWidth = Math.max(1, currentEnd - currentStart);
+
+        const needsBaselineUpdate = newTotalFrames !== prevTotalFrames && clips.length > 0;
+
+        if (!needsBaselineUpdate) {
+            return;
+        }
+
+        // Apply the new baseline total frames
+        useControlsStore.setState({ totalTimelineFrames: newTotalFrames });
+
+        if (hadNoClips) {
+            // First clip: set zoom level 1 window to exactly the baseline width,
+            // so the clip takes 60% of the timeline at zoom level 1.
+            controls.setTimelineDuration(0, newTotalFrames);
+            controls.setZoomLevel(1 as any);
+            return;
+        }
+
+        // For subsequent changes (e.g., adding a longer clip), keep the current
+        // window to avoid jitter, but recalibrate the zoom level so that the
+        // current window width maps to the nearest zoom step under the new baseline.
+        const steps = Math.max(1, maxZoomLevel - minZoomLevel);
+        const ratio = MIN_DURATION / newTotalFrames;
+        const durations: number[] = new Array(steps + 1).fill(0).map((_, i) => {
+            const ti = i / steps;
+            const d = Math.round(newTotalFrames * Math.pow(ratio, ti));
+            return Math.max(MIN_DURATION, Math.min(newTotalFrames, d));
+        });
+
+        // Keep the same window; clamp within new total if needed
+        let clampedStart = currentStart;
+        let clampedEnd = currentEnd;
+        const width = Math.max(1, clampedEnd - clampedStart);
+        if (clampedEnd > newTotalFrames) {
+            clampedStart = Math.max(0, newTotalFrames - width);
+            clampedEnd = clampedStart + width;
+            controls.setTimelineDuration(clampedStart, clampedEnd);
+        }
+
+        // Pick the zoom level whose target duration is closest to the current width
+        let bestIndex = 0;
+        let bestDiff = Number.POSITIVE_INFINITY;
+        for (let i = 0; i <= steps; i++) {
+            const diff = Math.abs(durations[i] - currentWidth);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestIndex = i;
+            }
+        }
+        const newZoomLevel = (minZoomLevel + bestIndex) as any;
+        controls.setZoomLevel(newZoomLevel);
+    },
     setGhostX: (x) => set({ ghostX: x }),
     hoveredTimelineId: null,
     setHoveredTimelineId: (timelineId) => set({ hoveredTimelineId: timelineId }),
@@ -173,6 +296,9 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             timelineWidth: timeline.timelineWidth ?? 0,
             timelineY: timeline.timelineY ?? 0,
             timelinePadding: timeline.timelinePadding ?? 0,
+            type: timeline.type ?? 'media',
+            muted: timeline.muted ?? false,
+            hidden: timeline.hidden ?? false,
         };
         const timelines = index !== undefined ? [...state.timelines.slice(0, index + 1), newTimeline, ...state.timelines.slice(index + 1)] : [...state.timelines, newTimeline];
         const resolvedTimelines = resolveOverlapsTimelines(timelines);
@@ -200,12 +326,14 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const newClips = [...state.clips, clip];
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
+        get()._updateZoomLevel(resolvedClips, clipDuration);
         return { clips: resolvedClips, clipDuration };
     }),
     removeClip: (clipId: string) => set((state) => {
         const newClips = state.clips.filter((clip) => clip.clipId !== clipId);
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
+        get()._updateZoomLevel(resolvedClips, clipDuration);
         return { clips: resolvedClips, clipDuration };
     }),
     updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) => set((state) => {
@@ -257,6 +385,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
+        get()._updateZoomLevel(resolvedClips, clipDuration);
         return { clips: resolvedClips, clipDuration };
     }),
     // Create two new clips from the original clip at the cut frame
@@ -304,6 +433,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const newClips = [...filteredClips, newClip1, newClip2];
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
+        get()._updateZoomLevel(resolvedClips, clipDuration);
         return { clips: resolvedClips, clipDuration };
     }),
     mergeClips: (clipIds: string[]) => set((state) => {
@@ -418,4 +548,10 @@ export const getClipX = (startFrame:number | null, endFrame:number | null, timel
     const [timelineStartFrame, timelineEndFrame] = timelineDuration;
     const relativePosition = (startFrame - timelineStartFrame) / (timelineEndFrame - timelineStartFrame); 
     return relativePosition * timelineWidth;
-}   
+}  
+
+export const getTimelineX = (timelineWidth:number, timelinePadding:number, timelineDuration:number[]) => {
+    const [timelineStartFrame, timelineEndFrame] = timelineDuration;
+    const timelineX = timelinePadding - (timelineWidth / (timelineEndFrame - timelineStartFrame)) * timelineStartFrame;
+    return Math.max(0, timelineX);
+}

@@ -89,9 +89,10 @@ function schedulePrefetchCanvas(path: string, mediaInfo: MediaInfo, centerFrame:
 
 
 
-export const fetchCanvasSample = async (path: string, frameIndex: number, width?: number, height?: number, options?: {mediaInfo?: MediaInfo, poolSize?:number}): Promise<WrappedCanvas | null> => {
+export const fetchCanvasSample = async (path: string, frameIndex: number, width?: number, height?: number, options?: {mediaInfo?: MediaInfo, poolSize?:number, prefetch?:boolean}): Promise<WrappedCanvas | null> => {
     const frame = getCachedSample(path, frameIndex, width, height, true);
     if (frame) return frame as WrappedCanvas;
+    
 
     const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
     if (!mediaInfo || !mediaInfo.video) return null;
@@ -137,7 +138,9 @@ export const fetchCanvasSample = async (path: string, frameIndex: number, width?
             const altKey = buildFrameKey(path, width, height, estIndex, true);
             frameCache.put(altKey, sample);
         }
-        schedulePrefetchCanvas(path, mediaInfo, frameIndex, width, height);
+        if (options?.prefetch) {
+            schedulePrefetchCanvas(path, mediaInfo, frameIndex, width, height);
+        }
     }
 
     return sample;
@@ -291,7 +294,7 @@ export const getNearestCachedCanvasSamples = (
     frameIndices: number[],
     width?: number,
     height?: number,
-    options?: { mediaInfo?: MediaInfo; maxDistance?: number }
+    options?: { mediaInfo?: MediaInfo }
 ): (WrappedCanvas | null)[] => {
     const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
     if (!mediaInfo || !mediaInfo.video) {
@@ -300,14 +303,6 @@ export const getNearestCachedCanvasSamples = (
 
     const targetW = Math.max(1, Math.floor(width || mediaInfo.video?.codedWidth || 0));
     const targetH = Math.max(1, Math.floor(height || mediaInfo.video?.codedHeight || 0));
-    const duration = mediaInfo?.duration;
-    const numFrames = (duration || 0) * 24;
-    let maxDistance = 24;
-    if (frameIndices.length > 1){
-        maxDistance = (frameIndices[1] - frameIndices[0]);
-    } else {
-        maxDistance = numFrames
-    }
 
     const results: (WrappedCanvas | null)[] = new Array(frameIndices.length).fill(null);
 
@@ -319,9 +314,9 @@ export const getNearestCachedCanvasSamples = (
             results[i] = found as WrappedCanvas;
             continue;
         }
-        // Search outward up to maxDistance
+        // Search outward without distance limit
         let assigned: WrappedCanvas | null = null;
-        for (let d = 1; d <= maxDistance; d++) {
+        for (let d = 1; ; d++) {
             const left = fi - d;
             if (left >= 0) {
                 const sL = getCachedSample(path, left, targetW, targetH, true) as WrappedCanvas | null;
@@ -330,6 +325,9 @@ export const getNearestCachedCanvasSamples = (
             const right = fi + d;
             const sR = getCachedSample(path, right, targetW, targetH, true) as WrappedCanvas | null;
             if (sR && (sR as any).canvas) { assigned = sR; break; }
+            
+            // Safety check to prevent infinite loop if no frames are cached
+            if (left < 0 && right > 10000) break;
         }
         results[i] = assigned;
     }

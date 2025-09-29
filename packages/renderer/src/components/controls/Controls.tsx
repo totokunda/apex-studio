@@ -1,38 +1,41 @@
 import { FiMinusCircle, FiPlusCircle } from "react-icons/fi";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { cn } from '@/lib/utils';
-import { BackButton, RewindBackward, RewindForward, ScissorsButton, TrashButton, MergeButton, PlayPauseButton, ExtendTimelineButton, ReduceTimelineButton } from "./Buttons";
+import { BackButton, RewindBackward, RewindForward, ScissorsButton, TrashButton, PlayPauseButton, ExtendTimelineButton, ReduceTimelineButton } from "./Buttons";
 import { useControlsStore } from "@/lib/control";
 import { useClipStore } from "@/lib/clip";
 import { ZoomLevel } from '@/lib/types';
-import { MIN_ZOOM, MAX_ZOOM, MIN_DURATION, MAX_DURATION } from '@/lib/settings';
+import { MIN_DURATION } from '@/lib/settings';
 
 const TimelineZoom = () => {
-    const { zoomLevel, setZoomLevel, setTimelineDuration, resetTimelineDuration,  focusFrame, setFocusFrame, focusAnchorRatio, totalTimelineFrames, setFocusAnchorRatio } = useControlsStore();
+    const { zoomLevel, setZoomLevel, setTimelineDuration, resetTimelineDuration,  focusFrame, setFocusFrame, focusAnchorRatio, totalTimelineFrames, setFocusAnchorRatio, minZoomLevel, maxZoomLevel } = useControlsStore();
     const [isDragging, setIsDragging] = useState(false);
     const [isHovering, setIsHovering] = useState(false);
     const barRef = useRef<HTMLDivElement>(null);
     const clips = useClipStore((state) => state.clips);
     const hasClips = useMemo(() => clips.length > 0, [clips]);
-
     useEffect(() => {
         if (!hasClips) {
             setZoomLevel(1);
             setFocusFrame(0);
             resetTimelineDuration();
         }
-    }, [hasClips])
+    }, [hasClips]);
+
+    
+
     
     const setZoom = (level:number) => { 
         // Clamp to valid integer zoom step
-        const clampedLevel = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(level)));
+        const clampedLevel = Math.max(minZoomLevel, Math.min(maxZoomLevel, Math.round(level)));
         
-        // Stable, per-level integer durations (same up/down), independent of current window
-        const maxDuration = Math.max(1, MAX_DURATION);
+        // Use dynamic baseline where zoomLevel 1 spans the entire timeline baseline
+        // and max zoom spans exactly MIN_DURATION (5 frames)
+        const maxDuration = Math.max(1, totalTimelineFrames);
         const minDuration = Math.max(1, Math.min(MIN_DURATION, maxDuration));
-        const steps = Math.max(1, MAX_ZOOM - MIN_ZOOM);
+        const steps = Math.max(1, maxZoomLevel - minZoomLevel);
         const ratio = minDuration / maxDuration;
-        const levelIndex = clampedLevel - MIN_ZOOM; // 0..steps
+        const levelIndex = clampedLevel - minZoomLevel; // 0..steps
 
         // Build deterministic duration table once per call (cheap) to avoid rounding drift
         const durations: number[] = new Array(steps + 1).fill(0).map((_, i) => {
@@ -52,6 +55,7 @@ const TimelineZoom = () => {
         const newAnchor = targetDuration > 0 ? (focusFrame - newStart) / targetDuration : 0.5;
         setFocusAnchorRatio(Math.max(0, Math.min(1, newAnchor)));
 
+        
         setTimelineDuration(newStart, newEnd);
         setZoomLevel(clampedLevel as ZoomLevel);
     }
@@ -77,13 +81,13 @@ const TimelineZoom = () => {
         const rect = barRef.current.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const percentage = Math.max(0, Math.min(1, x / rect.width));
-        const newZoom = MIN_ZOOM + Math.round(percentage * (MAX_ZOOM - MIN_ZOOM));
+        const newZoom = minZoomLevel + Math.round(percentage * (maxZoomLevel - minZoomLevel));
         setZoom(newZoom);
     };
 
     // Calculate circle position based on zoom level
     const getCirclePosition = () => {
-        const progress = (zoomLevel - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM);
+        const progress = (zoomLevel - minZoomLevel) / (maxZoomLevel - minZoomLevel);
         return progress * 100; // percentage
     };
 

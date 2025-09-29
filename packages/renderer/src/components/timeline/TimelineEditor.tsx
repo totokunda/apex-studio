@@ -5,23 +5,26 @@ import { Stage, Layer,  Text, Line, Rect} from 'react-konva';
 import Konva from 'konva';
 import { ScrubControl } from './Scrubber';
 import Timeline from './Timeline';
-import { useClipStore, getClipWidth, getClipX } from '@/lib/clip';
+import { useClipStore, getClipWidth, getClipX, isValidTimelineForClip, getTimelineTypeForClip } from '@/lib/clip';
 import { GoFileMedia } from "react-icons/go";
 import Droppable from '../dnd/Droppable';
 import {useDndMonitor} from '@dnd-kit/core';
 import { MediaItem } from '../media/Item';
 import {v4 as uuidv4} from 'uuid';
-import { ClipType, ZoomLevel } from '@/lib/types';
-import { MAX_DURATION, MIN_DURATION, MIN_ZOOM, MAX_ZOOM } from '@/lib/settings';
+import { AnyClipProps, TimelineType } from '@/lib/types';
+import TimelineSidebar from './TimelineSidebar';
 // import { cn } from '@/lib/utils';
 
 interface TimelineEditorProps {
+  
 }
 
 
 interface TimelineMomentsProps {
     stageWidth:number;
     startPadding:number;
+    maxScroll:number;
+    thumbY: () => number;
 }
 
 interface TickMark {
@@ -47,13 +50,13 @@ const getMajorZoomConfigFormat = (zoomConfig:{
     }
 }
 
-const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, startPadding}) => {
-    const { timelineDuration, fps, zoomLevel, focusFrame, shiftTimelineDuration } = useControlsStore();
+const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, startPadding, maxScroll, thumbY}) => {
+    const { timelineDuration, fps, zoomLevel, focusFrame, shiftTimelineDuration, maxZoomLevel, minZoomLevel } = useControlsStore();
     const [startFrame, endFrame] = timelineDuration;
 
     // We will basically render from startDuration to startDuration + duration. 
     useEffect(() => {
-            // ensure focusframe is alwys within the timeline duration
+            // ensure focusframe is always within the timeline duration
             if (focusFrame < startFrame) {
                 shiftTimelineDuration(focusFrame - startFrame);
             }
@@ -66,10 +69,11 @@ const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, 
     // Convert duration to milliseconds if needed for consistent calculations
     const tickMark:TickMark[] = useMemo(() => {
         let ticks:TickMark[] = [];
-        const zoomConfig = getZoomLevelConfig(zoomLevel, timelineDuration, fps);
+        const zoomConfig = getZoomLevelConfig(zoomLevel, timelineDuration, fps, maxZoomLevel, minZoomLevel);
         const majorTickInterval = zoomConfig.majorTickInterval * (zoomConfig.majorTickFormat === 'second' ? fps : 1);
         const minorTickInterval = zoomConfig.minorTickInterval * (zoomConfig.minorTickFormat === 'second' ? fps : 1);
         const [startFrame, endFrame] = timelineDuration;
+
 
         for (let i = startFrame; i <= endFrame; i += majorTickInterval) {
                 ticks.push({
@@ -95,6 +99,7 @@ const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, 
         ticks = ticks.filter((tick, index, self) =>
             index === 0 || tick.x !== self[index - 1].x || tick.type !== 'minor'
         );
+
         return ticks;
     }, [timelineDuration, zoomLevel, fps]);
     
@@ -113,9 +118,11 @@ const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, 
         }
     };
 
+
+  
     return (
         <>
-        <Rect x={0} y={0} width={stageWidth} height={28} fill="#222124" listening={false} />
+        <Rect x={0} y={0} width={stageWidth} height={28} fill={maxScroll > 0 && thumbY() > 24 ? "#222124" : undefined} listening={false} />
             {tickMark.map((tick, index) => {
                 // Calculate x position based on timeline progress
                 const progress = (tick.x - startFrame) / (endFrame - startFrame);
@@ -173,93 +180,18 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
   const panStateRef = useRef({ startX: 0, lastX: 0, startFrame: 0, fractionalFrames: 0 });
   const wheelRemainderRef = useRef(0);
   const timelinesLayerRef = useRef<Konva.Layer | null>(null);
-  const [hasExtendedTimeline, setHasExtendedTimeline] = useState(false);
+  
   const [verticalScroll, setVerticalScroll] = useState(0);
   const verticalScrollRef = useRef(0);
   const [isScrollbarHovered, setIsScrollbarHovered] = useState(false);
+  
 
 
   // Adjust zoom so that the first incoming clip spans roughly half of the visible window.
   // Only runs when there are no existing clips (timeline length is effectively zero).
-  const adjustZoomForFirstClip = (clipFrames:number) => {
-    try {
-      const clipsState = useClipStore.getState();
-      const hasAnyClips = (clipsState.clips || []).length > 0 || (clipsState.clipDuration || 0) > 0;
-      if (hasAnyClips) return;
+  
 
-      const maxWindow = Math.max(1, MAX_DURATION);
-      const minWindow = Math.max(1, Math.min(MIN_DURATION, maxWindow));
-      const desiredWindow = Math.max(minWindow, Math.min(maxWindow, Math.round(clipFrames * 2)));
-
-      const steps = Math.max(1, MAX_ZOOM - MIN_ZOOM);
-      const ratio = minWindow / maxWindow;
-      const durations:number[] = new Array(steps + 1).fill(0).map((_, i) => {
-        const ti = i / steps;
-        const d = Math.round(maxWindow * Math.pow(ratio, ti));
-        return Math.max(minWindow, Math.min(maxWindow, d));
-      });
-
-      let bestIdx = 0;
-      let bestDiff = Infinity;
-      for (let i = 0; i < durations.length; i++) {
-        const diff = Math.abs(durations[i] - desiredWindow);
-        if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
-      }
-
-      const level = (MIN_ZOOM + bestIdx) as ZoomLevel;
-      const windowLen = durations[bestIdx];
-
-      // Show from start; clip will be at frame 0 for first insert
-      controlStore.setTimelineDuration(0, windowLen);
-      controlStore.setFocusFrame(0);
-      controlStore.setZoomLevel(level);
-    } catch {}
-  };
-
-  // Snap current timeline window to the nearest discrete zoom level if it's not aligned.
-  const snapZoomToNearestLevelIfNeeded = () => {
-    try {
-      const [start, end] = controlStore.timelineDuration;
-      const currentLen = Math.max(1, end - start);
-      const total = Math.max(1, controlStore.totalTimelineFrames);
-
-      const maxWindow = Math.max(1, MAX_DURATION);
-      const minWindow = Math.max(1, Math.min(MIN_DURATION, maxWindow));
-      const steps = Math.max(1, MAX_ZOOM - MIN_ZOOM);
-      const ratio = minWindow / maxWindow;
-
-      const durations:number[] = new Array(steps + 1).fill(0).map((_, i) => {
-        const ti = i / steps;
-        const d = Math.round(maxWindow * Math.pow(ratio, ti));
-        return Math.max(minWindow, Math.min(maxWindow, d));
-      });
-
-      // If already aligned to one of the discrete levels, do nothing
-      if (durations.includes(currentLen)) return;
-
-      // Choose nearest duration and corresponding level
-      let bestIdx = 0;
-      let bestDiff = Infinity;
-      for (let i = 0; i < durations.length; i++) {
-        const diff = Math.abs(durations[i] - currentLen);
-        if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
-      }
-      const targetLen = durations[bestIdx];
-      const level = (MIN_ZOOM + bestIdx) as ZoomLevel;
-
-      // Anchor around focusFrame preserving focusAnchorRatio
-      const focus = controlStore.focusFrame;
-      const anchor = controlStore.focusAnchorRatio;
-      let newStart = Math.round(focus - (anchor * targetLen));
-      newStart = Math.max(0, Math.min(newStart, Math.max(0, total - targetLen)));
-      const newEnd = newStart + targetLen;
-
-      const newAnchor = targetLen > 0 ? (focus - newStart) / targetLen : 0.5;
-      controlStore.setFocusAnchorRatio(Math.max(0, Math.min(1, newAnchor)));
-      controlStore.setTimelineDuration(newStart, newEnd);
-      controlStore.setZoomLevel(level);
-    } catch {}
-  };
+  // Removed unused snapZoomToNearestLevelIfNeeded to avoid lints; handled elsewhere.
 
   useDndMonitor({
     onDragStart: (event) => {
@@ -286,7 +218,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const container = containerRef.current;
       let pointerX: number | null = null;
       let pointerY: number | null = null;
-
+      const data = event.active?.data?.current as unknown as MediaItem | undefined;
       if (clips.length === 0) return;
 
     if (container) {
@@ -303,6 +235,9 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       if (pointerX == null || pointerY == null) {
         return;
       }
+
+      // Edge auto-scroll for external DnD moves
+      edgeAutoScroll(pointerY);
 
       // check if the pointer is over a dashed line
       const stage = timelinesLayerRef.current;
@@ -342,7 +277,6 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const stageWidth = dimensions.stageWidth;
       const timelines = useClipStore.getState().timelines;
 
-
       let activeTimelineId: string | null = null;
       for (let i = 0; i < timelines.length; i++) {
         const t = timelines[i];
@@ -354,8 +288,11 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
 
         const isInside = pointerY >= top && pointerY <= bottom && pointerX >= left && pointerX <= right;
         if (isInside) {
-          activeTimelineId = t.timelineId!;
-          break;
+          // check for same type 
+          if (isValidTimelineForClip(t, data!)) {
+            activeTimelineId = t.timelineId!;
+            break;
+          }
         }
       }
 
@@ -371,31 +308,10 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const ghostFrames = useClipStore.getState().ghostStartEndFrame;
       const ghostFramesLen = Math.max(1, (ghostFrames[1] ?? 0) - (ghostFrames[0] ?? 0));
 
-      // Compute desired start/end in FRAME space using pointer center
-      const visibleDurationFrames = Math.max(1, visibleEndFrame - visibleStartFrame);
-      const pointerCenterFrame = visibleStartFrame + (pointerLocalX / stageWidth) * visibleDurationFrames;
-      let desiredStartFrame = Math.max(visibleStartFrame, Math.round(pointerCenterFrame - ghostFramesLen / 2));
-      let desiredEndFrame = desiredStartFrame + ghostFramesLen;
-
-      // If desired clip end exceeds visible end, extend timeline window (and total frames if needed)
-      if (desiredEndFrame > visibleEndFrame) {
-        const controls = useControlsStore.getState();
-        const totalFrames = controls.totalTimelineFrames;
-        if (desiredEndFrame > totalFrames) {
-          controls.incrementTotalTimelineFrames(desiredEndFrame - totalFrames);
-          
-        }
-        controls.setTimelineDuration(visibleStartFrame, desiredEndFrame);
-        // refresh visible window
-        const refreshed = useControlsStore.getState().timelineDuration;
-        visibleStartFrame = refreshed[0];
-        visibleEndFrame = refreshed[1];
-        setHasExtendedTimeline(true);
-      }
-
-      // Recompute ghost width and desired left after any extension
+      // Map pointer directly to ghost's left edge in PX to keep exact alignment
+      const desiredLeftPx = pointerLocalX;
       const ghostWidthPx = getClipWidth(0, ghostFramesLen, stageWidth, [visibleStartFrame, visibleEndFrame]);
-      const desiredLeft = (stageWidth * (desiredStartFrame - visibleStartFrame) / Math.max(1, (visibleEndFrame - visibleStartFrame)));
+      let desiredLeft = desiredLeftPx;
 
       // Build occupied intervals (in px, inner coordinates)
       const getClipsForTimeline = useClipStore.getState().getClipsForTimeline;
@@ -436,35 +352,46 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       if (prev < stageWidth) gaps.push([prev, stageWidth]);
       const validGaps = gaps.filter(([lo, hi]) => hi - lo >= ghostWidthPx);
 
-      // Choose the gap that contains the pointer center, else nearest by center distance
-      const pointerCenter = pointerLocalX;
+      // Choose the gap that can contain the ghost with its LEFT edge under the pointer
+      const pointerLeft = pointerLocalX;
       let chosenGap: [number, number] | null = null;
       for (const gap of validGaps) {
-        if (pointerCenter >= gap[0] && pointerCenter <= gap[1]) { chosenGap = gap; break; }
-      }
-      if (!chosenGap && validGaps.length > 0) {
-        chosenGap = validGaps.reduce((best, gap) => {
-          const gapCenter = (gap[0] + gap[1]) / 2;
-          const bestCenter = (best[0] + best[1]) / 2;
-          return Math.abs(pointerCenter - gapCenter) < Math.abs(pointerCenter - bestCenter) ? gap : best;
-        });
+        if (pointerLeft >= gap[0] && pointerLeft <= gap[1] - ghostWidthPx) { chosenGap = gap; break; }
       }
 
       let validatedLeft = desiredLeft;
       if (chosenGap) {
-        const [gLo, gHi] = chosenGap;
-        validatedLeft = Math.min(Math.max(desiredLeft, gLo), gHi - ghostWidthPx);
+        const [gLo] = chosenGap;
+        // keep pointer alignment; only prevent crossing into the occupied region on the left
+        validatedLeft = Math.max(desiredLeft, gLo);
       } else {
-        // No gap fits fully; just clamp within bounds (ghost may be hidden/invalid on drop)
-        validatedLeft = Math.max(0, Math.min(stageWidth - ghostWidthPx, desiredLeft));
+        // No chosen gap: prevent overriding existing clips on the left edge only
+        // Compute gLo as:
+        // - if pointer is inside an occupied interval [lo, hi], use hi
+        // - else, use the last hi to the left of pointer (or 0 if none)
+        let gLo = 0;
+        for (let i = 0; i < merged.length; i++) {
+          const [lo, hi] = merged[i];
+          if (pointerLeft < lo) {
+            // Pointer is in the gap before this interval; keep current gLo
+            break;
+          }
+          if (pointerLeft <= hi) {
+            // Pointer is inside this occupied interval; set gLo to its right edge
+            gLo = Math.max(gLo, hi);
+            break;
+          }
+          // Pointer is to the right of this interval; advance gLo
+          gLo = Math.max(gLo, hi);
+        }
+        // gHi is conceptually Infinity; just clamp to stage bounds later
+        validatedLeft = Math.max(desiredLeft, gLo);
       }
 
-      // Extend timeline if ghost would exceed current visible end
-      // No additional extension here; we already extended above using frame-space desired position
 
       setGhostTimelineId(activeTimelineId);
       setGhostInStage(true);
-      setGhostX(Math.round(validatedLeft));
+      setGhostX(validatedLeft);
     },
     onDragEnd: (event) => {
       
@@ -479,6 +406,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       if (timelines.length === 0) {
         timelineId = uuidv4();
         const newTimeline = {
+          type: getTimelineTypeForClip(data),
           timelineId,
           timelineWidth: size.width,
           timelineY: 0,
@@ -492,6 +420,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
          const hoveredTimeline = hoveredTimelineIdx !== -1 ? timelines[hoveredTimelineIdx] : null;
          timelineId = uuidv4();
           const newTimeline = {
+          type: data.type === 'image' || data.type === 'video' ? 'media' : data.type as TimelineType,
           timelineId,
           timelineWidth: size.width,
           timelineY: (hoveredTimeline?.timelineY ?? 0) + 64,
@@ -535,8 +464,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           width = mediaInfo.image?.width;
         } 
 
-        // If this is the first clip ever, adjust zoom/window so the clip fills ~1/2
-        adjustZoomForFirstClip(numFrames);
+        
 
         // Use validated ghost position to compute frames
         const state = useClipStore.getState();
@@ -563,32 +491,15 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         let startFrame = Math.round(tStart + (Math.max(0, Math.min(stageWidth, ghostX)) / stageWidth) * visibleDuration);
         let endFrame = startFrame + clipLen;
 
-        // If drop would exceed current window, extend window (and total frames) first
-
-        if (endFrame > tEnd) {
-          const controls = useControlsStore.getState();
-          const totalFrames = controls.totalTimelineFrames;
-          if (endFrame > totalFrames) {
-            controls.incrementTotalTimelineFrames(endFrame - totalFrames);
-            setHasExtendedTimeline(true);
-          }
-          controls.setTimelineDuration(tStart, endFrame);
-          tEnd = endFrame;
-        }
-
-        // Clamp start inside extended window
-        startFrame = Math.max(tStart, Math.min(tEnd - clipLen, startFrame));
-
-        endFrame = startFrame + clipLen;
-
-        // Validate against overlaps on the target timeline (in frame units)
+        // Validate against overlaps on the target timeline across ALL frames
+        // and choose a feasible placement. If no gap at desired position, append at end.
         const getClipsForTimeline = state.getClipsForTimeline;
         const existingClips = getClipsForTimeline(dropTimelineId)
           .map(c => ({ lo: c.startFrame || 0, hi: c.endFrame || 0 }))
           .filter(iv => iv.hi > iv.lo)
           .sort((a, b) => a.lo - b.lo);
 
-        // Merge intervals
+        // Merge intervals globally
         const merged: {lo:number, hi:number}[] = [];
         for (const iv of existingClips) {
           if (merged.length === 0) merged.push({ ...iv });
@@ -598,39 +509,26 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
             else merged.push({ ...iv });
           }
         }
-        // Gaps in frame units within visible window
-        const gaps: {lo:number, hi:number}[] = [];
-        let prev = tStart;
-        for (const iv of merged) {
-          const lo = Math.max(tStart, iv.lo);
-          const hi = Math.min(tEnd, iv.hi);
-          if (lo > prev) gaps.push({ lo: prev, hi: lo });
-          prev = Math.max(prev, hi);
-        }
-        if (prev < tEnd) gaps.push({ lo: prev, hi: tEnd });
-        const validGaps = gaps.filter(g => g.hi - g.lo >= clipLen);
-        // Choose gap containing target start or nearest by center
-        let chosen = validGaps.find(g => startFrame >= g.lo && (startFrame + clipLen) <= g.hi) || null;
-        if (!chosen && validGaps.length > 0) {
-          const desiredCenter = startFrame + clipLen / 2;
-          chosen = validGaps.reduce((best, g) => {
-            const gCenter = (g.lo + g.hi) / 2;
-            const bCenter = (best.lo + best.hi) / 2;
-            return Math.abs(desiredCenter - gCenter) < Math.abs(desiredCenter - bCenter) ? g : best;
-          });
-        }
 
-        if (chosen) {
-          startFrame = Math.min(Math.max(startFrame, chosen.lo), chosen.hi - clipLen);
-          endFrame = startFrame + clipLen;
+        // Try to place at or after requested startFrame without overlap
+        let placementStart = Math.max(0, startFrame);
+        if (merged.length === 0) {
+          // No existing clips; keep startFrame as selected (0 if first clip logic below)
         } else {
-          // No room; cancel drop
-          setActiveMediaItem(null);
-          setGhostTimelineId(null);
-          setGhostStartEndFrame(0, 0);
-          setGhostX(0);
-          return;
-        } 
+          // Advance placementStart past any overlapping intervals
+          for (const iv of merged) {
+            if (placementStart + clipLen <= iv.lo) {
+              // Fits before this interval
+              break;
+            }
+            if (placementStart < iv.hi) {
+              // Overlaps; move right after this interval and continue
+              placementStart = iv.hi;
+            }
+          }
+        }
+        startFrame = existingClips.length === 0 ? (existingClips.length === 0 ? 0 : placementStart) : placementStart;
+        endFrame = startFrame + clipLen;
 
         const newClip = {
           timelineId: dropTimelineId,
@@ -638,41 +536,21 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           startFrame: existingClips.length === 0 ? 0 : startFrame,
           endFrame,
           src: data.assetUrl,
-          type: data.type as ClipType,
+          type: data.type,
           framesToGiveEnd: framesToGiveEnd,
           framesToGiveStart: framesToGiveStart,
           height: height,
           width:width
         };
 
-        addClip(newClip);
-        
-        const timelineDuration = useControlsStore.getState().timelineDuration;
-        if (timelineDuration[1] - timelineDuration[0] > MAX_DURATION) {
-          try {
-            const controls = useControlsStore.getState();
-            const windowLength = 1440; // frames
-            const desiredStart = startFrame;
-            const desiredEnd = desiredStart + windowLength;
-            if (controls.totalTimelineFrames < desiredEnd) {
-              controls.incrementTotalTimelineFrames(desiredEnd - controls.totalTimelineFrames);
-            }
-            controls.setTimelineDuration(desiredStart, desiredEnd);
-            controls.setFocusFrame(desiredStart);
-          } catch {}
-        }
-        
+        addClip(newClip as AnyClipProps);
+
         setActiveMediaItem(null);
         setGhostTimelineId(null);
         setGhostStartEndFrame(0, 0);
         setGhostX(0);
 
-        // If we extended the window during drag, snap the zoom to the nearest level
-
-        if (hasExtendedTimeline) {
-          snapZoomToNearestLevelIfNeeded();
-          setHasExtendedTimeline(false);
-        }
+        // Baseline and zoom level recalibration happen within addClip -> _updateZoomLevel
 
       }
     
@@ -742,6 +620,48 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
   useEffect(() => {
     verticalScrollRef.current = clampedScroll;
   }, [clampedScroll]);
+
+  // Auto-scroll when dragging near top/bottom edges (both external DnD and internal clip drags)
+  const edgeAutoScroll = useCallback((pointerY: number) => {
+    if (maxScroll <= 0) return;
+    const stageHeight = dimensions.stageHeight || 0;
+    const TOP_MARGIN = 24; // ruler height
+    const EDGE_ZONE = 36;  // px threshold near edges
+    const MAX_DELTA = 28;  // px per invocation
+
+    // Scroll up when within top edge zone (below the ruler)
+    const topEdgeY = TOP_MARGIN + EDGE_ZONE;
+    if (pointerY <= topEdgeY) {
+      const intensity = Math.max(0, (topEdgeY - pointerY) / EDGE_ZONE);
+      const delta = Math.max(6, Math.round(intensity * MAX_DELTA));
+      setVerticalScroll((prev) => Math.max(0, prev - delta));
+      return;
+    }
+
+    // Scroll down when within bottom edge zone
+    const bottomEdgeStart = Math.max(0, stageHeight - EDGE_ZONE);
+    if (pointerY >= bottomEdgeStart) {
+      const intensity = Math.max(0, (pointerY - bottomEdgeStart) / EDGE_ZONE);
+      const delta = Math.max(6, Math.round(intensity * MAX_DELTA));
+      setVerticalScroll((prev) => Math.min(maxScroll, prev + delta));
+    }
+  }, [dimensions.stageHeight, maxScroll]);
+
+  // Listen for internal clip drag auto-scroll events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      try {
+        const anyEvt = e as any;
+        const y = Number(anyEvt?.detail?.y);
+        if (!Number.isFinite(y)) return;
+        edgeAutoScroll(y);
+      } catch {}
+    };
+    window.addEventListener('timeline-editor-autoscroll', handler as any);
+    return () => {
+      window.removeEventListener('timeline-editor-autoscroll', handler as any);
+    };
+  }, [edgeAutoScroll]);
 
   // Horizontal scroll/pan with mouse wheel or trackpad
   const handleWheelScroll = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
@@ -818,20 +738,36 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
 
   const hasClips = useMemo(() => clips.length > 0, [clips]);
 
-  const handleStageClick = useCallback((e: any) => {
+  const handleStageClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     // Check if the click target is the stage itself (background click)
     if (e.target === e.target.getStage()) {
       controlStore.clearSelection();
+      const stage = e.target.getStage();
+      const pos = stage?.getPointerPosition();
+      if (!pos) return;
+      // Map pointer X to frame within the visible window [startFrame, endFrame]
+      const timelinePadding = 24; // left padding used by timeline
+      const [startFrame, endFrame] = controlStore.timelineDuration;
+      const innerX = Math.max(0, Math.min((pos.x - timelinePadding), dimensions.stageWidth));
+      const progress = dimensions.stageWidth > 0 ? innerX / dimensions.stageWidth : 0;
+      const targetFrame = Math.round(startFrame + progress * (endFrame - startFrame));
+
+      // Pause if playing, then set focus without auto-resume
+      if (controlStore.isPlaying) controlStore.pause();
+      controlStore.setFocusAnchorRatio(Math.max(0, Math.min(1, progress)));
+      controlStore.setFocusFrame(targetFrame, false);
     }
+    
   }, [controlStore]);
 
   return (
-    <div  className='relative h-full flex flex-col'>
+    <div  className='relative h-full flex flex-row overflow-hidden'>
+      {hasClips && <TimelineSidebar clampedScroll={clampedScroll} />}
       <div className='relative h-full w-full overflow-hidden' ref={containerRef} onWheel={handleWheelScroll}>
         {dimensions.stageWidth > 0 && dimensions.stageHeight > 0 && (
             <>
             {hasClips && (
-                <>
+             <>
             <Stage 
               width={dimensions.stageWidth} 
               height={dimensions.stageHeight} 
@@ -841,17 +777,26 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
               onMouseMove={handleStageMouseMove}
               onMouseUp={endRulerDrag}
               onMouseLeave={endRulerDrag}
-    
               style={{ cursor: isRulerDragging ? 'grabbing' : 'default' }}
             >
                 <Layer ref={timelinesLayerRef} visible={hasClips} y={-clampedScroll}>
                     {timelines.map((timeline, index) => (
-                        <Timeline key={timeline.timelineId} scrollY={clampedScroll} index={index} timelineWidth={dimensions.stageWidth} timelineY={timeline.timelineY} timelineHeight={timeline.timelineHeight} timelineId={timeline.timelineId} />
+                        <Timeline key={timeline.timelineId} scrollY={clampedScroll} index={index} type={timeline.type} muted={timeline.muted} hidden={timeline.hidden} timelineWidth={dimensions.stageWidth} timelineY={timeline.timelineY} timelineHeight={timeline.timelineHeight} timelineId={timeline.timelineId} />
                     ))}
                 </Layer>
                 <Layer listening={false} visible={hasClips}>
                     {/* Time labels along the top */}
-                    <TimelineMoments stageWidth={dimensions.stageWidth} startPadding={24} />
+                    <TimelineMoments stageWidth={dimensions.stageWidth} startPadding={24} maxScroll={maxScroll} thumbY={() => {
+                      const trackTop = 24;
+                      const trackBottomPad = 8;
+                      const trackHeight = Math.max(0, dimensions.stageHeight - trackTop - trackBottomPad);
+                      const ratio = Math.max(0, Math.min(1, dimensions.stageHeight / Math.max(1, contentHeight)));
+                      const minThumb = 24;
+                      const thumbHeight = Math.max(minThumb, Math.round(trackHeight * ratio));
+                      const maxThumbY = Math.max(0, trackHeight - thumbHeight);
+                      const thumbY = trackTop + (maxScroll > 0 ? Math.round((clampedScroll / maxScroll) * maxThumbY) : 0);
+                      return thumbY;
+                    }} />
                 </Layer>
                 {/* Snap guideline overlay */}
                 <Layer listening={false}>

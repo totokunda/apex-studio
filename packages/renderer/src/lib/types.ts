@@ -1,6 +1,8 @@
 import { PacketStats, InputVideoTrack, InputAudioTrack, MetadataTags, InputFormat } from "mediabunny";
 
-export type ClipType = 'video' | 'image' | 'audio'
+export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora'
+export type TimelineType = 'media' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora'
+export type ViewTool = 'pointer' | 'hand' | 'mask' | 'draw' | 'shape'| 'text'
 
 export interface ClipTransform {
     x: number;
@@ -36,11 +38,14 @@ export interface ClipProps {
 }
 
 export interface TimelineProps {
+    type: TimelineType;
     timelineId: string;
     timelineWidth?: number;
     timelineY?: number;
     timelineHeight?:number;
     timelinePadding?:number;
+    muted: boolean;
+    hidden: boolean;
 }
 
 
@@ -61,7 +66,7 @@ export type AudioClipProps = ClipProps & {
 
 export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps;
 
-export type ZoomLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+export type ZoomLevel = number;
 
 export type InputImageTrack = {
     width: number;
@@ -103,4 +108,4 @@ export interface Point {
     y: number;
   }
 
-export type SidebarSection = 'media' | 'models' | 'tracks' | 'loras' | 'templates';
+export type SidebarSection = 'media' | 'models' | 'effects' | 'loras' | 'templates';

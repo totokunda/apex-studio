@@ -7,7 +7,6 @@ import { TbFileUpload, TbFolderUp} from "react-icons/tb";
 import { ScrollArea } from "@/components/ui/scroll-area"
 import Item, { MediaItem } from '@/components/media/Item'
 
-
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -18,8 +17,8 @@ import {
 import { cn } from '@/lib/utils';
 import { BsFilter } from "react-icons/bs";
 import { DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu";
-import { getMediaInfo } from '@/lib/media/utils';
 import { listConvertedMedia, importMediaPaths, ensureUniqueConvertedName, renameMediaPair, deleteMediaPair, getLowercaseExtension, pickMediaPaths } from '@app/preload';
+import { getMediaInfo } from '@/lib/media/utils';
 import { VIDEO_EXTS, IMAGE_EXTS, AUDIO_EXTS } from '@/lib/settings';
  
 
@@ -49,7 +48,6 @@ async function pickFilesViaInput(directory: boolean): Promise<string[] | undefin
 interface MediaSidebarProps {
     onClose: () => void;
 }
-
 
 
 // (unused with Electron file picker)

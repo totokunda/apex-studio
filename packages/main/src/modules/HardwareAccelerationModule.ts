@@ -4,7 +4,6 @@ import {ModuleContext} from '../ModuleContext.js';
 export class HardwareAccelerationModule implements AppModule {
   readonly #shouldBeDisabled: boolean;
 
-
   constructor({enable}: {enable: boolean}) {
     this.#shouldBeDisabled = !enable;
   }

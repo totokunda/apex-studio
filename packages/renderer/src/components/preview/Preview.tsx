@@ -50,6 +50,24 @@ const Preview:React.FC<PreviewProps> = () => {
     return sortedClips;
   }, [timelines])
 
+  const filterClips = useCallback((clips: AnyClipProps[], audio:boolean = false) => {
+    const filteredClips = clips.filter((clip) => {
+      const timeline = timelines.find((t) => t.timelineId === clip.timelineId);
+      
+      if (audio) {
+        if (timeline?.muted) {
+          return false;
+        }
+      }
+      if (timeline?.hidden) {
+        return false;
+      }
+      return true;
+    });
+
+    return filteredClips;
+  }, [timelines])
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -209,7 +227,7 @@ const Preview:React.FC<PreviewProps> = () => {
         >
          <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale} width={rectWidth} height={rectHeight} >
           <Rect x={0} y={0}  width={rectWidth} height={rectHeight} fill={'#000000'} />
-             {sortClips(clips).map((clip) => {
+             {sortClips(filterClips(clips)).map((clip) => {
               const clipAtFrame = clipWithinFrame(clip, focusFrame);
               if (!clipAtFrame) return null;
                if (clipAtFrame) {
@@ -231,7 +249,7 @@ const Preview:React.FC<PreviewProps> = () => {
 
     </div>
     {/* Mount non-visual audio previews OUTSIDE Konva tree so effects run */}
-    {sortClips(clips).map((clip) => {
+    {sortClips(filterClips(clips, true)).map((clip) => {
       const clipAtFrame = clipWithinFrame(clip, focusFrame);
       if (!clipAtFrame) return null;
       if (clip.type === 'audio' || clip.type === 'video') {

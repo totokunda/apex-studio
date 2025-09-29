@@ -9,7 +9,7 @@ interface ZoomLevelConfig {
 }
 
 // Calculate dynamic tick intervals based on duration and zoom level
-export const getZoomLevelConfig = (zoomLevel: ZoomLevel, timelineDuration: [number, number], fps: number = 24): ZoomLevelConfig => {
+export const getZoomLevelConfig = (zoomLevel: ZoomLevel, timelineDuration: [number, number], fps: number = 24, maxZoomLevel: ZoomLevel = 10, minZoomLevel: ZoomLevel = 1): ZoomLevelConfig => {
     // Target tick counts: 50 ticks at zoom 1, 10 ticks at zoom 10
     const targetTicks = 50 - ((zoomLevel - 1) * 4.4); // Linear progression from 50 to ~10
     const [startFrame, endFrame] = timelineDuration;
@@ -21,7 +21,8 @@ export const getZoomLevelConfig = (zoomLevel: ZoomLevel, timelineDuration: [numb
     let format: 'frame' | 'second' = 'second';
     
     // For higher zoom levels (7-10), switch to frame-based ticks
-    if (zoomLevel >= 7) {
+    const seventyPercentThresh = minZoomLevel + (maxZoomLevel - minZoomLevel) * 0.7;
+    if (zoomLevel >= seventyPercentThresh) {
         format = 'frame';
         minorTickInterval = Math.max(1, Math.round((endFrame - startFrame) / targetTicks));
     } else {

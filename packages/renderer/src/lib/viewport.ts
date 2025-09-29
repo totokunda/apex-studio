@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { Point } from "./types";
-type ViewTool = 'pointer' | 'hand';
+import { Point, ViewTool } from "./types";
+
 
 
 interface ViewportState {
@@ -26,11 +26,11 @@ interface ViewportState {
   setPosition: (position: Point) => void;
   panBy: (deltaX: number, deltaY: number) => void;
   centerOnWorldPoint: (worldPoint: Point, viewportSize: { width: number; height: number }) => void;
-  centerContentAt100: () => void;
+  centerContentAt: (percent: number) => void;
 }
 
 export const useViewportStore = create<ViewportState>((set, get) => ({
-  scale: 1,
+  scale: 0.75,
   minScale: 0.1,
   maxScale: 4,
   position: { x: 0, y: 0 },
@@ -116,14 +116,14 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
     };
     return { position };
   }),
-  centerContentAt100: () => {
+  centerContentAt: (percent) => {
     const { contentBounds, viewportSize } = get();
     if (!contentBounds) return;
     const worldCenter = {
       x: contentBounds.x + contentBounds.width / 2,
       y: contentBounds.y + contentBounds.height / 2,
     };
-    const scale = 1;
+    const scale = percent / 100;
     const centerScreen = { x: viewportSize.width / 2, y: viewportSize.height / 2 };
     const position = {
       x: centerScreen.x - worldCenter.x * scale,

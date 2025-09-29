@@ -11,13 +11,11 @@ interface DeleteAlertDialogProps {
 }
 
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog"
-import { MediaInfo } from '@/lib/types'
+import { ClipType, MediaInfo } from '@/lib/types'
 import { generateAudioWaveformCanvas, generatePosterCanvas } from '@/lib/media/timeline'
-import Draggable from '../dnd/Draggable'
-
+import Draggable from '@/components/dnd/Draggable'
 
 const DeleteAlertDialog: React.FC<React.PropsWithChildren<DeleteAlertDialogProps>> = ({ onDelete, open, onOpenChange}) => {
-
     return (
       <AlertDialog open={open} onOpenChange={onOpenChange}>
         <AlertDialogContent className='dark bg-brand font-poppins'>
@@ -36,7 +34,7 @@ const DeleteAlertDialog: React.FC<React.PropsWithChildren<DeleteAlertDialogProps
 
 export type MediaItem = {
     name: string;
-    type: 'video' | 'image' | 'audio' | 'other';
+    type: ClipType
     absPath: string;
     assetUrl: string;
     dateAddedMs?: number;

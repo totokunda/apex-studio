@@ -1,4 +1,4 @@
-import { CanvasSink, VideoSampleSink, AudioBufferSink } from "mediabunny";
+import { CanvasSink, AudioBufferSink } from "mediabunny";
 
 
 export type VideoDecoderKey = string; // `${path}#video`
@@ -6,7 +6,7 @@ export type CanvasDecoderKey = string; // `${path}#canvas@${width}x${height}`
 export type AudioDecoderKey = string; // `${path}#audio`
 
 export interface VideoDecoderContext {
-    sink: VideoSampleSink;
+    sink: CanvasSink;
     inFlight: Set<number>;
     lastAccessTs: number;
     frameRate: number;

@@ -9,10 +9,9 @@ import { MediaInfo } from "../types";
 import { MediaCache } from "./cache";
 import { IMAGE_EXTS } from "../settings";
 import { readImageMetadataFast } from "./image";
-import { Input, ALL_FORMATS,  BlobSource } from "mediabunny";
-import { getLowercaseExtension, readFileBuffer } from "@app/preload";
+import { Input, ALL_FORMATS, BlobSource, UrlSource } from "mediabunny";
+import { getLowercaseExtension, readFileBuffer, fileURLToPath } from "@app/preload";
 import { useControlsStore } from "../control";
-
 
 export function nowMs(): number {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -58,9 +57,10 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
     // Prefer streaming via UrlSource, but fall back to BlobSource if the server truncates streams or range reads fail
     let input: Input | null = null;
     try {
-        const buffer = await readFileBuffer(path);
-        const blob = new Blob([buffer as unknown as ArrayBuffer]);
-        input = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });
+        const filePath = fileURLToPath(path);  
+        // replace userDatab path 
+        const url = new URL(`app://user-data/${filePath}`);
+        input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
     } catch (e) {
         console.error('Error reading file', e);
         input = null;
@@ -86,9 +86,8 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
     } catch (e) {
         // Fallback: fetch the entire resource as a Blob and use BlobSource to avoid streaming issues
         try {
-            const resp = await fetch(path, { cache: 'no-store', credentials: 'omit', mode: 'cors' });
-            if (!resp.ok) throw new Error(`Failed to fetch media: ${resp.status} ${resp.statusText}`);
-            const blob = await resp.blob();
+            const buffer = await readFileBuffer(path);
+            const blob = new Blob([buffer as unknown as ArrayBuffer]);
             const blobInput = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });
             infoBundle = await gatherInfo(blobInput);
         } catch (fallbackErr) {

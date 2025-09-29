@@ -1,40 +1,17 @@
-import { MediaInfo, VideoClipProps } from '@/lib/types'
+import { MediaInfo, VideoClipProps} from '@/lib/types'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {Image, Transformer, Group, Line} from 'react-konva'
-import {fetchVideoSample, prefetchVideoSamples, setIdleDecodeTarget, removeIdleDecodeTarget} from '@/lib/media/video'
+import {getVideoIterator} from '@/lib/media/video'
 import {getMediaInfo} from '@/lib/media/utils'
 import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
 import { useClipStore } from '@/lib/clip';
+import { WrappedCanvas } from 'mediabunny';
 
-const usePrefetch = (mediaInfo: MediaInfo | null, framesToPrefetch: number, currentFrame: number, path: string) => {
-    const {codedWidth = 0, codedHeight = 0} = mediaInfo?.video || {};
-    useEffect(() => {
-      if (!mediaInfo) return;
-      if (!Number.isFinite(currentFrame)) return;
-      if (framesToPrefetch <= 0) return;
-      (async () => {
-        const secondDuration = mediaInfo.duration ?? 1;
-        const packetRate = mediaInfo.stats.video?.averagePacketRate ?? 1;
-        const totalFrames = secondDuration*packetRate;
-        const center = Math.max(0, Math.min(totalFrames, Math.floor(currentFrame)));
-        const half = Math.floor(framesToPrefetch / 2);
-        const minFrame = Math.max(0, center - half);
-        const maxFrame = Math.min(totalFrames, center + half);
-        const count = maxFrame - minFrame + 1;
-        if (count <= 0) return;
-        const frameIndices = Array.from({length: count}, (_, i) => minFrame + i);
-        try {
-          await prefetchVideoSamples(path, frameIndices, codedWidth, codedHeight, {mediaInfo});
-        } catch (e) {
-          console.error(e);
-        }
-      })();
-    }, [currentFrame, framesToPrefetch, mediaInfo, path, codedWidth, codedHeight]);
-}
+// (prefetch helper removed by request; timeline-driven rendering only)
 
-const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number}> = ({ src, clipId, startFrame = 0, framesToPrefetch = 96, rectWidth, rectHeight, framesToGiveStart}) => {
+const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart}) => {
     const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
     const focusFrame = useControlsStore((state) => state.focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -61,8 +38,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
       return aspectRatio;
     }, [mediaInfo?.video?.codedWidth, mediaInfo?.video?.codedHeight]);
 
-
-
     const groupRef = useRef<Konva.Group>(null);
     const SNAP_THRESHOLD_PX = 4; // pixels at screen scale
     const [guides, setGuides] = useState({
@@ -80,7 +55,11 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const [isInteracting, setIsInteracting] = useState(false);
     const [isRotating, setIsRotating] = useState(false);
     const [isTransforming, setIsTransforming] = useState(false);
-
+    const iteratorRef = useRef<AsyncIterable<WrappedCanvas | null> | null>(null);
+    const isPlaying = useControlsStore((s) => s.isPlaying);
+    const fps = useControlsStore((s) => s.fps);
+    const currentStartFrameRef = useRef<number>(0);
+    const lastRenderedFrameRef = useRef<number>(-1);
     const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean }) => {
         if (isRotating) return; // disable guides/snapping while rotating
         const node = imageRef.current;
@@ -310,53 +289,132 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         }
     }, [displayWidth, displayHeight]);
 
-    const draw = useCallback(async () => {
+
+    const drawWrappedCanvas = useCallback((wc: WrappedCanvas) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.imageSmoothingEnabled = true;
+        // @ts-ignore
+        ctx.imageSmoothingQuality = 'high';
+        try { ctx.drawImage(wc.canvas, 0, 0, canvas.width, canvas.height); } catch {}
+        imageRef.current?.getLayer()?.batchDraw?.();
+    }, []);
+
+    const seekAndDraw = useCallback(async () => {
         if (!canvasRef.current) return;
         if (!mediaInfo) return;
         if (!displayWidth || !displayHeight) return;
+        const frameRate = mediaInfo.stats.video?.averagePacketRate || fps || 0;
+        if (!Number.isFinite(frameRate) || frameRate <= 0) return;
+        const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * frameRate));
+        const targetFrame = Math.max(0, Math.min(totalFrames, Math.floor(currentFrame)));
+        // cancel any previous iterator
+        drawTokenRef.current++;
+        // @ts-ignore
+        iteratorRef.current?.return?.();
+        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: frameRate, index: targetFrame });
+        try {
+            // try a few samples in case the first frames are undecodable/null
+            let tries = 0;
+            while (tries < 8) {
+                // @ts-ignore
+                const res = await (iteratorRef.current as any).next();
+                const wc: WrappedCanvas | null = res?.value || null;
+                if (wc) {
+                    drawWrappedCanvas(wc);
+                    lastRenderedFrameRef.current = targetFrame;
+                    break;
+                }
+                tries++;
+            }
+        } catch (e) {
+            console.warn('[video] seek draw failed', e);
+        }
+    }, [mediaInfo, fps, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas]);
+
+    const startRendering = useCallback(async () => {
+        if (!canvasRef.current) return;
+        if (!mediaInfo) return;
+        if (!displayWidth || !displayHeight) return;
+        const frameRate = mediaInfo.stats.video?.averagePacketRate || fps || 0;
+        if (!Number.isFinite(frameRate) || frameRate <= 0) return;
+        const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * frameRate));
+        const startIdx = Math.max(0, Math.min(totalFrames, Math.floor(currentFrame)));
+        currentStartFrameRef.current = startIdx;
+        lastRenderedFrameRef.current = startIdx - 1;
+
+        const myToken = ++drawTokenRef.current;
+        // @ts-ignore
+        iteratorRef.current?.return?.();
+        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: frameRate, index: startIdx });
 
         try {
-            const secondDuration = mediaInfo.duration ?? 1;
-            const packetRate = mediaInfo.stats.video?.averagePacketRate ?? 1;
-            const totalFrames = secondDuration*packetRate;
-            const targetFrame = Math.max(0, Math.min(totalFrames, Math.floor(currentFrame)));
+            for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
+                if (myToken !== drawTokenRef.current) break;
+                if (!useControlsStore.getState().isPlaying) break;
+                if (!wc) continue;
 
-            const myToken = ++drawTokenRef.current;
-            const sample = await fetchVideoSample(src, targetFrame, mediaInfo?.video?.codedWidth, mediaInfo?.video?.codedHeight, {mediaInfo});
-            if (!sample) return;
-            if (myToken !== drawTokenRef.current) return;
+                // Determine the decoded sample's frame index
+                const ts: number | undefined = (wc as any)?.timestamp;
+                let sampleIdx = Number.isFinite(ts as number) ? Math.round((ts as number) * frameRate) : (lastRenderedFrameRef.current + 1);
 
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) return;
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-            sample.draw(ctx, 0, 0, canvas.width, canvas.height);
-            imageRef.current?.getLayer()?.batchDraw?.();
+                // Compute current timeline-local frame (clip space)
+                const computeLocalFocus = () => {
+                    const store = useControlsStore.getState();
+                    return Math.max(0, Math.floor((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
+                };
+
+                // Skip stale frames that are behind the timeline by more than 1 frame
+                let localFocus = computeLocalFocus();
+                if (sampleIdx < localFocus - 1) {
+                    lastRenderedFrameRef.current = sampleIdx;
+                    continue;
+                }
+
+                // If we're ahead of the timeline, wait until the timeline catches up
+                while (sampleIdx > (localFocus = computeLocalFocus())) {
+                    if (myToken !== drawTokenRef.current) break;
+                    if (!useControlsStore.getState().isPlaying) break;
+                    // Small sleep to pace to timeline FPS (about half frame duration)
+                    const delayMs = Math.max(4, Math.floor(1000 / Math.max(1, frameRate)) >> 1);
+                    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+                }
+                if (myToken !== drawTokenRef.current) break;
+                if (!useControlsStore.getState().isPlaying) break;
+
+                drawWrappedCanvas(wc as WrappedCanvas);
+                lastRenderedFrameRef.current = sampleIdx;
+            }
         } catch (e) {
-            console.error(e);
+            // swallow
         }
-    }, [mediaInfo, currentFrame, src, displayWidth, displayHeight]);
+    }, [mediaInfo, fps, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas]);
 
-    usePrefetch(mediaInfo, framesToPrefetch, currentFrame, src);
-
-  // Continuously decode frames when idle so the cache stays warm
-  useEffect(() => {
-      if (!mediaInfo || !mediaInfo.video) return;
-      const { codedWidth = 0, codedHeight = 0 } = mediaInfo.video || {};
-      if (!codedWidth || !codedHeight) return;
-      if (!Number.isFinite(currentFrame)) return;
-      setIdleDecodeTarget(src, Math.max(0, Math.floor(currentFrame)), codedWidth, codedHeight, { mediaInfo });
-      return () => {
-          removeIdleDecodeTarget(src);
-      };
-  }, [src, mediaInfo, currentFrame]);
-
+    // Start/stop iterator based on play state. Avoid depending on callbacks to prevent restarting every frame.
     useEffect(() => {
-        draw();
-    }, [draw]);
+        if (isPlaying) {
+            void startRendering();
+        } else {
+            void seekAndDraw();
+        }
+        return () => {
+            drawTokenRef.current++;
+            // @ts-ignore
+            iteratorRef.current?.return?.();
+        };
+    }, [isPlaying, src, mediaInfo, displayWidth, displayHeight, fps]);
+
+    // While paused, redraw immediately on scrubs/jumps
+    useEffect(() => {
+        if (isPlaying) return;
+        void seekAndDraw();
+    }, [currentFrame, isPlaying, seekAndDraw]);
+
+    // While playing, do not restart iterator on every focusFrame tick; decoding loop drives rendering.
+
 
     const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
         updateGuidesAndMaybeSnap({ snap: true });

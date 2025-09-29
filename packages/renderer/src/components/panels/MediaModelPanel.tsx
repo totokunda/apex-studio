@@ -5,10 +5,10 @@ import { useSidebarStore } from '@/lib/sidebar'
 import MediaMenu from '@/components/media/MediaMenu'
 import { ImperativePanelHandle } from 'react-resizable-panels'
 import { HiFilm } from "react-icons/hi";
-import { LuTrainTrack } from "react-icons/lu";
+import { MdPhotoFilter } from "react-icons/md";
 import { HiOutlineTemplate } from "react-icons/hi";
-import { HiOutlineLightBulb } from "react-icons/hi";
 import { MdOutlineMovieFilter } from 'react-icons/md'
+import { TbWand } from "react-icons/tb";
 import MediaModelTrigger from '../media/MediaModelTrigger'
 
 interface MediaModelPanelProps { order?: number; defaultSize?: number; minSize?: number }
@@ -52,8 +52,8 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
   >
     <div className="flex flex-row gap-x-2 p-3 px-5 pb-1 w-full">
         <MediaModelTrigger icon={<HiFilm className="h-4 w-4" />} title="Media" section="media" onOpen={resizePanelOpen} onClose={resizePanelClose} />
-        <MediaModelTrigger icon={<HiOutlineLightBulb className="h-4 w-4 stroke-2" />} title="Models" section="models" onOpen={resizePanelOpen} onClose={resizePanelClose} />
-        <MediaModelTrigger icon={<LuTrainTrack className="h-4 w-4 stroke-2" />} title="Tracks" section="tracks" onOpen={resizePanelOpen} onClose={resizePanelClose} />
+        <MediaModelTrigger icon={<TbWand className="h-4 w-4 stroke-2" />} title="Models" section="models" onOpen={resizePanelOpen} onClose={resizePanelClose} />
+        <MediaModelTrigger icon={<MdPhotoFilter className="h-4 w-4 " />} title="Effects" section="effects" onOpen={resizePanelOpen} onClose={resizePanelClose} />
         <MediaModelTrigger icon={<MdOutlineMovieFilter className="h-4 w-4 " />} title="LoRAs" section="loras" onOpen={resizePanelOpen} onClose={resizePanelClose} />
         <MediaModelTrigger icon={<HiOutlineTemplate className="h-4 w-4 stroke-2" />} title="Templates" section="templates" onOpen={resizePanelOpen} onClose={resizePanelClose} />
     </div>

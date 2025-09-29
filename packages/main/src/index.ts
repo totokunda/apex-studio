@@ -9,7 +9,8 @@ import {allowInternalOrigins} from './modules/BlockNotAllowdOrigins.js';
 import {allowExternalUrls} from './modules/ExternalUrls.js';
 import {chromeDevToolsExtension} from './modules/ChromeDevToolsExtension.js';
 import {createNativeFileDialogModule} from './modules/NativeFileDialog.js';
-
+import {apexApi} from './modules/ApexApi.js';
+import {appDirProtocol} from './modules/AppDirProtocol.js';
 
 export async function initApp(initConfig: AppInitConfig) {
   let moduleRunner = createModuleRunner()
@@ -39,7 +40,9 @@ export async function initApp(initConfig: AppInitConfig) {
           ]
           : [],
       )),
-    );
+    )
+    .init(apexApi())
+    .init(appDirProtocol());
   // Native file dialog for renderer via preload
   moduleRunner = moduleRunner.init(createNativeFileDialogModule());
 

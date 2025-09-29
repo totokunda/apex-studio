@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type AppLayoutId = "default" | "sidebar-right" | "three-column";
+export type AppLayoutId = "default" | "media" | "properties";
 
 interface LayoutConfigState {
   layout: AppLayoutId;

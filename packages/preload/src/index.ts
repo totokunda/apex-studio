@@ -11,6 +11,7 @@ import {join} from 'node:path';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 import {AUDIO_EXTS, IMAGE_EXTS, VIDEO_EXTS, getLowercaseExtension} from './media/fileExts.js';
 import {ensureUniqueNameSync} from './media/links.js';
+import { ClipType } from '../../renderer/src/lib/types.js';
 
 function send(channel: string, message: string) {
   return ipcRenderer.invoke(channel, message);
@@ -39,12 +40,17 @@ const readFileBuffer = async (path: string) => {
   return buffer;
 }
 
+const readFileStream = async (path: string) => {
+  const stream = await fs.createReadStream(fileURLToPath(path));
+  return stream;
+}
+
 export type ConvertedMediaItem = {
   name: string;
   absPath: string;
   assetUrl: string;
   dateAddedMs: number;
-  type: 'video' | 'image' | 'audio' | 'other';
+  type: ClipType;
 };
 
 function isSupportedExt(ext: string): boolean {
@@ -82,7 +88,7 @@ async function listConvertedMedia(): Promise<ConvertedMediaItem[]> {
       dateAddedMs = st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateAddedMs;
     } catch {}
     const assetUrl = pathToFileURL(absPath).href;
-    const type: ConvertedMediaItem['type'] = VIDEO_EXTS.has(ext) ? 'video' : IMAGE_EXTS.has(ext) ? 'image' : AUDIO_EXTS.has(ext) ? 'audio' : 'other';
+    const type: ConvertedMediaItem['type'] = VIDEO_EXTS.has(ext) ? 'video' : IMAGE_EXTS.has(ext) ? 'image' : AUDIO_EXTS.has(ext) ? 'audio':'video';
     items.push({ name, absPath, assetUrl, dateAddedMs, type });
   }
   items.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
@@ -116,6 +122,8 @@ async function ensureUniqueConvertedName(desiredName: string): Promise<string> {
   return ensureUniqueNameSync(convertedAbs, desiredName);
 }
 
+
+
 export {
   sha256sum,
   versions,
@@ -129,5 +137,8 @@ export {
   ensureUniqueConvertedName,
   pickMediaPaths,
   getLowercaseExtension,
-  readFileBuffer
+  readFileBuffer,
+  readFileStream,
+  pathToFileURL,
+  fileURLToPath
 };

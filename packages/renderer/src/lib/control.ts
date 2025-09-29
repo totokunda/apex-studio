@@ -44,6 +44,10 @@ const __playbackTick = (now: number) => {
 };
 
 interface ControlStore {
+    maxZoomLevel: ZoomLevel;
+    setMaxZoomLevel: (level: ZoomLevel) => void;
+    minZoomLevel: ZoomLevel;
+    setMinZoomLevel: (level: ZoomLevel) => void;
     zoomLevel: ZoomLevel;
     setZoomLevel: (level: ZoomLevel) => void;
     totalTimelineFrames: number; // total frames in the timeline
@@ -74,6 +78,10 @@ interface ControlStore {
 
 export const useControlsStore = create<ControlStore>((set, get) => ({
     // Zoom State
+    maxZoomLevel: 10,
+    setMaxZoomLevel: (level) => set({ maxZoomLevel: level }),
+    minZoomLevel: 1,
+    setMinZoomLevel: (level) => set({ minZoomLevel: level }),
     zoomLevel: 1,
     setZoomLevel: (level) => set({ zoomLevel: level }),
     // Timeline State
@@ -88,7 +96,7 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     canTimelineDurationBeShifted: (duration: number) => {
         const state = get();
         // Preserve existing rule
-        const basicAllowed = state.totalTimelineFrames - duration > MAX_DURATION;
+        const basicAllowed = state.totalTimelineFrames - duration > state.totalTimelineFrames;
         if (basicAllowed) return true;
 
         // Additional rule:
@@ -126,37 +134,31 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     timelineDuration: [0, TIMELINE_DURATION_SECONDS * DEFAULT_FPS], // [startFrame, endFrame]
     setTimelineDuration: (startFrame: number, endFrame: number) => set({ timelineDuration: [startFrame, endFrame] }),
     shiftTimelineDuration: (duration: number, shiftFocusFrame?: boolean, pause: boolean = false) => { 
-        // check if was playing 
-        const wasPlaying = get().isPlaying ;
-        if (wasPlaying && pause) {
-            get().pause();
-        }
-        set((state) => {
-        
+        const state = get();
         const [startFrame, endFrame] = state.timelineDuration;
         const requestedShift = Math.trunc(duration);
         const minShift = -startFrame; // cannot move left beyond 0
         const maxShift = state.totalTimelineFrames - endFrame; // cannot move right beyond total
         const clampedShift = Math.max(minShift, Math.min(maxShift, requestedShift));
         if (clampedShift === 0) {
-            return { timelineDuration: [startFrame, endFrame] };
+            return;
+        }
+        const wasPlaying = state.isPlaying;
+        if (wasPlaying && pause) {
+            state.pause();
         }
         const newStartFrame = startFrame + clampedShift;
         const newEndFrame = endFrame + clampedShift;
-        if (shiftFocusFrame) {
-            const newFocusFrame = Math.max(0, Math.min(state.totalTimelineFrames - 1, state.focusFrame + clampedShift));
-            return { timelineDuration: [newStartFrame, newEndFrame], focusFrame: newFocusFrame };
-        }
-        return { timelineDuration: [newStartFrame, newEndFrame] };
-    })
-    if (wasPlaying && pause) {
-        if (wasPlaying) {
+        const nextUpdate: Partial<ControlStore> = shiftFocusFrame
+            ? { timelineDuration: [newStartFrame, newEndFrame], focusFrame: Math.max(0, Math.min(state.totalTimelineFrames - 1, state.focusFrame + clampedShift)) }
+            : { timelineDuration: [newStartFrame, newEndFrame] };
+        set(nextUpdate as any);
+        if (wasPlaying && pause) {
             setTimeout(() => {
                 const s = get();
                 if (!s.isPlaying) s.play();
             }, 0);
         }
-    }
     },
     resetTimelineDuration: () => set({ timelineDuration: [0, TIMELINE_DURATION_SECONDS * DEFAULT_FPS] }),
     // FPS State

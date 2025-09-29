@@ -34,14 +34,14 @@ const TopBar:React.FC<TopBarProps> = () => {
                     {layout === 'default' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className='dark text-[11px] flex items-center gap-x-2' onClick={() => { setLayout('sidebar-right'); setLayoutOpen(false); }}>
-                    <span>Sidebar Right</span>
-                    {layout === 'sidebar-right' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
+                  <DropdownMenuItem className='dark text-[11px] flex items-center gap-x-2' onClick={() => { setLayout('media'); setLayoutOpen(false); }}>
+                    <span>Media</span>
+                    {layout === 'media' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className='dark text-[11px] flex items-center gap-x-2' onClick={() => { setLayout('three-column'); setLayoutOpen(false); }}>
-                    <span>3-Column</span>
-                    {layout === 'three-column' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
+                  <DropdownMenuItem className='dark text-[11px] flex items-center gap-x-2' onClick={() => { setLayout('properties'); setLayoutOpen(false); }}>
+                    <span>Properties</span>
+                    {layout === 'properties' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
            </DropdownMenu>

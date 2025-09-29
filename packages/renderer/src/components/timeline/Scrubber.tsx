@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from "react";
 import { useControlsStore } from "@/lib/control";
 import { getZoomLevelConfig } from "@/lib/zoom";
 import { cn } from "@/lib/utils";
-import { useClipStore } from "@/lib/clip";
 
 interface ScrubControlProps {
     stageHeight:number;
@@ -116,7 +115,6 @@ export const ScrubControl:React.FC<ScrubControlProps> = ({stageHeight, stageWidt
     // Reposition scrubber when the visible range or focus frame changes (e.g., zoom in/out)
     useEffect(() => {
         if (!containerRef.current) return;
-        
         // Keep the scrubber centered over the focusFrame in the new viewport
         const minCenterX = startPadding;
         const maxCenterX = startPadding + stageWidth;
@@ -140,12 +138,11 @@ export const ScrubControl:React.FC<ScrubControlProps> = ({stageHeight, stageWidt
         }
     }, [isDragging, timelineDuration, stageWidth, currentFrame]);
     
-
     return(
         <div 
             ref={containerRef}
             onMouseDown={handleMouseDown} 
-            style={{left: Math.min(position, stageWidth - 8)}} 
+            style={{left: Math.min(position, stageWidth)}} 
             className='absolute flex z-[9999] top-0 cursor-col-resize'
         >
             <div className='flex flex-col items-center'>

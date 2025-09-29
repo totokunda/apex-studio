@@ -33,6 +33,7 @@
     "playwright": "^1.55.0"
   },
   "dependencies": {
-    "@app/main": "*"
+    "@app/main": "*",
+    "mime": "^4.1.0"
   }
 }

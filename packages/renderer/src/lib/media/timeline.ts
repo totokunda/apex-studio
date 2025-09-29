@@ -264,8 +264,10 @@ export const generateAudioWaveformCanvas = async (
             amplitudes: amplitudes
         } as WrappedAmplitudes);
     }
+    
 
     const audioClip = getAudioForVideoFrames(amplitudes, options?.startFrame, options?.endFrame);
+
 
     // 1. Define your source and target ranges
     const SOURCE_DB_MIN = -60.0; // What we consider "silence" in the original signal
@@ -417,7 +419,7 @@ export const generatePosterCanvas = async (
         const targetWidth = Math.max(1, Math.floor(width || mediaInfo.video.codedWidth || 320));
         const targetHeight = Math.max(1, Math.floor(height || mediaInfo.video.codedHeight || 180));
         const frameIndex = options?.frameIndex ?? 0;
-        const wrapped = await fetchCanvasSample(path, frameIndex, targetWidth, targetHeight, { mediaInfo });
+        const wrapped = await fetchCanvasSample(path, frameIndex, targetWidth, targetHeight, { mediaInfo, prefetch: false });
         return wrapped?.canvas ?? null;
     } catch (e) {
         console.error(e);

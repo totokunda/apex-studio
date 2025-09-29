@@ -131,6 +131,14 @@ body {
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+.resizer {
+  cursor: col-resize;
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  clip-path: inset(0 50% 0 0); /* Hides right half */
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

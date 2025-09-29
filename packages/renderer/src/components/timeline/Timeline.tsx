@@ -1,13 +1,13 @@
 import React, {useMemo, useEffect } from "react";
 import { Rect,  Line,  Group } from "react-konva";
 import { TimelineProps } from "@/lib/types";
-import { useClipStore } from "@/lib/clip";
+import { useClipStore, getTimelineX } from "@/lib/clip";
 import TimelineClip from "./clips/TimelineClip";
 import GhostTimeline from "./clips/GhostTimeline";
 import { useControlsStore } from "@/lib/control";
 
-    
-const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({timelineWidth, timelineY, timelineHeight = 72, timelinePadding = 24, timelineId, index, scrollY}) => {
+
+const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({timelineWidth, timelineY, timelineHeight = 72, timelinePadding = 24, timelineId, index, scrollY, type, muted, hidden}) => {
     const {hoveredTimelineId, removeTimeline, getTimelineById} = useClipStore();
     const {setFocusFrame, setZoomLevel} = useControlsStore();
 
@@ -30,6 +30,7 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
     const bottomDashGroupY = timelineBottomY + hoverGap - underGroupHeight / 2;
 
     const {getClipsForTimeline, timelines} = useClipStore();
+    const {timelineDuration} = useControlsStore();
     const clips = getClipsForTimeline(timelineId);
     
     useEffect(() => {
@@ -42,6 +43,8 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
             }
         }
     },[timelineId, clips]);
+
+    const timelineX = useMemo(() => getTimelineX(timelineWidth!, timelinePadding, timelineDuration), [timelineWidth, timelinePadding, timelineDuration]);
 
     return (
         <>
@@ -57,23 +60,26 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
             )
            }
             <Rect
-            id={timelineId} x={timelinePadding} y={timelineY! + 40} cornerRadius={8} width={timelineWidth} height={timelineHeight - 16} fill={'rgba(11, 11, 13, 0.25)'}/>
+            id={timelineId} x={timelineX} y={timelineY! + 40} cornerRadius={8} width={timelineWidth! - (timelineX) + 8} height={timelineHeight - 16} fill={'rgba(11, 11, 13, 0.25)'}/>
             
             {clips.map((clip) => (
                     <TimelineClip 
                             key={clip.clipId} 
+                            muted={muted}
+                            hidden={hidden}
                             timelineId={timelineId}
                             clipId={clip.clipId}
                             timelinePadding={timelinePadding}
                             timelineWidth={timelineWidth} 
                             timelineY={timelineYBottom} 
                             timelineHeight={timelineHeight - 16} 
-                            type={clip.type}
+                            clipType={clip.type}
+                            type={type}
                             scrollY={scrollY}
                         />
                     )
                 )}
-            <GhostTimeline timelineId={timelineId} timelineY={timelineYBottom} timelineHeight={timelineHeight - 16} timelinePadding={timelinePadding} timelineWidth={timelineWidth}  />
+            <GhostTimeline timelineId={timelineId} timelineY={timelineYBottom} timelineHeight={timelineHeight - 16} timelinePadding={timelinePadding} timelineWidth={timelineWidth} type={type} muted={muted} hidden={hidden} />
             <Group id={`dashed-${timelineId}`} name={'timeline-dashed'} height={underGroupHeight} x={timelinePadding} y={bottomDashGroupY}>
                 <Line 
                     points={[0, underGroupHeight / 2, timelineWidth!, underGroupHeight / 2]} 
@@ -81,6 +87,10 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
                     strokeWidth={hoveredTimelineId === `dashed-${timelineId}` ? 1.2 : 0} 
                 />
             </Group>
+            {(hidden || (muted && type === 'audio')) && (
+                <Rect
+                id={`hidden-${timelineId}`} x={timelineX} y={timelineY! + 40} cornerRadius={8} width={timelineWidth! - timelineX + 8} height={timelineHeight - 16} fill={'rgba(11, 11, 13, 0.60)'}/>
+            )}
         </>
     )
 }
