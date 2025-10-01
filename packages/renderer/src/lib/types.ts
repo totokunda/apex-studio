@@ -1,8 +1,9 @@
 import { PacketStats, InputVideoTrack, InputAudioTrack, MetadataTags, InputFormat } from "mediabunny";
 
-export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora'
-export type TimelineType = 'media' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora'
+export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora' | 'shape' | 'draw'
+export type TimelineType = 'media' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora' | 'shape' | 'draw'
 export type ViewTool = 'pointer' | 'hand' | 'mask' | 'draw' | 'shape'| 'text'
+export type ShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'line' | 'star'
 
 export interface ClipTransform {
     x: number;
@@ -12,10 +13,12 @@ export interface ClipTransform {
     scaleX: number;
     scaleY: number;
     rotation: number;
+    // Shape-specific properties
+   
 }
 
 export interface ClipProps {
-
+    
     // May be less relevant when adding more timelines, might just store these separately
     timelineId?: string;
     timelineWidth?: number;
@@ -52,6 +55,10 @@ export interface TimelineProps {
 export type VideoClipProps = ClipProps & {
     src: string;
     type: 'video';
+    volume?: number;
+    fadeIn?: number;
+    fadeOut?: number;
+    speed?: number;
 }
 
 export type ImageClipProps = ClipProps & {
@@ -62,9 +69,22 @@ export type ImageClipProps = ClipProps & {
 export type AudioClipProps = ClipProps & {
     src: string;
     type: 'audio';
+    volume?: number;
+    fadeIn?: number;
+    fadeOut?: number;
+    speed?: number;
 }
 
-export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps;
+export type ShapeClipProps = ClipProps & {
+    src: null | undefined;
+    type: 'shape';
+    shapeType?: ShapeTool;
+    fill?: string;
+    stroke?: string;
+    strokeWidth?: number;
+}
+
+export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps;
 
 export type ZoomLevel = number;
 

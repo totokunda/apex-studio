@@ -263,10 +263,7 @@ const Controls = () => {
         <TimeControl />
     </div>
     <div className="flex items-center gap-x-2">
-        <div className="flex items-center  px-3   rounded-md border border-brand-light/10 divide-x divide-brand-light/10">
-    <div  className="pr-2"><ReduceTimelineButton numSeconds={15} /></div>
-    <div  className="pl-2"><ExtendTimelineButton numSeconds={15} /></div>
-    </div>
+
     <div className="ml-3">
         <TimelineZoom />
     </div>

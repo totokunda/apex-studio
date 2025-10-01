@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { Point, ViewTool } from "./types";
+import { Point, ViewTool, ShapeTool } from "./types";
 
 
 
@@ -9,6 +9,7 @@ interface ViewportState {
   maxScale: number;
   position: Point; // stage position in screen space
   tool: ViewTool;
+  shape: ShapeTool;
   clipPositions: Record<string, Point>;
   getClipPosition: (clipId: string) => Point | undefined;
   setClipPosition: (clipId: string, position: Point) => void;
@@ -19,6 +20,7 @@ interface ViewportState {
   aspectRatio: { width: number; height: number; id: string };
   setAspectRatio: (ratio: { width: number; height: number; id: string }) => void;
   setTool: (tool: ViewTool) => void;
+  setShape: (shape: ShapeTool) => void;
   setScalePercent: (percent: number) => void;
   setScalePercentCentered: (percent: number) => void;
   setScale: (scale: number) => void;
@@ -35,6 +37,7 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
   maxScale: 4,
   position: { x: 0, y: 0 },
   tool: 'pointer',
+  shape: 'rectangle',
   viewportSize: { width: 0, height: 0 },
   clipPositions: {},
   getClipPosition: (clipId) => {
@@ -48,6 +51,7 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
   aspectRatio: { width: 16, height: 9, id: '16:9' },
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
   setTool: (tool) => set({ tool }),
+  setShape: (shape) => set({ shape }),
   setScalePercent: (percent) => {
     const { minScale, maxScale, viewportSize, position, scale } = get();
     const next = Math.max(minScale, Math.min(maxScale, (percent || 0) / 100));

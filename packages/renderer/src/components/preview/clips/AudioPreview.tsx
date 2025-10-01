@@ -1,6 +1,6 @@
 import React, {  useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useControlsStore } from '@/lib/control';
-import { AnyClipProps, MediaInfo } from '@/lib/types';
+import { AnyClipProps, MediaInfo, AudioClipProps } from '@/lib/types';
 import { getMediaInfo } from '@/lib/media/utils';
 import { getAudioIterator } from '@/lib/media/audio';
 import { WrappedAudioBuffer } from 'mediabunny';
@@ -8,7 +8,8 @@ import { WrappedAudioBuffer } from 'mediabunny';
 type ClipWithSrc = Extract<AnyClipProps, { src: string }>;
 
 // Schedules audio playback for a clip in sync with the timeline. Renders nothing.
-const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = ({ src, startFrame = 0, framesToGiveStart}) => {
+const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props) => {
+  const { src, startFrame = 0, framesToGiveStart, volume = 0, fadeIn = 0, fadeOut = 0, speed: _speed } = props as AudioClipProps;
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
   const fps = useControlsStore((s) => s.fps);
   const focusFrame = useControlsStore((s) => s.focusFrame);
@@ -46,6 +47,13 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = ({ src
     gainNode.connect(ctx.destination);
     return { ctx, gainNode };
   }, []);
+
+  // Convert dB to linear gain (0 dB = 1.0, -60 dB ≈ 0.001, +20 dB = 10.0)
+  const dbToGain = (db: number) => Math.pow(10, db / 20);
+  const speed = useMemo(() => {
+    const s = Number(_speed ?? 1);
+    return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
+  }, [_speed]);
   // playback time is derived from the audio clock on demand to avoid rerenders
   const getPlaybackTime = () => {
     if (isPlaying) {
@@ -117,7 +125,11 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = ({ src
 
     startTimeRef.current = ctx.currentTime;
 
-    iteratorRef.current = await getAudioIterator(src, { mediaInfo:mediaInfo || undefined, fps, sampleSize: mediaInfo?.audio?.numberOfChannels == 2 ? 1024 : 2048, index: currentStartFrameRef.current });
+    // Sample from the correct media frame based on speed
+    const mediaFrameIndex = Math.max(0, Math.floor(currentStartFrameRef.current * Math.max(0.1, speed)));
+    const mediaTimeAtStart = mediaFrameIndex / fps;
+
+    iteratorRef.current = await getAudioIterator(src, { mediaInfo:mediaInfo || undefined, fps, sampleSize: mediaInfo?.audio?.numberOfChannels == 2 ? 1024 : 2048, index: mediaFrameIndex });
     for await (const buf of iteratorRef.current) {
       if (!buf) return;
       const buffer = buf.buffer || null;
@@ -128,10 +140,54 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = ({ src
         return; // Stop the loop
       }
 
-      const startTimestamp = startTimeRef.current + timestamp - playbackTimeAtStartRef.current;
+      // Map media timestamp to wall clock according to speed.
+      // Timeline seconds advance 1:1 with wall clock; media advances at `speed`.
+      const startTimestamp = startTimeRef.current + (timestamp - mediaTimeAtStart) / Math.max(0.1, speed);
       const node = ctx.createBufferSource();
 		  node.buffer = buffer;
-		  node.connect(gainNode);
+      try { node.playbackRate.value = Math.max(0.1, speed);
+        (node as any).preservesPitch = true;
+       } catch {}
+		  
+		  // Apply volume and fade effects
+		  const nodeGain = ctx.createGain();
+		  node.connect(nodeGain);
+		  nodeGain.connect(gainNode);
+		  
+		  const baseGain = dbToGain(volume || 0);
+		  const fadeInDuration = fadeIn || 0;
+		  const fadeOutDuration = fadeOut || 0;
+		  const totalDuration = mediaInfo?.duration || duration;
+		  
+		  // Set up fade in
+		  if (fadeInDuration > 0 && timestamp < fadeInDuration) {
+		    const fadeProgress = Math.min(1, timestamp / fadeInDuration);
+		    nodeGain.gain.setValueAtTime(baseGain * fadeProgress, startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime);
+		    if (timestamp + duration <= fadeInDuration) {
+		      const endFadeProgress = Math.min(1, (timestamp + duration) / fadeInDuration);
+		      nodeGain.gain.linearRampToValueAtTime(baseGain * endFadeProgress, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + duration);
+		    } else {
+		      nodeGain.gain.linearRampToValueAtTime(baseGain, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + (fadeInDuration - timestamp));
+		    }
+		  } else if (fadeOutDuration > 0 && timestamp + duration > totalDuration - fadeOutDuration) {
+		    // Set up fade out
+		    const fadeStartTime = totalDuration - fadeOutDuration;
+		    if (timestamp >= fadeStartTime) {
+		      const fadeProgress = 1 - ((timestamp - fadeStartTime) / fadeOutDuration);
+		      nodeGain.gain.setValueAtTime(baseGain * fadeProgress, startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime);
+		      const endFadeProgress = Math.max(0, 1 - ((timestamp + duration - fadeStartTime) / fadeOutDuration));
+		      nodeGain.gain.linearRampToValueAtTime(baseGain * endFadeProgress, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + duration);
+		    } else {
+		      nodeGain.gain.setValueAtTime(baseGain, startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime);
+		      const bufferOverlap = (timestamp + duration) - fadeStartTime;
+		      nodeGain.gain.linearRampToValueAtTime(baseGain, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + (duration - bufferOverlap));
+		      nodeGain.gain.linearRampToValueAtTime(0, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + duration);
+		    }
+		  } else {
+		    // No fade - just apply constant volume
+		    nodeGain.gain.setValueAtTime(baseGain, startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime);
+		  }
+		  
       if (startTimestamp >= ctx.currentTime) {
         node.start(startTimestamp);
       } else {
@@ -143,10 +199,14 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = ({ src
         audioQueueRef.current.delete(node);
       };
 
-      if (timestamp - getPlaybackTime() >= 1) {
+      if (timestamp - mediaTimeAtStart >= 0) {
+        // Pace startup to avoid queueing too far ahead; simple throttle
+      }
+      if ((timestamp - mediaTimeAtStart) / Math.max(0.1, speed) - (ctx.currentTime - startTimeRef.current) >= 1) {
         await new Promise<void>((resolve) => {
           const id = setInterval(() => {
-            if (timestamp - getPlaybackTime() < 1) {
+            const ahead = (timestamp - mediaTimeAtStart) / Math.max(0.1, speed) - (ctx.currentTime - startTimeRef.current);
+            if (ahead < 1) {
               clearInterval(id);
               resolve();
             }
@@ -154,13 +214,13 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = ({ src
         });
       }
     }
-  }, [isPlaying, ctx, mediaInfo, fps, src, gainNode]);
+  }, [isPlaying, ctx, mediaInfo, fps, src, gainNode, volume, fadeIn, fadeOut, speed]);
 
   // Start or restart rendering when playback starts or media becomes ready
   useEffect(() => {
     if (!isPlaying) return;
     void startRendering();
-  }, [isPlaying, ctx, mediaInfo, src, fps, startRendering]);
+  }, [isPlaying, ctx, mediaInfo, src, fps, startRendering, volume, fadeIn, fadeOut]);
 
   // Detect scrubbing while playing: if the UI's frame diverges from audio clock, resync
   useEffect(() => {

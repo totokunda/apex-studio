@@ -1,17 +1,19 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Group, Rect } from 'react-konva';
+import { Stage, Layer, Group, Rect, Line as KonvaLine, Ellipse as KonvaEllipse, RegularPolygon, Star as KonvaStar } from 'react-konva';
 import { useViewportStore } from '@/lib/viewport';
 import { useClipStore } from '@/lib/clip';
 import { KonvaEventObject } from 'konva/lib/Node';
-import { BASE_LONG_SIDE } from '@/lib/settings'; 
+import { BASE_LONG_SIDE, DEFAULT_FPS } from '@/lib/settings'; 
  
 import _ from 'lodash';
 import VideoPreview from './clips/VideoPreview';
 import AudioPreview from './clips/AudioPreview';
 import ImagePreview from './clips/ImagePreview';
+import ShapePreview from './clips/ShapePreview';
 import { useControlsStore } from '@/lib/control';
-import { AnyClipProps } from '@/lib/types';
+import { AnyClipProps, ShapeClipProps } from '@/lib/types';
+import { v4 as uuidv4 } from 'uuid';
 
 interface PreviewProps {
 
@@ -28,12 +30,18 @@ const Preview:React.FC<PreviewProps> = () => {
   const zoomAtScreenPoint = useViewportStore((s) => s.zoomAtScreenPoint);
   const panBy = useViewportStore((s) => s.panBy);
   const tool = useViewportStore((s) => s.tool);
+  const shape = useViewportStore((s) => s.shape);
   const setViewportSize = useViewportStore((s) => s.setViewportSize);
   const setContentBounds = useViewportStore((s) => s.setContentBounds);
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
-  const {clips, clipWithinFrame, timelines} = useClipStore();
+  const {clips, clipWithinFrame, timelines, addClip, addTimeline} = useClipStore();
   // Note: we use imperative store access in the recenter effect to avoid rerender loops
   const focusFrame = useControlsStore((s) => s.focusFrame);
+  const totalTimelineFrames = useControlsStore((s) => s.totalTimelineFrames);
+  // Shape creation state
+  const [isDrawingShape, setIsDrawingShape] = useState(false);
+  const [shapeStart, setShapeStart] = useState<{ x: number; y: number } | null>(null);
+  const [shapeCurrent, setShapeCurrent] = useState<{ x: number; y: number } | null>(null);
   
 
 
@@ -163,25 +171,133 @@ const Preview:React.FC<PreviewProps> = () => {
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
 
   const onMouseDown = useCallback((e: any) => {
-    if (tool !== 'hand') return;
-    isPanning.current = true;
-    lastPointer.current = { x: e.evt.offsetX, y: e.evt.offsetY };
-  }, [tool]);
+    if (tool === 'hand') {
+      isPanning.current = true;
+      lastPointer.current = { x: e.evt.offsetX, y: e.evt.offsetY };
+      return;
+    }
+    
+    if (tool === 'shape') {
+      const stage = e.target.getStage();
+      if (!stage) return;
+      
+      const pointerPos = stage.getPointerPosition();
+      if (!pointerPos) return;
+      
+      // Convert screen coordinates to world coordinates
+      const worldX = (pointerPos.x - position.x) / scale;
+      const worldY = (pointerPos.y - position.y) / scale;
+      
+      setIsDrawingShape(true);
+      setShapeStart({ x: worldX, y: worldY });
+      setShapeCurrent({ x: worldX, y: worldY });
+    }
+  }, [tool, position, scale]);
 
   const onMouseMove = useCallback((e: any) => {
-    if (!isPanning.current || tool !== 'hand') return;
-    const current = { x: e.evt.offsetX, y: e.evt.offsetY };
-    const last = lastPointer.current || current;
-    const dx = current.x - last.x;
-    const dy = current.y - last.y;
-    panBy(-dx, -dy);
-    lastPointer.current = current;
-  }, [panBy, tool]);
+    if (tool === 'hand' && isPanning.current) {
+      const current = { x: e.evt.offsetX, y: e.evt.offsetY };
+      const last = lastPointer.current || current;
+      const dx = current.x - last.x;
+      const dy = current.y - last.y;
+      panBy(-dx, -dy);
+      lastPointer.current = current;
+      return;
+    }
+    
+    if (tool === 'shape' && isDrawingShape && shapeStart) {
+      const stage = e.target.getStage();
+      if (!stage) return;
+      
+      const pointerPos = stage.getPointerPosition();
+      if (!pointerPos) return;
+      
+      // Convert screen coordinates to world coordinates
+      const worldX = (pointerPos.x - position.x) / scale;
+      const worldY = (pointerPos.y - position.y) / scale;
+      
+      setShapeCurrent({ x: worldX, y: worldY });
+    }
+  }, [panBy, tool, isDrawingShape, shapeStart, position, scale]);
 
-  const onMouseUp = useCallback(() => {
-    isPanning.current = false;
-    lastPointer.current = null;
-  }, []);
+  const onMouseUp = useCallback((e: any) => {
+    if (tool === 'hand') {
+      isPanning.current = false;
+      lastPointer.current = null;
+      return;
+    }
+    
+    if (tool === 'shape' && isDrawingShape && shapeStart && shapeCurrent) {
+      // Get current pointer position to ensure accuracy
+      const stage = e.target.getStage();
+      if (!stage) {
+        setIsDrawingShape(false);
+        setShapeStart(null);
+        setShapeCurrent(null);
+        return;
+      }
+      
+      const pointerPos = stage.getPointerPosition();
+      if (!pointerPos) {
+        setIsDrawingShape(false);
+        setShapeStart(null);
+        setShapeCurrent(null);
+        return;
+      }
+      
+      // Convert screen coordinates to world coordinates
+      const worldEndX = (pointerPos.x - position.x) / scale;
+      const worldEndY = (pointerPos.y - position.y) / scale;
+      
+      // Calculate shape dimensions using start and current end position
+      const x = Math.min(shapeStart.x, worldEndX);
+      const y = Math.min(shapeStart.y, worldEndY);
+      const width = Math.abs(worldEndX - shapeStart.x);
+      const height = Math.abs(worldEndY - shapeStart.y);
+      
+      // Only create shape if it has meaningful size
+      if (width > 5 && height > 5) {
+        // Find or create shape timeline
+        let shapeTimeline = { timelineId: uuidv4(), type: 'shape' as const, timelineY: 0, timelineHeight: 36, timelineWidth: 0, muted: false, hidden: false };
+       
+
+        addTimeline(shapeTimeline, -1);
+
+        // Create shape clip with 3-second duration (72 frames at 24fps)
+        const clipDuration = 3 * DEFAULT_FPS;
+        const newClip: ShapeClipProps = {
+          src: null,
+          clipId: uuidv4(),
+          type: 'shape' as const,
+          timelineId: shapeTimeline.timelineId,
+          startFrame: focusFrame,
+          endFrame: Math.min(focusFrame + clipDuration, totalTimelineFrames - 1),
+          framesToGiveEnd: -Infinity,
+          framesToGiveStart: 0,
+          shapeType: shape,
+          fill: '#E3E3E3',
+          stroke: '#E3E3E3',
+          strokeWidth: 1,
+          transform: {
+            x,
+            y,
+            width,
+            height,
+            scaleX: 1,
+            scaleY: 1,
+            rotation: 0, 
+          },
+        };
+        
+        addClip(newClip);
+      }
+      
+      // Reset shape creation state
+      setIsDrawingShape(false);
+      setShapeStart(null);
+      setShapeCurrent(null);
+    }
+  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline]);
 
   const onMouseLeave = useCallback((e:KonvaEventObject<MouseEvent>) => {
      // set pointer to default 
@@ -194,16 +310,60 @@ const Preview:React.FC<PreviewProps> = () => {
   const onMouseEnter = useCallback((e:KonvaEventObject<MouseEvent>) => {
     const container = e.target?.getStage()?.container();
     if (container) {
-      container.style.cursor = tool === 'hand' ? 'grab' : 'default';
+      if (tool === 'hand') {
+        container.style.cursor = 'grab';
+      } else if (tool === 'shape') {
+        container.style.cursor = 'crosshair';
+      } else {
+        container.style.cursor = 'default';
+      }
     }
   }, [tool]);
 
   useEffect(() => {
     const container = stageRef.current?.container();
     if (container) {
-      container.style.cursor = tool === 'hand' ? 'grab' : 'default';
+      if (tool === 'hand') {
+        container.style.cursor = 'grab';
+      } else if (tool === 'shape') {
+        container.style.cursor = 'crosshair';
+      } else {
+        container.style.cursor = 'default';
+      }
     }
   }, [tool]);
+  
+  // Render preview shape while drawing
+  const renderDrawingShape = useCallback(() => {
+    if (!isDrawingShape || !shapeStart || !shapeCurrent) return null;
+    
+    const x = Math.min(shapeStart.x, shapeCurrent.x);
+    const y = Math.min(shapeStart.y, shapeCurrent.y);
+    const width = Math.abs(shapeCurrent.x - shapeStart.x);
+    const height = Math.abs(shapeCurrent.y - shapeStart.y);
+    
+    const sharedProps = {
+      stroke: '#3b82f6',
+      strokeWidth: 2,
+      fill: '#3b82f644',
+      dash: [5, 5],
+    };
+    
+    switch (shape) {
+      case 'rectangle':
+        return <Rect {...sharedProps} x={x} y={y} width={width} height={height} />;
+      case 'ellipse':
+        return <KonvaEllipse {...sharedProps} x={x + width / 2} y={y + height / 2} radiusX={width / 2} radiusY={height / 2} />;
+      case 'polygon':
+        return <RegularPolygon {...sharedProps} x={x + width / 2} y={y + height / 2} sides={3} radius={Math.min(width, height) / 2} />;
+      case 'line':
+        return <KonvaLine {...sharedProps} points={[shapeStart.x, shapeStart.y, shapeCurrent.x, shapeCurrent.y]} />;
+      case 'star':
+        return <KonvaStar {...sharedProps} x={x + width / 2} y={y + height / 2} numPoints={5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} />;
+      default:
+        return <Rect {...sharedProps} x={x} y={y} width={width} height={height} />;
+    }
+  }, [isDrawingShape, shapeStart, shapeCurrent, shape]);
 
   return (
     <>
@@ -236,6 +396,8 @@ const Preview:React.FC<PreviewProps> = () => {
                     return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
                   case 'image':
                     return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
+                  case 'shape':
+                    return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
                   case 'audio':
                     return null
                  }
@@ -243,6 +405,7 @@ const Preview:React.FC<PreviewProps> = () => {
                 return null;
                }
              })}
+             {renderDrawingShape()}
          </Group>
         </Layer>
       </Stage>

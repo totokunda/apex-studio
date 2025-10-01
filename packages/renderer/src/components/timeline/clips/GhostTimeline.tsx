@@ -84,7 +84,7 @@ const GhostTimeline:React.FC<TimelineProps> = ({timelineY, timelineHeight, timel
      y={timelineY! - timelineHeight!} 
      cornerRadius={8} 
      width={ghostWidth} 
-     height={48} fill={'rgba(164, 119, 196, 0.3)'} stroke={'#AE81CE'} strokeWidth={2} shadowColor={'#AE81CE'} shadowBlur={8} shadowOpacity={0.35} />}
+     height={timelineHeight} fill={'rgba(164, 119, 196, 0.3)'} stroke={'#AE81CE'} strokeWidth={2} shadowColor={'#AE81CE'} shadowBlur={8} shadowOpacity={0.35} />}
     {ghostTimelineId == timelineId && guideLines && (
       <>
         {/* Gap boundary guidelines - extend 10px above and below */}

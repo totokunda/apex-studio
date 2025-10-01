@@ -3,14 +3,14 @@ import { useClipStore, getClipWidth, getClipX, isValidTimelineForClip, getTimeli
 import { generateTimelineSamples } from "@/lib/media/timeline";
 import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
 import { useControlsStore } from "@/lib/control";
-import { Image, Group,  Rect } from 'react-konva';
+import { Image, Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
-import { MediaInfo, TimelineProps } from "@/lib/types";
+import { MediaInfo, ShapeClipProps, TimelineProps } from "@/lib/types";
 import { v4 as uuidv4 } from 'uuid';
 
 const THUMBNAIL_TILE_SIZE = 36;
 
-const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' | 'audio' | 'image', scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 64, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
+const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' | 'audio' | 'image' | 'shape',  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 64, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
     // Select only what we need to avoid unnecessary rerenders
     const timelineDuration = useControlsStore((s) => s.timelineDuration);
     const selectedClipIds = useControlsStore((s) => s.selectedClipIds);
@@ -31,6 +31,10 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
     const addTimeline = useClipStore((s) => s.addTimeline);
     // Subscribe directly to this clip's data
     const currentClip = useClipStore((s) => s.clips.find((c) => c.clipId === clipId && (timelineId ? c.timelineId === timelineId : true)));
+    const cornerRadius = useMemo(() => {
+        return currentClip?.type === 'shape' ? 4 : 8;
+    }, [currentClip?.type]);
+
     
     const currentStartFrame = currentClip?.startFrame ?? 0;
     const currentEndFrame = currentClip?.endFrame ?? 0;
@@ -50,6 +54,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
     const exactVideoUpdateTimerRef = useRef<number | null>(null);
     const exactVideoUpdateSeqRef = useRef(0);
     const lastExactRequestKeyRef = useRef<string | null>(null);
+    const textRef = useRef<Konva.Text>(null);
+    const [textWidth, setTextWidth] = useState(0);
     
     // (moved) image positioning is computed after clipPosition is defined
 
@@ -137,10 +143,16 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
         setClipPosition({x: clipX + timelinePadding, y: timelineY - timelineHeight});
     }, [timelinePadding, timelineY, timelineId]);
 
+    useEffect(() => {
+        if (textRef.current) {
+            setTextWidth(textRef.current.width());
+        }
+    }, [(currentClip as ShapeClipProps)?.shapeType]);
+
     
 
 	useEffect(() => {
-		if (!currentClip?.src) return;
+		if (!currentClip) return;
 
         const generateTimelineThumbnailAudio = async () => {
             if (clipType !== 'audio') return;
@@ -163,7 +175,12 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                 timelineAdjustedEnd = true;
             }
 
-            if (timelineStartFrame > currentStartFrame) {
+
+            const duration = timelineEndFrame - timelineStartFrame;
+            const currentDuration = currentEndFrame - currentStartFrame;
+            const canFit = duration >= currentDuration;
+
+            if (timelineStartFrame > currentStartFrame && !canFit) {
                 startFrame = timelineStartFrame - timelineShift;
                 timelineAdjustedStart = true;
             } 
@@ -184,6 +201,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                 endFrame = currentEndFrame;
             }
 
+
             const samples = await generateTimelineSamples(
                 currentClipId,
                 currentClip?.src!,
@@ -195,6 +213,9 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                     mediaInfo: mediaInfoRef.current,
                     startFrame: startFrame,
                     endFrame: endFrame,
+                    volume: (currentClip as any)?.volume,
+                    fadeIn: (currentClip as any)?.fadeIn,
+                    fadeOut: (currentClip as any)?.fadeOut,
                 }
             );
 
@@ -292,6 +313,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             
             // Calculate frame indices based on timeline duration and available columns
             let numColumns = Math.ceil((tClipWidth - overHang) / thumbnailWidth);
+
             let numColumnsAlt:number | undefined = undefined;
             if (currentClip.framesToGiveStart || currentClip.framesToGiveEnd) {
                 const realStartFrame = currentStartFrame - (currentClip.framesToGiveStart ?? 0);
@@ -334,10 +356,15 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             }
 
             frameIndices = frameIndices.filter((frameIndex) => isNaN(frameIndex) === false && isFinite(frameIndex));
-            // shift all frames by the timeline shift    
-            frameIndices = frameIndices.map((frameIndex) => Math.max(0, frameIndex - timelineShift));
+            // Map timeline frames to source frames considering speed and in-clip offset
+            {
+                const s = Math.max(0.1, Math.min(5, Number((currentClip as any)?.speed ?? 1)));
+                frameIndices = frameIndices.map((frameIndex) => {
+                    const local = Math.max(0, frameIndex - timelineShift);
+                    return Math.max(0, Math.floor(local * s));
+                });
+            }
 
-            
             if (numColumnsAlt && frameIndices.length !== numColumnsAlt) {
                 // Trim indices to match the original column count, removing from
                 // left/right based on framesToGiveStart (left) and abs(framesToGiveEnd) (right)
@@ -457,6 +484,11 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                         thumbnailWidth,
                         timelineHeight,
                         tClipWidth,
+                        {
+                            volume: (currentClip as any)?.volume,
+                            fadeIn: (currentClip as any)?.fadeIn,
+                            fadeOut: (currentClip as any)?.fadeOut,
+                        }
                     );
                     if (mySeq !== exactVideoUpdateSeqRef.current) {
                         return;
@@ -525,15 +557,31 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             }, DEBOUNCE_MS);
         }
 
+        const generateTimelineThumbnailShape = async () => {
+            if (clipType !== 'shape') return;
+            // make canvas 
+            const ctx = imageCanvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+                ctx.fillStyle = '#894c30';
+                ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
+            }
+            clipRef.current?.getLayer()?.batchDraw();
+            
+        }
+
         if (clipType === 'audio') {
             generateTimelineThumbnailAudio()
         } else if (clipType === 'image') {
             generateTimelineThumbnailImage()
         } else if (clipType === 'video') {
             generateTimelineThumbnailVideo()
+        } else if (clipType === 'shape') {
+            generateTimelineThumbnailShape()
         }
+
     
-    }, [currentClip?.src,  zoomLevel, clipWidth, clipType, currentClip?.src, mediaInfoRef.current, resizeSide, thumbnailClipWidth.current,  maxTimelineWidth, timelineDuration, overHang]);
+    }, [zoomLevel, clipWidth, clipType, currentClip, mediaInfoRef.current, resizeSide, thumbnailClipWidth.current,  maxTimelineWidth, timelineDuration, overHang]);
     
     const calculateFrameFromX = useCallback((xPosition: number) => {
         // Remove padding to get actual timeline position
@@ -798,12 +846,14 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             const hoveredIdx = timelines.findIndex((t) => t.timelineId === hoveredKey);
             const hoveredTimeline = hoveredIdx !== -1 ? timelines[hoveredIdx] : null;
             const newTimelineId = uuidv4();
+            // get the timeline this clip is on
+            const timeline = state.getTimelineById(timelineId!);
             const newTimeline = {
                 type: getTimelineTypeForClip(currentClip!),
                 timelineId: newTimelineId,
                 timelineWidth: stageWidth,
                 timelineY: (hoveredTimeline?.timelineY ?? 0) + 64,
-                timelineHeight: 64,
+                timelineHeight: timeline?.timelineHeight ?? 64,
             };
             addTimeline(newTimeline, hoveredIdx);
             dropTimelineId = newTimelineId;
@@ -1070,9 +1120,9 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                     width={clipWidth}
                     fill={'transparent'}
                     height={timelineHeight}
-                    cornerRadius={8}
+                    cornerRadius={cornerRadius}
                     stroke={'#AE81CE'}
-                    strokeWidth={4}
+                    strokeWidth={3}
                 />
             )}
             <Group  
@@ -1099,9 +1149,34 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                     image={imageCanvas} 
                     width={imageWidth}
                     height={timelineHeight}
-                    cornerRadius={clipPosition.x == 24 || clipWidth <= imageWidth || overHang > 0 || imageX === 0 ? 8: 0}
+                    cornerRadius={clipPosition.x == 24 || clipWidth <= imageWidth || overHang > 0 || imageX === 0 ? cornerRadius: 0}
                     fill={'#E3E3E3'} 
                 />
+                {clipType === 'shape' && (currentClip  as ShapeClipProps)?.shapeType && (
+                    <Group>
+                    <Rect
+                        x={8 - 4}
+                        y={timelineHeight / 2}
+                        width={textWidth + 8}
+                        height={14}
+                        cornerRadius={2}
+                        fill="rgba(255, 255, 255, 0.2)"
+                        offsetY={7.5}
+                    />
+                    <Text
+                        ref={textRef}
+                        x={8}
+                        y={timelineHeight / 2}
+                        text={((currentClip as ShapeClipProps)?.shapeType?.charAt(0).toUpperCase() ?? '')  + ((currentClip as ShapeClipProps)?.shapeType?.slice(1 ) ?? '')}
+                        fontSize={10}
+                        fontFamily="Poppins"
+                        fill="white"
+                        align="left"
+                        verticalAlign="middle"
+                        offsetY={5}
+                    />
+                    </Group>
+                )}
             </Group>            
             <Rect
                 x={clipPosition.x  + clipWidth - 5}

@@ -22,12 +22,15 @@ export const createWaveformKey = (
     height: number,
     color?: string,
     startFrame?: number,
-    endFrame?: number
-): string => `waveform:${path}@${width}x${height}#c${color ?? ''}#${startFrame ?? ''}:${endFrame ?? ''}`;
+    endFrame?: number,
+    volume?: number,
+    fadeIn?: number,
+    fadeOut?: number
+): string => `waveform:${path}@${width}x${height}#c${color ?? ''}#${startFrame ?? ''}:${endFrame ?? ''}#v${volume ?? 0}#fi${fadeIn ?? 0}#fo${fadeOut ?? 0}`;
 
 export const createAmplitudeKey = (path: string): string => `amplitude:${path}`;
 
-export const generateTimelineSamples = async (_id: string, path: string, frameIndices: number[], width: number, height: number, totalCanvasWidth: number, options?: {mediaInfo?: MediaInfo, startFrame?: number, endFrame?: number}): Promise<WrappedCanvas[] | null> => {
+export const generateTimelineSamples = async (_id: string, path: string, frameIndices: number[], width: number, height: number, totalCanvasWidth: number, options?: {mediaInfo?: MediaInfo, startFrame?: number, endFrame?: number, volume?: number, fadeIn?: number, fadeOut?: number}): Promise<WrappedCanvas[] | null> => {
 
     const ext = getLowercaseExtension(path);
     let fetchedSamples:(WrappedCanvas | null)[];
@@ -41,7 +44,10 @@ export const generateTimelineSamples = async (_id: string, path: string, frameIn
             mediaInfo,
             color: '#7791C4',
             startFrame: options?.startFrame,
-            endFrame: options?.endFrame
+            endFrame: options?.endFrame,
+            volume: options?.volume,
+            fadeIn: options?.fadeIn,
+            fadeOut: options?.fadeOut
         });
     
         fetchedSamples = [{
@@ -233,10 +239,14 @@ export const generateAudioWaveformCanvas = async (
     path: string,
     width: number,
     height: number,
-    options?: { samples?: number; color?: string; mediaInfo?: MediaInfo; startFrame?: number; endFrame?: number }
+    options?: { samples?: number; color?: string; mediaInfo?: MediaInfo; startFrame?: number; endFrame?: number; volume?: number; fadeIn?: number; fadeOut?: number }
 ): Promise<HTMLCanvasElement | null> => {
-    
+
     const color = options?.color || '#A477C4';
+    const volume = options?.volume ?? 0;
+    const fadeIn = options?.fadeIn ?? 0;
+    const fadeOut = options?.fadeOut ?? 0;
+    
     // Check canvas cache first
     const frameCache = FramesCache.getState();
 
@@ -320,17 +330,63 @@ export const generateAudioWaveformCanvas = async (
     const totalBarSpace = barWidth + gap;
     ctx.fillStyle = barColor;
 
+    // Calculate volume and fade parameters
+    const totalDuration = options?.mediaInfo?.duration || 1;
+    const dbToGain = (db: number) => Math.pow(10, db / 20);
+    const volumeGain = dbToGain(volume);
+    const fadeInWidth = (fadeIn / totalDuration) * canvas.width;
+    const fadeOutWidth = (fadeOut / totalDuration) * canvas.width;
+    const fadeOutStart = canvas.width - fadeOutWidth;
+
     visualizerValues.forEach((value, index) => {
-        const barHeight: number = (value / 100) * canvas.height;
         const x: number = index * totalBarSpace;
+        
+        // Start with base bar height
+        let heightMultiplier = 1.0;
+        
+        // Apply volume gain to height
+        heightMultiplier *= volumeGain;
+        
+        // Apply fade in (progressively increase height from 0 to full)
+        if (fadeIn > 0 && x < fadeInWidth) {
+            const fadeInProgress = x / fadeInWidth; // 0 to 1
+            heightMultiplier *= fadeInProgress;
+        }
+        
+        // Apply fade out (progressively decrease height to 0)
+        if (fadeOut > 0 && x >= fadeOutStart) {
+            const fadeOutProgress = (canvas.width - x) / fadeOutWidth; // 1 to 0
+            heightMultiplier *= fadeOutProgress;
+        }
+        
+        const barHeight: number = Math.min((value / 100) * canvas.height * heightMultiplier, canvas.height);
         const y: number = canvas.height - barHeight;
-        if (value > 0) {
+        if (value > 0 && barHeight > 0) {
             drawRoundedTopBar(ctx, x, y, barWidth, barHeight, cornerRadius);
         }
     });
 
     const lineChunkSize = width > 240? 8 : 4; // <-- CONTROL THE SMOOTHNESS HERE
-    const linePoints = simplifyDataForLine(barWidth, gap, canvas, visualizerValues, lineChunkSize);
+    
+    // Apply volume and fade effects to visualizer values for line drawing
+    const adjustedVisualizerValues = visualizerValues.map((value, index) => {
+        const x = index * totalBarSpace;
+        let heightMultiplier = 1.0;
+        
+        heightMultiplier *= volumeGain;
+        
+        if (fadeIn > 0 && x < fadeInWidth) {
+            heightMultiplier *= x / fadeInWidth;
+        }
+        
+        if (fadeOut > 0 && x >= fadeOutStart) {
+            heightMultiplier *= (canvas.width - x) / fadeOutWidth;
+        }
+        
+        return Math.min(value * heightMultiplier, 100);
+    });
+    
+    const linePoints = simplifyDataForLine(barWidth, gap, canvas, adjustedVisualizerValues, lineChunkSize);
 
     // --- SECOND PASS: Draw the simplified, smooth line ---
     if (linePoints.length > 1) {

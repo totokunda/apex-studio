@@ -13,10 +13,10 @@ import { MediaItem } from '../media/Item';
 import {v4 as uuidv4} from 'uuid';
 import { AnyClipProps, TimelineType } from '@/lib/types';
 import TimelineSidebar from './TimelineSidebar';
-// import { cn } from '@/lib/utils';
+import Scrollbar from './Scrollbar';
 
 interface TimelineEditorProps {
-  
+
 }
 
 
@@ -34,7 +34,7 @@ interface TickMark {
     format: 'frame' | 'second';
 }
 
-const SCROLLBAR_WIDTH = 8;
+const SCROLLBAR_HW = 8;
 const SCROLL_BOTTOM_PADDING = 48; // extra space at bottom for easier drag-in
 
 const getMajorZoomConfigFormat = (zoomConfig:{
@@ -73,7 +73,6 @@ const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, 
         const majorTickInterval = zoomConfig.majorTickInterval * (zoomConfig.majorTickFormat === 'second' ? fps : 1);
         const minorTickInterval = zoomConfig.minorTickInterval * (zoomConfig.minorTickFormat === 'second' ? fps : 1);
         const [startFrame, endFrame] = timelineDuration;
-
 
         for (let i = startFrame; i <= endFrame; i += majorTickInterval) {
                 ticks.push({
@@ -184,6 +183,17 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
   const [verticalScroll, setVerticalScroll] = useState(0);
   const verticalScrollRef = useRef(0);
   const [isScrollbarHovered, setIsScrollbarHovered] = useState(false);
+  const [canScrollHorizontal, setCanScrollHorizontal] = useState(false);
+  const {totalTimelineFrames, timelineDuration} = useControlsStore();
+
+  useEffect(() => {
+    const [startFrame, endFrame] = timelineDuration;
+    const totalDuration = endFrame - startFrame;
+    if (totalDuration < totalTimelineFrames) {
+      setCanScrollHorizontal(true);
+    } else {
+      setCanScrollHorizontal(false);
+    }  }, [totalTimelineFrames, timelineDuration]);
   
 
 
@@ -540,7 +550,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           framesToGiveEnd: framesToGiveEnd,
           framesToGiveStart: framesToGiveStart,
           height: height,
-          width:width
+          width:width,
+          speed: 1.0
         };
 
         addClip(newClip as AnyClipProps);
@@ -760,6 +771,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     
   }, [controlStore]);
 
+
   return (
     <div  className='relative h-full flex flex-row overflow-hidden'>
       {hasClips && <TimelineSidebar clampedScroll={clampedScroll} />}
@@ -811,15 +823,16 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
                       shadowOpacity={0.4}
                     />
                   )}
+                  
                 </Layer>
                 {/* Virtual vertical scrollbar */}
                 {hasClips && maxScroll > 0 && (
                   <Layer>
                     {/* Invisible hover track to detect mouseover across full height on the right margin */}
                     <Rect
-                      x={Math.max(0, dimensions.stageWidth - SCROLLBAR_WIDTH)}
+                      x={Math.max(0, dimensions.stageWidth - SCROLLBAR_HW)}
                       y={0}
-                      width={SCROLLBAR_WIDTH}
+                      width={SCROLLBAR_HW}
                       height={dimensions.stageHeight}
                       fill={'transparent'}
                       listening
@@ -827,7 +840,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
                       onMouseLeave={() => setIsScrollbarHovered(false)}
                     />
                     {(() => {
-                       const scrollbarWidth = SCROLLBAR_WIDTH;
+                       const scrollbarWidth = SCROLLBAR_HW;
                        const trackTop = 24;
                        const trackBottomPad = 8;
                        const trackHeight = Math.max(0, dimensions.stageHeight - trackTop - trackBottomPad);
@@ -868,6 +881,17 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
                         />
                       );
                     })()}
+                    
+                  </Layer>
+                )}
+                {canScrollHorizontal && (
+                  <Layer>
+                    <Scrollbar 
+                      stageWidth={dimensions.stageWidth}
+                      stageHeight={dimensions.stageHeight}
+                      isScrollbarHovered={isScrollbarHovered}
+                      setIsScrollbarHovered={setIsScrollbarHovered}
+                    />
                   </Layer>
                 )}
             </Stage>

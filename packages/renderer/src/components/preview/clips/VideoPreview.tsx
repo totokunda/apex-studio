@@ -11,7 +11,7 @@ import { WrappedCanvas } from 'mediabunny';
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
-const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart}) => {
+const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart, speed: _speed }) => {
     const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
     const focusFrame = useControlsStore((state) => state.focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -20,6 +20,10 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const drawTokenRef = useRef(0);
     const suppressUntilRef = useRef<number>(0);
     const currentFrame = useMemo(() => focusFrame - startFrame + (framesToGiveStart || 0), [focusFrame, startFrame, framesToGiveStart]);
+    const speed = useMemo(() => {
+      const s = Number(_speed ?? 1);
+      return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
+    }, [_speed]);
     const tool = useViewportStore((s) => s.tool);
     const scale = useViewportStore((s) => s.scale);
     const position = useViewportStore((s) => s.position);
@@ -310,7 +314,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const frameRate = mediaInfo.stats.video?.averagePacketRate || fps || 0;
         if (!Number.isFinite(frameRate) || frameRate <= 0) return;
         const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * frameRate));
-        const targetFrame = Math.max(0, Math.min(totalFrames, Math.floor(currentFrame)));
+        const targetFrame = Math.max(0, Math.min(totalFrames, Math.floor(Math.max(0, currentFrame) * Math.max(0.1, speed))));
         // cancel any previous iterator
         drawTokenRef.current++;
         // @ts-ignore
@@ -342,7 +346,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const frameRate = mediaInfo.stats.video?.averagePacketRate || fps || 0;
         if (!Number.isFinite(frameRate) || frameRate <= 0) return;
         const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * frameRate));
-        const startIdx = Math.max(0, Math.min(totalFrames, Math.floor(currentFrame)));
+        const startIdx = Math.max(0, Math.min(totalFrames, Math.floor(Math.max(0, currentFrame) * Math.max(0.1, speed))));
         currentStartFrameRef.current = startIdx;
         lastRenderedFrameRef.current = startIdx - 1;
 
@@ -362,20 +366,21 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 let sampleIdx = Number.isFinite(ts as number) ? Math.round((ts as number) * frameRate) : (lastRenderedFrameRef.current + 1);
 
                 // Compute current timeline-local frame (clip space)
-                const computeLocalFocus = () => {
+                const computeLocalFocusMedia = () => {
                     const store = useControlsStore.getState();
-                    return Math.max(0, Math.floor((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
+                    const local = Math.max(0, Math.floor((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
+                    return Math.max(0, Math.floor(local * Math.max(0.1, speed)));
                 };
 
                 // Skip stale frames that are behind the timeline by more than 1 frame
-                let localFocus = computeLocalFocus();
+                let localFocus = computeLocalFocusMedia();
                 if (sampleIdx < localFocus - 1) {
                     lastRenderedFrameRef.current = sampleIdx;
                     continue;
                 }
 
                 // If we're ahead of the timeline, wait until the timeline catches up
-                while (sampleIdx > (localFocus = computeLocalFocus())) {
+                while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
                     if (myToken !== drawTokenRef.current) break;
                     if (!useControlsStore.getState().isPlaying) break;
                     // Small sleep to pace to timeline FPS (about half frame duration)

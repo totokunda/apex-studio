@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { AnyClipProps, TimelineProps, ClipTransform, TimelineType } from "./types";
+import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 
@@ -19,6 +19,7 @@ interface ClipStore {
     removeClip: (clipId: string) => void;
     updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) => void;
     resizeClip: (clipId: string, side: 'left' | 'right', newFrame: number) => void;
+    isValidResize: (clipId: string, side: 'left' | 'right', newFrame: number) => boolean;   
     splitClip: (cutFrame: number) => void;
     mergeClips: (clipIds: string[]) => void;
     moveClipToEnd: (clipId: string) => void;
@@ -337,11 +338,65 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         return { clips: resolvedClips, clipDuration };
     }),
     updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) => set((state) => {
-        const newClips = state.clips.map((clip) => clip.clipId === clipId ? { ...clip, ...clipToUpdate } : clip);
-        const resolvedClips = resolveOverlaps(newClips);
+        const index = state.clips.findIndex((c) => c.clipId === clipId);
+        if (index === -1) {
+            return { clips: state.clips };
+        }
+        const current = state.clips[index];
+
+        // Prepare update payload and handle speed-induced duration rescale
+        let nextUpdate: Partial<AnyClipProps> = { ...clipToUpdate };
+        if (Object.prototype.hasOwnProperty.call(clipToUpdate, 'speed')) {
+            const oldSpeed = Math.max(0.1, Number((current as VideoClipProps).speed || 1));
+            const newSpeedRaw = Number((clipToUpdate as any).speed);
+            const newSpeed = Math.max(0.1, Math.min(5, Number.isFinite(newSpeedRaw) ? newSpeedRaw : 1));
+
+            // Anchor at left edge: keep startFrame, adjust endFrame to preserve source coverage
+            const start = Math.max(0, Number(current.startFrame || 0));
+            const end = Math.max(start + 1, Number(current.endFrame || (start + 1)));
+            const oldDuration = Math.max(1, end - start);
+            const newDuration = Math.max(1, Math.round(oldDuration * (oldSpeed / newSpeed)));
+            nextUpdate.endFrame = start + newDuration;
+            (nextUpdate as VideoClipProps).speed = newSpeed as any;
+        }
+
+        const updatedClip = { ...current, ...nextUpdate } as AnyClipProps;
+        const newClips = [...state.clips];
+        newClips[index] = updatedClip;
+
+        const resolvedClips = resolveOverlaps(newClips as AnyClipProps[]);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
     }),
+    isValidResize: (clipId: string, side: 'left' | 'right', newFrame: number) => {
+        const state = get();
+        const sortedClips = [...state.clips].sort((a, b) => (a.startFrame || 0) - (b.startFrame || 0));
+        const currentIndex = sortedClips.findIndex(c => c.clipId === clipId);
+        if (currentIndex === -1) return false;
+        
+        const currentClip = sortedClips[currentIndex];
+
+        if (side === 'right') {
+            // Resize right edge - adjust current clip's end and shift all clips after it
+            const oldEndFrame = currentClip.endFrame || 0;
+            const newEndFrame = Math.max((currentClip.startFrame || 0) + 1, newFrame);
+            const frameDelta = newEndFrame - oldEndFrame;
+
+            if (frameDelta + (currentClip.framesToGiveEnd || 0) > 0) {
+                return false;
+            }
+        } else if (side === 'left') {
+            // Resize left edge - adjust current clip's start and shift all clips before it
+            const oldStartFrame = currentClip.startFrame || 0;
+            const newStartFrame = Math.min((currentClip.endFrame || 0) - 1, newFrame);
+            let frameDelta = newStartFrame - oldStartFrame;
+
+            if (frameDelta + (currentClip.framesToGiveStart || 0) < 0) {
+                return false;
+            }
+        }
+        return true;
+    },
     resizeClip: (clipId: string, side: 'left' | 'right', newFrame: number) => set((state) => {
         const sortedClips = [...state.clips].sort((a, b) => (a.startFrame || 0) - (b.startFrame || 0));
         const currentIndex = sortedClips.findIndex(c => c.clipId === clipId);
@@ -379,7 +434,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             } else {
                 const currentClipIndex = newClips.findIndex(c => c.clipId === clipId);
                 newClips[currentClipIndex] = { ...currentClip, startFrame: newStartFrame, framesToGiveStart: frameDelta + (currentClip.framesToGiveStart || 0) };
-
             }
         }
 
@@ -404,24 +458,23 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         
         // Calculate original clip boundaries including any existing frames to give
         const originalStart = (clip.startFrame || 0) - (clip.framesToGiveStart || 0);
-        const originalEnd = (clip.endFrame || 0) + (clip.framesToGiveEnd || 0);
         
         // create new clip ids
         const newClipId1 = uuidv4();
         const newClipId2 = uuidv4();
         
-        // First clip: from current start to cut frame
-        // Can be extended back to original start and forward to original end
+        // First clip: from original start to cut frame
+        // Keeps original framesToGiveStart, but can't extend past cut
         const newClip1: AnyClipProps = { 
             ...clip, 
             endFrame: cutFrame, 
             clipId: newClipId1,
             framesToGiveStart: clip.framesToGiveStart || 0,
-            framesToGiveEnd: originalEnd - cutFrame
+            framesToGiveEnd: 0
         };
         
-        // Second clip: from cut frame to current end
-        // Can be extended back to original start and forward to original end
+        // Second clip: from cut frame to original end
+        // Maintains proper media offset, but can't extend before cut
         const newClip2: AnyClipProps = { 
             ...clip, 
             startFrame: cutFrame, 

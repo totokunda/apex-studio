@@ -21,6 +21,13 @@ export const videoDecoders = new Map<VideoDecoderKey, VideoDecoderContext>();
 export const audioDecoders = new Map<AudioDecoderKey, AudioDecoderContext>();
 export const canvasDecoders = new Map<CanvasDecoderKey, CanvasDecoderContext>();
 
+export const getMediaInfoCached = (path: string): MediaInfo | undefined => {
+    const mediaCache = MediaCache.getState();
+    if (mediaCache.isMediaCached(path)) {
+        return mediaCache.getMedia(path)!;
+    }
+}
+
 export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
 
     // check if the metadata is cached

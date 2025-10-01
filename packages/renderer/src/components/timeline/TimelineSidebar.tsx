@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useClipStore } from '@/lib/clip';
 import { GoFileMedia } from "react-icons/go";
-import { LuAudioWaveform } from "react-icons/lu";
+import { LuAudioWaveform, LuShapes, LuSquareSquare, LuPen, LuType } from "react-icons/lu";
 
 import { IoVolumeMute } from "react-icons/io5";
 import { IoVolumeHigh } from "react-icons/io5";
@@ -36,6 +36,9 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
         {(type === 'audio') && (
             <LuAudioWaveform className='w-3 h-3 text-brand-light/50' />
         )}
+        {(type === 'shape') && (
+            <LuShapes className='w-3 h-3 text-brand-light/50' />
+        )}
         </>
     }
     {!isCollapsed && (
@@ -46,7 +49,10 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
         {type === 'audio' && (
             <LuAudioWaveform className='w-3 h-3 text-brand-light/50' />
         )}
-        <button className='cursor-pointer' onClick={() => {
+        {(type === 'shape') && (
+            <LuShapes className='w-3 h-3 text-brand-light/50' />
+        )}
+        {(type !== 'shape') && <button className='cursor-pointer' onClick={() => {
             if (timelineMuted) {
                 unmuteTimeline(timelineId);
             } else {
@@ -54,7 +60,7 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
             }
         }}>
             {timelineMuted ? <IoVolumeMute className='w-3 h-3 text-brand-light hover:text-brand-lighter' /> : <IoVolumeHigh className='w-3 h-3 text-brand-light hover:text-brand-lighter' />}
-        </button>   
+        </button>  }
         {(type !== 'audio') && <button className='cursor-pointer' onClick={() => {
             if (timelineHidden) {
                 unhideTimeline(timelineId);
