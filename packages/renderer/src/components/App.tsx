@@ -74,9 +74,9 @@ const App:React.FC = () => {
       <Toaster />  
       <div className="flex h-full w-full p-3">
         {layout === 'default' && (
-          <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5">
+          <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5 overflow-hidden">
             <ResizablePanel defaultSize={70} minSize={50} maxSize={70}>
-            <ResizablePanelGroup direction="horizontal" className="gap-0.5">
+            <ResizablePanelGroup direction="horizontal" className="gap-0.5 overflow-hidden">
             <MediaModelPanel order={1} />
             <ResizableHandle className="bg-transparent" />
                 <PreviewPanel order={3} />
@@ -90,7 +90,7 @@ const App:React.FC = () => {
         )}
         {layout === 'media' && (
           <ResizablePanelGroup direction="horizontal" className="flex-1 gap-0.5">
-            <MediaModelPanel order={undefined} defaultSize={30} minSize={20} />
+            <MediaModelPanel order={undefined} defaultSize={30} minSize={20} maxSize={50} />
             <ResizableHandle className="bg-transparent" />
             <ResizablePanel defaultSize={70} minSize={30}>
               <ResizablePanelGroup direction="vertical" className="gap-0.5">
@@ -98,7 +98,7 @@ const App:React.FC = () => {
                   <ResizablePanelGroup direction="horizontal" className="gap-0.5">
                     <PreviewPanel order={2} defaultSize={55} minSize={30} />
                     <ResizableHandle className="bg-transparent" />
-                    <PropertiesPanel order={2} defaultSize={45} minSize={20} />
+                    <PropertiesPanel order={2} defaultSize={45} minSize={30} />
                   </ResizablePanelGroup>
                 </ResizablePanel>
                 <ResizableHandle className="bg-transparent" />

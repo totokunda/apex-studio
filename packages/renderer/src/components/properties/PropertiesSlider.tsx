@@ -37,15 +37,16 @@ interface PropertiesSliderProps {
   min?: number;
   max?: number;
   step?: number;
+  toFixed?: number;
 }
 
-const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChange, renderInput, suffix, min, max, step = 0.1 }) => {
-  const [tempValue, setTempValue] = useState(value.toFixed(1));
+const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChange, renderInput, suffix, min, max, step = 0., toFixed = 1 }) => {
+  const [tempValue, setTempValue] = useState(value.toFixed(toFixed));
   const [isFocused, setIsFocused] = useState(false);
   const lastValueRef = React.useRef(value);
 
   useEffect(() => {
-    setTempValue(value.toFixed(1));
+    setTempValue(value.toFixed(toFixed));
     lastValueRef.current = value;
   }, [value, renderInput]);
 
@@ -54,7 +55,7 @@ const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChan
     // remove all non-numeric characters
     const numericValue = tempValue.replace(/[^0-9.]/g, '');
     const numValue = Number(numericValue);
-    const currentDisplay = value.toFixed(1);
+    const currentDisplay = value.toFixed(toFixed);
     if (tempValue === currentDisplay) return; // No change, skip
     
     if (!isNaN(numValue) && isFinite(numValue)) {
@@ -100,9 +101,9 @@ const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChan
   };
 
   return (
-    <div className="flex flex-col items-start w-full">
+    <div className="flex flex-col items-start w-full min-w-0">
       <label className="text-brand-light  text-[11px] mb-1">{label}</label>
-      <div className="flex flex-row items-center gap-x-2.5 w-full">
+      <div className="flex flex-row items-center gap-x-2.5 w-full min-w-0">
       <Slider value={[value]} onValueChange={(value) => onChange(value[0])} min={min} max={max} step={step} />
         <div className="flex flex-row items-center">
         <input 

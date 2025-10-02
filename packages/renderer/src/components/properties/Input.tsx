@@ -62,11 +62,11 @@ const Input: React.FC<InputProps<string>> = ({ value, onChange, label, className
     };
     
   return (
-    <div className="flex flex-col items-start w-full gap-y-1">
+    <div className="flex flex-col items-start w-full gap-y-1 min-w-0">
     <label className="text-brand-light  text-[11px] w-full text-start mb-0.5">{label}</label>
     {emptyLabel && <span className="mb-2.5"></span>}
 
-    <div className="relative w-full flex flex-row items-center">
+    <div className="relative w-full flex flex-row items-center min-w-0">
             {startLogo && <span className="text-brand-light/50 font-medium text-[11px] absolute left-2 top-1/2 -translate-y-1/2">{startLogo}</span>}
             <input className={cn(`w-full h-6 px-1.5 text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1  bg-brand ${className}`, {
                 'pl-6': startLogo,

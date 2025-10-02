@@ -59,8 +59,8 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
     const endFrameMax = Math.min(maxByMedia, endFrame + Math.abs(clip?.framesToGiveEnd ?? 0));
 
   return (
-    <div className="flex flex-col gap-y-2">
-      <div className="p-4 px-5">
+    <div className="flex flex-col gap-y-2 min-w-0">
+      <div className="p-4 px-5 min-w-0">
       <div className="flex flex-row items-center justify-between mb-4">
         <h4 className="text-brand-light text-[12px] font-medium text-start">Duration</h4>
         <span

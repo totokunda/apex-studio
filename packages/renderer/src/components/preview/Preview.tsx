@@ -273,7 +273,7 @@ const Preview:React.FC<PreviewProps> = () => {
           startFrame: focusFrame,
           endFrame: Math.min(focusFrame + clipDuration, totalTimelineFrames - 1),
           framesToGiveEnd: -Infinity,
-          framesToGiveStart: 0,
+          framesToGiveStart: Infinity,
           shapeType: shape,
           fill: '#E3E3E3',
           stroke: '#E3E3E3',
@@ -286,6 +286,8 @@ const Preview:React.FC<PreviewProps> = () => {
             scaleX: 1,
             scaleY: 1,
             rotation: 0, 
+            cornerRadius: 0,
+            opacity: 100,
           },
         };
         
@@ -344,8 +346,10 @@ const Preview:React.FC<PreviewProps> = () => {
     
     const sharedProps = {
       stroke: '#3b82f6',
+      strokeOpacity: 100,
       strokeWidth: 2,
       fill: '#3b82f644',
+      fillOpacity: 100,
       dash: [5, 5],
     };
     

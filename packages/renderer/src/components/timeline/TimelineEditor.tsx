@@ -469,12 +469,10 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         } else if (data.type === 'image') {
           numFrames = controlStore.fps * 5;
           framesToGiveEnd = -Infinity;
-          framesToGiveStart = 0;
+          framesToGiveStart = Infinity;
           height = mediaInfo.image?.height;
           width = mediaInfo.image?.width;
         } 
-
-        
 
         // Use validated ghost position to compute frames
         const state = useClipStore.getState();
@@ -770,10 +768,6 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     }
     
   }, [controlStore]);
-
-  useEffect(() => {
-    console.log('timelines', timelines);
-  }, [timelines]);
 
 
   return (

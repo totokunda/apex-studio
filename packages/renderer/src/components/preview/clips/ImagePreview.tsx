@@ -438,6 +438,8 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
       <Image 
       draggable={tool === 'pointer' && !isTransforming } 
       ref={imageRef}  
+      cornerRadius={clipTransform?.cornerRadius ?? 0}
+      opacity={(clipTransform?.opacity ?? 100) / 100}
       image={canvasRef.current || undefined}
        x={clipTransform?.x ?? offsetX} 
        y={clipTransform?.y ?? offsetY} 

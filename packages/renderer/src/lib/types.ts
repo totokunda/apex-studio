@@ -13,8 +13,8 @@ export interface ClipTransform {
     scaleX: number;
     scaleY: number;
     rotation: number;
-    // Shape-specific properties
-   
+    cornerRadius: number;
+    opacity: number;
 }
 
 export interface ClipProps {
@@ -80,7 +80,9 @@ export type ShapeClipProps = ClipProps & {
     type: 'shape';
     shapeType?: ShapeTool;
     fill?: string;
+    fillOpacity?: number;
     stroke?: string;
+    strokeOpacity?: number;
     strokeWidth?: number;
 }
 

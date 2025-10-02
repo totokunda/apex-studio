@@ -38,8 +38,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
     
     const currentStartFrame = currentClip?.startFrame ?? 0;
     const currentEndFrame = currentClip?.endFrame ?? 0;
-    //const realStartFrame = currentStartFrame + (currentClip?.framesToGiveStart !== Infinity ? currentClip?.framesToGiveStart || 0 : 0);
-    //const realEndFrame = currentEndFrame + (currentClip?.framesToGiveEnd !== -Infinity ? currentClip?.framesToGiveEnd || 0 : 0);
 
     const clipWidth = useMemo(() => Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration]);
     const clipX = useMemo(() => getClipX(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration, timelineId]);
@@ -262,20 +260,33 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                     const targetHeight = Math.max(1, imageCanvas.height);
                     ctx.clearRect(0, 0, targetWidth, targetHeight);
 
+
                     // Determine tile dimensions from the input canvas/image
                     const tileWidth = Math.max(1, (inputCanvas as any).width || (inputCanvas as any).naturalWidth || 1);
                     const tileHeight = Math.max(1, (inputCanvas as any).height || (inputCanvas as any).naturalHeight || 1);
                     const sourceHeight = Math.min(tileHeight, targetHeight);
+
+                    // When resizing from the left, offset the tiling pattern so new tiles appear from the left
+                    let startX = 0;
+                    if (resizeSide === 'left') {
+                        // Calculate offset so the pattern appears anchored to the right
+                        const remainder = targetWidth % tileWidth;
+                        startX = remainder > 0 ? -(tileWidth - remainder) : 0;
+                    }
                     
                     // Repeat the inputCanvas horizontally until we fill the target width
-                    let x = 0;
+                    let x = startX;
                     while (x < targetWidth) {
                         const remaining = targetWidth - x;
                         const drawWidth = Math.min(tileWidth, remaining);
-                        ctx.drawImage(
-                            inputCanvas,
-                            x, 0, drawWidth, sourceHeight,
-                        );
+                        
+                        // Only draw if the tile is visible (x + drawWidth > 0)
+                        if (x + drawWidth > 0) {
+                            ctx.drawImage(
+                                inputCanvas,
+                                x, 0, drawWidth, sourceHeight
+                            );
+                        }
                         x += drawWidth;
                     }
                 }
@@ -568,7 +579,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
         }
 
     
-    }, [zoomLevel, clipWidth, clipType, currentClip, mediaInfoRef.current, resizeSide, thumbnailClipWidth,  maxTimelineWidth, timelineDuration, overHang]);
+    }, [zoomLevel, clipWidth, clipType, currentClip, mediaInfoRef.current, resizeSide, thumbnailClipWidth,  maxTimelineWidth, timelineDuration, overHang, resizeSide]);
     
     const calculateFrameFromX = useCallback((xPosition: number) => {
         // Remove padding to get actual timeline position

@@ -22,9 +22,12 @@ const PositionProperties: React.FC<PositionPropertiesProps> = ({ clipId }) => {
     const handleAlign = (type: 'left' | 'center-h' | 'right' | 'top' | 'center-v' | 'bottom') => {
       if (!clip?.transform || !contentBounds) return;
       
-      const { width, height, x, y } = clip.transform;
+      const { width, height, x, y, scaleX, scaleY } = clip.transform;
       const containerWidth = contentBounds.width;
       const containerHeight = contentBounds.height;
+      
+      const scaledWidth = width * scaleX;
+      const scaledHeight = height * scaleY;
       
       let newX = x;
       let newY = y;
@@ -34,19 +37,19 @@ const PositionProperties: React.FC<PositionPropertiesProps> = ({ clipId }) => {
           newX = 0;
           break;
         case 'center-h':
-          newX = (containerWidth - width) / 2;
+          newX = (containerWidth - scaledWidth) / 2;
           break;
         case 'right':
-          newX = containerWidth - width;
+          newX = containerWidth - scaledWidth;
           break;
         case 'top':
           newY = 0;
           break;
         case 'center-v':
-          newY = (containerHeight - height) / 2;
+          newY = (containerHeight - scaledHeight) / 2;
           break;
         case 'bottom':
-          newY = containerHeight - height;
+          newY = containerHeight - scaledHeight;
           break;
       }
       
@@ -56,12 +59,15 @@ const PositionProperties: React.FC<PositionPropertiesProps> = ({ clipId }) => {
     const handleReset = () => {
       if (!clip?.transform || !contentBounds) return;
       
-      const { width, height } = clip.transform;
+      const { width, height, scaleX, scaleY } = clip.transform;
       const containerWidth = contentBounds.width;
       const containerHeight = contentBounds.height;
       
-      const centerX = (containerWidth - width) / 2;
-      const centerY = (containerHeight - height) / 2;
+      const scaledWidth = width * scaleX;
+      const scaledHeight = height * scaleY;
+      
+      const centerX = (containerWidth - scaledWidth) / 2;
+      const centerY = (containerHeight - scaledHeight) / 2;
       
       setClipTransform(clipId, { x: centerX, y: centerY, rotation: 0 });
       
@@ -72,8 +78,8 @@ const PositionProperties: React.FC<PositionPropertiesProps> = ({ clipId }) => {
     };
 
   return (
-    <div className="flex flex-col gap-y-2">
-      <div className="p-4 flex flex-col gap-y-4 px-5">
+    <div className="flex flex-col gap-y-2 min-w-0">
+      <div className="p-4 flex flex-col gap-y-4 px-5 min-w-0">
       <div className="flex flex-row items-center justify-between ">
         <h4 className="text-brand-light text-[12px] font-medium text-start">Position</h4>
         <span

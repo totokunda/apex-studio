@@ -401,14 +401,24 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     };
   }, [clipId, isSelected, removeClipSelection]);
 
+  const hexToRgba = (hex: string, opacity: number) => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${opacity / 100})`;
+  };
+
   const renderShape = () => {
+    const fillWithOpacity = hexToRgba(fill, ((clip as ShapeClipProps)?.fillOpacity ?? 100));
+    const strokeWithOpacity = hexToRgba(stroke, ((clip as ShapeClipProps)?.strokeOpacity ?? 100));
+
     const baseProps = {
       ref: shapeRef,
       scaleX,
       scaleY,
       rotation,
-      fill,
-      stroke,
+      fill: fillWithOpacity,
+      stroke: strokeWithOpacity,
       strokeWidth,
       draggable: tool === 'pointer' && !isTransforming,
       onDragStart: handleDragStart,
@@ -435,7 +445,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
 
     switch (shapeType) {
       case 'rectangle':
-        return <Rect {...cornerProps} width={width} height={height} />;
+        return <Rect {...cornerProps}  width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0} />;
       
       case 'ellipse':
         return <Ellipse {...centerProps} radiusX={width / 2} radiusY={height / 2} />;
@@ -450,7 +460,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
         return <Star {...centerProps} numPoints={5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} />;
       
       default:
-        return <Rect {...cornerProps} width={width} height={height} />;
+        return <Rect {...cornerProps} width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0} />;
     }
   };
 

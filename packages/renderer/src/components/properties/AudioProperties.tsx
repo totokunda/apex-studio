@@ -35,8 +35,8 @@ const AudioProperties: React.FC<AudioPropertiesProps> = ({ clipId }) => {
   }, [clip?.src]);
 
   return (
-    <div className="flex flex-col gap-y-2">
-      <div className="p-4 px-5">
+    <div className="flex flex-col gap-y-2 min-w-0">
+      <div className="p-4 px-5 min-w-0">
       <div className="flex flex-row items-center justify-between mb-4">
         <h4 className="text-brand-light text-[12px] font-medium text-start ">Audio</h4>
         <span

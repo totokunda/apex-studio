@@ -73,8 +73,8 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
     };
 
   return (
-    <div className="flex flex-col gap-y-2">
-      <div className="p-4 flex flex-col gap-y-4 px-5">
+    <div className="flex flex-col gap-y-2 min-w-0">
+      <div className="p-4 flex flex-col gap-y-4 px-5 min-w-0">
         <div className="flex flex-row items-center justify-between">
           <h4 className="text-brand-light text-[12px] font-medium text-start">Layout</h4>
           <span

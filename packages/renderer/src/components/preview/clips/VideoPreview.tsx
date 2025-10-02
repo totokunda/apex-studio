@@ -542,6 +542,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             window.removeEventListener('click', handleWindowClick);
         };
     }, [clipId, isSelected, removeClipSelection]);
+    
 
   return (
     <React.Fragment>
@@ -557,6 +558,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
        scaleX={clipTransform?.scaleX ?? 1}
        scaleY={clipTransform?.scaleY ?? 1}
        rotation={clipTransform?.rotation ?? 0}
+       cornerRadius={clipTransform?.cornerRadius ?? 0}
+       opacity={(clipTransform?.opacity ?? 100) / 100}
        onDragMove={handleDragMove} 
        onDragStart={handleDragStart} 
        onDragEnd={handleDragEnd} 

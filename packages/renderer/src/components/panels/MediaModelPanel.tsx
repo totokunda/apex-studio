@@ -11,9 +11,9 @@ import { MdOutlineMovieFilter } from 'react-icons/md'
 import { TbWand } from "react-icons/tb";
 import MediaModelTrigger from '../media/MediaModelTrigger'
 
-interface MediaModelPanelProps { order?: number; defaultSize?: number; minSize?: number }
+interface MediaModelPanelProps { order?: number; defaultSize?: number; minSize?: number; maxSize?: number }
 
-const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 25, minSize = 20 }) => {
+const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 25, minSize = 20, maxSize }) => {
     const panelRef = useRef<ImperativePanelHandle | null>(null);
     const [isPanelOpenAnimation, setIsPanelOpenAnimation] = useState(false);
     const { section, closeSection } = useSidebarStore();
@@ -44,6 +44,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
     <ResizablePanel
     ref={panelRef}
     minSize={minSize}
+    maxSize={maxSize}
     defaultSize={defaultSize}
     order={order}
     className={cn("bg-brand-background rounded-lg  overflow-hidden", {

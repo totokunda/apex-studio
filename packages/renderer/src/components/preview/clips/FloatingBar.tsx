@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { LuChevronDown, LuChevronUp, LuMousePointer2, LuHand, LuCheck, LuPen, LuSquareSquare, LuSquare, LuCircle, LuTriangle, LuMinus, LuStar, LuType} from "react-icons/lu";
-import { PiResize } from "react-icons/pi";
 
 
 import {
@@ -128,40 +127,37 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                <DropdownMenuItem
                  key='shape-rectangle'
                  textValue='Rectangle'
-                 className='dark text-[12px] flex items-center gap-x-2'
+                 className='dark text-[12px] flex items-center gap-x-2 h-7'
                  onClick={() => { setShape('rectangle'); setTool('shape'); setShapeOpen(false); }}
                >
                  <LuSquare className='w-4 h-4' />
                  <span>Rectangle</span>
                  {shape === 'rectangle' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
                </DropdownMenuItem>
-               <DropdownMenuSeparator />
                <DropdownMenuItem
                  key='shape-ellipse'
                  textValue='Ellipse'
-                 className='dark text-[12px] flex items-center gap-x-2'
+                 className='dark text-[12px] flex items-center gap-x-2 h-7'
                  onClick={() => { setShape('ellipse'); setTool('shape'); setShapeOpen(false); }}
                >
                  <LuCircle className='w-4 h-4' />
                  <span>Ellipse</span>
                  {shape === 'ellipse' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
                </DropdownMenuItem>
-               <DropdownMenuSeparator />
                <DropdownMenuItem
                  key='shape-polygon'
                  textValue='Polygon'
-                 className='dark text-[12px] flex items-center gap-x-2'
+                 className='dark text-[12px] flex items-center gap-x-2 h-7'
                  onClick={() => { setShape('polygon'); setTool('shape'); setShapeOpen(false); }}
                >
                  <LuTriangle className='w-4 h-4' />
                  <span>Polygon</span>
                  {shape === 'polygon' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
                </DropdownMenuItem>
-               <DropdownMenuSeparator />
                <DropdownMenuItem
                  key='shape-star'
                  textValue='Star'
-                 className='dark text-[12px] flex items-center gap-x-2'
+                 className='dark text-[12px] flex items-center gap-x-2 h-6'
                  onClick={() => { setShape('star'); setTool('shape'); setShapeOpen(false); }}
                >
                  <LuStar className='w-4 h-4' />
@@ -170,7 +166,6 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                </DropdownMenuItem>
              </DropdownMenuContent>
            </DropdownMenu>
-            
           <div onClick={() => setTool(tool === 'hand' ? 'hand' : 'pointer')} className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer ${
             (tool === 'pointer' || tool === 'hand')
               ? 'text-brand-light bg-brand-accent-two-shade'
@@ -196,18 +191,17 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                <DropdownMenuItem
                  key='tool-pointer'
                  textValue='Pointer'
-                 className='dark text-[12px] flex items-center gap-x-2'
+                 className='dark text-[12px] flex items-center gap-x-2 h-7'
                  onClick={() => { setTool('pointer'); setToolOpen(false); }}
                >
                  <LuMousePointer2 className='w-4 h-4' />
                  <span>Pointer</span>
                  {tool === 'pointer' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
                </DropdownMenuItem>
-               <DropdownMenuSeparator />
                <DropdownMenuItem
                  key='tool-hand'
                  textValue='Hand'
-                 className='dark text-[12px] flex items-center gap-x-2'
+                 className='dark text-[12px] flex items-center gap-x-2 h-7'
                  onClick={() => { setTool('hand'); setToolOpen(false); }}
                >
                  <LuHand className='w-4 h-4' />
