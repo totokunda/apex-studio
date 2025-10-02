@@ -149,7 +149,7 @@ export const fetchCanvasSample = async (path: string, frameIndex: number, width?
 export const fetchCanvasSamples = async (path: string, frameIndices: number[], width?: number, height?: number, options?: {mediaInfo?: MediaInfo}): Promise<(WrappedCanvas | null)[]> => {
     // make samples a list of nulls to start with
     const samples = getCachedSamples(path, frameIndices, width, height, true);
-
+    
     if (samples.every(sample => sample !== null)) {
         return samples as (WrappedCanvas | null)[];
     }
@@ -157,8 +157,8 @@ export const fetchCanvasSamples = async (path: string, frameIndices: number[], w
     const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
     if (!mediaInfo || !mediaInfo.video) return samples as (WrappedCanvas | null)[];
 
-    width = width || mediaInfo.video?.codedWidth || 0;
-    height = height || mediaInfo.video?.codedHeight || 0;
+    width = Math.max(1, Math.floor(width || mediaInfo.video?.codedWidth || 0));
+    height = Math.max(1, Math.floor(height || mediaInfo.video?.codedHeight || 0));
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         return samples as (WrappedCanvas | null)[];
     }
@@ -297,6 +297,7 @@ export const getNearestCachedCanvasSamples = (
     options?: { mediaInfo?: MediaInfo }
 ): (WrappedCanvas | null)[] => {
     const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
+    
     if (!mediaInfo || !mediaInfo.video) {
         return new Array(frameIndices.length).fill(null);
     }
@@ -305,6 +306,7 @@ export const getNearestCachedCanvasSamples = (
     const targetH = Math.max(1, Math.floor(height || mediaInfo.video?.codedHeight || 0));
 
     const results: (WrappedCanvas | null)[] = new Array(frameIndices.length).fill(null);
+
 
     for (let i = 0; i < frameIndices.length; i++) {
         const fi = frameIndices[i]!;

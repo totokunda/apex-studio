@@ -771,6 +771,10 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     
   }, [controlStore]);
 
+  useEffect(() => {
+    console.log('timelines', timelines);
+  }, [timelines]);
+
 
   return (
     <div  className='relative h-full flex flex-row overflow-hidden'>

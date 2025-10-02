@@ -1,10 +1,13 @@
 import { create } from "zustand";
-import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps } from "./types";
+import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 
 import { MediaItem } from "@/components/media/Item";
-import { MIN_DURATION } from "./settings";
+import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS } from "./settings";
+import { getMediaInfo } from "./media/utils";
+import { getLowercaseExtension } from "@app/preload";
+import { URLSearchParams } from "url";
 
 interface ClipStore {  
     // Clips
@@ -19,8 +22,9 @@ interface ClipStore {
     removeClip: (clipId: string) => void;
     updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) => void;
     resizeClip: (clipId: string, side: 'left' | 'right', newFrame: number) => void;
+    separateClip: (clipId: string) => void;
     isValidResize: (clipId: string, side: 'left' | 'right', newFrame: number) => boolean;   
-    splitClip: (cutFrame: number) => void;
+    splitClip: (cutFrame: number, clipId: string) => void;
     mergeClips: (clipIds: string[]) => void;
     moveClipToEnd: (clipId: string) => void;
     clipboard: AnyClipProps[];
@@ -368,6 +372,66 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
     }),
+    separateClip: (clipId) => set((state) => {
+        const clip = state.clips.find((c) => c.clipId === clipId);
+        if (!clip || clip.type !== 'video') return { clips: state.clips };
+        const newClipId1 = uuidv4();
+        const newClipId2 = uuidv4();
+        const newAudioTimelineId = uuidv4();
+
+        // Find the index of the current timeline
+        const currentTimelineIndex = state.timelines.findIndex(t => t.timelineId === clip.timelineId);
+        const clipTimeline = state.getTimelineById(clip.timelineId || '');
+        
+        // Create a new audio timeline for the separated audio clip
+        const audioTimeline: TimelineProps = {
+            timelineId: newAudioTimelineId,
+            type: 'audio',
+            timelineHeight: clipTimeline?.timelineHeight ?? 64,
+            timelineWidth: clipTimeline?.timelineWidth ?? 0,
+            timelineY: (clipTimeline?.timelineY ?? 0) + (clipTimeline?.timelineHeight ?? 64),
+            timelinePadding: clipTimeline?.timelinePadding ?? 0,
+            muted: false,
+            hidden: false,
+        };
+
+        const url1 = new URL(clip.src);
+        const url2 = new URL(clip.src);
+
+        url1.hash = 'video';
+        url2.hash = 'audio';
+
+        const clipVideo: AnyClipProps = {
+            ...clip,
+            src: url1.toString(),
+            clipId: newClipId1,
+        };
+        const clipAudio: AnyClipProps = {
+            ...clip,
+            type: 'audio',
+            src: url2.toString(),
+            clipId: newClipId2,
+            timelineId: newAudioTimelineId,
+        };
+        // Async run these two commands
+        getMediaInfo(clipVideo.src);
+        getMediaInfo(clipAudio.src);
+        
+        // Remove the original clip and add both new clips
+        const newClips = [...state.clips.filter((c) => c.clipId !== clipId), clipVideo, clipAudio];
+        
+        // Insert the new audio timeline directly below the current timeline
+        const newTimelines = currentTimelineIndex !== -1 
+            ? [...state.timelines.slice(0, currentTimelineIndex + 1), audioTimeline, ...state.timelines.slice(currentTimelineIndex + 1)]
+            : [...state.timelines, audioTimeline];
+        const resolvedTimelines = resolveOverlapsTimelines(newTimelines);
+        
+        // Resolve overlaps and calculate duration
+        const resolvedClips = resolveOverlaps(newClips);
+        const clipDuration = calculateTotalClipDuration(resolvedClips);
+        
+        return { clips: resolvedClips, clipDuration, timelines: resolvedTimelines };
+    }),
     isValidResize: (clipId: string, side: 'left' | 'right', newFrame: number) => {
         const state = get();
         const sortedClips = [...state.clips].sort((a, b) => (a.startFrame || 0) - (b.startFrame || 0));
@@ -443,12 +507,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         return { clips: resolvedClips, clipDuration };
     }),
     // Create two new clips from the original clip at the cut frame
-    splitClip: (cutFrame: number) => set((state) => {
+    splitClip: (cutFrame: number, clipId: string) => set((state) => {
         // Find the clip that contains the cut frame
         const clip = state.clips.find((clip) => {
             const startFrame = clip.startFrame || 0;
             const endFrame = clip.endFrame || 0;
-            return cutFrame > startFrame && cutFrame < endFrame;
+            return cutFrame > startFrame && cutFrame < endFrame && clip.clipId === clipId;
         });
         
         if (!clip) return { clips: state.clips };
@@ -456,21 +520,19 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         // remove the clip from the array 
         const filteredClips = state.clips.filter((c) => c.clipId !== clip.clipId);
         
-        // Calculate original clip boundaries including any existing frames to give
-        const originalStart = (clip.startFrame || 0) - (clip.framesToGiveStart || 0);
-        
         // create new clip ids
         const newClipId1 = uuidv4();
         const newClipId2 = uuidv4();
-        
+        const infinityFramestoGiveEnd = !isFinite(clip.framesToGiveEnd || 0);
+
         // First clip: from original start to cut frame
         // Keeps original framesToGiveStart, but can't extend past cut
         const newClip1: AnyClipProps = { 
             ...clip, 
             endFrame: cutFrame, 
             clipId: newClipId1,
-            framesToGiveStart: clip.framesToGiveStart || 0,
-            framesToGiveEnd: 0
+            framesToGiveStart: 0,
+            framesToGiveEnd: infinityFramestoGiveEnd ? Infinity : 0,
         };
         
         // Second clip: from cut frame to original end
@@ -479,9 +541,33 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             ...clip, 
             startFrame: cutFrame, 
             clipId: newClipId2,
-            framesToGiveStart: cutFrame - originalStart,
-            framesToGiveEnd: clip.framesToGiveEnd || 0
+            framesToGiveStart: 0,
+            framesToGiveEnd: infinityFramestoGiveEnd ? Infinity : 0,
         };
+
+        if (Object.prototype.hasOwnProperty.call(clip, 'src') && clip.src && (AUDIO_EXTS.includes(getLowercaseExtension(clip.src)) || VIDEO_EXTS.includes(getLowercaseExtension(clip.src)))) {
+            // one of audio or video
+            let speed = 1;
+            if (Object.prototype.hasOwnProperty.call(clip, 'speed')) {
+                speed = (clip as AudioClipProps).speed || 1;
+            }
+            const frameShift = (clip.startFrame || 0) - (clip.framesToGiveStart || 0);
+            const url1 = new URL(clip.src);
+            const url2 = new URL(clip.src);
+            const startFrame1 = (clip.startFrame || 0) - frameShift;
+            const endFrame1 = (cutFrame * speed) - frameShift;
+            const startFrame2 = (cutFrame * speed) - frameShift;
+            const endFrame2 = ((clip.endFrame || 0) * speed) - frameShift;
+            const currentStartFrame = url1.searchParams.get('startFrame') ? Number(url1.searchParams.get('startFrame')) : 0;    
+            url1.searchParams.set('startFrame', String(startFrame1 + currentStartFrame));
+            url1.searchParams.set('endFrame', String(endFrame1 + currentStartFrame));
+            url2.searchParams.set('startFrame', String(startFrame2 + currentStartFrame));
+            url2.searchParams.set('endFrame', String(endFrame2 + currentStartFrame));
+            newClip1.src = url1.toString();
+            newClip2.src = url2.toString();
+            void getMediaInfo(newClip1.src);
+            void getMediaInfo(newClip2.src);
+        }
         
         const newClips = [...filteredClips, newClip1, newClip2];
         const resolvedClips = resolveOverlaps(newClips);
@@ -584,7 +670,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         return [clip, frame - (clip.startFrame || 0)];
     },
     clipWithinFrame: (clip: AnyClipProps, frame: number) => {
-        return frame >= (clip.startFrame || 0) && frame < (clip.endFrame || 0);
+        return frame >= (clip.startFrame || 0)  && frame <= (clip.endFrame || 0);
     },
 
 }));

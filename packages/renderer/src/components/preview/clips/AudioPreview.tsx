@@ -21,6 +21,8 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
   const currentStartFrameRef = useRef<number>(0);
   const playbackTimeAtStartRef = useRef<number>(0);
   const audioQueueRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  const hasValidCurrentFrame = useMemo(() => currentFrame >= 0, [currentFrame]);
+  
 
   useEffect(() => {
     const wasPlaying = prevIsPlayingRef.current;
@@ -107,12 +109,14 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
 
 
   const startRendering = useCallback(async () => {
-    if (!isPlaying || !ctx || !mediaInfo || !mediaInfo.audio || !fps) {
+    // Only play audio when clip is actually active (not during prebuffer period)
+
+    if (!isPlaying || !ctx || !mediaInfo || !mediaInfo.audio || !fps || !hasValidCurrentFrame) {
       return;
     }
     // align starting frame and playback anchor with current UI state
     if (typeof currentFrame === 'number' && fps) {
-      currentStartFrameRef.current = currentFrame;
+      currentStartFrameRef.current = currentFrame
       playbackTimeAtStartRef.current = currentFrame / fps;
     }
     // Stop any existing buffers and iterator
@@ -124,25 +128,34 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
     iteratorRef.current?.return?.();
 
     startTimeRef.current = ctx.currentTime;
-
+    
     // Sample from the correct media frame based on speed
-    const mediaFrameIndex = Math.max(0, Math.floor(currentStartFrameRef.current * Math.max(0.1, speed)));
+    const mediaFrameIndex = Math.max(0, Math.floor(currentStartFrameRef.current * Math.max(0.1, speed))) + (mediaInfo.startFrame || 0);
     const mediaTimeAtStart = mediaFrameIndex / fps;
+    // Extend audio beyond clip boundary for seamless transitions with adjacent clips
+    const endIndex = mediaInfo?.endFrame ? mediaInfo.endFrame : undefined;
 
-    iteratorRef.current = await getAudioIterator(src, { mediaInfo:mediaInfo || undefined, fps, sampleSize: mediaInfo?.audio?.numberOfChannels == 2 ? 1024 : 2048, index: mediaFrameIndex });
+    iteratorRef.current = await getAudioIterator(src, { mediaInfo:mediaInfo || undefined, fps, startIndex: mediaFrameIndex, endIndex });
     for await (const buf of iteratorRef.current) {
-      if (!buf) return;
+      if (!buf) continue; // Skip null buffers but keep trying
       const buffer = buf.buffer || null;
       const duration = buf.duration || 0;
       const timestamp = buf.timestamp || 0;
 
       if (!buffer || duration <= 0) {
-        return; // Stop the loop
+        continue; // Skip invalid buffers but keep trying
       }
 
       // Map media timestamp to wall clock according to speed.
       // Timeline seconds advance 1:1 with wall clock; media advances at `speed`.
-      const startTimestamp = startTimeRef.current + (timestamp - mediaTimeAtStart) / Math.max(0.1, speed);
+      let startTimestamp = startTimeRef.current + (timestamp - mediaTimeAtStart) / Math.max(0.1, speed);
+      
+      // Ensure no gap at clip boundaries - if this buffer should start very soon, start it immediately
+      const timeUntilStart = startTimestamp - ctx.currentTime;
+      if (timeUntilStart > 0 && timeUntilStart < 0.001) {
+        startTimestamp = ctx.currentTime;
+      }
+      
       const node = ctx.createBufferSource();
 		  node.buffer = buffer;
       try { node.playbackRate.value = Math.max(0.1, speed);
@@ -199,22 +212,20 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
         audioQueueRef.current.delete(node);
       };
 
-      if (timestamp - mediaTimeAtStart >= 0) {
-        // Pace startup to avoid queueing too far ahead; simple throttle
-      }
-      if ((timestamp - mediaTimeAtStart) / Math.max(0.1, speed) - (ctx.currentTime - startTimeRef.current) >= 1) {
+      // More aggressive buffering for seamless playback - queue up to 2 seconds ahead
+      if ((timestamp - mediaTimeAtStart) / Math.max(0.1, speed) - (ctx.currentTime - startTimeRef.current) >= 2) {
         await new Promise<void>((resolve) => {
           const id = setInterval(() => {
             const ahead = (timestamp - mediaTimeAtStart) / Math.max(0.1, speed) - (ctx.currentTime - startTimeRef.current);
-            if (ahead < 1) {
+            if (ahead < 1.5) {
               clearInterval(id);
               resolve();
             }
-          }, 100);
+          }, 50);
         });
       }
     }
-  }, [isPlaying, ctx, mediaInfo, fps, src, gainNode, volume, fadeIn, fadeOut, speed]);
+  }, [isPlaying, ctx, mediaInfo, fps, src, gainNode, volume, fadeIn, fadeOut, speed, hasValidCurrentFrame]);
 
   // Start or restart rendering when playback starts or media becomes ready
   useEffect(() => {
@@ -233,16 +244,15 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
     }
   }, [currentFrame, isPlaying, fps, startRendering]);
 
-  // Cleanup on unmount: stop all audio immediately
+  // Cleanup on unmount: let scheduled audio complete for smooth transitions
   useEffect(() => {
     return () => {
-      // Stop all audio buffer source nodes
-      for (const node of audioQueueRef.current) {
-        try { node.stop(); } catch {}
-      }
+      // Don't stop audio nodes - let them finish their scheduled playback naturally
+      // This prevents gaps when transitioning between adjacent clips
+      // The nodes will clean themselves up via their onended handlers
       audioQueueRef.current.clear();
       
-      // Stop the audio iterator if it exists
+      // Stop the audio iterator to prevent scheduling new buffers
       // @ts-ignore
       iteratorRef.current?.return?.();
       iteratorRef.current = null;

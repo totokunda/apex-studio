@@ -9,7 +9,7 @@ import { MediaInfo } from "../types";
 import { MediaCache } from "./cache";
 import { IMAGE_EXTS } from "../settings";
 import { readImageMetadataFast } from "./image";
-import { Input, ALL_FORMATS, BlobSource, UrlSource } from "mediabunny";
+import { Input, ALL_FORMATS, BlobSource, UrlSource, AudioBufferSink } from "mediabunny";
 import { getLowercaseExtension, readFileBuffer, fileURLToPath } from "@app/preload";
 import { useControlsStore } from "../control";
 
@@ -28,14 +28,62 @@ export const getMediaInfoCached = (path: string): MediaInfo | undefined => {
     }
 }
 
+const getUrlWithoutHashSuffix = (path: string): string => {
+    const pathUrl = new URL(path);
+    pathUrl.hash = '';
+    return pathUrl.toString();
+}
+
+const getUrlWithoutSearchParams = (path: string): string => {
+    const pathUrl = new URL(path);
+    pathUrl.search = '';
+    return pathUrl.toString();
+}
+
 export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
+
+    const pathUrl = new URL(path);
+    const startFrame = pathUrl.searchParams.get('startFrame') ? Number(pathUrl.searchParams.get('startFrame')) : undefined;
+    const endFrame = pathUrl.searchParams.get('endFrame') ? Number(pathUrl.searchParams.get('endFrame')) : undefined;
 
     // check if the metadata is cached
     const mediaCache = MediaCache.getState();
     if (mediaCache.isMediaCached(path)) {
         return mediaCache.getMedia(path)!;
     }
-    const ext = getLowercaseExtension(path);
+
+    // Check if path has #audio or #video suffix
+    const hashIndex = pathUrl.hash.indexOf('#');
+    const hasHashSuffix = hashIndex !== -1;
+    const originalPath = hasHashSuffix ? getUrlWithoutHashSuffix(path) : path;
+    const hashSuffix = hasHashSuffix ? pathUrl.hash.substring(hashIndex + 1) : null;
+    const isAudioOnly = hashSuffix === 'audio';
+    const isVideoOnly = hashSuffix === 'video';
+
+    // If we have a hash suffix, check if the original path is cached
+    let baseMediaInfo: MediaInfo | undefined = undefined;
+    if (hasHashSuffix && mediaCache.isMediaCached(originalPath)) {
+        baseMediaInfo = mediaCache.getMedia(originalPath)!;
+        
+        // Create a filtered version based on hash suffix
+        const filteredMediaInfo: MediaInfo = {
+            ...baseMediaInfo,
+            path,
+            video: isAudioOnly ? null : baseMediaInfo.video,
+            audio: isVideoOnly ? null : baseMediaInfo.audio,
+            stats: {
+                video: isAudioOnly ? undefined : baseMediaInfo.stats.video,
+                audio: isVideoOnly ? undefined : baseMediaInfo.stats.audio,
+            },
+            startFrame: startFrame,
+            endFrame: endFrame,
+        };
+        
+        mediaCache.setMedia(path, filteredMediaInfo);
+        return filteredMediaInfo;
+    }
+
+    const ext = getLowercaseExtension(hasHashSuffix ? originalPath : path);
     // check if file is an image. then modify 
 
     if (IMAGE_EXTS.includes(ext)) {
@@ -55,16 +103,33 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
             duration: undefined,
             metadata: undefined,
             mimeType: metadata.mime,
-            format: undefined,
+            format: undefined
         };
         mediaCache.setMedia(path, mediaInfo);
         return mediaInfo;
     }
 
+    if (startFrame || endFrame) {
+        const pathWithoutSearchParams = getUrlWithoutSearchParams(path);
+        // check if the metadata is cached
+        const mediaCache = MediaCache.getState();
+        if (mediaCache.isMediaCached(pathWithoutSearchParams)) {
+            const mediaInfo = mediaCache.getMedia(pathWithoutSearchParams)!;
+            const newMediaInfo: MediaInfo = {
+                ...mediaInfo,
+                path,
+                startFrame: startFrame,
+                endFrame: endFrame,
+            };
+            mediaCache.setMedia(path, newMediaInfo);
+            return newMediaInfo;
+        }
+    }
+
     // Prefer streaming via UrlSource, but fall back to BlobSource if the server truncates streams or range reads fail
     let input: Input | null = null;
     try {
-        const filePath = fileURLToPath(path);  
+        const filePath = fileURLToPath(hasHashSuffix ? originalPath : path);  
         // replace userDatab path 
         const url = new URL(`app://user-data/${filePath}`);
         input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
@@ -83,6 +148,13 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
         const metadata = await inp.getMetadataTags();
         const mimeType = await inp.getMimeType();
         const format = await inp.getFormat();
+        
+        if (audioTrack) {
+            const sink = new AudioBufferSink(audioTrack);
+            const sample = await sink.getBuffer(0)
+            const sampleSize = sample?.buffer.length || 2048;
+            (audioTrack as any).sampleSize = sampleSize;
+        }
         return { videoTrack, audioTrack, packetStats, audioPacketStats, duration, metadata, mimeType, format };
     }
 
@@ -93,7 +165,7 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
     } catch (e) {
         // Fallback: fetch the entire resource as a Blob and use BlobSource to avoid streaming issues
         try {
-            const buffer = await readFileBuffer(path);
+            const buffer = await readFileBuffer(hasHashSuffix ? originalPath : path);
             const blob = new Blob([buffer as unknown as ArrayBuffer]);
             const blobInput = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });
             infoBundle = await gatherInfo(blobInput);
@@ -113,20 +185,40 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
 
     const mediaInfo: MediaInfo = {
         path,
-        video: videoTrack,
-        audio: audioTrack,
+        video: isAudioOnly ? null : videoTrack,
+        audio: isVideoOnly ? null : audioTrack,
         image: null,
         stats: {
-            video: packetStats,
-            audio: audioPacketStats,
+            video: isAudioOnly ? undefined : packetStats,
+            audio: isVideoOnly ? undefined : audioPacketStats,
         },
         duration,
         metadata,
         mimeType,
         format,
+        startFrame: startFrame,
+        endFrame: endFrame,
     }
 
     mediaCache.setMedia(path, mediaInfo);
+    
+    // If we fetched with a hash suffix but the base wasn't cached, also cache the full version
+    if (hasHashSuffix && !baseMediaInfo) {
+        const fullMediaInfo: MediaInfo = {
+            ...mediaInfo,
+            path: originalPath,
+            video: videoTrack,
+            audio: audioTrack,
+            stats: {
+                video: packetStats,
+                audio: audioPacketStats,
+            },
+            startFrame: startFrame,
+            endFrame: endFrame,
+        };
+        mediaCache.setMedia(originalPath, fullMediaInfo);
+    }
+    
     return mediaInfo;
 }
 

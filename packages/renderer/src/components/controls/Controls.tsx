@@ -1,7 +1,7 @@
 import { FiMinusCircle, FiPlusCircle } from "react-icons/fi";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { cn } from '@/lib/utils';
-import { BackButton, RewindBackward, RewindForward, ScissorsButton, TrashButton, PlayPauseButton, ExtendTimelineButton, ReduceTimelineButton } from "./Buttons";
+import { BackButton, RewindBackward, RewindForward, SplitButton, TrashButton, PlayPauseButton, SeparateButton } from "./Buttons";
 import { useControlsStore } from "@/lib/control";
 import { useClipStore } from "@/lib/clip";
 import { ZoomLevel } from '@/lib/types';
@@ -250,8 +250,9 @@ const Controls = () => {
     <div className='relative  flex items-center '>
         <div className="flex items-center w-full bg-brand-background/30 justify-between border-b border-brand-light/5 px-5 py-1">
     <div className="flex items-center gap-x-2"> 
-        <ScissorsButton />
+        <SplitButton />
         <TrashButton />
+        <SeparateButton /> 
         </div>
     <div className=' flex items-center justify-center gap-x-4 absolute left-1/2 -translate-x-1/2'>
         <BackButton />

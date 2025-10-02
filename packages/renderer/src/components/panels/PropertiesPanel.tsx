@@ -13,7 +13,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ order, defaultSize = 
     minSize={minSize}
     defaultSize={defaultSize}
     order={order}
-    className="bg-brand-background flex flex-col  rounded-lg shadow w-full border-brand-light/10 flex-shrink-0"
+    className="bg-brand flex flex-col  rounded-lg shadow w-full border-brand-light/10 flex-shrink-0"
   >
 
    <div className="bg-brand-background rounded-lg  h-full">

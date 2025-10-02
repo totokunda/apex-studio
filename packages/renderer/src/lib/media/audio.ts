@@ -40,17 +40,31 @@ function getOrCreateAudioDecoder(path: string, mediaInfo: MediaInfo): AudioDecod
     }
 }
 
-export const getAudioIterator = async (path: string, options?: { mediaInfo?: MediaInfo, sampleRate?: number, fps?: number, sampleSize?: number, index?: number }) => {
+export const getAudioIterator = async (path: string, options?: { mediaInfo?: MediaInfo, sampleRate?: number, fps?: number, sampleSize?: number, startIndex?: number, endIndex?: number }) => {
     try {
         const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
         if (!mediaInfo || !mediaInfo.audio) throw new Error('Media info not found');
-        const sampleRate = options?.sampleRate || mediaInfo.audio?.sampleRate || 0;
-        const sampleSize = options?.sampleSize || 2048.0;
-        const startTimestamp = (sampleSize * (options?.index || 0)) / sampleRate;
+        const sampleRate = mediaInfo.audio?.sampleRate || 0;
+        const sampleSize = mediaInfo.audio?.sampleSize || 2048.0;
+        const hasFps = !!(options?.fps && options.fps > 0);
+        // Align semantics with video: when fps is provided, treat startIndex/endIndex as frame indices
+        // and convert to seconds via fps. Fallback to sampleSize-based mapping when fps is unavailable.
+        const startIndex = options?.startIndex || 0;
+        let startTimestamp: number;
+        if (hasFps) {
+            startTimestamp = startIndex / (options!.fps as number);
+        } else {
+            startTimestamp = (sampleSize * startIndex) / sampleRate;
+        }
+        let endTimestamp: number | undefined = undefined;
+        if (typeof options?.endIndex === 'number') {
+            const endIndex = options!.endIndex as number;
+            endTimestamp = hasFps ? (endIndex / (options!.fps as number)) : ((sampleSize * endIndex) / sampleRate);
+        }
         const decoder = getOrCreateAudioDecoder(path, mediaInfo);
         if (!decoder) throw new Error('Decoder not found');
         decoder.lastAccessTs = nowMs();
-        return decoder.sink.buffers(startTimestamp);
+        return decoder.sink.buffers(startTimestamp, endTimestamp);
     } 
     finally {
         pruneStaleDecoders();

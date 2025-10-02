@@ -36,9 +36,9 @@ const AudioProperties: React.FC<AudioPropertiesProps> = ({ clipId }) => {
 
   return (
     <div className="flex flex-col gap-y-2">
-      <div className="p-5">
-      <div className="flex flex-row items-center justify-between">
-        <h4 className="text-brand-light text-sm font-medium text-start mb-4">Audio</h4>
+      <div className="p-4 px-5">
+      <div className="flex flex-row items-center justify-between mb-4">
+        <h4 className="text-brand-light text-[12px] font-medium text-start ">Audio</h4>
         <span
           onClick={() => {
             updateClip(clipId, { volume: 0, fadeIn: 0, fadeOut: 0 });

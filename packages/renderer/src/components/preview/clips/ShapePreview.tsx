@@ -492,7 +492,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
               node.getLayer()?.batchDraw?.();
             }
           }}
-          enabledAnchors={['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-right', 'middle-top', 'middle-bottom', 'middle-left', 'middle-right', 'middle-center', 'bottom-center']}
+          enabledAnchors={['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-right', 'middle-left', 'middle-right', 'bottom-center']}
         />
       )}
     </React.Fragment>

@@ -470,7 +470,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
           <div className="text-brand-lighter/60 text-xs px-5 py-4 pt-1">No media yet. Upload files to get started.</div>
         )}
         {!loading && items.length > 0 && (
-          <ScrollArea style={{ height: Math.max(0, panelHeight - 172) }} className="px-5 py-4 pt-1 "
+          <ScrollArea style={{ height: Math.max(0, panelHeight - 172) }} className="px-5 py-4 pt-1 dark"
           >
             <div className="grid gap-2 w-full" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}>
             {displayItems.map((item) => (

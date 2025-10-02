@@ -38,7 +38,7 @@ export const generateTimelineSamples = async (_id: string, path: string, frameIn
     if (IMAGE_EXTS.includes(ext)) {
         const image = await fetchImage(path, width, height, { mediaInfo: options?.mediaInfo });
         fetchedSamples = [image];
-    } else if (AUDIO_EXTS.includes(ext)) {
+    } else if (AUDIO_EXTS.includes(ext) || path.includes('#audio')) {
         const mediaInfo = options?.mediaInfo || await getMediaInfo(path);
         const canvas = await generateAudioWaveformCanvas(path, totalCanvasWidth, height, {
             mediaInfo,
@@ -64,16 +64,6 @@ export const generateTimelineSamples = async (_id: string, path: string, frameIn
     return samples
 }
 
-// Legacy helper retained for reference. Not used by the new full-waveform pipeline.
-// const createWaveformKey = (
-//     path: string,
-//     width: number,
-//     height: number,
-//     samples?: number,
-//     color?: string,
-//     startFrame?: number,
-//     endFrame?: number
-// ): string => `waveform:${path}@${width}x${height}#s${samples ?? 0}#c${color ?? ''}#${startFrame ?? ''}:${endFrame ?? ''}`;
 
 function mapRange(value: number, inMin: number, inMax: number, outMin: number, outMax: number): number {
     const clampedValue = Math.max(inMin, Math.min(value, inMax));
@@ -275,9 +265,27 @@ export const generateAudioWaveformCanvas = async (
         } as WrappedAmplitudes);
     }
     
+    let startFrame = options?.startFrame;
+    let endFrame = options?.endFrame; 
 
-    const audioClip = getAudioForVideoFrames(amplitudes, options?.startFrame, options?.endFrame);
+    // If mediaInfo has startFrame/endFrame, it means the media is already trimmed
+    // We need to offset our requested frames by the mediaInfo's startFrame
+    const mediaStartOffset = options?.mediaInfo?.startFrame ?? 0;
+    
+    // Adjust the requested frames to account for media trimming
+    if (startFrame !== undefined) {
+        startFrame = startFrame + mediaStartOffset;
+    } else if (mediaStartOffset > 0) {
+        startFrame = mediaStartOffset;
+    }
 
+    if (endFrame !== undefined) {
+        endFrame = endFrame + mediaStartOffset;
+    } else if (options?.mediaInfo?.endFrame !== undefined) {
+        endFrame = options?.mediaInfo?.endFrame;
+    }
+
+    const audioClip = getAudioForVideoFrames(amplitudes, startFrame, endFrame);
 
     // 1. Define your source and target ranges
     const SOURCE_DB_MIN = -60.0; // What we consider "silence" in the original signal

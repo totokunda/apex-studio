@@ -60,9 +60,9 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
 
   return (
     <div className="flex flex-col gap-y-2">
-      <div className="p-5">
-      <div className="flex flex-row items-center justify-between">
-        <h4 className="text-brand-light text-sm font-medium text-start mb-4">Duration</h4>
+      <div className="p-4 px-5">
+      <div className="flex flex-row items-center justify-between mb-4">
+        <h4 className="text-brand-light text-[12px] font-medium text-start">Duration</h4>
         <span
           onClick={() => {
             const startFrame = (clip?.startFrame ?? 0) - (clip?.framesToGiveStart ?? 0);
@@ -72,6 +72,7 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
             setTimeout(() => {
               updateClip(clipId, { speed: 1});
             }, 10);
+            updateClip(clipId, { speed: 1});
             setSpinning(true);
             setTimeout(() => {
               setSpinning(false);

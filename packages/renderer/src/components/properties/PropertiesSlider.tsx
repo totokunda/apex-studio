@@ -17,10 +17,10 @@ const Slider = React.forwardRef<
     )}
     {...props}
   >
-    <SliderPrimitive.Track className="relative h-0.5 group-hover/slider:h-1 w-full   grow overflow-hidden transition-all duration-200 rounded-full bg-brand">
+    <SliderPrimitive.Track className="relative h-0.5 group-hover/slider:h-1 w-full   grow overflow-hidden transition-all duration-200 rounded-full bg-brand-light/10">
       <SliderPrimitive.Range className="absolute h-full bg-brand-light" />
     </SliderPrimitive.Track>
-    <SliderPrimitive.Thumb className="block h-4 w-2 rounded-b rounded-t-xs bg-background shadow transition-colors focus-visible:outline-none  disabled:pointer-events-none disabled:opacity-50" />
+    <SliderPrimitive.Thumb className="block h-4 w-2 rounded-b rounded-t-xs bg-brand-light shadow transition-colors focus-visible:outline-none  disabled:pointer-events-none disabled:opacity-50" />
   </SliderPrimitive.Root>
 ))
 Slider.displayName = SliderPrimitive.Root.displayName
@@ -101,12 +101,12 @@ const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChan
 
   return (
     <div className="flex flex-col items-start w-full">
-      <label className="text-brand-light text-[10.5px]">{label}</label>
+      <label className="text-brand-light  text-[11px] mb-1">{label}</label>
       <div className="flex flex-row items-center gap-x-2.5 w-full">
       <Slider value={[value]} onValueChange={(value) => onChange(value[0])} min={min} max={max} step={step} />
         <div className="flex flex-row items-center">
         <input 
-          className="w-15 h-6 px-1.5 text-center text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1 rounded-l bg-brand-background"  
+          className="w-15 h-6 px-1.5 text-center text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1 rounded-l bg-brand"  
           value={renderInput ? renderInput(tempValue) : (isFocused ? tempValue : tempValue + (suffix || ''))}  
           onChange={(e) => setTempValue(e.target.value)}
           onFocus={() => setIsFocused(true)}

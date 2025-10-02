@@ -25,8 +25,8 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
   return (
   <>
   <div style={{
-    height: (timelineHeight ?? 0) - 16,
-    top: (timelineY ?? 0) + 40 - clampedScroll,
+    height: (timelineHeight ?? 0) - 8,
+    top: (timelineY ?? 0) + 32 - clampedScroll,
 
   }} className={cn("bg-brand-light/10  w-full absolute flex items-center justify-center")}>
     {isCollapsed && <>

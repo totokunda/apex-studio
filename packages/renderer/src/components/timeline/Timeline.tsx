@@ -15,19 +15,18 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
         return timelineHeight + (timelineY ?? 0) + 24;
     }, [timelineHeight, timelineY, timelineId]);
 
-    // Default height for the under-timeline group
-    const underGroupHeight = 14;
-
     // Compute exact edges of the visible timeline rect
-    const timelineTopY = (timelineY ?? 0) + 40;
-    const timelineBottomY = timelineTopY + (timelineHeight - 16);
+    const timelineTopY = (timelineY ?? 0) + 32;
+    const timelineBottomY = timelineTopY + (timelineHeight - 8);
 
-    // Desired consistent gap between the timeline and hover lines (in px)
-    const hoverGap = underGroupHeight / 2; // keep existing visual gap
-
-    // Position groups so the line inside (drawn at underGroupHeight/2) sits exactly at the desired gap
-    const topDashGroupY = timelineTopY - hoverGap - underGroupHeight / 2;
-    const bottomDashGroupY = timelineBottomY + hoverGap - underGroupHeight / 2;
+    // Timelines are spaced by their full height but rects are 8px shorter, creating an 8px gap
+    const gapBetweenTimelines = 8;
+    // Hover target spans the full gap for easy interaction
+    const underGroupHeight = gapBetweenTimelines;
+    
+    // Position groups so the line (drawn at underGroupHeight/2) sits exactly in the middle of the gap
+    const topDashGroupY = timelineTopY - gapBetweenTimelines / 2 - underGroupHeight / 2;
+    const bottomDashGroupY = timelineBottomY + gapBetweenTimelines / 2 - underGroupHeight / 2;
 
     const {getClipsForTimeline, timelines} = useClipStore();
     const {timelineDuration} = useControlsStore();
@@ -60,7 +59,7 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
             )
            }
             <Rect
-            id={timelineId} x={timelineX} y={timelineY! + 40} cornerRadius={8} width={timelineWidth! - (timelineX) + 8} height={timelineHeight - 16} fill={'rgba(11, 11, 13, 0.25)'}/>
+            id={timelineId} x={timelineX} y={timelineY! + 32} cornerRadius={8} width={timelineWidth! - (timelineX) + 8} height={timelineHeight - 8} fill={'rgba(11, 11, 13, 0.25)'}/>
             
             {clips.map((clip) => (
                     <TimelineClip 
@@ -72,14 +71,14 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
                             timelinePadding={timelinePadding}
                             timelineWidth={timelineWidth} 
                             timelineY={timelineYBottom} 
-                            timelineHeight={timelineHeight - 16} 
+                            timelineHeight={timelineHeight - 8} 
                             clipType={clip.type}
                             type={type}
                             scrollY={scrollY}
                         />
                     )
                 )}
-            <GhostTimeline timelineId={timelineId} timelineY={timelineYBottom} timelineHeight={timelineHeight - 16} timelinePadding={timelinePadding} timelineWidth={timelineWidth} type={type} muted={muted} hidden={hidden} />
+            <GhostTimeline timelineId={timelineId} timelineY={timelineYBottom} timelineHeight={timelineHeight - 8} timelinePadding={timelinePadding} timelineWidth={timelineWidth} type={type} muted={muted} hidden={hidden} />
             <Group id={`dashed-${timelineId}`} name={'timeline-dashed'} height={underGroupHeight} x={timelinePadding} y={bottomDashGroupY}>
                 <Line 
                     points={[0, underGroupHeight / 2, timelineWidth!, underGroupHeight / 2]} 
@@ -89,7 +88,7 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
             </Group>
             {(hidden || (muted && type === 'audio')) && (
                 <Rect
-                id={`hidden-${timelineId}`} x={timelineX} y={timelineY! + 40} cornerRadius={8} width={timelineWidth! - timelineX + 8} height={timelineHeight - 16} fill={'rgba(11, 11, 13, 0.60)'}/>
+                id={`hidden-${timelineId}`} x={timelineX} y={timelineY! + 32} cornerRadius={4} width={timelineWidth! - timelineX + 8} height={timelineHeight - 8} fill={'rgba(11, 11, 13, 0.60)'}/>
             )}
         </>
     )

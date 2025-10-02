@@ -100,7 +100,7 @@ export type InputImageTrack = {
 export type MediaInfo = {
     path: string;
     video: InputVideoTrack | null;
-    audio: InputAudioTrack | null;
+    audio: InputAudioTrack & { sampleSize?: number } | null;
     image: InputImageTrack | null;
     stats: {
         video: PacketStats | undefined;
@@ -110,6 +110,8 @@ export type MediaInfo = {
     metadata: MetadataTags | undefined;
     mimeType: string | undefined;
     format: InputFormat | undefined;
+    startFrame?: number;
+    endFrame?: number;
 }
 
 export type FrameBatch = {

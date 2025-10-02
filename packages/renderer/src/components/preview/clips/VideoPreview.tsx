@@ -2,7 +2,7 @@ import { MediaInfo, VideoClipProps} from '@/lib/types'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {Image, Transformer, Group, Line} from 'react-konva'
 import {getVideoIterator} from '@/lib/media/video'
-import {getMediaInfo} from '@/lib/media/utils'
+import {getMediaInfo, getMediaInfoCached} from '@/lib/media/utils'
 import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
@@ -12,7 +12,7 @@ import { WrappedCanvas } from 'mediabunny';
 // (prefetch helper removed by request; timeline-driven rendering only)
 
 const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart, speed: _speed }) => {
-    const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
+    const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(() => getMediaInfoCached(src) || null);
     const focusFrame = useControlsStore((state) => state.focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
@@ -242,6 +242,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
     useEffect(() => {
         let cancelled = false;
+        if (mediaInfo) return;
         (async () => {
             try {
                 const info = await getMediaInfo(src);
@@ -293,7 +294,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         }
     }, [displayWidth, displayHeight]);
 
-
     const drawWrappedCanvas = useCallback((wc: WrappedCanvas) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -314,12 +314,14 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const frameRate = mediaInfo.stats.video?.averagePacketRate || fps || 0;
         if (!Number.isFinite(frameRate) || frameRate <= 0) return;
         const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * frameRate));
-        const targetFrame = Math.max(0, Math.min(totalFrames, Math.floor(Math.max(0, currentFrame) * Math.max(0.1, speed))));
+        const targetFrame = Math.max(0, Math.min(totalFrames, Math.floor(Math.max(0, currentFrame) * Math.max(0.1, speed)))) + (mediaInfo.startFrame || 0);
         // cancel any previous iterator
         drawTokenRef.current++;
         // @ts-ignore
         iteratorRef.current?.return?.();
-        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: frameRate, index: targetFrame });
+        
+        const targetEndFrame = mediaInfo.endFrame;
+        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: frameRate, startIndex: targetFrame, endIndex: targetEndFrame });
         try {
             // try a few samples in case the first frames are undecodable/null
             let tries = 0;
@@ -346,14 +348,16 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const frameRate = mediaInfo.stats.video?.averagePacketRate || fps || 0;
         if (!Number.isFinite(frameRate) || frameRate <= 0) return;
         const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * frameRate));
-        const startIdx = Math.max(0, Math.min(totalFrames, Math.floor(Math.max(0, currentFrame) * Math.max(0.1, speed))));
+        const startIdx = Math.max(0, Math.min(totalFrames, Math.floor(Math.max(0, currentFrame) * Math.max(0.1, speed)))) + (mediaInfo.startFrame || 0);
         currentStartFrameRef.current = startIdx;
         lastRenderedFrameRef.current = startIdx - 1;
 
         const myToken = ++drawTokenRef.current;
         // @ts-ignore
         iteratorRef.current?.return?.();
-        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: frameRate, index: startIdx });
+        const targetEndFrame = mediaInfo.endFrame;
+
+        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: frameRate, startIndex: startIdx, endIndex: targetEndFrame });
 
         try {
             for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
@@ -369,8 +373,10 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 const computeLocalFocusMedia = () => {
                     const store = useControlsStore.getState();
                     const local = Math.max(0, Math.floor((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
-                    return Math.max(0, Math.floor(local * Math.max(0.1, speed)));
+                    const speedAdjusted = Math.max(0, Math.floor(local * Math.max(0.1, speed)));
+                    return speedAdjusted + (mediaInfo.startFrame || 0);
                 };
+                
 
                 // Skip stale frames that are behind the timeline by more than 1 frame
                 let localFocus = computeLocalFocusMedia();
@@ -419,7 +425,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     }, [currentFrame, isPlaying, seekAndDraw]);
 
     // While playing, do not restart iterator on every focusFrame tick; decoding loop drives rendering.
-
 
     const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
         updateGuidesAndMaybeSnap({ snap: true });

@@ -13,7 +13,9 @@ export const AUDIO_EXTS = new Set([
 export function getLowercaseExtension(filename: string): string {
   const idx = filename.lastIndexOf('.');
   if (idx === -1) return '';
-  return filename.slice(idx + 1).toLowerCase();
+  // remove any query or hash params
+  const filenameWithoutParams = filename.split('?')[0].split('#')[0];
+  return filenameWithoutParams.slice(idx + 1).toLowerCase();
 }
 
 export function isVideoExt(ext: string): boolean {

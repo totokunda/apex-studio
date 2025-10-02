@@ -2,16 +2,20 @@ import { TbPlayerSkipBack,  TbRewindBackward5,  TbLadder, TbPlus, TbMinus} from 
 
 import { TbRewindForward5 } from "react-icons/tb";
 import { FaCirclePause, FaCirclePlay } from "react-icons/fa6";
-import { FiScissors, FiTrash } from "react-icons/fi";
+import { FiTrash } from "react-icons/fi";
 import { CgMergeVertical } from "react-icons/cg";
 import { useControlsStore } from "@/lib/control";
 import { useClipStore } from "@/lib/clip";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { MAX_DURATION } from "@/lib/settings";
+import { LuSquareSplitVertical } from "react-icons/lu";
+import { getMediaInfoCached } from "@/lib/media/utils";
+import { PiSplitHorizontal } from "react-icons/pi";
+
 
 const BackButton = () => {
-    const {setFocusFrame,  focusFrame, pause, isPlaying, play} = useControlsStore();
+    const {setFocusFrame,  focusFrame} = useControlsStore();
     const {clips} = useClipStore();
     const hasClips = clips.length > 0;
     const disabled = focusFrame === 0 || !hasClips;
@@ -142,19 +146,31 @@ const ReduceTimelineButton:React.FC<{numSeconds?: number}> = ({numSeconds = 15})
     )
 }
 
-const ScissorsButton = () => {
-    const { splitClip } = useClipStore();
+const SplitButton = () => {
+    const { splitClip, clipWithinFrame, getClipById } = useClipStore();
     const {focusFrame} = useControlsStore();
-    const {clips} = useClipStore();
+    const {clips, clipDuration} = useClipStore();
     const hasClips = clips.length > 0;
-    const disabled = !hasClips || focusFrame === 0;
+    
+    const selectedClipIds = useControlsStore((state) => state.selectedClipIds);
+
+    const disabled = useMemo(() => !hasClips || focusFrame === 0 || selectedClipIds.length === 0 || focusFrame >= clipDuration || selectedClipIds.some((clipId) => {
+        const clip = getClipById(clipId);
+        return !clip || !clipWithinFrame(clip, focusFrame);
+    }), [hasClips, focusFrame, selectedClipIds, clipDuration, clipWithinFrame, getClipById]);
+
     const handleSplit = useCallback(() => {
         if (disabled) return;
-        splitClip(focusFrame);
-    }, [disabled, splitClip, focusFrame]);
+        selectedClipIds.forEach((clipId) => {
+            const clip = getClipById(clipId);
+            if (clip) {
+                splitClip(focusFrame, clipId);
+            }
+        });
+    }, [disabled, splitClip, focusFrame, selectedClipIds]);
     return (
         <div className={cn("flex shrink-0 transform-gpu items-center cursor-pointer gap-x-2 py-4 justify-center opacity-60 hover:opacity-100 transition-opacity duration-300", disabled && "opacity-30 cursor-not-allowed hover:opacity-30")} onClick={handleSplit}> 
-            <FiScissors className=" text-brand-light h-4 w-4" />
+            <PiSplitHorizontal className=" text-brand-light h-4 w-4" />
         </div>
     )
 }
@@ -219,5 +235,33 @@ const PlayPauseButton = () => {
     )
 }
 
+const SeparateButton = () => {
+    const { separateClip } = useClipStore();
+    const selectedClipIds = useControlsStore((state) => state.selectedClipIds);
+    const getClipById = useClipStore((state) => state.getClipById);
+    
+    const selectedClip = useMemo(() => {
+        if (selectedClipIds.length !== 1) return null;
+        return getClipById(selectedClipIds[0]);
+    }, [selectedClipIds, getClipById]);
+    const hasAudio = useMemo(() => {
+        if (selectedClip?.type === 'video') {
+            const mediaInfo = getMediaInfoCached(selectedClip.src);
+            return mediaInfo?.audio !== null;
+        }
+        return false;
+    }, [selectedClip]);
+    const disabled = !selectedClip || selectedClip.type !== 'video' || !hasAudio;
+    const handleSeparate = useCallback(() => {
+        if (disabled) return;
+        separateClip(selectedClip.clipId);
+    }, [disabled, separateClip, selectedClip]);
+    return (
+        <div className={cn("flex items-center cursor-pointer  justify-center opacity-60 hover:opacity-100 transition-opacity duration-300", disabled && "opacity-30 cursor-not-allowed hover:opacity-30")} onClick={handleSeparate}> 
+            <LuSquareSplitVertical className=" text-brand-light h-4 w-4" />
+        </div>
+    )
+}
 
-export { BackButton, RewindBackward, RewindForward, PauseButton, PlayButton, ScissorsButton, TrashButton, MergeButton, PlayPauseButton, ExtendTimelineButton, ReduceTimelineButton };
+
+export { BackButton, RewindBackward, RewindForward, PauseButton, PlayButton, SplitButton, TrashButton, MergeButton, PlayPauseButton, ExtendTimelineButton, ReduceTimelineButton, SeparateButton };
