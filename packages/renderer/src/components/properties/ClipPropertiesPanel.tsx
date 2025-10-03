@@ -17,7 +17,9 @@ interface PropertiesPanelProps {
 }
 
 const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
-  const clipId = useControlsStore((s) => s.selectedClipIds[s.selectedClipIds.length - 1])
+  const {selectedClipIds} = useControlsStore();
+  const clipId = useMemo(() => selectedClipIds[selectedClipIds.length - 1], [selectedClipIds]);
+
   const clip = useClipStore((s) => s.getClipById(clipId))
   const clipType = clip?.type;
   const tabRef = useRef<HTMLDivElement>(null);  
@@ -26,6 +28,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const [scrolledAmount, setScrolledAmount] = useState(0);
   const [isAnimating, setIsAnimating] = useState(false);
   const [selectedTab, setSelectedTab] = useState<string>("transform");
+  
 
   // check if clip has audio if it is video 
   const hasDuration = useMemo(() => {
@@ -130,9 +133,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           }
         }} className={cn("text-brand-light h-6 w-6 border border-brand-light/10 bg-brand-background/90 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute right-1 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollRight ? "block" : "hidden")} />
         </ScrollArea>
-        {(hasTransform) && <TabsContent value="transform" className="min-w-0 divide-y divide-brand-light/10">
-          <PositionProperties clipId={clipId} />
-          <LayoutProperties clipId={clipId} />
+        {(hasTransform) && <TabsContent  value="transform" className="min-w-0 divide-y divide-brand-light/10">
+          <PositionProperties clipId={clipId}  />
+          <LayoutProperties clipId={clipId}  />
         </TabsContent>}
         {(hasAudio) && <TabsContent value="audio" className="min-w-0">
           <AudioProperties clipId={clipId} />

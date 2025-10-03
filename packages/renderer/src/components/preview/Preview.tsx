@@ -12,7 +12,7 @@ import AudioPreview from './clips/AudioPreview';
 import ImagePreview from './clips/ImagePreview';
 import ShapePreview from './clips/ShapePreview';
 import { useControlsStore } from '@/lib/control';
-import { AnyClipProps, ShapeClipProps } from '@/lib/types';
+import { AnyClipProps, PolygonClipProps, ShapeClipProps } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 
 interface PreviewProps {
@@ -290,6 +290,10 @@ const Preview:React.FC<PreviewProps> = () => {
             opacity: 100,
           },
         };
+
+        if (shape === 'polygon') {
+          (newClip as PolygonClipProps).sides = 3;
+        }
         
         addClip(newClip);
       }

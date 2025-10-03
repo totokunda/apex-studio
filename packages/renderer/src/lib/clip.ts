@@ -7,7 +7,7 @@ import { MediaItem } from "@/components/media/Item";
 import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS } from "./settings";
 import { getMediaInfo } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
-import { URLSearchParams } from "url";
+
 
 interface ClipStore {  
     // Clips
@@ -284,7 +284,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const index = state.clips.findIndex((c) => c.clipId === clipId);
         if (index === -1) return { clips: state.clips };
         const current = state.clips[index];
-        const previous: ClipTransform = current.transform || { x: 0, y: 0, width: 0, height: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+        const previous: ClipTransform = current.transform || { x: 0, y: 0, width: 0, height: 0, scaleX: 1, scaleY: 1, rotation: 0, cornerRadius: 0, opacity: 100 };
         const next: ClipTransform = { ...previous, ...transform };
         const newClips = [...state.clips];
         newClips[index] = { ...current, transform: next } as AnyClipProps;
@@ -370,6 +370,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
         const resolvedClips = resolveOverlaps(newClips as AnyClipProps[]);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
+        // update the zoom level
+        get()._updateZoomLevel(resolvedClips, clipDuration);
         return { clips: resolvedClips, clipDuration };
     }),
     separateClip: (clipId) => set((state) => {

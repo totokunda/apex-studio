@@ -294,7 +294,7 @@ export const generateAudioWaveformCanvas = async (
     // **** THIS IS THE ONLY PART THAT CHANGES ****
     const TARGET_VISUAL_MIN = 0.0;   // Your desired minimum visual value
     const TARGET_VISUAL_MAX = 100.0; // Your desired maximum visual value
-    const barWidth = width > 240? 2 : 1;
+    const barWidth = 2;
     const gap = 1;
     // determine the number of bars we want to have
     const barCount = Math.max(1, Math.floor((width + gap) / (barWidth + gap)));

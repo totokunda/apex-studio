@@ -29,7 +29,7 @@ const AppearanceProperties: React.FC<AppearancePropertiesProps> = ({ clipId }) =
    const canUpdateCornerRadius = useMemo(() => {
         if (clip?.type === 'image' || clip?.type === 'video') return true;
         if (clip?.type === 'shape') {
-            if (clip?.shapeType === 'rectangle') return true;
+            if (clip?.shapeType === 'rectangle' || clip?.shapeType === 'polygon') return true;
         }
         return false;
     }, [clip?.type]);
@@ -58,14 +58,17 @@ const AppearanceProperties: React.FC<AppearancePropertiesProps> = ({ clipId }) =
       </div>
       <div className="flex flex-col gap-y-2">
         <PropertiesSlider label="Opacity" value={opacity} onChange={setOpacity} suffix="%" min={0} max={100} step={1} toFixed={0}  />
-            <div className="flex flex-row gap-x-2">
-        {canUpdateCornerRadius && <Input label="Corner Radius" 
+            
+        {canUpdateCornerRadius && 
+        <div className="flex flex-row gap-x-2 mb-4">
+          <Input label="Corner Radius" 
         value={clip?.transform?.cornerRadius?.toFixed(0).toString() ?? '0'} 
         onChange={(value) => updateClip(clipId, { transform: { ...clip?.transform!, cornerRadius: Number(value) } })} 
-        startLogo="R" canStep step={1} min={0} max={100} />}  
+        startLogo="R" canStep step={1} min={0} max={100} />
+        </div>}  
        
-        </div>
-        {canUpdateColor && <div className="flex flex-col gap-y-3 mt-4">
+        
+        {canUpdateColor && <div className="flex flex-col gap-y-3 ">
           <h4 className="text-brand-light text-[12px] font-medium text-start">Color</h4>
         <ColorInput value={(clip as ShapeClipProps)?.fill ?? '#000000'} percentValue={(clip as ShapeClipProps)?.fillOpacity ?? 100} setPercentValue={(value) => updateClip(clipId, {fillOpacity: value })} onChange={(value) => updateClip(clipId, { fill: value })} label="Fill" />
         <ColorInput value={(clip as ShapeClipProps)?.stroke ?? '#000000'} percentValue={(clip as ShapeClipProps)?.strokeOpacity ?? 100} setPercentValue={(value) => updateClip(clipId, {strokeOpacity: value})} onChange={(value) => updateClip(clipId, { stroke: value })} label="Stroke" />

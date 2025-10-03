@@ -1,4 +1,4 @@
-import React, {useMemo, useEffect } from "react";
+import React, {useMemo } from "react";
 import { Rect,  Line,  Group } from "react-konva";
 import { TimelineProps } from "@/lib/types";
 import { useClipStore, getTimelineX } from "@/lib/clip";
@@ -8,8 +8,7 @@ import { useControlsStore } from "@/lib/control";
 
 
 const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({timelineWidth, timelineY, timelineHeight = 72, timelinePadding = 24, timelineId, index, scrollY, type, muted, hidden}) => {
-    const {hoveredTimelineId, removeTimeline, getTimelineById} = useClipStore();
-    const {setFocusFrame, setZoomLevel} = useControlsStore();
+    const {hoveredTimelineId} = useClipStore();
 
     const timelineYBottom = useMemo(() => {
         return timelineHeight + (timelineY ?? 0) + 24;
@@ -28,20 +27,11 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
     const topDashGroupY = timelineTopY - gapBetweenTimelines / 2 - underGroupHeight / 2;
     const bottomDashGroupY = timelineBottomY + gapBetweenTimelines / 2 - underGroupHeight / 2;
 
-    const {getClipsForTimeline, timelines} = useClipStore();
+    const {getClipsForTimeline} = useClipStore();
     const {timelineDuration} = useControlsStore();
     const clips = getClipsForTimeline(timelineId);
     
-    useEffect(() => {
-        if (clips.length === 0 && getTimelineById(timelineId)) {
-            // delete the timeline
-            removeTimeline(timelineId);
-            if (timelines.length === 1) {
-                setFocusFrame(0);
-                setZoomLevel(1);
-            }
-        }
-    },[timelineId, clips]);
+
 
     const timelineX = useMemo(() => getTimelineX(timelineWidth!, timelinePadding, timelineDuration), [timelineWidth, timelinePadding, timelineDuration]);
 

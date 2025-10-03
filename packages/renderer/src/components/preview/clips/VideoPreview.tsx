@@ -481,15 +481,21 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const persistTransform = () => {
             const node = imageRef.current;
             if (!node) return;
+            const newWidth = node.width() * node.scaleX();
+            const newHeight = node.height() * node.scaleY();
             setClipTransform(clipId, {
                 x: node.x(),
                 y: node.y(),
-                width: node.width(),
-                height: node.height(),
-                scaleX: node.scaleX(),
-                scaleY: node.scaleY(),
+                width: newWidth,
+                height: newHeight,
+                scaleX: 1,
+                scaleY: 1,
                 rotation: node.rotation(),
             });
+            node.width(newWidth);
+            node.height(newHeight);
+            node.scaleX(1);
+            node.scaleY(1);
         };
         const onTransform = () => {
             bumpSuppress();

@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Rect, Ellipse, Line, Star, RegularPolygon, Transformer, Group } from 'react-konva';
+import { Rect, Ellipse, Line, Star, Transformer, Group } from 'react-konva';
 import type Konva from 'konva';
-import { ShapeClipProps,  ShapeTool } from '@/lib/types';
+import { PolygonClipProps, ShapeClipProps,  ShapeTool } from '@/lib/types';
 import { useClipStore } from '@/lib/clip';
 import { useViewportStore } from '@/lib/viewport';
 import { useControlsStore } from '@/lib/control';
+import RoundedRegularPolygon from './custom/RoundedRegularPolygon';
 
 interface ShapePreviewProps extends ShapeClipProps {
   rectWidth: number;
@@ -340,15 +341,42 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
       const actualHeight = currentHeight * nodeScaleY;
       const saveX = isCentered ? nodeX - actualWidth / 2 : nodeX;
       const saveY = isCentered ? nodeY - actualHeight / 2 : nodeY;
-      setClipTransform(clipId, {
-        x: saveX,
-        y: saveY,
-        width: currentWidth,
-        height: currentHeight,
-        scaleX: nodeScaleX,
-        scaleY: nodeScaleY,
-        rotation: node.rotation(),
-      });
+      
+      // For rectangle, ellipse, and line: update width/height, reset scale to 1
+      // For polygon and star: keep scaleX/scaleY behavior
+      const useWidthHeight = shapeType === 'rectangle' || shapeType === 'ellipse' || shapeType === 'line';
+      
+      if (useWidthHeight) {
+        setClipTransform(clipId, {
+          x: saveX,
+          y: saveY,
+          width: actualWidth,
+          height: actualHeight,
+          scaleX: 1,
+          scaleY: 1,
+          rotation: node.rotation(),
+        });
+        // Only update node dimensions for shapes that have width/height properties
+        if (shapeType === 'rectangle' || shapeType === 'line') {
+          node.width(actualWidth);
+          node.height(actualHeight);
+        } else if (shapeType === 'ellipse') {
+          node.radiusX(actualWidth / 2);
+          node.radiusY(actualHeight / 2);
+        }
+        node.scaleX(1);
+        node.scaleY(1);
+      } else {
+        setClipTransform(clipId, {
+          x: saveX,
+          y: saveY,
+          width: currentWidth,
+          height: currentHeight,
+          scaleX: nodeScaleX,
+          scaleY: nodeScaleY,
+          rotation: node.rotation(),
+        });
+      }
     };
     const onTransform = () => {
       bumpSuppress();
@@ -412,6 +440,8 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     const fillWithOpacity = hexToRgba(fill, ((clip as ShapeClipProps)?.fillOpacity ?? 100));
     const strokeWithOpacity = hexToRgba(stroke, ((clip as ShapeClipProps)?.strokeOpacity ?? 100));
 
+    const sides = (clip as PolygonClipProps)?.sides ?? 3;
+
     const baseProps = {
       ref: shapeRef,
       scaleX,
@@ -451,7 +481,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
         return <Ellipse {...centerProps} radiusX={width / 2} radiusY={height / 2} />;
       
       case 'polygon':
-        return <RegularPolygon {...centerProps} sides={3} radius={Math.min(width, height) / 2} />;
+        return <RoundedRegularPolygon {...centerProps} sides={sides} radius={Math.min(width, height) / 2} cornerRadius={clipTransform?.cornerRadius ?? 0} />;
       
       case 'line':
         return <Line {...cornerProps} points={[0, 0, width, 0]} />;

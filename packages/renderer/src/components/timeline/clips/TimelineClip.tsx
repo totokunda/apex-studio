@@ -160,28 +160,21 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
 	useEffect(() => {
 		if (!currentClip) return;
 
+
         const generateTimelineThumbnailAudio = async () => {
             if (clipType !== 'audio') return;
-    
-            const width = mediaInfoRef.current?.stats.audio?.averagePacketRate ?? 1;
-            const height = timelineHeight;
-            
-            // Get the speed factor - higher speed means more audio content in same duration
             const speed = Math.max(0.1, Math.min(5, Number((currentClip as any)?.speed ?? 1)));
             
-            // Calculate the visible clip duration (what's shown, accounting for trimming)
-            const visibleClipDurationFrames = currentEndFrame - currentStartFrame;
-            
-            // The waveform canvas width
-            const tClipWidth = imageCanvas.width;
-            
-            // Calculate which portion of the source audio to extract
-            // Account for framesToGiveStart (trim from beginning)
-            const trimStartFrames = (currentClip.framesToGiveStart ?? 0);
-            const audioStartFrame = Math.round(trimStartFrames * speed);
-            
-            // Calculate end frame: start + visible duration, accounting for speed
-            const audioEndFrame = Math.round(audioStartFrame + (visibleClipDurationFrames * speed));
+            const width = mediaInfoRef.current?.stats.audio?.averagePacketRate ?? 1;
+            const height = timelineHeight;
+            const timelineShift = currentStartFrame - (currentClip.framesToGiveStart ?? 0);
+            const visibleStartFrame = Math.max(currentStartFrame, timelineDuration[0]);
+            const visibleEndFrame = Math.min(currentEndFrame, timelineDuration[1]) * speed;
+            const duration = (timelineDuration[1] - timelineDuration[0]);
+
+            const pixelsPerFrame = (timelineWidth / duration);
+            const positionOffsetStart = Math.round(Math.max(0, (currentStartFrame - timelineDuration[0]) * pixelsPerFrame))
+            const tClipWidth = Math.round((pixelsPerFrame * (visibleEndFrame - visibleStartFrame)) + (positionOffsetStart === 0 ? timelinePadding : 0)) / speed;
 
             const samples = await generateTimelineSamples(
                 currentClipId,
@@ -192,42 +185,26 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                 tClipWidth,
                 {
                     mediaInfo: mediaInfoRef.current,
-                    startFrame: audioStartFrame,
-                    endFrame: audioEndFrame,
+                    startFrame: visibleStartFrame - timelineShift,
+                    endFrame: visibleEndFrame - timelineShift,
                     volume: (currentClip as any)?.volume,
                     fadeIn: (currentClip as any)?.fadeIn,
                     fadeOut: (currentClip as any)?.fadeOut,
                 }
             );
 
-  
             if (samples?.[0]?.canvas) {
                 const inputCanvas = samples?.[0]?.canvas as HTMLCanvasElement;
-
+                let offset = Math.max(0, imageCanvas.width - tClipWidth - positionOffsetStart) 
                 const ctx = imageCanvas.getContext('2d');
                 if (ctx) {
                     ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
-                    
-                    // Truncate the waveform to fit the canvas without compression
-                    const sourceWidth = Math.min(inputCanvas.width, imageCanvas.width);
-                    const sourceHeight = Math.min(inputCanvas.height, imageCanvas.height);
-
-                    // When resizing from left, we want to show the end portion of the waveform
-                    let sourceX = 0;
-                    if (resizeSide === 'left' && inputCanvas.width > imageCanvas.width) {
-                        sourceX = inputCanvas.width - imageCanvas.width;
-                    }
-
-                    // Draw without scaling - truncate only
-                    ctx.drawImage(
-                        inputCanvas,
-                        sourceX, 0, sourceWidth, sourceHeight, // source rectangle (truncate)
-                        0, 0, sourceWidth, sourceHeight        // destination rectangle (no scale)
-                    );
+                    ctx.drawImage(inputCanvas, offset, 0);
                 }
-
             }
+
             moveClipToEnd(currentClipId);
+            
         }
 
         const generateTimelineThumbnailImage = async () => {
@@ -567,7 +544,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             }
             clipRef.current?.getLayer()?.batchDraw();
         }
-
         if (clipType === 'audio') {
             generateTimelineThumbnailAudio()
         } else if (clipType === 'image') {
@@ -1182,7 +1158,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                     width={imageWidth}
                     height={timelineHeight}
                     cornerRadius={clipPosition.x == 24 || clipWidth <= imageWidth || overHang > 0 || imageX === 0 ? cornerRadius: 0}
-                    fill={'#E3E3E3'} 
+                    fill={clipType === 'audio' ? '#1A2138' : '#E3E3E3'} 
                 />
                 {clipType === 'shape' && (currentClip  as ShapeClipProps)?.shapeType && (
                     <Group>
@@ -1241,7 +1217,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                         e.target.getStage()!.container().style.cursor = 'default';
                     }
                 }}
-
                 />
                 
             <Rect
@@ -1275,9 +1250,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                         e.target.getStage()!.container().style.cursor = 'default';
                     }
                 }}
-
                 />
-            
             </>
     )
 }

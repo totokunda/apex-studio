@@ -1,5 +1,5 @@
 import { useClipStore } from '@/lib/clip';
-import { AnyClipProps } from '@/lib/types';
+import { AnyClipProps, PolygonClipProps } from '@/lib/types';
 import { useState } from 'react';
 import React from 'react'
 import { IoRefreshOutline, IoLockClosed, IoLockOpen } from 'react-icons/io5';
@@ -12,9 +12,18 @@ interface LayoutPropertiesProps {
 const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
     const clip = useClipStore((s) => s.getClipById(clipId)) as AnyClipProps;
     const setClipTransform = useClipStore((s) => s.setClipTransform);
+    const updateClip = useClipStore((s) => s.updateClip);
+
+    const hasSides = clip?.type === 'shape' && clip?.shapeType === 'polygon';
 
     const [spinning, setSpinning] = useState(false);
     const [scaleLocked, setScaleLocked] = useState(true);
+
+    const updateSides = (value: number) => {
+      if (isNaN(value) || !isFinite(value)) return;
+      if (value < 3 || value > 12) return;
+      updateClip(clipId, { sides: value });
+    }
 
     const handleReset = () => {
       if (!clip?.transform) return;
@@ -137,6 +146,8 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
               />
             </div>
           </div>
+          {hasSides && <div className="flex flex-row gap-x-2">
+            <Input label="Sides" value={(clip as PolygonClipProps)?.sides?.toString() ?? '3'} onChange={(value) => updateSides(Number(value))} startLogo="S" canStep step={1} min={3} max={12} /></div>}
         </div>
       </div>
     </div>

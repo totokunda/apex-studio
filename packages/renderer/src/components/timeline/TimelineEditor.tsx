@@ -172,7 +172,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
   // cause rendering glitches in Tauri's WebView. Toggle visibility via data.
   
   const controlStore = useControlsStore();
-  const {clips, timelines, addTimeline, addClip, setGhostStartEndFrame, setGhostX, setGhostTimelineId, setActiveMediaItem, setGhostInStage, setHoveredTimelineId, hoveredTimelineId, snapGuideX} = useClipStore();
+  const {clips, timelines, getClipsForTimeline, addTimeline, addClip, setGhostStartEndFrame, setGhostX, setGhostTimelineId, setActiveMediaItem, removeTimeline, setGhostInStage, setHoveredTimelineId, hoveredTimelineId, snapGuideX} = useClipStore();
   // const scrollBarRef = useRef<any>(null);
   // const isSyncingScrollRef = useRef(false);
   const [isRulerDragging, setIsRulerDragging] = useState(false);
@@ -413,6 +413,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const timelines = useClipStore.getState().timelines;
       let timelineId:string | undefined = undefined;
 
+      console.log('timelines', timelines);
+
       if (timelines.length === 0) {
         timelineId = uuidv4();
         const newTimeline = {
@@ -587,6 +589,14 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       observer.disconnect();
     };
   }, []);
+
+  // monitor all timelines and if any are empty, remove them
+  useEffect(() => {
+    const emptyTimelines = timelines.filter((t) => getClipsForTimeline(t.timelineId).length === 0);
+      emptyTimelines.forEach((t) => {
+      removeTimeline(t.timelineId);
+    });
+  }, [clips]);
 
   // Memoize dimensions to prevent unnecessary recalculations
   const dimensions = useMemo(() => {

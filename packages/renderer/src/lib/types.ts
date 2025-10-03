@@ -86,7 +86,12 @@ export type ShapeClipProps = ClipProps & {
     strokeWidth?: number;
 }
 
-export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps;
+export type PolygonClipProps = ShapeClipProps & {
+    shapeType: 'polygon';
+    sides?: number;
+}
+
+export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps;
 
 export type ZoomLevel = number;
 
