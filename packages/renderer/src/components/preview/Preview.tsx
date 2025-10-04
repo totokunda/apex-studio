@@ -602,8 +602,7 @@ const Preview:React.FC<PreviewProps> = () => {
       </div>
     )}
     {/* Mount non-visual audio previews OUTSIDE Konva tree so effects run */}
-    {!isFullscreen && (
-      <>
+    {<>
         {sortClips(filterClips(clips, true)).map((clip) => {
           const clipAtFrame = clipWithinFrame(clip, focusFrame);
           if (!clipAtFrame) return null;
@@ -613,7 +612,7 @@ const Preview:React.FC<PreviewProps> = () => {
           return null;
         })}
       </>
-    )}
+    }
     </>
   )
 }

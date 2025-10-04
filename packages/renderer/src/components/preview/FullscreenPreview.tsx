@@ -223,15 +223,6 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
         </Layer>
       </Stage>
 
-      {/* Audio previews */}
-      {sortClips(filterClips(clips, true)).map((clip) => {
-        const clipAtFrame = clipWithinFrame(clip, focusFrame);
-        if (!clipAtFrame) return null;
-        if (clip.type === 'audio' || clip.type === 'video') {
-          return <AudioPreview key={`audio-${clip.clipId}`} {...(clip as any)} />;
-        }
-        return null;
-      })}
 
       {/* Floating control bar */}
       <div
