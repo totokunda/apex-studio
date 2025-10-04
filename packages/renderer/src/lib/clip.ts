@@ -534,8 +534,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             ...clip, 
             endFrame: cutFrame, 
             clipId: newClipId1,
-            framesToGiveStart: infinityFramestoGiveStart ? -Infinity : 0,
-            framesToGiveEnd: infinityFramestoGiveEnd ? Infinity : 0,
+            framesToGiveStart: infinityFramestoGiveStart ? Infinity : 0,
+            framesToGiveEnd: infinityFramestoGiveEnd ? -Infinity : 0,
         };
         
         // Second clip: from cut frame to original end
@@ -544,8 +544,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             ...clip, 
             startFrame: cutFrame, 
             clipId: newClipId2,
-            framesToGiveStart: infinityFramestoGiveStart ? -Infinity : 0,
-            framesToGiveEnd: infinityFramestoGiveEnd ? Infinity : 0,
+            framesToGiveStart: infinityFramestoGiveStart ? Infinity : 0,
+            framesToGiveEnd: infinityFramestoGiveEnd ? -Infinity : 0,
         };
 
         if (Object.prototype.hasOwnProperty.call(clip, 'src') && clip.src && (AUDIO_EXTS.includes(getLowercaseExtension(clip.src)) || VIDEO_EXTS.includes(getLowercaseExtension(clip.src)))) {
