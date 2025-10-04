@@ -11,8 +11,9 @@ import VideoPreview from './clips/VideoPreview';
 import AudioPreview from './clips/AudioPreview';
 import ImagePreview from './clips/ImagePreview';
 import ShapePreview from './clips/ShapePreview';
+import TextPreview from './clips/TextPreview';
 import { useControlsStore } from '@/lib/control';
-import { AnyClipProps, PolygonClipProps, ShapeClipProps } from '@/lib/types';
+import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 
 interface PreviewProps {
@@ -40,6 +41,9 @@ const Preview:React.FC<PreviewProps> = () => {
   const totalTimelineFrames = useControlsStore((s) => s.totalTimelineFrames);
   // Shape creation state
   const [isDrawingShape, setIsDrawingShape] = useState(false);
+  const [isDrawingText, setIsDrawingText] = useState(false);
+  const [textStart, setTextStart] = useState<{ x: number; y: number } | null>(null);
+  const [textCurrent, setTextCurrent] = useState<{ x: number; y: number } | null>(null);
   const [shapeStart, setShapeStart] = useState<{ x: number; y: number } | null>(null);
   const [shapeCurrent, setShapeCurrent] = useState<{ x: number; y: number } | null>(null);
   
@@ -175,7 +179,7 @@ const Preview:React.FC<PreviewProps> = () => {
       isPanning.current = true;
       lastPointer.current = { x: e.evt.offsetX, y: e.evt.offsetY };
       return;
-    }
+    } 
     
     if (tool === 'shape') {
       const stage = e.target.getStage();
@@ -191,7 +195,25 @@ const Preview:React.FC<PreviewProps> = () => {
       setIsDrawingShape(true);
       setShapeStart({ x: worldX, y: worldY });
       setShapeCurrent({ x: worldX, y: worldY });
+      return;
+    } 
+
+    if (tool === 'text') {
+      const stage = e.target.getStage();
+      if (!stage) return;
+      
+      const pointerPos = stage.getPointerPosition();
+      if (!pointerPos) return;
+      
+      // Convert screen coordinates to world coordinates
+      const worldX = (pointerPos.x - position.x) / scale;
+      const worldY = (pointerPos.y - position.y) / scale;
+      
+      setIsDrawingText(true);
+      setTextStart({ x: worldX, y: worldY });
+      setTextCurrent({ x: worldX, y: worldY });
     }
+
   }, [tool, position, scale]);
 
   const onMouseMove = useCallback((e: any) => {
@@ -217,14 +239,116 @@ const Preview:React.FC<PreviewProps> = () => {
       const worldY = (pointerPos.y - position.y) / scale;
       
       setShapeCurrent({ x: worldX, y: worldY });
+    } 
+    if (tool === 'text' && isDrawingText && textStart) {
+      const stage = e.target.getStage();
+      if (!stage) return;
+      
+      const pointerPos = stage.getPointerPosition();
+      if (!pointerPos) return;
+      
+      // Convert screen coordinates to world coordinates
+      const worldX = (pointerPos.x - position.x) / scale;
+      const worldY = (pointerPos.y - position.y) / scale;
+
+      setTextCurrent({ x: worldX, y: worldY });
     }
-  }, [panBy, tool, isDrawingShape, shapeStart, position, scale]);
+  }, [panBy, tool, isDrawingShape, shapeStart, position, scale, isDrawingText, textStart]);
 
   const onMouseUp = useCallback((e: any) => {
     if (tool === 'hand') {
       isPanning.current = false;
       lastPointer.current = null;
       return;
+    }
+
+    if (tool === 'text' && isDrawingText && textStart && textCurrent) {
+      const stage = e.target.getStage();
+      if (!stage) {
+        setIsDrawingText( false);
+        setTextStart(null);
+        setTextCurrent(null);
+        return;
+      }
+
+      const pointerPos = stage.getPointerPosition();
+      if (!pointerPos) {
+        setIsDrawingText(false);
+        setTextStart(null);
+        setTextCurrent(null);
+        return;
+      }
+
+      setIsDrawingText(false);
+      setTextStart(null);
+      setTextCurrent(null);
+
+      const worldEndX = (pointerPos.x - position.x) / scale;
+      const worldEndY = (pointerPos.y - position.y) / scale;
+      
+      // Calculate shape dimensions using start and current end position
+      const x = Math.min(textStart.x, worldEndX);
+      const y = Math.min(textStart.y, worldEndY);
+      const width = Math.abs(worldEndX - textStart.x);
+      const height = Math.abs(worldEndY - textStart.y);
+
+      if (width < 5 || height < 5) {
+        setIsDrawingText(false);
+        setTextStart(null);
+        setTextCurrent(null);
+        return;
+      }
+
+      let textTimeline = { timelineId: uuidv4(), type: 'text' as const, timelineY: 0, timelineHeight: 36, timelineWidth: 0, muted: false, hidden: false };
+      addTimeline(textTimeline, -1);    
+
+      const clipDuration = 3 * DEFAULT_FPS;
+      const newClip: TextClipProps = {
+        src: null,
+        clipId: uuidv4(),
+        type: 'text' as const,
+        timelineId: textTimeline.timelineId,
+        startFrame: focusFrame,
+        endFrame: Math.min(focusFrame + clipDuration, totalTimelineFrames - 1),
+        framesToGiveEnd: -Infinity,
+        framesToGiveStart: Infinity,
+        text: 'Default Text',
+        fontSize: 32,
+        fontWeight: 400,
+        fontStyle: 'normal',
+        fontFamily: 'Arial',
+        color: '#ffffff',
+        colorOpacity: 100,
+        textAlign: 'left',
+        verticalAlign: 'top',
+        textTransform: 'none',
+        textDecoration: 'none',
+        strokeEnabled: false,
+        stroke: '#000000',
+        strokeWidth: 2,
+        strokeOpacity: 100,
+        shadowEnabled: false,
+        shadowColor: '#000000',
+        shadowOpacity: 75,
+        shadowBlur: 4,
+        shadowOffsetX: 2,
+        shadowOffsetY: 2,
+        shadowOffsetLocked: true,
+        transform: {
+          x: x,
+          y: y,
+          width: width,
+          height: height,
+          scaleX: 1,
+          scaleY: 1,
+          rotation: 0,
+          cornerRadius: 0,
+          opacity: 100,
+        }
+      };
+
+      addClip(newClip);
+
     }
     
     if (tool === 'shape' && isDrawingShape && shapeStart && shapeCurrent) {
@@ -236,7 +360,7 @@ const Preview:React.FC<PreviewProps> = () => {
         setShapeCurrent(null);
         return;
       }
-      
+
       const pointerPos = stage.getPointerPosition();
       if (!pointerPos) {
         setIsDrawingShape(false);
@@ -260,7 +384,6 @@ const Preview:React.FC<PreviewProps> = () => {
         // Find or create shape timeline
         let shapeTimeline = { timelineId: uuidv4(), type: 'shape' as const, timelineY: 0, timelineHeight: 36, timelineWidth: 0, muted: false, hidden: false };
        
-
         addTimeline(shapeTimeline, -1);
 
         // Create shape clip with 3-second duration (72 frames at 24fps)
@@ -303,7 +426,7 @@ const Preview:React.FC<PreviewProps> = () => {
       setShapeStart(null);
       setShapeCurrent(null);
     }
-  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline]);
+  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline, isDrawingText, textStart, textCurrent]);
 
   const onMouseLeave = useCallback((e:KonvaEventObject<MouseEvent>) => {
      // set pointer to default 
@@ -318,7 +441,7 @@ const Preview:React.FC<PreviewProps> = () => {
     if (container) {
       if (tool === 'hand') {
         container.style.cursor = 'grab';
-      } else if (tool === 'shape') {
+      } else if (tool === 'shape' || tool === 'text') {
         container.style.cursor = 'crosshair';
       } else {
         container.style.cursor = 'default';
@@ -331,7 +454,7 @@ const Preview:React.FC<PreviewProps> = () => {
     if (container) {
       if (tool === 'hand') {
         container.style.cursor = 'grab';
-      } else if (tool === 'shape') {
+      } else if (tool === 'shape' || tool === 'text') {
         container.style.cursor = 'crosshair';
       } else {
         container.style.cursor = 'default';
@@ -373,6 +496,30 @@ const Preview:React.FC<PreviewProps> = () => {
     }
   }, [isDrawingShape, shapeStart, shapeCurrent, shape]);
 
+
+  const renderDrawingText = useCallback(() => {
+    
+    if (!isDrawingText || !textStart || !textCurrent) return null;
+    
+    const x = Math.min(textStart.x, textCurrent.x);
+    const y = Math.min(textStart.y, textCurrent.y);
+    const width = Math.abs(textCurrent.x - textStart.x);
+    const height = Math.abs(textCurrent.y - textStart.y);
+
+    const sharedProps = {
+      stroke: '#3b82f6',
+      strokeOpacity: 100,
+      strokeWidth: 2,
+      fill: '#3b82f644',
+      fillOpacity: 100,
+      dash: [5, 5],
+    };
+
+
+    return <Rect {...sharedProps} x={x} y={y} width={width} height={height} />;
+  }, [isDrawingText, textStart, textCurrent]);
+    
+
   return (
     <>
     <div className='w-full h-full' ref={containerRef}>
@@ -406,6 +553,8 @@ const Preview:React.FC<PreviewProps> = () => {
                     return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
                   case 'shape':
                     return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
+                  case 'text':
+                    return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
                   case 'audio':
                     return null
                  }
@@ -414,6 +563,7 @@ const Preview:React.FC<PreviewProps> = () => {
                }
              })}
              {renderDrawingShape()}
+             {renderDrawingText()}
          </Group>
         </Layer>
       </Stage>

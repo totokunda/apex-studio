@@ -8,13 +8,19 @@ import { ZoomLevel } from '@/lib/types';
 import { MIN_DURATION } from '@/lib/settings';
 
 const TimelineZoom = () => {
-    const { zoomLevel, setZoomLevel, setTimelineDuration,  focusFrame, focusAnchorRatio, totalTimelineFrames, setFocusAnchorRatio, minZoomLevel, maxZoomLevel } = useControlsStore();
+    const { zoomLevel, setZoomLevel, setTimelineDuration,  focusFrame, setFocusFrame, focusAnchorRatio, totalTimelineFrames, setFocusAnchorRatio, minZoomLevel, maxZoomLevel } = useControlsStore();
     const [isDragging, setIsDragging] = useState(false);
     const [isHovering, setIsHovering] = useState(false);
     const barRef = useRef<HTMLDivElement>(null);
     const clips = useClipStore((state) => state.clips);
     const hasClips = useMemo(() => clips.length > 0, [clips]);
 
+    useEffect(() => {
+        if (!hasClips) {
+            setZoomLevel(1);
+            setFocusFrame(0);
+        }
+    }, [hasClips]);
     
     const setZoom = (level:number) => { 
         // Clamp to valid integer zoom step
@@ -46,6 +52,7 @@ const TimelineZoom = () => {
         const newAnchor = targetDuration > 0 ? (focusFrame - newStart) / targetDuration : 0.5;
         setFocusAnchorRatio(Math.max(0, Math.min(1, newAnchor)));
 
+        
         setTimelineDuration(newStart, newEnd);
         setZoomLevel(clampedLevel as ZoomLevel);
     }

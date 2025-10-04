@@ -15,6 +15,7 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
     const updateClip = useClipStore((s) => s.updateClip);
 
     const hasSides = clip?.type === 'shape' && clip?.shapeType === 'polygon';
+    const hasScale = clip?.type === 'image' || clip?.type === 'video' || clip?.type === 'shape';
 
     const [spinning, setSpinning] = useState(false);
     const [scaleLocked, setScaleLocked] = useState(true);
@@ -113,7 +114,7 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
             />
           </div>
           
-          <div className="flex flex-col ">
+          {hasScale && <div className="flex flex-col ">
             <div className="flex flex-row items-center justify-between">
               <span className="text-brand-light text-[10px] text-start">Scale</span>
               <button
@@ -145,7 +146,7 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
                 min={0.1}
               />
             </div>
-          </div>
+          </div>}
           {hasSides && <div className="flex flex-row gap-x-2">
             <Input label="Sides" value={(clip as PolygonClipProps)?.sides?.toString() ?? '3'} onChange={(value) => updateSides(Number(value))} startLogo="S" canStep step={1} min={3} max={12} /></div>}
         </div>

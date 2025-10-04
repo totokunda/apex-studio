@@ -91,7 +91,36 @@ export type PolygonClipProps = ShapeClipProps & {
     sides?: number;
 }
 
-export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps;
+export type TextClipProps = ClipProps & {
+    src: null | undefined;
+    type: 'text';
+    text?: string;
+    fontSize?: number;
+    fontWeight?: number;
+    fontStyle?: 'normal' | 'italic';
+    fontFamily?: string;
+    color?: string;
+    colorOpacity?: number;
+    textAlign?: 'left' | 'center' | 'right';
+    verticalAlign?: 'top' | 'middle' | 'bottom';
+    textTransform?: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
+    textDecoration?: 'none' | 'underline' | 'overline' | 'line-through';
+    // Stroke properties
+    strokeEnabled?: boolean;
+    stroke?: string;
+    strokeWidth?: number;
+    strokeOpacity?: number;
+    // Shadow properties
+    shadowEnabled?: boolean;
+    shadowColor?: string;
+    shadowOpacity?: number;
+    shadowBlur?: number;
+    shadowOffsetX?: number;
+    shadowOffsetY?: number;
+    shadowOffsetLocked?: boolean;
+}
+
+export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps;
 
 export type ZoomLevel = number;
 

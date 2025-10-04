@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useClipStore } from '@/lib/clip';
 import { GoFileMedia } from "react-icons/go";
-import { LuAudioWaveform, LuShapes, LuSquareSquare, LuPen, LuType } from "react-icons/lu";
-
+import { LuAudioWaveform, LuShapes, LuType } from "react-icons/lu";
 import { IoVolumeMute } from "react-icons/io5";
 import { IoVolumeHigh } from "react-icons/io5";
 import { IoEye } from "react-icons/io5";
@@ -39,6 +38,9 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
         {(type === 'shape') && (
             <LuShapes className='w-3 h-3 text-brand-light/50' />
         )}
+        {(type === 'text') && (
+            <LuType className='w-3 h-3 text-brand-light/50' />
+        )}
         </>
     }
     {!isCollapsed && (
@@ -52,7 +54,10 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
         {(type === 'shape') && (
             <LuShapes className='w-3 h-3 text-brand-light/50' />
         )}
-        {(type !== 'shape') && <button className='cursor-pointer' onClick={() => {
+        {(type === 'text') && (
+            <LuType className='w-3 h-3 text-brand-light/50' />
+        )}
+        {(type !== 'shape' && type !== 'text') && <button className='cursor-pointer' onClick={() => {
             if (timelineMuted) {
                 unmuteTimeline(timelineId);
             } else {

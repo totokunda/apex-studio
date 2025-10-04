@@ -451,6 +451,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
       stroke: strokeWithOpacity,
       strokeWidth,
       draggable: tool === 'pointer' && !isTransforming,
+      opacity: (clipTransform?.opacity ?? 100) / 100,
       onDragStart: handleDragStart,
       onDragMove: handleDragMove,
       onDragEnd: handleDragEnd,

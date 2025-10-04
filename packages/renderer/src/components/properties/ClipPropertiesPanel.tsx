@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import AppearanceProperties from './AppearanceProperties'
 import {LuChevronRight, LuChevronLeft} from 'react-icons/lu'
 import { cn } from '@/lib/utils'  
+import TextProperties from './TextProperties'
 
 interface PropertiesPanelProps {
     panelSize: number;
@@ -27,7 +28,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [scrolledAmount, setScrolledAmount] = useState(0);
   const [isAnimating, setIsAnimating] = useState(false);
-  const [selectedTab, setSelectedTab] = useState<string>("transform");
+  const [selectedTab, setSelectedTab] = useState<string>(clip?.type === 'text' ? "text" : "transform");
   
 
   // check if clip has audio if it is video 
@@ -48,12 +49,17 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   }, [clipType, clip?.src]);
 
   const hasAppearance = useMemo(() => {
-    if (clip?.type === 'image' || clip?.type === 'video' || clip?.type === 'shape') return true;
+    if (clip?.type === 'image' || clip?.type === 'video' || clip?.type === 'shape' || clip?.type === 'text') return true;
     return false;
   }, [clip?.type]);
 
   const hasTransform = useMemo(() => {
-    if (clip?.type === 'image' || clip?.type === 'video' || clip?.type === 'shape') return true;
+    if (clip?.type === 'image' || clip?.type === 'video' || clip?.type === 'shape' || clip?.type === 'text') return true;
+    return false;
+  }, [clip?.type]);
+
+  const hasText = useMemo(() => {
+    if (clip?.type === 'text') return true;
     return false;
   }, [clip?.type]);
 
@@ -68,11 +74,11 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
   const getValidTab = (currentTab: string) => {
     // Check if current tab is valid for this clip type
+    if (currentTab === "text" && hasText) return "text";
     if (currentTab === "transform" && hasTransform) return "transform";
     if (currentTab === "audio" && hasAudio) return "audio";
     if (currentTab === "duration" && hasDuration) return "duration";
     if (currentTab === "appearance" && hasAppearance) return "appearance";
-    
     // If current tab is invalid, return first available tab
     if (hasTransform) return "transform";
     if (hasAudio) return "audio";
@@ -102,10 +108,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   }, [panelSize, scrolledAmount, numVisibleTabs]);
 
   return (
-    <div  className="h-full w-full overflow-hidden min-w-0">
-      <div className="flex flex-col divide-y divide-brand-light/5 pb-4 min-w-0 overflow-x-auto overflow-y-auto h-full">
-      <Tabs value={selectedTab} onValueChange={setSelectedTab} className="min-w-0 relative">
-        <ScrollArea>
+    <div className="h-full w-full overflow-hidden min-w-0 flex flex-col">
+      <Tabs value={selectedTab} onValueChange={setSelectedTab} className="min-w-0 relative flex flex-col h-full">
+        <div className="relative flex-shrink-0 border-b border-brand-light/5">
           <LuChevronLeft onClick={() => {
             if (tabRef.current) {
               const tabWidth = 96 * numVisibleTabs;
@@ -116,38 +121,41 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               setTimeout(() => setIsAnimating(false), 300);
             }
           }} className={cn("text-brand-light h-6 w-6 bg-brand-background/90 border border-brand-light/10 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute left-1 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollLeft ? "block" : "hidden")} />
-        <TabsList ref={tabRef} style={{transform: `translateX(${scrolledAmount}px)`}} className={cn("bg-brand w-full rounded-b-none p-0 min-w-0 flex-shrink overflow-x-auto", isAnimating && "transition-all duration-300")}>
-          {(hasTransform) && <TabsTrigger value="transform" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
-          {(hasAudio) && <TabsTrigger value="audio" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
-          {(hasDuration) && <TabsTrigger value="duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
-          {(hasAppearance) && <TabsTrigger value="appearance" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
-        </TabsList>
-        <LuChevronRight onClick={() => {
-          if (tabRef.current) {
-            const tabWidth = 96 * numVisibleTabs;
-            const minScroll = tabWidth > panelSize ? -(tabWidth - panelSize) : 0;
-            const newAmount = Math.max(minScroll, scrolledAmount - 48);
-            setIsAnimating(true);
-            setScrolledAmount(Math.min(0, newAmount));
-            setTimeout(() => setIsAnimating(false), 300);
-          }
-        }} className={cn("text-brand-light h-6 w-6 border border-brand-light/10 bg-brand-background/90 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute right-1 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollRight ? "block" : "hidden")} />
+          <TabsList ref={tabRef} style={{transform: `translateX(${scrolledAmount}px)`}} className={cn("bg-brand w-full rounded-b-none p-0 min-w-0 flex-shrink overflow-x-auto", isAnimating && "transition-all duration-300")}>
+            {(hasText) && <TabsTrigger value="text" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
+            {(hasTransform) && <TabsTrigger value="transform" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
+            {(hasAudio) && <TabsTrigger value="audio" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
+            {(hasDuration) && <TabsTrigger value="duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            {(hasAppearance) && <TabsTrigger value="appearance" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
+          </TabsList>
+          <LuChevronRight onClick={() => {
+            if (tabRef.current) {
+              const tabWidth = 96 * numVisibleTabs;
+              const minScroll = tabWidth > panelSize ? -(tabWidth - panelSize) : 0;
+              const newAmount = Math.max(minScroll, scrolledAmount - 48);
+              setIsAnimating(true);
+              setScrolledAmount(Math.min(0, newAmount));
+              setTimeout(() => setIsAnimating(false), 300);
+            }
+          }} className={cn("text-brand-light h-6 w-6 border border-brand-light/10 bg-brand-background/90 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute right-1 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollRight ? "block" : "hidden")} />
+        </div>
+        <ScrollArea className="flex-1">
+          {(hasText) && <TabsContent value="text" className="min-w-0 m-0">  <TextProperties clipId={clipId} /> </TabsContent>}
+          {(hasTransform) && <TabsContent  value="transform" className="min-w-0 divide-y divide-brand-light/10 m-0">
+            <PositionProperties clipId={clipId}  />
+            <LayoutProperties clipId={clipId}  />
+          </TabsContent>}
+          {(hasAudio) && <TabsContent value="audio" className="min-w-0 m-0">
+            <AudioProperties clipId={clipId} />
+          </TabsContent>}
+          {(hasDuration) && <TabsContent value="duration" className="min-w-0 m-0">
+            <DurationProperties clipId={clipId} />
+          </TabsContent>}
+          {(hasAppearance) && <TabsContent value="appearance" className="min-w-0 m-0">
+            <AppearanceProperties clipId={clipId} />
+          </TabsContent>}
         </ScrollArea>
-        {(hasTransform) && <TabsContent  value="transform" className="min-w-0 divide-y divide-brand-light/10">
-          <PositionProperties clipId={clipId}  />
-          <LayoutProperties clipId={clipId}  />
-        </TabsContent>}
-        {(hasAudio) && <TabsContent value="audio" className="min-w-0">
-          <AudioProperties clipId={clipId} />
-        </TabsContent>}
-        {(hasDuration) && <TabsContent value="duration" className="min-w-0">
-          <DurationProperties clipId={clipId} />
-        </TabsContent>}
-        {(hasAppearance) && <TabsContent value="appearance" className="min-w-0">
-          <AppearanceProperties clipId={clipId} />
-        </TabsContent>}
       </Tabs>
-      </div>
     </div>
   )
 }

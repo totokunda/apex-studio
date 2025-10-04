@@ -526,6 +526,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const newClipId1 = uuidv4();
         const newClipId2 = uuidv4();
         const infinityFramestoGiveEnd = !isFinite(clip.framesToGiveEnd || 0);
+        const infinityFramestoGiveStart = !isFinite(clip.framesToGiveStart || 0);
 
         // First clip: from original start to cut frame
         // Keeps original framesToGiveStart, but can't extend past cut
@@ -533,7 +534,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             ...clip, 
             endFrame: cutFrame, 
             clipId: newClipId1,
-            framesToGiveStart: 0,
+            framesToGiveStart: infinityFramestoGiveStart ? -Infinity : 0,
             framesToGiveEnd: infinityFramestoGiveEnd ? Infinity : 0,
         };
         
@@ -543,7 +544,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             ...clip, 
             startFrame: cutFrame, 
             clipId: newClipId2,
-            framesToGiveStart: 0,
+            framesToGiveStart: infinityFramestoGiveStart ? -Infinity : 0,
             framesToGiveEnd: infinityFramestoGiveEnd ? Infinity : 0,
         };
 

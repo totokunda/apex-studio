@@ -5,13 +5,13 @@ import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
 import { useControlsStore } from "@/lib/control";
 import { Image, Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
-import { MediaInfo, ShapeClipProps, TimelineProps } from "@/lib/types";
+import { MediaInfo, ShapeClipProps, TextClipProps, TimelineProps } from "@/lib/types";
 import { v4 as uuidv4 } from 'uuid';
 import { getMediaInfoCached } from "@/lib/media/utils";
 
 const THUMBNAIL_TILE_SIZE = 36;
 
-const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' | 'audio' | 'image' | 'shape',  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 64, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
+const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' | 'audio' | 'image' | 'shape' | 'text',  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 64, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
     // Select only what we need to avoid unnecessary rerenders
     const timelineDuration = useControlsStore((s) => s.timelineDuration);
     const selectedClipIds = useControlsStore((s) => s.selectedClipIds);
@@ -33,7 +33,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
     // Subscribe directly to this clip's data
     const currentClip = useClipStore((s) => s.clips.find((c) => c.clipId === clipId && (timelineId ? c.timelineId === timelineId : true)));
     const cornerRadius = useMemo(() => {
-        return currentClip?.type === 'shape' ? 4 : 8;
+        return currentClip?.type === 'shape' || currentClip?.type === 'text' ? 4 : 8;
     }, [currentClip?.type]);
     
     const currentStartFrame = currentClip?.startFrame ?? 0;
@@ -544,6 +544,18 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             }
             clipRef.current?.getLayer()?.batchDraw();
         }
+
+        const generateTimelineThumbnailText = async () => {
+            if (clipType !== 'text') return;
+            // make canvas 
+            const ctx = imageCanvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+                ctx.fillStyle = '#E8E8E8';
+                ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
+            }
+            clipRef.current?.getLayer()?.batchDraw();
+        }
         if (clipType === 'audio') {
             generateTimelineThumbnailAudio()
         } else if (clipType === 'image') {
@@ -552,6 +564,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             generateTimelineThumbnailVideo()
         } else if (clipType === 'shape') {
             generateTimelineThumbnailShape()
+        } else if (clipType === 'text') {
+            generateTimelineThumbnailText()
         }
 
     
@@ -1180,6 +1194,31 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                         fontFamily="Poppins"
                         fill="white"
                         align="left"
+                        verticalAlign="middle"
+                        offsetY={5}
+                    />
+                    </Group>
+                )}
+                {clipType === 'text' && (currentClip  as TextClipProps)?.text && (
+                    <Group>
+                    <Rect
+                        x={8 - 4}
+                        y={timelineHeight / 2}
+                        width={textWidth + 8}
+                        height={14}
+                        cornerRadius={2}
+                        fill="rgba(0, 0, 0, 0.075)"
+                        offsetY={7.5}
+                    />
+                    <Text
+                        ref={textRef}
+                        x={8}
+                        y={timelineHeight / 2}
+                        text={((currentClip as TextClipProps)?.text ?? '')}
+                        fontSize={10}
+                        fontFamily={(currentClip as TextClipProps)?.fontFamily ?? 'Poppins'}
+                        fill="#151517"
+                        align={(currentClip as TextClipProps)?.textAlign ?? 'left'}
                         verticalAlign="middle"
                         offsetY={5}
                     />

@@ -139,6 +139,24 @@ body {
   clip-path: inset(0 50% 0 0); /* Hides right half */
 }
 
+/* Custom scrollbar styles */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(227, 227, 227, 0.1);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(227, 227, 227, 0.2);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

@@ -20,7 +20,6 @@ const ColorInput: React.FC<ColorInputProps> = ({ value, onChange, label, percent
   const isUserInteractingRef = React.useRef(false);
 
   useEffect(() => {
-    console.log(value);
     setTempColorValue(value);
     lastColorValueRef.current = value;
   }, [value]);
