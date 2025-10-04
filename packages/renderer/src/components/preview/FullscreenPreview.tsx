@@ -1,0 +1,299 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Stage, Layer, Group, Rect } from 'react-konva';
+import { useViewportStore } from '@/lib/viewport';
+import { useClipStore } from '@/lib/clip';
+import { BASE_LONG_SIDE } from '@/lib/settings';
+import VideoPreview from './clips/VideoPreview';
+import AudioPreview from './clips/AudioPreview';
+import ImagePreview from './clips/ImagePreview';
+import ShapePreview from './clips/ShapePreview';
+import TextPreview from './clips/TextPreview';
+import { useControlsStore } from '@/lib/control';
+import { AnyClipProps } from '@/lib/types';
+import { SlSizeActual } from 'react-icons/sl';
+import { FaCirclePause, FaCirclePlay } from 'react-icons/fa6';
+
+interface FullscreenPreviewProps {
+  onExit: () => void;
+}
+
+const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<any>(null);
+  const [showControls, setShowControls] = useState(true);
+  const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  const aspectRatio = useViewportStore((s) => s.aspectRatio);
+  const { clips, clipWithinFrame, timelines, clipDuration } = useClipStore();
+  const focusFrame = useControlsStore((s) => s.focusFrame);
+  const { play, pause, isPlaying, setFocusFrame, fps } = useControlsStore();
+  
+  const formatTime = useCallback((frames: number) => {
+    if (frames === 0 || frames === undefined || frames === null || isNaN(frames) || frames === Infinity || frames === -Infinity) return '00:00.00';
+    const seconds = frames / fps;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toFixed(2).padStart(5, '0')}`;
+  }, [fps]);
+  
+  const sortClips = useCallback((clips: AnyClipProps[]) => {
+    const sortedClips = clips.slice().sort((a, b) => {
+      const indexA = timelines.findIndex(t => t.timelineId === a.timelineId);
+      const indexB = timelines.findIndex(t => t.timelineId === b.timelineId);
+      return indexB - indexA;
+    });
+    return sortedClips;
+  }, [timelines]);
+
+  const filterClips = useCallback((clips: AnyClipProps[], audio: boolean = false) => {
+    const filteredClips = clips.filter((clip) => {
+      const timeline = timelines.find((t) => t.timelineId === clip.timelineId);
+      if (audio && timeline?.muted) return false;
+      if (timeline?.hidden) return false;
+      return true;
+    });
+    return filteredClips;
+  }, [timelines]);
+
+  // Compute rect dimensions based on aspect ratio
+  const { rectWidth, rectHeight } = useMemo(() => {
+    const ratio = aspectRatio.width / aspectRatio.height;
+    const baseShortSide = BASE_LONG_SIDE;
+    if (!Number.isFinite(ratio) || ratio <= 0) {
+      return { rectWidth: 0, rectHeight: 0 };
+    }
+    return { rectWidth: baseShortSide * ratio, rectHeight: baseShortSide };
+  }, [aspectRatio.width, aspectRatio.height]);
+
+  // Center the content in fullscreen
+  const { scale, position } = useMemo(() => {
+    if (!size.width || !size.height || !rectWidth || !rectHeight) {
+      return { scale: 1, position: { x: 0, y: 0 } };
+    }
+    
+    // Calculate scale to fit content in viewport
+    const scaleX = size.width / rectWidth;
+    const scaleY = size.height / rectHeight;
+    const scale = Math.min(scaleX, scaleY);
+    
+    // Center the scaled content
+    const scaledWidth = rectWidth * scale;
+    const scaledHeight = rectHeight * scale;
+    const x = (size.width - scaledWidth) / 2;
+    const y = (size.height - scaledHeight) / 2;
+    
+    return { scale, position: { x, y } };
+  }, [size.width, size.height, rectWidth, rectHeight]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      setSize({ width, height });
+    });
+    
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Auto-hide controls logic
+  const resetHideTimer = useCallback(() => {
+    setShowControls(true);
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+    }
+    hideTimeoutRef.current = setTimeout(() => {
+      setShowControls(false);
+    }, 3000);
+  }, []);
+
+  const handleMouseMove = useCallback(() => {
+    resetHideTimer();
+  }, [resetHideTimer]);
+
+  useEffect(() => {
+    resetHideTimer();
+    return () => {
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current);
+      }
+    };
+  }, [resetHideTimer]);
+
+  // Scrubber logic
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragProgress, setDragProgress] = useState<number | null>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
+
+  const progress = isDragging && dragProgress !== null 
+    ? dragProgress 
+    : clipDuration > 0 ? focusFrame / clipDuration : 0;
+
+  const handleScrubberMove = useCallback((clientX: number) => {
+    if (!progressBarRef.current) return;
+    const rect = progressBarRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    const newProgress = Math.max(0, Math.min(x / rect.width, 1));
+    
+    // Update progress immediately for smooth visual feedback
+    requestAnimationFrame(() => {
+      setDragProgress(newProgress);
+    });
+    
+    const newFrame = Math.round(newProgress * clipDuration);
+    setFocusFrame(Math.min(newFrame, clipDuration));
+  }, [clipDuration, setFocusFrame]);
+
+  const handleScrubberMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDragging) return;
+    handleScrubberMove(e.clientX);
+  }, [isDragging, handleScrubberMove]);
+
+  const handleScrubberMouseUp = useCallback(() => {
+    setIsDragging(false);
+    setDragProgress(null);
+  }, []);
+
+  const handleProgressBarMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+    if (isPlaying) pause();
+    handleScrubberMove(e.clientX);
+  }, [handleScrubberMove, isPlaying, pause]);
+
+  useEffect(() => {
+    if (isDragging) {
+      document.addEventListener('mousemove', handleScrubberMouseMove);
+      document.addEventListener('mouseup', handleScrubberMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleScrubberMouseMove);
+        document.removeEventListener('mouseup', handleScrubberMouseUp);
+      };
+    }
+  }, [isDragging, handleScrubberMouseMove, handleScrubberMouseUp]);
+
+  // Handle escape key to exit fullscreen
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onExit();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onExit]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="fixed inset-0 z-50 bg-black"
+      onMouseMove={handleMouseMove}
+    >
+      <Stage
+        ref={stageRef}
+        width={size.width}
+        height={size.height}
+        className="bg-black"
+      >
+        <Layer width={size.width} height={size.height}>
+          <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale}>
+            <Rect x={0} y={0} width={rectWidth} height={rectHeight} fill={'#000000'} />
+            {sortClips(filterClips(clips)).map((clip) => {
+              const clipAtFrame = clipWithinFrame(clip, focusFrame);
+              if (!clipAtFrame) return null;
+              switch (clip.type) {
+                case 'video':
+                  return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
+                case 'image':
+                  return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
+                case 'shape':
+                  return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
+                case 'text':
+                  return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
+                case 'audio':
+                  return null;
+              }
+            })}
+          </Group>
+        </Layer>
+      </Stage>
+
+      {/* Audio previews */}
+      {sortClips(filterClips(clips, true)).map((clip) => {
+        const clipAtFrame = clipWithinFrame(clip, focusFrame);
+        if (!clipAtFrame) return null;
+        if (clip.type === 'audio' || clip.type === 'video') {
+          return <AudioPreview key={`audio-${clip.clipId}`} {...(clip as any)} />;
+        }
+        return null;
+      })}
+
+      {/* Floating control bar */}
+      <div
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent transition-opacity duration-300 ${
+          showControls ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
+        <div className="px-8 pb-6 pt-12">
+          {/* Progress bar */}
+          <div
+            ref={progressBarRef}
+            className="relative w-full h-1 bg-white/20 rounded-full cursor-pointer mb-4 group"
+            onMouseDown={handleProgressBarMouseDown}
+          >
+            <div
+              className={`absolute h-full bg-blue-500 rounded-full pointer-events-none ${
+                isDragging ? '' : 'transition-all'
+              }`}
+              style={{ width: `${progress * 100}%` }}
+            />
+            <div
+              className={`absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-lg transition-opacity ${
+                isDragging ? 'opacity-100 cursor-grabbing' : 'opacity-0 group-hover:opacity-100 cursor-grab'
+              }`}
+              style={{ left: `calc(${progress * 100}% - 6px)` }}
+            />
+          </div>
+
+          {/* Controls */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              {/* Play/Pause button */}
+              <button
+                onClick={() => (isPlaying ? pause() : play())}
+                className="text-white hover:text-blue-400 transition-colors cursor-pointer"
+              >
+                {isPlaying ? (
+                  <FaCirclePause className="h-8 w-8" />
+                ) : (
+                  <FaCirclePlay className="h-8 w-8" />
+                )}
+              </button>
+
+              {/* Time display */}
+              <div className="text-white text-sm">
+                {formatTime(focusFrame)} / {formatTime(clipDuration)}
+              </div>
+            </div>
+
+            {/* Exit fullscreen button */}
+            <button
+              onClick={onExit}
+              className="text-white hover:text-blue-400 transition-colors cursor-pointer"
+            >
+              <SlSizeActual className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default FullscreenPreview;
+

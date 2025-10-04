@@ -8,6 +8,7 @@ import { IoEye } from "react-icons/io5";
 import { IoEyeOff } from "react-icons/io5";
 import { TimelineProps } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { useControlsStore } from '@/lib/control';
 
 interface TimelineSidebarProps {
     clampedScroll: number;  // for the scroll position
@@ -20,6 +21,7 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
     const { muteTimeline, unmuteTimeline, hideTimeline, unhideTimeline, isTimelineMuted, isTimelineHidden } = useClipStore();
     const timelineMuted = isTimelineMuted(timelineId);
     const timelineHidden = isTimelineHidden(timelineId);
+    
 
   return (
   <>
@@ -91,6 +93,7 @@ const TimelineSidebar: React.FC<TimelineSidebarProps> = ({clampedScroll}) => {
   const startXRef = useRef<number>(0)
   const isDraggingRef = useRef<boolean>(false);
   const {timelines} = useClipStore();
+  const {isFullscreen} = useControlsStore();
 
 
   const endDrag = useCallback(() => {
@@ -154,8 +157,9 @@ const TimelineSidebar: React.FC<TimelineSidebarProps> = ({clampedScroll}) => {
         aria-label='Drag to resize timeline sidebar'
         title='Drag to resize'
         className='absolute top-0 hover:bg-brand-light/50 right-0 h-full transition-all duration-100 w-px bg-brand-light/10 z-50 flex items-center justify-center group outline-none'
-        style={{ cursor: width === collapsedWidth ? 'e-resize' : 'w-resize' }}
+        style={{ cursor: width === collapsedWidth ? 'e-resize' : 'w-resize', display: isFullscreen ? 'none' : 'block'    }}
         onMouseDown={(e) => startDrag(e)}
+
       />
       <div className='relative h-full'>
       {timelines.map((timeline) => (

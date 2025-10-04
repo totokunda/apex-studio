@@ -74,6 +74,8 @@ interface ControlStore {
     pause:() => void;
     isPlaying: boolean;
     setIsPlaying: (isPlaying: boolean) => void;
+    isFullscreen: boolean;
+    setIsFullscreen: (isFullscreen: boolean) => void;
 }
 
 export const useControlsStore = create<ControlStore>((set, get) => ({
@@ -235,4 +237,6 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     },
     isPlaying: false,
     setIsPlaying: (isPlaying) => set({ isPlaying }),
+    isFullscreen: false,
+    setIsFullscreen: (isFullscreen) => set({ isFullscreen }),
     }));

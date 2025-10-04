@@ -31,7 +31,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
     const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
     const addClipSelection = useControlsStore((s) => s.addClipSelection);
-    const {selectedClipIds} = useControlsStore();
+    const {selectedClipIds, isFullscreen} = useControlsStore();
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
 
     const aspectRatio = useMemo(() => {
@@ -455,8 +455,9 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     }, [setClipTransform, clipId]);
 
     const handleClick = useCallback(() => {
+        if (isFullscreen) return;
         addClipSelection(clipId);
-    }, [addClipSelection, clipId]);
+    }, [addClipSelection, clipId, isFullscreen]);
 
     useEffect(() => {
         const transformer = transformerRef.current;
@@ -571,7 +572,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
        onDragEnd={handleDragEnd} 
        onClick={handleClick} 
        />
-      {tool === 'pointer' && isSelected && isInteracting && !isRotating && (
+      {tool === 'pointer' && isSelected && isInteracting && !isRotating && !isFullscreen && (
         <React.Fragment>
           {guides.vCenter && <Line listening={false} points={[rectWidth/2, 0, rectWidth/2, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
           {guides.v25 && <Line listening={false} points={[rectWidth*0.25, 0, rectWidth*0.25, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
@@ -586,7 +587,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         </React.Fragment>
       )}
     </Group>
-    {tool === 'pointer' && isSelected && <Transformer 
+    {tool === 'pointer' && isSelected && !isFullscreen && <Transformer 
         borderStroke='#AE81CE'
         anchorCornerRadius={8} 
         anchorStroke='#E3E3E3' 

@@ -28,6 +28,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
   const isSelected = useControlsStore((s) => s.selectedClipIds.includes(clipId));
   const addClipSelection = useControlsStore((s) => s.addClipSelection);
   const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
+  const isFullscreen = useControlsStore((s) => s.isFullscreen);
 
   const SNAP_THRESHOLD_PX = 4;
   const [guides, setGuides] = useState({
@@ -247,8 +248,9 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
   }, [isSelected]);
 
   const handleClick = useCallback(() => {
+    if (isFullscreen) return;
     addClipSelection(clipId);
-  }, [addClipSelection, clipId]);
+  }, [addClipSelection, clipId, isFullscreen]);
 
   const handleDragStart = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     e.target.getStage()!.container().style.cursor = 'grab';
@@ -499,7 +501,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     <React.Fragment>
       <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight}>
         {renderShape()}
-        {tool === 'pointer' && isSelected && isInteracting && !isRotating && (
+        {tool === 'pointer' && isSelected && isInteracting && !isRotating && !isFullscreen && (
           <React.Fragment>
             {guides.vCenter && <Line listening={false} points={[rectWidth/2, 0, rectWidth/2, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
             {guides.v25 && <Line listening={false} points={[rectWidth*0.25, 0, rectWidth*0.25, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
@@ -514,7 +516,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
           </React.Fragment>
         )}
       </Group>
-      {tool === 'pointer' && isSelected && (
+      {tool === 'pointer' && isSelected && !isFullscreen && (
         <Transformer
           borderStroke='#AE81CE'
           anchorCornerRadius={8} 

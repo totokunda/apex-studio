@@ -15,6 +15,8 @@ import TextPreview from './clips/TextPreview';
 import { useControlsStore } from '@/lib/control';
 import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
+import { SlSizeFullscreen } from 'react-icons/sl';
+import FullscreenPreview from './FullscreenPreview';
 
 interface PreviewProps {
 
@@ -46,6 +48,8 @@ const Preview:React.FC<PreviewProps> = () => {
   const [textCurrent, setTextCurrent] = useState<{ x: number; y: number } | null>(null);
   const [shapeStart, setShapeStart] = useState<{ x: number; y: number } | null>(null);
   const [shapeCurrent, setShapeCurrent] = useState<{ x: number; y: number } | null>(null);
+  const isFullscreen = useControlsStore((s) => s.isFullscreen);
+  const setIsFullscreen = useControlsStore((s) => s.setIsFullscreen);
   
 
 
@@ -104,6 +108,23 @@ const Preview:React.FC<PreviewProps> = () => {
     };
   }, [containerRef.current?.offsetWidth, containerRef.current?.offsetHeight]);
 
+  // Force size update when exiting fullscreen
+  useEffect(() => {
+    if (!isFullscreen && containerRef.current) {
+      // Use requestAnimationFrame to ensure DOM has updated
+      requestAnimationFrame(() => {
+        if (containerRef.current) {
+          const el = containerRef.current;
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            setSize({ width: rect.width, height: rect.height });
+            setViewportSize({ width: rect.width, height: rect.height });
+          }
+        }
+      });
+    }
+  }, [isFullscreen, setViewportSize]);
+
   // Compute rect dimensions based on aspect ratio
   const { rectWidth, rectHeight } = useMemo(() => {
     const ratio = aspectRatio.width / aspectRatio.height;
@@ -119,16 +140,16 @@ const Preview:React.FC<PreviewProps> = () => {
 
   // Center the rect initially and whenever aspect ratio or viewport changes
   useEffect(() => {
-    if (!stageRef.current) return;
+    if (!stageRef.current || isFullscreen) return;
     const rectBounds = { x: 0, y: 0, width: rectWidth, height: rectHeight };
     setContentBounds(rectBounds);
     const rectWorld = { x: rectBounds.x + rectBounds.width / 2, y: rectBounds.y + rectBounds.height / 2 };
     useViewportStore.getState().centerOnWorldPoint(rectWorld, { width: size.width, height: size.height });
-  }, [size.width, size.height, rectWidth, rectHeight]);
+  }, [size.width, size.height, rectWidth, rectHeight, isFullscreen]);
 
   // Recenter all clips when rect size changes (but not on initial render)
   useEffect(() => {
-    if (!rectWidth || !rectHeight) return;
+    if (!rectWidth || !rectHeight || isFullscreen) return;
     const prev = prevRectRef.current;
     if (!prev || prev.w === 0 || prev.h === 0) {
       prevRectRef.current = { w: rectWidth, h: rectHeight };
@@ -152,7 +173,7 @@ const Preview:React.FC<PreviewProps> = () => {
     });
 
     prevRectRef.current = { w: rectWidth, h: rectHeight };
-  }, [rectWidth, rectHeight]);
+  }, [rectWidth, rectHeight, isFullscreen]);
 
 
   const handleWheel = useCallback((e: any) => {
@@ -522,62 +543,77 @@ const Preview:React.FC<PreviewProps> = () => {
 
   return (
     <>
-    <div className='w-full h-full' ref={containerRef}>
-      <Stage
-        ref={stageRef}
-        width={size.width}
-        height={size.height}
-        className='bg-brand-background'
-        onWheel={handleWheel}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseLeave}
-        onMouseEnter={onMouseEnter}
-      >
-        <Layer
-           ref={layerRef}
-           width={size.width}
-           height={size.height}
+    {isFullscreen ? (
+      <FullscreenPreview onExit={() => setIsFullscreen(false)} />
+    ) : (
+      <div className='w-full h-full relative' ref={containerRef}>
+        <Stage
+          ref={stageRef}
+          width={size.width}
+          height={size.height}
+          className='bg-brand-background'
+          onWheel={handleWheel}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+          onMouseLeave={onMouseLeave}
+          onMouseEnter={onMouseEnter}
         >
-         <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale} width={rectWidth} height={rectHeight} >
-          <Rect x={0} y={0}  width={rectWidth} height={rectHeight} fill={'#000000'} />
-             {sortClips(filterClips(clips)).map((clip) => {
-              const clipAtFrame = clipWithinFrame(clip, focusFrame);
-              if (!clipAtFrame) return null;
-               if (clipAtFrame) {
-                 switch (clip.type) {
-                  case 'video':
-                    return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
-                  case 'image':
-                    return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
-                  case 'shape':
-                    return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
-                  case 'text':
-                    return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
-                  case 'audio':
-                    return null
+          <Layer
+             ref={layerRef}
+             width={size.width}
+             height={size.height}
+          >
+           <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale} width={rectWidth} height={rectHeight} >
+            <Rect x={0} y={0}  width={rectWidth} height={rectHeight} fill={'#000000'} />
+               {sortClips(filterClips(clips)).map((clip) => {
+                const clipAtFrame = clipWithinFrame(clip, focusFrame);
+                if (!clipAtFrame) return null;
+                 if (clipAtFrame) {
+                   switch (clip.type) {
+                    case 'video':
+                      return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
+                    case 'image':
+                      return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
+                    case 'shape':
+                      return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
+                    case 'text':
+                      return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
+                    case 'audio':
+                      return null
+                   }
+                 } else {
+                  return null;
                  }
-               } else {
-                return null;
-               }
-             })}
-             {renderDrawingShape()}
-             {renderDrawingText()}
-         </Group>
-        </Layer>
-      </Stage>
+               })}
+               {renderDrawingShape()}
+               {renderDrawingText()}
+           </Group>
+          </Layer>
+        </Stage>
 
-    </div>
+        {/* Fullscreen button */}
+        <button
+          onClick={() => setIsFullscreen(true)}
+          className="absolute bottom-4 right-4 p-2 bg-brand cursor-pointer hover:bg-brand-background-dark hover:text-blue-400 text-white rounded-md transition-colors"
+        >
+          <SlSizeFullscreen className="h-3 w-3" />
+        </button>
+      </div>
+    )}
     {/* Mount non-visual audio previews OUTSIDE Konva tree so effects run */}
-    {sortClips(filterClips(clips, true)).map((clip) => {
-      const clipAtFrame = clipWithinFrame(clip, focusFrame);
-      if (!clipAtFrame) return null;
-      if (clip.type === 'audio' || clip.type === 'video') {
-        return <AudioPreview key={`audio-${clip.clipId}`} {...(clip as any)} />
-      }
-      return null;
-    })}
+    {!isFullscreen && (
+      <>
+        {sortClips(filterClips(clips, true)).map((clip) => {
+          const clipAtFrame = clipWithinFrame(clip, focusFrame);
+          if (!clipAtFrame) return null;
+          if (clip.type === 'audio' || clip.type === 'video') {
+            return <AudioPreview key={`audio-${clip.clipId}`} {...(clip as any)} />
+          }
+          return null;
+        })}
+      </>
+    )}
     </>
   )
 }

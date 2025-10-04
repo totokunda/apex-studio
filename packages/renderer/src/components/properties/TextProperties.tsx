@@ -55,7 +55,7 @@ const applyTextTransform = (text: string, textTransform: string) => {
 
 const TextProperties: React.FC<TextPropertiesProps> = ({ clipId }) => {
     const clip = useClipStore((s) => s.getClipById(clipId)) as TextClipProps;
-    const [fontFamily, setFontFamily] = useState<string>('Arial');
+    const [fontFamily, setFontFamily] = useState<string>(clip?.fontFamily ?? 'Arial');
     const updateClip = useClipStore((s) => s.updateClip);
 
     const AlignmentButtons = [

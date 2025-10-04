@@ -9,7 +9,7 @@ interface ScrubControlProps {
 }
 
 export const ScrubControl:React.FC<ScrubControlProps> = ({stageHeight, stageWidth}) => {
-    const { timelineDuration, fps, zoomLevel, focusFrame, setFocusFrame, setFocusAnchorRatio, isPlaying, pause, play } = useControlsStore();
+    const { timelineDuration, fps, zoomLevel, focusFrame, setFocusFrame, setFocusAnchorRatio, isPlaying, pause, play, isFullscreen } = useControlsStore();
     const [isDragging, setIsDragging] = useState(false);    
     const [position, setPosition] = useState(18);
     const [currentFrame, setCurrentFrame] = useState(0);
@@ -137,6 +137,8 @@ export const ScrubControl:React.FC<ScrubControlProps> = ({stageHeight, stageWidt
             };
         }
     }, [isDragging, timelineDuration, stageWidth, currentFrame]);
+    
+    if (isFullscreen) return null;
     
     return(
         <div 

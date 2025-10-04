@@ -186,7 +186,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
     const clip = useClipStore((s) => s.getClipById(clipId)) as TextClipProps;
     const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
     const addClipSelection = useControlsStore((s) => s.addClipSelection);
-    const {selectedClipIds} = useControlsStore();
+    const {selectedClipIds, isFullscreen} = useControlsStore();
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
 
     const [isEditing, setIsEditing] = useState(false);
@@ -448,13 +448,14 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
     }, [setClipTransform, clipId]);
 
     const handleClick = useCallback(() => {
+        if (isFullscreen) return;
         addClipSelection(clipId);
-    }, [addClipSelection, clipId]);
+    }, [addClipSelection, clipId, isFullscreen]);
 
     const handleDblClick = useCallback(() => {
-        if (tool !== 'pointer') return;
+        if (tool !== 'pointer' || isFullscreen) return;
         setIsEditing(true);
-    }, [tool]);
+    }, [tool, isFullscreen]);
 
 
     const handleTextEditChange = useCallback((text: string) => {
@@ -656,7 +657,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
             height={clipTransform?.height ?? defaultHeight}
             transformerRef={transformerRef}
        />
-      {tool === 'pointer' && isSelected && isInteracting && !isRotating && !isEditing && (
+      {tool === 'pointer' && isSelected && isInteracting && !isRotating && !isEditing && !isFullscreen && (
         <React.Fragment>
           {guides.vCenter && <Line listening={false} points={[rectWidth/2, 0, rectWidth/2, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
           {guides.v25 && <Line listening={false} points={[rectWidth*0.25, 0, rectWidth*0.25, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
@@ -671,7 +672,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
         </React.Fragment>
       )}
     </Group>
-    {tool === 'pointer' && isSelected && !isEditing && <Transformer 
+    {tool === 'pointer' && isSelected && !isEditing && !isFullscreen && <Transformer 
         borderStroke='#AE81CE'
         anchorCornerRadius={8} 
         anchorStroke='#E3E3E3' 
