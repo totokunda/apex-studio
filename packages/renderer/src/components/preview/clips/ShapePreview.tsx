@@ -6,13 +6,20 @@ import { useClipStore } from '@/lib/clip';
 import { useViewportStore } from '@/lib/viewport';
 import { useControlsStore } from '@/lib/control';
 import RoundedRegularPolygon from './custom/RoundedRegularPolygon';
+import { BaseClipApplicator } from './apply/base';
+import ApplicatorFilter from './custom/ApplicatorFilter';
+
+//@ts-ignore
+Konva.Filters.Applicator = ApplicatorFilter; 
+
 
 interface ShapePreviewProps extends ShapeClipProps {
   rectWidth: number;
   rectHeight: number;
+  applicators: BaseClipApplicator[];
 }
 
-const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidth, rectHeight }) => {
+const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidth, rectHeight, applicators }) => {
   const shapeRef = useRef<any>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const groupRef = useRef<Konva.Group>(null);
@@ -30,6 +37,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
   const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
   const clearSelection = useControlsStore((s) => s.clearSelection);
   const isFullscreen = useControlsStore((s) => s.isFullscreen);
+
 
   const SNAP_THRESHOLD_PX = 4;
   const [guides, setGuides] = useState({
@@ -247,6 +255,15 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     });
     return () => cancelAnimationFrame(raf);
   }, [isSelected]);
+
+  useEffect(() => {
+    if (shapeRef.current) {
+      shapeRef.current.cache({
+        pixelRatio: 2,
+      })
+      shapeRef.current.getLayer()?.batchDraw?.();
+    }
+  }, [shapeRef.current, applicators]);
 
   const handleClick = useCallback(() => {
     if (isFullscreen) return;
@@ -478,24 +495,31 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
       y: y + actualHeight / 2,
     };
 
+    const applicatorProps = {
+      applicators,
+      //@ts-ignore
+      filters: [Konva.Filters.Applicator],
+    }
+
+
     switch (shapeType) {
       case 'rectangle':
-        return <Rect {...cornerProps}  width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0} />;
+        return <Rect {...cornerProps}  width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0}  {...applicatorProps} />;
       
       case 'ellipse':
-        return <Ellipse {...centerProps} radiusX={width / 2} radiusY={height / 2} />;
+        return <Ellipse {...centerProps} radiusX={width / 2} radiusY={height / 2} {...applicatorProps} />;
       
       case 'polygon':
-        return <RoundedRegularPolygon {...centerProps} sides={sides} radius={Math.min(width, height) / 2} cornerRadius={clipTransform?.cornerRadius ?? 0} />;
+        return <RoundedRegularPolygon {...centerProps} sides={sides} radius={Math.min(width, height) / 2} cornerRadius={clipTransform?.cornerRadius ?? 0} {...applicatorProps} />;
       
       case 'line':
-        return <Line {...cornerProps} points={[0, 0, width, 0]} />;
+        return <Line {...cornerProps} points={[0, 0, width, 0]} {...applicatorProps} />;
       
       case 'star':
-        return <Star {...centerProps} numPoints={5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} />;
+        return <Star {...centerProps} numPoints={5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} {...applicatorProps} />;
       
       default:
-        return <Rect {...cornerProps} width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0} />;
+        return <Rect {...cornerProps} width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0} {...applicatorProps} />;
     }
   };
 

@@ -80,7 +80,7 @@ export function Combobox({ value, onValueChange, fonts, placeholder = "Select fo
                 value="system"
                 onSelect={() => {
                   onValueChange?.("system")
-                  setOpen(false)
+                  setOpen(false)      
                 }}
                 className="flex items-center justify-between h-8 py-1.5 px-3 hover:bg-brand-light/5 data-[selected=true]:bg-brand-light/5 rounded-sm"
               >

@@ -10,7 +10,7 @@ import { useClipStore } from '@/lib/clip';
 import { useWebGLFilters } from '@/components/preview/webgl-filters';
 import { BaseClipApplicator } from './apply/base';
 
-const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], clutsLoaded?: number}> = ({ src, clipId, rectWidth, rectHeight, applicators, clutsLoaded}) => {
+const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[]}> = ({ src, clipId, rectWidth, rectHeight, applicators}) => {
     const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
@@ -328,7 +328,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         } catch (e) {
             console.error(e);
         }
-    }, [mediaInfo, src, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applyFilters, clutsLoaded]);
+    }, [mediaInfo, src, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applyFilters]);
 
     useEffect(() => {
         draw();

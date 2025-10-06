@@ -6,19 +6,14 @@ import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
 import { useClipStore } from '@/lib/clip';
+import { BaseClipApplicator } from './apply/base';
+import ApplicatorFilter from './custom/ApplicatorFilter';
+
+//@ts-ignore
+Konva.Filters.Applicator = ApplicatorFilter; 
 
 //@ts-ignore
 Konva._fixTextRendering = true;
-
-interface TextEditorProps {
-    onClose: () => void;
-    onChange: (text: string) => void;
-    textNode: Konva.Text | null;
-    isEditing: boolean;
-    width: number;
-    height: number;
-    textTransform: string;
-}
 
 const applyTextTransform = (text: string, textTransform: string) => {
         if (textTransform === 'uppercase') {
@@ -35,278 +30,16 @@ const applyTextTransform = (text: string, textTransform: string) => {
     }
     
 
-const TextEditor: React.FC<TextEditorProps> = ({ onClose, onChange, textNode, isEditing, width, height, textTransform }) => {
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const lastClickTimeRef = useRef<number>(0);
-    const divRef = useRef<HTMLDivElement>(null);
 
-    useEffect(() => {
-        if (!textareaRef.current || !textNode) return;
-    
-        const textarea = textareaRef.current;
-
-        textarea.value = applyTextTransform(textNode.text(), textTransform);
-        
-        textarea.style.fontSize = `${textNode.fontSize()}px`;
-        textarea.style.paddingLeft = '0px';
-        textarea.style.paddingRight = '0px';
-        textarea.style.margin = '0px';
-        textarea.style.overflow = 'hidden';
-        textarea.style.background = 'none';
-        textarea.style.outline = 'none';
-        textarea.style.resize = 'none';
-        textarea.style.lineHeight = String(textNode.lineHeight());
-        textarea.style.fontFamily = textNode.fontFamily();
-        textarea.style.fontStyle = String(textNode.fontStyle()).split(' ')[0]; // Extract 'normal' or 'italic'
-        textarea.style.fontWeight = String(textNode.fontStyle()).includes('bold') ? 'bold' : 'normal';
-        textarea.style.textDecoration = String(textNode.textDecoration());
-        textarea.style.width = `100%`;   
-        textarea.style.height = `${height - 8}px`;
-        textarea.style.display = 'block';
-        textarea.style.boxSizing = 'border-box';
-        textarea.style.overflowY = 'hidden';
-        textarea.style.overflowX = 'hidden';
-        textarea.style.overscrollBehavior = 'none';
-        (textarea.style as any).msOverflowStyle = 'none';
-        (textarea.style as any).scrollbarWidth = 'none';
-        (textarea.style as any).webkitOverflowScrolling = 'auto';
-        (textarea.style as any).overflowAnchor = 'none';
-        textarea.style.whiteSpace = 'pre-wrap';
-        textarea.style.wordWrap = 'break-word';
-        textarea.setAttribute('autocorrect', 'off');
-        textarea.setAttribute('autocapitalize', 'off');
-        textarea.setAttribute('spellcheck', 'false');
-
-        // Apply stroke if enabled
-        if (textNode.strokeEnabled && textNode.strokeEnabled()) {
-            const strokeColor = String(textNode.stroke());
-            const strokeWidth = textNode.strokeWidth();
-            textarea.style.webkitTextStroke = `${strokeWidth}px ${strokeColor}`;
-        } else {
-            textarea.style.webkitTextStroke = '';
-        }
-        
-        // Apply shadow if enabled
-        if (textNode.shadowEnabled && textNode.shadowEnabled()) {
-            const shadowColor = String(textNode.shadowColor());
-            const shadowBlur = textNode.shadowBlur();
-            const shadowOffsetX = textNode.shadowOffsetX();
-            const shadowOffsetY = textNode.shadowOffsetY();
-            textarea.style.textShadow = `${shadowOffsetX}px ${shadowOffsetY}px ${shadowBlur}px ${shadowColor}`;
-        } else {
-            textarea.style.textShadow = '';
-        }
-        
-        textarea.style.transformOrigin = 'left top';
-        textarea.style.textAlign = textNode.align();
-        textarea.style.color = String(textNode.fill());
-        
-        // Handle vertical alignment using padding
-        const verticalAlign = textNode.verticalAlign();
-        // Estimate content height based on number of lines
-        const lines = textarea.value.split('\n').length;
-        const estimatedContentHeight = lines * textNode.fontSize() * textNode.lineHeight();
-        const containerHeight = textNode.height();
-        const availableSpace = containerHeight - estimatedContentHeight;
-        
-        if (availableSpace > 0) {
-            if (verticalAlign === 'middle') {
-                textarea.style.paddingTop = `${availableSpace / 2}px`;
-                textarea.style.paddingBottom = `${availableSpace / 2}px`;
-            } else if (verticalAlign === 'bottom') {
-                textarea.style.paddingTop = `${availableSpace}px`;
-                textarea.style.paddingBottom = '0px';
-            } else {
-                textarea.style.paddingTop = '0px';
-                textarea.style.paddingBottom = `${availableSpace}px`;
-            }
-        } else {
-            textarea.style.paddingTop = '0px';
-            textarea.style.paddingBottom = '0px';
-        }
-        
-    
-        textarea.focus();
-    
-
-      }, [textNode, onChange, onClose, textTransform, width, height]);
-
-      useEffect(() => {
-        const textarea = textareaRef.current;
-        const DOUBLE_CLICK_THRESHOLD = 400;
-
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-              onClose();
-            }
-          };
-  
-        const handleClickOutside = (e: MouseEvent) => {
-              const target = e.target as Node;
-              const currentTime = Date.now();
-              const timeSinceLastClick = currentTime - lastClickTimeRef.current;
-              lastClickTimeRef.current = currentTime;
-              if (textarea === target || textarea?.contains(target) || !isEditing) {
-                  return;
-              }
-
-              if (timeSinceLastClick < DOUBLE_CLICK_THRESHOLD) {
-                  return;
-              }
-
-              onClose();
-          }
-
-        const preventScroll = () => {
-            if (textarea) {
-                textarea.scrollTop = 0;
-                textarea.scrollLeft = 0;
-            }
-        };
-
-        const preventScrollWithEvent = (e: Event) => {
-            e.preventDefault();
-            e.stopPropagation();
-            preventScroll();
-        };
-
-        const handleInput = (e: Event) => {
-            const target = e.target as HTMLTextAreaElement;
-            const scrollTop = target.scrollTop;
-            const scrollLeft = target.scrollLeft;
-            
-            if (scrollTop !== 0 || scrollLeft !== 0) {
-                target.scrollTop = 0;
-                target.scrollLeft = 0;
-            }
-            
-            preventScroll();
-            setTimeout(preventScroll, 0);
-            requestAnimationFrame(preventScroll);
-        };
-
-        const handleBeforeInput = () => {
-            preventScroll();
-        };
-
-        const handleSelectionChange = () => {
-            preventScroll();
-        };
-
-        // Continuously prevent any scroll
-        const scrollInterval = setInterval(preventScroll, 0);
-
-        textarea?.addEventListener('keydown', handleKeyDown);
-        textarea?.addEventListener('scroll', preventScrollWithEvent, { passive: false });
-        textarea?.addEventListener('input', handleInput as any);
-        textarea?.addEventListener('beforeinput', handleBeforeInput);
-        textarea?.addEventListener('keypress', preventScroll as any);
-        textarea?.addEventListener('keyup', preventScroll as any);
-        document.addEventListener('selectionchange', handleSelectionChange);
-        document.addEventListener('click', handleClickOutside, true);
-        
-        return () => {
-            clearInterval(scrollInterval);
-            document.removeEventListener('click', handleClickOutside, true);
-            document.removeEventListener('selectionchange', handleSelectionChange);
-            textarea?.removeEventListener('keydown', handleKeyDown);
-            textarea?.removeEventListener('scroll', preventScrollWithEvent);
-            textarea?.removeEventListener('input', handleInput as any);
-            textarea?.removeEventListener('beforeinput', handleBeforeInput);
-            textarea?.removeEventListener('keypress', preventScroll as any);
-            textarea?.removeEventListener('keyup', preventScroll as any);
-        }
-        
-      }, [isEditing, onClose]); 
-
-      useEffect(() => {
-        if (!divRef.current || !isEditing || !textNode) return;
-        const div = divRef.current;
-        // make the correct width and height
-        const textPosition = textNode.position();
-    
-        const areaPosition = {
-          x: textPosition.x,
-          y: textPosition.y,
-        };
-
-
-        const textareaWidth =  width;
-        const textareaHeight = height;
-        div.style.top = `${areaPosition.y}px`;
-        div.style.left = `${areaPosition.x}px`;
-        div.style.width = `${textareaWidth}px`;
-        div.style.height = `${textareaHeight}px`;
-        div.style.position = 'absolute';
-        div.style.overflow = 'hidden';
-        div.style.overscrollBehavior = 'none';
-        (div.style as any).overflowAnchor = 'none';
-
-        const rotation = textNode.rotation();
-        let transform = '';
-        if (rotation) {
-          transform += `rotateZ(${rotation}deg)`;
-        }
-        div.style.transform = transform;
-        div.style.transformOrigin = 'top left';
-      }, [isEditing, textNode, width, height]);
-
-      const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        // Store cursor position before change
-        const selectionStart = e.target.selectionStart;
-        const selectionEnd = e.target.selectionEnd;
-        
-        // Force scroll to top before and after
-        e.target.scrollTop = 0;
-        e.target.scrollLeft = 0;
-        
-        onChange(applyTextTransform(e.target.value, textTransform));
-        
-        // Restore cursor position and force scroll to top again
-        setTimeout(() => {
-            e.target.selectionStart = selectionStart;
-            e.target.selectionEnd = selectionEnd;
-            e.target.scrollTop = 0;
-            e.target.scrollLeft = 0;
-        }, 0);
-      }, [onChange, textTransform]);
-
-      const backgroundEnabled = textNode?.getAttr?.('backgroundEnabled') ?? false;
-      const backgroundColor = textNode?.getAttr?.('backgroundColor') ?? '#000000';
-      const backgroundOpacity = textNode?.getAttr?.('backgroundOpacity') ?? 100;
-      const backgroundCornerRadius = textNode?.getAttr?.('backgroundCornerRadius') ?? 0;
-
-      return (
-        <Html>
-        <div ref={divRef}
-            onClick={e => e.stopPropagation()}
-            style={{
-                position: 'absolute',
-                display: isEditing ? 'flex' : 'none',
-                backgroundColor: backgroundEnabled ? backgroundColor : 'transparent',
-                opacity: backgroundEnabled ? backgroundOpacity / 100 : 1,
-                borderRadius: backgroundEnabled ? `${backgroundCornerRadius}px` : '0px',
-            }}
-            >
-          <textarea
-            onBlur={() => onChange(applyTextTransform(textareaRef.current?.value ?? '', textTransform))}
-            onChange={handleTextareaChange}
-            ref={textareaRef}
-          />
-          </div>
-        </Html>
-      );
-};
-
-const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: number}> = ({ clipId, rectWidth, rectHeight}) => {
+const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[]}> = ({ clipId, rectWidth, rectHeight, applicators}) => {
     const textRef = useRef<Konva.Text>(null);
+    const backgroundRef = useRef<Konva.Rect>(null);
     const transformerRef = useRef<Konva.Transformer>(null);
     const suppressUntilRef = useRef<number>(0);
     const tool = useViewportStore((s) => s.tool);
     const scale = useViewportStore((s) => s.scale);
     const position = useViewportStore((s) => s.position);
     const setClipTransform = useClipStore((s) => s.setClipTransform);
-    const updateClip = useClipStore((s) => s.updateClip);
     const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
     const clip = useClipStore((s) => s.getClipById(clipId)) as TextClipProps;
     const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
@@ -316,6 +49,17 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
 
     const [isEditing, setIsEditing] = useState(false);
+    const [caretVisible, setCaretVisible] = useState(true);
+    const [caretPosition, setCaretPosition] = useState<number>(0); // Character index for caret position
+    const [selectionStart, setSelectionStart] = useState<number | null>(null);
+    const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
+    const [isDragging, setIsDragging] = useState(false);
+    const mouseDownPositionRef = useRef<{ x: number; y: number } | null>(null);
+    const lastClickTimeRef = useRef<number>(0);
+    const lastClickPositionRef = useRef<{ x: number; y: number } | null>(null);
+    const clickCountRef = useRef<number>(0);
+    const clickResetTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
 
     const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const [temporaryText, setTemporaryText] = useState<string | null>(clip?.text ?? null);
@@ -338,8 +82,6 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
     const [isInteracting, setIsInteracting] = useState(false);
     const [isRotating, setIsRotating] = useState(false);
     const [isTransforming, setIsTransforming] = useState(false);
-
-    
 
     const textTransform = clip?.textTransform ?? 'none';
 
@@ -578,34 +320,928 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
         setGuides({ vCenter: false, hCenter: false, v25: false, v75: false, h25: false, h75: false, left: false, right: false, top: false, bottom: false });
     }, [setClipTransform, clipId]);
 
-    const handleClick = useCallback(() => {
-        if (isFullscreen) return;
+    // Helper function to get accurate character positions using DOM Range API
+    const getDisplayedChars = useCallback((text: string, fontStyleStr: string, maxWidth: number, alignment: string, textDec: string, fontStyleProp: string) => {
+        // Use main document instead of iframe to access loaded fonts
+        const container = document.createElement('div');
+        container.style.font = fontStyleStr;
+        container.style.width = `${maxWidth}px`;
+        container.style.wordWrap = 'break-word';
+        container.style.whiteSpace = 'pre-wrap';
+        container.style.lineHeight = String(textRef.current?.lineHeight() || 1);
+        container.style.textAlign = alignment;
+        container.style.textDecoration = textDec;
+        container.style.fontStyle = fontStyleProp;
+        container.style.position = 'absolute';
+        container.style.left = '-9999px';
+        container.style.top = '-9999px';
+        container.style.visibility = 'hidden';
+        container.textContent = text;
+        document.body.prepend(container);
+        
+        const range = document.createRange();
+        
+        // Get the full text BBox
+        range.selectNode(container);
+        const mainBBox = range.getBoundingClientRect();
+        
+        const chars: Array<{ char: string; rect: DOMRect }> = [];
+        const textNode = container.firstChild as Text;
+        
+        if (textNode) {
+            text.split('').forEach((char, index) => {
+                range.setStart(textNode, index);
+                range.setEnd(textNode, index + 1);
+                const nodeBBox = range.getBoundingClientRect();
+                
+                // Get relative position
+                const x = nodeBBox.left - mainBBox.left;
+                const y = nodeBBox.top - mainBBox.top;
+                const rect = new DOMRect(x, y, nodeBBox.width, nodeBBox.height);
+                
+                chars.push({ char, rect });
+            });
+        }
+        
+        container.remove();
+        
+        return chars.filter((char) => char.rect.height > 0);
+    }, []);
+
+    // Build a map of all character bounding boxes for debugging and interaction
+    const characterBoundingBoxes = useMemo(() => {
+        const node = textRef.current;
+        if (!node) return [];
+        
+        const displayedText = applyTextTransform(temporaryText ?? text, textTransform);
+        if (!displayedText) return [];
+        
+        const nodeX = clipTransform?.x ?? offsetX;
+        const nodeY = clipTransform?.y ?? offsetY;
+        const nodeWidth = clipTransform?.width ?? defaultWidth;
+        const nodeHeight = clipTransform?.height ?? defaultHeight;
+        
+        const fontStyleString = `${fontWeight >= 700 ? 'bold' : 'normal'} ${fontSize}px ${fontFamily}`;
+        
+        // Get accurate character positions using DOM
+        const chars = getDisplayedChars(displayedText, fontStyleString, nodeWidth, textAlign, textDecoration, fontStyle);
+        
+        if (chars.length === 0) return [];
+        
+        // Calculate text block position to match Konva's rendering
+        // Konva applies vertical alignment, so we need to match it exactly
+        const totalTextHeight = Math.max(...chars.map(c => c.rect.bottom));
+        
+        let textBlockStartY = nodeY;
+        if (verticalAlign === 'middle') {
+            textBlockStartY = nodeY + (nodeHeight - totalTextHeight) / 2;
+        } else if (verticalAlign === 'bottom') {
+            textBlockStartY = nodeY + nodeHeight - totalTextHeight;
+        }
+        
+        const boxes: Array<{ index: number; x: number; y: number; width: number; height: number; char: string }> = [];
+        
+        chars.forEach((charData, index) => {
+            const { char, rect } = charData;
+            
+            // Add node offset and vertical alignment offset
+            boxes.push({
+                index: index,
+                x: nodeX + rect.left,
+                y: textBlockStartY + rect.top,
+                width: rect.width,
+                height: rect.height,
+                char: char === '\n' ? '\\n' : char
+            });
+        });
+        
+        
+        return boxes;
+    }, [isEditing, temporaryText, text, textTransform, fontSize, fontFamily, fontWeight, fontStyle, textDecoration, textAlign, verticalAlign, clipTransform, offsetX, offsetY, defaultWidth, defaultHeight, getDisplayedChars]);
+
+    // Handle keyboard input
+    const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+        const currentText = temporaryText ?? text ?? '';
+        const hasSelection = selectionStart !== null && selectionEnd !== null && selectionStart !== selectionEnd;
+        
+        // Handle Select All (Ctrl/Cmd + A)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+            e.preventDefault();
+            setSelectionStart(0);
+            setSelectionEnd(currentText.length);
+            setCaretPosition(currentText.length);
+            return;
+        }
+        
+        // Handle Copy (Ctrl/Cmd + C)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+            e.preventDefault();
+            if (hasSelection) {
+                const start = Math.min(selectionStart!, selectionEnd!);
+                const end = Math.max(selectionStart!, selectionEnd!);
+                const selectedText = currentText.substring(start, end);
+                navigator.clipboard.writeText(selectedText);
+            }
+            return;
+        }
+        
+        // Handle Cut (Ctrl/Cmd + X)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'x') {
+            e.preventDefault();
+            if (hasSelection) {
+                const start = Math.min(selectionStart!, selectionEnd!);
+                const end = Math.max(selectionStart!, selectionEnd!);
+                const selectedText = currentText.substring(start, end);
+                
+                // Copy to clipboard
+                navigator.clipboard.writeText(selectedText);
+                
+                // Delete selection
+                const beforeSelection = currentText.substring(0, start);
+                const afterSelection = currentText.substring(end);
+                const updatedText = beforeSelection + afterSelection;
+                
+                setTemporaryText(updatedText);
+                const updateClipStore = useClipStore.getState().updateClip;
+                updateClipStore(clipId, { text: updatedText });
+                
+                setCaretPosition(start);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+                
+            }
+            return;
+        }
+        
+        // Handle Paste (Ctrl/Cmd + V)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+            e.preventDefault();
+            navigator.clipboard.readText().then((clipboardText) => {
+                if (!clipboardText) return;
+                
+                const ZERO_WIDTH_SPACE = '\u200B';
+                let updatedText: string;
+                let newCaretPosition: number;
+                
+                if (hasSelection) {
+                    // Replace selection with pasted text
+                    const start = Math.min(selectionStart!, selectionEnd!);
+                    const end = Math.max(selectionStart!, selectionEnd!);
+                    const beforeSelection = currentText.substring(0, start);
+                    const afterSelection = currentText.substring(end);
+                    updatedText = beforeSelection + clipboardText + afterSelection;
+                    newCaretPosition = start + clipboardText.length;
+                    
+                    setSelectionStart(null);
+                    setSelectionEnd(null);
+                } else {
+                    // Insert at caret
+                    const beforeCaret = currentText.substring(0, caretPosition);
+                    let afterCaret = currentText.substring(caretPosition);
+                    
+                    // Remove zero-width space if we're pasting right after it
+                    if (afterCaret.startsWith(ZERO_WIDTH_SPACE)) {
+                        afterCaret = afterCaret.substring(1);
+                    }
+                    
+                    updatedText = beforeCaret + clipboardText + afterCaret;
+                    newCaretPosition = caretPosition + clipboardText.length;
+                }
+                
+                setTemporaryText(updatedText);
+                const updateClipStore = useClipStore.getState().updateClip;
+                updateClipStore(clipId, { text: updatedText });
+                setCaretPosition(newCaretPosition);
+                
+            });
+            return;
+        }
+        
+        // Handle Escape - Exit editing mode
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            setIsEditing(false);
+            setSelectionStart(null);
+            setSelectionEnd(null);
+            if (textRef.current) {
+                textRef.current.getStage()!.container().style.cursor = 'default';
+            }
+            return;
+        }
+        
+        // Handle Home - Move to start of line
+        if (e.key === 'Home') {
+            e.preventDefault();
+            const beforeCaret = currentText.substring(0, caretPosition);
+            const lastNewlineIndex = beforeCaret.lastIndexOf('\n');
+            const lineStart = lastNewlineIndex + 1;
+            setCaretPosition(lineStart);
+            setSelectionStart(null);
+            setSelectionEnd(null);
+            return;
+        }
+        
+        // Handle End - Move to end of line
+        if (e.key === 'End') {
+            e.preventDefault();
+            const afterCaret = currentText.substring(caretPosition);
+            const nextNewlineIndex = afterCaret.indexOf('\n');
+            if (nextNewlineIndex >= 0) {
+                setCaretPosition(caretPosition + nextNewlineIndex);
+            } else {
+                setCaretPosition(currentText.length);
+            }
+            setSelectionStart(null);
+            setSelectionEnd(null);
+            return;
+        }
+        
+        // Handle Arrow Keys
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            if (hasSelection) {
+                // If there's a selection, move to start of selection
+                const start = Math.min(selectionStart!, selectionEnd!);
+                setCaretPosition(start);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+            } else if (caretPosition > 0) {
+                setCaretPosition(caretPosition - 1);
+            }
+            return;
+        }
+        
+        if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            if (hasSelection) {
+                // If there's a selection, move to end of selection
+                const end = Math.max(selectionStart!, selectionEnd!);
+                setCaretPosition(end);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+            } else if (caretPosition < currentText.length) {
+                setCaretPosition(caretPosition + 1);
+            }
+            return;
+        }
+        
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            
+            if (characterBoundingBoxes.length === 0) {
+                setCaretPosition(0);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+                return;
+            }
+            
+            // Find current character box to get current X position
+            const currentBox = characterBoundingBoxes[Math.min(caretPosition, characterBoundingBoxes.length - 1)];
+            if (!currentBox) {
+                setCaretPosition(0);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+                return;
+            }
+            
+            const currentX = currentBox.x;
+            const currentY = currentBox.y;
+            
+            // Find all boxes on the previous line (lower Y value)
+            const boxesAbove = characterBoundingBoxes.filter(box => box.y < currentY - 5);
+            
+            if (boxesAbove.length === 0) {
+                // No line above, move to start
+                setCaretPosition(0);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+                return;
+            }
+            
+            // Find the closest line above
+            const closestLineY = Math.max(...boxesAbove.map(box => box.y));
+            const boxesOnPreviousLine = boxesAbove.filter(box => Math.abs(box.y - closestLineY) < 5);
+            
+            // Find the box on that line closest to current X position
+            let closestBox = boxesOnPreviousLine[0];
+            let minDistance = Math.abs(closestBox.x - currentX);
+            
+            for (const box of boxesOnPreviousLine) {
+                const distance = Math.abs(box.x - currentX);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestBox = box;
+                }
+            }
+            
+            setCaretPosition(closestBox.index);
+            setSelectionStart(null);
+            setSelectionEnd(null);
+            return;
+        }
+        
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            
+            if (characterBoundingBoxes.length === 0) {
+                setCaretPosition(0);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+                return;
+            }
+            
+            // Find current character box to get current X position
+            const currentBox = characterBoundingBoxes[Math.min(caretPosition, characterBoundingBoxes.length - 1)];
+            if (!currentBox) {
+                setCaretPosition(currentText.length);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+                return;
+            }
+            
+            const currentX = currentBox.x;
+            const currentY = currentBox.y;
+            
+            // Find all boxes on the next line (higher Y value)
+            const boxesBelow = characterBoundingBoxes.filter(box => box.y > currentY + 5);
+            
+            if (boxesBelow.length === 0) {
+                // No line below, move to end
+                setCaretPosition(currentText.length);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+                return;
+            }
+            
+            // Find the closest line below
+            const closestLineY = Math.min(...boxesBelow.map(box => box.y));
+            const boxesOnNextLine = boxesBelow.filter(box => Math.abs(box.y - closestLineY) < 5);
+            
+            // Find the box on that line closest to current X position
+            let closestBox = boxesOnNextLine[0];
+            let minDistance = Math.abs(closestBox.x - currentX);
+            
+            for (const box of boxesOnNextLine) {
+                const distance = Math.abs(box.x - currentX);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestBox = box;
+                }
+            }
+            
+            // Check if we should position after this character or before
+            const charMidpoint = closestBox.x + closestBox.width / 2;
+            if (currentX > charMidpoint && closestBox.index < currentText.length) {
+                setCaretPosition(Math.min(closestBox.index + 1, currentText.length));
+            } else {
+                setCaretPosition(closestBox.index);
+            }
+            
+            setSelectionStart(null);
+            setSelectionEnd(null);
+            return;
+        }
+        
+        // Handle Delete key
+        if (e.key === 'Delete') {
+            e.preventDefault();
+            
+            // Case 1: Text is selected - delete the selection
+            if (hasSelection) {
+                const start = Math.min(selectionStart!, selectionEnd!);
+                const end = Math.max(selectionStart!, selectionEnd!);
+                
+                const beforeSelection = currentText.substring(0, start);
+                const afterSelection = currentText.substring(end);
+                const updatedText = beforeSelection + afterSelection;
+                
+                setTemporaryText(updatedText);
+                const updateClipStore = useClipStore.getState().updateClip;
+                updateClipStore(clipId, { text: updatedText });
+                
+                setCaretPosition(start);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+            }
+            // Case 2: No selection - delete character after caret
+            else if (caretPosition < currentText.length) {
+                const ZERO_WIDTH_SPACE = '\u200B';
+                const beforeCaret = currentText.substring(0, caretPosition);
+                let afterCaret = currentText.substring(caretPosition + 1);
+                
+                // Also remove zero-width space if it's after the deleted character
+                if (afterCaret.startsWith(ZERO_WIDTH_SPACE)) {
+                    afterCaret = afterCaret.substring(1);
+                }
+                
+                const updatedText = beforeCaret + afterCaret;
+                
+                setTemporaryText(updatedText);
+                const updateClipStore = useClipStore.getState().updateClip;
+                updateClipStore(clipId, { text: updatedText });
+                
+                // Caret stays in same position
+            }
+            return;
+        }
+        
+        // Handle Backspace
+        if (e.key === 'Backspace') {
+            e.preventDefault();
+            
+            // Case 1: Text is selected - delete the selection
+            if (hasSelection) {
+                const start = Math.min(selectionStart!, selectionEnd!);
+                const end = Math.max(selectionStart!, selectionEnd!);
+                
+                const beforeSelection = currentText.substring(0, start);
+                const afterSelection = currentText.substring(end);
+                const updatedText = beforeSelection + afterSelection;
+                
+                setTemporaryText(updatedText);
+                const updateClipStore = useClipStore.getState().updateClip;
+                updateClipStore(clipId, { text: updatedText });
+                
+                // Move caret to start of deleted selection
+                setCaretPosition(start);
+                setSelectionStart(null);
+                setSelectionEnd(null);
+                
+            }
+            // Case 2: No selection - delete character before caret
+            else if (caretPosition > 0) {
+                const ZERO_WIDTH_SPACE = '\u200B';
+                let beforeCaret = currentText.substring(0, caretPosition - 1);
+                let afterCaret = currentText.substring(caretPosition);
+                
+                // Also remove zero-width space after if it's there
+                if (afterCaret.startsWith(ZERO_WIDTH_SPACE)) {
+                    afterCaret = afterCaret.substring(1);
+                }
+                
+                const updatedText = beforeCaret + afterCaret;
+                
+                setTemporaryText(updatedText);
+                const updateClipStore = useClipStore.getState().updateClip;
+                updateClipStore(clipId, { text: updatedText });
+                
+                // Move caret back one position
+                setCaretPosition(caretPosition - 1);
+                
+            }
+            return;
+        }
+        // Check if this is a printable character
+        else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            
+            const newChar = e.key;
+            let updatedText: string;
+            let newCaretPosition: number;
+            const ZERO_WIDTH_SPACE = '\u200B';
+            
+            // If there's a selection, replace it with the new character
+            if (selectionStart !== null && selectionEnd !== null && selectionStart !== selectionEnd) {
+                const start = Math.min(selectionStart, selectionEnd);
+                const end = Math.max(selectionStart, selectionEnd);
+                
+                const beforeSelection = currentText.substring(0, start);
+                const afterSelection = currentText.substring(end);
+                updatedText = beforeSelection + newChar + afterSelection;
+                newCaretPosition = start + 1;
+                
+                // Clear selection
+                setSelectionStart(null);
+                setSelectionEnd(null);
+            } else {
+                // No selection - insert at caret
+                const beforeCaret = currentText.substring(0, caretPosition);
+                let afterCaret = currentText.substring(caretPosition);
+                
+                // Remove zero-width space if we're typing right after it
+                if (afterCaret.startsWith(ZERO_WIDTH_SPACE)) {
+                    afterCaret = afterCaret.substring(1);
+                }
+                
+                updatedText = beforeCaret + newChar + afterCaret;
+                newCaretPosition = caretPosition + 1;
+            }
+            
+            // Update the text
+            setTemporaryText(updatedText);
+            const updateClipStore = useClipStore.getState().updateClip;
+            updateClipStore(clipId, { text: updatedText });
+            
+            // Move caret forward
+            setCaretPosition(newCaretPosition);
+            
+        }
+        // Handle Enter key for newlines
+        else if (e.key === 'Enter') {
+            e.preventDefault();
+            
+            let updatedText: string;
+            let newCaretPosition: number;
+            const ZERO_WIDTH_SPACE = '\u200B'; // Invisible character for positioning
+            
+            // If there's a selection, replace it with newline
+            if (hasSelection) {
+                const start = Math.min(selectionStart!, selectionEnd!);
+                const end = Math.max(selectionStart!, selectionEnd!);
+                
+                const beforeSelection = currentText.substring(0, start);
+                const afterSelection = currentText.substring(end);
+                
+                // Add zero-width space after newline to help with positioning
+                updatedText = beforeSelection + '\n' + ZERO_WIDTH_SPACE + afterSelection;
+                newCaretPosition = start + 1;
+                
+                // Clear selection
+                setSelectionStart(null);
+                setSelectionEnd(null);
+            } else {
+                // No selection - insert at caret
+                const beforeCaret = currentText.substring(0, caretPosition);
+                const afterCaret = currentText.substring(caretPosition);
+                
+                // Add zero-width space after newline to help with positioning
+                updatedText = beforeCaret + '\n' + ZERO_WIDTH_SPACE + afterCaret;
+                newCaretPosition = caretPosition + 1;
+            }
+            
+            setTemporaryText(updatedText);
+            const updateClipStore = useClipStore.getState().updateClip;
+            updateClipStore(clipId, { text: updatedText });
+            
+            setCaretPosition(newCaretPosition);
+            
+            return;
+        }
+    }, [temporaryText, text, caretPosition, selectionStart, selectionEnd, clipId]);
+
+    // Helper function to find the nearest character index using bounding boxes
+    const getCharIndexAtPosition = useCallback((mouseX: number, mouseY: number): number => {
+        if (characterBoundingBoxes.length === 0) return 0;
+        
+        const displayedText = applyTextTransform(temporaryText ?? text, textTransform);
+        const maxIndex = displayedText.length;
+        
+        // First, check if we clicked directly inside any character box
+        for (const box of characterBoundingBoxes) {
+            if (mouseX >= box.x && mouseX <= box.x + box.width &&
+                mouseY >= box.y && mouseY <= box.y + box.height) {
+                // Clicked inside this character - determine if closer to start or end
+                const charMidpoint = box.x + box.width / 2;
+                if (mouseX < charMidpoint) {
+                    // Closer to start of character
+                    return box.index;
+                } else {
+                    // Closer to end of character
+                    return Math.min(box.index + 1, maxIndex);
+                }
+            }
+        }
+        
+        // Not inside any character - find the line that was clicked
+        // Group boxes by line (using Y coordinate with tolerance)
+        const lines: Array<{ y: number; height: number; boxes: typeof characterBoundingBoxes }> = [];
+        
+        for (const box of characterBoundingBoxes) {
+            // Find if this box belongs to an existing line (within 5px tolerance)
+            let foundLine = lines.find(line => Math.abs(line.y - box.y) < 5);
+            
+            if (foundLine) {
+                foundLine.boxes.push(box);
+            } else {
+                // Create a new line
+                lines.push({
+                    y: box.y,
+                    height: box.height,
+                    boxes: [box]
+                });
+            }
+        }
+        
+        // Sort lines by Y position
+        lines.sort((a, b) => a.y - b.y);
+        
+        // Sort boxes within each line by their index (not X position) to maintain correct order
+        for (const line of lines) {
+            line.boxes.sort((a, b) => a.index - b.index);
+        }
+        
+        // Find the line that contains the click Y position
+        let targetLine = lines.find(line => {
+            const lineTop = line.y;
+            const lineBottom = line.y + line.height;
+            return mouseY >= lineTop && mouseY <= lineBottom;
+        });
+        
+        // If click is not within any line bounds, find the closest line
+        if (!targetLine) {
+            let minYDistance = Infinity;
+            
+            for (const line of lines) {
+                const lineCenterY = line.y + line.height / 2;
+                const distance = Math.abs(lineCenterY - mouseY);
+                
+                if (distance < minYDistance) {
+                    minYDistance = distance;
+                    targetLine = line;
+                }
+            }
+        }
+        
+        // Get all boxes on the clicked line
+        const boxesOnLine = targetLine?.boxes || [];
+        if (boxesOnLine.length === 0) {
+            return 0;
+        }
+        
+        // Find the visual start and end of the line (leftmost and rightmost X positions)
+        // But exclude newline characters from visual bounds
+        const visualBoxes = boxesOnLine.filter(box => box.char !== '\\n');
+        const allBoxes = boxesOnLine;
+        
+        if (visualBoxes.length === 0) {
+            // Only newline on this line
+            return allBoxes[0].index;
+        }
+        
+        // Find leftmost and rightmost visual characters
+        let leftmostBox = visualBoxes[0];
+        let rightmostBox = visualBoxes[0];
+        
+        for (const box of visualBoxes) {
+            if (box.x < leftmostBox.x) {
+                leftmostBox = box;
+            }
+            if (box.x + box.width > rightmostBox.x + rightmostBox.width) {
+                rightmostBox = box;
+            }
+        }
+        
+        
+        // If clicked before the visual start of the line, position at start
+        if (mouseX < leftmostBox.x) {
+            return leftmostBox.index;
+        }
+        
+        // If clicked after the visual end of the line, position after the rightmost character
+        // (which means before any newline if present)
+        if (mouseX > rightmostBox.x + rightmostBox.width) {
+            const endIndex = Math.min(rightmostBox.index + 1, maxIndex);
+            return endIndex;
+        }
+        
+        // Otherwise, find the closest character on this line (excluding newlines)
+        let closestBox = visualBoxes[0];
+        let minDistance = Math.abs((closestBox.x + closestBox.width / 2) - mouseX);
+        
+        for (const box of visualBoxes) {
+            const centerX = box.x + box.width / 2;
+            const distance = Math.abs(centerX - mouseX);
+            
+            if (distance < minDistance) {
+                minDistance = distance;
+                closestBox = box;
+            }
+        }
+        
+        // Determine if caret should be before or after this character
+        const charMidpoint = closestBox.x + closestBox.width / 2;
+        if (mouseX < charMidpoint) {
+            return closestBox.index;
+        } else {
+            const endIndex = Math.min(closestBox.index + 1, maxIndex);
+            return endIndex;
+        }
+    }, [characterBoundingBoxes, temporaryText, text, textTransform]);
+
+    const handleMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+        if (isFullscreen) {
+            if (!isEditing) {
         clearSelection();
         addClipSelection(clipId);
-    }, [addClipSelection, clipId, isFullscreen]);
+            }
+            return;
+        }
+        
+        if (!isEditing) {
+            clearSelection();
+            addClipSelection(clipId);
+            return;
+        }
+        
+        const stage = e.target.getStage();
+        if (stage) {
+            const pointerPosition = stage.getPointerPosition();
+            if (pointerPosition) {
+                // Store mouse down position for drag detection
+                mouseDownPositionRef.current = { x: pointerPosition.x, y: pointerPosition.y };
+                
+                const group = groupRef.current;
+                if (group) {
+                    const transform = group.getAbsoluteTransform().copy();
+                    transform.invert();
+                    const localPos = transform.point(pointerPosition);
+                    
+                    const charIndex = getCharIndexAtPosition(localPos.x, localPos.y);
+                    
+                    // Start potential drag
+                    setIsDragging(true);
+                    setSelectionStart(charIndex);
+                    setSelectionEnd(charIndex);
+                    setCaretPosition(charIndex);
+                    
+                    // Refocus input to ensure it captures keyboard events
+                    setTimeout(() => {
+                        inputRef.current?.focus();
+                    }, 0);
+                }
+            }
+        }
+    }, [isFullscreen, isEditing, getCharIndexAtPosition, clearSelection, addClipSelection, clipId]);
+
+    const handleMouseMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+        if (!isDragging || !isEditing) return;
+        
+        const stage = e.target.getStage();
+        if (stage) {
+            const pointerPosition = stage.getPointerPosition();
+            if (pointerPosition) {
+                const group = groupRef.current;
+                if (group) {
+                    const transform = group.getAbsoluteTransform().copy();
+                    transform.invert();
+                    const localPos = transform.point(pointerPosition);
+                    
+                    const charIndex = getCharIndexAtPosition(localPos.x, localPos.y);
+                    setSelectionEnd(charIndex);
+                    setCaretPosition(charIndex);
+                }
+            }
+        }
+    }, [isDragging, isEditing, getCharIndexAtPosition]);
+
+    const handleMouseUp = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+        if (!isDragging) return;
+        
+        setIsDragging(false);
+        
+        // Check if we actually dragged or just clicked
+        const stage = e.target.getStage();
+        if (stage && mouseDownPositionRef.current) {
+            const pointerPosition = stage.getPointerPosition();
+            if (pointerPosition) {
+                const dx = Math.abs(pointerPosition.x - mouseDownPositionRef.current.x);
+                const dy = Math.abs(pointerPosition.y - mouseDownPositionRef.current.y);
+                const didActuallyDrag = dx > 3 || dy > 3; // More than 3 pixels is considered a drag
+                
+                // If didn't drag (just clicked), clear selection
+                if (!didActuallyDrag) {
+                    setSelectionStart(null);
+                    setSelectionEnd(null);
+                }
+                // Otherwise, if we dragged but start === end, also clear
+                else if (selectionStart === selectionEnd) {
+                    setSelectionStart(null);
+                    setSelectionEnd(null);
+                }
+                // Otherwise keep the selection visible
+            }
+        }
+        
+        mouseDownPositionRef.current = null;
+    }, [isDragging, selectionStart, selectionEnd]);
+
+    // Helper to find word boundaries at a given position
+    const getWordBoundaries = useCallback((position: number, textContent: string) => {
+        if (!textContent) return { start: 0, end: 0 };
+        
+        let start = position;
+        let end = position;
+        
+        // Find start of word (move back until we hit whitespace or start)
+        while (start > 0 && !/\s/.test(textContent[start - 1])) {
+            start--;
+        }
+        
+        // Find end of word (move forward until we hit whitespace or end)
+        while (end < textContent.length && !/\s/.test(textContent[end])) {
+            end++;
+        }
+        
+        return { start, end };
+    }, []);
+
+    // onClick is now handled by mousedown/mouseup
+    // Keep this minimal handler for compatibility
+    const handleClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+        const currentTime = Date.now();
+        const stage = e.target.getStage();
+        if (stage) {
+            const pointerPosition = stage.getPointerPosition();
+            if (pointerPosition) {
+                const timeSinceLastClick = currentTime - lastClickTimeRef.current;
+                
+                // Check if position is close
+                let isPositionClose = false;
+                if (lastClickPositionRef.current) {
+                    const dx = Math.abs(pointerPosition.x - lastClickPositionRef.current.x);
+                    const dy = Math.abs(pointerPosition.y - lastClickPositionRef.current.y);
+                    isPositionClose = dx < 10 && dy < 10;
+                }
+                
+                // Update click count
+                if (timeSinceLastClick < 500 && isPositionClose) {
+                    clickCountRef.current++;
+                } else {
+                    clickCountRef.current = 1;
+                }
+                
+                // Reset click count after delay
+                if (clickResetTimerRef.current) {
+                    clearTimeout(clickResetTimerRef.current);
+                }
+                clickResetTimerRef.current = setTimeout(() => {
+                    clickCountRef.current = 0;
+                }, 600);
+                
+                lastClickTimeRef.current = currentTime;
+                lastClickPositionRef.current = { x: pointerPosition.x, y: pointerPosition.y };
+                
+            }
+        }
+    }, []);
 
     const handleDblClick = useCallback(() => {
         if (tool !== 'pointer' || isFullscreen) return;
+        
+        // If not already editing, enter editing mode and set caret to end
+        if (!isEditing) {
         setIsEditing(true);
-    }, [tool, isFullscreen]);
-
-
-    const handleTextEditChange = useCallback((text: string) => {
-        setTemporaryText(text);
-        updateClip(clipId, { text: text });
-    }, [clipId, updateClip]);
-
+            const displayedText = applyTextTransform(temporaryText ?? text, textTransform);
+            setCaretPosition(displayedText.length);
+            // Clear any selection
+            setSelectionStart(null);
+            setSelectionEnd(null);
+        } else {
+            // Already in editing mode - handle multi-click selection
+            const currentText = temporaryText ?? text ?? '';
+            
+            if (clickCountRef.current === 2) {
+                // Double-click: select word at caret
+                const { start, end } = getWordBoundaries(caretPosition, currentText);
+                setSelectionStart(start);
+                setSelectionEnd(end);
+                setCaretPosition(end);
+            } else if (clickCountRef.current >= 3) {
+                // Triple-click: select all
+                setSelectionStart(0);
+                setSelectionEnd(currentText.length);
+                setCaretPosition(currentText.length);
+            }
+        }
+        
+        // set the cursor to text
+        if (textRef.current) {
+            textRef.current.getStage()!.container().style.cursor = 'text';
+        }
+    }, [tool, isFullscreen, isEditing, temporaryText, text, textTransform, caretPosition, getWordBoundaries]);
 
     useEffect(() => {
         return () => {
             if (debounceTimeoutRef.current) {
                 clearTimeout(debounceTimeoutRef.current);
             }
+            if (clickResetTimerRef.current) {
+                clearTimeout(clickResetTimerRef.current);
+            }
         };
     }, []);
-    
 
-   
+
+    useEffect(() => {
+        if (textRef.current) {
+            textRef.current.cache({
+                pixelRatio: 2,
+            })
+            //@ts-ignore
+            textRef.current.getLayer()?.batchDraw?.();
+        }
+    }, [textRef.current, applicators]);
+
+    useEffect(() => {
+        if (backgroundRef.current) {
+            backgroundRef.current.cache({
+                pixelRatio: 2,
+            })
+            //@ts-ignore
+            backgroundRef.current.getLayer()?.batchDraw?.();
+        }
+    }, [backgroundRef.current, applicators]);
+    
     useEffect(() => {
         const transformer = transformerRef.current;
         if (!transformer) return;
@@ -695,7 +1331,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
     useEffect(() => {
         const handleWindowClick = (e: MouseEvent) => {
             if (!isSelected) return;
-            if (isEditing) return; // Don't deselect while editing
+            
             const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
             if (now < suppressUntilRef.current) return;
             const stage = textRef.current?.getStage();
@@ -710,6 +1346,11 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
             const insideText = pointerX >= textRect.x && pointerX <= textRect.x + textRect.width && pointerY >= textRect.y && pointerY <= textRect.y + textRect.height;
             if (!insideText) {
                 removeClipSelection(clipId);
+                setIsEditing(false);
+                // set the cursor to default
+                if (textRef.current) {
+                    textRef.current.getStage()!.container().style.cursor = 'default';
+                }
             }
         };
         window.addEventListener('click', handleWindowClick);
@@ -720,9 +1361,260 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
 
     useEffect(() => {
         if (!isEditing) {
+            // Clean up zero-width spaces when exiting edit mode
+            const ZERO_WIDTH_SPACE = '\u200B';
+            const currentText = temporaryText ?? clip?.text ?? '';
+            if (currentText.includes(ZERO_WIDTH_SPACE)) {
+                const cleanedText = currentText.replace(new RegExp(ZERO_WIDTH_SPACE, 'g'), '');
+                setTemporaryText(cleanedText);
+                const updateClipStore = useClipStore.getState().updateClip;
+                updateClipStore(clipId, { text: cleanedText });
+            } else {
             setTemporaryText(clip?.text ?? '');
         }
-    }, [isEditing, clip?.text]);
+            setSelectionStart(null);
+            setSelectionEnd(null);
+        } else {
+            // Focus the input when entering edit mode
+            setTimeout(() => {
+                inputRef.current?.focus();
+            }, 0);
+        }
+    }, [isEditing, clip?.text, temporaryText, clipId]);
+
+    // Exit editing mode if node is deselected
+    useEffect(() => {
+        if (isEditing && !isSelected) {
+            setIsEditing(false);
+            setSelectionStart(null);
+            setSelectionEnd(null);
+        }
+    }, [isEditing, isSelected]);
+
+    // Ensure input stays focused after text updates
+    useEffect(() => {
+        if (isEditing && inputRef.current && document.activeElement !== inputRef.current) {
+            inputRef.current.focus();
+        }
+    }, [isEditing, temporaryText, caretPosition]);
+
+    // Auto-expand node height when text exceeds bounds
+    useEffect(() => {
+        if (!isEditing) return;
+        
+        const node = textRef.current;
+        if (!node || characterBoundingBoxes.length === 0) return;
+        
+        const nodeHeight = clipTransform?.height ?? defaultHeight;
+        
+        // Calculate total text height from character boxes
+        const maxY = Math.max(...characterBoundingBoxes.map(box => box.y + box.height));
+        const minY = Math.min(...characterBoundingBoxes.map(box => box.y));
+        const totalTextHeight = maxY - minY;
+        
+        // Add some padding
+        const requiredHeight = totalTextHeight + 20;
+        
+        // If text exceeds current height, expand the node
+        if (requiredHeight > nodeHeight) {
+            const newHeight = Math.ceil(requiredHeight);
+            setClipTransform(clipId, { height: newHeight });
+        }
+    }, [isEditing, characterBoundingBoxes, clipTransform, defaultHeight, setClipTransform, clipId]);
+
+    // Listen for global mouse up to end dragging
+    useEffect(() => {
+        const handleGlobalMouseUp = (e: MouseEvent) => {
+            if (isDragging) {
+                // Create a fake Konva event for the handler
+                const stage = textRef.current?.getStage();
+                if (stage) {
+                    const fakeEvent = {
+                        target: textRef.current,
+                    } as any;
+                    handleMouseUp(fakeEvent);
+                }
+            }
+        };
+        
+        window.addEventListener('mouseup', handleGlobalMouseUp);
+        return () => {
+            window.removeEventListener('mouseup', handleGlobalMouseUp);
+        };
+    }, [isDragging, handleMouseUp]);
+
+    // Blinking caret animation
+    useEffect(() => {
+        if (!isEditing) {
+            setCaretVisible(true);
+            return;
+        }
+        
+        // Reset to visible when caret position changes
+        setCaretVisible(true);
+        
+        const interval = setInterval(() => {
+            setCaretVisible(prev => !prev);
+        }, 530);
+        
+        return () => clearInterval(interval);
+    }, [isEditing, caretPosition]);
+
+    // Calculate merged selection rectangles (one per line to eliminate gaps)
+    const selectedCharacterBoxes = useMemo(() => {
+        if (selectionStart === null || selectionEnd === null || selectionStart === selectionEnd) {
+            return [];
+        }
+        
+        const start = Math.min(selectionStart, selectionEnd);
+        const end = Math.max(selectionStart, selectionEnd);
+        
+        const selectedBoxes = characterBoundingBoxes.filter(box => box.index >= start && box.index < end);
+        
+        // Group boxes by line (Y coordinate)
+        const lineGroups = new Map<number, typeof selectedBoxes>();
+        for (const box of selectedBoxes) {
+            const lineY = Math.round(box.y);
+            if (!lineGroups.has(lineY)) {
+                lineGroups.set(lineY, []);
+            }
+            lineGroups.get(lineY)!.push(box);
+        }
+        
+        // Create merged rectangles for each line
+        const mergedBoxes: Array<{ index: number; x: number; y: number; width: number; height: number; char: string }> = [];
+        
+        for (const boxes of lineGroups.values()) {
+            if (boxes.length === 0) continue;
+            
+            // Find leftmost and rightmost boxes on this line
+            const leftmost = boxes.reduce((min, box) => box.x < min.x ? box : min, boxes[0]);
+            const rightmost = boxes.reduce((max, box) => (box.x + box.width) > (max.x + max.width) ? box : max, boxes[0]);
+            
+            // Create a merged rectangle spanning from leftmost to rightmost
+            mergedBoxes.push({
+                index: leftmost.index,
+                x: leftmost.x,
+                y: leftmost.y,
+                width: (rightmost.x + rightmost.width) - leftmost.x,
+                height: leftmost.height,
+                char: ''
+            });
+        }
+        
+        return mergedBoxes;
+    }, [selectionStart, selectionEnd, characterBoundingBoxes]);
+
+    // Calculate visual caret position based on character index using bounding boxes
+    const caretVisualPosition = useMemo(() => {
+        if (!textRef.current || !isEditing) return null;
+        
+        const displayedText = applyTextTransform(temporaryText ?? text, textTransform);
+        const nodeX = clipTransform?.x ?? offsetX;
+        const nodeY = clipTransform?.y ?? offsetY;
+        const nodeWidth = clipTransform?.width ?? defaultWidth;
+        const nodeHeight = clipTransform?.height ?? defaultHeight;
+        const node = textRef.current;
+        const lineHeight = fontSize * (node.lineHeight() || 1);
+        
+        
+        // Helper to calculate vertically aligned Y position
+        const getAlignedY = (contentHeight: number = lineHeight) => {
+            if (verticalAlign === 'middle') {
+                return nodeY + (nodeHeight - contentHeight) / 2;
+            } else if (verticalAlign === 'bottom') {
+                return nodeY + nodeHeight - contentHeight;
+            }
+            return nodeY;
+        };
+        
+        if (!displayedText) {
+            // Empty text - show caret at start position based on alignment
+            let caretX = nodeX;
+            if (textAlign === 'center') {
+                caretX = nodeX + nodeWidth / 2;
+            } else if (textAlign === 'right') {
+                caretX = nodeX + nodeWidth;
+            }
+            return { x: caretX, y: getAlignedY(), height: fontSize };
+        }
+        
+        // Clamp caret position to valid range
+        const clampedCaretPosition = Math.max(0, Math.min(caretPosition, displayedText.length));
+        
+        if (characterBoundingBoxes.length === 0) {
+            // No boxes yet - show caret at start
+            let caretX = nodeX;
+            if (textAlign === 'center') {
+                caretX = nodeX + nodeWidth / 2;
+            } else if (textAlign === 'right') {
+                caretX = nodeX + nodeWidth;
+            }
+            return { x: caretX, y: getAlignedY(), height: fontSize };
+        }
+        
+        // If caret is at position 0, place it at the start of the first character (or at text start if no characters)
+        if (clampedCaretPosition === 0) {
+            if (characterBoundingBoxes.length > 0) {
+                const firstBox = characterBoundingBoxes[0];
+                return { x: firstBox.x, y: firstBox.y, height: firstBox.height };
+            }
+            let caretX = nodeX;
+            if (textAlign === 'center') {
+                caretX = nodeX + nodeWidth / 2;
+            } else if (textAlign === 'right') {
+                caretX = nodeX + nodeWidth;
+            }
+            return { x: caretX, y: getAlignedY(), height: fontSize };
+        }
+        
+        // For any other position, use the character boxes directly since they have correct positions
+        
+        // If caret is at the end of text, place it after the last character
+        if (clampedCaretPosition >= characterBoundingBoxes.length) {
+            const lastBox = characterBoundingBoxes[characterBoundingBoxes.length - 1];
+            return { x: lastBox.x + lastBox.width, y: lastBox.y, height: lastBox.height };
+        }
+        
+        // Find the character box at the caret position
+        // The caret should appear before the character at caretPosition
+        const charBox = characterBoundingBoxes[clampedCaretPosition];
+        
+        if (charBox) {
+            // Place caret at the left edge of this character
+            return { x: charBox.x, y: charBox.y, height: charBox.height };
+        }
+        
+        // Fallback: place at the end of the previous character
+        const prevBox = characterBoundingBoxes[clampedCaretPosition - 1];
+        if (prevBox) {
+            return { x: prevBox.x + prevBox.width, y: prevBox.y, height: prevBox.height };
+        }
+        
+        // Final fallback
+        let caretX = nodeX;
+        if (textAlign === 'center') {
+            caretX = nodeX + nodeWidth / 2;
+        } else if (textAlign === 'right') {
+            caretX = nodeX + nodeWidth;
+        }
+        return { x: caretX, y: getAlignedY(), height: fontSize };
+    }, [isEditing, caretPosition, characterBoundingBoxes, clipTransform, offsetX, offsetY, temporaryText, text, textTransform, fontSize, textAlign, defaultWidth, verticalAlign, defaultHeight]);
+
+    const handleMouseOver = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+        if (!textRef.current) return;
+        if (isEditing) {
+            textRef.current.getStage()!.container().style.cursor = 'text';
+        } else {
+            textRef.current.getStage()!.container().style.cursor = 'default';
+        }
+        
+    }, [isEditing]);
+
+    const handleMouseOut = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+        if (!textRef.current) return;
+        textRef.current.getStage()!.container().style.cursor = 'default';
+    }, []);
 
   return (
     <React.Fragment>
@@ -732,7 +1624,11 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}
           width={clipTransform?.width ?? defaultWidth}
+          applicators={applicators}
+          //@ts-ignore
+          filters={[Konva.Filters.Applicator]}
           height={clipTransform?.height ?? defaultHeight}
+          ref={backgroundRef}
           fill={backgroundColor}
           opacity={((backgroundOpacity ?? 100) / 100) * ((clipTransform?.opacity ?? 100) / 100)}
           cornerRadius={backgroundCornerRadius}
@@ -740,6 +1636,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
           listening={false}
         />
       )}
+      
       <Text 
       draggable={tool === 'pointer' && !isTransforming && !isEditing} 
       ref={textRef}
@@ -761,7 +1658,6 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
       shadowEnabled={shadowEnabled}
       align={textAlign}
       verticalAlign={verticalAlign}
-      visible={!isEditing}
       opacity={(clipTransform?.opacity ?? 100) / 100}
       backgroundEnabled={backgroundEnabled}
       backgroundColor={backgroundColor}
@@ -779,6 +1675,14 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
        onDragEnd={handleDragEnd} 
        onClick={handleClick} 
        onDblClick={handleDblClick}
+       onMouseDown={handleMouseDown}
+       onMouseMove={handleMouseMove}
+       onMouseUp={handleMouseUp}
+       applicators={applicators}
+       onMouseOver={handleMouseOver}
+       onMouseOut={handleMouseOut}
+       //@ts-ignore
+       filters={[Konva.Filters.Applicator]}
        onTransform={(e) => {
          const node = e.target as Konva.Text;
          const newWidth = node.width() * node.scaleX();
@@ -791,15 +1695,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
          });
        }}
        />
-       <TextEditor 
-            onClose={() => setIsEditing(false)} 
-            onChange={handleTextEditChange} 
-            textNode={textRef.current}
-            textTransform={textTransform}
-            isEditing={isEditing}
-            width={clipTransform?.width ?? defaultWidth}
-            height={clipTransform?.height ?? defaultHeight}
-       />
+
       {tool === 'pointer' && isSelected && isInteracting && !isRotating && !isEditing && !isFullscreen && (
         <React.Fragment>
           {guides.vCenter && <Line listening={false} points={[rectWidth/2, 0, rectWidth/2, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
@@ -815,6 +1711,83 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
         </React.Fragment>
       )}
     </Group>
+    
+    {/* Editing UI - wrapped in Group with same rotation as text */}
+    <Group
+      x={clipTransform?.x ?? offsetX}
+      y={clipTransform?.y ?? offsetY}
+      rotation={clipTransform?.rotation ?? 0}
+      listening={false}
+    >
+      {/* Text selection highlight - with rotation */}
+      {isEditing && selectedCharacterBoxes.map((box) => {
+        const textX = clipTransform?.x ?? offsetX;
+        const textY = clipTransform?.y ?? offsetY;
+        return (
+          <Rect
+            key={`highlight-${box.index}`}
+            x={box.x - textX}
+            y={box.y - textY}
+            width={box.width}
+            height={box.height}
+            fill="#ADD8E6"
+            opacity={0.5}
+            listening={false}
+          />
+        );
+      })}
+      
+      {/* Caret - with rotation */}
+      {(() => {
+        const shouldShow = isEditing && caretVisible && caretVisualPosition && selectionStart === null && selectionEnd === null;
+        if (!shouldShow) return null;
+        
+        const textX = clipTransform?.x ?? offsetX;
+        const textY = clipTransform?.y ?? offsetY;
+        
+        return (
+          <Line
+            x={0}
+            y={0}
+            points={[
+              caretVisualPosition.x - textX,
+              caretVisualPosition.y - textY,
+              caretVisualPosition.x - textX,
+              caretVisualPosition.y - textY + caretVisualPosition.height
+            ]}
+            stroke={color}
+            strokeWidth={2}
+            listening={false}
+            opacity={(colorOpacity ?? 100) / 100}
+          />
+        );
+      })()}
+    </Group>
+    
+    {/* Hidden input for keyboard capture */}
+    {isEditing && (
+      <Html>
+        <input
+          ref={inputRef}
+          type="text"
+          onKeyDown={handleKeyDown}
+          style={{
+            position: 'absolute',
+            top: '-9999px',
+            left: '-9999px',
+            width: '1px',
+            height: '1px',
+            opacity: 0,
+            border: 'none',
+            outline: 'none',
+            padding: 0,
+            margin: 0,
+          }}
+          autoFocus
+        />
+      </Html>
+    )}
+    
     <Transformer 
         borderStroke='#AE81CE'
         anchorCornerRadius={8} 
@@ -836,7 +1809,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
                 node.getLayer()?.batchDraw?.();
             }
         }} 
-        enabledAnchors={isEditing ? [] : ['top-left', 'bottom-right', 'top-right', 'bottom-left',  'middle-left', 'middle-right', 'top-center', 'bottom-center']} />
+        enabledAnchors={['top-left', 'bottom-right', 'top-right', 'bottom-left',  'middle-left', 'middle-right', 'top-center', 'bottom-center']} />
     </React.Fragment>
   )
 }

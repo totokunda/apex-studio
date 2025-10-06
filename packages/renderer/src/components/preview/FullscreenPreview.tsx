@@ -52,7 +52,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
       const filterPath = clip.fullPath || clip.smallPath;
       if (filterPath) {
         try {
-          await haldClutInstance.loadClut(filterPath);
+          await haldClutInstance.preloadClut(filterPath);
         } catch (e) {
           console.warn('Failed to preload CLUT:', filterPath, e);
         }

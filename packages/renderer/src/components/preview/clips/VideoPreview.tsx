@@ -13,7 +13,7 @@ import { BaseClipApplicator } from './apply/base'
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
-const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], clutsLoaded?: number}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart, speed: _speed, applicators, clutsLoaded }) => {
+const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[]}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart, speed: _speed, applicators}) => {
     const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(() => getMediaInfoCached(src) || null);
     const focusFrame = useControlsStore((state) => state.focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -424,7 +424,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             console.warn('[video] seek draw failed', e);
         }
-    }, [mediaInfo, fps, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas]);
+    }, [mediaInfo, fps, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed]);
 
     const startRendering = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -487,7 +487,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             // swallow
         }
-    }, [mediaInfo, fps, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas]);
+    }, [mediaInfo, fps, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, framesToGiveStart]);
 
     // Start/stop iterator based on play state. Avoid depending on callbacks to prevent restarting every frame.
     useEffect(() => {
@@ -501,7 +501,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             // @ts-ignore
             iteratorRef.current?.return?.();
         };
-    }, [isPlaying, src, mediaInfo, displayWidth, displayHeight, fps]);
+    }, [isPlaying, src, mediaInfo, displayWidth, displayHeight, fps, speed]);
 
     // While paused, redraw immediately on scrubs/jumps
     useEffect(() => {
