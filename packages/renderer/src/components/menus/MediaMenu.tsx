@@ -46,7 +46,6 @@ async function pickFilesViaInput(directory: boolean): Promise<string[] | undefin
 }
 
 interface MediaSidebarProps {
-    onClose: () => void;
 }
 
 
@@ -110,7 +109,7 @@ const sortMediaItems = (
 // }
 
 
-const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
+const MediaSidebar: React.FC<MediaSidebarProps> = () => {
     const [items, setItems] = useState<MediaItem[]>([]);
     const [loading, setLoading] = useState(false);
     const panelRef = useRef<HTMLDivElement | null>(null);
@@ -168,6 +167,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
         const results: MediaItem[] = [];
         for (const it of list) {
           const info = await getMediaInfo(it.assetUrl);
+          
           results.push({ name: it.name, type: it.type, absPath: it.absPath, assetUrl: it.assetUrl, dateAddedMs: it.dateAddedMs, mediaInfo: info });
         }
         results.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
@@ -186,10 +186,19 @@ const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
           setIsUploading(true);
           const paths = await pickFilesViaInput(directory);
           if (!paths || paths.length === 0) return;
+          const existingNames = new Set(items.map(it => it.name));
           const loadingId = toast.loading(`Importing ${paths.length} item(s)…`, { position: "bottom-right" });
           await importMediaPaths(paths, '480p');
           toast.dismiss(loadingId);
-          await loadMediaList();
+          const list = await listConvertedMedia();
+          const newItems: MediaItem[] = [];
+          for (const it of list) {
+            if (!existingNames.has(it.name)) {
+              const info = await getMediaInfo(it.assetUrl);
+              newItems.push({ name: it.name, type: it.type, absPath: it.absPath, assetUrl: it.assetUrl, dateAddedMs: it.dateAddedMs, mediaInfo: info });
+            }
+          }
+          setItems((prev) => [...prev, ...newItems].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
         } catch (error) {
           console.error(error);
           toast.error("Failed to upload file", {
@@ -253,7 +262,14 @@ const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
           toast.success(`Renamed to ${unique}`, { position: "bottom-right", duration: 3000, style:{ width: 'fit-content' } });
           setRenamingItem(null);
           setRenameValue("");
-          await loadMediaList();
+          setItems((prev) => prev.map((item) => {
+            if (item.name === originalName) {
+              const newAbsPath = item.absPath.replace(originalName, unique);
+              const newAssetUrl = item.assetUrl.replace(encodeURIComponent(originalName), encodeURIComponent(unique));
+              return { ...item, name: unique, assetUrl: newAssetUrl, absPath: newAbsPath };
+            }
+            return item;
+          }).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
         } catch (e) {
           console.error(e);
           toast.error("Failed to rename", { position: "bottom-right", duration: 3000, style:{ width: 'fit-content' } });
@@ -286,7 +302,13 @@ const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
               width: 'fit-content'
             }
           });
-          await loadMediaList();
+          setItems((prev) => prev.filter((item) => item.name !== name));
+          setDurationCache((prev) => {
+            const next = { ...prev };
+            const item = items.find((it) => it.name === name);
+            if (item) delete next[item.assetUrl];
+            return next;
+          });
         } catch (e) {
           console.error(e);
           toast.error('Failed to delete', {
@@ -297,7 +319,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
             }
           });
         }
-      }, [loadMediaList]);
+      }, [items]);
 
       // removed old inline thumbnail implementations in favor of memoized MediaThumb above
       // Prefetch durations lazily when sorting by duration
@@ -370,7 +392,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
             <DropdownMenuTrigger asChild>
               <button
                 className={cn(
-                  "px-2.5 py-1.5 rounded-md text-brand-light/90 text-[12px] flex flex-row items-center gap-x-2 transition-colors",
+                  "px-2.5 py-1.5 rounded-md text-brand-light/90 text-[12px] flex bg-brand flex-row items-center gap-x-2 transition-colors",
                   "hover:bg-brand-light/10",
                   ((filterOpen) || (selectedTypes.size > 0)) && "bg-brand-light/10",
                 )}
@@ -423,7 +445,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
             <DropdownMenuTrigger asChild>
               <button
                 className={cn(
-                  "px-2.5 py-1.5 rounded-md text-brand-light/90 text-[12px] flex flex-row items-center gap-x-2 transition-colors",
+                  "px-2.5 py-1.5 rounded-md text-brand-light/90 text-[12px] flex bg-brand flex-row items-center gap-x-2 transition-colors",
                   "hover:bg-brand-light/10",
                   ((sortOpen)) && "bg-brand-light/10",
                 )}
@@ -461,7 +483,6 @@ const MediaSidebar: React.FC<MediaSidebarProps> = ({ onClose }) => {
           </DropdownMenu>
         </div>
       </div>
-
       <div ref={listContainerRef} className=" overflow-y-auto">
         {loading && (
           <div className="text-brand-lighter/70 text-xs px-5 py-4 pt-1">Loading media…</div>

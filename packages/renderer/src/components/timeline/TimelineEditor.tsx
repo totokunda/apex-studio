@@ -5,20 +5,20 @@ import { Stage, Layer,  Text, Line, Rect} from 'react-konva';
 import Konva from 'konva';
 import { ScrubControl } from './Scrubber';
 import Timeline from './Timeline';
-import { useClipStore, getClipWidth, getClipX, isValidTimelineForClip, getTimelineTypeForClip } from '@/lib/clip';
+import { useClipStore, getClipWidth, getClipX, isValidTimelineForClip, getTimelineTypeForClip, getTimelineHeightForClip } from '@/lib/clip';
 import { GoFileMedia } from "react-icons/go";
 import Droppable from '../dnd/Droppable';
 import {useDndMonitor} from '@dnd-kit/core';
 import { MediaItem } from '../media/Item';
 import {v4 as uuidv4} from 'uuid';
-import { AnyClipProps, TimelineType } from '@/lib/types';
+import { AnyClipProps, Filter, FilterClipProps, TimelineType } from '@/lib/types';
 import TimelineSidebar from './TimelineSidebar';
 import Scrollbar from './Scrollbar';
+import { useWebGLHaldClut } from '../preview/webgl-filters';
 
 interface TimelineEditorProps {
 
 }
-
 
 interface TimelineMomentsProps {
     stageWidth:number;
@@ -179,7 +179,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
   const panStateRef = useRef({ startX: 0, lastX: 0, startFrame: 0, fractionalFrames: 0 });
   const wheelRemainderRef = useRef(0);
   const timelinesLayerRef = useRef<Konva.Layer | null>(null);
-  
+  const haldClutRef = useWebGLHaldClut();
   const [verticalScroll, setVerticalScroll] = useState(0);
   const verticalScrollRef = useRef(0);
   const [isScrollbarHovered, setIsScrollbarHovered] = useState(false);
@@ -194,6 +194,14 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     } else {
       setCanScrollHorizontal(false);
     }  }, [totalTimelineFrames, timelineDuration]);
+
+
+    const getBoundsForTimeline = (timelineId: string) => {
+      const timeline = timelines.find((t) => t.timelineId === timelineId);
+      if (!timeline) return 8;
+      if (timeline.type === 'media') return 16;
+      return 8;
+    }
   
 
 
@@ -208,17 +216,19 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const data = event.active?.data?.current as unknown as MediaItem | undefined;
       if (!data) return;
       const mediaInfo = data.mediaInfo;
-      if (!mediaInfo) return;
       setActiveMediaItem(data);
       const clipFrames = (() => {
         if (data.type === 'image') return controlStore.fps * 5;
         if (data.type === 'video') {
-          const fps = mediaInfo.stats.video?.averagePacketRate ?? 0;
-          return Math.round((mediaInfo.duration ?? 0) * fps);
+          const fps = mediaInfo?.stats.video?.averagePacketRate ?? 0;
+          return Math.round((mediaInfo?.duration ?? 0) * fps);
         }
         if (data.type === 'audio') {
-          const fps = mediaInfo.stats.audio?.averagePacketRate ?? 0;
-          return Math.round((mediaInfo.duration ?? 0) * fps);
+          const fps = mediaInfo?.stats.audio?.averagePacketRate ?? 0;
+          return Math.round((mediaInfo?.duration ?? 0) * fps);
+        }
+        if (data.type === 'filter') {
+          return controlStore.fps * 5;
         }
         return 0;
       })();
@@ -253,6 +263,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const stage = timelinesLayerRef.current;
       const children = stage?.children || [];
       let hoveredTimelineIdCurrent: string | null = null;
+      
       for (const child of children) {
         const id = child.id();
         if (id.startsWith('dashed-')) {
@@ -262,8 +273,9 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           const rectY = rect.y;
           const rectX = rect.x;
           const rectWidth = rect.width;
-          const boundNumberTop = id?.endsWith('-top') ? 36 : 16;
-          const boundNumberBottom = 16;
+          const boundNumber = getBoundsForTimeline(id);
+          const boundNumberTop = id?.endsWith('-top') ? 36 : boundNumber;
+          const boundNumberBottom = boundNumber;
           const boundsY = [rectY - boundNumberTop, rectY + boundNumberBottom];
 
           const boundsX = [rectX, rectX + rectWidth];
@@ -286,12 +298,13 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const timelinePadding = 24;
       const stageWidth = dimensions.stageWidth;
       const timelines = useClipStore.getState().timelines;
+      
 
       let activeTimelineId: string | null = null;
       for (let i = 0; i < timelines.length; i++) {
         const t = timelines[i];
         const top = (t.timelineY ?? 0) + 8 - (verticalScrollRef.current || 0);
-        const height = t.timelineHeight ?? 64;
+        const height = t.timelineHeight ?? 54;
         const left = timelinePadding;
         const right = left + stageWidth;
         const bottom = top + height;
@@ -326,12 +339,14 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       // Build occupied intervals (in px, inner coordinates)
       const getClipsForTimeline = useClipStore.getState().getClipsForTimeline;
       const existingClips = getClipsForTimeline(activeTimelineId);
+      let maxRight = 0;
       const occupied = existingClips
         .map((c) => {
           const sx = getClipX(c.startFrame || 0, c.endFrame || 0, stageWidth, [visibleStartFrame, visibleEndFrame]);
           const sw = getClipWidth(c.startFrame || 0, c.endFrame || 0, stageWidth, [visibleStartFrame, visibleEndFrame]);
-          const lo = Math.max(0, Math.min(stageWidth, sx));
-          const hi = Math.max(0, Math.min(stageWidth, sx + sw));
+          const lo = Math.max(0, sx);
+          const hi = Math.max(0, sx + sw);
+          maxRight = Math.max(maxRight, hi);
           return hi > lo ? [lo, hi] as [number, number] : null;
         })
         .filter(Boolean) as [number, number][];
@@ -352,52 +367,42 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         }
       }
 
-      // Compute gaps within [0, stageWidth]
+      // Compute gaps
       const gaps: [number, number][] = [];
       let prev = 0;
       for (const [lo, hi] of merged) {
         if (lo > prev) gaps.push([prev, lo]);
         prev = Math.max(prev, hi);
       }
-      if (prev < stageWidth) gaps.push([prev, stageWidth]);
-      const validGaps = gaps.filter(([lo, hi]) => hi - lo >= ghostWidthPx);
+      // add the last gap
+      if (prev < stageWidth) gaps.push([prev, Infinity]);
 
-      // Choose the gap that can contain the ghost with its LEFT edge under the pointer
-      const pointerLeft = pointerLocalX;
+      const validGaps = gaps.filter(([lo, hi]) => hi - lo >= ghostWidthPx);
+      const pointerCenter = desiredLeft;
       let chosenGap: [number, number] | null = null;
+
       for (const gap of validGaps) {
-        if (pointerLeft >= gap[0] && pointerLeft <= gap[1] - ghostWidthPx) { chosenGap = gap; break; }
+        if (pointerCenter >= gap[0] && pointerCenter <= gap[1]) { chosenGap = gap; break; }
+      }
+      if (!chosenGap && validGaps.length > 0) {
+        chosenGap = validGaps.reduce((best, gap) => {
+          const gc = (gap[0] + gap[1]) / 2;
+          const bc = (best[0] + best[1]) / 2;
+          return Math.abs(pointerCenter - gc) < Math.abs(pointerCenter - bc) ? gap : best;
+        });
       }
 
       let validatedLeft = desiredLeft;
+
       if (chosenGap) {
-        const [gLo] = chosenGap;
-        // keep pointer alignment; only prevent crossing into the occupied region on the left
-        validatedLeft = Math.max(desiredLeft, gLo);
+        const [gLo, gHi] = chosenGap;
+        validatedLeft = Math.min(Math.max(desiredLeft, gLo), gHi - ghostWidthPx);
       } else {
-        // No chosen gap: prevent overriding existing clips on the left edge only
-        // Compute gLo as:
-        // - if pointer is inside an occupied interval [lo, hi], use hi
-        // - else, use the last hi to the left of pointer (or 0 if none)
-        let gLo = 0;
-        for (let i = 0; i < merged.length; i++) {
-          const [lo, hi] = merged[i];
-          if (pointerLeft < lo) {
-            // Pointer is in the gap before this interval; keep current gLo
-            break;
-          }
-          if (pointerLeft <= hi) {
-            // Pointer is inside this occupied interval; set gLo to its right edge
-            gLo = Math.max(gLo, hi);
-            break;
-          }
-          // Pointer is to the right of this interval; advance gLo
-          gLo = Math.max(gLo, hi);
-        }
-        // gHi is conceptually Infinity; just clamp to stage bounds later
-        validatedLeft = Math.max(desiredLeft, gLo);
+        // Ensure validated Left 
+        validatedLeft = Math.max(validatedLeft, maxRight);
       }
 
+      validatedLeft = Math.max(0, validatedLeft);
 
       setGhostTimelineId(activeTimelineId);
       setGhostInStage(true);
@@ -406,14 +411,14 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     onDragEnd: (event) => {
       
       const data = event.active?.data?.current as unknown as MediaItem | undefined;
+      
       if (!event.over && !useClipStore.getState().ghostTimelineId && !useClipStore.getState().hoveredTimelineId) return;
       if (!data) return;
       
       // check if any timelines exist 
       const timelines = useClipStore.getState().timelines;
       let timelineId:string | undefined = undefined;
-
-      console.log('timelines', timelines);
+      const timelineHeight = getTimelineHeightForClip(data);
 
       if (timelines.length === 0) {
         timelineId = uuidv4();
@@ -422,7 +427,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           timelineId,
           timelineWidth: size.width,
           timelineY: 0,
-          timelineHeight: 64,
+          timelineHeight: timelineHeight,
         };
         addTimeline(newTimeline);
       } else if (hoveredTimelineId) {
@@ -435,16 +440,14 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           type: data.type === 'image' || data.type === 'video' ? 'media' : data.type as TimelineType,
           timelineId,
           timelineWidth: size.width,
-          timelineY: (hoveredTimeline?.timelineY ?? 0) + 64,
-          timelineHeight: 64,
+          timelineY: (hoveredTimeline?.timelineY ?? 0) + timelineHeight,
+          timelineHeight: timelineHeight,
         };
         addTimeline(newTimeline, hoveredTimelineIdx);
-      } else if (timelines.length === 1) {
-        timelineId = timelines[0].timelineId;
       } 
 
         const mediaInfo = data.mediaInfo;
-        if (!mediaInfo) {
+        if (!mediaInfo && data.type !== 'filter') {
           setActiveMediaItem(null);
           setGhostTimelineId(null);
           setGhostStartEndFrame(0, 0);
@@ -459,22 +462,30 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         let width:number | undefined = undefined;
 
         if (data.type === 'video') {
-          const duration = mediaInfo.duration ?? 0; 
-          const fps = mediaInfo.stats.video?.averagePacketRate ?? 0;
-          height = mediaInfo.video?.codedHeight;
-          width = mediaInfo.video?.codedWidth;
+          const duration = mediaInfo?.duration ?? 0; 
+          const fps = mediaInfo?.stats.video?.averagePacketRate ?? 0;
+          height = mediaInfo?.video?.codedHeight;
+          width = mediaInfo?.video?.codedWidth;
           numFrames = Math.round(duration * fps);
         } else if (data.type === 'audio') {
-            const duration = mediaInfo.duration ?? 0; 
+            const duration = mediaInfo?.duration ?? 0; 
             const fps = controlStore.fps;
             numFrames = Math.round(duration * fps);
         } else if (data.type === 'image') {
           numFrames = controlStore.fps * 5;
           framesToGiveEnd = -Infinity;
           framesToGiveStart = Infinity;
-          height = mediaInfo.image?.height;
-          width = mediaInfo.image?.width;
-        } 
+          height = mediaInfo?.image?.height;
+          width = mediaInfo?.image?.width;
+        } else if (data.type === 'filter') {
+          numFrames = controlStore.fps * 5;
+          framesToGiveEnd = -Infinity;
+          framesToGiveStart = Infinity;
+          height = 540; // Does not matter
+          width = 540; // Does not matter
+          // Start with smallPath 
+         void haldClutRef?.preloadClut((data as unknown as Filter).smallPath);
+        }
 
         // Use validated ghost position to compute frames
         const state = useClipStore.getState();
@@ -540,19 +551,31 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         startFrame = existingClips.length === 0 ? (existingClips.length === 0 ? 0 : placementStart) : placementStart;
         endFrame = startFrame + clipLen;
 
-        const newClip = {
+        const newClip: AnyClipProps = {
           timelineId: dropTimelineId,
           clipId: uuidv4(),
           startFrame: existingClips.length === 0 ? 0 : startFrame,
           endFrame,
           src: data.assetUrl,
-          type: data.type,
+          // @ts-ignore
+          type: data.type, // ignore for now since we don't have all types implemented yet
           framesToGiveEnd: framesToGiveEnd,
           framesToGiveStart: framesToGiveStart,
           height: height,
           width:width,
           speed: 1.0
         };
+
+        if (data.type === 'filter') {
+          (newClip as FilterClipProps).name = (data as unknown as Filter).name;
+          (newClip as FilterClipProps).smallPath = (data as unknown as Filter).smallPath;
+          (newClip as FilterClipProps).fullPath = (data as unknown as Filter).fullPath;
+          (newClip as FilterClipProps).category = (data as unknown as Filter).category;
+          (newClip as FilterClipProps).examplePath = (data as unknown as Filter).examplePath;
+          (newClip as FilterClipProps).exampleAssetUrl = (data as unknown as Filter).exampleAssetUrl;
+        }
+
+
 
         addClip(newClip as AnyClipProps);
 
@@ -623,7 +646,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     if (!timelines || timelines.length === 0) return dimensions.stageHeight;
     const bottoms = timelines.map((t) => {
       const y = t.timelineY || 0;
-      const h = t.timelineHeight || 64;
+      const h = t.timelineHeight || 54;
       return y + h + 32; // include padding/offsets in Timeline rendering
     });
     return Math.max(...bottoms, 0) + SCROLL_BOTTOM_PADDING;
@@ -910,14 +933,14 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           {/* Overlay helper text/icon centered */}
           
             <div style={{display: clips.length > 0 ? 'none' : 'flex'}} className='h-full items-center justify-center w-full p-8'>
-            <Droppable id='timeline' className='w-full rounded-lg bg-brand-background/70 text-brand-light/70 duration-100 ease-in-out' accepts={['media']} highlight={{borderColor: '#A477C4', textColor: '#E8E8E8', bgColor: '#A477C4'}}>
-              <div className='w-full group py-6 px-10    border-brand-light/30 rounded-lg  flex items-center'>
+            <Droppable id='timeline' className='w-full rounded-lg bg-brand-background/60 text-brand-light/90 duration-100 ease-in-out ' accepts={['media']} highlight={{borderColor: '#A477C4', textColor: '#E8E8E8', bgColor: '#A477C4'}}>
+              <div className='w-full group py-6 px-10  rounded-lg  flex items-center '>
               <div className=' mx-auto w-full flex items-center font-sans pointer-events-auto'>
                 <h4 className=" flex items-center flex-row leading-none gap-x-3.5">
                     <span className='flex items-center justify-center leading-none'>
                         <GoFileMedia className='w-5 h-5 ' />
                     </span>
-                    <span className='text-[12.5px] font-poppins leading-none '>Drag and drop media, tracks and models</span>
+                    <span className='text-[12px] font-light font-poppins leading-none '>Drag and drop media to start creating</span>
                 </h4>
             </div>
               </div>

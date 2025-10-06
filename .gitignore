@@ -31,7 +31,7 @@ thumbs.db
 # Gradle
 .idea/**/gradle.xml
 .idea/**/libraries
-
+packages/renderer/public/filters
 # Gradle and Maven with auto-import
 # When using Gradle or Maven with auto-import, you should exclude module files,
 # since they will be recreated, and may cause churn.  Uncomment if using

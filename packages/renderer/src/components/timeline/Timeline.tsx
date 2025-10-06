@@ -7,7 +7,7 @@ import GhostTimeline from "./clips/GhostTimeline";
 import { useControlsStore } from "@/lib/control";
 
 
-const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({timelineWidth, timelineY, timelineHeight = 72, timelinePadding = 24, timelineId, index, scrollY, type, muted, hidden}) => {
+const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({timelineWidth, timelineY, timelineHeight = 54, timelinePadding = 24, timelineId, index, scrollY, type, muted, hidden}) => {
     const {hoveredTimelineId} = useClipStore();
 
     const timelineYBottom = useMemo(() => {

@@ -34,6 +34,7 @@
   },
   "dependencies": {
     "@app/main": "*",
+    "@fontsource/lato": "^5.2.7",
     "mime": "^4.1.0",
     "soundtouchjs": "^0.2.1"
   }

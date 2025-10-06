@@ -12,6 +12,7 @@ import {pathToFileURL, fileURLToPath} from 'node:url';
 import {AUDIO_EXTS, IMAGE_EXTS, VIDEO_EXTS, getLowercaseExtension} from './media/fileExts.js';
 import {ensureUniqueNameSync} from './media/links.js';
 import { ClipType } from '../../renderer/src/lib/types.js';
+import { fetchFilters } from './filters/fetch.js';  
 
 function send(channel: string, message: string) {
   return ipcRenderer.invoke(channel, message);
@@ -36,7 +37,11 @@ async function pickMediaPaths(options: { directory?: boolean, filters?: { name: 
 }
 
 const readFileBuffer = async (path: string) => {
-  const buffer = await fsp.readFile(fileURLToPath(path));
+  // check if path is a file url
+  if (path.startsWith('file://')) {
+    path = fileURLToPath(path);
+  }
+  const buffer = await fsp.readFile(path);
   return buffer;
 }
 
@@ -77,7 +82,6 @@ async function listConvertedMedia(): Promise<ConvertedMediaItem[]> {
   }
   const items: ConvertedMediaItem[] = [];
   for (const e of entries) {
-    if (!e.isFile()) continue;
     const name = e.name;
     const ext = getLowercaseExtension(name);
     if (!isSupportedExt(ext)) continue;
@@ -109,7 +113,8 @@ async function importMediaPaths(inputAbsPaths: string[], resolution?: string): P
     await fsp.copyFile(srcAbs, dstAbs);
     try {
       await processMediaTo24({ inputAbsPath: dstAbs, resolution });
-    } catch {
+    } catch (error) {
+      console.error('Error processing media:', error);
       // ignore per-file errors, let caller report
     }
     count += 1;
@@ -140,5 +145,6 @@ export {
   readFileBuffer,
   readFileStream,
   pathToFileURL,
-  fileURLToPath
+  fileURLToPath,
+  fetchFilters
 };

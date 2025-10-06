@@ -26,6 +26,10 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
     const isPlaying = useControlsStore((s) => s.isPlaying);
     const pause = useControlsStore((s) => s.pause);
 
+    const hasSpeed = useMemo(() => {
+        return clip?.type === 'video' || clip?.type === 'audio';
+    }, [clip?.type]);
+
     const setSpeed = (value: number) => {
         const numValue = typeof value === 'number' ? value : Number(value);
         if (isNaN(numValue) || !isFinite(numValue)) return;
@@ -58,12 +62,16 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
     const maxByMedia = Math.max(0, Math.floor(rawTotalFrames / effectiveSpeed));
     const endFrameMax = Math.min(maxByMedia, endFrame + Math.abs(clip?.framesToGiveEnd ?? 0));
 
+    const canRefresh = useMemo(() => {
+        return isFinite(clip?.framesToGiveEnd ?? 0) && isFinite(clip?.framesToGiveStart ?? 0);
+    }, [clip?.type]);
+
   return (
     <div className="flex flex-col gap-y-2 min-w-0">
       <div className="p-4 px-5 min-w-0">
       <div className="flex flex-row items-center justify-between mb-4">
         <h4 className="text-brand-light text-[12px] font-medium text-start">Duration</h4>
-        <span
+        {(canRefresh) && <span
           onClick={() => {
             const startFrame = (clip?.startFrame ?? 0) - (clip?.framesToGiveStart ?? 0);
             const endFrame = (clip?.endFrame ?? 0) - (clip?.framesToGiveEnd ?? 0);
@@ -84,10 +92,10 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
             className={spinning ? "animate-spin duration-500" : ""}
             onAnimationEnd={() => setSpinning(false)}
           />
-        </span>
+        </span>}
       </div>
       <div className="flex flex-col gap-y-2">
-        <PropertiesSlider label="Speed" value={Math.round(speed * 10) / 10} onChange={setSpeed} suffix="x" min={0.1} max={5} step={0.1}  />
+        {(hasSpeed) && <PropertiesSlider label="Speed" value={Math.round(speed * 10) / 10} onChange={setSpeed} suffix="x" min={0.1} max={5} step={0.1}  />}
             <div className="flex flex-row gap-x-2">
         <Input label="Start Frame" value={startFrame.toString()} onChange={
             (value) => setStartFrame(Number(value))

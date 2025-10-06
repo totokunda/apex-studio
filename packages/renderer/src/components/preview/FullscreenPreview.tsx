@@ -4,7 +4,6 @@ import { useViewportStore } from '@/lib/viewport';
 import { useClipStore } from '@/lib/clip';
 import { BASE_LONG_SIDE } from '@/lib/settings';
 import VideoPreview from './clips/VideoPreview';
-import AudioPreview from './clips/AudioPreview';
 import ImagePreview from './clips/ImagePreview';
 import ShapePreview from './clips/ShapePreview';
 import TextPreview from './clips/TextPreview';
@@ -12,6 +11,8 @@ import { useControlsStore } from '@/lib/control';
 import { AnyClipProps } from '@/lib/types';
 import { SlSizeActual } from 'react-icons/sl';
 import { FaCirclePause, FaCirclePlay } from 'react-icons/fa6';
+import { getApplicatorsForClip } from '@/lib/applicator-utils';
+import { useWebGLHaldClut } from './webgl-filters';
 
 interface FullscreenPreviewProps {
   onExit: () => void;
@@ -28,6 +29,41 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
   const { clips, clipWithinFrame, timelines, clipDuration } = useClipStore();
   const focusFrame = useControlsStore((s) => s.focusFrame);
   const { play, pause, isPlaying, setFocusFrame, fps } = useControlsStore();
+  const haldClutInstance = useWebGLHaldClut();
+  
+  // Memoize applicator factory configuration
+  const applicatorConfig = useMemo(() => ({
+    haldClutInstance,
+    // Add more shared resources here as needed
+  }), [haldClutInstance]);
+  
+  // Get applicators for a specific clip using the factory
+  const getClipApplicators = useCallback((clipId: string) => {
+    return getApplicatorsForClip(clipId, applicatorConfig);
+  }, [applicatorConfig, focusFrame, timelines, clips]);
+  
+  // Preload all resources for applicator clips
+  useEffect(() => {
+    if (!haldClutInstance) return;
+    
+    // Preload filter CLUTs
+    const filterClips = clips.filter(c => c.type === 'filter');
+    const loadPromises = filterClips.map(async (clip: any) => {
+      const filterPath = clip.fullPath || clip.smallPath;
+      if (filterPath) {
+        try {
+          await haldClutInstance.loadClut(filterPath);
+        } catch (e) {
+          console.warn('Failed to preload CLUT:', filterPath, e);
+        }
+      }
+    });
+    
+    // Add preloading for other applicator types here as they are added
+    // e.g., mask textures, processor models, etc.
+    
+    Promise.all(loadPromises).catch(console.error);
+  }, [clips, haldClutInstance]);
   
   const formatTime = useCallback((frames: number) => {
     if (frames === 0 || frames === undefined || frames === null || isNaN(frames) || frames === Infinity || frames === -Infinity) return '00:00.00';
@@ -206,23 +242,27 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
             {sortClips(filterClips(clips)).map((clip) => {
               const clipAtFrame = clipWithinFrame(clip, focusFrame);
               if (!clipAtFrame) return null;
+              
+              // Get applicators for clips that support effects (video, image, etc.)
+              const applicators = getClipApplicators(clip.clipId);
+              
               switch (clip.type) {
                 case 'video':
-                  return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
+                  return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
                 case 'image':
-                  return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
+                  return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
                 case 'shape':
                   return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
                 case 'text':
                   return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
-                case 'audio':
+                default:
+                  // Applicator clips (filter, mask, processor, etc.) don't render visually
                   return null;
               }
             })}
           </Group>
         </Layer>
       </Stage>
-
 
       {/* Floating control bar */}
       <div

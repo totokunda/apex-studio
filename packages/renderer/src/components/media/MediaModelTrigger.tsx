@@ -16,11 +16,8 @@ const MediaModelTrigger:React.FC<MediaModelTriggerProps> = ({ onClick, icon, tit
     const { openSection, closeSection, section: currentSection } = useSidebarStore();
     const handleClick = useCallback(() => {
         onClick?.();
-        if (currentSection === section) {
-            closeSection(onClose);
-        } else {
-            openSection(section, currentSection === null ? onOpen : undefined);
-        }
+        openSection(section, currentSection === null ? onOpen : undefined);
+        
     }, [section, currentSection, closeSection, openSection]);
     
   return (

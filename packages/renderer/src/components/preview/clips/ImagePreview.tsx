@@ -7,25 +7,28 @@ import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
 import { useClipStore } from '@/lib/clip';
+import { useWebGLFilters } from '@/components/preview/webgl-filters';
+import { BaseClipApplicator } from './apply/base';
 
-const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number}> = ({ src, clipId, rectWidth, rectHeight}) => {
+const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], clutsLoaded?: number}> = ({ src, clipId, rectWidth, rectHeight, applicators, clutsLoaded}) => {
     const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
     const transformerRef = useRef<Konva.Transformer>(null);
     const suppressUntilRef = useRef<number>(0);
+    const { applyFilters } = useWebGLFilters();
     const tool = useViewportStore((s) => s.tool);
     const scale = useViewportStore((s) => s.scale);
     const position = useViewportStore((s) => s.position);
     const setClipTransform = useClipStore((s) => s.setClipTransform);
     const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
     const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
+    const clearSelection = useControlsStore((s) => s.clearSelection);
     const addClipSelection = useControlsStore((s) => s.addClipSelection);
     const {selectedClipIds, isFullscreen} = useControlsStore();
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
 
-    
-
+    const clip = useClipStore((s) => s.getClipById(clipId)) as ImageClipProps;
 
     const aspectRatio = useMemo(() => {
       const originalWidth = mediaInfo?.image?.width;
@@ -297,7 +300,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             
             if (!image) return;
            
-            const canvas = canvasRef.current;
+            let canvas = canvasRef.current;
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
             if (!ctx) return;
@@ -305,11 +308,27 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             // @ts-ignore
             ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(image.canvas, 0, 0, canvas.width, canvas.height);
+            
+            // Apply WebGL filters for better performance
+            applyFilters(canvas, {
+                brightness: clip?.brightness,
+                contrast: clip?.contrast,
+                hue: clip?.hue,
+                saturation: clip?.saturation,
+                blur: clip?.blur,
+                sharpness: clip?.sharpness,
+                noise: clip?.noise,
+                vignette: clip?.vignette
+            });
+            // apply applicators to canvas
+            applicators.forEach(applicator => {
+                canvas = applicator.apply(canvas);
+            });
             imageRef.current?.getLayer()?.batchDraw?.();
         } catch (e) {
             console.error(e);
         }
-    }, [mediaInfo, src, displayWidth, displayHeight]);
+    }, [mediaInfo, src, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applyFilters, clutsLoaded]);
 
     useEffect(() => {
         draw();
@@ -345,6 +364,8 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
     const handleClick = useCallback(() => {
         if (isFullscreen) return;
+        // deselect all other clips
+        clearSelection();
         addClipSelection(clipId);
     }, [addClipSelection, clipId, isFullscreen]);
 
@@ -475,12 +496,13 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         </React.Fragment>
       )}
     </Group>
-    {tool === 'pointer' && isSelected && !isFullscreen && <Transformer 
+    <Transformer 
         borderStroke='#AE81CE'
         anchorCornerRadius={8} 
         anchorStroke='#E3E3E3' 
         anchorStrokeWidth={1}
         borderStrokeWidth={2}
+        visible={tool === 'pointer' && isSelected && !isFullscreen}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]} 
         boundBoxFunc={transformerBoundBoxFunc as any}
         ref={(node) => {
@@ -493,7 +515,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
                 node.getLayer()?.batchDraw?.();
             }
         }} 
-        enabledAnchors={['top-left', 'bottom-right', 'top-right', 'bottom-left']} />}
+        enabledAnchors={['top-left', 'bottom-right', 'top-right', 'bottom-left']} />
     </React.Fragment>
   )
 }

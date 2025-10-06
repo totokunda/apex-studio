@@ -39,6 +39,7 @@ export type MediaItem = {
     assetUrl: string;
     dateAddedMs?: number;
     mediaInfo?: MediaInfo;
+    fillCanvas?: boolean;
 }
 
 interface ItemProps {
@@ -113,6 +114,9 @@ export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean }> = R
           const canvasEl = canvasRef.current;
           if (!poster || !canvasEl) return;
           if (cancelled) return;
+
+
+          
           const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
           const cssWidth = canvasEl.clientWidth || 240;
           const cssHeight = Math.round(cssWidth * 9 / 16);
@@ -127,15 +131,20 @@ export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean }> = R
   
           // Use the source image width, scaled only by ideal height, and center horizontally.
           const srcCanvas = poster as any;
-          const srcW: number = srcCanvas.width || (item.mediaInfo?.video?.codedWidth ?? 0);
-          const srcH: number = srcCanvas.height || (item.mediaInfo?.video?.codedHeight ?? 0);
+          const srcW: number = srcCanvas.width
+          const srcH: number = srcCanvas.height
           if (srcW > 0 && srcH > 0) {
-            const scale = canvasEl.height / srcH; // scale to match ideal height only (device pixels)
-            const drawW = Math.max(1, Math.floor(srcW * scale));
-            const drawH = Math.max(1, Math.floor(srcH * scale));
-            const drawX = Math.floor((canvasEl.width - drawW) / 2);
-            const drawY = 0;
-            ctx.drawImage(poster as CanvasImageSource, drawX, drawY, drawW, drawH);
+            if (item.fillCanvas) {
+              // Fill the entire canvas
+              ctx.drawImage(poster as CanvasImageSource, 0, 0, canvasEl.width, canvasEl.height);
+            } else {
+              const scale = canvasEl.height / srcH; // scale to match ideal height only (device pixels)
+              const drawW = Math.max(1, Math.floor(srcW * scale));
+              const drawH = Math.max(1, Math.floor(srcH * scale));
+              const drawX = Math.floor((canvasEl.width - drawW) / 2);
+              const drawY = 0;
+              ctx.drawImage(poster as CanvasImageSource, drawX, drawY, drawW, drawH);
+            }
           }
         } catch (e) {
           console.error(e);
@@ -153,7 +162,7 @@ export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean }> = R
           </span>
         )}
         {
-            isDragging && !mediaInfo?.duration && (
+            isDragging && mediaInfo && !mediaInfo?.duration && (
                 <span className="text-[10px] text-brand-light/90 absolute bottom-1 left-1 p-1 rounded bg-brand-background-dark/60 z-10">
                     {formatDuration(3)}
                 </span>

@@ -1,9 +1,23 @@
 import { PacketStats, InputVideoTrack, InputAudioTrack, MetadataTags, InputFormat } from "mediabunny";
 
-export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora' | 'shape' | 'draw'
-export type TimelineType = 'media' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora' | 'shape' | 'draw'
+export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
+export type TimelineType = 'media' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
 export type ViewTool = 'pointer' | 'hand' | 'mask' | 'draw' | 'shape'| 'text'
 export type ShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'line' | 'star'
+
+export interface MediaAdjustments {
+    // Color Correction
+    brightness?: number; // isFilter    
+    contrast?: number; // isFilter
+    exposure?: number;
+    hue?: number; // isFilter
+    saturation?: number; // isFilter
+    // Effects
+    sharpness?: number;
+    noise?: number; // isFilter
+    blur?: number; // isFilter
+    vignette?: number;
+}
 
 export interface ClipTransform {
     x: number;
@@ -37,7 +51,6 @@ export interface ClipProps {
     // Persisted transform for preview canvas (position/size/scale/rotation)
     transform?: ClipTransform;
     type: ClipType;
-    
 }
 
 export interface TimelineProps {
@@ -52,7 +65,7 @@ export interface TimelineProps {
 }
 
 
-export type VideoClipProps = ClipProps & {
+export type VideoClipProps = ClipProps & MediaAdjustments & {
     src: string;
     type: 'video';
     volume?: number;
@@ -61,7 +74,7 @@ export type VideoClipProps = ClipProps & {
     speed?: number;
 }
 
-export type ImageClipProps = ClipProps & {
+export type ImageClipProps = ClipProps & MediaAdjustments & {
     src: string;
     type: 'image';
 }
@@ -118,9 +131,25 @@ export type TextClipProps = ClipProps & {
     shadowOffsetX?: number;
     shadowOffsetY?: number;
     shadowOffsetLocked?: boolean;
+    // Background properties
+    backgroundEnabled?: boolean;
+    backgroundColor?: string;
+    backgroundOpacity?: number;
+    backgroundCornerRadius?: number;
 }
 
-export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps;
+export type FilterClipProps = ClipProps & {
+    src: null | undefined;
+    name?: string;
+    type: 'filter';
+    smallPath?: string;
+    fullPath?: string;
+    category?: string;
+    examplePath?: string;
+    exampleAssetUrl?: string;
+}
+
+export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps;
 
 export type ZoomLevel = number;
 
@@ -166,4 +195,19 @@ export interface Point {
     y: number;
   }
 
-export type SidebarSection = 'media' | 'models' | 'effects' | 'loras' | 'templates';
+export type SidebarSection = 'media' | 'models' | 'filters' | 'loras' | 'templates';
+
+
+export interface Filter {
+    id: string;
+    name: string;
+    smallPath: string;
+    fullPath: string;
+    category: string;
+    examplePath: string;
+    exampleAssetUrl: string;
+}
+
+export type FilterWithType = Filter & {
+    type: 'filter';
+}

@@ -69,7 +69,7 @@ const TextShadowSection: React.FC<TextShadowSectionProps> = ({ clipId }) => {
                         step={1}
                         toFixed={0}
                     />
-                    <div className="flex flex-col gap-y-2 pb-6">
+                    <div className="flex flex-col gap-y-2 ">
                         <div className="flex flex-row items-center gap-x-2 w-full">
                             <h4 className="text-brand-light text-[10.5px] flex-1 text-start">Offset</h4>
                             <button

@@ -2,7 +2,6 @@ import { create } from "zustand";
 import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
-
 import { MediaItem } from "@/components/media/Item";
 import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS } from "./settings";
 import { getMediaInfo } from "./media/utils";
@@ -92,6 +91,15 @@ export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string):
     return clip.type;
 }
 
+export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string):number => {
+    if (typeof clip === 'string') 
+        clip = {type:clip} as AnyClipProps;
+    if (clip.type === 'video' || clip.type === 'image' || clip.type === 'audio') {
+        return 54;
+    }
+    return 40;
+}
+
 
 
 // Helper function to resolve overlaps by shifting clips to maintain frame gaps
@@ -150,7 +158,7 @@ export const resolveOverlapsTimelines = (timelines: TimelineProps[]): TimelinePr
             // Each subsequent timeline is positioned based on the previous timeline's position + height
             const previousTimeline = resolvedTimelines[i - 1];
             const previousY = previousTimeline.timelineY || 0;
-            const previousHeight = previousTimeline.timelineHeight || 64;
+            const previousHeight = previousTimeline.timelineHeight || 54;
             timeline.timelineY = previousY + previousHeight;
         }
         
@@ -297,7 +305,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     addTimeline: (timeline: Partial<TimelineProps>, index?: number) => set((state) => {
         const newTimeline: TimelineProps = {
             timelineId: timeline.timelineId ?? uuidv4(),
-            timelineHeight: timeline.timelineHeight ?? 64,
+            timelineHeight: timeline.timelineHeight ?? 54,
             timelineWidth: timeline.timelineWidth ?? 0,
             timelineY: timeline.timelineY ?? 0,
             timelinePadding: timeline.timelinePadding ?? 0,
@@ -389,9 +397,9 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const audioTimeline: TimelineProps = {
             timelineId: newAudioTimelineId,
             type: 'audio',
-            timelineHeight: clipTimeline?.timelineHeight ?? 64,
+            timelineHeight: clipTimeline?.timelineHeight ?? 54,
             timelineWidth: clipTimeline?.timelineWidth ?? 0,
-            timelineY: (clipTimeline?.timelineY ?? 0) + (clipTimeline?.timelineHeight ?? 64),
+            timelineY: (clipTimeline?.timelineY ?? 0) + (clipTimeline?.timelineHeight ?? 54),
             timelinePadding: clipTimeline?.timelinePadding ?? 0,
             muted: false,
             hidden: false,

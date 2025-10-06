@@ -8,17 +8,21 @@ import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
 import { useClipStore } from '@/lib/clip';
 import { WrappedCanvas } from 'mediabunny';
+import { useWebGLFilters } from '@/components/preview/webgl-filters';
+import { BaseClipApplicator } from './apply/base'
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
-const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart, speed: _speed }) => {
+const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], clutsLoaded?: number}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart, speed: _speed, applicators, clutsLoaded }) => {
     const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(() => getMediaInfoCached(src) || null);
     const focusFrame = useControlsStore((state) => state.focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
     const imageRef = useRef<Konva.Image>(null);
     const transformerRef = useRef<Konva.Transformer>(null);
     const drawTokenRef = useRef(0);
     const suppressUntilRef = useRef<number>(0);
+    const { applyFilters } = useWebGLFilters();
     const currentFrame = useMemo(() => focusFrame - startFrame + (framesToGiveStart || 0), [focusFrame, startFrame, framesToGiveStart]);
     const speed = useMemo(() => {
       const s = Number(_speed ?? 1);
@@ -31,8 +35,26 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
     const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
     const addClipSelection = useControlsStore((s) => s.addClipSelection);
+    const clearSelection = useControlsStore((s) => s.clearSelection);
     const {selectedClipIds, isFullscreen} = useControlsStore();
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
+
+    const clip = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps;
+
+    // Use refs to store current filter values to avoid callback recreation
+    const filterParamsRef = useRef({
+        brightness: clip?.brightness,
+        contrast: clip?.contrast,
+        hue: clip?.hue,
+        saturation: clip?.saturation,
+        blur: clip?.blur,
+        sharpness: clip?.sharpness,
+        noise: clip?.noise,
+        vignette: clip?.vignette
+    });
+
+    // Use ref to store current applicators to avoid callback recreation
+    const applicatorsRef = useRef(applicators);
 
     const aspectRatio = useMemo(() => {
       const originalWidth = mediaInfo?.video?.codedWidth || 0;
@@ -64,6 +86,45 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const fps = useControlsStore((s) => s.fps);
     const currentStartFrameRef = useRef<number>(0);
     const lastRenderedFrameRef = useRef<number>(-1);
+
+    // Update refs when values change
+    useEffect(() => {
+        filterParamsRef.current = {
+            brightness: clip?.brightness,
+            contrast: clip?.contrast,
+            hue: clip?.hue,
+            saturation: clip?.saturation,
+            blur: clip?.blur,
+            sharpness: clip?.sharpness,
+            noise: clip?.noise,
+            vignette: clip?.vignette
+        };
+        applicatorsRef.current = applicators;
+    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators]);
+
+    // If video is paused, reapply filters when they change
+    useEffect(() => {
+        if (!isPlaying && canvasRef.current && originalFrameRef.current && imageRef.current) {
+            let canvas = canvasRef.current;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                // Restore the original unfiltered frame
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(originalFrameRef.current, 0, 0);
+                
+                // Apply filters to the clean frame
+                applyFilters(canvas, filterParamsRef.current);
+                
+                // Apply applicators (filter clips from layers above)
+                applicatorsRef.current.forEach(applicator => {
+                    canvas = applicator.apply(canvas);
+                });
+                
+                imageRef.current.getLayer()?.batchDraw();
+            }
+        }
+    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators]);
+
     const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean }) => {
         if (isRotating) return; // disable guides/snapping while rotating
         const node = imageRef.current;
@@ -222,6 +283,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         }
         return () => {
             canvasRef.current = null;
+            originalFrameRef.current = null;
         };
     }, []);
 
@@ -295,7 +357,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     }, [displayWidth, displayHeight]);
 
     const drawWrappedCanvas = useCallback((wc: WrappedCanvas) => {
-        const canvas = canvasRef.current;
+        let canvas = canvasRef.current;
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
@@ -304,8 +366,31 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         // @ts-ignore
         ctx.imageSmoothingQuality = 'high';
         try { ctx.drawImage(wc.canvas, 0, 0, canvas.width, canvas.height); } catch {}
+        
+        // Store the original unfiltered frame for filter adjustments while paused
+        if (!originalFrameRef.current) {
+            originalFrameRef.current = document.createElement('canvas');
+        }
+        if (originalFrameRef.current.width !== canvas.width || originalFrameRef.current.height !== canvas.height) {
+            originalFrameRef.current.width = canvas.width;
+            originalFrameRef.current.height = canvas.height;
+        }
+        const origCtx = originalFrameRef.current.getContext('2d');
+        if (origCtx) {
+            origCtx.clearRect(0, 0, canvas.width, canvas.height);
+            origCtx.drawImage(canvas, 0, 0);
+        }
+        
+        // Apply WebGL filters for better performance (fast enough for real-time playback)
+        // Use ref values to avoid callback recreation on filter/applicator changes
+        applyFilters(canvas, filterParamsRef.current);
+        // apply applicators to canvas
+        applicatorsRef.current.forEach(applicator => {
+            canvas = applicator.apply(canvas);
+        });
+        
         imageRef.current?.getLayer()?.batchDraw?.();
-    }, []);
+    }, [applyFilters]);
 
     const seekAndDraw = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -456,6 +541,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
     const handleClick = useCallback(() => {
         if (isFullscreen) return;
+        clearSelection();
         addClipSelection(clipId);
     }, [addClipSelection, clipId, isFullscreen]);
 
@@ -587,12 +673,13 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         </React.Fragment>
       )}
     </Group>
-    {tool === 'pointer' && isSelected && !isFullscreen && <Transformer 
+    <Transformer 
         borderStroke='#AE81CE'
         anchorCornerRadius={8} 
         anchorStroke='#E3E3E3' 
         anchorStrokeWidth={1}
         borderStrokeWidth={2}
+        visible={tool === 'pointer' && isSelected && !isFullscreen}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]} 
         boundBoxFunc={transformerBoundBoxFunc as any}
         ref={(node) => {
@@ -605,7 +692,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 node.getLayer()?.batchDraw?.();
             }
         }} 
-        enabledAnchors={['top-left', 'bottom-right', 'top-right', 'bottom-left']} />}
+        enabledAnchors={['top-left', 'bottom-right', 'top-right', 'bottom-left']} />
     </React.Fragment>
   )
 }

@@ -5,13 +5,14 @@ import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
 import { useControlsStore } from "@/lib/control";
 import { Image, Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
-import { MediaInfo, ShapeClipProps, TextClipProps, TimelineProps } from "@/lib/types";
+import { MediaInfo, ShapeClipProps, TextClipProps, TimelineProps, VideoClipProps, ImageClipProps, ClipType, FilterClipProps } from "@/lib/types";
 import { v4 as uuidv4 } from 'uuid';
 import { getMediaInfoCached } from "@/lib/media/utils";
+import { useWebGLFilters } from "@/components/preview/webgl-filters";
 
 const THUMBNAIL_TILE_SIZE = 36;
 
-const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' | 'audio' | 'image' | 'shape' | 'text',  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 64, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
+const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType,  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 54, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
     // Select only what we need to avoid unnecessary rerenders
     const timelineDuration = useControlsStore((s) => s.timelineDuration);
     const selectedClipIds = useControlsStore((s) => s.selectedClipIds);
@@ -30,10 +31,11 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
     const setHoveredTimelineId = useClipStore((s) => s.setHoveredTimelineId);
     const setSnapGuideX = useClipStore((s) => s.setSnapGuideX);
     const addTimeline = useClipStore((s) => s.addTimeline);
+    const totalTimelineFrames = useControlsStore((s) => s.totalTimelineFrames);
     // Subscribe directly to this clip's data
     const currentClip = useClipStore((s) => s.clips.find((c) => c.clipId === clipId && (timelineId ? c.timelineId === timelineId : true)));
     const cornerRadius = useMemo(() => {
-        return currentClip?.type === 'shape' || currentClip?.type === 'text' ? 4 : 8;
+        return currentClip?.type === 'shape' || currentClip?.type === 'text' ? 2 : 4;
     }, [currentClip?.type]);
     
     const currentStartFrame = currentClip?.startFrame ?? 0;
@@ -57,6 +59,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
     const [isDragging, setIsDragging] = useState(false);
     const rectRefLeft = useRef<Konva.Rect>(null);
     const rectRefRight = useRef<Konva.Rect>(null);
+    const { applyFilters } = useWebGLFilters();
     
     // (moved) image positioning is computed after clipPosition is defined
 
@@ -266,6 +269,19 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                         }
                         x += drawWidth;
                     }
+                    
+                    // Apply WebGL filters to image thumbnails
+                    const imgClip = currentClip as ImageClipProps;
+                    applyFilters(imageCanvas, {
+                        brightness: imgClip?.brightness,
+                        contrast: imgClip?.contrast,
+                        hue: imgClip?.hue,
+                        saturation: imgClip?.saturation,
+                        blur: imgClip?.blur,
+                        sharpness: imgClip?.sharpness,
+                        noise: imgClip?.noise,
+                        vignette: imgClip?.vignette
+                    });
                 }
             }
             clipRef.current?.getLayer()?.batchDraw();
@@ -437,6 +453,19 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                         );
                         x += drawWidth;
                     }
+                    
+                    // Apply WebGL filters to video thumbnails
+                    const vidClip = currentClip as VideoClipProps;
+                    applyFilters(imageCanvas, {
+                        brightness: vidClip?.brightness,
+                        contrast: vidClip?.contrast,
+                        hue: vidClip?.hue,
+                        saturation: vidClip?.saturation,
+                        blur: vidClip?.blur,
+                        sharpness: vidClip?.sharpness,
+                        noise: vidClip?.noise,
+                        vignette: vidClip?.vignette
+                    });
                 }
                 clipRef.current?.getLayer()?.batchDraw();
             
@@ -522,6 +551,19 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                             );
                             x2 += drawWidth2;
                         }
+                        
+                        // Apply WebGL filters to exact video thumbnails
+                        const vidClip = currentClip as VideoClipProps;
+                        applyFilters(imageCanvas, {
+                            brightness: vidClip?.brightness,
+                            contrast: vidClip?.contrast,
+                            hue: vidClip?.hue,
+                            saturation: vidClip?.saturation,
+                            blur: vidClip?.blur,
+                            sharpness: vidClip?.sharpness,
+                            noise: vidClip?.noise,
+                            vignette: vidClip?.vignette
+                        });
                     }
                 } finally {
                     if (mySeq === exactVideoUpdateSeqRef.current) {
@@ -556,6 +598,17 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             }
             clipRef.current?.getLayer()?.batchDraw();
         }
+        const generateTimelineThumbnailFilter = async () => {
+            if (clipType !== 'filter') return;
+            // make canvas 
+            const ctx = imageCanvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+                ctx.fillStyle = '#00BFFF';
+                ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
+            }
+            clipRef.current?.getLayer()?.batchDraw();
+        }
         if (clipType === 'audio') {
             generateTimelineThumbnailAudio()
         } else if (clipType === 'image') {
@@ -566,6 +619,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             generateTimelineThumbnailShape()
         } else if (clipType === 'text') {
             generateTimelineThumbnailText()
+        } else if (clipType === 'filter') {
+            generateTimelineThumbnailFilter()
         }
 
     
@@ -726,7 +781,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
             prev = Math.max(prev, hi);
         }
         // add the last gap
-        if (prev < timelineWidth) gaps.push([prev, timelineWidth]);
+        if (prev < timelineWidth) gaps.push([prev, Infinity]);
 
         const validGaps = gaps.filter(([lo, hi]) => hi - lo >= ghostWidthPx);
         const pointerCenter = desiredLeft;
@@ -759,6 +814,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
         const SNAP_THRESHOLD_PX = 6;
         let appliedSnap = false;
         let snapStageX: number | null = null;
+        
         if (chosenGap) {
             const [gLo, gHi] = chosenGap;
             const allTimelines = useClipStore.getState().timelines || [];
@@ -844,8 +900,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                 type: getTimelineTypeForClip(currentClip!),
                 timelineId: newTimelineId,
                 timelineWidth: stageWidth,
-                timelineY: (hoveredTimeline?.timelineY ?? 0) + 64,
-                timelineHeight: timeline?.timelineHeight ?? 64,
+                timelineY: (hoveredTimeline?.timelineY ?? 0) + 54,
+                timelineHeight: timeline?.timelineHeight ?? 54,
             };
             // check if idx is the same as the timelineId
             const currentIdx = state.timelines.findIndex((t) => t.timelineId === timelineId);
@@ -1214,11 +1270,36 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: 'video' 
                         ref={textRef}
                         x={8}
                         y={timelineHeight / 2}
-                        text={((currentClip as TextClipProps)?.text ?? '')}
+                        text={((currentClip as TextClipProps)?.text?.replace('\n', ' ') ?? '')}
                         fontSize={10}
                         fontFamily={(currentClip as TextClipProps)?.fontFamily ?? 'Poppins'}
                         fill="#151517"
-                        align={(currentClip as TextClipProps)?.textAlign ?? 'left'}
+                        align="left"
+                        verticalAlign="middle"
+                        offsetY={5}
+                    />
+                    </Group>
+                )}
+                {clipType === 'filter' && (currentClip  as FilterClipProps)?.name && (
+                    <Group>
+                    <Rect
+                        x={8 - 4}
+                        y={timelineHeight / 2}
+                        width={textWidth + 8}
+                        height={14}
+                        cornerRadius={2}
+                        fill="rgba(0, 0, 0, 0.075)"
+                        offsetY={7.5}
+                    />
+                    <Text
+                        ref={textRef}
+                        x={8}
+                        y={timelineHeight / 2}
+                        text={((currentClip as FilterClipProps)?.name ?? '')}
+                        fontSize={10}
+                        fontFamily={'Poppins'}
+                        fill="#ffffff"
+                        align="left"
                         verticalAlign="middle"
                         offsetY={5}
                     />

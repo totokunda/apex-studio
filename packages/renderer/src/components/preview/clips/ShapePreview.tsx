@@ -28,6 +28,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
   const isSelected = useControlsStore((s) => s.selectedClipIds.includes(clipId));
   const addClipSelection = useControlsStore((s) => s.addClipSelection);
   const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
+  const clearSelection = useControlsStore((s) => s.clearSelection);
   const isFullscreen = useControlsStore((s) => s.isFullscreen);
 
   const SNAP_THRESHOLD_PX = 4;
@@ -249,6 +250,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
 
   const handleClick = useCallback(() => {
     if (isFullscreen) return;
+    clearSelection();
     addClipSelection(clipId);
   }, [addClipSelection, clipId, isFullscreen]);
 
@@ -516,12 +518,13 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
           </React.Fragment>
         )}
       </Group>
-      {tool === 'pointer' && isSelected && !isFullscreen && (
+      
         <Transformer
           borderStroke='#AE81CE'
           anchorCornerRadius={8} 
           anchorStroke='#E3E3E3' 
           anchorStrokeWidth={1}
+          visible={tool === 'pointer' && isSelected && !isFullscreen}
           borderStrokeWidth={2}
           rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
           boundBoxFunc={transformerBoundBoxFunc as any}
@@ -537,7 +540,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
           }}
           enabledAnchors={['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-right', 'middle-left', 'middle-right', 'bottom-center']}
         />
-      )}
+      
     </React.Fragment>
   );
 };

@@ -8,6 +8,11 @@ const GhostTimeline:React.FC<TimelineProps> = ({timelineY, timelineHeight, timel
     const {ghostStartEndFrame, ghostX, ghostTimelineId, getClipsForTimeline, draggingClipId} = useClipStore();
     const {timelineDuration} = useControlsStore();
     const ghostWidth = useMemo(() => getClipWidth(ghostStartEndFrame[0], ghostStartEndFrame[1], timelineWidth!, timelineDuration), [ghostStartEndFrame, timelineWidth, timelineDuration]);
+    const  {getClipById} = useClipStore();
+    const currentClip = getClipById(draggingClipId!);
+    const cornerRadius = useMemo(() => {
+        return currentClip?.type === 'shape' || currentClip?.type === 'text' ? 2 : 4;
+    }, [currentClip?.type]);
 
     const guideLines = useMemo(() => {
       if (ghostTimelineId !== timelineId) return null;
@@ -75,14 +80,14 @@ const GhostTimeline:React.FC<TimelineProps> = ({timelineY, timelineHeight, timel
           width={(guideLines[1] - guideLines[0])}
           height={timelineHeight}
           fill={'rgba(174,129,206,0.12)'}
-          cornerRadius={6}
+          cornerRadius={cornerRadius}
         />
       </>
     )}
     {ghostTimelineId == timelineId && <Rect
      x={ghostX + timelinePadding}
      y={timelineY! - timelineHeight!} 
-     cornerRadius={8} 
+     cornerRadius={cornerRadius} 
      width={ghostWidth} 
      height={timelineHeight} fill={'rgba(164, 119, 196, 0.3)'} stroke={'#AE81CE'} strokeWidth={2} shadowColor={'#AE81CE'} shadowBlur={8} shadowOpacity={0.35} />}
     {ghostTimelineId == timelineId && guideLines && (

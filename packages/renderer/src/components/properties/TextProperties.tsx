@@ -1,5 +1,5 @@
 import { TextClipProps } from '@/lib/types';
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useClipStore } from '@/lib/clip';
 import { Combobox, FontItem } from './Combobox';
 import PropertiesSlider from './PropertiesSlider';
@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import ColorInput from './ColorInput';
 import TextStrokeSection from './TextStrokeSection';
 import TextShadowSection from './TextShadowSection';
+import TextBackgroundSection from './TextBackgroundSection';
 
 interface TextPropertiesProps {
     clipId: string;
@@ -57,6 +58,10 @@ const TextProperties: React.FC<TextPropertiesProps> = ({ clipId }) => {
     const clip = useClipStore((s) => s.getClipById(clipId)) as TextClipProps;
     const [fontFamily, setFontFamily] = useState<string>(clip?.fontFamily ?? 'Arial');
     const updateClip = useClipStore((s) => s.updateClip);
+
+    useEffect(() => {
+        setFontFamily(clip?.fontFamily ?? 'Arial');
+    }, [clip?.fontFamily]);
 
     const AlignmentButtons = [
         { value: 'left', icon: <FaAlignLeft className="h-3 w-3" />,  },
@@ -191,10 +196,10 @@ const TextProperties: React.FC<TextPropertiesProps> = ({ clipId }) => {
             <ButtonList buttons={TextTransformButtons} selected={clip?.textTransform ?? 'none'} onSelect={setTextTransform} />
             </div>
             <ColorInput percentValue={clip?.colorOpacity ?? 100} value={clip?.color ?? '#000000'} setPercentValue={(value) => updateClip(clipId, { colorOpacity: value })} onChange={(value) => updateClip(clipId, { color: value })} label="Color"  />
-        </div>
-        
+        </div>        
         <TextStrokeSection clipId={clipId} />
         <TextShadowSection clipId={clipId} />
+        <TextBackgroundSection clipId={clipId} />
         
         </div>
     )

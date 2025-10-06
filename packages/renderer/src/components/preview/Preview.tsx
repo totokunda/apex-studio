@@ -17,6 +17,8 @@ import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps } from '@
 import { v4 as uuidv4 } from 'uuid';
 import { SlSizeFullscreen } from 'react-icons/sl';
 import FullscreenPreview from './FullscreenPreview';
+import { getApplicatorsForClip } from '@/lib/applicator-utils';
+import { useWebGLHaldClut } from './webgl-filters';
 
 interface PreviewProps {
 
@@ -50,8 +52,52 @@ const Preview:React.FC<PreviewProps> = () => {
   const [shapeCurrent, setShapeCurrent] = useState<{ x: number; y: number } | null>(null);
   const isFullscreen = useControlsStore((s) => s.isFullscreen);
   const setIsFullscreen = useControlsStore((s) => s.setIsFullscreen);
+  const haldClutInstance = useWebGLHaldClut();
+  const [clutsLoaded, setClutsLoaded] = useState(0);
   
-
+  // Memoize applicator factory configuration
+  const applicatorConfig = useMemo(() => ({
+    haldClutInstance,
+    // Add more shared resources here as needed
+  }), [haldClutInstance]);
+  
+  // Get applicators for a specific clip using the factory
+  const getClipApplicators = useCallback((clipId: string) => {
+    return getApplicatorsForClip(clipId, applicatorConfig);
+  }, [applicatorConfig]);
+  
+  // Preload all resources for applicator clips
+  useEffect(() => {
+    if (!haldClutInstance) return;
+    
+    // Preload filter CLUTs
+    const filterClips = clips.filter(c => c.type === 'filter');
+    
+    if (filterClips.length === 0) {
+      setClutsLoaded(0);
+      return;
+    }
+    
+    let loadedCount = 0;
+    const loadPromises = filterClips.map(async (clip: any) => {
+      const filterPath = clip.fullPath || clip.smallPath;
+      if (filterPath) {
+        try {
+          await haldClutInstance.preloadClut(filterPath);
+          loadedCount++;
+          setClutsLoaded(loadedCount);
+        } catch (e) {
+          console.warn('Failed to preload CLUT:', filterPath, e);
+        }
+      }
+    });
+    
+    // Add preloading for other applicator types here as they are added
+    // e.g., mask textures, processor models, etc.
+    
+    Promise.all(loadPromises).catch(console.error);
+  }, [clips, haldClutInstance]);
+  
 
   const sortClips = useCallback((clips: AnyClipProps[]) => {
     // Sort clips by timeline index - earlier timelines render later (on top)
@@ -320,7 +366,7 @@ const Preview:React.FC<PreviewProps> = () => {
         return;
       }
 
-      let textTimeline = { timelineId: uuidv4(), type: 'text' as const, timelineY: 0, timelineHeight: 36, timelineWidth: 0, muted: false, hidden: false };
+      let textTimeline = { timelineId: uuidv4(), type: 'text' as const, timelineY: 0, timelineHeight: 40, timelineWidth: 0, muted: false, hidden: false };
       addTimeline(textTimeline, -1);    
 
       const clipDuration = 3 * DEFAULT_FPS;
@@ -403,7 +449,7 @@ const Preview:React.FC<PreviewProps> = () => {
       // Only create shape if it has meaningful size
       if (width > 5 && height > 5) {
         // Find or create shape timeline
-        let shapeTimeline = { timelineId: uuidv4(), type: 'shape' as const, timelineY: 0, timelineHeight: 36, timelineWidth: 0, muted: false, hidden: false };
+        let shapeTimeline = { timelineId: uuidv4(), type: 'shape' as const, timelineY: 0, timelineHeight: 40, timelineWidth: 0, muted: false, hidden: false };
        
         addTimeline(shapeTimeline, -1);
 
@@ -569,17 +615,22 @@ const Preview:React.FC<PreviewProps> = () => {
                {sortClips(filterClips(clips)).map((clip) => {
                 const clipAtFrame = clipWithinFrame(clip, focusFrame);
                 if (!clipAtFrame) return null;
+                
+                // Get applicators for clips that support effects (video, image, etc.)
+                const applicators = getClipApplicators(clip.clipId);
+
                  if (clipAtFrame) {
                    switch (clip.type) {
                     case 'video':
-                      return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
+                      return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} clutsLoaded={clutsLoaded} />
                     case 'image':
-                      return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
+                      return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} clutsLoaded={clutsLoaded} />
                     case 'shape':
                       return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
                     case 'text':
                       return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
-                    case 'audio':
+                    default:
+                      // Applicator clips (filter, mask, processor, etc.) don't render visually
                       return null
                    }
                  } else {
@@ -591,7 +642,6 @@ const Preview:React.FC<PreviewProps> = () => {
            </Group>
           </Layer>
         </Stage>
-
         {/* Fullscreen button */}
         <button
           onClick={() => setIsFullscreen(true)}

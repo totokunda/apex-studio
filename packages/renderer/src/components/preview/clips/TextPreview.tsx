@@ -1,6 +1,6 @@
 import { TextClipProps } from '@/lib/types'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {Text, Transformer, Group, Line} from 'react-konva'
+import {Text, Transformer, Group, Line, Rect} from 'react-konva'
 import { Html } from 'react-konva-utils'
 import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
@@ -18,7 +18,6 @@ interface TextEditorProps {
     width: number;
     height: number;
     textTransform: string;
-    transformerRef: React.RefObject<Konva.Transformer | null>;
 }
 
 const applyTextTransform = (text: string, textTransform: string) => {
@@ -34,41 +33,23 @@ const applyTextTransform = (text: string, textTransform: string) => {
         } 
         return text;
     }
+    
 
-const TextEditor: React.FC<TextEditorProps> = ({ onClose, onChange, textNode, isEditing, width, height, textTransform, transformerRef }) => {
+const TextEditor: React.FC<TextEditorProps> = ({ onClose, onChange, textNode, isEditing, width, height, textTransform }) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const lastClickTimeRef = useRef<number>(0);
+    const divRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         if (!textareaRef.current || !textNode) return;
     
         const textarea = textareaRef.current;
-        const textPosition = textNode.position();
-    
-        const areaPosition = {
-          x: textPosition.x - 3,
-          y: textPosition.y - 3,
-        };
 
-        // Calculate clientRect inside useEffect to get current dimensions
-        let clientRect = null;
-        if (transformerRef.current) {
-            const rect = transformerRef.current.getClientRect();
-            clientRect = {
-                width: rect.width,
-                height: rect.height,
-                x: rect.x,
-                y: rect.y,
-            };
-        }
-
-        // Match styles with the text node
         textarea.value = applyTextTransform(textNode.text(), textTransform);
-        textarea.style.position = 'absolute';
-        textarea.style.top = `${areaPosition.y}px`;
-        textarea.style.left = `${areaPosition.x}px`;
+        
         textarea.style.fontSize = `${textNode.fontSize()}px`;
-        textarea.style.padding = '0px';
+        textarea.style.paddingLeft = '0px';
+        textarea.style.paddingRight = '0px';
         textarea.style.margin = '0px';
         textarea.style.overflow = 'hidden';
         textarea.style.background = 'none';
@@ -79,9 +60,23 @@ const TextEditor: React.FC<TextEditorProps> = ({ onClose, onChange, textNode, is
         textarea.style.fontStyle = String(textNode.fontStyle()).split(' ')[0]; // Extract 'normal' or 'italic'
         textarea.style.fontWeight = String(textNode.fontStyle()).includes('bold') ? 'bold' : 'normal';
         textarea.style.textDecoration = String(textNode.textDecoration());
-        textarea.style.width = `${clientRect?.width ?? width}px`;
-        textarea.style.height = `${clientRect?.height ?? height}px`;
-        
+        textarea.style.width = `100%`;   
+        textarea.style.height = `${height - 8}px`;
+        textarea.style.display = 'block';
+        textarea.style.boxSizing = 'border-box';
+        textarea.style.overflowY = 'hidden';
+        textarea.style.overflowX = 'hidden';
+        textarea.style.overscrollBehavior = 'none';
+        (textarea.style as any).msOverflowStyle = 'none';
+        (textarea.style as any).scrollbarWidth = 'none';
+        (textarea.style as any).webkitOverflowScrolling = 'auto';
+        (textarea.style as any).overflowAnchor = 'none';
+        textarea.style.whiteSpace = 'pre-wrap';
+        textarea.style.wordWrap = 'break-word';
+        textarea.setAttribute('autocorrect', 'off');
+        textarea.setAttribute('autocapitalize', 'off');
+        textarea.setAttribute('spellcheck', 'false');
+
         // Apply stroke if enabled
         if (textNode.strokeEnabled && textNode.strokeEnabled()) {
             const strokeColor = String(textNode.stroke());
@@ -104,15 +99,32 @@ const TextEditor: React.FC<TextEditorProps> = ({ onClose, onChange, textNode, is
         
         textarea.style.transformOrigin = 'left top';
         textarea.style.textAlign = textNode.align();
-        textarea.style.verticalAlign = textNode.verticalAlign();
         textarea.style.color = String(textNode.fill());
-    
-        const rotation = textNode.rotation();
-        let transform = '';
-        if (rotation) {
-          transform += `rotateZ(${rotation}deg)`;
+        
+        // Handle vertical alignment using padding
+        const verticalAlign = textNode.verticalAlign();
+        // Estimate content height based on number of lines
+        const lines = textarea.value.split('\n').length;
+        const estimatedContentHeight = lines * textNode.fontSize() * textNode.lineHeight();
+        const containerHeight = textNode.height();
+        const availableSpace = containerHeight - estimatedContentHeight;
+        
+        if (availableSpace > 0) {
+            if (verticalAlign === 'middle') {
+                textarea.style.paddingTop = `${availableSpace / 2}px`;
+                textarea.style.paddingBottom = `${availableSpace / 2}px`;
+            } else if (verticalAlign === 'bottom') {
+                textarea.style.paddingTop = `${availableSpace}px`;
+                textarea.style.paddingBottom = '0px';
+            } else {
+                textarea.style.paddingTop = '0px';
+                textarea.style.paddingBottom = `${availableSpace}px`;
+            }
+        } else {
+            textarea.style.paddingTop = '0px';
+            textarea.style.paddingBottom = '0px';
         }
-        textarea.style.transform = transform;
+        
     
         textarea.focus();
     
@@ -138,7 +150,6 @@ const TextEditor: React.FC<TextEditorProps> = ({ onClose, onChange, textNode, is
                   return;
               }
 
-
               if (timeSinceLastClick < DOUBLE_CLICK_THRESHOLD) {
                   return;
               }
@@ -146,29 +157,143 @@ const TextEditor: React.FC<TextEditorProps> = ({ onClose, onChange, textNode, is
               onClose();
           }
 
+        const preventScroll = () => {
+            if (textarea) {
+                textarea.scrollTop = 0;
+                textarea.scrollLeft = 0;
+            }
+        };
+
+        const preventScrollWithEvent = (e: Event) => {
+            e.preventDefault();
+            e.stopPropagation();
+            preventScroll();
+        };
+
+        const handleInput = (e: Event) => {
+            const target = e.target as HTMLTextAreaElement;
+            const scrollTop = target.scrollTop;
+            const scrollLeft = target.scrollLeft;
+            
+            if (scrollTop !== 0 || scrollLeft !== 0) {
+                target.scrollTop = 0;
+                target.scrollLeft = 0;
+            }
+            
+            preventScroll();
+            setTimeout(preventScroll, 0);
+            requestAnimationFrame(preventScroll);
+        };
+
+        const handleBeforeInput = () => {
+            preventScroll();
+        };
+
+        const handleSelectionChange = () => {
+            preventScroll();
+        };
+
+        // Continuously prevent any scroll
+        const scrollInterval = setInterval(preventScroll, 0);
+
         textarea?.addEventListener('keydown', handleKeyDown);
+        textarea?.addEventListener('scroll', preventScrollWithEvent, { passive: false });
+        textarea?.addEventListener('input', handleInput as any);
+        textarea?.addEventListener('beforeinput', handleBeforeInput);
+        textarea?.addEventListener('keypress', preventScroll as any);
+        textarea?.addEventListener('keyup', preventScroll as any);
+        document.addEventListener('selectionchange', handleSelectionChange);
         document.addEventListener('click', handleClickOutside, true);
         
         return () => {
+            clearInterval(scrollInterval);
             document.removeEventListener('click', handleClickOutside, true);
+            document.removeEventListener('selectionchange', handleSelectionChange);
             textarea?.removeEventListener('keydown', handleKeyDown);
+            textarea?.removeEventListener('scroll', preventScrollWithEvent);
+            textarea?.removeEventListener('input', handleInput as any);
+            textarea?.removeEventListener('beforeinput', handleBeforeInput);
+            textarea?.removeEventListener('keypress', preventScroll as any);
+            textarea?.removeEventListener('keyup', preventScroll as any);
         }
         
-      }, [isEditing, onClose])
+      }, [isEditing, onClose]); 
+
+      useEffect(() => {
+        if (!divRef.current || !isEditing || !textNode) return;
+        const div = divRef.current;
+        // make the correct width and height
+        const textPosition = textNode.position();
+    
+        const areaPosition = {
+          x: textPosition.x,
+          y: textPosition.y,
+        };
+
+
+        const textareaWidth =  width;
+        const textareaHeight = height;
+        div.style.top = `${areaPosition.y}px`;
+        div.style.left = `${areaPosition.x}px`;
+        div.style.width = `${textareaWidth}px`;
+        div.style.height = `${textareaHeight}px`;
+        div.style.position = 'absolute';
+        div.style.overflow = 'hidden';
+        div.style.overscrollBehavior = 'none';
+        (div.style as any).overflowAnchor = 'none';
+
+        const rotation = textNode.rotation();
+        let transform = '';
+        if (rotation) {
+          transform += `rotateZ(${rotation}deg)`;
+        }
+        div.style.transform = transform;
+        div.style.transformOrigin = 'top left';
+      }, [isEditing, textNode, width, height]);
+
+      const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        // Store cursor position before change
+        const selectionStart = e.target.selectionStart;
+        const selectionEnd = e.target.selectionEnd;
+        
+        // Force scroll to top before and after
+        e.target.scrollTop = 0;
+        e.target.scrollLeft = 0;
+        
+        onChange(applyTextTransform(e.target.value, textTransform));
+        
+        // Restore cursor position and force scroll to top again
+        setTimeout(() => {
+            e.target.selectionStart = selectionStart;
+            e.target.selectionEnd = selectionEnd;
+            e.target.scrollTop = 0;
+            e.target.scrollLeft = 0;
+        }, 0);
+      }, [onChange, textTransform]);
+
+      const backgroundEnabled = textNode?.getAttr?.('backgroundEnabled') ?? false;
+      const backgroundColor = textNode?.getAttr?.('backgroundColor') ?? '#000000';
+      const backgroundOpacity = textNode?.getAttr?.('backgroundOpacity') ?? 100;
+      const backgroundCornerRadius = textNode?.getAttr?.('backgroundCornerRadius') ?? 0;
 
       return (
         <Html>
-          <textarea
+        <div ref={divRef}
             onClick={e => e.stopPropagation()}
-            onBlur={() => onChange(applyTextTransform(textareaRef.current?.value ?? '', textTransform))}
-            onChange={(e) => onChange(applyTextTransform(e.target.value, textTransform))}
-            ref={textareaRef}
             style={{
-              border: '3px solid #AE81CE',
-              position: 'absolute',
-              display: isEditing ? 'block' : 'none',
+                position: 'absolute',
+                display: isEditing ? 'flex' : 'none',
+                backgroundColor: backgroundEnabled ? backgroundColor : 'transparent',
+                opacity: backgroundEnabled ? backgroundOpacity / 100 : 1,
+                borderRadius: backgroundEnabled ? `${backgroundCornerRadius}px` : '0px',
             }}
+            >
+          <textarea
+            onBlur={() => onChange(applyTextTransform(textareaRef.current?.value ?? '', textTransform))}
+            onChange={handleTextareaChange}
+            ref={textareaRef}
           />
+          </div>
         </Html>
       );
 };
@@ -186,6 +311,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
     const clip = useClipStore((s) => s.getClipById(clipId)) as TextClipProps;
     const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
     const addClipSelection = useControlsStore((s) => s.addClipSelection);
+    const clearSelection = useControlsStore((s) => s.clearSelection);
     const {selectedClipIds, isFullscreen} = useControlsStore();
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
 
@@ -241,6 +367,11 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
     const shadowOffsetX = clip?.shadowOffsetX ?? 2;
     const shadowOffsetY = clip?.shadowOffsetY ?? 2;
     
+    // Background properties
+    const backgroundEnabled = clip?.backgroundEnabled ?? false;
+    const backgroundColor = clip?.backgroundColor ?? '#000000';
+    const backgroundOpacity = clip?.backgroundOpacity ?? 100;
+    const backgroundCornerRadius = clip?.backgroundCornerRadius ?? 0;
 
     // Don't render if clip is not found
     if (!clip) {
@@ -449,6 +580,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
 
     const handleClick = useCallback(() => {
         if (isFullscreen) return;
+        clearSelection();
         addClipSelection(clipId);
     }, [addClipSelection, clipId, isFullscreen]);
 
@@ -463,11 +595,6 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
         updateClip(clipId, { text: text });
     }, [clipId, updateClip]);
 
-    useEffect(() => {
-        if (transformerRef.current && textRef.current) {
-          transformerRef.current.nodes([textRef.current]);
-        }
-      }, [isEditing]);
 
     useEffect(() => {
         return () => {
@@ -600,6 +727,19 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
   return (
     <React.Fragment>
     <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight}>
+      {backgroundEnabled && (
+        <Rect
+          x={clipTransform?.x ?? offsetX}
+          y={clipTransform?.y ?? offsetY}
+          width={clipTransform?.width ?? defaultWidth}
+          height={clipTransform?.height ?? defaultHeight}
+          fill={backgroundColor}
+          opacity={((backgroundOpacity ?? 100) / 100) * ((clipTransform?.opacity ?? 100) / 100)}
+          cornerRadius={backgroundCornerRadius}
+          rotation={clipTransform?.rotation ?? 0}
+          listening={false}
+        />
+      )}
       <Text 
       draggable={tool === 'pointer' && !isTransforming && !isEditing} 
       ref={textRef}
@@ -623,6 +763,10 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
       verticalAlign={verticalAlign}
       visible={!isEditing}
       opacity={(clipTransform?.opacity ?? 100) / 100}
+      backgroundEnabled={backgroundEnabled}
+      backgroundColor={backgroundColor}
+      backgroundOpacity={backgroundOpacity}
+      backgroundCornerRadius={backgroundCornerRadius}
        x={clipTransform?.x ?? offsetX} 
        y={clipTransform?.y ?? offsetY} 
        width={clipTransform?.width ?? defaultWidth} 
@@ -655,7 +799,6 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
             isEditing={isEditing}
             width={clipTransform?.width ?? defaultWidth}
             height={clipTransform?.height ?? defaultHeight}
-            transformerRef={transformerRef}
        />
       {tool === 'pointer' && isSelected && isInteracting && !isRotating && !isEditing && !isFullscreen && (
         <React.Fragment>
@@ -672,15 +815,16 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
         </React.Fragment>
       )}
     </Group>
-    {tool === 'pointer' && isSelected && !isEditing && !isFullscreen && <Transformer 
+    <Transformer 
         borderStroke='#AE81CE'
         anchorCornerRadius={8} 
         anchorStroke='#E3E3E3' 
         anchorStrokeWidth={1}
         borderStrokeWidth={2}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]} 
+        rotateEnabled={!isEditing}
         boundBoxFunc={transformerBoundBoxFunc as any}
-        
+        visible={tool === 'pointer' && isSelected && !isFullscreen}
         keepRatio={false}
         ref={(node) => {
             transformerRef.current = node;
@@ -692,7 +836,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
                 node.getLayer()?.batchDraw?.();
             }
         }} 
-        enabledAnchors={['top-left', 'bottom-right', 'top-right', 'bottom-left',  'middle-left', 'middle-right', 'top-center', 'bottom-center']} />}
+        enabledAnchors={isEditing ? [] : ['top-left', 'bottom-right', 'top-right', 'bottom-left',  'middle-left', 'middle-right', 'top-center', 'bottom-center']} />
     </React.Fragment>
   )
 }

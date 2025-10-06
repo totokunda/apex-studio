@@ -145,7 +145,7 @@ export const ScrubControl:React.FC<ScrubControlProps> = ({stageHeight, stageWidt
             ref={containerRef}
             onMouseDown={handleMouseDown} 
             style={{left: Math.min(position, stageWidth)}} 
-            className='absolute flex z-[9999] top-0 cursor-col-resize'
+            className='absolute flex z-50 top-0 cursor-col-resize'
         >
             <div className='flex flex-col items-center'>
                 <div className={cn("w-3 h-4 rounded-t-sm rounded-b-lg border-2 border-white shadow-md bg-white")}></div>

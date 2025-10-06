@@ -5,7 +5,7 @@ import {useDraggable} from '@dnd-kit/core';
 import { MediaItem } from '../media/Item';
 
 
-type GenericData = MediaItem;
+type GenericData = MediaItem
 
 interface DraggableProps {
     id: string;

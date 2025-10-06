@@ -9,6 +9,7 @@ import { IoEyeOff } from "react-icons/io5";
 import { TimelineProps } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useControlsStore } from '@/lib/control';
+import { MdPhotoFilter } from "react-icons/md";
 
 interface TimelineSidebarProps {
     clampedScroll: number;  // for the scroll position
@@ -29,7 +30,7 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
     height: (timelineHeight ?? 0) - 8,
     top: (timelineY ?? 0) + 32 - clampedScroll,
 
-  }} className={cn("bg-brand-light/10  w-full absolute flex items-center justify-center")}>
+  }} className={cn("bg-brand-light/5  w-full absolute flex items-center justify-center")}>
     {isCollapsed && <>
         {(type === 'media') && (
             <GoFileMedia className='w-3 h-3 text-brand-light/50' />
@@ -42,6 +43,9 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
         )}
         {(type === 'text') && (
             <LuType className='w-3 h-3 text-brand-light/50' />
+        )}
+        {(type === 'filter') && (
+            <MdPhotoFilter className='w-3 h-3 text-brand-light/50' />
         )}
         </>
     }
@@ -59,7 +63,10 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
         {(type === 'text') && (
             <LuType className='w-3 h-3 text-brand-light/50' />
         )}
-        {(type !== 'shape' && type !== 'text') && <button className='cursor-pointer' onClick={() => {
+        {(type === 'filter') && (
+            <MdPhotoFilter className='w-3 h-3 text-brand-light/50' />
+        )}
+        {(type !== 'shape' && type !== 'text' && type !== 'filter') && <button className='cursor-pointer' onClick={() => {
             if (timelineMuted) {
                 unmuteTimeline(timelineId);
             } else {
