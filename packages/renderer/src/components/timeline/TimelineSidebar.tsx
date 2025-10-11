@@ -47,6 +47,7 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
         {(type === 'filter') && (
             <MdPhotoFilter className='w-3 h-3 text-brand-light/50' />
         )}
+        
         </>
     }
     {!isCollapsed && (
@@ -66,6 +67,7 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
         {(type === 'filter') && (
             <MdPhotoFilter className='w-3 h-3 text-brand-light/50' />
         )}
+       
         {(type !== 'shape' && type !== 'text' && type !== 'filter') && <button className='cursor-pointer' onClick={() => {
             if (timelineMuted) {
                 unmuteTimeline(timelineId);

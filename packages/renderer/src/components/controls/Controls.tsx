@@ -174,16 +174,21 @@ const TimeControl:React.FC<TimeControlProps> = () => {
     const formatTime = (frames: number) => {
         if (frames === 0 || frames === undefined || frames === null || isNaN(frames) || frames === Infinity || frames === -Infinity) return '00:00.00';
         // convert frames to seconds
-        const seconds = frames / fps;
-        const minutes = Math.floor(seconds / 60);
-        const remainingSeconds = seconds % 60;
+        const totalSeconds = frames / fps;
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const remainingSeconds = totalSeconds % 60;
+        
+        if (hours > 0) {
+            return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toFixed(2).padStart(5, '0')}`;
+        }
         return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toFixed(2).padStart(5, '0')}`;
     };
 
     return (
         <div className="flex items-center gap-x-2 w-full">
             <span className="text-brand-light/60 text-xs">
-            <span className="w-15 inline-block">{formatTime(focusFrame)}</span>/<span className="w-15 inline-block">{formatTime(clipDuration)}</span>
+            <span className="w-17 inline-block">{formatTime(focusFrame)}</span>/<span className="w-16 inline-block">{formatTime(clipDuration)}</span>
             </span>
         </div>
     )

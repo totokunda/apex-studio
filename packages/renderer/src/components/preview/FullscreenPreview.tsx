@@ -67,9 +67,14 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
   
   const formatTime = useCallback((frames: number) => {
     if (frames === 0 || frames === undefined || frames === null || isNaN(frames) || frames === Infinity || frames === -Infinity) return '00:00.00';
-    const seconds = frames / fps;
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
+    const totalSeconds = frames / fps;
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = totalSeconds % 60;
+    
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toFixed(2).padStart(5, '0')}`;
+    }
     return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toFixed(2).padStart(5, '0')}`;
   }, [fps]);
   
@@ -252,9 +257,9 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
                 case 'image':
                   return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
                 case 'shape':
-                  return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
+                  return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
                 case 'text':
-                  return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />;
+                  return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
                 default:
                   // Applicator clips (filter, mask, processor, etc.) don't render visually
                   return null;

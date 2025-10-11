@@ -1,5 +1,4 @@
 import { TbPlayerSkipBack,  TbRewindBackward5,  TbLadder, TbPlus, TbMinus} from "react-icons/tb";
-
 import { TbRewindForward5 } from "react-icons/tb";
 import { FaCirclePause, FaCirclePlay } from "react-icons/fa6";
 import { FiTrash } from "react-icons/fi";
@@ -12,7 +11,6 @@ import { MAX_DURATION } from "@/lib/settings";
 import { LuSquareSplitVertical } from "react-icons/lu";
 import { getMediaInfoCached } from "@/lib/media/utils";
 import { PiSplitHorizontal } from "react-icons/pi";
-
 
 const BackButton = () => {
     const {setFocusFrame,  focusFrame} = useControlsStore();
@@ -177,15 +175,22 @@ const SplitButton = () => {
 
 const TrashButton = () => {
     const { selectedClipIds, clearSelection } = useControlsStore();
-    const { removeClip, clips } = useClipStore();
+    const {selectedPreprocessorId} = useClipStore();
+    const { removeClip, clips, removePreprocessorFromClip, getClipFromPreprocessorId } = useClipStore();
     const hasClips = clips.length > 0;
-    const disabled = selectedClipIds.length === 0 || !hasClips;
+    const disabled = (selectedClipIds.length === 0 && selectedPreprocessorId === null) || !hasClips;
     const handleDelete = useCallback(() => {
         if (disabled) return;
-        if (selectedClipIds.length === 0) return;
-        selectedClipIds.forEach((clipId) => {
-            removeClip(clipId);
-        });
+        if (selectedClipIds.length === 0 && selectedPreprocessorId === null) return;
+        if (selectedClipIds.length > 0) {
+            selectedClipIds.forEach((clipId) => {
+                removeClip(clipId);
+            });
+        }
+        if (selectedPreprocessorId !== null) {
+            const clip = getClipFromPreprocessorId(selectedPreprocessorId);
+            removePreprocessorFromClip(clip?.clipId ?? '', selectedPreprocessorId);
+        }
         clearSelection();
     }, [disabled, selectedClipIds, removeClip, clearSelection]);
 

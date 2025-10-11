@@ -5,6 +5,43 @@ import fs from 'node:fs';
 import path from 'node:path';
 import mime from 'mime';
 
+// Helper to convert Node.js stream to Web ReadableStream with proper error handling
+function nodeStreamToWebStream(nodeStream: fs.ReadStream): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      nodeStream.on('data', (chunk: string | Buffer) => {
+        try {
+          const uint8Array = typeof chunk === 'string' 
+            ? new TextEncoder().encode(chunk) 
+            : new Uint8Array(chunk);
+          controller.enqueue(uint8Array);
+        } catch (err) {
+          // Stream might be closed, ignore
+        }
+      });
+
+      nodeStream.on('end', () => {
+        try {
+          controller.close();
+        } catch (err) {
+          // Already closed, ignore
+        }
+      });
+
+      nodeStream.on('error', (err) => {
+        try {
+          controller.error(err);
+        } catch {
+          // Already errored, ignore
+        }
+        nodeStream.destroy();
+      });
+    },
+    cancel() {
+      nodeStream.destroy();
+    }
+  });
+}
 
 class AppDirProtocol implements AppModule {
   async enable({app}: ModuleContext): Promise<void> {
@@ -41,12 +78,42 @@ class AppDirProtocol implements AppModule {
           return new Response(null, { status: 404 });
         }
         
-        const stream = fs.createReadStream(filePath);
         const contentType = mime.getType(filePath) || 'application/octet-stream';
+        const fileSize = fs.statSync(filePath).size;
         
-        return new Response(stream as any, {
+        // Handle Range requests
+        const rangeHeader = request.headers.get('range');
+        if (rangeHeader) {
+          const parts = rangeHeader.replace(/bytes=/, '').split('-');
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+          const chunkSize = (end - start) + 1;
+          
+          const nodeStream = fs.createReadStream(filePath, { start, end });
+          const webStream = nodeStreamToWebStream(nodeStream);
+          
+          return new Response(webStream, {
+            status: 206,
+            headers: {
+              'Content-Type': contentType,
+              'Content-Length': chunkSize.toString(),
+              'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+              'Accept-Ranges': 'bytes'
+            }
+          });
+        }
+        
+        // Full content response
+        const nodeStream = fs.createReadStream(filePath);
+        const webStream = nodeStreamToWebStream(nodeStream);
+        
+        return new Response(webStream, {
           status: 200,
-          headers: { 'Content-Type': contentType }
+          headers: {
+            'Content-Type': contentType,
+            'Content-Length': fileSize.toString(),
+            'Accept-Ranges': 'bytes'
+          }
         });
       });
   }

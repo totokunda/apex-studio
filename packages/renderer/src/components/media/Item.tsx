@@ -2,7 +2,8 @@ import React, { useRef, useState, useEffect } from 'react'
 import { Input } from "@/components/ui/input"
 import { cn } from '@/lib/utils'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { TbDots, TbPencil, TbTrash } from "react-icons/tb"
+import { TbDots, TbPencil, TbTrash, TbVideo, TbVideoOff } from "react-icons/tb"
+import { LuLoaderCircle } from "react-icons/lu"
 
 interface DeleteAlertDialogProps {
   onDelete: () => void;
@@ -40,6 +41,7 @@ export type MediaItem = {
     dateAddedMs?: number;
     mediaInfo?: MediaInfo;
     fillCanvas?: boolean;
+    hasProxy?: boolean;
 }
 
 interface ItemProps {
@@ -58,6 +60,9 @@ interface ItemProps {
   handleDelete: (item: string) => void;
   startRename: (item: MediaItem) => void;
   isDragging?: boolean;
+  onCreateProxy?: (item: MediaItem) => void;
+  onRemoveProxy?: (item: MediaItem) => void;
+  isCreatingProxy?: boolean;
 }
 
 // Stable, memoized thumbnail component to prevent re-renders on parent resize
@@ -66,9 +71,12 @@ export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean }> = R
     const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
   
     const formatDuration = (duration: number) => {
+      const hours = Math.floor(duration / 3600);
       const minutes = Math.floor((duration % 3600) / 60);
       const seconds = Math.floor(duration % 60);
-      return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+      return hours > 0 
+        ? `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+        : `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     };
   
     // Draw audio waveform once per URL
@@ -114,8 +122,6 @@ export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean }> = R
           const canvasEl = canvasRef.current;
           if (!poster || !canvasEl) return;
           if (cancelled) return;
-
-
           
           const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
           const cssWidth = canvasEl.clientWidth || 240;
@@ -164,7 +170,7 @@ export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean }> = R
         {
             isDragging && mediaInfo && !mediaInfo?.duration && (
                 <span className="text-[10px] text-brand-light/90 absolute bottom-1 left-1 p-1 rounded bg-brand-background-dark/60 z-10">
-                    {formatDuration(3)}
+                    {formatDuration(5)}
                 </span>
             )
         }
@@ -173,33 +179,69 @@ export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean }> = R
   });
 
 
-const Item:React.FC<ItemProps> = ({ item, renamingItem, setRenamingItem, renameContainerRef, renameInputRef, renameValue, setRenameValue, commitRename, setDeleteItem, setDeleteAlertOpen, deleteAlertOpen, deleteItem, handleDelete, startRename }) => {
+const Item:React.FC<ItemProps> = ({ item, renamingItem, setRenamingItem, renameContainerRef, renameInputRef, renameValue, setRenameValue, commitRename, setDeleteItem, setDeleteAlertOpen, deleteAlertOpen, deleteItem, handleDelete, startRename, onCreateProxy, onRemoveProxy, isCreatingProxy }) => {
   const [isOpen, setIsOpen] = useState(false);
   return (
-      <Draggable id={item.name} data={item} disabled={isOpen || renamingItem === item.name || deleteAlertOpen}>
+      <Draggable id={item.name} data={item} disabled={isOpen || renamingItem === item.name || deleteAlertOpen || isCreatingProxy}>
               <div key={item.name} className={cn("group rounded-md transition-colors p-2.5  hover:bg-brand-light/5 ", {
                 "bg-brand-light/5": renamingItem === item.name,
               })}>
                 <div className="relative">
-                  <div className="w-full aspect-video overflow-hidden cursor-pointer  rounded-md bg-brand">
-                  
+                  <div className={cn("w-full aspect-video overflow-hidden  rounded-md bg-brand relative", {
+                    "opacity-50": isCreatingProxy,
+                    "cursor-pointer": !isCreatingProxy,
+                  })}>
                     <MediaThumb item={item} />
+                    {item.hasProxy && !isCreatingProxy && (
+                      <span className="absolute bottom-1 right-1 text-[8.5px] bg-brand-background/90 text-brand-light/90 px-1.5 py-1 rounded border border-brand-light/10 shadow">
+                        Proxy
+                      </span>
+                    )}
+                    {isCreatingProxy && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-brand-background/60 backdrop-blur-sm rounded-md">
+                        <LuLoaderCircle className="w-8 h-8 text-brand-light/90 animate-spin" />
+                      </div>
+                    )}
                   </div>
                   <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
                   <div
-                    className="absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity "
+                    className={cn("absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity", {
+                      "pointer-events-none": isCreatingProxy,
+                    })}
                     title="Actions"
                   >
-                      <DropdownMenuTrigger className='bg-black/50 cursor-pointer hover:bg-black/70 duration-300 text-white p-1 rounded'>
+                      <DropdownMenuTrigger disabled={isCreatingProxy} className='bg-black/50 cursor-pointer hover:bg-black/70 duration-300 text-white p-1 rounded disabled:opacity-50 disabled:cursor-not-allowed'>
                         <TbDots className="w-4 h-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent  align='start' className='dark w-40 flex flex-col text-brand-light bg-brand-background font-poppins' >
+                      {item.type === 'video' && (
+                          <>
+                            
+                            {!item.hasProxy ? (
+                              <DropdownMenuItem className='py-1.5' onClick={() => onCreateProxy?.(item)}>
+                                <TbVideo className="w-4 h-4" />
+                                <span className="flex flex-row gap-x-2.5 items-center justify-center text-xs">
+                                  Create File Proxy
+                                </span>
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem className='py-1.5' onClick={() => onRemoveProxy?.(item)}>
+                                <TbVideoOff className="w-4 h-4" />
+                                <span className="flex flex-row gap-x-2.5 items-center justify-center text-xs">
+                                  Remove File Proxy
+                                </span>
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
+                          </>
+                        )}
                       <DropdownMenuItem className='py-1.5' onClick={() => startRename(item)}>
                           <TbPencil className="w-4 h-4" />
                           <span className="flex flex-row gap-x-2.5 items-center justify-center text-xs">
                             Rename
                           </span>
                         </DropdownMenuItem>
+                        
                         <DropdownMenuSeparator />
                         <DropdownMenuItem className='py-1.5' onClick={() => {setDeleteItem(item.name); setDeleteAlertOpen(true)}}>
                             <TbTrash className="w-4 h-4" />

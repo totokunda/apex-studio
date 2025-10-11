@@ -57,12 +57,12 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const applicatorsRef = useRef(applicators);
 
     const aspectRatio = useMemo(() => {
-      const originalWidth = mediaInfo?.video?.codedWidth || 0;
-      const originalHeight = mediaInfo?.video?.codedHeight || 0;
+      const originalWidth = mediaInfo?.video?.displayWidth || 0;
+      const originalHeight = mediaInfo?.video?.displayHeight || 0;
       if (!originalWidth || !originalHeight) return 16/9;
       const aspectRatio = originalWidth / originalHeight;
       return aspectRatio;
-    }, [mediaInfo?.video?.codedWidth, mediaInfo?.video?.codedHeight]);
+    }, [mediaInfo?.video?.displayWidth, mediaInfo?.video?.displayHeight]);
 
     const groupRef = useRef<Konva.Group>(null);
     const SNAP_THRESHOLD_PX = 4; // pixels at screen scale
@@ -318,8 +318,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
     // Compute aspect-fit display size and offsets within the preview rect
     const {displayWidth, displayHeight, offsetX, offsetY} = useMemo(() => {
-        const originalWidth = mediaInfo?.video?.codedWidth || 0;
-        const originalHeight = mediaInfo?.video?.codedHeight || 0;
+        const originalWidth = mediaInfo?.video?.displayWidth || 0;
+        const originalHeight = mediaInfo?.video?.displayHeight || 0;
         if (!originalWidth || !originalHeight || !rectWidth || !rectHeight) {
             return { displayWidth: 0, displayHeight: 0, offsetX: 0, offsetY: 0 };
         }
@@ -334,7 +334,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const ox = (rectWidth - dw) / 2;
         const oy = (rectHeight - dh) / 2;
         return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
-    }, [mediaInfo?.video?.codedWidth, mediaInfo?.video?.codedHeight, rectWidth, rectHeight]);
+    }, [mediaInfo?.video?.displayWidth, mediaInfo?.video?.displayHeight, rectWidth, rectHeight]);
 
     // Initialize default transform if missing
     useEffect(() => {
@@ -396,17 +396,24 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!canvasRef.current) return;
         if (!mediaInfo) return;
         if (!displayWidth || !displayHeight) return;
-        const frameRate = mediaInfo.stats.video?.averagePacketRate || fps || 0;
-        if (!Number.isFinite(frameRate) || frameRate <= 0) return;
-        const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * frameRate));
-        const targetFrame = Math.max(0, Math.min(totalFrames, Math.floor(Math.max(0, currentFrame) * Math.max(0.1, speed)))) + (mediaInfo.startFrame || 0);
+        const clipFps = mediaInfo.stats.video?.averagePacketRate || fps || 0;
+        const projectFps = fps || 0;
+        if (!Number.isFinite(clipFps) || clipFps <= 0) return;
+        if (!Number.isFinite(projectFps) || projectFps <= 0) return;
+        
+        // Map from project fps space to native clip fps space
+        const idealFrame = Math.max(0, currentFrame) * Math.max(0.1, speed);
+        const actualFrame = Math.round((idealFrame / projectFps) * clipFps);
+        const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * clipFps));
+        const targetFrame = Math.max(0, Math.min(totalFrames, actualFrame)) + (mediaInfo.startFrame || 0);
+        
         // cancel any previous iterator
         drawTokenRef.current++;
         // @ts-ignore
         iteratorRef.current?.return?.();
         
         const targetEndFrame = mediaInfo.endFrame;
-        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: frameRate, startIndex: targetFrame, endIndex: targetEndFrame });
+        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: clipFps, startIndex: targetFrame, endIndex: targetEndFrame });
         try {
             // try a few samples in case the first frames are undecodable/null
             let tries = 0;
@@ -430,10 +437,16 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!canvasRef.current) return;
         if (!mediaInfo) return;
         if (!displayWidth || !displayHeight) return;
-        const frameRate = mediaInfo.stats.video?.averagePacketRate || fps || 0;
-        if (!Number.isFinite(frameRate) || frameRate <= 0) return;
-        const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * frameRate));
-        const startIdx = Math.max(0, Math.min(totalFrames, Math.floor(Math.max(0, currentFrame) * Math.max(0.1, speed)))) + (mediaInfo.startFrame || 0);
+        const clipFps = mediaInfo.stats.video?.averagePacketRate || fps || 0;
+        const projectFps = fps || 0;
+        if (!Number.isFinite(clipFps) || clipFps <= 0) return;
+        if (!Number.isFinite(projectFps) || projectFps <= 0) return;
+        
+        // Map from project fps space to native clip fps space
+        const idealStartFrame = Math.max(0, currentFrame) * Math.max(0.1, speed);
+        const actualStartFrame = Math.round((idealStartFrame / projectFps) * clipFps);
+        const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * clipFps));
+        const startIdx = Math.max(0, Math.min(totalFrames, actualStartFrame)) + (mediaInfo.startFrame || 0);
         currentStartFrameRef.current = startIdx;
         lastRenderedFrameRef.current = startIdx - 1;
 
@@ -442,7 +455,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         iteratorRef.current?.return?.();
         const targetEndFrame = mediaInfo.endFrame;
 
-        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: frameRate, startIndex: startIdx, endIndex: targetEndFrame });
+        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: clipFps, startIndex: startIdx, endIndex: targetEndFrame });
 
         try {
             for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
@@ -450,16 +463,18 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 if (!useControlsStore.getState().isPlaying) break;
                 if (!wc) continue;
 
-                // Determine the decoded sample's frame index
+                // Determine the decoded sample's frame index in native fps
                 const ts: number | undefined = (wc as any)?.timestamp;
-                let sampleIdx = Number.isFinite(ts as number) ? Math.round((ts as number) * frameRate) : (lastRenderedFrameRef.current + 1);
+                let sampleIdx = Number.isFinite(ts as number) ? Math.round((ts as number) * clipFps) : (lastRenderedFrameRef.current + 1);
 
-                // Compute current timeline-local frame (clip space)
+                // Compute current timeline-local frame mapped to native fps (clip space)
                 const computeLocalFocusMedia = () => {
                     const store = useControlsStore.getState();
                     const local = Math.max(0, Math.floor((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
                     const speedAdjusted = Math.max(0, Math.floor(local * Math.max(0.1, speed)));
-                    return speedAdjusted + (mediaInfo.startFrame || 0);
+                    // Map from project fps to native fps
+                    const actualFrameIdx = Math.round((speedAdjusted / projectFps) * clipFps);
+                    return actualFrameIdx + (mediaInfo.startFrame || 0);
                 };
                 
 
@@ -474,8 +489,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
                     if (myToken !== drawTokenRef.current) break;
                     if (!useControlsStore.getState().isPlaying) break;
-                    // Small sleep to pace to timeline FPS (about half frame duration)
-                    const delayMs = Math.max(4, Math.floor(1000 / Math.max(1, frameRate)) >> 1);
+                    // Small sleep to pace to project FPS (about half frame duration)
+                    const delayMs = Math.max(4, Math.floor(1000 / Math.max(1, projectFps)) >> 1);
                     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
                 }
                 if (myToken !== drawTokenRef.current) break;

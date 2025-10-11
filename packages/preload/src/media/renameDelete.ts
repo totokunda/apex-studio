@@ -1,64 +1,61 @@
 import fs from 'node:fs';
 import {promises as fsp} from 'node:fs';
 import {join} from 'node:path';
-import {converted24Dir, originalDir as originalDirFromRoot} from './paths.js';
-import {ensureUniqueNameSync, findFileByStemSync, loadLinks, removeLinkByConverted, updateLinkOnRename} from './links.js';
+import {symlinksDir, proxyDir} from './paths.js';
 
 export async function renameMediaPairInRoot(mediaRootAbs: string, convertedOldName: string, convertedNewName: string): Promise<void> {
-  const convDir = converted24Dir(mediaRootAbs);
-  const origDir = originalDirFromRoot(mediaRootAbs);
-
-  const oldConvAbs = join(convDir, convertedOldName);
-  const newConvAbs = join(convDir, convertedNewName);
-  if (oldConvAbs !== newConvAbs) {
-    await fsp.rename(oldConvAbs, newConvAbs);
+  const symlinksPath = symlinksDir(mediaRootAbs);
+  const oldSymlinkAbs = join(symlinksPath, convertedOldName);
+  const newSymlinkAbs = join(symlinksPath, convertedNewName);
+  
+  if (oldSymlinkAbs !== newSymlinkAbs && fs.existsSync(oldSymlinkAbs)) {
+    await fsp.rename(oldSymlinkAbs, newSymlinkAbs);
   }
-
-  const idx = await loadLinks(mediaRootAbs);
-  const originalOldName = idx.convertedToOriginal[convertedOldName] ?? findFileByStemSync(origDir, convertedOldName.replace(/\.[^.]+$/, ''));
-  if (originalOldName) {
-    const newBase = convertedNewName.replace(/\.[^.]+$/, '');
-    const ext = originalOldName.includes('.') ? originalOldName.slice(originalOldName.lastIndexOf('.')) : '';
-    const desired = `${newBase}${ext}`;
-    const finalOriginalNew = ensureUniqueNameSync(origDir, desired);
-    const oldOrigAbs = join(origDir, originalOldName);
-    const newOrigAbs = join(origDir, finalOriginalNew);
-    if (oldOrigAbs !== newOrigAbs) {
-      try { await fsp.rename(oldOrigAbs, newOrigAbs); } catch {}
+  
+  // Update proxy index if the file has a proxy
+  try {
+    const proxyIndexPath = join(mediaRootAbs, '.proxy-index.json');
+    if (fs.existsSync(proxyIndexPath)) {
+      const content = await fsp.readFile(proxyIndexPath, 'utf8');
+      const proxyIndex = JSON.parse(content);
+      
+      if (proxyIndex[convertedOldName]) {
+        proxyIndex[convertedNewName] = proxyIndex[convertedOldName];
+        delete proxyIndex[convertedOldName];
+        await fsp.writeFile(proxyIndexPath, JSON.stringify(proxyIndex, null, 2), 'utf8');
+      }
     }
-    await updateLinkOnRename(mediaRootAbs, convertedOldName, convertedNewName, originalOldName, finalOriginalNew);
-  } else {
-    const idx2 = await loadLinks(mediaRootAbs);
-    delete idx2.convertedToOriginal[convertedOldName];
-    idx2.convertedToOriginal[convertedNewName] = '';
-    await fsp.writeFile(join(mediaRootAbs, '.links.json'), JSON.stringify(idx2, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Error updating proxy index on rename:', e);
   }
 }
 
 export async function deleteMediaPairInRoot(mediaRootAbs: string, convertedName: string): Promise<void> {
-  const convDir = converted24Dir(mediaRootAbs);
-  const origDir = originalDirFromRoot(mediaRootAbs);
-
-  const convAbs = join(convDir, convertedName);
-  if (fs.existsSync(convAbs)) {
-    await fsp.rm(convAbs, {force: true});
+  const symlinksPath = symlinksDir(mediaRootAbs);
+  const symlinkAbs = join(symlinksPath, convertedName);
+  
+  if (fs.existsSync(symlinkAbs)) {
+    await fsp.rm(symlinkAbs, {force: true});
   }
-
-  const origName = await removeLinkByConverted(mediaRootAbs, convertedName);
-  if (origName) {
-    if (origName.length > 0) {
-      const origAbs = join(origDir, origName);
-      if (fs.existsSync(origAbs)) {
-        try { await fsp.rm(origAbs, {force: true}); } catch {}
-      }
-    } else {
-      const stem = convertedName.replace(/\.[^.]+$/, '');
-      const found = findFileByStemSync(origDir, stem);
-      if (found) {
-        const abs = join(origDir, found);
-        try { await fsp.rm(abs, {force: true}); } catch {}
+  
+  // Also delete proxy if it exists
+  try {
+    const proxyIndexPath = join(mediaRootAbs, '.proxy-index.json');
+    if (fs.existsSync(proxyIndexPath)) {
+      const content = await fsp.readFile(proxyIndexPath, 'utf8');
+      const proxyIndex = JSON.parse(content);
+      
+      if (proxyIndex[convertedName]) {
+        const proxyPath = join(proxyDir(mediaRootAbs), proxyIndex[convertedName]);
+        if (fs.existsSync(proxyPath)) {
+          await fsp.rm(proxyPath, {force: true});
+        }
+        delete proxyIndex[convertedName];
+        await fsp.writeFile(proxyIndexPath, JSON.stringify(proxyIndex, null, 2), 'utf8');
       }
     }
+  } catch (e) {
+    console.error('Error cleaning up proxy:', e);
   }
 }
 

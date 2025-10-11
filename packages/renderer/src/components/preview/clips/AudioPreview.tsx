@@ -4,7 +4,7 @@ import { AnyClipProps, MediaInfo, AudioClipProps } from '@/lib/types';
 import { getMediaInfo } from '@/lib/media/utils';
 import { getAudioIterator } from '@/lib/media/audio';
 import { WrappedAudioBuffer } from 'mediabunny';
-import * as Tone from 'tone';
+
 
 type ClipWithSrc = Extract<AnyClipProps, { src: string }>;
 

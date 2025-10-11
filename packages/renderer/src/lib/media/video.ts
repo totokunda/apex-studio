@@ -7,7 +7,7 @@ import {videoDecoders, pruneStaleDecoders} from "./utils";
 
 
 
-function getOrCreateVideoDecoder(path: string, mediaInfo: MediaInfo): VideoDecoderContext | null {
+function getOrCreateVideoDecoder(path: string, mediaInfo: MediaInfo, canBeTransparent: boolean): VideoDecoderContext | null {
     if (!mediaInfo?.video) return null;
     const key: VideoDecoderKey = `${path}#video`;
     const existing = videoDecoders.get(key);
@@ -18,7 +18,12 @@ function getOrCreateVideoDecoder(path: string, mediaInfo: MediaInfo): VideoDecod
         return existing;
     }
     try {
-        const sink = new CanvasSink(mediaInfo.video);
+    
+        const sink = new CanvasSink(mediaInfo.video, {
+            poolSize: 2,
+			fit: 'contain', // In case the video changes dimensions over time
+			alpha: canBeTransparent,
+        });
         const ctx: VideoDecoderContext = {
             sink,
             inFlight: new Set<number>(),
@@ -48,7 +53,8 @@ export const getVideoIterator = async (path: string, options?: { mediaInfo?: Med
 
         const startTimestamp = (options?.startIndex || 0) / fps;
         const endTimestamp = options?.endIndex ? (options.endIndex) / fps : undefined;
-        const decoder = getOrCreateVideoDecoder(path, mediaInfo);
+        const videoCanBeTransparent = await mediaInfo.video.canBeTransparent();
+        const decoder = getOrCreateVideoDecoder(path, mediaInfo, videoCanBeTransparent);
         if (!decoder) throw new Error('Decoder not found');
         decoder.lastAccessTs = nowMs();
         return decoder.sink.canvases(startTimestamp, endTimestamp);

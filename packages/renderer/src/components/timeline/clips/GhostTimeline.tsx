@@ -11,10 +11,14 @@ const GhostTimeline:React.FC<TimelineProps> = ({timelineY, timelineHeight, timel
     const  {getClipById} = useClipStore();
     const currentClip = getClipById(draggingClipId!);
     const cornerRadius = useMemo(() => {
-        return currentClip?.type === 'shape' || currentClip?.type === 'text' ? 2 : 4;
+        return 1;
     }, [currentClip?.type]);
 
-    const guideLines = useMemo(() => {
+    const gapBoundaryPadding = useMemo(() => {
+        return timelineDuration[0] === 0? timelinePadding : 0;
+    }, [currentClip?.type]);
+
+    const computedGuideLines = useMemo(() => {
       if (ghostTimelineId !== timelineId) return null;
       const [tStart, tEnd] = timelineDuration;
       const stageWidth = timelineWidth || 0;
@@ -68,6 +72,9 @@ const GhostTimeline:React.FC<TimelineProps> = ({timelineY, timelineHeight, timel
       return chosen;
     }, [ghostTimelineId, timelineId, ghostX, ghostWidth, getClipsForTimeline, timelineDuration, timelineWidth, draggingClipId]);
 
+    // For preprocessor timelines, use ghostGuideLines from store; for media timelines, use computed guidelines
+    const guideLines = computedGuideLines;
+
     return (
     <React.Fragment>
     {ghostTimelineId == timelineId && guideLines && (
@@ -75,26 +82,26 @@ const GhostTimeline:React.FC<TimelineProps> = ({timelineY, timelineHeight, timel
         {/* Highlight the valid drop gap */}
         <Rect
           listening={false}
-          x={guideLines[0] + timelinePadding}
+          x={guideLines[0] + gapBoundaryPadding}
           y={(timelineY! - timelineHeight!)}
           width={(guideLines[1] - guideLines[0])}
           height={timelineHeight}
-          fill={'rgba(174,129,206,0.12)'}
+          fill={'rgba(255,255,255,0.12)'}
           cornerRadius={cornerRadius}
         />
       </>
     )}
     {ghostTimelineId == timelineId && <Rect
-     x={ghostX + timelinePadding}
+     x={ghostX + gapBoundaryPadding}
      y={timelineY! - timelineHeight!} 
      cornerRadius={cornerRadius} 
      width={ghostWidth} 
-     height={timelineHeight} fill={'rgba(164, 119, 196, 0.3)'} stroke={'#AE81CE'} strokeWidth={2} shadowColor={'#AE81CE'} shadowBlur={8} shadowOpacity={0.35} />}
+     height={timelineHeight} fill={'rgba(255, 255, 255, 0.3)'} stroke={'#FFFFFF'} strokeWidth={2} shadowColor={'#FFFFFF'} shadowBlur={8} shadowOpacity={0.35} />}
     {ghostTimelineId == timelineId && guideLines && (
       <>
         {/* Gap boundary guidelines - extend 10px above and below */}
-        <Line listening={false} points={[guideLines[0] + timelinePadding, (timelineY! - timelineHeight! - 10), guideLines[0] + timelinePadding, (timelineY! + 10)]} stroke={'#AE81CE'} strokeWidth={1.5} dash={[4, 3]} shadowColor={'#AE81CE'} shadowBlur={6} shadowOpacity={0.4} />
-        <Line listening={false} points={[guideLines[1] + timelinePadding, (timelineY! - timelineHeight! - 10), guideLines[1] + timelinePadding, (timelineY! + 10)]} stroke={'#AE81CE'} strokeWidth={1.5} dash={[4, 3]} shadowColor={'#AE81CE'} shadowBlur={6} shadowOpacity={0.4} />
+        <Line listening={false} points={[guideLines[0] + gapBoundaryPadding, (timelineY! - timelineHeight!), guideLines[0] + gapBoundaryPadding, (timelineY!)]} stroke={'#FFFFFF'} strokeWidth={1.5} dash={[4, 3]} shadowColor={'#FFFFFF'} shadowBlur={6} shadowOpacity={0.4} />
+        <Line listening={false} points={[guideLines[1] + gapBoundaryPadding, (timelineY! - timelineHeight!), guideLines[1] + gapBoundaryPadding, (timelineY!)]} stroke={'#FFFFFF'} strokeWidth={1.5} dash={[4, 3]} shadowColor={'#FFFFFF'} shadowBlur={6} shadowOpacity={0.4} />
       </>
     )}
     </React.Fragment>

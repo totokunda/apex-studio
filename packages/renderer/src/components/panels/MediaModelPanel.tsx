@@ -3,6 +3,7 @@ import { ResizablePanel } from '@/components/ui/resizable'
 import { cn } from '@/lib/utils'
 import { useSidebarStore } from '@/lib/sidebar'
 import MediaMenu from '@/components/menus/MediaMenu'
+import PreprocessorMenu from '@/components/menus/PreprocessorMenu'
 import { ImperativePanelHandle } from 'react-resizable-panels'
 import { HiFilm } from "react-icons/hi";
 import { MdPhotoFilter } from "react-icons/md";
@@ -12,6 +13,7 @@ import { TbWand } from "react-icons/tb";
 import { LuChevronRight, LuChevronLeft } from 'react-icons/lu'
 import MediaModelTrigger from '../media/MediaModelTrigger'
 import FilterMenu from '../menus/FilterMenu'
+import { VscServerProcess } from "react-icons/vsc";
 
 interface MediaModelPanelProps { order?: number; defaultSize?: number; minSize?: number; maxSize?: number }
 
@@ -94,6 +96,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
           <MediaModelTrigger icon={<HiFilm className="h-4 w-4" />} title="Media" section="media" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<TbWand className="h-4 w-4 stroke-2" />} title="Models" section="models" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<MdPhotoFilter className="h-4 w-4 " />} title="Filters" section="filters" onOpen={resizePanelOpen} onClose={resizePanelClose} />
+          <MediaModelTrigger icon={<VscServerProcess className="h-4 w-4 " />} title="Preprocessors" section="preprocessors" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<MdOutlineMovieFilter className="h-4 w-4 " />} title="LoRAs" section="loras" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<HiOutlineTemplate className="h-4 w-4 stroke-2" />} title="Templates" section="templates" onOpen={resizePanelOpen} onClose={resizePanelClose} />
         </div>
@@ -106,6 +109,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
     </div>
     {section === 'media' && <MediaMenu />}
     {section === 'filters' && <FilterMenu />}
+    {section === 'preprocessors' && <PreprocessorMenu />}
   </ResizablePanel>
   )
 }

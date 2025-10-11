@@ -203,16 +203,20 @@ function getAudioForVideoFrames(
     startFrame?: number,
     endFrame?: number,
     audioSampleRate: number = 48000,
-    videoFrameRate: number = 24
+    videoFrameRate: number = 24,
+    sampleSize: number  | undefined = undefined
 ): Float32Array {
     if (!startFrame) startFrame = 0;
     
     // 1. Calculate how many audio samples correspond to one video frame.
-    const samplesPerFrame = audioSampleRate / videoFrameRate;
+    const samplesPerFrame = sampleSize ? sampleSize : audioSampleRate / videoFrameRate;
+
     // 2. Calculate the starting sample index.
     // We use Math.floor() to ensure we get an integer index.
     const startSampleIndex = Math.floor(startFrame * samplesPerFrame);
-    const endSampleIndex = endFrame ? Math.floor(endFrame * samplesPerFrame) : fullAudioAmplitudes.length;
+    let endSampleIndex = endFrame ? Math.floor(endFrame * samplesPerFrame) : fullAudioAmplitudes.length;
+    // ensure endSampleIndex is less than fullAudioAmplitudes.length
+    endSampleIndex = Math.min(endSampleIndex, fullAudioAmplitudes.length);
 
     // 4. Slice the original audio array to get the desired segment.
     // The .slice() method is perfect for this, as it doesn't modify the original array.
@@ -285,7 +289,10 @@ export const generateAudioWaveformCanvas = async (
         endFrame = options?.mediaInfo?.endFrame;
     }
 
-    const audioClip = getAudioForVideoFrames(amplitudes, startFrame, endFrame);
+    const audioSampleRate = options?.mediaInfo?.audio?.sampleRate ?? 48000;
+    const videoFrameRate = options?.mediaInfo?.stats.video?.averagePacketRate ?? 24;
+
+    const audioClip = getAudioForVideoFrames(amplitudes, startFrame, endFrame, audioSampleRate, videoFrameRate, options?.mediaInfo?.audio?.sampleSize);
 
     // 1. Define your source and target ranges
     const SOURCE_DB_MIN = -60.0; // What we consider "silence" in the original signal
@@ -480,9 +487,11 @@ export const generatePosterCanvas = async (
         const mediaInfo = options?.mediaInfo || await getMediaInfo(path);
         if (!mediaInfo?.video) return null;
 
-        const targetWidth = Math.max(1, Math.floor(width || mediaInfo.video.codedWidth || 320));
-        const targetHeight = Math.max(1, Math.floor(height || mediaInfo.video.codedHeight || 180));
-        const frameIndex = options?.frameIndex ?? 0;
+        const targetWidth = Math.max(1, Math.floor(width || mediaInfo.video.displayWidth || 320));
+        const targetHeight = Math.max(1, Math.floor(height || mediaInfo.video.displayHeight || 180));
+        const duration = mediaInfo.duration ?? 1;
+        const numFrames = duration * (mediaInfo.stats.video?.averagePacketRate ?? 24);
+        const frameIndex = options?.frameIndex ?? Math.floor(numFrames * 0.1);
         const wrapped = await fetchCanvasSample(path, frameIndex, targetWidth, targetHeight, { mediaInfo, prefetch: false });
         return wrapped?.canvas ?? null;
     } catch (e) {

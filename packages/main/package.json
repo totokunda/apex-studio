@@ -14,10 +14,12 @@
   "dependencies": {
     "@app/preload": "*",
     "@app/renderer": "*",
-    "electron-updater": "6.6.2"
+    "electron-updater": "6.6.2",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@app/electron-versions": "*",
+    "@types/ws": "^8.5.10",
     "electron-devtools-installer": "4.0.0",
     "typescript": "5.9.2",
     "vite": "7.1.6"

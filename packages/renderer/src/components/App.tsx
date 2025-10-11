@@ -17,13 +17,15 @@ import { DndContext, DragEndEvent, DragOverlay } from "@dnd-kit/core";
 import { MediaItem, MediaThumb } from "@/components/media/Item";
 import { cn } from "@/lib/utils";
 import { useClipStore } from "@/lib/clip";
+import { Preprocessor } from "@/lib/preprocessor/api";
+import { PreprocessorItem } from "./menus/PreprocessorMenu";
 
 const App:React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useLayoutConfigStore((s) => s.layout);
   const {ghostInStage, clips} = useClipStore();
 
-  const [activeDragItem, setActiveDragItem] = useState<MediaItem | null>(null);
+  const [activeDragItem, setActiveDragItem] = useState<MediaItem | Preprocessor | null>(null);
 
   // Disable scrolling while dragging
   useEffect(() => {
@@ -75,7 +77,7 @@ const App:React.FC = () => {
       <div className="flex h-full w-full p-3">
         {layout === 'default' && (
           <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5 overflow-hidden">
-            <ResizablePanel defaultSize={70} minSize={50} maxSize={70}>
+            <ResizablePanel defaultSize={70} minSize={30} maxSize={70}>
             <ResizablePanelGroup direction="horizontal" className="gap-0.5 overflow-hidden">
             <MediaModelPanel order={1} />
             <ResizableHandle className="bg-transparent" />
@@ -130,11 +132,22 @@ const App:React.FC = () => {
     </main>
     <DragOverlay dropAnimation={null}>
       {activeDragItem ? (
+        <>
+        {activeDragItem?.type !== 'preprocessor' && (
         <div className={cn("w-44 aspect-video rounded-md overflow-hidden bg-brand opacity-100", {
           "opacity-0": ghostInStage && clips.length > 0,
         })}>
-          <MediaThumb item={activeDragItem} isDragging={true} />
+          <MediaThumb item={activeDragItem as MediaItem} isDragging={true} />
         </div>
+        )}
+        {activeDragItem?.type === 'preprocessor' && (
+          <div className={cn("overflow-hidden opacity-100", {
+            "opacity-0": ghostInStage && clips.length > 0,
+          })}>
+          <PreprocessorItem preprocessor={activeDragItem as Preprocessor} isDragging={true} />
+        </div>
+        )}
+        </>
       ) : null}
     </DragOverlay>
     </DndContext>

@@ -1,6 +1,6 @@
 import React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { LuChevronDown, LuArrowUpDown, LuLoader } from "react-icons/lu";
+import { LuChevronDown, LuArrowUpDown, LuLoader, LuFolder, LuUpload } from "react-icons/lu";
 import { LuCloudUpload } from "react-icons/lu";
 import { toast } from 'sonner';
 import { TbFileUpload, TbFolderUp} from "react-icons/tb";
@@ -17,11 +17,10 @@ import {
 import { cn } from '@/lib/utils';
 import { BsFilter } from "react-icons/bs";
 import { DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu";
-import { listConvertedMedia, importMediaPaths, ensureUniqueConvertedName, renameMediaPair, deleteMediaPair, getLowercaseExtension, pickMediaPaths } from '@app/preload';
+import { listConvertedMedia, importMediaPaths, ensureUniqueConvertedName, renameMediaPair, deleteMediaPair, getLowercaseExtension, pickMediaPaths, getPathForFile, createProxy, removeProxy } from '@app/preload';
 import { getMediaInfo } from '@/lib/media/utils';
 import { VIDEO_EXTS, IMAGE_EXTS, AUDIO_EXTS } from '@/lib/settings';
  
-
 function isSupported(p: string) {
     try {
         const e = getLowercaseExtension(p);
@@ -130,6 +129,9 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
     const [sortOpen, setSortOpen] = useState(false);
     const [durationCache, setDurationCache] = useState<Record<string, number | undefined>>({});
     const [isUploading, setIsUploading] = useState(false);
+    const [isDragging, setIsDragging] = useState(false);
+    const dragCounterRef = useRef(0);
+    const [creatingProxies, setCreatingProxies] = useState<Set<string>>(new Set());
 
     useEffect(() => {
       const el = uploadBarRef.current;
@@ -164,12 +166,17 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
       try {
         setLoading(true);
         const list = await listConvertedMedia();
-        const results: MediaItem[] = [];
-        for (const it of list) {
-          const info = await getMediaInfo(it.assetUrl);
-          
-          results.push({ name: it.name, type: it.type, absPath: it.absPath, assetUrl: it.assetUrl, dateAddedMs: it.dateAddedMs, mediaInfo: info });
-        }
+        const infoPromises = list.map(it => getMediaInfo(it.assetUrl));
+        const infos = await Promise.all(infoPromises);
+        const results: MediaItem[] = list.map((it, idx) => ({
+          name: it.name,
+          type: it.type,
+          absPath: it.absPath,
+          assetUrl: it.assetUrl,
+          dateAddedMs: it.dateAddedMs,
+          mediaInfo: infos[idx],
+          hasProxy: it.hasProxy
+        }));
         results.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
         setItems(results);
       } catch (e) {
@@ -188,16 +195,21 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
           if (!paths || paths.length === 0) return;
           const existingNames = new Set(items.map(it => it.name));
           const loadingId = toast.loading(`Importing ${paths.length} item(s)…`, { position: "bottom-right" });
-          await importMediaPaths(paths, '480p');
+          await importMediaPaths(paths);
           toast.dismiss(loadingId);
           const list = await listConvertedMedia();
-          const newItems: MediaItem[] = [];
-          for (const it of list) {
-            if (!existingNames.has(it.name)) {
-              const info = await getMediaInfo(it.assetUrl);
-              newItems.push({ name: it.name, type: it.type, absPath: it.absPath, assetUrl: it.assetUrl, dateAddedMs: it.dateAddedMs, mediaInfo: info });
-            }
-          }
+          const newItemsToFetch = list.filter(it => !existingNames.has(it.name));
+          const infoPromises = newItemsToFetch.map(it => getMediaInfo(it.assetUrl));
+          const infos = await Promise.all(infoPromises);
+          const newItems: MediaItem[] = newItemsToFetch.map((it, idx) => ({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: infos[idx],
+            hasProxy: it.hasProxy
+          }));
           setItems((prev) => [...prev, ...newItems].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
         } catch (error) {
           console.error(error);
@@ -211,6 +223,85 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         }
         finally {
           setIsUploading(false);
+        }
+      };
+
+      const handleDraggedFiles = async (files: File[]) => {
+        try {
+          setIsUploading(true);
+          const paths: string[] = [];
+          for (const file of files) {
+            try {
+              const path = getPathForFile(file);
+              if (path && isSupported(path)) {
+                paths.push(path);
+              }
+            } catch (e) {
+              console.warn('Could not get path for file:', e);
+            }
+          }
+          if (paths.length === 0) {
+            toast.error("No supported media files found", { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
+            return;
+          }
+          const existingNames = new Set(items.map(it => it.name));
+          const loadingId = toast.loading(`Importing ${paths.length} item(s)…`, { position: "bottom-right" });
+          await importMediaPaths(paths);
+          toast.dismiss(loadingId);
+          const list = await listConvertedMedia();
+          const newItemsToFetch = list.filter(it => !existingNames.has(it.name));
+          const infoPromises = newItemsToFetch.map(it => getMediaInfo(it.assetUrl));
+          const infos = await Promise.all(infoPromises);
+          const newItems: MediaItem[] = newItemsToFetch.map((it, idx) => ({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: infos[idx],
+            hasProxy: it.hasProxy
+          }));
+          setItems((prev) => [...prev, ...newItems].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
+        } catch (error) {
+          console.error(error);
+          toast.error("Failed to import files", { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
+        } finally {
+          setIsUploading(false);
+        }
+      };
+
+      const handleDragEnter = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current++;
+        if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+          setIsDragging(true);
+        }
+      };
+
+      const handleDragLeave = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current--;
+        if (dragCounterRef.current === 0) {
+          setIsDragging(false);
+        }
+      };
+
+      const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+
+      const handleDrop = async (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+        dragCounterRef.current = 0;
+        
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0) {
+          await handleDraggedFiles(files);
         }
       };
     
@@ -320,6 +411,37 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
           });
         }
       }, [items]);
+
+      const handleCreateProxy = useCallback(async (item: MediaItem) => {
+        try {
+          setCreatingProxies((prev) => new Set(prev).add(item.name));
+          const loadingId = toast.loading('Creating proxy...', { position: "bottom-right" });
+          await createProxy(item.name, '480p');
+          toast.dismiss(loadingId);
+          toast.success('Proxy created', { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
+          await loadMediaList();
+        } catch (e) {
+          console.error(e);
+          toast.error('Failed to create proxy', { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
+        } finally {
+          setCreatingProxies((prev) => {
+            const next = new Set(prev);
+            next.delete(item.name);
+            return next;
+          });
+        }
+      }, [loadMediaList]);
+
+      const handleRemoveProxy = useCallback(async (item: MediaItem) => {
+        try {
+          await removeProxy(item.name);
+          toast.success('Proxy removed', { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
+          await loadMediaList();
+        } catch (e) {
+          console.error(e);
+          toast.error('Failed to remove proxy', { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
+        }
+      }, [loadMediaList]);
 
       // removed old inline thumbnail implementations in favor of memoized MediaThumb above
       // Prefetch durations lazily when sorting by duration
@@ -483,12 +605,25 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
           </DropdownMenu>
         </div>
       </div>
-      <div ref={listContainerRef} className=" overflow-y-auto">
+      <div 
+        ref={listContainerRef} 
+        className="overflow-y-auto relative"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         {loading && (
           <div className="text-brand-lighter/70 text-xs px-5 py-4 pt-1">Loading media…</div>
         )}
         {!loading && items.length === 0 && (
-          <div className="text-brand-lighter/60 text-xs px-5 py-4 pt-1">No media yet. Upload files to get started.</div>
+          <div style={{ height: Math.max(0, panelHeight - 172) }} className="flex flex-col items-center justify-center w-full text-sm gap-y-2 text-brand-lighter/60">
+            <LuFolder className="w-7 h-7 text-brand-light" />
+            <div className="flex flex-col items-center justify-center gap-y-1">
+            <span className="text-brand-lighter text-base font-medium">No media yet</span>
+            <span className="text-brand-lighter/50 text-xs">Upload files to get started.</span>
+            </div>
+          </div>
         )}
         {!loading && items.length > 0 && (
           <ScrollArea style={{ height: Math.max(0, panelHeight - 172) }} className="px-5 py-4 pt-1 dark"
@@ -504,10 +639,21 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
               setRenameValue={setRenameValue} commitRename={commitRename} 
               setDeleteItem={setDeleteItem} setDeleteAlertOpen={setDeleteAlertOpen} 
               deleteAlertOpen={deleteAlertOpen} deleteItem={deleteItem} 
-              handleDelete={handleDelete} startRename={startRename} />
+              handleDelete={handleDelete} startRename={startRename}
+              onCreateProxy={handleCreateProxy} onRemoveProxy={handleRemoveProxy}
+              isCreatingProxy={creatingProxies.has(item.name)} />
             ))}
             </div>
           </ScrollArea>
+        )}
+        {isDragging && (
+          <div className="absolute inset-0 bg-brand/80 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-none z-50 m-2 border-2 border-dashed border-brand-light/80 rounded-lg">
+            <LuUpload className="w-7 h-7 text-brand-light mb-2.5" />
+            <div className="flex flex-col items-center gap-y-1">
+              <span className="text-brand-lighter text-base font-medium">Drop files here</span>
+              <span className="text-brand-lighter/60 text-xs">Supports video, image, and audio files</span>
+            </div>
+          </div>
         )}
       </div>
       

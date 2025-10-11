@@ -15,6 +15,14 @@ export function converted24Dir(mediaRootAbs: string): string {
   return join(mediaRootAbs, '24');
 }
 
+export function symlinksDir(mediaRootAbs: string): string {
+  return join(mediaRootAbs, 'symlinks');
+}
+
+export function proxyDir(mediaRootAbs: string): string {
+  return join(mediaRootAbs, 'proxy');
+}
+
 export function ensureDirSync(fs: typeof import('node:fs'), dirPath: string) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, {recursive: true});

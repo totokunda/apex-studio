@@ -40,11 +40,12 @@ const getUrlWithoutSearchParams = (path: string): string => {
     return pathUrl.toString();
 }
 
-export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
+export const getMediaInfo = async (path: string, options?: { fullStats?: boolean }): Promise<MediaInfo> => {
 
     const pathUrl = new URL(path);
     const startFrame = pathUrl.searchParams.get('startFrame') ? Number(pathUrl.searchParams.get('startFrame')) : undefined;
     const endFrame = pathUrl.searchParams.get('endFrame') ? Number(pathUrl.searchParams.get('endFrame')) : undefined;
+    const quickLoad = !options?.fullStats;
 
     // check if the metadata is cached
     const mediaCache = MediaCache.getState();
@@ -139,11 +140,16 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
     }
 
     // If UrlSource creation failed for some reason, or if later reads fail, we'll fallback below
-    async function gatherInfo(inp: Input) {
+    async function gatherInfo(inp: Input, quickLoad = true) {
         const videoTrack = await inp.getPrimaryVideoTrack();
         const audioTrack = await inp.getPrimaryAudioTrack();
-        const packetStats = await videoTrack?.computePacketStats();
-        const audioPacketStats = await audioTrack?.computePacketStats();
+        
+        // For quick load, only scan first ~100 packets for fast frame rate estimate
+        // For full load (when clip is on timeline), scan all packets for accuracy
+        const targetPacketCount = quickLoad ? 100 : Infinity;
+        const packetStats = await videoTrack?.computePacketStats(targetPacketCount);
+        const audioPacketStats = await audioTrack?.computePacketStats(targetPacketCount);
+        
         const duration = await inp.computeDuration();
         const metadata = await inp.getMetadataTags();
         const mimeType = await inp.getMimeType();
@@ -161,18 +167,20 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
     let infoBundle: any | null = null;
     try {
         if (!input) throw new Error('UrlSource init failed');
-        infoBundle = await gatherInfo(input);
+        infoBundle = await gatherInfo(input, quickLoad);
     } catch (e) {
         // Fallback: fetch the entire resource as a Blob and use BlobSource to avoid streaming issues
         try {
             const buffer = await readFileBuffer(hasHashSuffix ? originalPath : path);
             const blob = new Blob([buffer as unknown as ArrayBuffer]);
             const blobInput = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });
-            infoBundle = await gatherInfo(blobInput);
+            infoBundle = await gatherInfo(blobInput, quickLoad);
         } catch (fallbackErr) {
             throw fallbackErr;
         }
     }
+
+
 
     let { videoTrack, audioTrack, packetStats, audioPacketStats, duration, metadata, mimeType, format } = infoBundle;
     if (audioTrack && !(await audioTrack.canDecode())) {
@@ -198,6 +206,7 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
         format,
         startFrame: startFrame,
         endFrame: endFrame,
+        originalInput: input ?? undefined,
     }
 
     mediaCache.setMedia(path, mediaInfo);
@@ -219,7 +228,54 @@ export const getMediaInfo = async (path: string): Promise<MediaInfo> => {
         mediaCache.setMedia(originalPath, fullMediaInfo);
     }
     
+    // If this was a quick load and we have tracks with estimates, optionally compute full stats in background
+    if (quickLoad && !options?.fullStats && (videoTrack || audioTrack)) {
+        void (async () => {
+            try {
+                if (input && (videoTrack || audioTrack)) {
+                    const fullVideoStats = videoTrack ? await videoTrack.computePacketStats() : undefined;
+                    const fullAudioStats = audioTrack ? await audioTrack.computePacketStats() : undefined;
+                    
+                    // Update cache with full stats
+                    const cached = mediaCache.getMedia(path);
+                    if (cached) {
+                        cached.stats.video = fullVideoStats;
+                        cached.stats.audio = fullAudioStats;
+                        mediaCache.setMedia(path, cached);
+                    }
+                }
+            } catch {}
+        })();
+    }
+    
     return mediaInfo;
+}
+
+// Helper to upgrade media info to full stats (call when clip added to timeline)
+export const ensureFullMediaStats = async (path: string): Promise<void> => {
+    const mediaCache = MediaCache.getState();
+    const cached = mediaCache.getMedia(path);
+    if (!cached) return;
+    
+    // Check if we already have full stats (packetCount > 100 indicates full scan)
+    const hasFullVideoStats = cached.stats.video?.packetCount && cached.stats.video.packetCount > 100;
+    const hasFullAudioStats = cached.stats.audio?.packetCount && cached.stats.audio.packetCount > 100;
+    
+    if (hasFullVideoStats && hasFullAudioStats) return;
+    
+    try {
+        if (!hasFullVideoStats && cached.video) {
+            const fullStats = await cached.video.computePacketStats();
+            cached.stats.video = fullStats;
+        }
+        if (!hasFullAudioStats && cached.audio) {
+            const fullStats = await cached.audio.computePacketStats();
+            cached.stats.audio = fullStats;
+        }
+        mediaCache.setMedia(path, cached);
+    } catch (e) {
+        console.warn('Failed to compute full stats:', e);
+    }
 }
 
 

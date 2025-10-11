@@ -2,17 +2,18 @@ import {sha256sum} from './nodeCrypto.js';
 import {versions} from './versions.js';
 import {processMediaTo24} from './media/process.js';
 import {renameMediaPairInRoot, deleteMediaPairInRoot} from './media/renameDelete.js';
-import {ipcRenderer} from 'electron';
+import {ipcRenderer, webUtils} from 'electron';
 import {getMediaRootAbsolute} from './media/root.js';
-import {converted24Dir, originalDir} from './media/paths.js';
+import {symlinksDir, proxyDir} from './media/paths.js';
 import {promises as fsp} from 'node:fs';
 import fs from 'node:fs';
-import {join} from 'node:path';
+import {join, basename, extname} from 'node:path';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 import {AUDIO_EXTS, IMAGE_EXTS, VIDEO_EXTS, getLowercaseExtension} from './media/fileExts.js';
 import {ensureUniqueNameSync} from './media/links.js';
 import { ClipType } from '../../renderer/src/lib/types.js';
-import { fetchFilters } from './filters/fetch.js';  
+import { fetchFilters } from './filters/fetch.js';
+import {spawn} from 'node:child_process';  
 
 function send(channel: string, message: string) {
   return ipcRenderer.invoke(channel, message);
@@ -56,27 +57,51 @@ export type ConvertedMediaItem = {
   assetUrl: string;
   dateAddedMs: number;
   type: ClipType;
+  hasProxy?: boolean;
+};
+
+type ProxyIndex = {
+  [symlinkName: string]: string; // maps symlink name to proxy filename
 };
 
 function isSupportedExt(ext: string): boolean {
   return VIDEO_EXTS.has(ext) || IMAGE_EXTS.has(ext) || AUDIO_EXTS.has(ext);
 }
 
-async function ensureMediaDirs(): Promise<{root: string, originalAbs: string, convertedAbs: string}> {
+async function loadProxyIndex(): Promise<ProxyIndex> {
+  try {
+    const root = getMediaRootAbsolute();
+    const indexPath = join(root, '.proxy-index.json');
+    const content = await fsp.readFile(indexPath, 'utf8');
+    return JSON.parse(content);
+  } catch {
+    return {};
+  }
+}
+
+async function saveProxyIndex(index: ProxyIndex): Promise<void> {
   const root = getMediaRootAbsolute();
-  const originalAbs = originalDir(root);
-  const convertedAbs = converted24Dir(root);
-  if (!fs.existsSync(originalAbs)) fs.mkdirSync(originalAbs, {recursive: true});
-  if (!fs.existsSync(convertedAbs)) fs.mkdirSync(convertedAbs, {recursive: true});
-  return {root, originalAbs, convertedAbs};
+  const indexPath = join(root, '.proxy-index.json');
+  await fsp.writeFile(indexPath, JSON.stringify(index, null, 2), 'utf8');
+}
+
+async function ensureMediaDirs(): Promise<{root: string, symlinksAbs: string, proxyAbs: string}> {
+  const root = getMediaRootAbsolute();
+  const symlinksAbs = symlinksDir(root);
+  const proxyAbs = proxyDir(root);
+  if (!fs.existsSync(symlinksAbs)) fs.mkdirSync(symlinksAbs, {recursive: true});
+  if (!fs.existsSync(proxyAbs)) fs.mkdirSync(proxyAbs, {recursive: true});
+  return {root, symlinksAbs, proxyAbs};
 }
 
 async function listConvertedMedia(): Promise<ConvertedMediaItem[]> {
   
-  const {convertedAbs} = await ensureMediaDirs();
+  const {symlinksAbs, proxyAbs} = await ensureMediaDirs();
+  const proxyIndex = await loadProxyIndex();
+  
   let entries: import('node:fs').Dirent[] = [];
   try {
-    entries = await fsp.readdir(convertedAbs, {withFileTypes: true}) as unknown as import('node:fs').Dirent[];
+    entries = await fsp.readdir(symlinksAbs, {withFileTypes: true}) as unknown as import('node:fs').Dirent[];
   } catch {
     entries = [] as any;
   }
@@ -85,37 +110,53 @@ async function listConvertedMedia(): Promise<ConvertedMediaItem[]> {
     const name = e.name;
     const ext = getLowercaseExtension(name);
     if (!isSupportedExt(ext)) continue;
-    const absPath = join(convertedAbs, name);
+    
+    let absPath = join(symlinksAbs, name);
+    let hasProxy = false;
+    
+    // Check if this file has a proxy
+    if (proxyIndex[name]) {
+      const proxyPath = join(proxyAbs, proxyIndex[name]);
+      if (fs.existsSync(proxyPath)) {
+        absPath = proxyPath;
+        hasProxy = true;
+      }
+    }
+    
     let dateAddedMs = Date.now();
     try {
-      const st = await fsp.stat(absPath);
+      const st = await fsp.lstat(join(symlinksAbs, name));
       dateAddedMs = st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateAddedMs;
     } catch {}
     const assetUrl = pathToFileURL(absPath).href;
     const type: ConvertedMediaItem['type'] = VIDEO_EXTS.has(ext) ? 'video' : IMAGE_EXTS.has(ext) ? 'image' : AUDIO_EXTS.has(ext) ? 'audio':'video';
-    items.push({ name, absPath, assetUrl, dateAddedMs, type });
+    items.push({ name, absPath, assetUrl, dateAddedMs, type, hasProxy });
   }
   items.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
   return items;
 }
 
 async function importMediaPaths(inputAbsPaths: string[], resolution?: string): Promise<number> {
-  const {originalAbs} = await ensureMediaDirs();
+  const {symlinksAbs} = await ensureMediaDirs();
   let count = 0;
   for (const srcAbs of inputAbsPaths) {
     const fileName = srcAbs.split(/[/\\]/g).pop();
     if (!fileName) continue;
     const ext = getLowercaseExtension(fileName);
     if (!isSupportedExt(ext)) continue;
-    const desired = fileName;
-    const uniqueName = ensureUniqueNameSync(originalAbs, desired);
-    const dstAbs = join(originalAbs, uniqueName);
-    await fsp.copyFile(srcAbs, dstAbs);
+    const uniqueName = ensureUniqueNameSync(symlinksAbs, fileName);
+    const dstAbs = join(symlinksAbs, uniqueName);
     try {
-      await processMediaTo24({ inputAbsPath: dstAbs, resolution });
+      await fsp.rm(dstAbs, {force: true});
+      await fsp.symlink(srcAbs, dstAbs);
     } catch (error) {
-      console.error('Error processing media:', error);
-      // ignore per-file errors, let caller report
+      console.error('Error creating symlink:', error);
+      try {
+        await fsp.copyFile(srcAbs, dstAbs);
+      } catch (copyError) {
+        console.error('Error copying file:', copyError);
+        continue;
+      }
     }
     count += 1;
   }
@@ -123,11 +164,194 @@ async function importMediaPaths(inputAbsPaths: string[], resolution?: string): P
 }
 
 async function ensureUniqueConvertedName(desiredName: string): Promise<string> {
-  const {convertedAbs} = await ensureMediaDirs();
-  return ensureUniqueNameSync(convertedAbs, desiredName);
+  const {symlinksAbs} = await ensureMediaDirs();
+  return ensureUniqueNameSync(symlinksAbs, desiredName);
+}
+
+function getPathForFile(file: File): string {
+  return webUtils.getPathForFile(file);
+}
+
+async function createProxy(fileName: string, resolution: string = '480p'): Promise<void> {
+  const {symlinksAbs, proxyAbs} = await ensureMediaDirs();
+  const symlinkPath = join(symlinksAbs, fileName);
+  
+  if (!fs.existsSync(symlinkPath)) {
+    throw new Error('Source file not found');
+  }
+  
+  // Resolve the actual file path from the symlink
+  const realPath = await fsp.realpath(symlinkPath);
+  
+  // Generate proxy filename
+  const baseName = basename(fileName, extname(fileName));
+  const proxyFileName = `${baseName}_proxy.mp4`;
+  const proxyPath = join(proxyAbs, proxyFileName);
+  
+  // Parse target height
+  const parseHeight = (res: string): number => {
+    const s = res.trim().toLowerCase();
+    if (s === '720' || s === '720p' || s === 'hd') return 720;
+    if (s === '1080' || s === '1080p') return 1080;
+    const raw = s.endsWith('p') ? s.slice(0, -1) : s;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 480;
+  };
+  
+  const targetHeight = parseHeight(resolution);
+  
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-i', realPath,
+      '-vf', `scale=-2:${targetHeight}`,
+      '-r', '24',
+      '-c:v', 'libx264',
+      '-preset', 'medium',
+      '-crf', '23',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-ar', '48000',
+      '-y',
+      proxyPath
+    ];
+    
+    const ffmpeg = spawn('ffmpeg', args);
+    
+    let stderr = '';
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+    
+    ffmpeg.on('close', async (code) => {
+      if (code === 0) {
+        const proxyIndex = await loadProxyIndex();
+        proxyIndex[fileName] = proxyFileName;
+        await saveProxyIndex(proxyIndex);
+        resolve();
+      } else {
+        reject(new Error(`FFmpeg failed with code ${code}: ${stderr}`));
+      }
+    });
+    
+    ffmpeg.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
+async function removeProxy(fileName: string): Promise<void> {
+  const {proxyAbs} = await ensureMediaDirs();
+  const proxyIndex = await loadProxyIndex();
+  
+  if (proxyIndex[fileName]) {
+    const proxyPath = join(proxyAbs, proxyIndex[fileName]);
+    if (fs.existsSync(proxyPath)) {
+      await fsp.rm(proxyPath, {force: true});
+    }
+    delete proxyIndex[fileName];
+    await saveProxyIndex(proxyIndex);
+  }
 }
 
 
+
+// Config API functions
+interface ConfigResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
+async function getBackendUrl(): Promise<ConfigResponse<{url: string}>> {
+  return await ipcRenderer.invoke('backend:get-url');
+}
+
+async function setBackendUrl(url: string): Promise<ConfigResponse<{url: string}>> {
+  return await ipcRenderer.invoke('backend:set-url', url);
+}
+
+async function getHomeDir(): Promise<ConfigResponse<{home_dir: string}>> {
+  return await ipcRenderer.invoke('config:get-home-dir');
+}
+
+async function setHomeDir(homeDir: string): Promise<ConfigResponse<{home_dir: string}>> {
+  return await ipcRenderer.invoke('config:set-home-dir', homeDir);
+}
+
+async function getTorchDevice(): Promise<ConfigResponse<{device: string}>> {
+  return await ipcRenderer.invoke('config:get-torch-device');
+}
+
+async function setTorchDevice(device: string): Promise<ConfigResponse<{device: string}>> {
+  return await ipcRenderer.invoke('config:set-torch-device', device);
+}
+
+async function getCachePath(): Promise<ConfigResponse<{cache_path: string}>> {
+  return await ipcRenderer.invoke('config:get-cache-path');
+}
+
+async function setCachePath(cachePath: string): Promise<ConfigResponse<{cache_path: string}>> {
+  return await ipcRenderer.invoke('config:set-cache-path', cachePath);
+}
+
+// Preprocessor API functions
+async function listPreprocessors(checkDownloaded: boolean = true): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('preprocessor:list', checkDownloaded);
+}
+
+async function getPreprocessor(name: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('preprocessor:get', name);
+}
+
+async function downloadPreprocessor(name: string, jobId?: string): Promise<ConfigResponse<{job_id: string; status: string; message?: string}>> {
+  return await ipcRenderer.invoke('preprocessor:download', name, jobId);
+}
+
+async function runPreprocessor(request: {
+  preprocessor_name: string;
+  input_path: string;
+  job_id?: string;
+  download_if_needed?: boolean;
+  params?: Record<string, any>;
+  start_frame?: number;
+  end_frame?: number;
+}): Promise<ConfigResponse<{job_id: string; status: string; message?: string}>> {
+  return await ipcRenderer.invoke('preprocessor:run', request);
+}
+
+async function getPreprocessorStatus(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('preprocessor:status', jobId);
+}
+
+async function getPreprocessorResult(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('preprocessor:result', jobId);
+}
+
+async function connectPreprocessorWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('preprocessor:connect-ws', jobId);
+}
+
+async function disconnectPreprocessorWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('preprocessor:disconnect-ws', jobId);
+}
+
+function onPreprocessorWebSocketUpdate(jobId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`preprocessor:ws-update:${jobId}`, listener);
+  return () => ipcRenderer.removeListener(`preprocessor:ws-update:${jobId}`, listener);
+}
+
+function onPreprocessorWebSocketStatus(jobId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`preprocessor:ws-status:${jobId}`, listener);
+  return () => ipcRenderer.removeListener(`preprocessor:ws-status:${jobId}`, listener);
+}
+
+function onPreprocessorWebSocketError(jobId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`preprocessor:ws-error:${jobId}`, listener);
+  return () => ipcRenderer.removeListener(`preprocessor:ws-error:${jobId}`, listener);
+}
 
 export {
   sha256sum,
@@ -146,5 +370,27 @@ export {
   readFileStream,
   pathToFileURL,
   fileURLToPath,
-  fetchFilters
+  fetchFilters,
+  getPathForFile,
+  createProxy,
+  removeProxy,
+  getBackendUrl,
+  setBackendUrl,
+  getHomeDir,
+  setHomeDir,
+  getTorchDevice,
+  setTorchDevice,
+  getCachePath,
+  setCachePath,
+  listPreprocessors,
+  getPreprocessor,
+  downloadPreprocessor,
+  runPreprocessor,
+  getPreprocessorStatus,
+  getPreprocessorResult,
+  connectPreprocessorWebSocket,
+  disconnectPreprocessorWebSocket,
+  onPreprocessorWebSocketUpdate,
+  onPreprocessorWebSocketStatus,
+  onPreprocessorWebSocketError
 };

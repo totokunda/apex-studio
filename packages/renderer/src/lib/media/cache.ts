@@ -165,8 +165,8 @@ export const getCachedSample = (path: string, frameIndex: number, width?: number
     const frameCache = FramesCache.getState();
     const mediaCache = MediaCache.getState();
 
-    height = height || mediaCache.getMedia(path)?.video?.codedHeight || 0;
-    width = width || mediaCache.getMedia(path)?.video?.codedWidth || 0;
+    height = height || mediaCache.getMedia(path)?.video?.displayHeight || 0;
+    width = width || mediaCache.getMedia(path)?.video?.displayWidth || 0;
 
     const key = buildFrameKey(path, width, height, frameIndex, useCanvas);
 

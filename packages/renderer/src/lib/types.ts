@@ -1,7 +1,8 @@
-import { PacketStats, InputVideoTrack, InputAudioTrack, MetadataTags, InputFormat } from "mediabunny";
+import { PacketStats, InputVideoTrack, InputAudioTrack, MetadataTags, InputFormat, Input } from "mediabunny";
+import { Preprocessor } from "./preprocessor";
 
-export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
-export type TimelineType = 'media' | 'audio' | 'model' | 'processor' | 'mask' | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
+export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
+export type TimelineType = 'media' | 'audio' | 'model'  | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
 export type ViewTool = 'pointer' | 'hand' | 'mask' | 'draw' | 'shape'| 'text'
 export type ShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'line' | 'star'
 
@@ -35,11 +36,6 @@ export interface ClipProps {
     
     // May be less relevant when adding more timelines, might just store these separately
     timelineId?: string;
-    timelineWidth?: number;
-    timelineY?: number;
-    timelineHeight?:number;
-    
-
     startFrame?:number;
     endFrame?:number;
     framesToGiveEnd?:number;
@@ -56,10 +52,10 @@ export interface ClipProps {
 export interface TimelineProps {
     type: TimelineType;
     timelineId: string;
-    timelineWidth?: number;
-    timelineY?: number;
-    timelineHeight?:number;
-    timelinePadding?:number;
+    timelineWidth: number;
+    timelineY: number;
+    timelineHeight:number;
+    timelinePadding:number;
     muted: boolean;
     hidden: boolean;
 }
@@ -72,11 +68,13 @@ export type VideoClipProps = ClipProps & MediaAdjustments & {
     fadeIn?: number;
     fadeOut?: number;
     speed?: number;
+    preprocessors:PreprocessorClipProps[];
 }
 
 export type ImageClipProps = ClipProps & MediaAdjustments & {
     src: string;
     type: 'image';
+    preprocessors:PreprocessorClipProps[];
 }
 
 export type AudioClipProps = ClipProps & {
@@ -149,6 +147,14 @@ export type FilterClipProps = ClipProps & {
     exampleAssetUrl?: string;
 }
 
+export type PreprocessorClipProps = {
+    clipId?: string;
+    id: string;
+    preprocessor: Preprocessor;
+    startFrame?:number;
+    endFrame?:number;
+}
+
 export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps;
 
 export type ZoomLevel = number;
@@ -177,6 +183,7 @@ export type MediaInfo = {
     format: InputFormat | undefined;
     startFrame?: number;
     endFrame?: number;
+    originalInput?: Input;    // Only used for converting media to 24 fps
 }
 
 export type FrameBatch = {
@@ -195,7 +202,7 @@ export interface Point {
     y: number;
   }
 
-export type SidebarSection = 'media' | 'models' | 'filters' | 'loras' | 'templates';
+export type SidebarSection = 'media' | 'models' | 'filters' | 'loras' | 'templates' | 'preprocessors';
 
 
 export interface Filter {

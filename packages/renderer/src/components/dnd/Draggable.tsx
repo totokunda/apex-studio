@@ -3,9 +3,10 @@ import React from 'react';
 import {useDraggable} from '@dnd-kit/core';
 // import {CSS} from '@dnd-kit/utilities';
 import { MediaItem } from '../media/Item';
+import { Preprocessor } from '@/lib/preprocessor/api';
 
 
-type GenericData = MediaItem
+type GenericData = MediaItem | Preprocessor;
 
 interface DraggableProps {
     id: string;

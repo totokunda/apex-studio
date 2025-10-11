@@ -7,10 +7,10 @@ import { PREFETCH_BACK, PREFETCH_AHEAD } from "../settings";
 import { buildFrameKey, getCachedSample, getCachedSamples } from "./cache";
 import {canvasDecoders, pruneStaleDecoders} from "./utils";
 
-function getOrCreateCanvasDecoder(path: string, mediaInfo: MediaInfo, width: number, height: number): CanvasDecoderContext | null {
+function getOrCreateCanvasDecoder(path: string, mediaInfo: MediaInfo, width: number, height: number, canBeTransparent: boolean): CanvasDecoderContext | null {
     if (!mediaInfo?.video) return null;
-    const targetW = Math.max(1, Math.floor(width || mediaInfo.video.codedWidth || 0));
-    const targetH = Math.max(1, Math.floor(height || mediaInfo.video.codedHeight || 0));
+    const targetW = Math.max(1, Math.floor(width || mediaInfo.video.displayWidth || 0));
+    const targetH = Math.max(1, Math.floor(height || mediaInfo.video.displayHeight || 0));
     const key: CanvasDecoderKey = `${path}#canvas@${targetW}x${targetH}`;
     const existing = canvasDecoders.get(key);
     const frameRate = mediaInfo.stats.video?.averagePacketRate || 0;
@@ -24,6 +24,7 @@ function getOrCreateCanvasDecoder(path: string, mediaInfo: MediaInfo, width: num
             width: targetW,
             height: targetH,
             fit: 'fill',
+			alpha: canBeTransparent,
         });
         const ctx: CanvasDecoderContext = {
             sink,
@@ -50,7 +51,7 @@ function getOrCreateCanvasDecoder(path: string, mediaInfo: MediaInfo, width: num
 
 
 function schedulePrefetchCanvas(path: string, mediaInfo: MediaInfo, centerFrame: number, width: number, height: number) {
-    const ctx = getOrCreateCanvasDecoder(path, mediaInfo, width, height);
+    const ctx = getOrCreateCanvasDecoder(path, mediaInfo, width, height, false);
     if (!ctx) return;
     const frameRate = ctx.frameRate || mediaInfo.stats.video?.averagePacketRate || 0;
     if (!Number.isFinite(frameRate) || frameRate <= 0) return;
@@ -97,8 +98,8 @@ export const fetchCanvasSample = async (path: string, frameIndex: number, width?
     const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
     if (!mediaInfo || !mediaInfo.video) return null;
 
-    width = width || mediaInfo.video?.codedWidth || 0;
-    height = height || mediaInfo.video?.codedHeight || 0;
+    width = width || mediaInfo.video?.displayWidth || 0;
+    height = height || mediaInfo.video?.displayHeight || 0;
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         return null;
     }
@@ -110,9 +111,12 @@ export const fetchCanvasSample = async (path: string, frameIndex: number, width?
     }
     const timestamp = frameIndex / frameRate;
 
+    
+
     let sample: WrappedCanvas | null = null;
     try {
-        const decoder = getOrCreateCanvasDecoder(path, mediaInfo, width, height);
+        const videoCanBeTransparent = await mediaInfo.video.canBeTransparent();
+        const decoder = getOrCreateCanvasDecoder(path, mediaInfo, width, height, videoCanBeTransparent);
         if (!decoder) return null;
         decoder.lastAccessTs = nowMs();
         sample = await decoder.sink.getCanvas(timestamp);
@@ -157,13 +161,13 @@ export const fetchCanvasSamples = async (path: string, frameIndices: number[], w
     const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
     if (!mediaInfo || !mediaInfo.video) return samples as (WrappedCanvas | null)[];
 
-    width = Math.max(1, Math.floor(width || mediaInfo.video?.codedWidth || 0));
-    height = Math.max(1, Math.floor(height || mediaInfo.video?.codedHeight || 0));
+    width = Math.max(1, Math.floor(width || mediaInfo.video?.displayWidth || 0));
+    height = Math.max(1, Math.floor(height || mediaInfo.video?.displayHeight || 0));
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         return samples as (WrappedCanvas | null)[];
     }
-
-    const decoder = getOrCreateCanvasDecoder(path, mediaInfo, width, height);
+    const videoCanBeTransparent = await mediaInfo.video.canBeTransparent();
+    const decoder = getOrCreateCanvasDecoder(path, mediaInfo, width, height, videoCanBeTransparent);
     if (!decoder) return samples as (WrappedCanvas | null)[];
     decoder.lastAccessTs = nowMs();
 
@@ -302,8 +306,8 @@ export const getNearestCachedCanvasSamples = (
         return new Array(frameIndices.length).fill(null);
     }
 
-    const targetW = Math.max(1, Math.floor(width || mediaInfo.video?.codedWidth || 0));
-    const targetH = Math.max(1, Math.floor(height || mediaInfo.video?.codedHeight || 0));
+    const targetW = Math.max(1, Math.floor(width || mediaInfo.video?.displayWidth || 0));
+    const targetH = Math.max(1, Math.floor(height || mediaInfo.video?.displayHeight || 0));
 
     const results: (WrappedCanvas | null)[] = new Array(frameIndices.length).fill(null);
 

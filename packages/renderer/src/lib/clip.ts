@@ -1,12 +1,14 @@
 import { create } from "zustand";
-import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps } from "./types";
+import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 import { MediaItem } from "@/components/media/Item";
 import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS } from "./settings";
 import { getMediaInfo } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
+import { Preprocessor } from "./preprocessor";
 
+export const PREPROCESSOR_BAR_HEIGHT = 24;
 
 interface ClipStore {  
     // Clips
@@ -20,6 +22,7 @@ interface ClipStore {
     addClip: (clip: AnyClipProps) => void;
     removeClip: (clipId: string) => void;
     updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) => void;
+    updatePreprocessor: (clipId: string, preprocessorId: string, preprocessorToUpdate: Partial<PreprocessorClipProps>) => void;
     resizeClip: (clipId: string, side: 'left' | 'right', newFrame: number) => void;
     separateClip: (clipId: string) => void;
     isValidResize: (clipId: string, side: 'left' | 'right', newFrame: number) => boolean;   
@@ -37,6 +40,10 @@ interface ClipStore {
     setGhostStartEndFrame: (startFrame: number, endFrame: number) => void;
     ghostX: number;
     setGhostX: (x: number) => void;
+    ghostGuideLines: [number, number] | null;
+    selectedPreprocessorId: string | null;
+    setSelectedPreprocessorId: (preprocessorId: string | null) => void;
+    setGhostGuideLines: (guideLines: [number, number] | null) => void;
     muteTimeline: (timelineId: string) => void;
     unmuteTimeline: (timelineId: string) => void;
     hideTimeline: (timelineId: string) => void;
@@ -51,11 +58,16 @@ interface ClipStore {
     setGhostTimelineId: (timelineId: string | null) => void;
     draggingClipId: string | null;
     setDraggingClipId: (clipId: string | null) => void;
+    addPreprocessorToClip: (clipId: string, preprocessor: PreprocessorClipProps) => void;
+    removePreprocessorFromClip: (clipId: string, preprocessor: PreprocessorClipProps | string) => void;
+    getPreprocessorsForClip: (clipId: string) => PreprocessorClipProps[];
+    getClipFromPreprocessorId: (preprocessorId: string) => AnyClipProps | null;
     // Global snap guideline (absolute stage X in px). Null when inactive
     snapGuideX: number | null;
     setSnapGuideX: (x: number | null) => void;
     _updateZoomLevel: (clips:AnyClipProps[], clipDuration: number) => void;
-
+    getTimelinePosition: (timelineId: string, scrollY?: number) => {top: number, bottom: number, left: number, right: number};
+    getClipPosition: (clipId: string, scrollY?: number) => {top: number, bottom: number, left: number, right: number};
     // Timelines
     timelines: TimelineProps[];
     getClipsForTimeline: (timelineId: string) => AnyClipProps[];
@@ -73,7 +85,7 @@ const calculateTotalClipDuration = (clips: AnyClipProps[]): number => {
     return maxEndFrame;
 };
 
-export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipProps | MediaItem | string) => {
+export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipProps | MediaItem | string | Preprocessor) => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
     if (timeline.type === 'media') {
@@ -94,10 +106,13 @@ export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string):
 export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string):number => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
-    if (clip.type === 'video' || clip.type === 'image' || clip.type === 'audio') {
+    if (clip.type === 'video' || clip.type === 'image' ) {
+        return 72;
+    } 
+    if (clip.type === 'audio') {
         return 54;
     }
-    return 40;
+    return 36;
 }
 
 
@@ -274,6 +289,10 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         controls.setZoomLevel(newZoomLevel);
     },
     setGhostX: (x) => set({ ghostX: x }),
+    selectedPreprocessorId: null,
+    setSelectedPreprocessorId: (preprocessorId) => set({ selectedPreprocessorId: preprocessorId }),
+    ghostGuideLines: null,
+    setGhostGuideLines: (guideLines) => set({ ghostGuideLines: guideLines }),
     hoveredTimelineId: null,
     setHoveredTimelineId: (timelineId) => set({ hoveredTimelineId: timelineId }),
     ghostTimelineId: null,
@@ -300,6 +319,56 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
     }),
+    getClipFromPreprocessorId: (preprocessorId: string) => {
+        const clip = get().clips.find((c) => c.type === 'video' || c.type === 'image' && c.preprocessors?.some((p) => p.id === preprocessorId));
+        return clip || null;
+    },
+    updatePreprocessor: (clipId: string, preprocessorId: string, preprocessorToUpdate: Partial<PreprocessorClipProps>) => set((state) => {
+        const newClips = [...state.clips];
+        const currentClipIndex = newClips.findIndex((c) => c.clipId === clipId);
+        if (currentClipIndex === -1) return { clips: state.clips };
+        const currentClip = newClips[currentClipIndex];
+        if (!currentClip) return { clips: state.clips };
+        if (currentClip.type !== 'video' && currentClip.type !== 'image') return { clips: state.clips };
+        const newPreprocessors = currentClip.preprocessors?.map((p) => p.id === preprocessorId ? { ...p, ...preprocessorToUpdate } : p) || [];
+        const newClip = { ...currentClip, preprocessors: newPreprocessors } as AnyClipProps;
+        newClips[currentClipIndex] = newClip;
+        const resolvedClips = resolveOverlaps(newClips);
+        const clipDuration = calculateTotalClipDuration(resolvedClips);
+        return { clips: resolvedClips, clipDuration };
+    }),
+    addPreprocessorToClip: (clipId: string, preprocessor: PreprocessorClipProps) => set((state) => {
+       const currentClipIndex = state.clips.findIndex((c) => c.clipId === clipId);
+       const currentClip = state.clips[currentClipIndex];
+       if (!currentClip) return { clips: state.clips };
+       const newClips = [...state.clips];
+       if (currentClip.type !== 'video' && currentClip.type !== 'image') return { clips: state.clips };
+       const newPreprocessors = [...(currentClip.preprocessors || []), preprocessor];
+       const newClip = { ...currentClip, preprocessors: newPreprocessors } as AnyClipProps;
+       newClips[currentClipIndex] = newClip;
+       const resolvedClips = resolveOverlaps(newClips);
+       const clipDuration = calculateTotalClipDuration(resolvedClips);
+       return { clips: resolvedClips, clipDuration };
+    }),
+    removePreprocessorFromClip: (clipId: string, preprocessor: PreprocessorClipProps | string) => set((state) => {
+        const newClips = [...state.clips];
+        const currentClipIndex = newClips.findIndex((c) => c.clipId === clipId);
+        if (currentClipIndex === -1) return { clips: state.clips };
+        const currentClip = newClips[currentClipIndex];
+        if (!currentClip) return { clips: state.clips };
+        if (currentClip.type !== 'video' && currentClip.type !== 'image') return { clips: state.clips };
+        const newPreprocessors = currentClip.preprocessors?.filter((p) => p.id !== (typeof preprocessor === 'string' ? preprocessor : preprocessor.id)) || [];
+        const newClip = { ...currentClip, preprocessors: newPreprocessors } as AnyClipProps;
+        newClips[currentClipIndex] = newClip;
+        const resolvedClips = resolveOverlaps(newClips);
+        const clipDuration = calculateTotalClipDuration(resolvedClips);
+        return { clips: resolvedClips, clipDuration };
+    }),
+    getPreprocessorsForClip: (clipId: string) => {
+        const clip = get().clips.find((c) => c.clipId === clipId);
+        if (!clip || (clip.type !== 'video' && clip.type !== 'image')) return [];
+        return clip.preprocessors || [];
+    },
     getTimelineById: (timelineId: string) => get().timelines.find((timeline) => timeline.timelineId === timelineId),
     setTimelines: (timelines: TimelineProps[]) => set({ timelines }),
     addTimeline: (timeline: Partial<TimelineProps>, index?: number) => set((state) => {
@@ -308,7 +377,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             timelineHeight: timeline.timelineHeight ?? 54,
             timelineWidth: timeline.timelineWidth ?? 0,
             timelineY: timeline.timelineY ?? 0,
-            timelinePadding: timeline.timelinePadding ?? 0,
+            timelinePadding: timeline.timelinePadding ?? 24,
             type: timeline.type ?? 'media',
             muted: timeline.muted ?? false,
             hidden: timeline.hidden ?? false,
@@ -397,7 +466,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const audioTimeline: TimelineProps = {
             timelineId: newAudioTimelineId,
             type: 'audio',
-            timelineHeight: clipTimeline?.timelineHeight ?? 54,
+            timelineHeight: getTimelineHeightForClip('audio'),
             timelineWidth: clipTimeline?.timelineWidth ?? 0,
             timelineY: (clipTimeline?.timelineY ?? 0) + (clipTimeline?.timelineHeight ?? 54),
             timelinePadding: clipTimeline?.timelinePadding ?? 0,
@@ -683,7 +752,33 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     clipWithinFrame: (clip: AnyClipProps, frame: number) => {
         return frame >= (clip.startFrame || 0)  && frame <= (clip.endFrame || 0);
     },
-
+    getTimelinePosition: (timelineId: string, scrollY?: number) => {
+        const timeline = get().timelines.find((t) => t.timelineId === timelineId);
+        if (!timeline) return {top: 0, bottom: 0, left: 0, right: 0};
+        const top = (timeline.timelineY ?? 0) + 8 - (scrollY || 0);
+        const bottom = top + (timeline.timelineHeight ?? 54);
+        return {top, bottom, left: timeline.timelinePadding!, right: timeline.timelinePadding! + (timeline.timelineWidth ?? 0)};
+    },
+    getClipPosition: (clipId: string, scrollY?: number) => {
+        const clip = get().clips.find((c) => c.clipId === clipId);
+        if (!clip) return {top: 0, bottom: 0, left: 0, right: 0};
+        
+        const timeline = get().timelines.find((t) => t.timelineId === clip.timelineId);
+        if (!timeline) return {top: 0, bottom: 0, left: 0, right: 0};
+        
+        const controls = useControlsStore.getState();
+        const timelineDuration = controls.timelineDuration;
+        
+        const clipX = getClipX(clip.startFrame ?? 0, clip.endFrame ?? 0, timeline.timelineWidth ?? 0, timelineDuration);
+        const clipWidth = getClipWidth(clip.startFrame ?? 0, clip.endFrame ?? 0, timeline.timelineWidth ?? 0, timelineDuration);
+        
+        const top = (timeline.timelineY ?? 0) + 8 - (scrollY || 0);
+        const bottom = top + (timeline.timelineHeight ?? 54);
+        const left = (timeline.timelinePadding ?? 0) + clipX;
+        const right = left + clipWidth;
+        
+        return {top, bottom, left, right};
+    },
 }));
 
 export const getClipWidth = (startFrame:number, endFrame:number, timelineWidth:number, timelineDuration:number[]) => {

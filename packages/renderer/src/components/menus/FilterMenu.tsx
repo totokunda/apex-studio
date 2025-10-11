@@ -1,182 +1,266 @@
-import React, { useEffect, useState, forwardRef, useRef, useMemo } from 'react'
-import { FixedSizeGrid as Grid } from 'react-window';
+import React, { useEffect, useState, useRef, useMemo } from 'react'
 import { fetchFilters} from '@app/preload';
 import { Filter } from '@/lib/types';
-import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area"
 import Draggable from '@/components/dnd/Draggable';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { LuSearch, LuChevronLeft, LuChevronRight, LuArrowRight } from "react-icons/lu";
 
 const FilterItem = ({ filter }: { filter: Filter }) => {
   return (
     <Draggable id={filter.id} data={{...filter, type: 'filter', absPath: filter.examplePath, assetUrl: filter.exampleAssetUrl, fillCanvas: true }}>
-      <div className="w-full h-full flex flex-col p-2  rounded-md hover:bg-brand-light/5 transition-colors cursor-pointer">
-        <div className="flex-1 overflow-hidden rounded-md mb-2">
-          <img src={filter.examplePath} alt={filter.name} className="w-full h-full object-cover" />
-         
-        </div>
-        <div className="text-[10px] flex  flex-col gap-x-1 w-full  truncate">
-          <span className="text-brand-light/80 text-[10px] truncate">{filter.name}</span>
-          <span className="text-brand-light/25 text-[9.5px] truncate font-light">{filter.category}</span>
+      <div className="cursor-pointer w-32 transition-all duration-200 rounded-md">
+        <div className="flex flex-col gap-y-2.5">
+          <div className="flex items-center gap-x-1 relative">
+            <img src={filter.examplePath} alt={filter.name} className="h-full object-cover rounded-md" />
+          </div>
+          <div className="w-full truncate leading-tight font-medium text-brand-light text-[10px] text-start">
+            {filter.name}
+          </div>
         </div>
       </div>
     </Draggable>
   )
 }
 
-const CustomScrollbarsVirtualList = forwardRef<HTMLDivElement, React.HTMLProps<HTMLDivElement>>(({ ...props }, ref) => (
-  <ScrollAreaPrimitive.Root className="relative overflow-hidden h-full  flex flex-col items-center">
-    <ScrollAreaPrimitive.Viewport 
-      ref={ref} 
-      className="h-full w-full rounded-[inherit]" 
-      {...props} 
-    />
-    <ScrollAreaPrimitive.Scrollbar
-      orientation="vertical"
-      className="flex touch-none select-none transition-colors h-full w-2 border-l border-l-transparent p-[1px]"
-    >
-      <ScrollAreaPrimitive.Thumb className="relative flex-1 rounded-full bg-brand-light/10 hover:bg-brand-light/20 transition-colors" />
-    </ScrollAreaPrimitive.Scrollbar>
-    <ScrollAreaPrimitive.Corner />
-  </ScrollAreaPrimitive.Root>
-));
+const FilterCategory: React.FC<{category: string, filters: Filter[], width: number, onViewAll: () => void}> = ({category, filters, width, onViewAll}) => {
+    const carouselRef = useRef<HTMLDivElement>(null);
+    const [showLeftArrow, setShowLeftArrow] = useState(false);
+    const [showRightArrow, setShowRightArrow] = useState(false);
 
-CustomScrollbarsVirtualList.displayName = 'CustomScrollbarsVirtualList';
+    const checkScroll = () => {
+        if (carouselRef.current) {
+            const { scrollLeft, scrollWidth, clientWidth } = carouselRef.current;
+            const hasOverflow = scrollWidth > clientWidth;
+            setShowLeftArrow(scrollLeft > 5);
+            setShowRightArrow(hasOverflow && scrollLeft + clientWidth < scrollWidth - 5);
+        } else {
+            setShowLeftArrow(false);
+            setShowRightArrow(false);
+        }
+    };
+
+    useEffect(() => {
+        const timeouts = [
+            setTimeout(checkScroll, 0),
+            setTimeout(checkScroll, 100),
+            setTimeout(checkScroll, 300),
+            setTimeout(checkScroll, 500)
+        ];
+        
+        const carousel = carouselRef.current;
+        if (carousel) {
+            carousel.addEventListener('scroll', checkScroll);
+            window.addEventListener('resize', checkScroll);
+            return () => {
+                timeouts.forEach(clearTimeout);
+                carousel.removeEventListener('scroll', checkScroll);
+                window.removeEventListener('resize', checkScroll);
+            };
+        }
+        return () => timeouts.forEach(clearTimeout);
+    }, [filters]);
+
+    const scroll = (direction: 'left' | 'right') => {
+        if (carouselRef.current) {
+            const scrollAmount = 300;
+            carouselRef.current.scrollBy({
+                left: direction === 'left' ? -scrollAmount : scrollAmount,
+                behavior: 'smooth'
+            });
+        }
+    };
+
+    return (
+        <div className="flex flex-col gap-y-1 px-7">
+            <div className="flex items-center justify-between py-2" style={{
+                width: width,
+            }}>
+                <span className="text-brand-light text-[13px] font-medium">{category}</span>
+                <button 
+                    onClick={onViewAll}
+                    className="flex items-center gap-x-1.5 text-brand-light hover:text-brand-light/70 text-[12px] font-medium cursor-pointer transition-colors rounded-md flex-shrink-0"
+                >
+                    <span>View all</span>
+                    <LuArrowRight className="w-3.5 h-3.5" />
+                </button>
+            </div>
+            <div className="relative" style={{
+                width: width,
+            }}>
+                {showLeftArrow && (
+                    <button
+                        onClick={() => scroll('left')}
+                        className="absolute -left-3 top-1/2 cursor-pointer -translate-y-1/2 z-[9999] bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
+                    >
+                        <LuChevronLeft className="w-4 h-4 text-brand-light" />
+                    </button>
+                )}
+                {showRightArrow && (
+                    <button
+                        onClick={() => scroll('right')}
+                        className="absolute -right-3 top-1/2 cursor-pointer -translate-y-1/2 z-[9999] bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
+                    >
+                        <LuChevronRight className="w-4 h-4 text-brand-light" />
+                    </button>
+                )}
+                <div 
+                    ref={carouselRef}
+                    className="carousel-container flex gap-x-2 overflow-x-auto rounded-md"
+                    style={{ 
+                        scrollbarWidth: 'none', 
+                        msOverflowStyle: 'none',
+                        WebkitOverflowScrolling: 'touch'
+                    }}
+                >
+                    {filters.map((filter) => (
+                        <div key={filter.id} className="flex-shrink-0">
+                            <FilterItem filter={filter} />
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+    )
+}
+
+const CategoryDetailView: React.FC<{category: string, filters: Filter[], onBack: () => void}> = ({category, filters, onBack}) => {
+    return (
+        <div className="flex flex-col h-full w-full">
+            <div className="px-7 pt-4 pb-4 border-b border-brand/20">
+                <div className="flex items-center gap-x-3">
+                 <button onClick={onBack} className="text-brand-light hover:text-brand-light/70 p-1 flex items-center justify-center bg-brand border border-brand-light/10 rounded-md transition-colors cursor-pointer">
+                        <LuChevronLeft className="w-4 h-4" />
+                    </button>
+                    <span className="text-brand-light text-[14px] font-medium">{category}</span>
+                </div>
+            </div>
+            <ScrollArea className="flex-1 pb-16">
+                <div className="px-7 pt-6">
+                    <div className="grid gap-x-2 gap-y-3" style={{gridTemplateColumns: 'repeat(auto-fit, minmax(128px, 1fr))'}}>
+                        {filters.map((filter) => (
+                            <div key={filter.id} className="flex justify-center">
+                                <FilterItem filter={filter} />
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </ScrollArea>
+        </div>
+    );
+};
 
 const FilterMenu = () => {
+  const scrollRef = useRef<HTMLDivElement>(null)
   const [filters, setFilters] = useState<Filter[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [search, setSearch] = useState<string>('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [containerWidth, setContainerWidth] = useState<number>(600);
-  const [containerHeight, setContainerHeight] = useState<number>(600);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const filterBarRef = useRef<HTMLDivElement>(null);
-  const gridRef = useRef<any>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [scrollWidth, setScrollWidth] = useState(0);
+
+  const filteredFilters = useMemo(() => {
+    if (!searchQuery.trim()) return filters;
+    const query = searchQuery.toLowerCase();
+    return filters.filter(filter => 
+      filter.name.toLowerCase().includes(query) ||
+      filter.category.toLowerCase().includes(query)
+    );
+  }, [filters, searchQuery]);
+
+  const categories = useMemo(() => {
+    return [...new Set(filteredFilters.map((filter) => filter.category))]
+  }, [filteredFilters]);
 
   useEffect(() => {
     fetchFilters().then((filters) => {
-      const uniqueCategories = Array.from(new Set(filters.map((filter) => filter.category)));
-      setCategories(uniqueCategories);
       setFilters(filters);
     });
   }, []);
 
   useEffect(() => {
-    const updateDimensions = () => {
-      if (containerRef.current) {
-        setContainerWidth(containerRef.current.offsetWidth);
-        setContainerHeight(containerRef.current.offsetHeight);
+    const updateWidth = () => {
+      if (scrollRef.current) {
+        const newWidth = scrollRef.current.clientWidth;
+        if (newWidth > 0) {
+          setScrollWidth(newWidth);
+        }
       }
     };
-    
-    updateDimensions();
-    const resizeObserver = new ResizeObserver(updateDimensions);
-    if (containerRef.current) {
-      resizeObserver.observe(containerRef.current);
+
+    // Initial update with multiple attempts to catch the width after layout
+    const timeouts = [
+      setTimeout(updateWidth, 0),
+      setTimeout(updateWidth, 50),
+      setTimeout(updateWidth, 100),
+      setTimeout(updateWidth, 200)
+    ];
+
+    // Use ResizeObserver for more reliable resize tracking
+    const resizeObserver = new ResizeObserver(updateWidth);
+    if (scrollRef.current) {
+      resizeObserver.observe(scrollRef.current);
     }
-    
-    return () => resizeObserver.disconnect();
-  }, []);
 
-  const filteredFilters = useMemo(() => {
-    return filters.filter((filter) => {
-      const matchesSearch = search === '' || 
-        filter.name.toLowerCase().includes(search.toLowerCase()) ||
-        filter.category.toLowerCase().includes(search.toLowerCase());
-      const matchesCategory = selectedCategory === 'all' || filter.category === selectedCategory;
-      return matchesSearch && matchesCategory;
-    });
-  }, [filters, search, selectedCategory]);
+    // Also listen to window resize as fallback
+    window.addEventListener('resize', updateWidth);
 
-  const ITEM_MIN_WIDTH = 140;
-  const ROW_GAP = 24;
-  const COLUMN_GAP = 12;
-  const FILTER_BAR_HEIGHT = 80;
-  const HORIZONTAL_PADDING = 32; // px-4 (left + right) = 16px * 2 = 32px
-  
-  const availableWidth = containerWidth - HORIZONTAL_PADDING;
-  const columnCount = Math.max(1, Math.floor(availableWidth / (ITEM_MIN_WIDTH + COLUMN_GAP)));
-  const columnWidth = Math.floor(availableWidth / columnCount);
-  
-  // Calculate dynamic item height based on column width
-  // Image takes most of the space, text/padding takes ~40px
-  const itemHeight = Math.floor(columnWidth * 0.8);
-  const rowHeight = itemHeight + ROW_GAP;
-  
-  const rowCount = Math.ceil(filteredFilters.length / columnCount);
-  const gridHeight = Math.max(0, containerHeight - FILTER_BAR_HEIGHT - 40);
+    return () => {
+      timeouts.forEach(clearTimeout);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateWidth);
+    };
+  }, [selectedCategory]);
 
-  const Cell = ({ columnIndex, rowIndex, style }: { columnIndex: number; rowIndex: number; style: React.CSSProperties }) => {
-    const index = rowIndex * columnCount + columnIndex;
-    if (index >= filteredFilters.length) return null;
-    
-    const isLastRow = rowIndex === rowCount - 1;
-    const extraBottomPadding = isLastRow ? 16 : 0;
-    
-    // Add offset for top spacing by adjusting the top position
-    const topOffset = 12;
-    const adjustedTop = (style.top as number) + topOffset;
-    
+  if (selectedCategory) {
     return (
-      <div style={{
-        ...style,
-        top: adjustedTop,
-        paddingRight: COLUMN_GAP,
-        paddingBottom: ROW_GAP + extraBottomPadding,
-      }} className="box-border">
-        <div className="w-full h-full">
-          <FilterItem filter={filteredFilters[index]} />
-        </div>
-      </div>
+      <>
+        <style>{`
+          .carousel-container::-webkit-scrollbar {
+            display: none;
+          }
+        `}</style>
+        <CategoryDetailView 
+          category={selectedCategory}
+          filters={filteredFilters.filter(f => f.category === selectedCategory)}
+          onBack={() => setSelectedCategory(null)}
+        />
+      </>
     );
-  };
+  }
 
   return (
-    <div ref={containerRef} className="flex flex-col w-full h-full">
-      <div ref={filterBarRef} className="flex flex-col gap-3 p-4 border-b border-brand-light/5">
-        <div className="flex flex-row gap-2 w-full">
-          <div className="relative w-3/5">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-brand-light/40" />
-            <Input
+    <>
+      <style>{`
+        .carousel-container::-webkit-scrollbar {
+          display: none;
+        }
+      `}</style>
+      <div className="flex flex-col h-full w-full">
+        <div className="px-7 pt-4 pb-2">
+          <div className="relative">
+            <LuSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-light/60" />
+            <input
+              type="text"
               placeholder="Search filters..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-9  border-0 text-brand-light text-[12px]! bg-brand placeholder:text-brand-light/40"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-brand text-brand-light placeholder:text-brand-light/50 rounded-md pl-10 pr-4 py-2.5 text-[12px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all"
             />
           </div>
-          <div className="relative w-2/5">
-          <Select value={selectedCategory} onValueChange={setSelectedCategory}> 
-            <SelectTrigger className="w-full bg-brand border-0 text-brand-light text-[11.5px]!">
-              <SelectValue placeholder="All Categories" />
-            </SelectTrigger>
-            <SelectContent className="text-[11px]! dark font-poppins">
-              <SelectItem value="all" className="text-[11.5px]! text-brand-light">All Categories</SelectItem>
-              {categories.map((category) => (
-                <SelectItem key={category} value={category} className="text-[11.5px]! text-brand-light">
-                  {category}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          </div>
         </div>
+        <ScrollArea className="flex-1 pb-16" ref={scrollRef}>
+          <div className="flex flex-col gap-y-6 pt-4">
+            {categories.map((category) => (
+              <FilterCategory 
+                width={scrollWidth - 48} 
+                key={category} 
+                category={category} 
+                filters={filteredFilters.filter((filter) => filter.category === category)}
+                onViewAll={() => setSelectedCategory(category)}
+              />
+            ))}
+          </div>
+        </ScrollArea>
       </div>
-      <Grid
-        ref={gridRef}
-        columnCount={columnCount}
-        columnWidth={columnWidth}
-        height={gridHeight}
-        rowCount={rowCount}
-        rowHeight={rowHeight}
-        width={availableWidth}
-        outerElementType={CustomScrollbarsVirtualList}
-      >
-        {Cell}
-      </Grid>
-
-    </div>
+    </>
   )
 }
 

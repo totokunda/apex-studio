@@ -119,8 +119,8 @@ function detectMime(buf: ArrayBuffer): string | undefined {
       const track = decoder.tracks.selectedTrack;
       const result = await decoder.decode({ frameIndex: 0, completeFramesOnly: true });
       const image = result.image;
-      const width = image.codedWidth;
-      const height = image.codedHeight;
+      const width = image.displayWidth;
+      const height = image.displayHeight;
       image.close();
       decoder.close?.();
       const meta: InputImageTrack = { width, height, mime, size, animated: !!track?.animated };
