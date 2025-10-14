@@ -10,6 +10,7 @@ import {
   onPreprocessorWebSocketUpdate,
   onPreprocessorWebSocketStatus,
   onPreprocessorWebSocketError,
+  cancelPreprocessor as cancelPreprocessorPreload,
 } from '@app/preload';
 
 export interface ConfigResponse<T> {
@@ -18,15 +19,23 @@ export interface ConfigResponse<T> {
   error?: string;
 }
 
-export interface PreprocessorParameter {
+type PreprocessorParameterType = 'int' | 'float' | 'bool' | 'str' | 'category';
+
+interface ParameterOption {
   name: string;
-  type: string;
+  value: any;
+}
+
+export interface PreprocessorParameter {
+  display_name?: string;
+  name: string;
+  type: PreprocessorParameterType;
   default?: any;
   required?: boolean;
   description?: string;
   min?: number;
   max?: number;
-  options?: string[];
+  options?: ParameterOption[];
 }
 
 export interface Preprocessor {
@@ -157,6 +166,15 @@ export function subscribeToJobErrors(jobId: string, callback: (data: any) => voi
 }
 
 /**
+ * Cancel a preprocessor job
+/**
+ * Cancel a preprocessor job
+ */
+export async function cancelPreprocessor(jobId: string): Promise<ConfigResponse<any>> {
+  return await cancelPreprocessorPreload(jobId);
+}
+
+/**
  * Helper class to manage a preprocessing job with WebSocket tracking
  */
 export class PreprocessorJob {
@@ -216,6 +234,13 @@ export class PreprocessorJob {
   }
 
   /**
+   * Cancel the job
+   */
+  async cancel(): Promise<ConfigResponse<any>> {
+    return await cancelPreprocessor(this.jobId);
+  }
+
+  /**
    * Disconnect and cleanup
    */
   async disconnect(): Promise<void> {
@@ -227,4 +252,9 @@ export class PreprocessorJob {
     await disconnectJobWebSocket(this.jobId);
   }
 }
+
+// Export hooks for convenience
+export { usePreprocessorJob, useActiveJobs, useJobProgress, usePreprocessorJobActions } from './hooks';
+export { usePreprocessorJobStore } from './store';
+export type { JobProgress } from './store';
 

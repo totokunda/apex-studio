@@ -56,7 +56,6 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
            }
             <Rect
             id={timelineId} x={timelineX} y={timelineY! + 32} cornerRadius={4} width={timelineWidth! - (timelineX) + 8} height={renderedTimelineHeight} fill={'rgba(11, 11, 13, 0.25)'}/>
-            
             {clips.map((clip) => (
                     <TimelineClip 
                             key={clip.clipId} 

@@ -61,6 +61,8 @@ export interface TimelineProps {
 }
 
 
+export type PreprocessorClipType = VideoClipProps | ImageClipProps;
+
 export type VideoClipProps = ClipProps & MediaAdjustments & {
     src: string;
     type: 'video';
@@ -148,11 +150,14 @@ export type FilterClipProps = ClipProps & {
 }
 
 export type PreprocessorClipProps = {
+    src?: string;
     clipId?: string;
     id: string;
     preprocessor: Preprocessor;
     startFrame?:number;
     endFrame?:number;
+    values: Record<string, any>;
+    status?: 'running' | 'complete' | 'failed';
 }
 
 export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps;

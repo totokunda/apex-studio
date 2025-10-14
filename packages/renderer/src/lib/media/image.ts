@@ -165,7 +165,7 @@ export const fetchImage = async (path: string,  width?: number, height?: number,
     const cachedImage = getCachedImage(path, width, height);
     if (cachedImage)
         return cachedImage as WrappedCanvas; 
-
+    
     const blob = await toBlob(path);
     const url = URL.createObjectURL(blob);
     const img = new Image(width, height);
@@ -174,10 +174,22 @@ export const fetchImage = async (path: string,  width?: number, height?: number,
     
     await img.decode();
 
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    
+    if (ctx) {
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+    }
+
+    URL.revokeObjectURL(url);
+
     const imageCache = FramesCache.getState();
 
     const contentToCache =  {
-        canvas: img as unknown as HTMLCanvasElement,
+        canvas: canvas,
         duration: 1,
         timestamp: 0
     }

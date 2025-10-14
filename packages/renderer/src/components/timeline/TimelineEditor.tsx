@@ -18,6 +18,7 @@ import { useWebGLHaldClut } from '../preview/webgl-filters';
 import { ensureFullMediaStats } from '@/lib/media/utils';
 import { Preprocessor } from '@/lib/preprocessor';
 import { calculateFrameFromX, getOtherPreprocessors } from '@/lib/preprocessorHelpers';
+import {convertFrameRange} from '@/lib/media/fps';
 
 interface TimelineEditorProps {
 
@@ -225,7 +226,11 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         const fps = controlStore.fps;
         if (data.type === 'image') return fps * 5;
         if (data.type === 'video') {
-          return Math.round((mediaInfo?.duration ?? 0) * fps);  
+          
+          const realFps = mediaInfo?.stats.video?.averagePacketRate ?? fps;
+          const realEnd = (mediaInfo?.duration ?? 0) * realFps;
+          const {end: endFrameReal} = convertFrameRange(0,realEnd, realFps, fps);
+          return endFrameReal;
         }
         if (data.type === 'audio') {
           return Math.round((mediaInfo?.duration ?? 0) * fps);
@@ -723,6 +728,9 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       setGhostInStage(false);
       preprocessorDragClipRef.current = null;
       preprocessorDragKonvaNodeRef.current = null;
+      if (clip.type === 'image') {
+        setSelectedPreprocessorId(draggedPreprocessor.id);
+      }
       return;
     }
     
@@ -815,15 +823,21 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     let targetClip: AnyClipProps | null = null;
     let targetTimeline: TimelineProps | null = null;
 
+    let minDistance = Infinity;
     for (let timeline of timelines) {
+      if (timeline.type !== 'media') continue;
+      
       const {top, bottom, left, right} = getTimelinePosition(timeline.timelineId, verticalScrollRef.current);
-      const isInside = pointerY >= top && pointerY <= bottom && pointerX >= left && pointerX <= right;
-      if (isInside) {
-        if (timeline.type === 'media') {
-          targetTimeline = timeline;
-      } 
-      break;
-    }
+      
+      // Calculate distance to timeline bounds
+      const dx = Math.max(left - pointerX, 0, pointerX - right);
+      const dy = Math.max(top - pointerY, 0, pointerY - bottom);
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        targetTimeline = timeline;
+      }
     }
 
     if (!targetTimeline) {
@@ -930,13 +944,36 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       return;
     }
 
+    // fill the values with the default values
+    const values: Record<string, any> = {};
+    for (const param of _data.parameters || []) {
+      values[param.name] = param.default;
+    }
+
+    // For image clips, always span the entire duration
+    const finalStartFrame = targetClip.type === 'image' ? 0 : relativeStartFrame;
+    const finalEndFrame = targetClip.type === 'image' ? clipDuration : relativeEndFrame;
+
     const newPreprocessorClip: PreprocessorClipProps = {
       clipId: targetClip.clipId,
       id: uuidv4(),
       preprocessor: _data,
-      startFrame: relativeStartFrame,
-      endFrame: relativeEndFrame,
+      startFrame: finalStartFrame,
+      endFrame: finalEndFrame,
+      values: values,
     };
+
+    if (targetClip.type === 'image') {
+      if (!_data.supports_image) {
+        return;
+      }
+    }
+    if (targetClip.type === 'video') {
+      if (!_data.supports_video) {
+        return;
+      }
+    }
+
 
     if (preprocessorDragClipRef.current) {
       setSelectedPreprocessorId(preprocessorDragClipRef.current.id);
@@ -949,26 +986,50 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           preprocessorDragKonvaNodeRef.current.moveToTop();
         }
         
-        // Calculate the absolute timeline frame from pointer position
-        const absoluteFrame = calculateFrameFromX(pointerX, timelinePadding, timelineWidth, [visibleStartFrame, visibleEndFrame]);
+        // Check if clip has changed
+        const hasClipChanged = preprocessorDragClipRef.current.clipId !== targetClip.clipId;
         
-        // Convert to relative frame within the clip
-        const newRelativeStartFrame = Math.max(0, Math.min(absoluteFrame - targetClip.startFrame!, clipDuration));
-        const duration = (preprocessorDragClipRef.current.endFrame ?? 0) - (preprocessorDragClipRef.current.startFrame ?? 0);
-        const newRelativeEndFrame = Math.min(newRelativeStartFrame + duration, clipDuration);
-        
-        // Calculate the visual X position from the frame data (ensure consistency)
-        const finalAbsoluteFrame = targetClip.startFrame! + newRelativeStartFrame;
-        const progress = (finalAbsoluteFrame - visibleStartFrame) / (visibleEndFrame - visibleStartFrame);
-        const visualX = progress * stageWidth + timelinePadding;
-        
-        // Update visual position
-        preprocessorDragKonvaNodeRef.current?.x(visualX);
-        
-        // Update data
-        preprocessorDragClipRef.current.startFrame = newRelativeStartFrame;
-        preprocessorDragClipRef.current.endFrame = newRelativeEndFrame;
-        updatePreprocessor(targetClip.clipId, preprocessorDragClipRef.current.id, { startFrame: newRelativeStartFrame, endFrame: newRelativeEndFrame });
+        if (hasClipChanged) {
+          // Remove from old clip
+          removePreprocessorFromClip(preprocessorDragClipRef.current.clipId ?? '', preprocessorDragClipRef.current.id);
+          
+          // Calculate the absolute timeline frame from pointer position
+          const absoluteFrame = calculateFrameFromX(pointerX, timelinePadding, timelineWidth, [visibleStartFrame, visibleEndFrame]);
+          
+          // Convert to relative frame within the new clip
+          const newRelativeStartFrame = Math.max(0, Math.min(absoluteFrame - targetClip.startFrame!, clipDuration));
+          const duration = (preprocessorDragClipRef.current.endFrame ?? 0) - (preprocessorDragClipRef.current.startFrame ?? 0);
+          const newRelativeEndFrame = Math.min(newRelativeStartFrame + duration, clipDuration);
+          
+          // Update clipId and add to new clip
+          preprocessorDragClipRef.current.clipId = targetClip.clipId;
+          preprocessorDragClipRef.current.startFrame = newRelativeStartFrame;
+          preprocessorDragClipRef.current.endFrame = newRelativeEndFrame;
+          
+          addPreprocessorToClip(targetClip.clipId, preprocessorDragClipRef.current);
+        } else {
+          // Same clip - just update position
+          // Calculate the absolute timeline frame from pointer position
+          const absoluteFrame = calculateFrameFromX(pointerX, timelinePadding, timelineWidth, [visibleStartFrame, visibleEndFrame]);
+          
+          // Convert to relative frame within the clip
+          const newRelativeStartFrame = Math.max(0, Math.min(absoluteFrame - targetClip.startFrame!, clipDuration));
+          const duration = (preprocessorDragClipRef.current.endFrame ?? 0) - (preprocessorDragClipRef.current.startFrame ?? 0);
+          const newRelativeEndFrame = Math.min(newRelativeStartFrame + duration, clipDuration);
+          
+          // Calculate the visual X position from the frame data (ensure consistency)
+          const finalAbsoluteFrame = targetClip.startFrame! + newRelativeStartFrame;
+          const progress = (finalAbsoluteFrame - visibleStartFrame) / (visibleEndFrame - visibleStartFrame);
+          const visualX = progress * stageWidth + timelinePadding;
+          
+          // Update visual position
+          preprocessorDragKonvaNodeRef.current?.x(visualX);
+          
+          // Update data
+          preprocessorDragClipRef.current.startFrame = newRelativeStartFrame;
+          preprocessorDragClipRef.current.endFrame = newRelativeEndFrame;
+          updatePreprocessor(targetClip.clipId, preprocessorDragClipRef.current.id, { startFrame: newRelativeStartFrame, endFrame: newRelativeEndFrame });
+        }
         return;
     }
 

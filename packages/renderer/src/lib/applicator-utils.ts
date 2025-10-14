@@ -8,7 +8,7 @@ import { WebGLHaldClut } from '@/components/preview/webgl-filters/hald-clut';
 /**
  * Supported applicator clip types that can be applied to other clips
  */
-export const APPLICATOR_CLIP_TYPES: ClipType[] = ['filter', 'mask', 'processor'];
+export const APPLICATOR_CLIP_TYPES: ClipType[] = ['filter'];
 
 /**
  * Gets all applicable effect clips that should be applied to a given clip at the current frame.

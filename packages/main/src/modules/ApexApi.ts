@@ -158,6 +158,11 @@ export class ApexApi implements AppModule {
       return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/preprocessor/run', request);
     });
 
+    // Cancel preprocessor
+    ipcMain.handle('preprocessor:cancel', async (_event, jobId: string) => {
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/preprocessor/cancel/${encodeURIComponent(jobId)}`);
+    });
+
     // Get job status
     ipcMain.handle('preprocessor:status', async (_event, jobId: string) => {
       return this.makeRequest<any>('GET', `/preprocessor/status/${encodeURIComponent(jobId)}`);
@@ -253,6 +258,8 @@ export class ApexApi implements AppModule {
           'Content-Type': 'application/json',
         },
       };
+
+      console.log(`${this.backendUrl}${endpoint}`, body);
 
       if (body && method === 'POST') {
         options.body = JSON.stringify(body);

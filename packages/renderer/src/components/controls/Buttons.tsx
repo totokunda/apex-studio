@@ -150,11 +150,17 @@ const SplitButton = () => {
     const {clips, clipDuration} = useClipStore();
     const hasClips = clips.length > 0;
     
+    
     const selectedClipIds = useControlsStore((state) => state.selectedClipIds);
 
     const disabled = useMemo(() => !hasClips || focusFrame === 0 || selectedClipIds.length === 0 || focusFrame >= clipDuration || selectedClipIds.some((clipId) => {
         const clip = getClipById(clipId);
-        return !clip || !clipWithinFrame(clip, focusFrame);
+        // check if clip has running preprocessors
+        let runningPreprocessors = false;
+        if (clip && (clip.type === 'video' || clip.type === 'image') && clip.preprocessors && clip.preprocessors.length > 0) {
+            runningPreprocessors = clip.preprocessors.some((preprocessor) => preprocessor.status === 'running');
+        }
+        return !clip || !clipWithinFrame(clip, focusFrame) || runningPreprocessors;
     }), [hasClips, focusFrame, selectedClipIds, clipDuration, clipWithinFrame, getClipById]);
 
     const handleSplit = useCallback(() => {

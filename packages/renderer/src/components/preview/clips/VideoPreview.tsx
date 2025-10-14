@@ -10,11 +10,12 @@ import { useClipStore } from '@/lib/clip';
 import { WrappedCanvas } from 'mediabunny';
 import { useWebGLFilters } from '@/components/preview/webgl-filters';
 import { BaseClipApplicator } from './apply/base'
+import _ from 'lodash';
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
 const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[]}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart, speed: _speed, applicators}) => {
-    const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(() => getMediaInfoCached(src) || null);
+    const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
     const focusFrame = useControlsStore((state) => state.focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
@@ -36,10 +37,59 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
     const addClipSelection = useControlsStore((s) => s.addClipSelection);
     const clearSelection = useControlsStore((s) => s.clearSelection);
-    const {selectedClipIds, isFullscreen} = useControlsStore();
+    const {selectedClipIds, isFullscreen, fps:srcFps} = useControlsStore();
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
+    const lastSelectedSrcRef = useRef<string | null>(null); 
+    const cachedPreprocessorRangeRef = useRef<{startFrame: number, endFrame: number, selectedSrc: string, frameOffset: number} | null>(null);
+    const addedTimestampRef = useRef<number | undefined>(undefined); // last timestamp rendered
 
     const clip = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps;
+
+    const {
+        selectedSrc,
+        frameOffset,
+    } = useMemo(() => {
+        // Check if we can use the cached result
+
+        // Cache miss - recalculate
+        if (!clip.preprocessors || clip.preprocessors.length === 0) {
+            cachedPreprocessorRangeRef.current = null;
+            addedTimestampRef.current = 0;
+            return {selectedSrc: src, frameOffset: 0};
+        }
+
+        if (cachedPreprocessorRangeRef.current && 
+            currentFrame >= cachedPreprocessorRangeRef.current.startFrame && 
+            currentFrame <= cachedPreprocessorRangeRef.current.endFrame) {
+            return {
+                selectedSrc: cachedPreprocessorRangeRef.current.selectedSrc,
+                frameOffset: cachedPreprocessorRangeRef.current.frameOffset
+            };
+        }
+
+        
+        
+        // go through the preprocessors and find the one that is within the focus frame
+        for (const preprocessor of clip.preprocessors) {
+            if (preprocessor.startFrame !== undefined && preprocessor.endFrame !== undefined && currentFrame >= preprocessor.startFrame && currentFrame <= preprocessor.endFrame && preprocessor.status === 'complete' && preprocessor.src) {
+                const startSec = preprocessor.startFrame / srcFps;
+                addedTimestampRef.current = startSec;
+
+                cachedPreprocessorRangeRef.current = {
+                    startFrame: preprocessor.startFrame,
+                    endFrame: preprocessor.endFrame,
+                    selectedSrc: preprocessor.src,
+                    frameOffset: preprocessor.startFrame,
+                };
+                
+                return {selectedSrc: preprocessor.src, frameOffset: preprocessor.startFrame};
+            }
+        }
+
+        cachedPreprocessorRangeRef.current = null;
+        addedTimestampRef.current = 0;
+        return {selectedSrc: src, frameOffset: 0};
+    }, [clip?.preprocessors, src, currentFrame]);
 
     // Use refs to store current filter values to avoid callback recreation
     const filterParamsRef = useRef({
@@ -57,12 +107,12 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const applicatorsRef = useRef(applicators);
 
     const aspectRatio = useMemo(() => {
-      const originalWidth = mediaInfo?.video?.displayWidth || 0;
-      const originalHeight = mediaInfo?.video?.displayHeight || 0;
+      const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
+      const originalHeight = mediaInfo.current?.video?.displayHeight || 0;
       if (!originalWidth || !originalHeight) return 16/9;
       const aspectRatio = originalWidth / originalHeight;
       return aspectRatio;
-    }, [mediaInfo?.video?.displayWidth, mediaInfo?.video?.displayHeight]);
+    }, [mediaInfo.current?.video?.displayWidth, mediaInfo.current?.video?.displayHeight]);
 
     const groupRef = useRef<Konva.Group>(null);
     const SNAP_THRESHOLD_PX = 4; // pixels at screen scale
@@ -304,22 +354,31 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
     useEffect(() => {
         let cancelled = false;
-        if (mediaInfo) return;
+        if (lastSelectedSrcRef.current === selectedSrc) return;
+        lastSelectedSrcRef.current = selectedSrc;
+        // @ts-ignore
+        iteratorRef.current?.return?.();
+        iteratorRef.current = null;
+        let info = getMediaInfoCached(selectedSrc);
+        if (!info) {
         (async () => {
             try {
-                const info = await getMediaInfo(src);
-                if (!cancelled) setMediaInfo(info);
+                if (!info) info = await getMediaInfo(selectedSrc);
+                if (!cancelled) mediaInfo.current = info;
             } catch (e) {
                 console.error(e);
-            }
-        })();
+                }
+            })();
+        } else {
+            mediaInfo.current = info;
+        }
         return () => { cancelled = true };
-    }, [src]);
+    }, [selectedSrc]);
 
     // Compute aspect-fit display size and offsets within the preview rect
     const {displayWidth, displayHeight, offsetX, offsetY} = useMemo(() => {
-        const originalWidth = mediaInfo?.video?.displayWidth || 0;
-        const originalHeight = mediaInfo?.video?.displayHeight || 0;
+        const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
+        const originalHeight = mediaInfo.current?.video?.displayHeight || 0;
         if (!originalWidth || !originalHeight || !rectWidth || !rectHeight) {
             return { displayWidth: 0, displayHeight: 0, offsetX: 0, offsetY: 0 };
         }
@@ -334,7 +393,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const ox = (rectWidth - dw) / 2;
         const oy = (rectHeight - dh) / 2;
         return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
-    }, [mediaInfo?.video?.displayWidth, mediaInfo?.video?.displayHeight, rectWidth, rectHeight]);
+    }, [mediaInfo.current?.video?.displayWidth, mediaInfo.current?.video?.displayHeight, rectWidth, rectHeight]);
 
     // Initialize default transform if missing
     useEffect(() => {
@@ -396,24 +455,24 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!canvasRef.current) return;
         if (!mediaInfo) return;
         if (!displayWidth || !displayHeight) return;
-        const clipFps = mediaInfo.stats.video?.averagePacketRate || fps || 0;
+        const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || 0;
         const projectFps = fps || 0;
         if (!Number.isFinite(clipFps) || clipFps <= 0) return;
         if (!Number.isFinite(projectFps) || projectFps <= 0) return;
         
         // Map from project fps space to native clip fps space
-        const idealFrame = Math.max(0, currentFrame) * Math.max(0.1, speed);
+        const idealFrame = Math.max(0, currentFrame - frameOffset) * Math.max(0.1, speed);
         const actualFrame = Math.round((idealFrame / projectFps) * clipFps);
-        const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * clipFps));
-        const targetFrame = Math.max(0, Math.min(totalFrames, actualFrame)) + (mediaInfo.startFrame || 0);
+        const totalFrames = Math.max(0, Math.floor((mediaInfo.current?.duration || 0) * clipFps));
+        const targetFrame = Math.max(0, Math.min(totalFrames, actualFrame)) + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
         
         // cancel any previous iterator
         drawTokenRef.current++;
         // @ts-ignore
         iteratorRef.current?.return?.();
         
-        const targetEndFrame = mediaInfo.endFrame;
-        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: clipFps, startIndex: targetFrame, endIndex: targetEndFrame });
+        const targetEndFrame = Math.round((mediaInfo.current?.endFrame || 0) / projectFps * clipFps);
+        iteratorRef.current = await getVideoIterator(selectedSrc, { mediaInfo: mediaInfo.current || undefined, fps: clipFps, startIndex: targetFrame, endIndex: targetEndFrame });
         try {
             // try a few samples in case the first frames are undecodable/null
             let tries = 0;
@@ -422,6 +481,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 const res = await (iteratorRef.current as any).next();
                 const wc: WrappedCanvas | null = res?.value || null;
                 if (wc) {
+                    
                     drawWrappedCanvas(wc);
                     lastRenderedFrameRef.current = targetFrame;
                     break;
@@ -431,31 +491,32 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             console.warn('[video] seek draw failed', e);
         }
-    }, [mediaInfo, fps, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed]);
+    }, [mediaInfo, fps, selectedSrc, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, frameOffset]);
 
     const startRendering = useCallback(async () => {
         if (!canvasRef.current) return;
-        if (!mediaInfo) return;
+        if (!mediaInfo.current) return;
         if (!displayWidth || !displayHeight) return;
-        const clipFps = mediaInfo.stats.video?.averagePacketRate || fps || 0;
+        const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || 0;
         const projectFps = fps || 0;
         if (!Number.isFinite(clipFps) || clipFps <= 0) return;
         if (!Number.isFinite(projectFps) || projectFps <= 0) return;
         
         // Map from project fps space to native clip fps space
-        const idealStartFrame = Math.max(0, currentFrame) * Math.max(0.1, speed);
+        const idealStartFrame = Math.max(0, currentFrame - frameOffset) * Math.max(0.1, speed);
         const actualStartFrame = Math.round((idealStartFrame / projectFps) * clipFps);
-        const totalFrames = Math.max(0, Math.floor((mediaInfo.duration || 0) * clipFps));
-        const startIdx = Math.max(0, Math.min(totalFrames, actualStartFrame)) + (mediaInfo.startFrame || 0);
+        const totalFrames = Math.max(0, Math.floor((mediaInfo.current?.duration || 0) * clipFps));
+        const startIdx = Math.max(0, Math.min(totalFrames, actualStartFrame)) + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
         currentStartFrameRef.current = startIdx;
         lastRenderedFrameRef.current = startIdx - 1;
 
         const myToken = ++drawTokenRef.current;
         // @ts-ignore
         iteratorRef.current?.return?.();
-        const targetEndFrame = mediaInfo.endFrame;
+        const targetEndFrame = Math.round((mediaInfo.current?.endFrame || 0) / projectFps * clipFps);
 
-        iteratorRef.current = await getVideoIterator(src, { mediaInfo: mediaInfo || undefined, fps: clipFps, startIndex: startIdx, endIndex: targetEndFrame });
+
+        iteratorRef.current = await getVideoIterator(selectedSrc, { mediaInfo: mediaInfo.current || undefined, fps: clipFps, startIndex: startIdx, endIndex: targetEndFrame });
 
         try {
             for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
@@ -464,7 +525,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 if (!wc) continue;
 
                 // Determine the decoded sample's frame index in native fps
-                const ts: number | undefined = (wc as any)?.timestamp;
+                const ts: number | undefined = (wc as any)?.timestamp + addedTimestampRef.current;
+
                 let sampleIdx = Number.isFinite(ts as number) ? Math.round((ts as number) * clipFps) : (lastRenderedFrameRef.current + 1);
 
                 // Compute current timeline-local frame mapped to native fps (clip space)
@@ -474,7 +536,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                     const speedAdjusted = Math.max(0, Math.floor(local * Math.max(0.1, speed)));
                     // Map from project fps to native fps
                     const actualFrameIdx = Math.round((speedAdjusted / projectFps) * clipFps);
-                    return actualFrameIdx + (mediaInfo.startFrame || 0);
+                    return actualFrameIdx + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
                 };
                 
 
@@ -502,7 +564,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             // swallow
         }
-    }, [mediaInfo, fps, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, framesToGiveStart]);
+    }, [mediaInfo, fps, selectedSrc, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, framesToGiveStart, frameOffset]);
 
     // Start/stop iterator based on play state. Avoid depending on callbacks to prevent restarting every frame.
     useEffect(() => {
@@ -516,7 +578,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             // @ts-ignore
             iteratorRef.current?.return?.();
         };
-    }, [isPlaying, src, mediaInfo, displayWidth, displayHeight, fps, speed]);
+    }, [isPlaying, selectedSrc, mediaInfo, displayWidth, displayHeight, fps, speed, frameOffset]);
 
     // While paused, redraw immediately on scrubs/jumps
     useEffect(() => {

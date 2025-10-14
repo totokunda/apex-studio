@@ -44,6 +44,8 @@ function nodeStreamToWebStream(nodeStream: fs.ReadStream): ReadableStream<Uint8A
 }
 
 class AppDirProtocol implements AppModule {
+  private cachePath: string | null = null;
+
   async enable({app}: ModuleContext): Promise<void> {
     protocol.registerSchemesAsPrivileged([{
         scheme: 'app',
@@ -56,19 +58,29 @@ class AppDirProtocol implements AppModule {
         }
       }]);
     await app.whenReady();
+    
+    // Fetch cache path from backend
+    await this.fetchCachePath();
+    
     protocol.handle('app', (request) => {
-        // Map app://user-data/... to a real file under userData
         const u = new URL(request.url);
-        if (u.hostname !== 'user-data') {
+        
+        let basePath: string | null = null;
+        if (u.hostname === 'user-data') {
+          basePath = app.getPath('userData');
+        } else if (u.hostname === 'apex-cache') {
+          basePath = this.cachePath;
+        }
+
+        if (!basePath) {
           return new Response(null, { status: 404 });
         }
         
-        const userData = app.getPath('userData');
         const decodedPathname = decodeURIComponent(u.pathname);
         const normalizedPathname = decodedPathname.startsWith('/') ? decodedPathname.slice(1) : decodedPathname;
-        const filePath = normalizedPathname.startsWith(userData) 
+        const filePath = normalizedPathname.startsWith(basePath) 
           ? normalizedPathname 
-          : path.join(userData, normalizedPathname);
+          : path.join(basePath, normalizedPathname);
         // Check if file exists and is readable
         try {
           if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
@@ -116,6 +128,20 @@ class AppDirProtocol implements AppModule {
           }
         });
       });
+  }
+
+  private async fetchCachePath(): Promise<void> {
+    try {
+      const response = await fetch('http://127.0.0.1:8765/config/cache-path');
+      if (response.ok) {
+        const data = await response.json() as {cache_path: string};
+        if (data.cache_path) {
+          this.cachePath = data.cache_path;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch cache path:', error);
+    }
   }
 }
 

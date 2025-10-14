@@ -33,7 +33,7 @@ export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?:
                                     <span className="font-medium text-[12px]">{preprocessor.name}</span>
                                     <span className="text-[11px] text-brand-light/70 bg-brand/30 rounded">{preprocessor.category}</span>
                                 </div>
-                                <p className="text-[11px] text-brand-light w-full">{preprocessor.description}</p>
+                                <p className="text-[10.5px] text-brand-light w-full">{preprocessor.description}</p>
                             </div>
                         </TooltipContent>
                     </Tooltip>

@@ -23,7 +23,7 @@ export function getOtherPreprocessors(
     excludeId: string
 ): PreprocessorClipProps[] {
     return allPreprocessors
-        .filter(p => p.id !== excludeId)
+        .filter(p => p.id !== excludeId) 
         .sort((a, b) => (a.startFrame ?? 0) - (b.startFrame ?? 0));
 }
 
@@ -86,7 +86,42 @@ export function findGapAfterBlock(
             return gapEnd - preprocessorDuration;
         }
     }
-    
     return null;
+}
+
+/**
+ * Validates that a preprocessor's updated frames are valid
+ * Returns an object with isValid boolean and optional error message
+ */
+export function validatePreprocessorFrames(
+    startFrame: number,
+    endFrame: number,
+    preprocessorId: string,
+    allPreprocessors: PreprocessorClipProps[],
+    clipDuration: number
+): { isValid: boolean; error?: string } {
+    // Check minimum duration
+    if (endFrame - startFrame < 1) {
+        return { isValid: false, error: 'Preprocessor must be at least 1 frame long' };
+    }
+    
+    // Check bounds
+    if (startFrame < 0) {
+        return { isValid: false, error: 'Start frame cannot be before clip start' };
+    }
+    
+    if (endFrame > clipDuration) {
+        return { isValid: false, error: 'End frame cannot exceed clip duration' };
+    }
+    
+    // Check for collisions with other preprocessors
+    const otherPreprocessors = getOtherPreprocessors(allPreprocessors, preprocessorId);
+    const collisions = detectCollisions(startFrame, endFrame, otherPreprocessors, clipDuration);
+    
+    if (collisions.length > 0) {
+        return { isValid: false, error: 'Overlaps with another preprocessor' };
+    }
+    
+    return { isValid: true };
 }
 

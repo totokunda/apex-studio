@@ -10,6 +10,7 @@ import {videoDecoders, pruneStaleDecoders} from "./utils";
 function getOrCreateVideoDecoder(path: string, mediaInfo: MediaInfo, canBeTransparent: boolean): VideoDecoderContext | null {
     if (!mediaInfo?.video) return null;
     const key: VideoDecoderKey = `${path}#video`;
+
     const existing = videoDecoders.get(key);
     const frameRate = mediaInfo.stats.video?.averagePacketRate || 0;
     if (existing) {
@@ -18,12 +19,12 @@ function getOrCreateVideoDecoder(path: string, mediaInfo: MediaInfo, canBeTransp
         return existing;
     }
     try {
-    
         const sink = new CanvasSink(mediaInfo.video, {
             poolSize: 2,
 			fit: 'contain', // In case the video changes dimensions over time
 			alpha: canBeTransparent,
         });
+
         const ctx: VideoDecoderContext = {
             sink,
             inFlight: new Set<number>(),
@@ -35,7 +36,7 @@ function getOrCreateVideoDecoder(path: string, mediaInfo: MediaInfo, canBeTransp
         void (async () => {
             try {
                 const ts = 0;
-                await sink.getCanvas(ts);
+                await sink.getCanvas(ts)
             } catch {}
         })();
         return ctx;
@@ -49,7 +50,7 @@ export const getVideoIterator = async (path: string, options?: { mediaInfo?: Med
     try {
         const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
         if (!mediaInfo || !mediaInfo.video) throw new Error('Media info not found');
-        const fps = options?.fps || mediaInfo.stats.video?.averagePacketRate || 0;      
+        const fps = options?.fps || mediaInfo.stats.video?.averagePacketRate || 0;   
 
         const startTimestamp = (options?.startIndex || 0) / fps;
         const endTimestamp = options?.endIndex ? (options.endIndex) / fps : undefined;
@@ -57,6 +58,7 @@ export const getVideoIterator = async (path: string, options?: { mediaInfo?: Med
         const decoder = getOrCreateVideoDecoder(path, mediaInfo, videoCanBeTransparent);
         if (!decoder) throw new Error('Decoder not found');
         decoder.lastAccessTs = nowMs();
+
         return decoder.sink.canvases(startTimestamp, endTimestamp);
     } 
     finally {

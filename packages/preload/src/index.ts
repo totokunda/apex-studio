@@ -316,6 +316,10 @@ async function runPreprocessor(request: {
   start_frame?: number;
   end_frame?: number;
 }): Promise<ConfigResponse<{job_id: string; status: string; message?: string}>> {
+  // check if input_path is a file url
+  if (request.input_path.startsWith('file://')) {
+    request.input_path = fileURLToPath(request.input_path);
+  }
   return await ipcRenderer.invoke('preprocessor:run', request);
 }
 
@@ -351,6 +355,15 @@ function onPreprocessorWebSocketError(jobId: string, callback: (data: any) => vo
   const listener = (_event: any, data: any) => callback(data);
   ipcRenderer.on(`preprocessor:ws-error:${jobId}`, listener);
   return () => ipcRenderer.removeListener(`preprocessor:ws-error:${jobId}`, listener);
+}
+
+async function cancelPreprocessor(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('preprocessor:cancel', jobId);
+}
+
+function pathToFileURLString(path: string): string {
+  const fileUrl = pathToFileURL(path);
+  return fileUrl.href;
 }
 
 export {
@@ -392,5 +405,7 @@ export {
   disconnectPreprocessorWebSocket,
   onPreprocessorWebSocketUpdate,
   onPreprocessorWebSocketStatus,
-  onPreprocessorWebSocketError
+  onPreprocessorWebSocketError,
+  pathToFileURLString,
+  cancelPreprocessor
 };

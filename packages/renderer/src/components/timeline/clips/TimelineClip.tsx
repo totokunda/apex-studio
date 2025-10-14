@@ -59,7 +59,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const clipX = useMemo(() => getClipX(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration, timelineId]);
     const clipRef = useRef<Konva.Line>(null);
     const [resizeSide, setResizeSide] = useState<'left' | 'right' | null>(null);
-    const [resizingPreprocessor, setResizingPreprocessor] = useState<{id: string, side: 'left' | 'right'} | null>(null);
     const [draggingPreprocessor, setDraggingPreprocessor] = useState<{id: string, offsetX: number} | null>(null);
     const [imageCanvas] = useState<HTMLCanvasElement>(() => document.createElement('canvas'));
     const mediaInfoRef = useRef<MediaInfo | undefined>(getMediaInfoCached(currentClip?.src!));
@@ -257,7 +256,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     const targetHeight = Math.max(1, imageCanvas.height);
                     ctx.clearRect(0, 0, targetWidth, targetHeight);
 
-
                     // Determine tile dimensions from the input canvas/image
                     const tileWidth = Math.max(1, (inputCanvas as any).width || (inputCanvas as any).naturalWidth || 1);
                     const tileHeight = Math.max(1, (inputCanvas as any).height || (inputCanvas as any).naturalHeight || 1);
@@ -423,7 +421,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 
                 // Track if we have any cached samples
                 const hasCachedSamples = nearest.some(sample => sample !== null && sample !== undefined);
-                
                 const ctx = imageCanvas.getContext('2d');
                 if (ctx) {
                     ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
@@ -627,7 +624,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             const ctx = imageCanvas.getContext('2d');
             if (ctx) {
                 ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
-                ctx.fillStyle = '#FFFFFF';
+                ctx.fillStyle = '#E3E3E3';
                 ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
             }
             clipRef.current?.getLayer()?.batchDraw();
@@ -1089,7 +1086,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 let targetFrame = newFrame;
                 
                 // Check for preprocessor boundaries - prevent resizing past preprocessors
-                if (currentClip && (currentClip.type === 'video' || currentClip.type === 'image')) {
+                if (currentClip && (currentClip.type === 'video')) {
                     const preprocessors = (currentClip as VideoClipProps | ImageClipProps).preprocessors || [];
                     if (preprocessors.length > 0) {
                         // Find the rightmost preprocessor end position (in absolute frames)
@@ -1141,7 +1138,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 let targetFrame = newFrame;
                 
                 // Check for preprocessor boundaries - prevent resizing past preprocessors
-                if (currentClip && (currentClip.type === 'video' || currentClip.type === 'image')) {
+                if (currentClip && (currentClip.type === 'video')) {
                     const preprocessors = (currentClip as VideoClipProps | ImageClipProps).preprocessors || [];
                     if (preprocessors.length > 0) {
                         // Find the leftmost preprocessor start position (in absolute frames)

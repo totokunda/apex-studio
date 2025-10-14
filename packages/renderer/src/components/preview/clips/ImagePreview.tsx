@@ -2,7 +2,7 @@ import { ImageClipProps, MediaInfo} from '@/lib/types'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {Image, Transformer, Group, Line} from 'react-konva'
 import {fetchImage} from '@/lib/media/image'
-import {getMediaInfo} from '@/lib/media/utils'
+import {getMediaInfo, getMediaInfoCached} from '@/lib/media/utils'
 import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
@@ -11,7 +11,7 @@ import { useWebGLFilters } from '@/components/preview/webgl-filters';
 import { BaseClipApplicator } from './apply/base';
 
 const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[]}> = ({ src, clipId, rectWidth, rectHeight, applicators}) => {
-    const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
+    const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
     const transformerRef = useRef<Konva.Transformer>(null);
@@ -30,13 +30,17 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
     const clip = useClipStore((s) => s.getClipById(clipId)) as ImageClipProps;
 
+    const selectedSrc = useMemo(() => {
+        return clip?.preprocessors?.find(p => p.status === 'complete')?.src ?? src;
+    }, [clip?.src, clip.preprocessors]);
+
     const aspectRatio = useMemo(() => {
-      const originalWidth = mediaInfo?.image?.width;
-      const originalHeight = mediaInfo?.image?.height;
+      const originalWidth = mediaInfoRef.current?.image?.width;
+      const originalHeight = mediaInfoRef.current?.image?.height;
       if (!originalWidth || !originalHeight) return 16/9;
       const aspectRatio = originalWidth / originalHeight;
       return aspectRatio;
-    }, [mediaInfo?.image?.width, mediaInfo?.image?.height]);
+    }, [mediaInfoRef.current?.image?.width, mediaInfoRef.current?.image?.height]);
 
 
     const groupRef = useRef<Konva.Group>(null);
@@ -238,7 +242,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         (async () => {
             try {
                 const info = await getMediaInfo(src);
-                if (!cancelled) setMediaInfo(info);
+                if (!cancelled) mediaInfoRef.current = info;
             } catch (e) {
                 console.error(e);
             }
@@ -248,8 +252,8 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
     // Compute aspect-fit display size and offsets within the preview rect
     const {displayWidth, displayHeight, offsetX, offsetY} = useMemo(() => {
-        const originalWidth = mediaInfo?.image?.width || 0;
-        const originalHeight = mediaInfo?.image?.height || 0;
+        const originalWidth = mediaInfoRef.current?.image?.width || 0;
+        const originalHeight = mediaInfoRef.current?.image?.height || 0;
         if (!originalWidth || !originalHeight || !rectWidth || !rectHeight) {
             return { displayWidth: 0, displayHeight: 0, offsetX: 0, offsetY: 0 };
         }
@@ -264,7 +268,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         const ox = (rectWidth - dw) / 2;
         const oy = (rectHeight - dh) / 2;
         return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
-    }, [mediaInfo?.image?.height, mediaInfo?.image?.width, rectWidth, rectHeight]);
+    }, [mediaInfoRef.current?.image?.height, mediaInfoRef.current?.image?.width, rectWidth, rectHeight]);
 
     // Initialize default transform if missing
     useEffect(() => {
@@ -289,14 +293,14 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
     const draw = useCallback(async () => {
 
         if (!canvasRef.current) return;
-        if (!mediaInfo) return;
+        if (!mediaInfoRef.current) return;
         if (!displayWidth || !displayHeight) return;
 
         try {
             
-            const height = mediaInfo.image?.height;
-            const width = mediaInfo.image?.width
-            const image = await fetchImage(src, height, width);
+            const height = mediaInfoRef.current.image?.height;
+            const width = mediaInfoRef.current.image?.width
+            const image = await fetchImage(selectedSrc, height, width, {mediaInfo: mediaInfoRef.current});
             
             if (!image) return;
            
@@ -307,6 +311,8 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             ctx.imageSmoothingEnabled = true;
             // @ts-ignore
             ctx.imageSmoothingQuality = 'high';
+            // clear the canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(image.canvas, 0, 0, canvas.width, canvas.height);
             
             // Apply WebGL filters for better performance
@@ -328,7 +334,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         } catch (e) {
             console.error(e);
         }
-    }, [mediaInfo, src, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applyFilters]);
+    }, [mediaInfoRef, selectedSrc, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applyFilters]);
 
     useEffect(() => {
         draw();

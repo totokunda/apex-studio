@@ -40,7 +40,7 @@ const getUrlWithoutSearchParams = (path: string): string => {
     return pathUrl.toString();
 }
 
-export const getMediaInfo = async (path: string, options?: { fullStats?: boolean }): Promise<MediaInfo> => {
+export const getMediaInfo = async (path: string, options?: { fullStats?: boolean, sourceDir?: 'user-data' | 'apex-cache' }): Promise<MediaInfo> => {
 
     const pathUrl = new URL(path);
     const startFrame = pathUrl.searchParams.get('startFrame') ? Number(pathUrl.searchParams.get('startFrame')) : undefined;
@@ -132,10 +132,9 @@ export const getMediaInfo = async (path: string, options?: { fullStats?: boolean
     try {
         const filePath = fileURLToPath(hasHashSuffix ? originalPath : path);  
         // replace userDatab path 
-        const url = new URL(`app://user-data/${filePath}`);
+        const url = new URL(`app://${options?.sourceDir ?? 'user-data'}/${filePath}`);
         input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
     } catch (e) {
-        console.error('Error reading file', e);
         input = null;
     }
 

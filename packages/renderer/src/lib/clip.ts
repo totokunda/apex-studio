@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps } from "./types";
+import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps, ImageClipProps, PreprocessorClipType } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 import { MediaItem } from "@/components/media/Item";
@@ -41,8 +41,7 @@ interface ClipStore {
     ghostX: number;
     setGhostX: (x: number) => void;
     ghostGuideLines: [number, number] | null;
-    selectedPreprocessorId: string | null;
-    setSelectedPreprocessorId: (preprocessorId: string | null) => void;
+    
     setGhostGuideLines: (guideLines: [number, number] | null) => void;
     muteTimeline: (timelineId: string) => void;
     unmuteTimeline: (timelineId: string) => void;
@@ -58,10 +57,13 @@ interface ClipStore {
     setGhostTimelineId: (timelineId: string | null) => void;
     draggingClipId: string | null;
     setDraggingClipId: (clipId: string | null) => void;
+    selectedPreprocessorId: string | null;
+    setSelectedPreprocessorId: (preprocessorId: string | null) => void;
+    getPreprocessorById: (preprocessorId: string) => PreprocessorClipProps | null;
     addPreprocessorToClip: (clipId: string, preprocessor: PreprocessorClipProps) => void;
     removePreprocessorFromClip: (clipId: string, preprocessor: PreprocessorClipProps | string) => void;
     getPreprocessorsForClip: (clipId: string) => PreprocessorClipProps[];
-    getClipFromPreprocessorId: (preprocessorId: string) => AnyClipProps | null;
+    getClipFromPreprocessorId: (preprocessorId: string) => PreprocessorClipType | null;
     // Global snap guideline (absolute stage X in px). Null when inactive
     snapGuideX: number | null;
     setSnapGuideX: (x: number | null) => void;
@@ -290,7 +292,13 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     },
     setGhostX: (x) => set({ ghostX: x }),
     selectedPreprocessorId: null,
-    setSelectedPreprocessorId: (preprocessorId) => set({ selectedPreprocessorId: preprocessorId }),
+    setSelectedPreprocessorId: (preprocessorId) => {
+        // control store set clip id to empty
+        if (preprocessorId) {
+        useControlsStore.setState({ selectedClipIds: [] });
+        }
+        set({ selectedPreprocessorId: preprocessorId});
+    },
     ghostGuideLines: null,
     setGhostGuideLines: (guideLines) => set({ ghostGuideLines: guideLines }),
     hoveredTimelineId: null,
@@ -319,13 +327,21 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
     }),
+    getPreprocessorById: (preprocessorId: string) => {
+        // get the clip that contains the preprocessor
+        const clip = get().clips.find((c) => (c.type === 'video' || c.type === 'image') && c.preprocessors?.some((p) => p.id === preprocessorId));
+        if (!clip) return null;
+        const preprocessor = (clip as VideoClipProps | ImageClipProps).preprocessors?.find((p) => p.id === preprocessorId);
+        return preprocessor || null;
+    },
     getClipFromPreprocessorId: (preprocessorId: string) => {
-        const clip = get().clips.find((c) => c.type === 'video' || c.type === 'image' && c.preprocessors?.some((p) => p.id === preprocessorId));
+        const clip = get().clips.find((c) => (c.type === 'video' || c.type === 'image') && c.preprocessors?.some((p) => p.id === preprocessorId)) as PreprocessorClipType | null;
         return clip || null;
     },
     updatePreprocessor: (clipId: string, preprocessorId: string, preprocessorToUpdate: Partial<PreprocessorClipProps>) => set((state) => {
         const newClips = [...state.clips];
         const currentClipIndex = newClips.findIndex((c) => c.clipId === clipId);
+
         if (currentClipIndex === -1) return { clips: state.clips };
         const currentClip = newClips[currentClipIndex];
         if (!currentClip) return { clips: state.clips };
@@ -362,7 +378,11 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         newClips[currentClipIndex] = newClip;
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
-        return { clips: resolvedClips, clipDuration };
+        let selectedPreprocessorId = state.selectedPreprocessorId;
+        if (selectedPreprocessorId === (typeof preprocessor === 'string' ? preprocessor : preprocessor.id)) {
+            selectedPreprocessorId = null;
+        }
+        return { clips: resolvedClips, clipDuration, selectedPreprocessorId };
     }),
     getPreprocessorsForClip: (clipId: string) => {
         const clip = get().clips.find((c) => c.clipId === clipId);
@@ -439,6 +459,22 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const newDuration = Math.max(1, Math.round(oldDuration * (oldSpeed / newSpeed)));
             nextUpdate.endFrame = start + newDuration;
             (nextUpdate as VideoClipProps).speed = newSpeed as any;
+
+            // Update preprocessors timing to match the new speed
+            if ((current.type === 'video' || current.type === 'image') && current.preprocessors && current.preprocessors.length > 0) {
+                const speedRatio = oldSpeed / newSpeed;
+                const updatedPreprocessors = current.preprocessors.map(preprocessor => {
+                    const preprocessorStart = Math.max(0, Number(preprocessor.startFrame || 0));
+                    const preprocessorEnd = Math.max(preprocessorStart + 1, Number(preprocessor.endFrame || (preprocessorStart + 1)));
+                    const preprocessorDuration = Math.max(1, preprocessorEnd - preprocessorStart);
+                    const newPreprocessorDuration = Math.max(1, Math.round(preprocessorDuration * speedRatio));
+                    return {
+                        ...preprocessor,
+                        endFrame: preprocessorStart + newPreprocessorDuration
+                    };
+                });
+                (nextUpdate as VideoClipProps | ImageClipProps).preprocessors = updatedPreprocessors;
+            }
         }
 
         const updatedClip = { ...current, ...nextUpdate } as AnyClipProps;
@@ -624,6 +660,81 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             framesToGiveStart: infinityFramestoGiveStart ? Infinity : 0,
             framesToGiveEnd: infinityFramestoGiveEnd ? -Infinity : 0,
         };
+        
+        if (clip.type === 'image' || clip.type === 'video') { 
+            if (clip.preprocessors && clip.preprocessors.length > 0) {
+                const clip1Preprocessors: PreprocessorClipProps[] = [];
+                const clip2Preprocessors: PreprocessorClipProps[] = [];
+                clip.preprocessors.forEach(preprocessor => {
+                    // check if preprocessor is within the new clip
+                    if (preprocessor.startFrame !== undefined && preprocessor.endFrame !== undefined) {
+                        // Case 1: Preprocessor is entirely before the cut frame
+                        if (preprocessor.endFrame < cutFrame) {
+                            clip1Preprocessors.push(preprocessor);
+                        }
+                        // Case 2: Preprocessor is entirely after the cut frame
+                        else if (preprocessor.startFrame >= cutFrame) {
+                            clip2Preprocessors.push({
+                                ...preprocessor,
+                                startFrame: preprocessor.startFrame - cutFrame,
+                                endFrame: preprocessor.endFrame - cutFrame,
+                            });
+                        }
+                        // Case 3: Preprocessor spans across the cut frame
+                        else if (preprocessor.startFrame < cutFrame && preprocessor.endFrame > cutFrame) {
+                            // Calculate how much of the preprocessor media is used before/after cut
+                            const preprocessorMediaDurationBeforeCut = cutFrame - preprocessor.startFrame;
+                            const preprocessorMediaDurationAfterCut = preprocessor.endFrame - cutFrame;
+                            
+                            const preprocessor1 = {
+                                ...preprocessor,
+                                endFrame: cutFrame
+                            };
+                            
+                            const preprocessor2 = {
+                                ...preprocessor,
+                                id: uuidv4(),
+                                startFrame: 0,
+                                endFrame: preprocessorMediaDurationAfterCut,
+                            };
+                            
+                            // Update src URLs to reflect the split in preprocessor media
+                            if (preprocessor.src) {
+                                const url1 = new URL(preprocessor.src);
+                                const url2 = new URL(preprocessor.src);
+                                const currentStartFrame = url1.searchParams.get('startFrame') ? Number(url1.searchParams.get('startFrame')) : 0;
+                                const currentEndFrame = url1.searchParams.get('endFrame') ? Number(url1.searchParams.get('endFrame')) : undefined;
+                                
+                                // First preprocessor: from start to cutFrame in preprocessor media
+                                url1.searchParams.set('startFrame', String(currentStartFrame));
+                                url1.searchParams.set('endFrame', String(currentStartFrame + preprocessorMediaDurationBeforeCut));
+                                
+                                // Second preprocessor: from cutFrame to end in preprocessor media
+                                url2.searchParams.set('startFrame', String(currentStartFrame + preprocessorMediaDurationBeforeCut));
+                                if (currentEndFrame !== undefined) {
+                                    url2.searchParams.set('endFrame', String(currentEndFrame));
+                                } else {
+                                    url2.searchParams.set('endFrame', String(currentStartFrame + preprocessorMediaDurationBeforeCut + preprocessorMediaDurationAfterCut));
+                                }
+
+                                preprocessor1.src = url1.toString();
+                                preprocessor2.src = url2.toString();
+                                
+                                void getMediaInfo(preprocessor1.src);
+                                void getMediaInfo(preprocessor2.src);
+                            }
+                            
+                            clip1Preprocessors.push(preprocessor1);
+                            clip2Preprocessors.push(preprocessor2);
+
+                        }
+                    }
+                });
+                
+                (newClip1 as VideoClipProps | ImageClipProps).preprocessors = clip1Preprocessors;
+                (newClip2 as VideoClipProps | ImageClipProps).preprocessors = clip2Preprocessors;
+            }
+        }
 
         if (Object.prototype.hasOwnProperty.call(clip, 'src') && clip.src && (AUDIO_EXTS.includes(getLowercaseExtension(clip.src)) || VIDEO_EXTS.includes(getLowercaseExtension(clip.src)))) {
             // one of audio or video

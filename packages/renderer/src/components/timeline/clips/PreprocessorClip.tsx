@@ -1,15 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {  PreprocessorClipProps } from '@/lib/types'
+import {  MediaInfo, PreprocessorClipProps } from '@/lib/types'
 import { getClipWidth, useClipStore } from '@/lib/clip'
-import { Rect} from 'react-konva'
+import { Rect, Image } from 'react-konva'
 import { Text } from 'react-konva'
 import { Group } from 'react-konva'
 import { Html } from 'react-konva-utils'
-import { FaPlay } from 'react-icons/fa6'
-import { LuTrash } from 'react-icons/lu'
+import { FaPlay, FaStop } from 'react-icons/fa6'
+import { LuTrash} from 'react-icons/lu'
+
 import { useControlsStore } from '@/lib/control'
 import Konva from 'konva'
 import { calculateFrameFromX as calcFrameFromX, getOtherPreprocessors as getOthers, detectCollisions as detectColls, findGapAfterBlock as findGap } from '@/lib/preprocessorHelpers'
+import { runPreprocessor, usePreprocessorJob, usePreprocessorJobActions } from '@/lib/preprocessor/api'
+import { toast } from 'sonner';
+import {getMediaInfo, getMediaInfoCached} from '@/lib/media/utils'  
+import {pathToFileURLString} from '@app/preload'
+import { generateTimelineSamples } from "@/lib/media/timeline"
+import { getNearestCachedCanvasSamples } from "@/lib/media/canvas"
+import { useWebGLFilters } from "@/components/preview/webgl-filters"
+import {  toFrameRange } from '@/lib/media/fps'
+import { cn } from '@/lib/utils'
+const THUMBNAIL_TILE_SIZE = 36;
 
 interface PropsPreprocessorClip {
     preprocessor: PreprocessorClipProps
@@ -24,10 +35,14 @@ interface PropsPreprocessorClip {
     timelinePadding: number
 }
 
-export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging}) => {
+export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging}) => {
     const {timelineDuration, setSelectedClipIds} = useControlsStore()
     const removePreprocessorFromClip = useClipStore((s) => s.removePreprocessorFromClip);
     const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
+    const getClipFromPreprocessorId = useClipStore((s) => s.getClipFromPreprocessorId);
+    const getPreprocessorById = useClipStore((s) => s.getPreprocessorById);
+    const preprocessor = useMemo(() => getPreprocessorById(inputPreprocessor.id) ?? inputPreprocessor, [inputPreprocessor.id, getPreprocessorById, inputPreprocessor]);
+    const clip = getClipFromPreprocessorId(preprocessor.id);
     // Preprocessor frames are stored relative to the parent clip (0 = clip start)
     const preprocessorStartFrame = preprocessor.startFrame ?? 0;
     const preprocessorEndFrame = preprocessor.endFrame ?? (currentEndFrame - currentStartFrame);
@@ -38,9 +53,19 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
     const clipWidth = Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3);
     
     // Calculate preprocessor position and size as proportion of parent clip
-    const preprocessorDuration = useMemo(() => preprocessorEndFrame - preprocessorStartFrame, [preprocessorEndFrame, preprocessorStartFrame]);
+    const preprocessorDuration = useMemo(() => {
+        if (clip?.type === 'image') {
+            return clipDuration;
+        }
+        return preprocessorEndFrame - preprocessorStartFrame;
+    }, [preprocessorEndFrame, preprocessorStartFrame, clip?.type]);
     const preprocessorX = useMemo(() => (preprocessorStartFrame / clipDuration) * clipWidth, [preprocessorStartFrame, clipDuration, clipWidth]);
-    const preprocessorWidth = useMemo(() => Math.max((preprocessorDuration / clipDuration) * clipWidth, 3), [preprocessorDuration, clipDuration, clipWidth]);
+    const preprocessorWidth = useMemo(() => {
+        if (clip?.type === 'image') {
+            return clipWidth;
+        }
+        return Math.max((preprocessorDuration / clipDuration) * clipWidth, 3);
+    }, [preprocessorDuration, clipDuration, clipWidth, clip?.type]);
     const selectedPreprocessorId = useClipStore((s) => s.selectedPreprocessorId);
     const setSelectedPreprocessorId = useClipStore((s) => s.setSelectedPreprocessorId);
     const updatePreprocessor = useClipStore((s) => s.updatePreprocessor);
@@ -49,6 +74,73 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
     const prevClipBounds = useRef({ startFrame: currentStartFrame, endFrame: currentEndFrame });
     const [isAltPressed, setIsAltPressed] = useState(false);
     const previousMouseX = useRef<number | null>(null);
+    const preprocessorJobId = useMemo(() => preprocessor.status === 'running' ? preprocessor.id : null, [preprocessor.id, preprocessor.status]);
+    const { isProcessing, progress, result} = usePreprocessorJob(preprocessorJobId);
+    const { clearJob, stopTracking } = usePreprocessorJobActions(); 
+    const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(preprocessor.src ?? '') ?? null);
+    const [imageCanvas] = useState<HTMLCanvasElement>(() => document.createElement('canvas'));
+    const { applyFilters } = useWebGLFilters();
+    const exactVideoUpdateTimerRef = useRef<number | null>(null);
+    const exactVideoUpdateSeqRef = useRef<number>(0);
+    const lastExactRequestKeyRef = useRef<string | null>(null);
+    const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
+    
+    const { fps } = useControlsStore();
+
+    const showProgress = useMemo(() => {
+        if (preprocessor.status === 'running') {
+            return true;
+        }
+        if (result !== null && result.result_path !== null) {
+            return false;
+        }
+        if (isProcessing || progress > 0) {
+            return true;
+        }
+        return false;
+    }, [isProcessing, progress, result, inputPreprocessor.id, preprocessor.status]);
+
+    const canResize = useMemo(() => {
+        return preprocessor.status !== 'running' && clip?.type === 'video';
+    }, [preprocessor.status, clip?.type]);
+
+    const preprocessorXPosition = useMemo(() => {
+        const timelineSpan = timelineDuration[1] - timelineDuration[0];
+        const pxPerFrame = timelineWidth / timelineSpan;
+        const startSpanWidth = preprocessorStartFrame * pxPerFrame;
+        return clipPosition.x + startSpanWidth;
+    }, [clipPosition.x, preprocessorWidth, timelineDuration]);
+
+    useEffect(() => {
+        if (result?.result_path) {
+            const resultPath = result.result_path;
+            // convert to file url
+            const fileUrl = pathToFileURLString(resultPath);
+            getMediaInfo(fileUrl, { sourceDir: 'apex-cache'}).then((mediaInfo) => {
+                mediaInfoRef.current = mediaInfo;
+                updatePreprocessor(clipId, preprocessor.id, {
+                    src: fileUrl,
+                    status: 'complete'
+                });
+            }).catch(() => {
+                updatePreprocessor(clipId, preprocessor.id, {
+                    status: 'failed'
+                });
+            });
+        }
+    }, [result]);
+
+    useEffect(() => {
+        mediaInfoRef.current = getMediaInfoCached(preprocessor.src ?? '') ?? null;
+    }, [preprocessor.src]);
+
+    // Set canvas dimensions based on preprocessor width and height
+    useEffect(() => {
+        imageCanvas.width = Math.min(preprocessorWidth, timelineWidth);
+        imageCanvas.height = timelineHeight;
+    }, [preprocessorWidth, timelineHeight, imageCanvas, timelineWidth]);
+
+    const imageWidth = useMemo(() => Math.min(preprocessorWidth, timelineWidth), [preprocessorWidth, timelineWidth]);
 
     useEffect(() => {
         if (isDragging) {
@@ -56,6 +148,34 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
                 setSelectedPreprocessorId(null);
         }
     }, [isDragging, preprocessor.id, setSelectedPreprocessorId]);
+
+    const imageX = useMemo(() => {
+        let extraDist = 0;
+        let positionX = preprocessorWidth <= imageWidth? 0:  (-preprocessorXPosition);
+
+        const clipOffset = currentStartFrame - (isFinite(clip?.framesToGiveStart ?? 0) ? clip?.framesToGiveStart ?? 0 : 0);
+        const timelineStartFrame = timelineDuration[0] - clipOffset;
+        const timelineEndFrame = timelineDuration[1] - clipOffset;
+        const pxPerFrame = timelineWidth / (timelineEndFrame - timelineStartFrame);
+        const distFromStartFrames = preprocessorStartFrame - timelineStartFrame;
+        const distFromStartPixels = distFromStartFrames * pxPerFrame;
+        const distFromEndFrames = timelineEndFrame - preprocessorEndFrame;
+        const distFromEndPixels = distFromEndFrames * pxPerFrame;
+        // check if end is beyond timelineEndFrame
+       
+        const timelineSpan = timelineEndFrame - timelineStartFrame;
+        const preprocessorSpan = preprocessorEndFrame - preprocessorStartFrame;
+        if (preprocessorSpan > timelineSpan && preprocessorStartFrame > timelineStartFrame) {
+            extraDist += distFromStartPixels;
+        } else if (preprocessorEndFrame < timelineEndFrame && preprocessorEndFrame < timelineStartFrame) { 
+            extraDist += distFromEndPixels;
+        } else if (preprocessorSpan <= timelineSpan && preprocessorStartFrame < timelineStartFrame) {
+            extraDist += (timelineStartFrame - preprocessorStartFrame) * pxPerFrame - timelinePadding
+        }
+
+
+        return positionX + extraDist
+    }, [preprocessorXPosition, imageWidth, preprocessorX, currentStartFrame, clip?.framesToGiveStart, timelineDuration]);
 
     // Track Alt key state globally
     useEffect(() => {
@@ -207,14 +327,16 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
 
     const handleDragStart = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
             // Only allow preprocessor drag if Alt key is held OR dragging from header
+            if (preprocessor.status === 'running') return;
             e.target.getStage()!.container().style.cursor = 'grab';
             setSelectedPreprocessorId(preprocessor.id);
             e.target.moveToTop();
             // Reset mouse tracking for clean drag direction detection
             previousMouseX.current = null;
-        }, [preprocessor.id, setSelectedPreprocessorId]);
+        }, [preprocessor.id, setSelectedPreprocessorId, preprocessor.status]);
     
     const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+        
         const stage = e.target.getStage();
         if (!stage) return;
 
@@ -233,6 +355,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
                 dragDirection = 'left';
             }
         }
+
         previousMouseX.current = mouseX;
 
         // Calculate desired position based on actual mouse position
@@ -351,11 +474,12 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
         e.target.x(adjustedX);
 
         updatePreprocessor(clipId, preprocessor.id, { startFrame: relativeStartFrame, endFrame: relativeEndFrame });
-    }, [calculateFrameFromX, preprocessorEndFrame, preprocessorStartFrame, currentStartFrame, currentEndFrame, clipId, preprocessor.id, updatePreprocessor,  timelineDuration, timelinePadding, timelineWidth, detectCollisions, findGapAfterBlock]);
+    }, [calculateFrameFromX, preprocessorEndFrame, preprocessorStartFrame, currentStartFrame, currentEndFrame, clipId, preprocessor.id, updatePreprocessor,  timelineDuration, timelinePadding, timelineWidth, detectCollisions, findGapAfterBlock, preprocessor.status]);
 
     const handleDragEnd = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+        if (preprocessor.status === 'running') return;
         e.target.getStage()!.container().style.cursor = 'default';
-    }, []);
+    }, [preprocessor.status]);
 
     const dragBoundFunc = useCallback((pos: {x: number, y: number}) => {
         // Just constrain Y, let handleDragMove handle X collisions
@@ -381,6 +505,8 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
             // Convert to relative frame within the clip
             const relativeFrame = absoluteFrame - currentStartFrame;
             const clipDurationNow = currentEndFrame - currentStartFrame;
+
+            if (!canResize) return;
 
             if (resizingPreprocessor.side === 'right') {
                 // Resizing right edge
@@ -432,10 +558,344 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [resizingPreprocessor, currentStartFrame, currentEndFrame, calculateFrameFromX, clipId, updatePreprocessor, preprocessor.id, preprocessorStartFrame, preprocessorEndFrame, getOtherPreprocessors]);
+    }, [resizingPreprocessor, currentStartFrame, currentEndFrame, calculateFrameFromX, clipId, updatePreprocessor, preprocessor.id, preprocessorStartFrame, preprocessorEndFrame, getOtherPreprocessors, canResize]);
 
     // Preprocessor is interactive only when Alt is pressed OR when hovering/interacting with header
     const isListening = !isAltPressed;
+
+    
+
+    // Trigger thumbnail generation when preprocessor completes
+    useEffect(() => {
+        if (preprocessor.status !== 'complete' || !mediaInfoRef.current || !preprocessor.src) return;
+
+        const generateTimelineThumbnailImage = async () => {
+            if (!mediaInfoRef.current?.image) return;
+            
+            const width = mediaInfoRef.current.image.width ?? 1;
+            const height = mediaInfoRef.current.image.height ?? 1;
+            const ratio = width / height;
+            let thumbnailWidth = Math.max(timelineHeight * ratio, THUMBNAIL_TILE_SIZE);
+            const tClipWidth = Math.min(clipWidth, timelineWidth);
+
+            const samples = await generateTimelineSamples(
+                preprocessor.id,
+                preprocessor.src!,
+                [0],
+                thumbnailWidth,
+                timelineHeight,
+                tClipWidth,
+                {
+                    mediaInfo: mediaInfoRef.current,
+                }
+            );
+    
+            if (samples?.[0]?.canvas) {
+                const inputCanvas = samples[0].canvas as HTMLCanvasElement;
+                const ctx = imageCanvas.getContext('2d');
+                if (ctx) {
+                    const targetWidth = Math.max(1, imageCanvas.width);
+                    const targetHeight = Math.max(1, imageCanvas.height);
+                    ctx.clearRect(0, 0, targetWidth, targetHeight);
+    
+                    // Determine tile dimensions from the input canvas/image
+                    const tileWidth = Math.max(1, (inputCanvas as any).width || (inputCanvas as any).naturalWidth || 1);
+                    const tileHeight = Math.max(1, (inputCanvas as any).height || (inputCanvas as any).naturalHeight || 1);
+                    const sourceHeight = Math.min(tileHeight, targetHeight);
+    
+                    // Repeat the inputCanvas horizontally until we fill the target width
+                    let x = 0;
+                    while (x < targetWidth) {
+                        const remaining = targetWidth - x;
+                        const drawWidth = Math.min(tileWidth, remaining);
+                        
+                        if (x + drawWidth > 0) {
+                            ctx.drawImage(
+                                inputCanvas,
+                                x, 0, drawWidth, sourceHeight
+                            );
+                        }
+                        x += drawWidth;
+                    }
+                    
+                    // Apply WebGL filters to image thumbnails
+                    applyFilters(imageCanvas, {
+                        brightness: clip?.brightness,
+                        contrast: clip?.contrast,
+                        hue: clip?.hue,
+                        saturation: clip?.saturation,
+                        blur: clip?.blur,
+                        sharpness: clip?.sharpness,
+                        noise: clip?.noise,
+                        vignette: clip?.vignette
+                    });
+                }
+            }
+            preprocessorRef.current?.getLayer()?.batchDraw();
+        }
+    
+        const generateTimelineThumbnailVideo = async () => {
+            if (!mediaInfoRef.current?.video) return;
+            
+            const clipFps = mediaInfoRef.current?.stats.video?.averagePacketRate || fps;
+
+            const width = mediaInfoRef.current.video.displayWidth ?? 1;
+            const height = mediaInfoRef.current.video.displayHeight ?? 1;
+            const ratio = width / height;
+            const thumbnailWidth = Math.max(timelineHeight * ratio, THUMBNAIL_TILE_SIZE);
+            
+            const mediaStartFrame = mediaInfoRef.current.startFrame ? Math.round((mediaInfoRef.current.startFrame ?? 0) / fps * clipFps) : 0;
+            const mediaEndFrame = mediaInfoRef.current.endFrame ? Math.round((mediaInfoRef.current.endFrame ?? 0) / fps * clipFps) : undefined;
+            const clipOffset = currentStartFrame - (clip?.framesToGiveStart ?? 0);
+            const timelineStartFrame = timelineDuration[0] - clipOffset;
+            const timelineEndFrame = timelineDuration[1] - clipOffset;
+            const timelineSpan = timelineEndFrame - timelineStartFrame;
+            const speed = Math.max(0.1, Math.min(5, Number(((clip as any)?.speed ?? 1))));
+    
+            const renderStartFrame = Math.max(timelineStartFrame, preprocessorStartFrame);
+            const renderEndFrame = Math.min(timelineEndFrame, preprocessorEndFrame);
+            const renderSpan = renderEndFrame - renderStartFrame;
+            const pxPerFrame = timelineWidth / timelineSpan;
+            const renderWidth = renderSpan * pxPerFrame;
+            const numColumns = Math.ceil(renderWidth / thumbnailWidth) + 1
+    
+            let frameIndices: number[] = [];
+            if (renderSpan >= numColumns && numColumns > 1) {
+                frameIndices = Array.from({ length: numColumns }, (_, i) => {
+                    const progress = i / (numColumns - 1);
+                    const frameIndex = Math.round(renderStartFrame + progress * renderSpan);
+                    return frameIndex;
+                });
+            } else if (numColumns > 1) {
+                frameIndices = Array.from({ length: numColumns }, (_, i) => {
+                    const frameIndex = Math.floor(i / Math.ceil(numColumns / (renderSpan + 1)));
+                    const clampedIndex = Math.min(frameIndex, renderSpan);
+                    return renderStartFrame + clampedIndex;
+                });
+            }
+            else {
+                frameIndices = [renderStartFrame];
+            }
+    
+            frameIndices = frameIndices.filter((frameIndex) => isNaN(frameIndex) === false && isFinite(frameIndex));
+
+
+            {
+                const clipFps = mediaInfoRef.current?.stats.video?.averagePacketRate || fps;
+
+                // frameIndices are in clip-relative coordinates, so shift by preprocessor start to get preprocessor-relative frames
+                const frameShift = preprocessorStartFrame;
+                frameIndices = frameIndices.map((frameIndex) => {
+                    const local = frameIndex - frameShift;
+                    const speedAdjusted = local * speed;
+                    // Map from project fps space to native clip fps space
+                    const nativeFpsFrame = Math.round((speedAdjusted / fps) * clipFps);
+                    let sourceFrame = nativeFpsFrame + mediaStartFrame;
+                    if (mediaEndFrame !== undefined) {
+                        sourceFrame = Math.min(sourceFrame, mediaEndFrame);
+                    }
+                    return Math.max(mediaStartFrame, sourceFrame);
+                });
+            }
+
+            console.log('frameIndices', frameIndices, mediaStartFrame, mediaEndFrame);
+
+            
+  
+            if (frameIndices.length === 0) {
+                return;
+            }
+
+            // Immediate draw using nearest cached frames
+            const nearest = getNearestCachedCanvasSamples(
+                preprocessor.src!,
+                frameIndices,
+                thumbnailWidth,
+                timelineHeight,
+                { mediaInfo: mediaInfoRef.current }
+            );
+            
+            const hasCachedSamples = nearest.some(sample => sample !== null && sample !== undefined);
+            // get the sum width of all the samples
+            const ctx = imageCanvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+                let x = 0;
+                const targetWidth = Math.max(1, imageCanvas.width);
+                const targetHeight = Math.max(1, imageCanvas.height);
+    
+                for (let i = 0; i < nearest.length && x < targetWidth; i++) {
+                    const sample = nearest[i];
+                    if (!sample) continue;
+                    const inputCanvas = sample.canvas as HTMLCanvasElement;
+                    const anyCanvas = inputCanvas as any;
+                    const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
+                    const tileHeight = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
+                    const sourceHeight = Math.min(tileHeight, targetHeight);
+    
+    
+                    const remaining = targetWidth - x;
+                    if (remaining <= 0) break;
+                    const drawWidth = Math.min(tileWidth, remaining);
+                    if (drawWidth <= 0) break;
+                    ctx.drawImage(
+                        inputCanvas,
+                        0, 0, drawWidth, sourceHeight,
+                        x, 0, drawWidth, sourceHeight
+                    );
+                    x += drawWidth;
+                }
+    
+                
+                // Apply WebGL filters
+                applyFilters(imageCanvas, {
+                    brightness: clip?.brightness,
+                    contrast: clip?.contrast,
+                    hue: clip?.hue,
+                    saturation: clip?.saturation,
+                    blur: clip?.blur,
+                    sharpness: clip?.sharpness,
+                    noise: clip?.noise,
+                    vignette: clip?.vignette
+                });
+            }
+            preprocessorRef.current?.getLayer()?.batchDraw();
+            
+            // Debounced fetch of exact frames
+            if (exactVideoUpdateTimerRef.current != null) {
+                window.clearTimeout(exactVideoUpdateTimerRef.current);
+                exactVideoUpdateTimerRef.current = null;
+            }
+            const DEBOUNCE_MS = hasCachedSamples ? 100 : 0;
+            const requestKey = `${preprocessor.id}|${frameIndices.join(',')}|${thumbnailWidth}x${timelineHeight}`;
+            exactVideoUpdateTimerRef.current = window.setTimeout(async () => {
+                const mySeq = ++exactVideoUpdateSeqRef.current;
+                try {
+                    if (lastExactRequestKeyRef.current === requestKey) {
+                        return;
+                    }
+                    const exactSamples = await generateTimelineSamples(
+                        preprocessor.id,
+                        preprocessor.src!,
+                        frameIndices,
+                        thumbnailWidth,
+                        timelineHeight,
+                        preprocessorWidth,
+                        {}
+                    );
+    
+                    if (mySeq !== exactVideoUpdateSeqRef.current) {
+                        return;
+                    }
+                    const ctx2 = imageCanvas.getContext('2d');
+    
+                    if (ctx2 && exactSamples) {
+                        ctx2.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+                        let x2 = 0;
+                        const targetWidth2 = Math.max(1, imageCanvas.width);
+                        const targetHeight2 = Math.max(1, imageCanvas.height);
+    
+                        for (let i = 0; i < exactSamples.length && x2 < targetWidth2; i++) {
+                            const sample = exactSamples[i];
+                            const inputCanvas = sample.canvas as HTMLCanvasElement;
+                            const anyCanvas = inputCanvas as any;
+                            const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
+                            const tileHeight = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
+                            const sourceHeight = Math.min(tileHeight, targetHeight2);
+    
+                            const remaining2 = targetWidth2 - x2;
+                            if (remaining2 <= 0) break;
+                            const drawWidth2 = Math.min(tileWidth, remaining2);
+                            if (drawWidth2 <= 0) break;
+                            ctx2.drawImage(
+                                inputCanvas,
+                                0, 0, drawWidth2, sourceHeight,
+                                x2, 0, drawWidth2, sourceHeight
+                            );
+                            x2 += drawWidth2;
+                        }
+                        
+                        // Apply WebGL filters
+                        applyFilters(imageCanvas, {
+                            brightness: clip?.brightness,
+                            contrast: clip?.contrast,
+                            hue: clip?.hue,
+                            saturation: clip?.saturation,
+                            blur: clip?.blur,
+                            sharpness: clip?.sharpness,
+                            noise: clip?.noise,
+                            vignette: clip?.vignette
+                        });
+                    }
+                } finally {
+                    if (mySeq === exactVideoUpdateSeqRef.current) {
+                        preprocessorRef.current?.getLayer()?.batchDraw();
+                        lastExactRequestKeyRef.current = requestKey;
+                        
+                        if (!hasCachedSamples) {
+                            setForceRerenderCounter(prev => prev + 1);
+                        }
+                    }
+                }
+            }, DEBOUNCE_MS);
+        };
+        
+        // Determine type from mediaInfo
+        if (mediaInfoRef.current.video) {
+            generateTimelineThumbnailVideo();
+        } else if (mediaInfoRef.current.image) {
+            generateTimelineThumbnailImage();
+        }
+    }, [preprocessor.status, preprocessor.src, preprocessorWidth, clipWidth, timelineHeight, timelineWidth, timelineDuration, forceRerenderCounter, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette]);
+
+    const handleRunPreprocessor = useCallback(async () => {
+        if (preprocessor.status === 'running') return;
+        const clip = getClipFromPreprocessorId(preprocessor.id);
+        if (!clip || !clip.src) return;
+        
+        // Clear any existing job data to ensure fresh start with new parameters
+        clearJob(preprocessor.id);
+        
+        // need to convert our startFrame and endFrame back to where it would be with real FPS
+        const clipMediaInfo = getMediaInfoCached(clip.src);
+        const clipFps = clipMediaInfo?.stats.video?.averagePacketRate ?? 24;
+
+        if (preprocessor.startFrame === undefined || preprocessor.endFrame === undefined) return;
+        
+        const { start: startFrameReal, end: endFrameReal } = toFrameRange(preprocessor.startFrame, preprocessor.endFrame, fps, clipFps, clipMediaInfo?.duration ?? 0);
+
+
+
+        const response = await runPreprocessor({
+            preprocessor_name: preprocessor.preprocessor.id,
+            input_path: clip.src,
+            start_frame: startFrameReal,
+            end_frame: endFrameReal,
+            job_id: preprocessor.id,
+            download_if_needed: true,
+            params: preprocessor.values,
+        });
+
+        if (response.success) {
+            updatePreprocessor(clipId, preprocessor.id, { status: 'running' });
+            toast.success(`Preprocessor ${preprocessor.preprocessor.name} run started successfully`);
+        } else {
+            toast.error(`Failed to run preprocessor ${preprocessor.preprocessor.name}`);
+        }
+    }, [canResize, preprocessor.preprocessor.id, clipId, updatePreprocessor, getClipFromPreprocessorId, preprocessor.status, clearJob, fps, preprocessor.id, preprocessor.startFrame, preprocessor.endFrame, preprocessor.values]);
+
+    const handleStopPreprocessor = useCallback(() => {
+        if (preprocessor.status !== 'running') return;
+        
+        // Stop tracking the job and clear it
+        stopTracking(preprocessor.id);
+        clearJob(preprocessor.id);
+        
+        // Update preprocessor status to idle
+        updatePreprocessor(clipId, preprocessor.id, { status: undefined });
+        
+        toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
+    }, [preprocessor.status, preprocessor.id, preprocessor.preprocessor.name, stopTracking, clearJob, updatePreprocessor, clipId]);
 
     return (
         <Group
@@ -444,7 +904,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
             y={clipPosition.y}
             clipX={0}
             clipY={0}
-            draggable 
+            draggable={preprocessor.status !== 'running' && preprocessor.status !== 'complete'}
             listening={isListening}
             key={preprocessor.id} 
             onDragStart={handleDragStart} 
@@ -452,57 +912,89 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
             clipWidth={preprocessorWidth}
             ref={preprocessorRef}
             clipFunc={(ctx) => {
-                ctx.rect(-4, -4, preprocessorWidth + 6, timelineHeight + 4);
+                ctx.rect(-4, -4, preprocessorWidth + 6, timelineHeight + 8);
             }}
             
             >
         <React.Fragment key={preprocessor.id}>
-            <Rect
-                x={0}
-                y={0}
-                width={preprocessorWidth}
-                onClick={() => {
-                    // deselect all other clips
-                    setSelectedPreprocessorId(preprocessor.id);
-                    setSelectedClipIds([]);
-                }}
-                height={timelineHeight}
-                fill={selectedPreprocessorId === preprocessor.id ? 'rgba(0, 200, 180, 0.75)' : 'rgba(0, 200, 180, 0.4)'}
-                stroke={'rgba(255, 255, 255, 1)'}
-                strokeWidth={selectedPreprocessorId === preprocessor.id ? 2 :0 }
-                cornerRadius={cornerRadius}
-                onMouseOver={(e) => {
-                    e.target.getStage()!.container().style.cursor = 'grab';
-                }}
-                onMouseLeave={(e) => {
-                    if (!resizingPreprocessor) {
-                        e.target.getStage()!.container().style.cursor = 'default';
-                    }
-                }}
-            />
-            <Rect  
-                x={0}
-                y={0}
-                width={preprocessorWidth}
-                height={18}
-                fill={'rgba(0, 90, 80, 1)'}
-                strokeWidth={1}
-                cornerRadius={cornerRadius}
-                listening={true}
-                onMouseOver={(e) => {
-                    e.target.getStage()!.container().style.cursor = 'grab';
-                }}
-                onMouseLeave={(e) => {
-                    if (!resizingPreprocessor) {
-                        e.target.getStage()!.container().style.cursor = 'default';
-                    }
-                }}
-             /> 
+            {/* Background Rect - visible when no thumbnail or during progress */}
+            {(!mediaInfoRef.current || preprocessor.status !== 'complete') && (
+                <Rect
+                    x={0}
+                    y={0}
+                    width={preprocessorWidth}
+                    onClick={() => {
+                        setSelectedPreprocessorId(preprocessor.id);
+                        setSelectedClipIds([]);
+                    }}
+                    height={timelineHeight}
+                    fill={showProgress ? 'rgb(34, 33, 36)' : (selectedPreprocessorId === preprocessor.id ? 'rgba(0, 0, 85, 0.85)' : 'rgba(0, 0, 85, 0.7)')}
+                    stroke={showProgress ? 'rgb(174, 129, 206)' : selectedPreprocessorId === preprocessor.id ? 'rgba(255, 255, 255, 1)' : 'rgba(255, 255, 255, 0.1)'}
+                    strokeWidth={showProgress ? 2 : (selectedPreprocessorId === preprocessor.id ? preprocessor.status === 'complete' ? 1 : 2 :0) }
+                    cornerRadius={cornerRadius}
+
+                    onMouseOver={(e) => {
+                        e.target.getStage()!.container().style.cursor = 'grab';
+                    }}
+                    onMouseLeave={(e) => {
+                        if (!resizingPreprocessor) {
+                            e.target.getStage()!.container().style.cursor = 'default';
+                        }
+                    }}
+                />
+            )}
+            
+            {/* Image thumbnail - visible when preprocessor is complete and has valid mediaInfo */}
+            {mediaInfoRef.current && preprocessor.status === 'complete' && (
+                <>
+                    <Image
+                        x={imageX}
+                        y={0}
+                        image={imageCanvas}
+                        width={imageWidth}
+                        height={timelineHeight}
+                        cornerRadius={cornerRadius}
+                        fill={'black'}
+                        onClick={() => {
+                            setSelectedPreprocessorId(preprocessor.id);
+                            setSelectedClipIds([]);
+                        }}
+                        
+                    />
+                    {/* Border/stroke for the image */}
+                    <Rect
+                        x={0}
+                        y={0}
+                        width={preprocessorWidth}
+                        height={timelineHeight}
+                        fill={'transparent'}
+                        stroke={selectedPreprocessorId === preprocessor.id ? 'rgba(255, 255, 255, 1)' : 'rgba(255, 255, 255, 0.1)'}
+                        strokeWidth={selectedPreprocessorId === preprocessor.id ? 1 : 0}
+                        cornerRadius={cornerRadius}
+                        listening={false}
+                    />
+                </>
+            )}
+            {/* Progress fill animation - fills like a battery as job progresses */}
+            {showProgress && (
+                <Rect
+                    x={0}
+                    y={0}
+                    width={preprocessorWidth * (progress ?? 0)}
+                    height={timelineHeight}
+                    fill={'rgb(174, 129, 206)'}
+                    cornerRadius={cornerRadius}
+                    listening={false}
+                />
+            )}
+
             <Text
                 x={4}
-                y={4}
+                y={timelineHeight - 16}
                 text={preprocessor.preprocessor.name}
-                fontSize={9}
+                fontSize={9.5}
+                fontStyle={'500'}
+                visible={preprocessor.status !== 'complete'}
                 fontFamily={'Poppins'}
                 listening={true}
                 fill={'white'}
@@ -512,13 +1004,20 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
             {preprocessorWidth >= (textRef.current?.width() ?? 0) + 32 && (
                 <Group 
                     x={Math.max(preprocessorWidth - 28, 4)} 
-                    y={4}
+                    y={preprocessor.status === 'complete' ? 4 : timelineHeight - 16}
                     listening={true}
                 >
-                <Html >
-                    <div className="flex items-center gap-x-1" style={{ overflow: 'hidden', maxWidth: '24px' }}>
-                    <FaPlay size={10} fill={'white'} className="cursor-pointer" />
-                    <LuTrash onClick={() => removePreprocessorFromClip(clipId, preprocessor.id)} size={10}  className="cursor-pointer text-white hover:fill-white transition-colors duration-200" />
+                <Html>
+                    <div className="flex w-32 items-center gap-x-1 justify-end" style={{ overflow: 'hidden', maxWidth: '24px' }}>
+                   {preprocessor.status !== 'running' && preprocessor.status !== 'complete' && <FaPlay size={10} fill={'white'} className="cursor-pointer" onClick={() => handleRunPreprocessor()} />}
+                    {preprocessor.status === 'running' && <FaStop size={10} fill={'white'} className="cursor-pointer" onClick={() => handleStopPreprocessor()} />}
+                    <div onClick={() => removePreprocessorFromClip(clipId, preprocessor.id)} className={cn("relative rounded cursor-pointer transition-colors duration-200 group", {
+                        "hidden": preprocessor.status === 'complete' && selectedPreprocessorId !== preprocessor.id,
+                        "bg-brand/90  p-1 border border-brand-light/20": preprocessor.status === 'complete' && selectedPreprocessorId === preprocessor.id,
+                        "hover:bg-brand-background": preprocessor.status === 'complete' && selectedPreprocessorId === preprocessor.id,
+                    })}>
+                    <LuTrash  size={10}   className={cn(" text-white group-hover:fill-white transition-colors duration-200")} />
+                    </div>
                     </div>
                 </Html>
                 </Group>
@@ -529,7 +1028,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
                 y={0}
                 width={1.5}
                 height={timelineHeight}
-                visible={selectedPreprocessorId === preprocessor.id}
+                visible={selectedPreprocessorId === preprocessor.id && preprocessor.status !== 'running' && preprocessor.status !== 'complete' && clip?.type === 'video'}
                 cornerRadius={[cornerRadius, 0, 0, cornerRadius]}
                 fill={'white'}
                 stroke={'white'}
@@ -537,6 +1036,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
                     e.target.getStage()!.container().style.cursor = 'col-resize';
                 }}
                 onMouseDown={(e) => {
+                    if (!canResize) return;
                     e.cancelBubble = true;
                     e.evt.stopPropagation();
                     setResizingPreprocessor({id: preprocessor.id, side: 'left'});
@@ -552,7 +1052,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
                 y={0}
                 width={1.5}
                 height={timelineHeight}
-                visible={selectedPreprocessorId === preprocessor.id}
+                visible={selectedPreprocessorId === preprocessor.id && preprocessor.status !== 'running' && preprocessor.status !== 'complete' && clip?.type === 'video'}
                 cornerRadius={[0, cornerRadius, cornerRadius, 0]}
                 fill={'white'}
                 stroke={'white'}
@@ -560,6 +1060,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor, 
                     e.target.getStage()!.container().style.cursor = 'col-resize';
                 }}
                 onMouseDown={(e) => {
+                    if (!canResize) return;
                     e.cancelBubble = true;
                     e.evt.stopPropagation();
                     setResizingPreprocessor({id: preprocessor.id, side: 'right'});
