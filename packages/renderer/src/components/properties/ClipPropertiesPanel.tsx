@@ -146,6 +146,17 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     return false;
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId]);
 
+  const hasPreprocessorDuration = useMemo(() => {
+    if (selectedPreprocessorId) {
+      const preprocessor = getPreprocessorById(selectedPreprocessorId);
+      const clip = getClipFromPreprocessorId(selectedPreprocessorId);
+      if (preprocessor?.status === 'running' || preprocessor?.status === 'complete') return false;
+      if (!preprocessor || !clip) return false;
+      return preprocessor.startFrame !== undefined && preprocessor.endFrame !== undefined && clip.type === 'video' || clip.type === 'image';
+    }
+    return false;
+  }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId]);
+
   const preprocessor = useClipStore((s) => {
     if (selectedPreprocessorId) {
       return s.getPreprocessorById(selectedPreprocessorId);
@@ -222,7 +233,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           <TabsList ref={tabRef} style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}} className={cn("bg-brand w-full rounded-b-none p-0 min-w-0 flex-shrink overflow-x-auto [&::-webkit-scrollbar]:hidden")}>
             {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-info" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Info</TabsTrigger>}
             {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Parameters</TabsTrigger>}
-            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
             {(hasTransform) && <TabsTrigger value="transform" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
             {(hasAudio) && <TabsTrigger value="audio" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
@@ -244,7 +255,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasValidPreprocessor && selectedPreprocessorId && preprocessor) && <TabsContent value="preprocessor-parameters" className="min-w-0 m-0">
               <PreprocessorParametersPanel preprocessor={preprocessor}/>
             </TabsContent>}
-            {(hasValidPreprocessor && selectedPreprocessorId) && <TabsContent value="preprocessor-duration" className="min-w-0 m-0">
+            {(hasValidPreprocessor && selectedPreprocessorId && hasPreprocessorDuration) && <TabsContent value="preprocessor-duration" className="min-w-0 m-0">
               <PreprocessorDurationPanel preprocessorId={selectedPreprocessorId} />
             </TabsContent>}
           {(hasText) && <TabsContent value="text" className="min-w-0 m-0">  <TextProperties clipId={clipId} /> </TabsContent>}

@@ -513,8 +513,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const myToken = ++drawTokenRef.current;
         // @ts-ignore
         iteratorRef.current?.return?.();
-        const targetEndFrame = Math.round((mediaInfo.current?.endFrame || 0) / projectFps * clipFps);
-
+        const targetEndFrame = mediaInfo.current?.endFrame ? Math.round((mediaInfo.current?.endFrame || 0) / projectFps * clipFps) : undefined;
 
         iteratorRef.current = await getVideoIterator(selectedSrc, { mediaInfo: mediaInfo.current || undefined, fps: clipFps, startIndex: startIdx, endIndex: targetEndFrame });
 
@@ -525,7 +524,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 if (!wc) continue;
 
                 // Determine the decoded sample's frame index in native fps
-                const ts: number | undefined = (wc as any)?.timestamp + addedTimestampRef.current;
+                const ts: number | undefined = (wc as any)?.timestamp + (addedTimestampRef.current || 0) * speed;
 
                 let sampleIdx = Number.isFinite(ts as number) ? Math.round((ts as number) * clipFps) : (lastRenderedFrameRef.current + 1);
 
@@ -538,6 +537,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                     const actualFrameIdx = Math.round((speedAdjusted / projectFps) * clipFps);
                     return actualFrameIdx + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
                 };
+
+                console.log('sampleIdx', sampleIdx, ts, addedTimestampRef.current);
                 
 
                 // Skip stale frames that are behind the timeline by more than 1 frame

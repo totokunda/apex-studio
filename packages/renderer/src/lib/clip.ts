@@ -463,14 +463,23 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             // Update preprocessors timing to match the new speed
             if ((current.type === 'video' || current.type === 'image') && current.preprocessors && current.preprocessors.length > 0) {
                 const speedRatio = oldSpeed / newSpeed;
+                const clipStart = start;
                 const updatedPreprocessors = current.preprocessors.map(preprocessor => {
                     const preprocessorStart = Math.max(0, Number(preprocessor.startFrame || 0));
                     const preprocessorEnd = Math.max(preprocessorStart + 1, Number(preprocessor.endFrame || (preprocessorStart + 1)));
-                    const preprocessorDuration = Math.max(1, preprocessorEnd - preprocessorStart);
-                    const newPreprocessorDuration = Math.max(1, Math.round(preprocessorDuration * speedRatio));
+                    
+                    // Calculate relative positions from clip start
+                    const relativeStart = preprocessorStart - clipStart;
+                    const relativeEnd = preprocessorEnd - clipStart;
+                    
+                    // Scale the relative positions
+                    const newRelativeStart = Math.round(relativeStart * speedRatio);
+                    const newRelativeEnd = Math.round(relativeEnd * speedRatio);
+                    
                     return {
                         ...preprocessor,
-                        endFrame: preprocessorStart + newPreprocessorDuration
+                        startFrame: clipStart + newRelativeStart,
+                        endFrame: clipStart + newRelativeEnd
                     };
                 });
                 (nextUpdate as VideoClipProps | ImageClipProps).preprocessors = updatedPreprocessors;

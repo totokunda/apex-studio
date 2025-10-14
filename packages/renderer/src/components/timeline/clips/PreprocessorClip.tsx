@@ -698,10 +698,6 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                 });
             }
 
-            console.log('frameIndices', frameIndices, mediaStartFrame, mediaEndFrame);
-
-            
-  
             if (frameIndices.length === 0) {
                 return;
             }

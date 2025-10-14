@@ -5,19 +5,28 @@ import { ScrollArea } from '../ui/scroll-area'
 import { LuInfo, LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuDownload } from "react-icons/lu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { cn } from '@/lib/utils'
+import { useClipStore } from '@/lib/clip'
 
 export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?: boolean}> = ({preprocessor, isDragging}) => {
     const isDownloaded = preprocessor.is_downloaded ?? true;
+    const {clips} = useClipStore();
+
+    const disabled = useMemo(() => {
+        return clips.length === 0;
+    }, [clips]);
 
     return (
         <Draggable data={{
             ...preprocessor,
             type: 'preprocessor',
             processor_url: `/preprocessors/${preprocessor.id}.png`,
-        }} id={preprocessor.id}>
+        }} id={preprocessor.id} disabled={disabled}>
            <div className={cn("flex flex-col gap-y-2.5 cursor-pointer w-28 transition-all duration-200 rounded-md ", {
             'w-28': !isDragging,
             'w-24': isDragging,
+            'opacity-50': disabled,
+            'cursor-not-allowed': disabled,
+            'pointer-events-none': disabled,
            })}>
             <div className="flex items-center gap-x-1 relative">
                 <TooltipProvider>
