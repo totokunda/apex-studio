@@ -1,6 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Group, Rect, Line as KonvaLine, Ellipse as KonvaEllipse, RegularPolygon, Star as KonvaStar } from 'react-konva';
+import { Stage, Layer, Group, Rect, Line as KonvaLine, Ellipse as KonvaEllipse, RegularPolygon, Star as KonvaStar, Circle } from 'react-konva';
 import { useViewportStore } from '@/lib/viewport';
 import { useClipStore } from '@/lib/clip';
 import { KonvaEventObject } from 'konva/lib/Node';
@@ -12,13 +12,16 @@ import AudioPreview from './clips/AudioPreview';
 import ImagePreview from './clips/ImagePreview';
 import ShapePreview from './clips/ShapePreview';
 import TextPreview from './clips/TextPreview';
+import DrawingPreview from './clips/DrawingPreview';
 import { useControlsStore } from '@/lib/control';
-import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps } from '@/lib/types';
+import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps, DrawingClipProps, DrawingLine } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 import { SlSizeFullscreen } from 'react-icons/sl';
 import FullscreenPreview from './FullscreenPreview';
 import { getApplicatorsForClip } from '@/lib/applicator-utils';
 import { useWebGLHaldClut } from './webgl-filters';
+import { useDrawingStore } from '@/lib/drawing';
+import { erasePolylineByEraser, transformEraserToLocal, mergeConnectedLines } from '@/lib/eraser-utils';
 
 interface PreviewProps {
 
@@ -54,6 +57,11 @@ const Preview:React.FC<PreviewProps> = () => {
   const setIsFullscreen = useControlsStore((s) => s.setIsFullscreen);
   const haldClutInstance = useWebGLHaldClut();
   const [clutsLoaded, setClutsLoaded] = useState(0);
+  const {tool: drawingTool, color: drawingColor, opacity: drawingOpacity, smoothing: drawingSmoothing, getCurrentSize, setCurrentLineId} = useDrawingStore();
+  const isDrawingRef = useRef(false);
+  const eraserPointsRef = useRef<Array<{ x: number; y: number }>>([]);
+  const lastEraserPosRef = useRef<{ x: number; y: number } | null>(null);
+  const [cursorPreview, setCursorPreview] = useState<{ x: number; y: number } | null>(null);
   
   // Memoize applicator factory configuration
   const applicatorConfig = useMemo(() => ({
@@ -240,6 +248,7 @@ const Preview:React.FC<PreviewProps> = () => {
 
   const isPanning = useRef(false);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const currentDrawingClipId = useRef<string | null>(null);
 
   const onMouseDown = useCallback((e: any) => {
     if (tool === 'hand') {
@@ -279,11 +288,159 @@ const Preview:React.FC<PreviewProps> = () => {
       setIsDrawingText(true);
       setTextStart({ x: worldX, y: worldY });
       setTextCurrent({ x: worldX, y: worldY });
+      return;
     }
 
-  }, [tool, position, scale]);
+    if (tool === 'draw') {
+      const stage = e.target.getStage();
+      if (!stage) return;
+      
+      const pointerPos = stage.getPointerPosition();
+      if (!pointerPos) return;
+      
+      // Convert screen coordinates to world coordinates
+      const worldX = (pointerPos.x - position.x) / scale;
+      const worldY = (pointerPos.y - position.y) / scale;
+      
+      isDrawingRef.current = true;
+      
+      // Check if there's already a drawing clip at the current frame
+      const existingDrawingClip = clips.find(
+        (c) => c.type === 'draw' && clipWithinFrame(c, focusFrame)
+      ) as DrawingClipProps | undefined;
+      
+      // Handle eraser tool separately - no line creation, just collect points
+      if (drawingTool === 'eraser') {
+        if (!existingDrawingClip) {
+          // Eraser needs existing clip to work with
+          isDrawingRef.current = false;
+          currentDrawingClipId.current = null;
+          return;
+        }
+        
+        currentDrawingClipId.current = existingDrawingClip.clipId;
+        eraserPointsRef.current = [{ x: worldX, y: worldY }];
+        lastEraserPosRef.current = { x: worldX, y: worldY };
+        return;
+      }
+      
+      const lineId = uuidv4();
+      setCurrentLineId(lineId);
+      
+      if (existingDrawingClip) {
+        currentDrawingClipId.current = existingDrawingClip.clipId;
+        
+        // Add new line to existing clip
+        const newLine: DrawingLine = {
+          lineId,
+          tool: drawingTool,
+          points: [worldX, worldY],
+          stroke: drawingTool === 'highlighter' ? '#FFFF00' : drawingColor,
+          strokeWidth: getCurrentSize(),
+          opacity: drawingTool === 'highlighter' ? 50 : drawingOpacity,
+          smoothing: drawingSmoothing,
+          transform: {
+            x: 0,
+            y: 0,
+            scaleX: 1,
+            scaleY: 1,
+            rotation: 0,
+            opacity: 100,
+          },
+        };
+        
+        // Append new line to the end so it renders on top of older lines
+        const updatedLines = [...(existingDrawingClip.lines || []), newLine];
+        useClipStore.getState().updateClip(existingDrawingClip.clipId, { lines: updatedLines });
+      } else {
+        
+        // Create new drawing clip
+        let drawingTimeline = timelines.find((t) => t.type === 'draw');
+        
+        if (!drawingTimeline) {
+          drawingTimeline = {
+            timelineId: uuidv4(),
+            type: 'draw' as const,
+            timelineY: 0,
+            timelineHeight: 40,
+            timelineWidth: 0,
+            timelinePadding: 24,
+            muted: false,
+            hidden: false,
+          };
+          addTimeline(drawingTimeline, -1);
+        }
+        
+        const clipDuration = 3 * DEFAULT_FPS;
+        let proposedEndFrame = Math.min(focusFrame + clipDuration, totalTimelineFrames - 1);
+        
+        // Check for existing clips on the drawing timeline that would collide
+        const clipsOnDrawingTimeline = clips.filter((c) => c.timelineId === drawingTimeline!.timelineId);
+        for (const existingClip of clipsOnDrawingTimeline) {
+          const existingStart = existingClip.startFrame ?? 0;
+          // If an existing clip starts after our current frame but before our proposed end frame
+          if (existingStart > focusFrame && existingStart < proposedEndFrame) {
+            // Adjust our end frame to stop at the existing clip's start
+            proposedEndFrame = existingStart;
+          }
+        }
+        
+        const newClipId = uuidv4();
+        const newClip: DrawingClipProps = {
+          src: null,
+          clipId: newClipId,
+          type: 'draw' as const,
+          timelineId: drawingTimeline.timelineId,
+          startFrame: focusFrame,
+          endFrame: proposedEndFrame,
+          framesToGiveEnd: -Infinity,
+          framesToGiveStart: Infinity,
+          lines: [
+            {
+              lineId,
+              tool: drawingTool,
+              points: [worldX, worldY],
+              stroke: drawingTool === 'highlighter' ? '#FFFF00' : drawingColor,
+              strokeWidth: getCurrentSize(),
+              opacity: drawingTool === 'highlighter' ? 50 : drawingOpacity,
+              smoothing: drawingSmoothing,
+              transform: {
+                x: 0,
+                y: 0,
+                scaleX: 1,
+                scaleY: 1,
+                rotation: 0,
+                opacity: 100,
+              },
+            },
+          ],
+        };
+        
+        currentDrawingClipId.current = newClipId;
+        addClip(newClip);
+      }
+      
+      return;
+    }
+
+  }, [tool, position, scale, clips, clipWithinFrame, focusFrame, drawingTool, drawingColor, drawingOpacity, getCurrentSize, setCurrentLineId, timelines, addTimeline, addClip, totalTimelineFrames]);
 
   const onMouseMove = useCallback((e: any) => {
+    // Update cursor preview for draw tool
+    if (tool === 'draw') {
+      const stage = e.target.getStage();
+      if (stage) {
+        const pointerPos = stage.getPointerPosition();
+        if (pointerPos) {
+          const worldX = (pointerPos.x - position.x) / scale;
+          const worldY = (pointerPos.y - position.y) / scale;
+          setCursorPreview({ x: worldX, y: worldY });
+        }
+      }
+    } else {
+      setCursorPreview(null);
+    }
+    
     if (tool === 'hand' && isPanning.current) {
       const current = { x: e.evt.offsetX, y: e.evt.offsetY };
       const last = lastPointer.current || current;
@@ -320,12 +477,140 @@ const Preview:React.FC<PreviewProps> = () => {
 
       setTextCurrent({ x: worldX, y: worldY });
     }
-  }, [panBy, tool, isDrawingShape, shapeStart, position, scale, isDrawingText, textStart]);
+
+    if (tool === 'draw' && isDrawingRef.current) {
+      const stage = e.target.getStage();
+      if (!stage) return;
+      
+      const pointerPos = stage.getPointerPosition();
+      if (!pointerPos) return;
+      
+      // Convert screen coordinates to world coordinates
+      const worldX = (pointerPos.x - position.x) / scale;
+      const worldY = (pointerPos.y - position.y) / scale;
+      
+      // Find the drawing clip that we're currently drawing on
+      const drawingClipId = currentDrawingClipId.current;
+      if (!drawingClipId) return;
+      
+      const drawingClip = useClipStore.getState().getClipById(drawingClipId) as DrawingClipProps | undefined;
+      if (!drawingClip || !drawingClip.lines) return;
+      
+      // Handle eraser tool - apply real-time erasing
+      if (drawingTool === 'eraser') {
+        // Interpolate points between last position and current position to avoid gaps
+        const lastPos = lastEraserPosRef.current;
+        if (lastPos) {
+          const dx = worldX - lastPos.x;
+          const dy = worldY - lastPos.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          
+          // Add interpolated points if distance is significant (more than 2 pixels)
+          if (dist > 2) {
+            const steps = Math.ceil(dist / 2); // Sample every ~2 pixels
+            for (let i = 1; i <= steps; i++) {
+              const t = i / steps;
+              eraserPointsRef.current.push({
+                x: lastPos.x + dx * t,
+                y: lastPos.y + dy * t,
+              });
+            }
+          } else {
+            eraserPointsRef.current.push({ x: worldX, y: worldY });
+          }
+        } else {
+          eraserPointsRef.current.push({ x: worldX, y: worldY });
+        }
+        
+        lastEraserPosRef.current = { x: worldX, y: worldY };
+        
+        const eraserBaseRadius = getCurrentSize() / 2;
+        const worldEraserPts = eraserPointsRef.current;
+        
+        // Process all brush/highlighter lines
+        const updatedLines: DrawingLine[] = [];
+        
+        for (const line of drawingClip.lines) {
+          // Only erase brush and highlighter lines
+          if (line.tool !== 'brush' && line.tool !== 'highlighter') {
+            updatedLines.push(line);
+            continue;
+          }
+          
+          // Add the line's stroke width to the eraser radius for better coverage
+          const effectiveEraserRadius = eraserBaseRadius + (line.strokeWidth / 2);
+          
+          // Transform eraser points from world space to line's local space
+          const { localPts, localRadius } = transformEraserToLocal(
+            worldEraserPts,
+            line.transform,
+            effectiveEraserRadius
+          );
+          
+          // Apply erasing algorithm in local space
+          const splitPolylines = erasePolylineByEraser(line.points, localPts, localRadius);
+          
+          // Create new lines for each split segment (points are already in local space)
+          for (const polyline of splitPolylines) {
+            // Filter out segments with less than 2 points (less than 4 values in flat array)
+            if (polyline.length >= 4) {
+              updatedLines.push({
+                ...line,
+                lineId: uuidv4(), // New ID for split segment
+                points: polyline,
+              });
+            }
+          }
+        }
+        
+        // Apply lightweight merging to reduce fragmentation (single pass)
+        const mergedLines = mergeConnectedLines(updatedLines, false);
+        
+        useClipStore.getState().updateClip(drawingClip.clipId, { lines: mergedLines });
+        return;
+      }
+      
+      // Find the current line being drawn (brush/highlighter)
+      const currentLine = drawingClip.lines[drawingClip.lines.length - 1];
+      if (!currentLine) return;
+      
+      // Add point to the current line
+      const updatedLines = [...drawingClip.lines];
+      updatedLines[updatedLines.length - 1] = {
+        ...currentLine,
+        points: [...currentLine.points, worldX, worldY],
+      };
+      
+      useClipStore.getState().updateClip(drawingClip.clipId, { lines: updatedLines });
+    }
+  }, [panBy, tool, isDrawingShape, shapeStart, position, scale, isDrawingText, textStart, drawingTool, getCurrentSize, cursorPreview]);
 
   const onMouseUp = useCallback((e: any) => {
     if (tool === 'hand') {
       isPanning.current = false;
       lastPointer.current = null;
+      return;
+    }
+
+    if (tool === 'draw' && isDrawingRef.current) {
+      const clipId = currentDrawingClipId.current;
+      isDrawingRef.current = false;
+      currentDrawingClipId.current = null;
+      
+      // Clean up eraser state and perform final aggressive merge
+      if (drawingTool === 'eraser' && clipId) {
+        eraserPointsRef.current = [];
+        lastEraserPosRef.current = null;
+        
+        // Perform aggressive merging on mouse up to consolidate all fragments
+        const drawingClip = useClipStore.getState().getClipById(clipId) as DrawingClipProps | undefined;
+        if (drawingClip && drawingClip.lines) {
+          const fullyMergedLines = mergeConnectedLines(drawingClip.lines, true);
+          useClipStore.getState().updateClip(clipId, { lines: fullyMergedLines });
+        }
+      } else {
+        setCurrentLineId(null);
+      }
       return;
     }
 
@@ -493,7 +778,7 @@ const Preview:React.FC<PreviewProps> = () => {
       setShapeStart(null);
       setShapeCurrent(null);
     }
-  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline, isDrawingText, textStart, textCurrent]);
+  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline, isDrawingText, textStart, textCurrent, setCurrentLineId]);
 
   const onMouseLeave = useCallback((e:KonvaEventObject<MouseEvent>) => {
      // set pointer to default 
@@ -501,20 +786,26 @@ const Preview:React.FC<PreviewProps> = () => {
      if (container) {
          container.style.cursor = 'default';
      }
+     // Hide cursor preview when leaving canvas
+     setCursorPreview(null);
   }, []);
 
   const onMouseEnter = useCallback((e:KonvaEventObject<MouseEvent>) => {
     const container = e.target?.getStage()?.container();
     if (container) {
+      
       if (tool === 'hand') {
         container.style.cursor = 'grab';
       } else if (tool === 'shape' || tool === 'text') {
         container.style.cursor = 'crosshair';
+      } else if (tool === 'draw') {
+        // Hide cursor and use preview circle instead for accurate positioning
+        container.style.cursor = 'none';
       } else {
         container.style.cursor = 'default';
       }
     }
-  }, [tool]);
+  }, [tool, drawingTool]);
 
   useEffect(() => {
     const container = stageRef.current?.container();
@@ -523,11 +814,14 @@ const Preview:React.FC<PreviewProps> = () => {
         container.style.cursor = 'grab';
       } else if (tool === 'shape' || tool === 'text') {
         container.style.cursor = 'crosshair';
+      } else if (tool === 'draw') {
+        // Hide cursor and use preview circle instead for accurate positioning
+        container.style.cursor = 'none';
       } else {
         container.style.cursor = 'default';
       }
     }
-  }, [tool]);
+  }, [tool, drawingTool]);
   
   // Render preview shape while drawing
   const renderDrawingShape = useCallback(() => {
@@ -585,6 +879,51 @@ const Preview:React.FC<PreviewProps> = () => {
 
     return <Rect {...sharedProps} x={x} y={y} width={width} height={height} />;
   }, [isDrawingText, textStart, textCurrent]);
+
+  const renderCursorPreview = useCallback(() => {
+    if (!cursorPreview || tool !== 'draw') return null;
+    
+    const brushSize = getCurrentSize();
+    const radius = brushSize / 2;
+    
+    // Get the color and opacity based on the tool
+    let previewColor = drawingColor;
+    let previewOpacity = drawingOpacity / 100;
+    
+    if (drawingTool === 'highlighter') {
+      previewColor = '#FFFF00';
+      // Fixed 50% opacity for highlighter
+      previewOpacity = 0.5;
+    } else if (drawingTool === 'eraser') {
+      previewColor = '#FFFFFF';
+      previewOpacity = 0.5; // Fixed opacity for eraser preview
+    }
+    
+    return (
+      <>
+        {/* Outer circle showing brush size */}
+        <Circle
+          x={cursorPreview.x}
+          y={cursorPreview.y}
+          radius={radius}
+          stroke={previewColor}
+          strokeWidth={1}
+          fill={previewColor}
+          opacity={previewOpacity}
+          listening={false}
+        />
+        {/* Center dot showing exact drawing point */}
+        <Circle
+          x={cursorPreview.x}
+          y={cursorPreview.y}
+          radius={1}
+          fill={drawingTool === 'eraser' ? '#000000' : previewColor}
+          opacity={1}
+          listening={false}
+        />
+      </>
+    );
+  }, [cursorPreview, tool, drawingTool, drawingColor, drawingOpacity, getCurrentSize]);
     
 
   return (
@@ -629,6 +968,8 @@ const Preview:React.FC<PreviewProps> = () => {
                       return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />
                     case 'text':
                       return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators}  />
+                    case 'draw':
+                      return <DrawingPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
                     default:
                       // Applicator clips (filter, mask, processor, etc.) don't render visually
                       return null
@@ -639,6 +980,7 @@ const Preview:React.FC<PreviewProps> = () => {
                })}
                {renderDrawingShape()}
                {renderDrawingText()}
+               {renderCursorPreview()}
            </Group>
           </Layer>
         </Stage>

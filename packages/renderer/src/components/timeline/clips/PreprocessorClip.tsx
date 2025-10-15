@@ -7,7 +7,6 @@ import { Group } from 'react-konva'
 import { Html } from 'react-konva-utils'
 import { FaPlay, FaStop } from 'react-icons/fa6'
 import { LuTrash} from 'react-icons/lu'
-
 import { useControlsStore } from '@/lib/control'
 import Konva from 'konva'
 import { calculateFrameFromX as calcFrameFromX, getOtherPreprocessors as getOthers, detectCollisions as detectColls, findGapAfterBlock as findGap } from '@/lib/preprocessorHelpers'
@@ -74,6 +73,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const prevClipBounds = useRef({ startFrame: currentStartFrame, endFrame: currentEndFrame });
     const [isAltPressed, setIsAltPressed] = useState(false);
     const previousMouseX = useRef<number | null>(null);
+    const dragOffsetX = useRef<number>(0);
     const preprocessorJobId = useMemo(() => preprocessor.status === 'running' ? preprocessor.id : null, [preprocessor.id, preprocessor.status]);
     const { isProcessing, progress, result} = usePreprocessorJob(preprocessorJobId);
     const { clearJob, stopTracking } = usePreprocessorJobActions(); 
@@ -328,12 +328,25 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const handleDragStart = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
             // Only allow preprocessor drag if Alt key is held OR dragging from header
             if (preprocessor.status === 'running') return;
-            e.target.getStage()!.container().style.cursor = 'grab';
+            const stage = e.target.getStage();
+            if (!stage) return;
+            stage.container().style.cursor = 'grab';
             setSelectedPreprocessorId(preprocessor.id);
             e.target.moveToTop();
+            
+            // Calculate the offset between mouse position and clip start position
+            const pointerPosition = stage.getPointerPosition();
+            if (pointerPosition) {
+                const [timelineStartFrame, timelineEndFrame] = timelineDuration;
+                const absoluteCurrentStart = preprocessorStartFrame + currentStartFrame;
+                const relativeToTimeline = (absoluteCurrentStart - timelineStartFrame) / (timelineEndFrame - timelineStartFrame);
+                const clipStartX = timelinePadding + (relativeToTimeline * timelineWidth);
+                dragOffsetX.current = pointerPosition.x - clipStartX;
+            }
+            
             // Reset mouse tracking for clean drag direction detection
             previousMouseX.current = null;
-        }, [preprocessor.id, setSelectedPreprocessorId, preprocessor.status]);
+        }, [preprocessor.id, setSelectedPreprocessorId, preprocessor.status, timelineDuration, preprocessorStartFrame, currentStartFrame, timelinePadding, timelineWidth]);
     
     const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
         
@@ -358,8 +371,10 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
 
         previousMouseX.current = mouseX;
 
-        // Calculate desired position based on actual mouse position
-        let absoluteStartFrame = calculateFrameFromX(mouseX);
+        // Calculate desired position based on actual mouse position, applying the drag offset
+        // This maintains the relative position where the user clicked
+        const adjustedMouseX = mouseX - dragOffsetX.current;
+        let absoluteStartFrame = calculateFrameFromX(adjustedMouseX);
         const preprocessorDuration = preprocessorEndFrame - preprocessorStartFrame;
         let absoluteEndFrame = absoluteStartFrame + preprocessorDuration;
 
@@ -860,8 +875,6 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         
         const { start: startFrameReal, end: endFrameReal } = toFrameRange(preprocessor.startFrame, preprocessor.endFrame, fps, clipFps, clipMediaInfo?.duration ?? 0);
 
-
-
         const response = await runPreprocessor({
             preprocessor_name: preprocessor.preprocessor.id,
             input_path: clip.src,
@@ -880,11 +893,11 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         }
     }, [canResize, preprocessor.preprocessor.id, clipId, updatePreprocessor, getClipFromPreprocessorId, preprocessor.status, clearJob, fps, preprocessor.id, preprocessor.startFrame, preprocessor.endFrame, preprocessor.values]);
 
-    const handleStopPreprocessor = useCallback(() => {
+    const handleStopPreprocessor = useCallback(async () => {
         if (preprocessor.status !== 'running') return;
         
         // Stop tracking the job and clear it
-        stopTracking(preprocessor.id);
+        await stopTracking(preprocessor.id);
         clearJob(preprocessor.id);
         
         // Update preprocessor status to idle

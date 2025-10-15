@@ -542,7 +542,6 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
           </React.Fragment>
         )}
       </Group>
-      
         <Transformer
           borderStroke='#AE81CE'
           anchorCornerRadius={8} 

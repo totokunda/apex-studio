@@ -641,6 +641,18 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             clipRef.current?.getLayer()?.batchDraw();
         }
 
+        const generateTimelineThumbnailDrawing = async () => {
+            if (clipType !== 'draw') return;
+            // make canvas 
+            const ctx = imageCanvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+                ctx.fillStyle = '#9B59B6';
+                ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
+            }
+            clipRef.current?.getLayer()?.batchDraw();
+        }
+
         if (clipType === 'audio') {
             generateTimelineThumbnailAudio()
         } else if (clipType === 'image') {
@@ -653,6 +665,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             generateTimelineThumbnailText()
         } else if (clipType === 'filter') {
             generateTimelineThumbnailFilter()
+        } else if (clipType === 'draw') {
+            generateTimelineThumbnailDrawing()
         } 
     
     }, [zoomLevel, clipWidth, clipType, currentClip, mediaInfoRef.current, resizeSide, thumbnailClipWidth,  maxTimelineWidth, timelineDuration, overHang, resizeSide, forceRerenderCounter]);
@@ -1349,6 +1363,31 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         fontSize={10}
                         fontFamily={'Poppins'}
                         fill="#ffffff"
+                        align="left"
+                        verticalAlign="middle"
+                        offsetY={5}
+                    />
+                    </Group>
+                )}
+                {clipType === 'draw' && (
+                    <Group>
+                    <Rect
+                        x={8 - 4}
+                        y={timelineHeight / 2}
+                        width={textWidth + 8}
+                        height={14}
+                        cornerRadius={2}
+                        fill="rgba(255, 255, 255, 0.2)"
+                        offsetY={7.5}
+                    />
+                    <Text
+                        ref={textRef}
+                        x={8}
+                        y={timelineHeight / 2}
+                        text="Drawing"
+                        fontSize={10}
+                        fontFamily="Poppins"
+                        fill="white"
                         align="left"
                         verticalAlign="middle"
                         offsetY={5}

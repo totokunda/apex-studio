@@ -538,8 +538,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                     return actualFrameIdx + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
                 };
 
-                console.log('sampleIdx', sampleIdx, ts, addedTimestampRef.current);
-                
 
                 // Skip stale frames that are behind the timeline by more than 1 frame
                 let localFocus = computeLocalFocusMedia();

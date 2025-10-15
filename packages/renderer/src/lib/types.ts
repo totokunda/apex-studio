@@ -149,6 +149,32 @@ export type FilterClipProps = ClipProps & {
     exampleAssetUrl?: string;
 }
 
+export interface DrawingLineTransform {
+    x: number;
+    y: number;
+    scaleX: number;
+    scaleY: number;
+    rotation: number;
+    opacity: number;
+}
+
+export interface DrawingLine {
+    lineId: string;
+    tool: 'brush' | 'highlighter' | 'eraser';
+    points: number[]; // [x1, y1, x2, y2, ...]
+    stroke: string;
+    strokeWidth: number;
+    opacity: number;
+    smoothing: number; // 0-1 tension value
+    transform: DrawingLineTransform;
+}
+
+export type DrawingClipProps = ClipProps & {
+    src: null | undefined;
+    type: 'draw';
+    lines: DrawingLine[];
+}
+
 export type PreprocessorClipProps = {
     src?: string;
     clipId?: string;
@@ -160,7 +186,7 @@ export type PreprocessorClipProps = {
     status?: 'running' | 'complete' | 'failed';
 }
 
-export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps;
+export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps | DrawingClipProps;
 
 export type ZoomLevel = number;
 

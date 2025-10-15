@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { ColorPicker, ColorPickerSelection, ColorPickerEyeDropper, ColorPickerHue, ColorPickerAlpha, ColorPickerOutput, ColorPickerFormat } from '@/components/ui/shadcn-io/color-picker'
 import {Popover, PopoverContent, PopoverTrigger} from '@/components/ui/popover'
 import Color from 'color';
+import { cn } from '@/lib/utils';
 
 
 interface ColorInputProps {
@@ -10,9 +11,11 @@ interface ColorInputProps {
   percentValue?: number;
   setPercentValue?: (value: number) => void;
   label?: string;
+  labelClass?: string;
+  size?: 'small' | 'medium';
 }
 
-const ColorInput: React.FC<ColorInputProps> = ({ value, onChange, label, percentValue, setPercentValue }) => {
+const ColorInput: React.FC<ColorInputProps> = ({ value, onChange, label, percentValue, setPercentValue, labelClass, size = 'small' }) => {
   const [tempColorValue, setTempColorValue] = useState(value);
   const [tempPercentValue, setTempPercentValue] = useState(percentValue?.toString() ?? '100');
   const lastColorValueRef = React.useRef(value);
@@ -154,14 +157,20 @@ const ColorInput: React.FC<ColorInputProps> = ({ value, onChange, label, percent
 
   return ( 
   <div className="flex flex-col items-start w-full gap-y-1 min-w-0">
-    {label && <label className="text-brand-light text-[12px] w-full text-start mb-0.5">{label}</label>}
+    {label && <label className={cn(`text-brand-light text-[12px] w-full text-start mb-0.5`, labelClass)}>{label}</label>}
     <div className="flex flex-row relative w-full">
       <Popover>
         <PopoverTrigger>
           <span className="w-3 h-3 rounded absolute left-2 top-1/2 -translate-y-1/2" style={{ backgroundColor: tempColorValue }} />
         </PopoverTrigger>
-    <input type="text" value={tempColorValue} onChange={(e) => setTempColorValue(e.target.value)} onBlur={handleColorBlur} onKeyDown={handleColorKeyDown} className="w-full h-6 px-1.5 pl-9 text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1 rounded-l bg-brand" />
-    <input type="text" value={tempPercentValue} onChange={(e) => setTempPercentValue(e.target.value)} onBlur={handlePercentBlur} onKeyDown={handlePercentKeyDown} className="h-6 w-12 px-1.5 pr-4 text-brand-light text-[11px] border-l-0 font-normal items-center border border-brand-light/10 p-1 rounded-r bg-brand" />
+    <input type="text" value={tempColorValue} onChange={(e) => setTempColorValue(e.target.value)} onBlur={handleColorBlur} onKeyDown={handleColorKeyDown} className={cn("w-full px-1.5 text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1 rounded-l bg-brand  pl-7",  {
+      'h-6': size === 'small',
+      'h-7': size === 'medium'
+    })} />
+    <input type="text" value={tempPercentValue} onChange={(e) => setTempPercentValue(e.target.value)} onBlur={handlePercentBlur} onKeyDown={handlePercentKeyDown} className={cn("w-12 px-1.5 text-brand-light text-[11px]  font-normal items-center border border-brand-light/10 pl-2.5 rounded-r bg-brand border-l-0", {
+      'h-6': size === 'small',
+      'h-7': size === 'medium'
+    })} />
     <span className=" text-[11px] rounded absolute right-2 top-1/2 -translate-y-1/2 text-brand-light/50">%</span>
     <PopoverContent side='left' sideOffset={16} className='p-0 dark border-none w-60' onOpenAutoFocus={() => { isUserInteractingRef.current = true; }} onCloseAutoFocus={() => { isUserInteractingRef.current = false; }}>
     <ColorPicker 

@@ -678,11 +678,11 @@ export const useClipStore = create<ClipStore>((set, get) => ({
                     // check if preprocessor is within the new clip
                     if (preprocessor.startFrame !== undefined && preprocessor.endFrame !== undefined) {
                         // Case 1: Preprocessor is entirely before the cut frame
-                        if (preprocessor.endFrame < cutFrame) {
+                        if (preprocessor.endFrame <= cutFrame) {
                             clip1Preprocessors.push(preprocessor);
                         }
                         // Case 2: Preprocessor is entirely after the cut frame
-                        else if (preprocessor.startFrame >= cutFrame) {
+                        else if (preprocessor.startFrame > cutFrame) {
                             clip2Preprocessors.push({
                                 ...preprocessor,
                                 startFrame: preprocessor.startFrame - cutFrame,

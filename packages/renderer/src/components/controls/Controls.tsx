@@ -6,6 +6,7 @@ import { useControlsStore } from "@/lib/control";
 import { useClipStore } from "@/lib/clip";
 import { ZoomLevel } from '@/lib/types';
 import { MIN_DURATION } from '@/lib/settings';
+import { useDrawingStore } from '@/lib/drawing';
 
 const TimelineZoom = () => {
     const { zoomLevel, setZoomLevel, setTimelineDuration,  focusFrame, setFocusFrame, focusAnchorRatio, totalTimelineFrames, setFocusAnchorRatio, minZoomLevel, maxZoomLevel } = useControlsStore();
@@ -205,10 +206,26 @@ const Controls = () => {
       const isMod = e.metaKey || e.ctrlKey;
       const controls = useControlsStore.getState();
       const clipsStore = useClipStore.getState();
+      const drawingStore = useDrawingStore.getState();
       const selectedIds = controls.selectedClipIds || [];
+      const selectedLineId = drawingStore.selectedLineId;
 
       // Delete selected clips
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        // delete the selected line if it exists
+        if (selectedLineId && selectedIds.length > 0) {
+          e.preventDefault();
+          // get the clip with the drawing type
+          selectedIds.forEach((id) => {
+            const clip = clipsStore.getClipById(id);
+            if (clip?.type === 'draw') {
+              clipsStore.updateClip(id, { lines: clip.lines.filter((line) => line.lineId !== selectedLineId) });
+            }
+          });
+          // update the clip to remove the line
+          drawingStore.setSelectedLineId(null);
+          return;
+        }
         if (selectedIds.length > 0) {
           e.preventDefault();
           selectedIds.forEach((id) => clipsStore.removeClip(id));

@@ -1,17 +1,16 @@
-import React, {  useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {  useCallback, useEffect, useMemo, useRef } from 'react';
 import { useControlsStore } from '@/lib/control';
 import { AnyClipProps, MediaInfo, AudioClipProps } from '@/lib/types';
-import { getMediaInfo } from '@/lib/media/utils';
+import { getMediaInfo, getMediaInfoCached } from '@/lib/media/utils';
 import { getAudioIterator } from '@/lib/media/audio';
 import { WrappedAudioBuffer } from 'mediabunny';
-
 
 type ClipWithSrc = Extract<AnyClipProps, { src: string }>;
 
 // Schedules audio playback for a clip in sync with the timeline. Renders nothing.
 const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props) => {
   const { src, startFrame = 0, framesToGiveStart, volume = 0, fadeIn = 0, fadeOut = 0, speed: _speed } = props as AudioClipProps;
-  const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
+  const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
   const fps = useControlsStore((s) => s.fps);
   const focusFrame = useControlsStore((s) => s.focusFrame);
   const currentFrame = useMemo(() => focusFrame - startFrame + (framesToGiveStart || 0), [focusFrame, startFrame, framesToGiveStart]);
@@ -22,6 +21,7 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
   const currentStartFrameRef = useRef<number>(0);
   const playbackTimeAtStartRef = useRef<number>(0);
   const audioQueueRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  const lastResyncTimeRef = useRef<number>(0);
   const hasValidCurrentFrame = useMemo(() => currentFrame >= 0, [currentFrame]);
   
 
@@ -71,7 +71,7 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
     (async () => {
       try {
         const info = await getMediaInfo(src);
-        if (!cancelled) setMediaInfo(info);
+        if (!cancelled) mediaInfoRef.current = info;
       } catch {}
     })();
     return () => { cancelled = true };
@@ -111,8 +111,7 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
 
   const startRendering = useCallback(async () => {
     // Only play audio when clip is actually active (not during prebuffer period)
-
-    if (!isPlaying || !ctx || !mediaInfo || !mediaInfo.audio || !fps || !hasValidCurrentFrame) {
+    if (!isPlaying || !ctx || !mediaInfoRef.current || !mediaInfoRef.current.audio || !fps || !hasValidCurrentFrame) {
       return;
     }
     // align starting frame and playback anchor with current UI state
@@ -129,14 +128,16 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
     iteratorRef.current?.return?.();
 
     startTimeRef.current = ctx.currentTime;
+    lastResyncTimeRef.current = Date.now();
     
     // Sample from the correct media frame based on speed
-    const mediaFrameIndex = Math.max(0, Math.floor(currentStartFrameRef.current * Math.max(0.1, speed))) + (mediaInfo.startFrame || 0);
+    const mediaFrameIndex = Math.max(0, Math.floor(currentStartFrameRef.current * Math.max(0.1, speed))) + (mediaInfoRef.current?.startFrame || 0);
     const mediaTimeAtStart = mediaFrameIndex / fps;
     // Extend audio beyond clip boundary for seamless transitions with adjacent clips
-    const endIndex = mediaInfo?.endFrame ? mediaInfo.endFrame : undefined;
+    const endIndex = mediaInfoRef.current?.endFrame ? mediaInfoRef.current.endFrame : undefined;
 
-    iteratorRef.current = await getAudioIterator(src, { mediaInfo:mediaInfo || undefined, fps, startIndex: mediaFrameIndex, endIndex });
+    iteratorRef.current = await getAudioIterator(src, { mediaInfo:mediaInfoRef.current || undefined, fps, startIndex: mediaFrameIndex, endIndex });
+
     for await (const buf of iteratorRef.current) {
       if (!buf) continue; // Skip null buffers but keep trying
       const buffer = buf.buffer || null;
@@ -171,7 +172,7 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
 		  const baseGain = dbToGain(volume || 0);
 		  const fadeInDuration = fadeIn || 0;
 		  const fadeOutDuration = fadeOut || 0;
-		  const totalDuration = mediaInfo?.duration || duration;
+		  const totalDuration = mediaInfoRef.current?.duration || duration;
 		  
 		  // Set up fade in
 		  if (fadeInDuration > 0 && timestamp < fadeInDuration) {
@@ -201,7 +202,7 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
 		    // No fade - just apply constant volume
 		    nodeGain.gain.setValueAtTime(baseGain, startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime);
 		  }
-		  
+
       if (startTimestamp >= ctx.currentTime) {
         node.start(startTimestamp);
       } else {
@@ -226,24 +227,15 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
         });
       }
     }
-  }, [isPlaying, ctx, mediaInfo, fps, src, gainNode, volume, fadeIn, fadeOut, speed, hasValidCurrentFrame]);
+  }, [isPlaying, ctx, mediaInfoRef.current, fps, src, gainNode, volume, fadeIn, fadeOut, speed, hasValidCurrentFrame]);
+
+
 
   // Start or restart rendering when playback starts or media becomes ready
   useEffect(() => {
     if (!isPlaying) return;
     void startRendering();
-  }, [isPlaying, ctx, mediaInfo, src, fps, startRendering, volume, fadeIn, fadeOut]);
-
-  // Detect scrubbing while playing: if the UI's frame diverges from audio clock, resync
-  useEffect(() => {
-    if (!isPlaying || !fps) return;
-    const predictedFrame = Math.round(getPlaybackTime() * fps);
-    if (Math.abs(currentFrame - predictedFrame) > 2) {
-      currentStartFrameRef.current = currentFrame;
-      playbackTimeAtStartRef.current = currentFrame / fps;
-      void startRendering();
-    }
-  }, [currentFrame, isPlaying, fps, startRendering]);
+  }, [isPlaying, ctx, mediaInfoRef.current, src, fps, startRendering, volume, fadeIn, fadeOut]);
 
   // Cleanup on unmount: let scheduled audio complete for smooth transitions
   useEffect(() => {

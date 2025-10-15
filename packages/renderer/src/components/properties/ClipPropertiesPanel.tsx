@@ -13,6 +13,7 @@ import AdjustProperties from './AdjustProperties'
 import {LuChevronRight, LuChevronLeft} from 'react-icons/lu'
 import { cn } from '@/lib/utils'  
 import TextProperties from './TextProperties'
+import LineProperties from './LineProperties'
 import PreprocessorInfoPanel from './preprocessor/PreprocessorInfoPanel'
 import PreprocessorDurationPanel from './preprocessor/PreprocessorDurationPanel'
 import PreprocessorParametersPanel from './preprocessor/PreprocessorParametersPanel'
@@ -22,6 +23,7 @@ import { toast } from 'sonner';
 
 import { toFrameRange } from '@/lib/media/fps';
 import { usePreprocessorJobActions } from '@/lib/preprocessor/api';
+import { useDrawingStore } from '@/lib/drawing';
 
 interface PropertiesPanelProps {
     panelSize: number;
@@ -31,9 +33,11 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const {selectedClipIds} = useControlsStore();
   const {selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, updatePreprocessor} = useClipStore();
   const { fps } = useControlsStore();
+  const selectedLineId = useDrawingStore((s) => s.selectedLineId);
   const clipId = useMemo(() => selectedClipIds[selectedClipIds.length - 1], [selectedClipIds]);
 
   const clip = useClipStore((s) => s.getClipById(clipId))
+  const preprocessor = selectedPreprocessorId ? getPreprocessorById(selectedPreprocessorId) : null
   const clipType = clip?.type;
   const tabRef = useRef<HTMLDivElement>(null);  
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -80,42 +84,30 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     return false;
   }, [clip?.type]);
 
+  const hasLine = useMemo(() => {
+    if (clip?.type === 'draw' && selectedLineId) return true;
+    return false;
+  }, [clip?.type, selectedLineId]);
+
   const numVisibleTabs = useMemo(() => {
     let tabTotal = 0;
+    if (hasLine) tabTotal++;
     if (hasTransform) tabTotal++;
     if (hasAudio) tabTotal++;
     if (hasDuration) tabTotal++;
     if (hasAppearance) tabTotal++;
     if (hasAdjust) tabTotal++;
     return tabTotal;
-  }, [hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust]);
+  }, [hasLine, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust]);
 
-  const getValidTab = (currentTab: string) => {
-    // Check if current tab is valid for this clip type
-    if (currentTab === "text" && hasText) return "text";
-    if (currentTab === "transform" && hasTransform) return "transform";
-    if (currentTab === "audio" && hasAudio) return "audio";
-    if (currentTab === "duration" && hasDuration) return "duration";
-    if (currentTab === "appearance" && hasAppearance) return "appearance";
-    if (currentTab === "adjust" && hasAdjust) return "adjust";
-    if (currentTab === "preprocessor-info" && hasValidPreprocessor) return "preprocessor-info";
-    if (currentTab === "preprocessor-parameters" && hasValidPreprocessor) return "preprocessor-parameters";
-    if (currentTab === "preprocessor-duration" && hasValidPreprocessor) return "preprocessor-duration";
-    // If current tab is invalid, return first available tab
-    if (hasValidPreprocessor) return "preprocessor-info";
-    if (hasTransform) return "transform";
-    if (hasAudio) return "audio";
-    if (hasAppearance) return "appearance";
-    if (hasAdjust) return "adjust";
-    return "duration"; // fallback
-  };
+  
 
   useEffect(() => {
-    const validTab = getValidTab(selectedTab);
-    if (validTab !== selectedTab) {
-      setSelectedTab(validTab);
+    // Automatically switch to line tab when a line is selected
+    if (hasLine && selectedLineId) {
+      setSelectedTab('line');
     }
-  }, [clipId, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust]);
+  }, [selectedLineId, hasLine]);
 
   const checkScrollButtons = () => {
     if (tabRef.current) {
@@ -137,7 +129,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
   const hasValidPreprocessor = useMemo(() => {
     if (selectedPreprocessorId) {
-      const preprocessor = getPreprocessorById(selectedPreprocessorId);
       const clip = getClipFromPreprocessorId(selectedPreprocessorId);
       
       if (!preprocessor || !clip) return false;
@@ -148,27 +139,50 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
   const hasPreprocessorDuration = useMemo(() => {
     if (selectedPreprocessorId) {
-      const preprocessor = getPreprocessorById(selectedPreprocessorId);
+      
       const clip = getClipFromPreprocessorId(selectedPreprocessorId);
       if (preprocessor?.status === 'running' || preprocessor?.status === 'complete') return false;
       if (!preprocessor || !clip) return false;
       return preprocessor.startFrame !== undefined && preprocessor.endFrame !== undefined && clip.type === 'video' || clip.type === 'image';
     }
     return false;
-  }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId]);
+  }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, preprocessor]);
 
-  const preprocessor = useClipStore((s) => {
-    if (selectedPreprocessorId) {
-      return s.getPreprocessorById(selectedPreprocessorId);
+  const getValidTab = (currentTab: string) => {
+    // Check if current tab is valid for this clip type
+    if (currentTab === "line" && hasLine) return "line";
+    if (currentTab === "text" && hasText) return "text";
+    if (currentTab === "transform" && hasTransform) return "transform";
+    if (currentTab === "audio" && hasAudio) return "audio";
+    if (currentTab === "duration" && hasDuration) return "duration";
+    if (currentTab === "appearance" && hasAppearance) return "appearance";
+    if (currentTab === "adjust" && hasAdjust) return "adjust";
+    if (currentTab === "preprocessor-info" && hasValidPreprocessor) return "preprocessor-info";
+    if (currentTab === "preprocessor-parameters" && hasValidPreprocessor) return "preprocessor-parameters";
+    if (currentTab === "preprocessor-duration" && hasValidPreprocessor && hasPreprocessorDuration) return "preprocessor-duration";
+    // If current tab is invalid, return first available tab
+    if (hasValidPreprocessor) return "preprocessor-info";
+    if (hasLine) return "line";
+    if (hasTransform) return "transform";
+    if (hasAudio) return "audio";
+    if (hasAppearance) return "appearance";
+    if (hasAdjust) return "adjust";
+    return "duration"; // fallback
+  };
+
+  useEffect(() => {
+    const validTab = getValidTab(selectedTab);
+    if (validTab !== selectedTab) {
+      setSelectedTab(validTab);
     }
-    return null;
-  });
+  }, [clipId, hasLine, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust, hasPreprocessorDuration]);
+
+
 
   const handleRunPreprocessor = useCallback(async () => {
     // get the preprocessor 
     if (!selectedPreprocessorId) return;
     clearJob(selectedPreprocessorId);
-    const preprocessor = getPreprocessorById(selectedPreprocessorId);
     const clip = getClipFromPreprocessorId(selectedPreprocessorId);
     if (!preprocessor) return;
     if (!clip) return;
@@ -201,11 +215,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     } else {
       toast.error(`Failed to run preprocessor ${preprocessor.preprocessor.name}`);
     }
-  }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId]);
+  }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, preprocessor]);
 
   const handleStopPreprocessor = useCallback(() => {
     if (!selectedPreprocessorId) return;
-    const preprocessor = getPreprocessorById(selectedPreprocessorId);
     const clip = getClipFromPreprocessorId(selectedPreprocessorId);
     if (!preprocessor || !clip) return;
     if (preprocessor.status !== 'running') return;
@@ -218,7 +231,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     updatePreprocessor(clip.clipId, preprocessor.id, { status: undefined });
     
     toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
-  }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor]);
+  }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor, preprocessor]);
 
   return (
     <div className="h-full w-full min-w-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden' }}>
@@ -234,6 +247,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-info" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Info</TabsTrigger>}
             {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Parameters</TabsTrigger>}
             {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
             {(hasTransform) && <TabsTrigger value="transform" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
             {(hasAudio) && <TabsTrigger value="audio" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
@@ -258,6 +272,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasValidPreprocessor && selectedPreprocessorId && hasPreprocessorDuration) && <TabsContent value="preprocessor-duration" className="min-w-0 m-0">
               <PreprocessorDurationPanel preprocessorId={selectedPreprocessorId} />
             </TabsContent>}
+          {(hasLine) && <TabsContent value="line" className="min-w-0 m-0">
+            <LineProperties clipId={clipId} />
+          </TabsContent>}
           {(hasText) && <TabsContent value="text" className="min-w-0 m-0">  <TextProperties clipId={clipId} /> </TabsContent>}
           {(hasTransform) && <TabsContent  value="transform" className="min-w-0 divide-y divide-brand-light/10 m-0">
             <PositionProperties clipId={clipId}  />
