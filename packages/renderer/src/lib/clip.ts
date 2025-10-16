@@ -57,6 +57,8 @@ interface ClipStore {
     setGhostTimelineId: (timelineId: string | null) => void;
     draggingClipId: string | null;
     setDraggingClipId: (clipId: string | null) => void;
+    isDragging: boolean;
+    setIsDragging: (isDragging: boolean) => void;
     selectedPreprocessorId: string | null;
     setSelectedPreprocessorId: (preprocessorId: string | null) => void;
     getPreprocessorById: (preprocessorId: string) => PreprocessorClipProps | null;
@@ -309,6 +311,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     setGhostInStage: (inStage) => set({ ghostInStage: inStage }),
     draggingClipId: null,
     setDraggingClipId: (clipId) => set({ draggingClipId: clipId }),
+    isDragging: false,
+    setIsDragging: (isDragging) => set({ isDragging }),
     snapGuideX: null,
     setSnapGuideX: (x) => set({ snapGuideX: x }),
     getClipTransform: (clipId: string) => {

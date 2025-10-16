@@ -70,26 +70,33 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         
         
         // go through the preprocessors and find the one that is within the focus frame
+        // adjust preprocessor ranges by framesToGiveStart to match currentFrame's reference frame
+        const clipFramesToGiveStart = framesToGiveStart || 0;
         for (const preprocessor of clip.preprocessors) {
-            if (preprocessor.startFrame !== undefined && preprocessor.endFrame !== undefined && currentFrame >= preprocessor.startFrame && currentFrame <= preprocessor.endFrame && preprocessor.status === 'complete' && preprocessor.src) {
-                const startSec = preprocessor.startFrame / srcFps;
-                addedTimestampRef.current = startSec;
-
-                cachedPreprocessorRangeRef.current = {
-                    startFrame: preprocessor.startFrame,
-                    endFrame: preprocessor.endFrame,
-                    selectedSrc: preprocessor.src,
-                    frameOffset: preprocessor.startFrame,
-                };
+            if (preprocessor.startFrame !== undefined && preprocessor.endFrame !== undefined && preprocessor.status === 'complete' && preprocessor.src) {
+                const adjustedStartFrame = preprocessor.startFrame + clipFramesToGiveStart;
+                const adjustedEndFrame = preprocessor.endFrame + clipFramesToGiveStart;
                 
-                return {selectedSrc: preprocessor.src, frameOffset: preprocessor.startFrame};
+                if (currentFrame >= adjustedStartFrame && currentFrame <= adjustedEndFrame) {
+                    const startSec = preprocessor.startFrame / srcFps;
+                    addedTimestampRef.current = startSec;
+
+                    cachedPreprocessorRangeRef.current = {
+                        startFrame: adjustedStartFrame,
+                        endFrame: adjustedEndFrame,
+                        selectedSrc: preprocessor.src,
+                        frameOffset: preprocessor.startFrame,
+                    };
+                    
+                    return {selectedSrc: preprocessor.src, frameOffset: preprocessor.startFrame};
+                }
             }
         }
 
         cachedPreprocessorRangeRef.current = null;
         addedTimestampRef.current = 0;
         return {selectedSrc: src, frameOffset: 0};
-    }, [clip?.preprocessors, src, currentFrame]);
+    }, [clip?.preprocessors, src, currentFrame, framesToGiveStart]);
 
     // Use refs to store current filter values to avoid callback recreation
     const filterParamsRef = useRef({
@@ -461,7 +468,10 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!Number.isFinite(projectFps) || projectFps <= 0) return;
         
         // Map from project fps space to native clip fps space
-        const idealFrame = Math.max(0, currentFrame - frameOffset) * Math.max(0.1, speed);
+        // When using a preprocessor src, we need to subtract framesToGiveStart since it's already in currentFrame
+        const isUsingPreprocessorSrc = selectedSrc !== src;
+        const adjustedCurrentFrame = isUsingPreprocessorSrc ? currentFrame - (framesToGiveStart || 0) : currentFrame;
+        const idealFrame = Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
         const actualFrame = Math.round((idealFrame / projectFps) * clipFps);
         const totalFrames = Math.max(0, Math.floor((mediaInfo.current?.duration || 0) * clipFps));
         const targetFrame = Math.max(0, Math.min(totalFrames, actualFrame)) + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
@@ -491,7 +501,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             console.warn('[video] seek draw failed', e);
         }
-    }, [mediaInfo, fps, selectedSrc, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, frameOffset]);
+    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, frameOffset, framesToGiveStart]);
 
     const startRendering = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -503,7 +513,10 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!Number.isFinite(projectFps) || projectFps <= 0) return;
         
         // Map from project fps space to native clip fps space
-        const idealStartFrame = Math.max(0, currentFrame - frameOffset) * Math.max(0.1, speed);
+        // When using a preprocessor src, we need to subtract framesToGiveStart since it's already in currentFrame
+        const isUsingPreprocessorSrc = selectedSrc !== src;
+        const adjustedCurrentFrame = isUsingPreprocessorSrc ? currentFrame - (framesToGiveStart || 0) : currentFrame;
+        const idealStartFrame = Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
         const actualStartFrame = Math.round((idealStartFrame / projectFps) * clipFps);
         const totalFrames = Math.max(0, Math.floor((mediaInfo.current?.duration || 0) * clipFps));
         const startIdx = Math.max(0, Math.min(totalFrames, actualStartFrame)) + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
@@ -531,13 +544,16 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 // Compute current timeline-local frame mapped to native fps (clip space)
                 const computeLocalFocusMedia = () => {
                     const store = useControlsStore.getState();
-                    const local = Math.max(0, Math.floor((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
+                    let local = Math.max(0, Math.floor((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
+                    // When using preprocessor src, adjust to match preprocessor video's frame space
+                    if (isUsingPreprocessorSrc) {
+                        local = local - (framesToGiveStart || 0)
+                    }
                     const speedAdjusted = Math.max(0, Math.floor(local * Math.max(0.1, speed)));
                     // Map from project fps to native fps
                     const actualFrameIdx = Math.round((speedAdjusted / projectFps) * clipFps);
                     return actualFrameIdx + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
                 };
-
 
                 // Skip stale frames that are behind the timeline by more than 1 frame
                 let localFocus = computeLocalFocusMedia();
@@ -554,7 +570,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                     const delayMs = Math.max(4, Math.floor(1000 / Math.max(1, projectFps)) >> 1);
                     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
                 }
-                if (myToken !== drawTokenRef.current) break;
+
+                if (myToken !== drawTokenRef.current)  break;
                 if (!useControlsStore.getState().isPlaying) break;
 
                 drawWrappedCanvas(wc as WrappedCanvas);
@@ -563,7 +580,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             // swallow
         }
-    }, [mediaInfo, fps, selectedSrc, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, framesToGiveStart, frameOffset]);
+    }, [mediaInfo, fps, selectedSrc,  displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, frameOffset, framesToGiveStart]);
+
 
     // Start/stop iterator based on play state. Avoid depending on callbacks to prevent restarting every frame.
     useEffect(() => {

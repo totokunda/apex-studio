@@ -6,11 +6,12 @@ import { Text } from 'react-konva'
 import { Group } from 'react-konva'
 import { Html } from 'react-konva-utils'
 import { FaPlay, FaStop } from 'react-icons/fa6'
+import { FaRegSquare, FaCheckSquare } from 'react-icons/fa'
 import { LuTrash} from 'react-icons/lu'
 import { useControlsStore } from '@/lib/control'
 import Konva from 'konva'
 import { calculateFrameFromX as calcFrameFromX, getOtherPreprocessors as getOthers, detectCollisions as detectColls, findGapAfterBlock as findGap } from '@/lib/preprocessorHelpers'
-import { runPreprocessor, usePreprocessorJob, usePreprocessorJobActions } from '@/lib/preprocessor/api'
+import { runPreprocessor, usePreprocessorJob, usePreprocessorJobActions, getPreprocessorResult } from '@/lib/preprocessor/api'
 import { toast } from 'sonner';
 import {getMediaInfo, getMediaInfoCached} from '@/lib/media/utils'  
 import {pathToFileURLString} from '@app/preload'
@@ -35,17 +36,20 @@ interface PropsPreprocessorClip {
 }
 
 export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging}) => {
+    
     const {timelineDuration, setSelectedClipIds} = useControlsStore()
     const removePreprocessorFromClip = useClipStore((s) => s.removePreprocessorFromClip);
     const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
     const getClipFromPreprocessorId = useClipStore((s) => s.getClipFromPreprocessorId);
     const getPreprocessorById = useClipStore((s) => s.getPreprocessorById);
+    const isDraggingGlobal = useClipStore((s) => s.isDragging);
     const preprocessor = useMemo(() => getPreprocessorById(inputPreprocessor.id) ?? inputPreprocessor, [inputPreprocessor.id, getPreprocessorById, inputPreprocessor]);
     const clip = getClipFromPreprocessorId(preprocessor.id);
     // Preprocessor frames are stored relative to the parent clip (0 = clip start)
     const preprocessorStartFrame = preprocessor.startFrame ?? 0;
     const preprocessorEndFrame = preprocessor.endFrame ?? (currentEndFrame - currentStartFrame);
     const textRef = useRef<Konva.Text>(null);
+    
     
     // Calculate parent clip dimensions
     const clipDuration = currentEndFrame - currentStartFrame;
@@ -71,7 +75,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const [resizingPreprocessor, setResizingPreprocessor] = useState<{id: string, side: 'left' | 'right'} | null>(null);
     const preprocessorRef = useRef<Konva.Group>(null);
     const prevClipBounds = useRef({ startFrame: currentStartFrame, endFrame: currentEndFrame });
-    const [isAltPressed, setIsAltPressed] = useState(false);
+    const [isCtrlPressed, setIsCtrlPressed] = useState(false);
     const previousMouseX = useRef<number | null>(null);
     const dragOffsetX = useRef<number>(0);
     const preprocessorJobId = useMemo(() => preprocessor.status === 'running' ? preprocessor.id : null, [preprocessor.id, preprocessor.status]);
@@ -84,6 +88,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const exactVideoUpdateSeqRef = useRef<number>(0);
     const lastExactRequestKeyRef = useRef<string | null>(null);
     const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
+    
     
     const { fps } = useControlsStore();
 
@@ -130,9 +135,43 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         }
     }, [result]);
 
+    // Fallback mechanism: if progress reaches 100% but result doesn't come through, manually fetch it
+    useEffect(() => {
+        if (preprocessor.status !== 'running' || progress < 0.99) return;
+
+        const timeoutId = setTimeout(async () => {
+            // Check if we still don't have a result after waiting
+            if (!result?.result_path && preprocessor.status === 'running') {
+                try {
+                    const response = await getPreprocessorResult(preprocessor.id);
+                    if (response.success && response.data?.result_path) {
+                        const resultPath = response.data.result_path;
+                        const fileUrl = pathToFileURLString(resultPath);
+                        const mediaInfo = await getMediaInfo(fileUrl, { sourceDir: 'apex-cache' });
+                        mediaInfoRef.current = mediaInfo;
+                        updatePreprocessor(clipId, preprocessor.id, {
+                            src: fileUrl,
+                            status: 'complete'
+                        });
+                    } else if (response.data?.status === 'failed') {
+                        updatePreprocessor(clipId, preprocessor.id, {
+                            status: 'failed'
+                        });
+                    }
+                } catch (error) {
+                    console.error('Failed to fetch preprocessor result:', error);
+                }
+            }
+        }, 5000); // Wait 8 seconds after reaching 100% before trying to fetch
+
+        return () => clearTimeout(timeoutId);
+    }, [preprocessor.status, progress, result, preprocessor.id, clipId, updatePreprocessor]);
+
     useEffect(() => {
         mediaInfoRef.current = getMediaInfoCached(preprocessor.src ?? '') ?? null;
     }, [preprocessor.src]);
+
+    
 
     // Set canvas dimensions based on preprocessor width and height
     useEffect(() => {
@@ -142,18 +181,21 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
 
     const imageWidth = useMemo(() => Math.min(preprocessorWidth, timelineWidth), [preprocessorWidth, timelineWidth]);
 
+    
+
     useEffect(() => {
         if (isDragging) {
                 preprocessorRef.current?.moveToTop();
-                setSelectedPreprocessorId(null);
         }
-    }, [isDragging, preprocessor.id, setSelectedPreprocessorId]);
+    }, [isDragging]);
+
+    
 
     const imageX = useMemo(() => {
         let extraDist = 0;
         let positionX = preprocessorWidth <= imageWidth? 0:  (-preprocessorXPosition);
 
-        const clipOffset = currentStartFrame - (isFinite(clip?.framesToGiveStart ?? 0) ? clip?.framesToGiveStart ?? 0 : 0);
+        const clipOffset = 0 // currentStartFrame - (isFinite(clip?.framesToGiveStart ?? 0) ? clip?.framesToGiveStart ?? 0 : 0);
         const timelineStartFrame = timelineDuration[0] - clipOffset;
         const timelineEndFrame = timelineDuration[1] - clipOffset;
         const pxPerFrame = timelineWidth / (timelineEndFrame - timelineStartFrame);
@@ -173,15 +215,14 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             extraDist += (timelineStartFrame - preprocessorStartFrame) * pxPerFrame - timelinePadding
         }
 
-
         return positionX + extraDist
     }, [preprocessorXPosition, imageWidth, preprocessorX, currentStartFrame, clip?.framesToGiveStart, timelineDuration]);
 
     // Track Alt key state globally
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Alt') {
-                setIsAltPressed(true);
+            if ( e.key === 'Meta') {
+                setIsCtrlPressed(true);
             }
             if (e.key === 'Delete' && selectedPreprocessorId === preprocessor.id) {
                 removePreprocessorFromClip(clipId, preprocessor.id);
@@ -189,8 +230,8 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         };
         
         const handleKeyUp = (e: KeyboardEvent) => {
-            if (e.key === 'Alt') {
-                setIsAltPressed(false);
+            if (e.key === 'Meta') {
+                setIsCtrlPressed(false);
             }
         };
 
@@ -199,7 +240,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         
         // Handle case where window loses focus while Alt is pressed
         const handleBlur = () => {
-            setIsAltPressed(false);
+            setIsCtrlPressed(false);
         };
         window.addEventListener('blur', handleBlur);
 
@@ -576,7 +617,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     }, [resizingPreprocessor, currentStartFrame, currentEndFrame, calculateFrameFromX, clipId, updatePreprocessor, preprocessor.id, preprocessorStartFrame, preprocessorEndFrame, getOtherPreprocessors, canResize]);
 
     // Preprocessor is interactive only when Alt is pressed OR when hovering/interacting with header
-    const isListening = !isAltPressed;
+    const isListening = !isCtrlPressed;
 
     
 
@@ -661,12 +702,11 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             
             const mediaStartFrame = mediaInfoRef.current.startFrame ? Math.round((mediaInfoRef.current.startFrame ?? 0) / fps * clipFps) : 0;
             const mediaEndFrame = mediaInfoRef.current.endFrame ? Math.round((mediaInfoRef.current.endFrame ?? 0) / fps * clipFps) : undefined;
-            const clipOffset = currentStartFrame - (clip?.framesToGiveStart ?? 0);
-            const timelineStartFrame = timelineDuration[0] - clipOffset;
-            const timelineEndFrame = timelineDuration[1] - clipOffset;
+            const timelineStartFrame = timelineDuration[0]
+            const timelineEndFrame = timelineDuration[1]
             const timelineSpan = timelineEndFrame - timelineStartFrame;
             const speed = Math.max(0.1, Math.min(5, Number(((clip as any)?.speed ?? 1))));
-    
+
             const renderStartFrame = Math.max(timelineStartFrame, preprocessorStartFrame);
             const renderEndFrame = Math.min(timelineEndFrame, preprocessorEndFrame);
             const renderSpan = renderEndFrame - renderStartFrame;
@@ -694,7 +734,6 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     
             frameIndices = frameIndices.filter((frameIndex) => isNaN(frameIndex) === false && isFinite(frameIndex));
 
-
             {
                 const clipFps = mediaInfoRef.current?.stats.video?.averagePacketRate || fps;
 
@@ -716,6 +755,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             if (frameIndices.length === 0) {
                 return;
             }
+
 
             // Immediate draw using nearest cached frames
             const nearest = getNearestCachedCanvasSamples(
@@ -857,7 +897,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         } else if (mediaInfoRef.current.image) {
             generateTimelineThumbnailImage();
         }
-    }, [preprocessor.status, preprocessor.src, preprocessorWidth, clipWidth, timelineHeight, timelineWidth, timelineDuration, forceRerenderCounter, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette]);
+    }, [preprocessor.status, preprocessor.src, preprocessorWidth, clipWidth, timelineHeight, timelineWidth, timelineDuration, forceRerenderCounter, clip]);
 
     const handleRunPreprocessor = useCallback(async () => {
         if (preprocessor.status === 'running') return;
@@ -906,15 +946,17 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
     }, [preprocessor.status, preprocessor.id, preprocessor.preprocessor.name, stopTracking, clearJob, updatePreprocessor, clipId]);
 
+
     return (
+        <>
         <Group
             id={preprocessor.id}
-            x={clipPosition.x + preprocessorX}
-            y={clipPosition.y}
+            x={isDragging ? clipPosition.x + preprocessorX + 1.5 : clipPosition.x + preprocessorX}
+            y={isDragging ? clipPosition.y + 1.5 : clipPosition.y}
             clipX={0}
             clipY={0}
             draggable={preprocessor.status !== 'running' && preprocessor.status !== 'complete'}
-            listening={isListening}
+            listening={preprocessor.status === 'complete' ? false : isListening}
             key={preprocessor.id} 
             onDragStart={handleDragStart} 
             onDragMove={handleDragMove} onDragEnd={handleDragEnd} dragBoundFunc={dragBoundFunc}
@@ -964,11 +1006,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                         height={timelineHeight}
                         cornerRadius={cornerRadius}
                         fill={'black'}
-                        onClick={() => {
-                            setSelectedPreprocessorId(preprocessor.id);
-                            setSelectedClipIds([]);
-                        }}
-                        
+                        listening={false}
                     />
                     {/* Border/stroke for the image */}
                     <Rect
@@ -1010,7 +1048,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                 ref={textRef}
             />
             {/* Only show icons if there's enough space (at least 35px wide) */}
-            {preprocessorWidth >= (textRef.current?.width() ?? 0) + 32 && (
+            {preprocessorWidth >= (textRef.current?.width() ?? 0) + 32 && !isDraggingGlobal && (
                 <Group 
                     x={Math.max(preprocessorWidth - 28, 4)} 
                     y={preprocessor.status === 'complete' ? 4 : timelineHeight - 16}
@@ -1081,5 +1119,60 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             />
         </React.Fragment>
         </Group>
+        
+        {/* External control icons for completed preprocessors */}
+        {preprocessor.status === 'complete' && preprocessorWidth >= 50 && !isDraggingGlobal && (
+            <Html>
+                <div 
+                    style={{
+                        position: 'absolute',
+                        left: `${clipPosition.x + preprocessorX}px`,
+                        top: `${clipPosition.y}px`,
+                        width: `${preprocessorWidth}px`,
+                        height: `${timelineHeight}px`,
+                        pointerEvents: 'none',
+                    }}
+                >
+                    {/* Control icons - top right corner */}
+                    <div className="absolute top-1 right-1 flex items-center gap-1 pointer-events-auto">
+                         {/* Trash icon (only when selected) */}
+                         {selectedPreprocessorId === preprocessor.id && (
+                             <div
+                                 onClick={(e) => {
+                                     e.stopPropagation();
+                                     removePreprocessorFromClip(clipId, preprocessor.id);
+                                 }}
+                                 className="flex items-center justify-center p-1 rounded cursor-pointer transition-all shadow-lg bg-brand-background border border-brand-light/10 hover:bg-brand-background hover:border-brand-light/40"
+                             >
+                                 <LuTrash size={12} className="text-white" />
+                             </div>
+                         )}
+                        {/* Select icon */}
+                        <div
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedPreprocessorId(selectedPreprocessorId === preprocessor.id ? null : preprocessor.id);
+                                setSelectedClipIds([]);
+                            }}
+                            className={cn(
+                                "flex items-center justify-center p-1 rounded cursor-pointer transition-all shadow-lg",
+                                selectedPreprocessorId === preprocessor.id
+                                    ? "bg-brand-background border border-brand-light/10 hover:bg-brand-background"
+                                    : "bg-brand/80 border border-white/20 hover:bg-brand-background hover:border-white/40"
+                            )}
+                        >
+                            {selectedPreprocessorId === preprocessor.id ? (
+                                <FaCheckSquare size={12} className="text-white" />
+                            ) : (
+                                <FaRegSquare size={12} className="text-white" />
+                            )}
+                        </div>
+
+                        
+                    </div>
+                </div>
+            </Html>
+        )}
+        </>
     );
 }

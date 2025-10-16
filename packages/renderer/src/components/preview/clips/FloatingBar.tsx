@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { LuChevronDown, LuChevronUp, LuMousePointer2, LuHand, LuCheck, LuSquareSquare, LuSquare, LuCircle, LuTriangle, LuMinus, LuStar, LuType, LuHighlighter, LuEraser, LuPenTool} from "react-icons/lu";
+import { LuChevronDown, LuChevronUp, LuMousePointer2, LuHand, LuCheck, LuSquare, LuCircle, LuTriangle, LuMinus, LuStar, LuType, LuHighlighter, LuEraser, LuPenTool, LuLasso, LuBrush, LuWand, LuPlus, LuX} from "react-icons/lu";
 
 import {
     DropdownMenu,
@@ -13,22 +13,12 @@ import { Slider } from "@/components/ui/slider"
 import { useViewportStore } from "@/lib/viewport";
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useDrawingStore } from '@/lib/drawing';
+import { useMaskStore } from '@/lib/mask';
 import ColorInput from '@/components/properties/ColorInput';
 
 
 interface FloatingBarProps {
 }
-
-// Removed individual MousePointerButton and HandButton in favor of a dropdown selector
-
-const MaskButton = ({ active, onClick }: { active: boolean; onClick: () => void }) => {
-  return (
-    <div onClick={onClick} className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer ${active ? 'text-brand-light bg-brand-accent-two-shade' : 'text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10'}`}>
-      <LuSquareSquare className="w-5 h-5" />
-    </div>
-  )
-}
-
 
 const TextButton = ({ active, onClick }: { active: boolean; onClick: () => void }) => {
   return (
@@ -81,7 +71,19 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
     const [shapeOpen, setShapeOpen] = useState(false);
     const [toolOpen, setToolOpen] = useState(false);
     const [drawOpen, setDrawOpen] = useState(false);
+    const [maskOpen, setMaskOpen] = useState(false);
     const [tempSizeValue, setTempSizeValue] = useState<string>('3');
+    
+    const maskTool = useMaskStore((s) => s.tool);
+    const setMaskTool = useMaskStore((s) => s.setTool);
+    const maskShape = useMaskStore((s) => s.shape);
+    const setMaskShape = useMaskStore((s) => s.setShape);
+    const maskBrushSize = useMaskStore((s) => s.brushSize);
+    const setMaskBrushSize = useMaskStore((s) => s.setBrushSize);
+    const touchLabel = useMaskStore((s) => s.touchLabel);
+    const setTouchLabel = useMaskStore((s) => s.setTouchLabel);
+    const touchDrawMode = useMaskStore((s) => s.touchDrawMode);
+    const setTouchDrawMode = useMaskStore((s) => s.setTouchDrawMode);
     
     useEffect(() => {
       setZoomLevel(Math.round(scale * 100));
@@ -249,7 +251,214 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
               </PopoverContent>
             </Popover>
            <TextButton active={tool === 'text'} onClick={() => setTool('text')} />
-          <MaskButton active={tool === 'mask'} onClick={() => setTool('mask')} />
+           <div onClick={() => setTool('mask')} className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer ${tool === 'mask' ? 'text-brand-light bg-brand-accent-two-shade' : 'text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10'}`}>
+             {maskTool === 'lasso' && <LuLasso className="w-5 h-5" />}
+             {maskTool === 'shape' && maskShape === 'rectangle' && <LuSquare className="w-5 h-5" />}
+             {maskTool === 'shape' && maskShape === 'ellipse' && <LuCircle className="w-5 h-5" />}
+             {maskTool === 'shape' && maskShape === 'polygon' && <LuTriangle className="w-5 h-5" />}
+             {maskTool === 'shape' && maskShape === 'star' && <LuStar className="w-5 h-5" />}
+             {maskTool === 'draw' && <LuBrush className="w-5 h-5" />}
+             {maskTool === 'touch' && <LuWand className="w-5 h-5" />}
+            </div>
+           <Popover open={maskOpen} onOpenChange={setMaskOpen}>
+              <PopoverTrigger className={`rounded h-8 px-0.5 -ml-0.5 transition-all duration-300 cursor-pointer ${
+                maskOpen ? 'text-brand-light bg-brand-light/10' : 'text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10'
+              }`}>
+                {maskOpen ? (
+                  <LuChevronUp className="w-3.5 h-3.5" />
+                ) : (
+                  <LuChevronDown className="w-3.5 h-3.5" />
+                )}
+              </PopoverTrigger>
+              <PopoverContent className='dark w-56 bg-brand-background font-poppins p-3 pt-3 pb-5'>
+              <div className='mb-2.5 w-full flex '>
+                  <label className="text-brand-light text-[11px] font-medium">Masking Tool</label>
+                  </div>
+                <div className="flex flex-col gap-y-3">
+                  {/* Mask Tools */}
+                  
+                  <div className="flex flex-col gap-y-0.5">
+                    
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div
+                        onClick={() => { setTool('mask'); setMaskTool('lasso'); }}
+                        className={`flex flex-col items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
+                          maskTool === 'lasso' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                        }`}
+                      >
+                        <LuLasso className="w-4 h-4" />
+                        <span className="text-[9px] font-medium">Lasso</span>
+                      </div>
+                      <div
+                        onClick={() => { setTool('mask'); setMaskTool('shape'); }}
+                        className={`flex flex-col items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
+                          maskTool === 'shape' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                        }`}
+                      >
+                        {maskShape === 'rectangle' && <LuSquare className="w-4 h-4" />}
+                        {maskShape === 'ellipse' && <LuCircle className="w-4 h-4" />}
+                        {maskShape === 'polygon' && <LuTriangle className="w-4 h-4" />}
+                        {maskShape === 'star' && <LuStar className="w-4 h-4" />}
+                        <span className="text-[9px] font-medium">Shape</span>
+                      </div>
+                      <div
+                        onClick={() => { setTool('mask'); setMaskTool('draw'); }}
+                        className={`flex flex-col relative items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
+                          maskTool === 'draw' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                        }`}
+                      >
+                        <div className="relative">
+                        <LuBrush className="w-4 h-4" />
+                        
+                        </div>
+                        <div className="relative flex items-center gap-x-1">
+                        <span className="text-[9px] font-medium">Draw</span>
+                        </div>
+                      </div>
+                      <div
+                        onClick={() => { setTool('mask'); setMaskTool('touch'); }}
+                        className={`flex flex-col relative items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
+                          maskTool === 'touch' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                        }`}
+                      >
+              
+                        <LuWand className="w-4 h-4" />
+                        <div className="relative flex items-center gap-x-1">
+                        <span className="text-[9px] font-medium">Touch</span>
+                        </div>
+                   
+                      </div>
+                    </div>
+                  </div>
+                  
+                  
+                  {/* Shape Selector (for shape tool) */}
+                  {maskTool === 'shape' && (
+                    <div className="flex flex-col gap-y-2">
+                      <label className="text-brand-light text-[11px] font-medium">Mask Shape</label>
+                      <div className="grid grid-cols-4 gap-1">
+                        <div
+                          onClick={() => setMaskShape('rectangle')}
+                          className={`flex items-center justify-center p-1.5 cursor-pointer transition-all duration-200 rounded-sm border ${
+                            maskShape === 'rectangle' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                          }`}
+                        >
+                          <LuSquare className="w-4 h-4" />
+                        </div>
+                        <div
+                          onClick={() => setMaskShape('ellipse')}
+                          className={`flex items-center justify-center p-1.5 cursor-pointer transition-all duration-200 rounded-sm border ${
+                            maskShape === 'ellipse' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                          }`}
+                        >
+                          <LuCircle className="w-4 h-4" />
+                        </div>
+                        <div
+                          onClick={() => setMaskShape('polygon')}
+                          className={`flex items-center justify-center p-1.5 cursor-pointer transition-all duration-200 rounded-sm border ${
+                            maskShape === 'polygon' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                          }`}
+                        >
+                          <LuTriangle className="w-4 h-4" />
+                        </div>
+                        <div
+                          onClick={() => setMaskShape('star')}
+                          className={`flex items-center justify-center p-1.5 cursor-pointer transition-all duration-200 rounded-sm border ${
+                            maskShape === 'star' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                          }`}
+                        >
+                          <LuStar className="w-4 h-4" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {/* Brush Size (for draw tool) */}
+                  {maskTool === 'draw' && (
+                    <div className="flex flex-col gap-y-0.5">
+                      <label className="text-brand-light text-[12px] font-medium">Brush Size</label>
+                      <div className="flex items-center gap-x-2">
+                        <Slider
+                          className="w-full dark"
+                          value={[maskBrushSize]}
+                          max={100}
+                          min={1}
+                          step={1}
+                          onValueChange={(value) => setMaskBrushSize(value[0])}
+                        />
+                        <input
+                          className="w-[40px] h-6 px-1 text-brand-light focus:outline-brand-background border border-brand-light/10 text-center bg-brand ring-brand-background text-[11px] font-normal items-center justify-center rounded"
+                          value={maskBrushSize}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value) || 1;
+                            setMaskBrushSize(Math.max(1, Math.min(100, val)));
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Touch Tool Settings */}
+                  {maskTool === 'touch' && (
+                    <>
+                      {/* Mode Selection: Point or Draw */}
+                      <div className="flex flex-col gap-y-2">
+                        <label className="text-brand-light text-[11px] font-medium">Input Mode</label>
+                        <div className="flex flex-row border border-brand-light/10 rounded-md overflow-hidden bg-brand divide-x divide-brand-light/10">
+                          <div
+                            onClick={() => setTouchDrawMode('point')}
+                            className={`flex items-center gap-x-2 px-3 py-1.5 w-1/2 cursor-pointer justify-center transition-all duration-200 ${
+                              touchDrawMode === 'point' ? 'bg-brand-accent-two-shade text-brand-light' : 'text-brand-light/80 hover:bg-brand-light/5'
+                            }`}
+                          >
+                            <LuWand className="w-3.5 h-3.5" />
+                            <span className="text-[10.5px]">Point</span>
+                          </div>
+                          <div
+                            onClick={() => setTouchDrawMode('draw')}
+                            className={`flex items-center gap-x-2 px-3 py-1.5 w-1/2 cursor-pointer justify-center transition-all duration-200 ${
+                              touchDrawMode === 'draw' ? 'bg-brand-accent-two-shade text-brand-light' : 'text-brand-light/80 hover:bg-brand-light/5'
+                            }`}
+                          >
+                            <LuLasso className="w-3.5 h-3.5" />
+                            <span className="text-[10.5px]">Draw</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Label Selection (only for point mode) */}
+                      {touchDrawMode === 'point' && (
+                        <div className="flex flex-row items-center justify-between gap-x-2">
+                          <label className="text-brand-light text-[11px] font-medium">Point Type</label>
+                          <div className="flex flex-row gap-x-1 overflow-hidden w-22">
+                            <div
+                              onClick={() => setTouchLabel('positive')}
+                              className={`flex items-center gap-x-2 px-3 py-1 w-1/2 rounded-md border border-brand-light/10 cursor-pointer justify-center transition-all duration-200 ${
+                                touchLabel === 'positive' ? 'bg-blue-500 text-brand-light' : 'text-brand-light/80 hover:bg-brand-light/5 bg-brand'
+                              }`}
+                            >
+                              <div className="flex items-center justify-center w-4 h-4 rounded-md">
+                                <LuPlus className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+                              </div>
+                            </div>
+                            <div
+                              onClick={() => setTouchLabel('negative')}
+                              className={`flex items-center gap-x-2 px-3 py-1 w-1/2 rounded-md border border-brand-light/10 cursor-pointer justify-center transition-all duration-200 ${
+                                touchLabel === 'negative' ? 'bg-red-500 text-brand-light' : 'text-brand-light/80 hover:bg-brand-light/5 bg-brand'
+                              }`}
+                            >
+                              <div className="flex items-center justify-center w-4 h-4 rounded-md">
+                                <LuX className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                </div>
+              </PopoverContent>
+            </Popover>
           <div onClick={() => setTool('shape')} className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer ${
             tool === 'shape' ? 'text-brand-light bg-brand-accent-two-shade' : 'text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10'
           }`}>

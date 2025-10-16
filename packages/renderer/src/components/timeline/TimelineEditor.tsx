@@ -176,7 +176,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
   // cause rendering glitches in Tauri's WebView. Toggle visibility via data.
   
   const controlStore = useControlsStore();
-  const {clips, timelines, addPreprocessorToClip, removePreprocessorFromClip, updatePreprocessor, getClipsForTimeline, getTimelinePosition, getClipPosition, addTimeline, addClip, setGhostStartEndFrame, setGhostX, setGhostGuideLines, setGhostTimelineId, setActiveMediaItem, removeTimeline, setGhostInStage, setHoveredTimelineId, hoveredTimelineId, snapGuideX, setSelectedPreprocessorId} = useClipStore();
+  const {clips, timelines, addPreprocessorToClip, removePreprocessorFromClip, updatePreprocessor, getClipsForTimeline, getTimelinePosition, getClipPosition, addTimeline, addClip, setGhostStartEndFrame, setGhostX, setGhostGuideLines, setGhostTimelineId, setActiveMediaItem, removeTimeline, setGhostInStage, setHoveredTimelineId, hoveredTimelineId, snapGuideX, setSelectedPreprocessorId, setIsDragging} = useClipStore();
   // const scrollBarRef = useRef<any>(null);
   // const isSyncingScrollRef = useRef(false);
   const [isRulerDragging, setIsRulerDragging] = useState(false);
@@ -214,6 +214,9 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     onDragStart: (event) => {
       const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | undefined;
       if (!data) return;
+      
+      setIsDragging(true);
+      
       if (data.type === 'preprocessor') {
         const clipFrames = controlStore.fps * 5;
         setGhostStartEndFrame(0, clipFrames);
@@ -279,13 +282,19 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     onDragEnd: (event) => {
       const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | undefined;
 
-      if (!data) return;
+      if (!data) {
+        setIsDragging(false);
+        return;
+      }
+      
       // Route to appropriate handler based on item type
       if (data.type === 'preprocessor') {
         handlePreprocessorDrop(event, data as Preprocessor);
       } else if (data?.type === 'image' || data?.type === 'video' || data?.type === 'audio' || data?.type === 'filter') {
         handleMediaItemDrop(event, data);
       }
+      
+      setIsDragging(false);
     }
   });
 
@@ -670,6 +679,11 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       (newClip as FilterClipProps).category = (data as unknown as Filter).category;
       (newClip as FilterClipProps).examplePath = (data as unknown as Filter).examplePath;
       (newClip as FilterClipProps).exampleAssetUrl = (data as unknown as Filter).exampleAssetUrl;
+    }
+
+    if (data.type === 'image' || data.type === 'video') {
+      (newClip as VideoClipProps | ImageClipProps).preprocessors = [];
+      (newClip as VideoClipProps | ImageClipProps).masks = [];
     }
 
     addClip(newClip as AnyClipProps);

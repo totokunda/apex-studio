@@ -33,6 +33,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const setSnapGuideX = useClipStore((s) => s.setSnapGuideX);
     const addTimeline = useClipStore((s) => s.addTimeline);
     const setSelectedPreprocessorId = useClipStore((s) => s.setSelectedPreprocessorId);
+    const setIsDraggingGlobal = useClipStore((s) => s.setIsDragging);
     
     // Subscribe directly to this clip's data
     const currentClip = useClipStore((s) => s.clips.find((c) => c.clipId === clipId && (timelineId ? c.timelineId === timelineId : true)));
@@ -919,7 +920,10 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     }, [clipRef, clipWidth, timelineHeight, isSelected, timelinePadding, timelineDuration, currentEndFrame, currentStartFrame, timelineWidth, getClipsForTimeline, timelineId, currentClipId, setGhostTimelineId, setGhostInStage, setGhostX, setGhostStartEndFrame, setHoveredTimelineId, scrollY, clipType, currentClip, setSnapGuideX]);
 
     const handleDragEnd = useCallback((_e: Konva.KonvaEventObject<MouseEvent>) => {
+        rectRefLeft.current?.moveToTop();
+        rectRefRight.current?.moveToTop();
         setIsDragging(false);
+        setIsDraggingGlobal(false);
         // Compute validated frames from ghost state
         const [tStart, tEnd] = timelineDuration;
         const stageWidth = timelineWidth;
@@ -1069,7 +1073,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         setGhostX(0);
         setDraggingClipId(null);
         setSnapGuideX(null);
-    }, [timelineWidth, timelineDuration, currentEndFrame, currentStartFrame, getClipsForTimeline, timelineId, currentClipId, updateClip, setGhostInStage, setGhostTimelineId, setGhostStartEndFrame, setGhostX, setDraggingClipId, timelinePadding, clipId, restoreWindowIfChanged, clipType, currentClip, clipX, timelineY, totalClipHeight, setSnapGuideX, setHoveredTimelineId, addTimeline, getTimelineById]);
+    }, [timelineWidth, timelineDuration, currentEndFrame, currentStartFrame, getClipsForTimeline, timelineId, currentClipId, updateClip, setGhostInStage, setGhostTimelineId, setGhostStartEndFrame, setGhostX, setDraggingClipId, timelinePadding, clipId, restoreWindowIfChanged, clipType, currentClip, clipX, timelineY, totalClipHeight, setSnapGuideX, setHoveredTimelineId, addTimeline, getTimelineById, setIsDraggingGlobal]);
 
     useEffect(() => {
         const newY = timelineY - totalClipHeight;
@@ -1082,6 +1086,13 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         toggleClipSelection(currentClipId, isShiftClick);
         setSelectedPreprocessorId(null);
     }, [isSelected, currentClipId, toggleClipSelection, moveClipToEnd]);
+
+    useEffect(() => {
+        if (isSelected) {
+            rectRefLeft.current?.moveToTop();
+            rectRefRight.current?.moveToTop();
+        }
+    }, [isSelected]);
 
     // Handle resizing via global mouse move/up while a handle is being dragged
     useEffect(() => {
@@ -1194,6 +1205,10 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 } else {
                     setSnapGuideX(null);
                 }
+                
+                // Prevent resizing below frame 0
+                targetFrame = Math.max(0, targetFrame);
+                
                 if (targetFrame !== currentStartFrame) {
                     // Use the new contiguous resize method - local state will update via useEffect
                     resizeClip(clipId, 'left', targetFrame);
@@ -1217,14 +1232,17 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 
     const handleDragStart = useCallback((e:Konva.KonvaEventObject<MouseEvent>) => {
         groupRef.current?.moveToTop();
-        rectRefLeft.current?.moveToTop();
-        rectRefRight.current?.moveToTop();
+        
         setSelectedPreprocessorId(null);
        
         setIsDragging(true);
+        setIsDraggingGlobal(true);
         setTempClipPosition({x: clipPosition.x, y: clipPosition.y});
         // Store fixed Y position at drag start for preprocessor clips
         fixedYRef.current = clipPosition.y;
+
+        rectRefLeft.current?.moveToBottom();
+        rectRefRight.current?.moveToBottom();
         // If this clip isn't already selected, select it (without shift behavior during drag)
         if (!isSelected) {
             toggleClipSelection(currentClipId, false);
@@ -1252,7 +1270,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         }
 
 
-    }, [currentClipId, moveClipToEnd, isSelected, currentEndFrame, currentStartFrame, setDraggingClipId, setGhostTimelineId, setGhostStartEndFrame, setGhostInStage, setGhostX, timelineId, timelineWidth, timelinePadding, clipPosition, toggleClipSelection]);
+    }, [currentClipId, moveClipToEnd, isSelected, currentEndFrame, currentStartFrame, setDraggingClipId, setGhostTimelineId, setGhostStartEndFrame, setGhostInStage, setGhostX, timelineId, timelineWidth, timelinePadding, clipPosition, toggleClipSelection, setIsDraggingGlobal]);
 
     const handleMouseOver = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
         //moveClipToEnd(currentClipId);

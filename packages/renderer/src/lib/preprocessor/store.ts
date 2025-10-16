@@ -70,7 +70,7 @@ export const usePreprocessorJobStore = create<PreprocessorJobStore>((set, get) =
       if (data.status === 'complete') {
         // Repeatedly fetch result until retrieved
         const fetchWithRetry = async (attempt = 0) => {
-          const delay = Math.min(500 * Math.pow(1.5, attempt), 5000);
+          const delay = Math.min(500 * Math.pow(1.5, attempt), 30000);
           setTimeout(async () => {
             const success = await get().fetchJobResult(jobId);
             if (!success) {

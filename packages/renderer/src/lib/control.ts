@@ -76,6 +76,8 @@ interface ControlStore {
     setIsPlaying: (isPlaying: boolean) => void;
     isFullscreen: boolean;
     setIsFullscreen: (isFullscreen: boolean) => void;
+    selectedMaskId: string | null;
+    setSelectedMaskId: (maskId: string | null) => void;
 }
 
 export const useControlsStore = create<ControlStore>((set, get) => ({
@@ -239,4 +241,6 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     setIsPlaying: (isPlaying) => set({ isPlaying }),
     isFullscreen: false,
     setIsFullscreen: (isFullscreen) => set({ isFullscreen }),
+    selectedMaskId: null,
+    setSelectedMaskId: (maskId) => set({ selectedMaskId: maskId }),
     }));

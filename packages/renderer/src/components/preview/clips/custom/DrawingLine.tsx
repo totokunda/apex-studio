@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Line as KonvaLine, Rect, Line } from 'react-konva';
+import { Line as KonvaLine, Rect, Line, Group } from 'react-konva';
 import { DrawingLine } from '@/lib/types';
 import Konva from 'konva';
 import { Transformer } from 'react-konva';
@@ -51,6 +51,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClic
     const lineOpacity = line.tool === 'eraser' ? 1 : line.opacity / 100;
     const ref = useRef<Konva.Line>(null);
     const rectRef = useRef<Konva.Rect>(null);
+    const groupRef = useRef<Konva.Group>(null);
     const transformerRef = useRef<Konva.Transformer>(null);
     const isTransformingRef = useRef(false);
     const tool = useViewportStore((s) => s.tool);
@@ -130,10 +131,11 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClic
 
     const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean }) => {
         const rect = rectRef.current;
-        if (!rect) return;
+        const group = groupRef.current;
+        if (!rect || !group) return;
 
         const thresholdLocal = SNAP_THRESHOLD_PX;
-        const client = rect.getClientRect({ skipShadow: true, skipStroke: true });
+        const client = rect.getClientRect({ skipShadow: true, skipStroke: true, relativeTo: group as any });
         const centerX = client.x + client.width / 2;
         const centerY = client.y + client.height / 2;
         const dxToVCenter = (rectWidth / 2) - centerX;
@@ -410,6 +412,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClic
 
     return (
         <>
+        <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight}>
         <KonvaLine
           key={line.lineId}
           points={line.points}
@@ -454,6 +457,99 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClic
             onClick={(e) => handleLineClick(e, line.lineId)}
             onTap={(e) => handleLineClick(e, line.lineId)}
          />
+        
+        {/* Guide Lines */}
+        {guides.vCenter && (
+          <Line
+            points={[rectWidth / 2, 0, rectWidth / 2, rectHeight]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        {guides.hCenter && (
+          <Line
+            points={[0, rectHeight / 2, rectWidth, rectHeight / 2]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        {guides.v25 && (
+          <Line
+            points={[rectWidth * 0.25, 0, rectWidth * 0.25, rectHeight]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        {guides.v75 && (
+          <Line
+            points={[rectWidth * 0.75, 0, rectWidth * 0.75, rectHeight]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        {guides.h25 && (
+          <Line
+            points={[0, rectHeight * 0.25, rectWidth, rectHeight * 0.25]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        {guides.h75 && (
+          <Line
+            points={[0, rectHeight * 0.75, rectWidth, rectHeight * 0.75]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        {guides.left && (
+          <Line
+            points={[0, 0, 0, rectHeight]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        {guides.right && (
+          <Line
+            points={[rectWidth, 0, rectWidth, rectHeight]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        {guides.top && (
+          <Line
+            points={[0, 0, rectWidth, 0]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        {guides.bottom && (
+          <Line
+            points={[0, rectHeight, rectWidth, rectHeight]}
+            stroke="#AE81CE"
+            strokeWidth={1}
+            dash={[6, 4]}
+            listening={false}
+          />
+        )}
+        </Group>
           <Transformer
             borderStroke='#AE81CE'
             anchorCornerRadius={8} 
@@ -467,98 +563,6 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClic
             enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right', 'top-center', 'middle-left', 'middle-right', 'bottom-center']}
             boundBoxFunc={transformerBoundBoxFunc}
             />
-        
-        {/* Guide Lines */}
-        {guides.vCenter && (
-          <Line
-            points={[rectWidth / 2, 0, rectWidth / 2, rectHeight]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
-        {guides.hCenter && (
-          <Line
-            points={[0, rectHeight / 2, rectWidth, rectHeight / 2]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
-        {guides.v25 && (
-          <Line
-            points={[rectWidth * 0.25, 0, rectWidth * 0.25, rectHeight]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
-        {guides.v75 && (
-          <Line
-            points={[rectWidth * 0.75, 0, rectWidth * 0.75, rectHeight]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
-        {guides.h25 && (
-          <Line
-            points={[0, rectHeight * 0.25, rectWidth, rectHeight * 0.25]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
-        {guides.h75 && (
-          <Line
-            points={[0, rectHeight * 0.75, rectWidth, rectHeight * 0.75]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
-        {guides.left && (
-          <Line
-            points={[0, 0, 0, rectHeight]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
-        {guides.right && (
-          <Line
-            points={[rectWidth, 0, rectWidth, rectHeight]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
-        {guides.top && (
-          <Line
-            points={[0, 0, rectWidth, 0]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
-        {guides.bottom && (
-          <Line
-            points={[0, rectHeight, rectWidth, rectHeight]}
-            stroke="#A477C4"
-            strokeWidth={1}
-            dash={[4, 4]}
-            listening={false}
-          />
-        )}
         </>
       );
 };

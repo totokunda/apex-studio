@@ -209,9 +209,30 @@ const Controls = () => {
       const drawingStore = useDrawingStore.getState();
       const selectedIds = controls.selectedClipIds || [];
       const selectedLineId = drawingStore.selectedLineId;
+      const selectedMaskId = controls.selectedMaskId;
 
-      // Delete selected clips
+      // Delete selected clips, lines, or masks
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Delete selected mask if it exists
+        if (selectedMaskId) {
+          e.preventDefault();
+          // Find the clip that has this mask
+          const clipWithMask = clipsStore.clips.find((clip) => {
+            if (clip.type !== 'video' && clip.type !== 'image') return false;
+            const masks = (clip as any).masks || [];
+            return masks.some((m: any) => m.id === selectedMaskId);
+          });
+          
+          if (clipWithMask) {
+            const currentMasks = (clipWithMask as any).masks || [];
+            const updatedMasks = currentMasks.filter((m: any) => m.id !== selectedMaskId);
+            clipsStore.updateClip(clipWithMask.clipId, { masks: updatedMasks });
+          }
+          
+          controls.setSelectedMaskId(null);
+          return;
+        }
+        
         // delete the selected line if it exists
         if (selectedLineId && selectedIds.length > 0) {
           e.preventDefault();

@@ -42,6 +42,7 @@ export class ApexApi implements AppModule {
     this.registerConfigHandlers();
     this.registerBackendUrlHandlers();
     this.registerPreprocessorHandlers();
+    this.registerMaskHandlers();
   }
 
   private async loadSettings(): Promise<void> {
@@ -122,6 +123,22 @@ export class ApexApi implements AppModule {
 
     ipcMain.handle('config:set-cache-path', async (_event, cachePath: string) => {
       return this.makeRequest<{cache_path: string}>('POST', '/config/cache-path', { cache_path: cachePath });
+    });
+  }
+
+  private registerMaskHandlers(): void {
+    ipcMain.handle('mask:create', async (_event, request: {
+      input_path: string;
+      frame_number?: number;
+      tool: string;
+      points?: Array<{x: number, y: number}>;
+      point_labels?: Array<number>;
+      box?: {x1: number, y1: number, x2: number, y2: number};
+      multimask_output?: boolean;
+      simplify_tolerance?: number;
+      model_type?: string;
+    }) => {
+      return this.makeRequest<{status: string; contours?: Array<Array<number>>; message?: string}>('POST', '/mask/create', request);
     });
   }
 

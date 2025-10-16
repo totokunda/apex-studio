@@ -307,6 +307,25 @@ async function downloadPreprocessor(name: string, jobId?: string): Promise<Confi
   return await ipcRenderer.invoke('preprocessor:download', name, jobId);
 }
 
+async function createMask(request: {
+  input_path: string;
+  frame_number?: number;
+  tool: string;
+  points?: Array<{x: number, y: number}>;
+  point_labels?: Array<number>;
+  box?: {x1: number, y1: number, x2: number, y2: number};
+  multimask_output?: boolean;
+  simplify_tolerance?: number;
+  model_type?: string;
+}): Promise<ConfigResponse<{status: string; contours?: Array<Array<number>>; message?: string}>> {
+  // check if input_path is a file url
+  if (request.input_path.startsWith('file://')) {
+    request.input_path = fileURLToPath(request.input_path);
+  }
+  return await ipcRenderer.invoke('mask:create', request);
+}
+
+
 async function runPreprocessor(request: {
   preprocessor_name: string;
   input_path: string;
@@ -322,6 +341,8 @@ async function runPreprocessor(request: {
   }
   return await ipcRenderer.invoke('preprocessor:run', request);
 }
+
+
 
 async function getPreprocessorStatus(jobId: string): Promise<ConfigResponse<any>> {
   return await ipcRenderer.invoke('preprocessor:status', jobId);
@@ -407,5 +428,6 @@ export {
   onPreprocessorWebSocketStatus,
   onPreprocessorWebSocketError,
   pathToFileURLString,
-  cancelPreprocessor
+  cancelPreprocessor,
+  createMask
 };

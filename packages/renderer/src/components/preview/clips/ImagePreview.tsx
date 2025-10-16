@@ -32,7 +32,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
     const selectedSrc = useMemo(() => {
         return clip?.preprocessors?.find(p => p.status === 'complete')?.src ?? src;
-    }, [clip?.src, clip.preprocessors]);
+    }, [clip?.src, clip?.preprocessors]);
 
     const aspectRatio = useMemo(() => {
       const originalWidth = mediaInfoRef.current?.image?.width;

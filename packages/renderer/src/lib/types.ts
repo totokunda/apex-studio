@@ -70,13 +70,15 @@ export type VideoClipProps = ClipProps & MediaAdjustments & {
     fadeIn?: number;
     fadeOut?: number;
     speed?: number;
-    preprocessors:PreprocessorClipProps[];
+    preprocessors: PreprocessorClipProps[];
+    masks: MaskClipProps[];
 }
 
 export type ImageClipProps = ClipProps & MediaAdjustments & {
     src: string;
     type: 'image';
-    preprocessors:PreprocessorClipProps[];
+    preprocessors: PreprocessorClipProps[];
+    masks: MaskClipProps[];
 }
 
 export type AudioClipProps = ClipProps & {
@@ -173,6 +175,74 @@ export type DrawingClipProps = ClipProps & {
     src: null | undefined;
     type: 'draw';
     lines: DrawingLine[];
+}
+
+export interface MaskTransform {
+    x: number;
+    y: number;
+    scaleX: number;
+    scaleY: number;
+    rotation: number;
+}
+
+export type MaskTool = 'lasso' | 'shape' | 'draw' | 'touch';
+export type MaskShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'star';
+
+export interface MaskData {
+    // For lasso tool - closed path points
+    lassoPoints?: number[]; // [x1, y1, x2, y2, ...]
+    // For shape tool
+    shapeBounds?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        rotation?: number;
+        shapeType?: MaskShapeTool;
+        scaleX?: number;
+        scaleY?: number;
+    };
+    // Legacy support for rectangle tool (maps to shapeBounds with shapeType='rectangle')
+    rectangleBounds?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        rotation?: number;
+    };
+    // For draw tool - freeform strokes
+    drawStrokes?: Array<{
+        points: number[]; // [x1, y1, x2, y2, ...]
+        strokeWidth: number;
+    }>;
+    // For touch/SAM2 tool - AI generated mask or selection points
+    touchPoints?: Array<{ x: number; y: number; label: 1 | 0 }>; // positive/negative
+    touchBox?: { x1: number; y1: number; x2: number; y2: number };
+    // Generated mask data (binary mask as base64 encoded image or URL)
+    maskImageData?: string;
+}
+
+export type MaskClipProps = {
+    id: string;
+    clipId?: string;
+    tool: MaskTool;
+    startFrame?: number;
+    endFrame?: number;
+    featherAmount: number;
+    brushSize?: number;
+    // Mask data for the initial frame/keyframes
+    keyframes: Map<number, MaskData> | Record<number, MaskData>;
+    // Tracking settings
+    isTracked: boolean;
+    trackingMode?: 'masktrack' | 'bboxtrack' | 'maskpointtrack' | 'maskbboxtrack';
+    // Transform applied to mask
+    transform?: MaskTransform;
+    // Metadata
+    createdAt: number;
+    lastModified: number;
+    // Operation settings
+    inverted?: boolean; // Invert the mask
+    opacity?: number; // Mask opacity
 }
 
 export type PreprocessorClipProps = {
