@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Group, Rect, Line as KonvaLine, Ellipse as KonvaEllipse, RegularPolygon, Star as KonvaStar, Circle } from 'react-konva';
 import { useViewportStore } from '@/lib/viewport';
-import { useClipStore } from '@/lib/clip';
+import { getLocalFrame, useClipStore } from '@/lib/clip';
 import { KonvaEventObject } from 'konva/lib/Node';
 import { BASE_LONG_SIDE, DEFAULT_FPS } from '@/lib/settings'; 
  
@@ -15,7 +15,7 @@ import TextPreview from './clips/TextPreview';
 import DrawingPreview from './clips/DrawingPreview';
 import MaskPreview from './clips/MaskPreview';
 import { useControlsStore } from '@/lib/control';
-import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps, DrawingClipProps, DrawingLine } from '@/lib/types';
+import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps, DrawingClipProps, DrawingLine, PreprocessorClipType, MaskClipProps, MaskData } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 import { SlSizeFullscreen } from 'react-icons/sl';
 import FullscreenPreview from './FullscreenPreview';
@@ -24,6 +24,7 @@ import { useWebGLHaldClut } from './webgl-filters';
 import { useDrawingStore } from '@/lib/drawing';
 import { useMaskStore } from '@/lib/mask';
 import { erasePolylineByEraser, transformEraserToLocal, mergeConnectedLines } from '@/lib/eraser-utils';
+import { calculateArea, doPolygonsIntersect, isPolygonInsidePolygon, mergePolygons } from '@/lib/polygon';
 
 interface PreviewProps {
 
@@ -44,7 +45,7 @@ const Preview:React.FC<PreviewProps> = () => {
   const setViewportSize = useViewportStore((s) => s.setViewportSize);
   const setContentBounds = useViewportStore((s) => s.setContentBounds);
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
-  const {clips, clipWithinFrame, timelines, addClip, addTimeline} = useClipStore();
+  const {clips, clipWithinFrame, timelines, addClip, addTimeline, updateClip} = useClipStore();
   // Note: we use imperative store access in the recenter effect to avoid rerender loops
   const focusFrame = useControlsStore((s) => s.focusFrame);
   const totalTimelineFrames = useControlsStore((s) => s.totalTimelineFrames);
@@ -58,6 +59,7 @@ const Preview:React.FC<PreviewProps> = () => {
   const isFullscreen = useControlsStore((s) => s.isFullscreen);
   const setIsFullscreen = useControlsStore((s) => s.setIsFullscreen);
   const haldClutInstance = useWebGLHaldClut();
+  const setSelectedMaskId = useControlsStore((s) => s.setSelectedMaskId);
   const [clutsLoaded, setClutsLoaded] = useState(0);
   const {tool: drawingTool, color: drawingColor, opacity: drawingOpacity, smoothing: drawingSmoothing, getCurrentSize, setCurrentLineId} = useDrawingStore();
   const isDrawingRef = useRef(false);
@@ -82,7 +84,8 @@ const Preview:React.FC<PreviewProps> = () => {
   const [maskCursorPreview, setMaskCursorPreview] = useState<{ x: number; y: number } | null>(null);
   const [isDrawingTouchLasso, setIsDrawingTouchLasso] = useState(false);
   const [touchLassoPoints, setTouchLassoPoints] = useState<number[]>([]);
-  
+  const isMaskDragging = useMaskStore((s) => s.isMaskDragging);
+  const isOverMask = useMaskStore((s) => s.isOverMask);
   // Memoize applicator factory configuration
   const applicatorConfig = useMemo(() => ({
     haldClutInstance,
@@ -282,6 +285,8 @@ const Preview:React.FC<PreviewProps> = () => {
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const currentDrawingClipId = useRef<string | null>(null);
 
+
+
   const onMouseDown = useCallback((e: any) => {
     if (tool === 'hand') {
       isPanning.current = true;
@@ -292,6 +297,8 @@ const Preview:React.FC<PreviewProps> = () => {
     if (tool === 'mask' && maskTool === 'lasso') {
       const stage = e.target.getStage();
       if (!stage) return;
+
+      if (isMaskDragging || isOverMask) return;
       
       const pointerPos = stage.getPointerPosition();
       if (!pointerPos) return;
@@ -308,6 +315,8 @@ const Preview:React.FC<PreviewProps> = () => {
     if (tool === 'mask' && maskTool === 'shape') {
       const stage = e.target.getStage();
       if (!stage) return;
+
+      if (isMaskDragging || isOverMask) return;
       
       const pointerPos = stage.getPointerPosition();
       if (!pointerPos) return;
@@ -358,84 +367,75 @@ const Preview:React.FC<PreviewProps> = () => {
       
       // Handle point mode: add touch points
       // Find the topmost clip at the current frame
-      const targetClip = getTopmostClipAtFrame();
+      const targetClip = getTopmostClipAtFrame() as PreprocessorClipType;
       
-      if (targetClip) {
-        const { updateClip } = useClipStore.getState();
-        
-        // Determine mask duration based on clip type
-        let maskStartFrame = focusFrame;
-        let maskEndFrame = focusFrame;
-        
-        if (targetClip.type === 'image') {
-          maskStartFrame = targetClip.startFrame ?? focusFrame;
-          maskEndFrame = targetClip.endFrame ?? focusFrame;
-        } else if (targetClip.type === 'video') {
-          maskStartFrame = focusFrame;
-          maskEndFrame = focusFrame;
-        }
+      if (!targetClip || (targetClip.type !== 'video' && targetClip.type !== 'image')) return;
+
+
+        const localFrame = targetClip.type === 'image' ? 0 : getLocalFrame(focusFrame, targetClip);
         
         // Get existing masks
-        const currentMasks = (targetClip as any).masks || [];
+        const currentMasks = targetClip.masks || [];
         
         // Check if there's already a touch mask at this frame for this clip
-        let existingTouchMask = currentMasks.find((mask: any) => {
-          const maskStart = mask.startFrame ?? 0;
-          const maskEnd = mask.endFrame ?? 0;
-          return mask.tool === 'touch' && focusFrame >= maskStart && focusFrame <= maskEnd;
-        });
+        let existingTouchMask = currentMasks.find((mask) => mask.tool === 'touch');
         
         if (existingTouchMask) {
           // Add point to existing mask
           const keyframes = existingTouchMask.keyframes instanceof Map 
             ? existingTouchMask.keyframes 
-            : (existingTouchMask.keyframes as Record<number, any>);
+            : (existingTouchMask.keyframes as Record<number, MaskData>);
           
           const currentFrameData = keyframes instanceof Map 
-            ? keyframes.get(focusFrame) 
-            : keyframes[focusFrame];
+            ? keyframes.get(localFrame) 
+            : keyframes[localFrame];
+
           
           const touchPoints = currentFrameData?.touchPoints || [];
-          const lassoStrokes = currentFrameData?.lassoStrokes || [];
-          
           // Add new point with label
-          const updatedTouchPoints = [...touchPoints, { x: worldX, y: worldY, label: touchLabel }];
-          
+          const updatedTouchPoints = [...touchPoints, { x: worldX, y: worldY, label: touchLabel === 'positive' ? 1 as const : 0 as const }];
+
           // Update keyframes
           if (keyframes instanceof Map) {
-            keyframes.set(focusFrame, { touchPoints: updatedTouchPoints, lassoStrokes });
+            keyframes.set(localFrame, { touchPoints: updatedTouchPoints });
             existingTouchMask.keyframes = keyframes;
           } else {
             existingTouchMask.keyframes = {
               ...keyframes,
-              [focusFrame]: { touchPoints: updatedTouchPoints, lassoStrokes },
+              [localFrame]: { touchPoints: updatedTouchPoints },
             };
           }
-          
+
+
           existingTouchMask.lastModified = Date.now();
           
+
           updateClip(targetClip.clipId, {
             masks: currentMasks,
           });
         } else {
           // Create new touch mask
+          
           const newMask = {
             id: uuidv4(),
             clipId: targetClip.clipId,
             tool: 'touch' as const,
-            startFrame: maskStartFrame,
-            endFrame: maskEndFrame,
             featherAmount: featherAmount,
             keyframes: {
-              [focusFrame]: {
-                touchPoints: [{ x: worldX, y: worldY, label: touchLabel }],
-                lassoStrokes: [],
+              [localFrame]: {
+                touchPoints: [{ x: worldX, y: worldY, label: touchLabel === 'positive' ? 1 as const : 0 as const }],
               },
             },
             isTracked: false,
             createdAt: Date.now(),
             lastModified: Date.now(),
-            opacity: 100,
+            maskColor: '#000000',
+            maskOpacity: 100,
+            maskColorEnabled: true,
+            backgroundColor: '#FFFFFF',
+            backgroundOpacity: 100,
+            backgroundColorEnabled: true,
+            transform: targetClip.transform ? { ...targetClip.transform } : undefined,
           };
           
           currentMasks.push(newMask);
@@ -444,7 +444,7 @@ const Preview:React.FC<PreviewProps> = () => {
             masks: currentMasks,
           });
         }
-      }
+      
       
       return;
     }
@@ -615,7 +615,7 @@ const Preview:React.FC<PreviewProps> = () => {
       return;
     }
 
-  }, [tool, position, scale, clips, clipWithinFrame, focusFrame, drawingTool, drawingColor, drawingOpacity, getCurrentSize, setCurrentLineId, timelines, addTimeline, addClip, totalTimelineFrames, maskTool, touchLabel, touchDrawMode, featherAmount, getTopmostClipAtFrame]);
+  }, [tool, position, scale, clips, clipWithinFrame, focusFrame, drawingTool, drawingColor, drawingOpacity, getCurrentSize, setCurrentLineId, isMaskDragging, isOverMask, timelines, addTimeline, addClip, totalTimelineFrames, maskTool, touchLabel, touchDrawMode, featherAmount, getTopmostClipAtFrame]);
 
   const onMouseMove = useCallback((e: any) => {
     // Handle lasso drawing
@@ -644,8 +644,36 @@ const Preview:React.FC<PreviewProps> = () => {
       
       const worldX = (pointerPos.x - position.x) / scale;
       const worldY = (pointerPos.y - position.y) / scale;
-      
-      setMaskRectCurrent({ x: worldX, y: worldY });
+
+      // add constraints for star and polygon
+      if (maskShape === 'star') {
+        const dx = worldX - maskRectStart.x;
+        const dy = worldY - maskRectStart.y;
+        const size = Math.max(Math.abs(dx), Math.abs(dy));
+        const sx = dx >= 0 ? 1 : -1;
+        const sy = dy >= 0 ? 1 : -1;
+        const constrainedX = maskRectStart.x + sx * size;
+        const constrainedY = maskRectStart.y + sy * size;
+        setMaskRectCurrent({ x: constrainedX, y: constrainedY });
+      } else if (maskShape === 'polygon') {
+        const dx = worldX - maskRectStart.x;
+        const dy = worldY - maskRectStart.y;
+        const ratio = 1.1543665517482078;
+        let width = Math.abs(dx);
+        let height = Math.abs(dy);
+        if (width / (height || 1) >= ratio) {
+          height = width / ratio;
+        } else {
+          width = height * ratio;
+        }
+        const sx = dx >= 0 ? 1 : -1;
+        const sy = dy >= 0 ? 1 : -1;
+        const constrainedX = maskRectStart.x + sx * width;
+        const constrainedY = maskRectStart.y + sy * height;
+        setMaskRectCurrent({ x: constrainedX, y: constrainedY });
+      } else {
+        setMaskRectCurrent({ x: worldX, y: worldY });
+      }
       return;
     }
     
@@ -743,9 +771,35 @@ const Preview:React.FC<PreviewProps> = () => {
       if (!pointerPos) return;
       
       // Convert screen coordinates to world coordinates
-      const worldX = (pointerPos.x - position.x) / scale;
-      const worldY = (pointerPos.y - position.y) / scale;
-      
+      let worldX = (pointerPos.x - position.x) / scale;
+      let worldY = (pointerPos.y - position.y) / scale;
+
+      // Enforce constraints for star and polygon shape tools
+      if (shape === 'star') {
+        const dx = worldX - shapeStart.x;
+        const dy = worldY - shapeStart.y;
+        const size = Math.max(Math.abs(dx), Math.abs(dy));
+        const sx = dx >= 0 ? 1 : -1;
+        const sy = dy >= 0 ? 1 : -1;
+        worldX = shapeStart.x + sx * size;
+        worldY = shapeStart.y + sy * size;
+      } else if (shape === 'polygon') {
+        const dx = worldX - shapeStart.x;
+        const dy = worldY - shapeStart.y;
+        const ratio = 1.1543665517482078;
+        let width = Math.abs(dx);
+        let height = Math.abs(dy);
+        if (width / (height || 1) >= ratio) {
+          height = width / ratio;
+        } else {
+          width = height * ratio;
+        }
+        const sx = dx >= 0 ? 1 : -1;
+        const sy = dy >= 0 ? 1 : -1;
+        worldX = shapeStart.x + sx * width;
+        worldY = shapeStart.y + sy * height;
+      }
+
       setShapeCurrent({ x: worldX, y: worldY });
     } 
     if (tool === 'text' && isDrawingText && textStart) {
@@ -875,209 +929,43 @@ const Preview:React.FC<PreviewProps> = () => {
       lastPointer.current = null;
       return;
     }
-    
-    if (tool === 'mask' && maskTool === 'lasso' && isDrawingLasso && lassoPoints.length >= 6) {
+
+    if (tool === 'mask' && maskTool === 'lasso' && isDrawingLasso && lassoPoints.length >= 6 && !isMaskDragging) {
       // Need at least 3 points (6 values) to create a valid lasso
       setIsDrawingLasso(false);
-      
+
       // Find the topmost clip at the current frame
-      const targetClip = getTopmostClipAtFrame();
-      
-      if (targetClip) {
-        const { updateClip } = useClipStore.getState();
+      const targetClip = getTopmostClipAtFrame() as PreprocessorClipType;
+
+      if (!targetClip || (targetClip.type !== 'video' && targetClip.type !== 'image')) return;
         
-        // Determine mask duration based on clip type
-        let maskStartFrame = focusFrame;
-        let maskEndFrame = focusFrame;
-        
-        if (targetClip.type === 'image') {
-          // For images, mask covers the entire clip duration
-          maskStartFrame = targetClip.startFrame ?? focusFrame;
-          maskEndFrame = targetClip.endFrame ?? focusFrame;
-        } else if (targetClip.type === 'video') {
-          // For videos, mask is only 1 frame long
-          maskStartFrame = focusFrame;
-          maskEndFrame = focusFrame;
-        }
-        
+      const localFrame = targetClip.type === 'image' ? 0 : getLocalFrame(focusFrame, targetClip);
         // Create the mask
         const newMask = {
           id: uuidv4(),
           clipId: targetClip.clipId,
           tool: 'lasso' as const,
-          startFrame: maskStartFrame,
-          endFrame: maskEndFrame,
           featherAmount: featherAmount,
           keyframes: {
-            [focusFrame]: {
+            [localFrame]: {
               lassoPoints: [...lassoPoints],
             },
           },
           isTracked: false,
           createdAt: Date.now(),
           lastModified: Date.now(),
-          opacity: 100,
+          maskColor: '#000000',
+          maskOpacity: 100,
+          maskColorEnabled: true,
+          backgroundColor: '#FFFFFF',
+          backgroundOpacity: 100,
+          backgroundColorEnabled: true,
+          transform: targetClip.transform ? { ...targetClip.transform } : undefined,
         };
         
         // Get existing masks and check for containment
-        const currentMasks = (targetClip as any).masks || [];
+        const currentMasks = targetClip.masks || [];
         let masksToKeep = [...currentMasks];
-        
-        // Helper function to calculate polygon area (shoelace formula)
-        const calculateArea = (points: number[]) => {
-          let area = 0;
-          const n = points.length / 2;
-          for (let i = 0; i < n; i++) {
-            const j = (i + 1) % n;
-            const xi = points[i * 2];
-            const yi = points[i * 2 + 1];
-            const xj = points[j * 2];
-            const yj = points[j * 2 + 1];
-            area += xi * yj - xj * yi;
-          }
-          return Math.abs(area / 2);
-        };
-        
-        // Helper function to check if a point is inside a polygon
-        const isPointInPolygon = (x: number, y: number, polygonPoints: number[]) => {
-          let inside = false;
-          const n = polygonPoints.length / 2;
-          for (let i = 0, j = n - 1; i < n; j = i++) {
-            const xi = polygonPoints[i * 2];
-            const yi = polygonPoints[i * 2 + 1];
-            const xj = polygonPoints[j * 2];
-            const yj = polygonPoints[j * 2 + 1];
-            
-            const intersect = ((yi > y) !== (yj > y)) && 
-                            (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-            if (intersect) inside = !inside;
-          }
-          return inside;
-        };
-        
-        // Helper function to check if one polygon is completely inside another
-        const isPolygonInsidePolygon = (innerPoints: number[], outerPoints: number[]) => {
-          // Check if all points of inner polygon are inside outer polygon
-          const n = innerPoints.length / 2;
-          for (let i = 0; i < n; i++) {
-            const x = innerPoints[i * 2];
-            const y = innerPoints[i * 2 + 1];
-            if (!isPointInPolygon(x, y, outerPoints)) {
-              return false;
-            }
-          }
-          return true;
-        };
-        
-        // Helper function to check if two line segments intersect
-        const doSegmentsIntersect = (
-          p1x: number, p1y: number, p2x: number, p2y: number,
-          p3x: number, p3y: number, p4x: number, p4y: number
-        ) => {
-          const denom = (p4y - p3y) * (p2x - p1x) - (p4x - p3x) * (p2y - p1y);
-          if (Math.abs(denom) < 1e-10) return false; // Parallel or coincident
-          
-          const ua = ((p4x - p3x) * (p1y - p3y) - (p4y - p3y) * (p1x - p3x)) / denom;
-          const ub = ((p2x - p1x) * (p1y - p3y) - (p2y - p1y) * (p1x - p3x)) / denom;
-          
-          return ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1;
-        };
-        
-        // Helper function to check if two polygons intersect
-        const doPolygonsIntersect = (points1: number[], points2: number[]) => {
-          const n1 = points1.length / 2;
-          const n2 = points2.length / 2;
-          
-          // Check if any edges intersect
-          for (let i = 0; i < n1; i++) {
-            const j = (i + 1) % n1;
-            const p1x = points1[i * 2];
-            const p1y = points1[i * 2 + 1];
-            const p2x = points1[j * 2];
-            const p2y = points1[j * 2 + 1];
-            
-            for (let k = 0; k < n2; k++) {
-              const l = (k + 1) % n2;
-              const p3x = points2[k * 2];
-              const p3y = points2[k * 2 + 1];
-              const p4x = points2[l * 2];
-              const p4y = points2[l * 2 + 1];
-              
-              if (doSegmentsIntersect(p1x, p1y, p2x, p2y, p3x, p3y, p4x, p4y)) {
-                return true;
-              }
-            }
-          }
-          
-          // Check if one polygon is inside the other
-          if (isPointInPolygon(points1[0], points1[1], points2)) return true;
-          if (isPointInPolygon(points2[0], points2[1], points1)) return true;
-          
-          return false;
-        };
-        
-        // Helper function to compute convex hull (Graham scan algorithm)
-        const computeConvexHull = (points: number[]) => {
-          const pts: Array<{x: number, y: number}> = [];
-          for (let i = 0; i < points.length; i += 2) {
-            pts.push({ x: points[i], y: points[i + 1] });
-          }
-          
-          if (pts.length < 3) return points;
-          
-          // Find the point with lowest y (and leftmost if tie)
-          let minIdx = 0;
-          for (let i = 1; i < pts.length; i++) {
-            if (pts[i].y < pts[minIdx].y || (pts[i].y === pts[minIdx].y && pts[i].x < pts[minIdx].x)) {
-              minIdx = i;
-            }
-          }
-          
-          // Swap to put lowest point first
-          [pts[0], pts[minIdx]] = [pts[minIdx], pts[0]];
-          const pivot = pts[0];
-          
-          // Sort by polar angle
-          const sorted = [pivot, ...pts.slice(1).sort((a, b) => {
-            const angleA = Math.atan2(a.y - pivot.y, a.x - pivot.x);
-            const angleB = Math.atan2(b.y - pivot.y, b.x - pivot.x);
-            if (Math.abs(angleA - angleB) < 1e-10) {
-              const distA = (a.x - pivot.x) ** 2 + (a.y - pivot.y) ** 2;
-              const distB = (b.x - pivot.x) ** 2 + (b.y - pivot.y) ** 2;
-              return distA - distB;
-            }
-            return angleA - angleB;
-          })];
-          
-          // Build hull
-          const hull = [sorted[0], sorted[1]];
-          
-          const ccw = (p1: {x: number, y: number}, p2: {x: number, y: number}, p3: {x: number, y: number}) => {
-            return (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
-          };
-          
-          for (let i = 2; i < sorted.length; i++) {
-            while (hull.length > 1 && ccw(hull[hull.length - 2], hull[hull.length - 1], sorted[i]) <= 0) {
-              hull.pop();
-            }
-            hull.push(sorted[i]);
-          }
-          
-          // Convert back to flat array
-          const result: number[] = [];
-          for (const pt of hull) {
-            result.push(pt.x, pt.y);
-          }
-          return result;
-        };
-        
-        // Helper function to merge two polygons (using convex hull)
-        const mergePolygons = (points1: number[], points2: number[]) => {
-          // Combine all points
-          const allPoints = [...points1, ...points2];
-          // Return convex hull of all points
-          return computeConvexHull(allPoints);
-        };
         
         const newMaskArea = calculateArea(lassoPoints);
         
@@ -1086,15 +974,7 @@ const Preview:React.FC<PreviewProps> = () => {
         let mergedPoints = [...lassoPoints];
         
         // Check each existing mask at this frame for containment and intersection
-        masksToKeep = currentMasks.filter((existingMask: any) => {
-          // Only check masks at the same frame
-          const maskStart = existingMask.startFrame ?? 0;
-          const maskEnd = existingMask.endFrame ?? 0;
-          
-          if (focusFrame < maskStart || focusFrame > maskEnd) {
-            return true; // Keep masks not at this frame
-          }
-          
+        masksToKeep = currentMasks.filter((existingMask) => {
           if (existingMask.tool !== 'lasso') {
             return true; // Keep non-lasso masks for now
           }
@@ -1108,10 +988,10 @@ const Preview:React.FC<PreviewProps> = () => {
             ? Array.from(keyframes.keys()).sort((a, b) => a - b)
             : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
           
-          const activeKeyframe = keyframeNumbers.filter((k: number) => k <= focusFrame).pop();
+          const activeKeyframe = keyframeNumbers.filter((k) => k <= localFrame).pop();
           
           if (activeKeyframe === undefined) {
-            return true; // Keep if no keyframe data
+            return true; // Keep if no keyframe at this frame
           }
           
           const maskData = keyframes instanceof Map 
@@ -1151,7 +1031,7 @@ const Preview:React.FC<PreviewProps> = () => {
         
         // Update the new mask with merged points if any masks were merged
         if (intersectingMasks.length > 0) {
-          newMask.keyframes[focusFrame].lassoPoints = mergedPoints;
+          newMask.keyframes[localFrame].lassoPoints = mergedPoints;
         }
         
         // Add the new mask (which may now be a merged mask)
@@ -1160,7 +1040,11 @@ const Preview:React.FC<PreviewProps> = () => {
         updateClip(targetClip.clipId, {
           masks: masksToKeep,
         });
-      }
+
+        if (masksToKeep.length > 0) {
+          setSelectedMaskId(newMask.id);
+        }
+      
       
       // Clear lasso points immediately since mask rendering will handle display
       setLassoPoints([]);
@@ -1174,136 +1058,34 @@ const Preview:React.FC<PreviewProps> = () => {
       setLassoPoints([]);
       return;
     }
-    
-    // Handle touch lasso drawing finish
-    if (tool === 'mask' && maskTool === 'touch' && touchDrawMode === 'draw' && isDrawingTouchLasso) {
-      setIsDrawingTouchLasso(false);
-      
-      // Need at least 3 points (6 values) for a valid lasso
-      if (touchLassoPoints.length < 6) {
-        setTouchLassoPoints([]);
-        return;
-      }
-      
-      // Find the topmost clip at the current frame
-      const targetClip = getTopmostClipAtFrame();
-      
-      if (targetClip) {
-        const { updateClip } = useClipStore.getState();
-        
-        // Determine mask duration based on clip type
-        let maskStartFrame = focusFrame;
-        let maskEndFrame = focusFrame;
-        
-        if (targetClip.type === 'image') {
-          maskStartFrame = targetClip.startFrame ?? focusFrame;
-          maskEndFrame = targetClip.endFrame ?? focusFrame;
-        } else if (targetClip.type === 'video') {
-          maskStartFrame = focusFrame;
-          maskEndFrame = focusFrame;
-        }
-        
-        // Get existing masks
-        const currentMasks = (targetClip as any).masks || [];
-        
-        // Check if there's already a touch mask at this frame for this clip
-        let existingTouchMask = currentMasks.find((mask: any) => {
-          const maskStart = mask.startFrame ?? 0;
-          const maskEnd = mask.endFrame ?? 0;
-          return mask.tool === 'touch' && focusFrame >= maskStart && focusFrame <= maskEnd;
-        });
-        
-        if (existingTouchMask) {
-          // Add lasso stroke to existing mask
-          const keyframes = existingTouchMask.keyframes instanceof Map 
-            ? existingTouchMask.keyframes 
-            : (existingTouchMask.keyframes as Record<number, any>);
-          
-          const currentFrameData = keyframes instanceof Map 
-            ? keyframes.get(focusFrame) 
-            : keyframes[focusFrame];
-          
-          const touchPoints = currentFrameData?.touchPoints || [];
-          const lassoStrokes = currentFrameData?.lassoStrokes || [];
-          
-          // Add new lasso stroke
-          const updatedLassoStrokes = [...lassoStrokes, [...touchLassoPoints]];
-          
-          // Update keyframes
-          if (keyframes instanceof Map) {
-            keyframes.set(focusFrame, { touchPoints, lassoStrokes: updatedLassoStrokes });
-            existingTouchMask.keyframes = keyframes;
-          } else {
-            existingTouchMask.keyframes = {
-              ...keyframes,
-              [focusFrame]: { touchPoints, lassoStrokes: updatedLassoStrokes },
-            };
-          }
-          
-          existingTouchMask.lastModified = Date.now();
-          
-          updateClip(targetClip.clipId, {
-            masks: currentMasks,
-          });
-        } else {
-          // Create new touch mask with lasso stroke
-          const newMask = {
-            id: uuidv4(),
-            clipId: targetClip.clipId,
-            tool: 'touch' as const,
-            startFrame: maskStartFrame,
-            endFrame: maskEndFrame,
-            featherAmount: featherAmount,
-            keyframes: {
-              [focusFrame]: {
-                touchPoints: [],
-                lassoStrokes: [[...touchLassoPoints]],
-              },
-            },
-            isTracked: false,
-            createdAt: Date.now(),
-            lastModified: Date.now(),
-            opacity: 100,
-          };
-          
-          currentMasks.push(newMask);
-          
-          updateClip(targetClip.clipId, {
-            masks: currentMasks,
-          });
-        }
-      }
-      
-      setTouchLassoPoints([]);
-      return;
-    }
+
     
     // Handle shape mask creation
     if (tool === 'mask' && maskTool === 'shape' && isDrawingMaskRect && maskRectStart && maskRectCurrent) {
       setIsDrawingMaskRect(false);
       
-      const width = Math.abs(maskRectCurrent.x - maskRectStart.x);
-      const height = Math.abs(maskRectCurrent.y - maskRectStart.y);
+      let width = Math.abs(maskRectCurrent.x - maskRectStart.x);
+      let height = Math.abs(maskRectCurrent.y - maskRectStart.y);
+      if (maskShape === 'star') {
+        const size = Math.max(width, height);
+        width = size;
+        height = size;
+      } else if (maskShape === 'polygon') {
+        const ratio = 1.1543665517482078;
+        if (width / (height || 1) >= ratio) {
+          height = width / ratio;
+        } else {
+          width = height * ratio;
+        }
+      }
       
       // Only create mask if shape has meaningful size
       if (width > 5 && height > 5) {
-        const targetClip = getTopmostClipAtFrame();
+        const targetClip = getTopmostClipAtFrame() as PreprocessorClipType;
         
-        if (targetClip) {
-          const { updateClip } = useClipStore.getState();
+        if (!targetClip || (targetClip.type !== 'video' && targetClip.type !== 'image')) return;
           
-          // Determine mask duration based on clip type
-          let maskStartFrame = focusFrame;
-          let maskEndFrame = focusFrame;
-          
-          if (targetClip.type === 'image') {
-            maskStartFrame = targetClip.startFrame ?? focusFrame;
-            maskEndFrame = targetClip.endFrame ?? focusFrame;
-          } else if (targetClip.type === 'video') {
-            maskStartFrame = focusFrame;
-            maskEndFrame = focusFrame;
-          }
-          
+          const localFrame = targetClip.type === 'image' ? 0 : getLocalFrame(focusFrame, targetClip);
           const x = Math.min(maskRectStart.x, maskRectCurrent.x);
           const y = Math.min(maskRectStart.y, maskRectCurrent.y);
           
@@ -1312,11 +1094,9 @@ const Preview:React.FC<PreviewProps> = () => {
             id: uuidv4(),
             clipId: targetClip.clipId,
             tool: 'shape' as const,
-            startFrame: maskStartFrame,
-            endFrame: maskEndFrame,
             featherAmount: featherAmount,
             keyframes: {
-              [focusFrame]: {
+              [localFrame]: {
                 shapeBounds: {
                   x,
                   y,
@@ -1324,17 +1104,24 @@ const Preview:React.FC<PreviewProps> = () => {
                   height,
                   rotation: 0,
                   shapeType: maskShape,
+                  renderOnce: maskShape === 'polygon' || maskShape === 'star',
                 },
               },
             },
             isTracked: false,
             createdAt: Date.now(),
             lastModified: Date.now(),
-            opacity: 100,
+            maskColor: '#000000',
+            maskOpacity: 100,
+            maskColorEnabled: true,
+            backgroundColor: '#FFFFFF',
+            backgroundOpacity: 100,
+            backgroundColorEnabled: true,
+            transform: targetClip.transform ? { ...targetClip.transform } : undefined,
           };
           
           // Get existing masks and check for containment
-          const currentMasks = (targetClip as any).masks || [];
+          const currentMasks = targetClip.masks || [];
           
           // Helper function to check if one rectangle is inside another (axis-aligned)
           const isRectInsideRect = (
@@ -1359,16 +1146,9 @@ const Preview:React.FC<PreviewProps> = () => {
           const newRectBounds = { x, y, width, height };
           
           // Filter out masks that are consumed by the new one
-          const masksToKeep = currentMasks.filter((existingMask: any) => {
-            // Only check masks at the same frame
-            const maskStart = existingMask.startFrame ?? 0;
-            const maskEnd = existingMask.endFrame ?? 0;
+          const masksToKeep = currentMasks.filter((existingMask) => {
             
-            if (focusFrame < maskStart || focusFrame > maskEnd) {
-              return true; // Keep masks not at this frame
-            }
-            
-            if (existingMask.tool !== 'shape' && existingMask.tool !== 'rectangle') {
+            if (existingMask.tool !== 'shape') {
               return true; // Keep non-shape masks
             }
             
@@ -1381,7 +1161,7 @@ const Preview:React.FC<PreviewProps> = () => {
               ? Array.from(keyframes.keys()).sort((a, b) => a - b)
               : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
             
-            const activeKeyframe = keyframeNumbers.filter((k: number) => k <= focusFrame).pop();
+            const activeKeyframe = keyframeNumbers.filter((k) => k <= localFrame).pop();
             
             if (activeKeyframe === undefined) {
               return true; // Keep if no keyframe data
@@ -1412,11 +1192,9 @@ const Preview:React.FC<PreviewProps> = () => {
           });
           
           // Only add the new mask if it wasn't consumed by a larger mask
-          const shouldAddNewMask = !currentMasks.some((existingMask: any) => {
-            const maskStart = existingMask.startFrame ?? 0;
-            const maskEnd = existingMask.endFrame ?? 0;
-            
-            if (focusFrame < maskStart || focusFrame > maskEnd || (existingMask.tool !== 'shape' && existingMask.tool !== 'rectangle')) {
+          const shouldAddNewMask = !currentMasks.some((existingMask) => {
+
+            if (existingMask.tool !== 'shape') {
               return false;
             }
             
@@ -1428,7 +1206,7 @@ const Preview:React.FC<PreviewProps> = () => {
               ? Array.from(keyframes.keys()).sort((a, b) => a - b)
               : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
             
-            const activeKeyframe = keyframeNumbers.filter((k: number) => k <= focusFrame).pop();
+            const activeKeyframe = keyframeNumbers.filter((k) => k <= localFrame).pop();
             
             if (activeKeyframe === undefined) return false;
             
@@ -1455,7 +1233,11 @@ const Preview:React.FC<PreviewProps> = () => {
           updateClip(targetClip.clipId, {
             masks: masksToKeep,
           });
-        }
+
+          if (shouldAddNewMask) {
+            setSelectedMaskId(newMask.id);
+          }
+        
       }
       
       // Reset rectangle drawing state
@@ -1464,75 +1246,6 @@ const Preview:React.FC<PreviewProps> = () => {
       return;
     }
     
-    // Handle brush mask creation
-    if (tool === 'mask' && maskTool === 'draw' && isDrawingMaskBrush && maskBrushPoints.length >= 4) {
-      setIsDrawingMaskBrush(false);
-      
-      // Need at least 2 points (4 values) to create a valid brush stroke
-      const targetClip = getTopmostClipAtFrame();
-      
-      if (targetClip) {
-        const { updateClip } = useClipStore.getState();
-        
-        // Determine mask duration based on clip type
-        let maskStartFrame = focusFrame;
-        let maskEndFrame = focusFrame;
-        
-        if (targetClip.type === 'image') {
-          // For images, mask covers the entire clip duration
-          maskStartFrame = targetClip.startFrame ?? focusFrame;
-          maskEndFrame = targetClip.endFrame ?? focusFrame;
-        } else if (targetClip.type === 'video') {
-          // For videos, mask is only 1 frame long
-          maskStartFrame = focusFrame;
-          maskEndFrame = focusFrame;
-        }
-        
-        // Create the mask
-        const newMask = {
-          id: uuidv4(),
-          clipId: targetClip.clipId,
-          tool: 'draw' as const,
-          startFrame: maskStartFrame,
-          endFrame: maskEndFrame,
-          featherAmount: featherAmount,
-          brushSize: maskBrushSize,
-          keyframes: {
-            [focusFrame]: {
-              drawStrokes: [{
-                points: [...maskBrushPoints],
-                strokeWidth: maskBrushSize,
-              }],
-            },
-          },
-          isTracked: false,
-          createdAt: Date.now(),
-          lastModified: Date.now(),
-          opacity: 100,
-        };
-        
-        // Get existing masks and add the new one
-        const currentMasks = (targetClip as any).masks || [];
-        currentMasks.push(newMask);
-        
-        updateClip(targetClip.clipId, {
-          masks: currentMasks,
-        });
-      }
-      
-      // Clear brush points immediately
-      setMaskBrushPoints([]);
-      
-      return;
-    }
-    
-    // If brush mask was being drawn but not enough points, just clear
-    if (tool === 'mask' && maskTool === 'draw' && isDrawingMaskBrush) {
-      setIsDrawingMaskBrush(false);
-      setMaskBrushPoints([]);
-      return;
-    }
-
     if (tool === 'draw' && isDrawingRef.current) {
       const clipId = currentDrawingClipId.current;
       isDrawingRef.current = false;
@@ -1669,8 +1382,13 @@ const Preview:React.FC<PreviewProps> = () => {
       // Calculate shape dimensions using start and current end position
       const x = Math.min(shapeStart.x, worldEndX);
       const y = Math.min(shapeStart.y, worldEndY);
-      const width = Math.abs(worldEndX - shapeStart.x);
-      const height = Math.abs(worldEndY - shapeStart.y);
+      let width = Math.abs(worldEndX - shapeStart.x);
+      let height = Math.abs(worldEndY - shapeStart.y);
+      if (shape === 'star') {
+        const size = Math.max(width, height);
+        width = size;
+        height = size;
+      }
       
       // Only create shape if it has meaningful size
       if (width > 5 && height > 5) {
@@ -1719,7 +1437,7 @@ const Preview:React.FC<PreviewProps> = () => {
       setShapeStart(null);
       setShapeCurrent(null);
     }
-  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline, isDrawingText, textStart, textCurrent, setCurrentLineId, maskTool, isDrawingLasso, lassoPoints, featherAmount, focusFrame, getTopmostClipAtFrame, isDrawingMaskRect, maskRectStart, maskRectCurrent, isDrawingMaskBrush, maskBrushPoints, maskBrushSize, maskShape, touchDrawMode, isDrawingTouchLasso, touchLassoPoints]);
+  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline, isDrawingText, textStart, textCurrent, setCurrentLineId, maskTool, isDrawingLasso, lassoPoints, featherAmount, focusFrame, isMaskDragging,  getTopmostClipAtFrame, isDrawingMaskRect, maskRectStart, maskRectCurrent, isDrawingMaskBrush, maskBrushPoints, maskBrushSize, maskShape, touchDrawMode, isDrawingTouchLasso, touchLassoPoints]);
 
   const onMouseLeave = useCallback((e:KonvaEventObject<MouseEvent>) => {
      // set pointer to default 
@@ -1781,12 +1499,15 @@ const Preview:React.FC<PreviewProps> = () => {
         // Hide cursor and use preview circle for mask brush tool
         container.style.cursor = 'none';
       } else if (tool === 'mask' && (maskTool === 'lasso' || maskTool === 'shape' || maskTool === 'touch')) {
-        container.style.cursor = 'crosshair';
+        // In mask mode, use crosshair when not over a mask (individual mask components set pointer/move cursor)
+        if (!isOverMask) {
+          container.style.cursor = 'crosshair';
+        }
       } else {
         container.style.cursor = 'default';
       }
     }
-  }, [tool, drawingTool, maskTool]);
+  }, [tool, drawingTool, maskTool, isOverMask]);
   
   // Render preview shape while drawing
   const renderDrawingShape = useCallback(() => {
@@ -1794,8 +1515,20 @@ const Preview:React.FC<PreviewProps> = () => {
     
     const x = Math.min(shapeStart.x, shapeCurrent.x);
     const y = Math.min(shapeStart.y, shapeCurrent.y);
-    const width = Math.abs(shapeCurrent.x - shapeStart.x);
-    const height = Math.abs(shapeCurrent.y - shapeStart.y);
+    let width = Math.abs(shapeCurrent.x - shapeStart.x);
+    let height = Math.abs(shapeCurrent.y - shapeStart.y);
+    if (shape === 'star') {
+      const size = Math.max(width, height);
+      width = size;
+      height = size;
+    } else if (shape === 'polygon') {
+      const ratio = 1.1543665517482078;
+      if (width / (height || 1) >= ratio) {
+        height = width / ratio;
+      } else {
+        width = height * ratio;
+      }
+    }
     
     const sharedProps = {
       stroke: '#3b82f6',
@@ -1811,12 +1544,14 @@ const Preview:React.FC<PreviewProps> = () => {
         return <Rect {...sharedProps} x={x} y={y} width={width} height={height} />;
       case 'ellipse':
         return <KonvaEllipse {...sharedProps} x={x + width / 2} y={y + height / 2} radiusX={width / 2} radiusY={height / 2} />;
-      case 'polygon':
-        return <RegularPolygon {...sharedProps} x={x + width / 2} y={y + height / 2} sides={3} radius={Math.min(width, height) / 2} />;
+      case 'polygon': {
+        const radius = Math.min(width / Math.sqrt(3), height / 1.5);
+        return <RegularPolygon {...sharedProps} x={x + width / 2} y={y + height / 2} sides={3} radius={radius} />;
+      }
       case 'line':
         return <KonvaLine {...sharedProps} points={[shapeStart.x, shapeStart.y, shapeCurrent.x, shapeCurrent.y]} />;
       case 'star':
-        return <KonvaStar {...sharedProps} x={x + width / 2} y={y + height / 2} numPoints={5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} />;
+        return <KonvaStar {...sharedProps} x={x + width / 2} y={y + height / 2} numPoints={5} innerRadius={width / 4} outerRadius={width / 2} />;
       default:
         return <Rect {...sharedProps} x={x} y={y} width={width} height={height} />;
     }
@@ -2045,8 +1780,13 @@ const Preview:React.FC<PreviewProps> = () => {
     
     const x = Math.min(maskRectStart.x, maskRectCurrent.x);
     const y = Math.min(maskRectStart.y, maskRectCurrent.y);
-    const width = Math.abs(maskRectCurrent.x - maskRectStart.x);
-    const height = Math.abs(maskRectCurrent.y - maskRectStart.y);
+    let width = Math.abs(maskRectCurrent.x - maskRectStart.x);
+    let height = Math.abs(maskRectCurrent.y - maskRectStart.y);
+    if (maskShape === 'star') {
+      const size = Math.max(width, height);
+      width = size;
+      height = size;
+    }
     
     const sharedProps = {
       stroke: 'rgb(0, 127, 245)',
@@ -2061,10 +1801,12 @@ const Preview:React.FC<PreviewProps> = () => {
         return <Rect {...sharedProps} x={x} y={y} width={width} height={height} />;
       case 'ellipse':
         return <KonvaEllipse {...sharedProps} x={x + width / 2} y={y + height / 2} radiusX={width / 2} radiusY={height / 2} />;
-      case 'polygon':
-        return <RegularPolygon {...sharedProps} x={x + width / 2} y={y + height / 2} sides={3} radius={Math.min(width, height) / 2} />;
+      case 'polygon': {
+        const radius = Math.min(width / Math.sqrt(3), height / 1.5);
+        return <RegularPolygon {...sharedProps} x={x + width / 2} y={y + height / 2} sides={3} radius={radius} />;
+      }
       case 'star':
-        return <KonvaStar {...sharedProps} x={x + width / 2} y={y + height / 2} numPoints={5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} />;
+        return <KonvaStar {...sharedProps} x={x + width / 2} y={y + height / 2} numPoints={5} innerRadius={width / 4} outerRadius={width / 2} />;
       default:
         return <Rect {...sharedProps} x={x} y={y} width={width} height={height} />;
     }

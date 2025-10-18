@@ -46,6 +46,7 @@ export interface ClipProps {
     height?: number;
     // Persisted transform for preview canvas (position/size/scale/rotation)
     transform?: ClipTransform;
+    originalTransform?: ClipTransform;
     type: ClipType;
 }
 
@@ -104,6 +105,11 @@ export type ShapeClipProps = ClipProps & {
 export type PolygonClipProps = ShapeClipProps & {
     shapeType: 'polygon';
     sides?: number;
+}
+
+export type StarClipProps = ShapeClipProps & {
+    shapeType: 'star';
+    points?: number;
 }
 
 export type TextClipProps = ClipProps & {
@@ -177,13 +183,7 @@ export type DrawingClipProps = ClipProps & {
     lines: DrawingLine[];
 }
 
-export interface MaskTransform {
-    x: number;
-    y: number;
-    scaleX: number;
-    scaleY: number;
-    rotation: number;
-}
+export type MaskTransform = ClipTransform;
 
 export type MaskTool = 'lasso' | 'shape' | 'draw' | 'touch';
 export type MaskShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'star';
@@ -201,23 +201,18 @@ export interface MaskData {
         shapeType?: MaskShapeTool;
         scaleX?: number;
         scaleY?: number;
+        renderOnce?: boolean;
     };
-    // Legacy support for rectangle tool (maps to shapeBounds with shapeType='rectangle')
-    rectangleBounds?: {
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        rotation?: number;
-    };
+
     // For draw tool - freeform strokes
-    drawStrokes?: Array<{
+    drawStrokes?: {
         points: number[]; // [x1, y1, x2, y2, ...]
         strokeWidth: number;
-    }>;
+    }[];
     // For touch/SAM2 tool - AI generated mask or selection points
     touchPoints?: Array<{ x: number; y: number; label: 1 | 0 }>; // positive/negative
     touchBox?: { x1: number; y1: number; x2: number; y2: number };
+    contours?: number[][];
     // Generated mask data (binary mask as base64 encoded image or URL)
     maskImageData?: string;
 }
@@ -226,15 +221,13 @@ export type MaskClipProps = {
     id: string;
     clipId?: string;
     tool: MaskTool;
-    startFrame?: number;
-    endFrame?: number;
     featherAmount: number;
     brushSize?: number;
     // Mask data for the initial frame/keyframes
     keyframes: Map<number, MaskData> | Record<number, MaskData>;
     // Tracking settings
     isTracked: boolean;
-    trackingMode?: 'masktrack' | 'bboxtrack' | 'maskpointtrack' | 'maskbboxtrack';
+    confidenceThreshold?: number;
     // Transform applied to mask
     transform?: MaskTransform;
     // Metadata
@@ -242,7 +235,12 @@ export type MaskClipProps = {
     lastModified: number;
     // Operation settings
     inverted?: boolean; // Invert the mask
-    opacity?: number; // Mask opacity
+    backgroundColor?: string;
+    backgroundOpacity?: number;
+    backgroundColorEnabled?: boolean;
+    maskColor?: string;
+    maskOpacity?: number;
+    maskColorEnabled?: boolean;
 }
 
 export type PreprocessorClipProps = {

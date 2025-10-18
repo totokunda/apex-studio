@@ -7,6 +7,8 @@ import { useClipStore } from "@/lib/clip";
 import { ZoomLevel } from '@/lib/types';
 import { MIN_DURATION } from '@/lib/settings';
 import { useDrawingStore } from '@/lib/drawing';
+import { useMaskStore } from "@/lib/mask";
+import { useViewportStore } from "@/lib/viewport";
 
 const TimelineZoom = () => {
     const { zoomLevel, setZoomLevel, setTimelineDuration,  focusFrame, setFocusFrame, focusAnchorRatio, totalTimelineFrames, setFocusAnchorRatio, minZoomLevel, maxZoomLevel } = useControlsStore();
@@ -196,6 +198,11 @@ const TimeControl:React.FC<TimeControlProps> = () => {
 }
 
 const Controls = () => {
+  const {setIsOverMask, setIsMaskDragging} = useMaskStore();
+  const tool = useViewportStore((s) => s.tool);
+  const selectedMaskId = useControlsStore((s) => s.selectedMaskId);
+  const selectedLineId = useDrawingStore((s) => s.selectedLineId);
+  const selectedIds = useControlsStore((s) => s.selectedClipIds);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -210,11 +217,12 @@ const Controls = () => {
       const selectedIds = controls.selectedClipIds || [];
       const selectedLineId = drawingStore.selectedLineId;
       const selectedMaskId = controls.selectedMaskId;
+      
 
       // Delete selected clips, lines, or masks
       if (e.key === 'Delete' || e.key === 'Backspace') {
         // Delete selected mask if it exists
-        if (selectedMaskId) {
+        if (selectedMaskId && tool === 'mask') {
           e.preventDefault();
           // Find the clip that has this mask
           const clipWithMask = clipsStore.clips.find((clip) => {
@@ -230,6 +238,8 @@ const Controls = () => {
           }
           
           controls.setSelectedMaskId(null);
+          setIsOverMask(false);
+          setIsMaskDragging(false);
           return;
         }
         
@@ -285,7 +295,7 @@ const Controls = () => {
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [tool, selectedMaskId, selectedLineId, selectedIds]);
   return (
     <div className='relative  flex items-center '>
         <div className="flex items-center w-full bg-brand-background/30 justify-between border-b border-brand-light/5 px-5 py-1">

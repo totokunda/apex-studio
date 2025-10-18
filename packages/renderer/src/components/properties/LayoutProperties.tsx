@@ -1,5 +1,5 @@
 import { useClipStore } from '@/lib/clip';
-import { AnyClipProps, PolygonClipProps } from '@/lib/types';
+import { AnyClipProps, PolygonClipProps, StarClipProps } from '@/lib/types';
 import { useState } from 'react';
 import React from 'react'
 import { IoRefreshOutline, IoLockClosed, IoLockOpen } from 'react-icons/io5';
@@ -15,7 +15,8 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
     const updateClip = useClipStore((s) => s.updateClip);
 
     const hasSides = clip?.type === 'shape' && clip?.shapeType === 'polygon';
-    const hasScale = clip?.type === 'image' || clip?.type === 'video' || clip?.type === 'shape';
+    const hasPoints = clip?.type === 'shape' && clip?.shapeType === 'star';
+    const hasScale =  clip?.type === 'shape';
 
     const [spinning, setSpinning] = useState(false);
     const [scaleLocked, setScaleLocked] = useState(true);
@@ -26,12 +27,19 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
       updateClip(clipId, { sides: value });
     }
 
+    const updatePoints = (value: number) => {
+      if (isNaN(value) || !isFinite(value)) return;
+      if (value < 4 || value > 100) return;
+      const updatedClip = { ...clip, points: value };
+      updateClip(clipId, updatedClip);
+    }
+
     const handleReset = () => {
       if (!clip?.transform) return;
       
       setClipTransform(clipId, { 
-        width: clip.transform.width,
-        height: clip.transform.height,
+        width: clip.originalTransform?.width,
+        height: clip.originalTransform?.height,
         scaleX: 1, 
         scaleY: 1 
       });
@@ -149,6 +157,8 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
           </div>}
           {hasSides && <div className="flex flex-row gap-x-2">
             <Input label="Sides" value={(clip as PolygonClipProps)?.sides?.toString() ?? '3'} onChange={(value) => updateSides(Number(value))} startLogo="S" canStep step={1} min={3} max={12} /></div>}
+          {hasPoints && <div className="flex flex-row gap-x-2">
+            <Input label="Points" value={(clip as StarClipProps)?.points?.toString() ?? '5'} onChange={(value) => updatePoints(Number(value))} startLogo="P" canStep step={1} min={3} max={12} /></div>}
         </div>
       </div>
     </div>

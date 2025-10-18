@@ -50,7 +50,9 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
   setContentBounds: (bounds) => set({ contentBounds: bounds }),
   aspectRatio: { width: 16, height: 9, id: '16:9' },
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
-  setTool: (tool) => set({ tool }),
+  setTool: (tool) => {
+    set({ tool });
+  },
   setShape: (shape) => set({ shape }),
   setScalePercent: (percent) => {
     const { minScale, maxScale, viewportSize, position, scale } = get();

@@ -9,6 +9,7 @@ export interface ConfigResponse<T> {
 }
 
 export interface MaskRequest {
+  id?: string;
   input_path: string;
   frame_number?: number;
   tool: string;
@@ -24,6 +25,48 @@ export interface MaskResponse {
   status: string;
   contours?: Array<Array<number>>;
   message?: string;
+}
+
+const maskCache = new Map<string, MaskResponse>();
+
+function stableStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+
+  const helper = (input: unknown): unknown => {
+    if (input === null || typeof input !== 'object') {
+      return input;
+    }
+
+    const typedInput = input as object;
+
+    if (seen.has(typedInput)) {
+      return;
+    }
+
+    seen.add(typedInput);
+
+    if (Array.isArray(input)) {
+      return input.map(item => helper(item));
+    }
+
+    const result: Record<string, unknown> = {};
+    const record = input as Record<string, unknown>;
+    for (const key of Object.keys(record).sort()) {
+      const nestedValue = record[key];
+      if (typeof nestedValue === 'undefined') {
+        continue;
+      }
+      result[key] = helper(nestedValue);
+    }
+
+    return result;
+  };
+
+  return JSON.stringify(helper(value));
+}
+
+function createMaskCacheKey(request: MaskRequest): string {
+  return stableStringify(request);
 }
 
 // Helper function to convert flat array [x1, y1, x2, y2, ...] to array of {x, y} objects
@@ -333,6 +376,7 @@ export function denormalizeContours(
 
 // Hook-based API for automatic mask creation
 export interface UseMaskOptions {
+  id?: string;
   inputPath: string;
   frameNumber?: number;
   tool: string;
@@ -359,6 +403,7 @@ export interface UseMaskResult {
 
 export function useMask(options: UseMaskOptions): UseMaskResult {
   const {
+    id,
     inputPath,
     frameNumber,
     tool,
@@ -387,17 +432,14 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
       return;
     }
 
-
-    // Abort previous request if still pending
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
 
-    abortControllerRef.current = new AbortController();
-    
-    setLoading(true);
-    setError(null);
-    
+    let cacheKey: string | null = null;
+    let controller: AbortController | null = null;
+
     try {
       // Convert and normalize points (and labels if provided)
       let normalizedPoints: Array<{x: number, y: number}> | undefined;
@@ -449,9 +491,8 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
         normalizedBox = box;
       }
 
-
-      
       const request: MaskRequest = {
+        id: id || undefined,
         input_path: inputPath,
         frame_number: frameNumber,
         tool,
@@ -462,10 +503,31 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
         simplify_tolerance: simplifyTolerance,
         model_type: modelType
       };
+
+      cacheKey = createMaskCacheKey(request);
       
+      const cachedResponse = maskCache.get(cacheKey);
+      if (cachedResponse) {
+        setData(cachedResponse);
+        setError(null);
+        setLoading(false);
+        return;
+      }
+
+      if (abortControllerRef.current) {
+        // @ts-ignore
+        abortControllerRef.current.abort();
+      }
+
+      controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      setLoading(true);
+      setError(null);
+
       const response = await createMaskPreload(request);
-      
-      if (abortControllerRef.current?.signal.aborted) {
+
+      if (controller?.signal.aborted) {
         return;
       }
       
@@ -478,20 +540,27 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
             contours: denormalizeContours(finalData.contours, displayWidth, displayHeight, mediaInfo, clipTransform)
           };
         }
+        if (cacheKey) {
+          maskCache.set(cacheKey, finalData);
+        }
         setData(finalData);
         setError(null);
       } else {
-        setError(response.error || 'Failed to create mask');
+        const errorMessage = response.error || 'Failed to create mask';
+        setError(errorMessage);
         setData(null);
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
-        setError(err instanceof Error ? err.message : 'Unknown error occurred');
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+        setError(errorMessage);
         setData(null);
       }
     } finally {
       setLoading(false);
-      abortControllerRef.current = null;
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
   }, [
     enabled,

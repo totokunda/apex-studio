@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Rect, Ellipse, Line, Star, Transformer, Group } from 'react-konva';
 import type Konva from 'konva';
-import { PolygonClipProps, ShapeClipProps,  ShapeTool } from '@/lib/types';
+import { PolygonClipProps, ShapeClipProps,  ShapeTool, StarClipProps } from '@/lib/types';
 import { useClipStore } from '@/lib/clip';
 import { useViewportStore } from '@/lib/viewport';
 import { useControlsStore } from '@/lib/control';
@@ -516,7 +516,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
         return <Line {...cornerProps} points={[0, 0, width, 0]} {...applicatorProps} />;
       
       case 'star':
-        return <Star {...centerProps} numPoints={5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} {...applicatorProps} />;
+        return <Star {...centerProps} numPoints={(clip as StarClipProps)?.points ?? 5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} {...applicatorProps} />;
       
       default:
         return <Rect {...cornerProps} width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0} {...applicatorProps} />;

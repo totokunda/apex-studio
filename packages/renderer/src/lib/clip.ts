@@ -7,6 +7,7 @@ import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS } from "./settings";
 import { getMediaInfo } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
+import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
 
 export const PREPROCESSOR_BAR_HEIGHT = 24;
 
@@ -41,7 +42,6 @@ interface ClipStore {
     ghostX: number;
     setGhostX: (x: number) => void;
     ghostGuideLines: [number, number] | null;
-    
     setGhostGuideLines: (guideLines: [number, number] | null) => void;
     muteTimeline: (timelineId: string) => void;
     unmuteTimeline: (timelineId: string) => void;
@@ -322,11 +322,34 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     setClipTransform: (clipId: string, transform: Partial<ClipTransform>) => set((state) => {
         const index = state.clips.findIndex((c) => c.clipId === clipId);
         if (index === -1) return { clips: state.clips };
+
         const current = state.clips[index];
+        const hadTransform = !!current.transform;
         const previous: ClipTransform = current.transform || { x: 0, y: 0, width: 0, height: 0, scaleX: 1, scaleY: 1, rotation: 0, cornerRadius: 0, opacity: 100 };
         const next: ClipTransform = { ...previous, ...transform };
+
+        const updatedClip: AnyClipProps = { ...current, transform: next };
+
+        if (!current.originalTransform) {
+            updatedClip.originalTransform = { ...next };
+        }
+
+        if ((current.type === 'video' || current.type === 'image') && Array.isArray((current as VideoClipProps | ImageClipProps).masks)) {
+            const currentMasks = (current as VideoClipProps | ImageClipProps).masks;
+            if (currentMasks.length > 0) {
+                const remappedMasks = currentMasks.map((mask) => {
+                    const baseTransform = mask.transform ?? previous;
+                    if (!hadTransform) {
+                        return { ...mask, transform: { ...next } };
+                    }
+                    return remapMaskWithClipTransform(mask, baseTransform, next);
+                });
+                (updatedClip as VideoClipProps | ImageClipProps).masks = remappedMasks;
+            }
+        }
+
         const newClips = [...state.clips];
-        newClips[index] = { ...current, transform: next } as AnyClipProps;
+        newClips[index] = updatedClip;
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
@@ -923,4 +946,19 @@ export const getTimelineX = (timelineWidth:number, timelinePadding:number, timel
     const [timelineStartFrame, timelineEndFrame] = timelineDuration;
     const timelineX = timelinePadding - (timelineWidth / (timelineEndFrame - timelineStartFrame)) * timelineStartFrame;
     return Math.max(0, timelineX);
+}
+
+
+export const getLocalFrame = (focusFrame: number, clip: AnyClipProps) => {
+    const startFrame = clip.startFrame ?? 0;
+    const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? clip.framesToGiveStart ?? 0 : 0;
+    const realStartFrame = startFrame + framesToGiveStart;
+    return focusFrame - realStartFrame;
+}
+
+export const getGlobalFrame = (focusFrame: number, clip: AnyClipProps) => {
+    const startFrame = clip.startFrame ?? 0;
+    const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? clip.framesToGiveStart ?? 0 : 0;
+    const realStartFrame = startFrame + framesToGiveStart;
+    return focusFrame + realStartFrame;
 }

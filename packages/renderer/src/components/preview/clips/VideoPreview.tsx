@@ -6,11 +6,12 @@ import {getMediaInfo, getMediaInfoCached} from '@/lib/media/utils'
 import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
-import { useClipStore } from '@/lib/clip';
+import { useClipStore, getLocalFrame } from '@/lib/clip';
 import { WrappedCanvas } from 'mediabunny';
 import { useWebGLFilters } from '@/components/preview/webgl-filters';
 import { BaseClipApplicator } from './apply/base'
 import _ from 'lodash';
+import { useWebGLMask } from '../mask/useWebGLMask'
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
@@ -43,7 +44,15 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const cachedPreprocessorRangeRef = useRef<{startFrame: number, endFrame: number, selectedSrc: string, frameOffset: number} | null>(null);
     const addedTimestampRef = useRef<number | undefined>(undefined); // last timestamp rendered
 
+
     const clip = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps;
+
+    const { applyMask } = useWebGLMask({
+        focusFrame: focusFrame,
+        masks: clip?.masks || [],
+        disabled: tool === 'mask',
+        clip: clip,
+    });
 
     const {
         selectedSrc,
@@ -112,6 +121,12 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
     // Use ref to store current applicators to avoid callback recreation
     const applicatorsRef = useRef(applicators);
+    const maskFrameForCurrentFocus = useMemo(() => {
+        if (clip) {
+            return Math.max(0, Math.floor(getLocalFrame(focusFrame, clip)));
+        }
+        return Math.max(0, Math.floor(currentFrame));
+    }, [clip, focusFrame, currentFrame]);
 
     const aspectRatio = useMemo(() => {
       const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
@@ -168,6 +183,13 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 // Restore the original unfiltered frame
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(originalFrameRef.current, 0, 0);
+
+                // Apply masks before filters so masked pixels feed the rest of the pipeline
+                const maskedCanvas = applyMask(canvas, maskFrameForCurrentFocus);
+                if (maskedCanvas !== canvas) {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(maskedCanvas, 0, 0, canvas.width, canvas.height);
+                }
                 
                 // Apply filters to the clean frame
                 applyFilters(canvas, filterParamsRef.current);
@@ -180,7 +202,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 imageRef.current.getLayer()?.batchDraw();
             }
         }
-    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators]);
+    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators, applyMask, maskFrameForCurrentFocus]);
 
     const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean }) => {
         if (isRotating) return; // disable guides/snapping while rotating
@@ -422,9 +444,10 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         }
     }, [displayWidth, displayHeight]);
 
-    const drawWrappedCanvas = useCallback((wc: WrappedCanvas) => {
+    const drawWrappedCanvas = useCallback((wc: WrappedCanvas, maskFrame?: number) => {
         let canvas = canvasRef.current;
         if (!canvas) return;
+        
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -441,10 +464,18 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             originalFrameRef.current.width = canvas.width;
             originalFrameRef.current.height = canvas.height;
         }
+
         const origCtx = originalFrameRef.current.getContext('2d');
         if (origCtx) {
             origCtx.clearRect(0, 0, canvas.width, canvas.height);
             origCtx.drawImage(canvas, 0, 0);
+        }
+
+        // Apply masks before running filters/applicators so downstream operations see masked pixels
+        const maskedCanvas = applyMask(canvas, maskFrame);
+        if (maskedCanvas !== canvas) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            try { ctx.drawImage(maskedCanvas, 0, 0, canvas.width, canvas.height); } catch {}
         }
         
         // Apply WebGL filters for better performance (fast enough for real-time playback)
@@ -456,7 +487,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         });
         
         imageRef.current?.getLayer()?.batchDraw?.();
-    }, [applyFilters]);
+    }, [applyFilters, applyMask]);
 
     const seekAndDraw = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -491,8 +522,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 const res = await (iteratorRef.current as any).next();
                 const wc: WrappedCanvas | null = res?.value || null;
                 if (wc) {
-                    
-                    drawWrappedCanvas(wc);
+                    drawWrappedCanvas(wc, maskFrameForCurrentFocus);
                     lastRenderedFrameRef.current = targetFrame;
                     break;
                 }
@@ -501,7 +531,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             console.warn('[video] seek draw failed', e);
         }
-    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, frameOffset, framesToGiveStart]);
+    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, frameOffset, framesToGiveStart, maskFrameForCurrentFocus]);
 
     const startRendering = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -535,6 +565,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 if (myToken !== drawTokenRef.current) break;
                 if (!useControlsStore.getState().isPlaying) break;
                 if (!wc) continue;
+
+                
 
                 // Determine the decoded sample's frame index in native fps
                 const ts: number | undefined = (wc as any)?.timestamp + (addedTimestampRef.current || 0) * speed;
@@ -574,13 +606,18 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 if (myToken !== drawTokenRef.current)  break;
                 if (!useControlsStore.getState().isPlaying) break;
 
-                drawWrappedCanvas(wc as WrappedCanvas);
+                const storeState = useControlsStore.getState();
+                const focusFrameForMask = storeState.focusFrame || 0;
+                const maskFrameBase = Math.max(0, Math.floor(focusFrameForMask - startFrame + (framesToGiveStart || 0)));
+                const maskFrame = clip ? Math.max(0, Math.floor(getLocalFrame(focusFrameForMask, clip))) : maskFrameBase;
+
+                drawWrappedCanvas(wc as WrappedCanvas, maskFrame);
                 lastRenderedFrameRef.current = sampleIdx;
             }
         } catch (e) {
             // swallow
         }
-    }, [mediaInfo, fps, selectedSrc,  displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, frameOffset, framesToGiveStart]);
+    }, [mediaInfo, fps, selectedSrc,  displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, frameOffset, framesToGiveStart, clip]);
 
 
     // Start/stop iterator based on play state. Avoid depending on callbacks to prevent restarting every frame.

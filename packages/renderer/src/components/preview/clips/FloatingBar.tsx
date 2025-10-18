@@ -82,9 +82,7 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
     const setMaskBrushSize = useMaskStore((s) => s.setBrushSize);
     const touchLabel = useMaskStore((s) => s.touchLabel);
     const setTouchLabel = useMaskStore((s) => s.setTouchLabel);
-    const touchDrawMode = useMaskStore((s) => s.touchDrawMode);
-    const setTouchDrawMode = useMaskStore((s) => s.setTouchDrawMode);
-    
+
     useEffect(() => {
       setZoomLevel(Math.round(scale * 100));
     }, [scale])
@@ -279,7 +277,20 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                   
                   <div className="flex flex-col gap-y-0.5">
                     
-                    <div className="grid grid-cols-2 gap-1.5">
+                    <div className="grid grid-cols-3 gap-1.5">
+                    <div
+                        onClick={() => { setTool('mask'); setMaskTool('touch'); }}
+                        className={`flex flex-col relative items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
+                          maskTool === 'touch' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                        }`}
+                      >
+              
+                        <LuWand className="w-4 h-4" />
+                        <div className="relative flex items-center gap-x-1">
+                        <span className="text-[9px] font-medium">Touch</span>
+                        </div>
+                   
+                      </div>
                       <div
                         onClick={() => { setTool('mask'); setMaskTool('lasso'); }}
                         className={`flex flex-col items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
@@ -301,33 +312,7 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                         {maskShape === 'star' && <LuStar className="w-4 h-4" />}
                         <span className="text-[9px] font-medium">Shape</span>
                       </div>
-                      <div
-                        onClick={() => { setTool('mask'); setMaskTool('draw'); }}
-                        className={`flex flex-col relative items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
-                          maskTool === 'draw' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
-                        }`}
-                      >
-                        <div className="relative">
-                        <LuBrush className="w-4 h-4" />
-                        
-                        </div>
-                        <div className="relative flex items-center gap-x-1">
-                        <span className="text-[9px] font-medium">Draw</span>
-                        </div>
-                      </div>
-                      <div
-                        onClick={() => { setTool('mask'); setMaskTool('touch'); }}
-                        className={`flex flex-col relative items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
-                          maskTool === 'touch' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
-                        }`}
-                      >
-              
-                        <LuWand className="w-4 h-4" />
-                        <div className="relative flex items-center gap-x-1">
-                        <span className="text-[9px] font-medium">Touch</span>
-                        </div>
-                   
-                      </div>
+                      
                     </div>
                   </div>
                   
@@ -400,33 +385,7 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                   {/* Touch Tool Settings */}
                   {maskTool === 'touch' && (
                     <>
-                      {/* Mode Selection: Point or Draw */}
-                      <div className="flex flex-col gap-y-2">
-                        <label className="text-brand-light text-[11px] font-medium">Input Mode</label>
-                        <div className="flex flex-row border border-brand-light/10 rounded-md overflow-hidden bg-brand divide-x divide-brand-light/10">
-                          <div
-                            onClick={() => setTouchDrawMode('point')}
-                            className={`flex items-center gap-x-2 px-3 py-1.5 w-1/2 cursor-pointer justify-center transition-all duration-200 ${
-                              touchDrawMode === 'point' ? 'bg-brand-accent-two-shade text-brand-light' : 'text-brand-light/80 hover:bg-brand-light/5'
-                            }`}
-                          >
-                            <LuWand className="w-3.5 h-3.5" />
-                            <span className="text-[10.5px]">Point</span>
-                          </div>
-                          <div
-                            onClick={() => setTouchDrawMode('draw')}
-                            className={`flex items-center gap-x-2 px-3 py-1.5 w-1/2 cursor-pointer justify-center transition-all duration-200 ${
-                              touchDrawMode === 'draw' ? 'bg-brand-accent-two-shade text-brand-light' : 'text-brand-light/80 hover:bg-brand-light/5'
-                            }`}
-                          >
-                            <LuLasso className="w-3.5 h-3.5" />
-                            <span className="text-[10.5px]">Draw</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      {/* Label Selection (only for point mode) */}
-                      {touchDrawMode === 'point' && (
+
                         <div className="flex flex-row items-center justify-between gap-x-2">
                           <label className="text-brand-light text-[11px] font-medium">Point Type</label>
                           <div className="flex flex-row gap-x-1 overflow-hidden w-22">
@@ -452,7 +411,7 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                             </div>
                           </div>
                         </div>
-                      )}
+
                     </>
                   )}
 

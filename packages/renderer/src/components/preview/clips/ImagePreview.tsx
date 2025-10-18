@@ -9,6 +9,7 @@ import { useViewportStore } from '@/lib/viewport';
 import { useClipStore } from '@/lib/clip';
 import { useWebGLFilters } from '@/components/preview/webgl-filters';
 import { BaseClipApplicator } from './apply/base';
+import { useWebGLMask } from '../mask/useWebGLMask';
 
 const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[]}> = ({ src, clipId, rectWidth, rectHeight, applicators}) => {
     const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
@@ -27,8 +28,16 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
     const addClipSelection = useControlsStore((s) => s.addClipSelection);
     const {selectedClipIds, isFullscreen} = useControlsStore();
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
-
+    const focusFrame = useControlsStore((s) => s.focusFrame);
+    
     const clip = useClipStore((s) => s.getClipById(clipId)) as ImageClipProps;
+
+    const { applyMask } = useWebGLMask({
+        focusFrame: focusFrame,
+        masks: clip?.masks || [],
+        disabled: tool === 'mask',
+        clip: clip,
+    });
 
     const selectedSrc = useMemo(() => {
         return clip?.preprocessors?.find(p => p.status === 'complete')?.src ?? src;
@@ -41,7 +50,6 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
       const aspectRatio = originalWidth / originalHeight;
       return aspectRatio;
     }, [mediaInfoRef.current?.image?.width, mediaInfoRef.current?.image?.height]);
-
 
     const groupRef = useRef<Konva.Group>(null);
     const SNAP_THRESHOLD_PX = 4; // pixels at screen scale
@@ -57,6 +65,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         top: false,
         bottom: false,
     });
+
     const [isInteracting, setIsInteracting] = useState(false);
     const [isRotating, setIsRotating] = useState(false);
     const [isTransforming, setIsTransforming] = useState(false);
@@ -313,10 +322,12 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             ctx.imageSmoothingQuality = 'high';
             // clear the canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(image.canvas, 0, 0, canvas.width, canvas.height);
-            
+
+            let canvasToDraw = applyMask(image.canvas as HTMLCanvasElement);
+            ctx.drawImage(canvasToDraw, 0, 0, canvas.width, canvas.height);
+
             // Apply WebGL filters for better performance
-            applyFilters(canvas, {
+            canvasToDraw = applyFilters(canvasToDraw, {
                 brightness: clip?.brightness,
                 contrast: clip?.contrast,
                 hue: clip?.hue,
@@ -326,15 +337,21 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
                 noise: clip?.noise,
                 vignette: clip?.vignette
             });
+
             // apply applicators to canvas
-            applicators.forEach(applicator => {
-                canvas = applicator.apply(canvas);
-            });
+            canvas = applicators.reduce((acc, applicator) => {
+                return applicator.apply(acc);
+            }, canvasToDraw);
+
+            // apply mask to canvas
+            
+
+
             imageRef.current?.getLayer()?.batchDraw?.();
         } catch (e) {
             console.error(e);
         }
-    }, [mediaInfoRef, selectedSrc, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applyFilters]);
+    }, [mediaInfoRef, selectedSrc, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applyFilters, applyMask]);
 
     useEffect(() => {
         draw();

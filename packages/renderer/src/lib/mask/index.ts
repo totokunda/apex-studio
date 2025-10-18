@@ -16,7 +16,8 @@ interface MaskState {
   autoMask: boolean;
   touchLabel: TouchLabel;
   touchDrawMode: TouchDrawMode;
-  
+  isMaskDragging: boolean;
+  isOverMask: boolean;
   setTool: (tool: MaskTool) => void;
   setShape: (shape: MaskShapeTool) => void;
   setBrushSize: (size: number) => void;
@@ -27,10 +28,12 @@ interface MaskState {
   setAutoMask: (autoMask: boolean) => void;
   setTouchLabel: (label: TouchLabel) => void;
   setTouchDrawMode: (mode: TouchDrawMode) => void;
+  setIsMaskDragging: (isDragging: boolean) => void;
+  setIsOverMask: (isOverMask: boolean) => void;
 }
 
 export const useMaskStore = create<MaskState>((set) => ({
-  tool: 'lasso',
+  tool: 'touch',
   shape: 'rectangle',
   brushSize: 10,
   featherAmount: 2,
@@ -40,7 +43,8 @@ export const useMaskStore = create<MaskState>((set) => ({
   autoMask: false,
   touchLabel: 'positive',
   touchDrawMode: 'point',
-  
+  isMaskDragging: false,
+  isOverMask: false,
   setTool: (tool) => set({ tool }),
   setShape: (shape) => set({ shape }),
   setBrushSize: (brushSize) => set({ brushSize }),
@@ -51,6 +55,8 @@ export const useMaskStore = create<MaskState>((set) => ({
   setAutoMask: (autoMask) => set({ autoMask }),
   setTouchLabel: (touchLabel) => set({ touchLabel }),
   setTouchDrawMode: (touchDrawMode) => set({ touchDrawMode }),
+  setIsMaskDragging: (isMaskDragging) => set({ isMaskDragging }),
+  setIsOverMask: (isOverMask) => set({ isOverMask }),
 }));
 
 // Export API functions and types

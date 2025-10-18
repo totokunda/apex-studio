@@ -24,16 +24,19 @@ import { toast } from 'sonner';
 import { toFrameRange } from '@/lib/media/fps';
 import { usePreprocessorJobActions } from '@/lib/preprocessor/api';
 import { useDrawingStore } from '@/lib/drawing';
+import { useViewportStore } from '@/lib/viewport';
+import MaskPropertiesPanel from './mask/MaskPropertiesPanel';
 
 interface PropertiesPanelProps {
     panelSize: number;
 }
 
 const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
-  const {selectedClipIds} = useControlsStore();
+  const {selectedClipIds, selectedMaskId} = useControlsStore();
   const {selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, updatePreprocessor} = useClipStore();
   const { fps } = useControlsStore();
   const selectedLineId = useDrawingStore((s) => s.selectedLineId);
+  const tool = useViewportStore((s) => s.tool);
   const clipId = useMemo(() => selectedClipIds[selectedClipIds.length - 1], [selectedClipIds]);
 
   const clip = useClipStore((s) => s.getClipById(clipId))
@@ -89,16 +92,24 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     return false;
   }, [clip?.type, selectedLineId]);
 
+  const hasMask = useMemo(() => {
+    // Show mask panel if a mask is selected OR if we're in mask tool mode
+
+    if (tool === 'mask' && (clip?.type === 'video' || clip?.type === 'image')) return true;
+    return false;
+  }, [selectedMaskId, tool, clip?.type]);
+
   const numVisibleTabs = useMemo(() => {
     let tabTotal = 0;
     if (hasLine) tabTotal++;
+    if (hasMask) tabTotal++;
     if (hasTransform) tabTotal++;
     if (hasAudio) tabTotal++;
     if (hasDuration) tabTotal++;
     if (hasAppearance) tabTotal++;
     if (hasAdjust) tabTotal++;
     return tabTotal;
-  }, [hasLine, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust]);
+  }, [hasLine, hasMask, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust]);
 
   
 
@@ -108,6 +119,13 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       setSelectedTab('line');
     }
   }, [selectedLineId, hasLine]);
+
+  useEffect(() => {
+    // Automatically switch to mask tab when a mask is selected
+    if (hasMask && selectedMaskId) {
+      setSelectedTab('mask');
+    }
+  }, [selectedMaskId, hasMask]);
 
   const checkScrollButtons = () => {
     if (tabRef.current) {
@@ -151,6 +169,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const getValidTab = (currentTab: string) => {
     // Check if current tab is valid for this clip type
     if (currentTab === "line" && hasLine) return "line";
+    if (currentTab === "mask" && hasMask) return "mask";
     if (currentTab === "text" && hasText) return "text";
     if (currentTab === "transform" && hasTransform) return "transform";
     if (currentTab === "audio" && hasAudio) return "audio";
@@ -163,6 +182,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     // If current tab is invalid, return first available tab
     if (hasValidPreprocessor) return "preprocessor-info";
     if (hasLine) return "line";
+    if (hasMask) return "mask";
     if (hasTransform) return "transform";
     if (hasAudio) return "audio";
     if (hasAppearance) return "appearance";
@@ -175,9 +195,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (validTab !== selectedTab) {
       setSelectedTab(validTab);
     }
-  }, [clipId, hasLine, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust, hasPreprocessorDuration]);
-
-
+  }, [clipId, hasLine, hasMask, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust, hasPreprocessorDuration, tool]);
 
   const handleRunPreprocessor = useCallback(async () => {
     // get the preprocessor 
@@ -250,6 +268,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
             {(hasTransform) && <TabsTrigger value="transform" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
+            {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Mask</TabsTrigger>}
             {(hasAudio) && <TabsTrigger value="audio" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
             {(hasDuration) && <TabsTrigger value="duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
             {(hasAdjust) && <TabsTrigger value="adjust" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Adjust</TabsTrigger>}
@@ -275,10 +294,14 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasLine) && <TabsContent value="line" className="min-w-0 m-0">
             <LineProperties clipId={clipId} />
           </TabsContent>}
+          
           {(hasText) && <TabsContent value="text" className="min-w-0 m-0">  <TextProperties clipId={clipId} /> </TabsContent>}
           {(hasTransform) && <TabsContent  value="transform" className="min-w-0 divide-y divide-brand-light/10 m-0">
             <PositionProperties clipId={clipId}  />
             <LayoutProperties clipId={clipId}  />
+          </TabsContent>}
+          {(hasMask) && <TabsContent value="mask" className="min-w-0 m-0">
+            <MaskPropertiesPanel clipId={clipId} />
           </TabsContent>}
           {(hasAudio) && <TabsContent value="audio" className="min-w-0 m-0">
             <AudioProperties clipId={clipId} />
