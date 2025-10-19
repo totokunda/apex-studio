@@ -426,7 +426,7 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
       onDragMove: isWhite ? handleDragMove : undefined,
       onDragEnd: isWhite ? handleDragEnd : undefined,
       listening: isWhite,
-      rotation,
+      rotation:rotation,
       dash: !isWhite ? [4.5, 4.5] : undefined,
       dashOffset: !isWhite ? -animationOffset : undefined,
     };
@@ -450,6 +450,7 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
       scaleX: 1,
       scaleY: 1,
     };
+
     
     switch (shapeType) {
       case 'rectangle':
@@ -473,7 +474,11 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
 
 
   return (
-    <Group visible={tool==='mask'} ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight} onMouseOver={() => setIsOverMask(true)} onMouseOut={() => setIsOverMask(false)}>
+    <Group 
+    visible={tool==='mask'} 
+    ref={groupRef} 
+    clipX={0}
+    clipY={0} onMouseOver={() => setIsOverMask(true)} onMouseOut={() => setIsOverMask(false)}>
       {/* White shape background */}
       {renderShape(true)}
       

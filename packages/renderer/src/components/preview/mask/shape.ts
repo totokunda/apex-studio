@@ -37,6 +37,8 @@ const fragmentShader = `
 
   // Canvas size in pixels
   uniform vec2 u_canvasSize;
+  // Canvas-to-mask scale conversion factors (applied before rotation)
+  uniform vec2 u_canvasScale;
   // Per-shape non-uniform scale factors (1 = no scaling)
   uniform vec2 u_shapeScale;
   // Rotation in radians (clockwise around shape center)
@@ -68,63 +70,88 @@ const fragmentShader = `
     // Derive pixel coords from fragment position; map to top-left origin
     vec2 pixelCoord = vec2(gl_FragCoord.x, u_canvasSize.y - gl_FragCoord.y);
 
-    // Compute scaled dimensions (so x/y represent top-left of the scaled shape)
-    float scaleX = max(u_shapeScale.x, 0.0001);
-    float scaleY = max(u_shapeScale.y, 0.0001);
-    float scaledW = u_shapeBounds.z * scaleX;
-    float scaledH = u_shapeBounds.w * scaleY;
+    // Precompute scale and rotation helpers
+    float shapeScaleX = max(u_shapeScale.x, 0.0001);
+    float shapeScaleY = max(u_shapeScale.y, 0.0001);
+    vec2 invCanvasScale = vec2(1.0 / max(u_canvasScale.x, 0.0001),
+                               1.0 / max(u_canvasScale.y, 0.0001));
+    float baseWidthMask = u_shapeBounds.z * invCanvasScale.x;
+    float baseHeightMask = u_shapeBounds.w * invCanvasScale.y;
+    float rectWidthMask = max(baseWidthMask * shapeScaleX, 0.0001);
+    float rectHeightMask = max(baseHeightMask * shapeScaleY, 0.0001);
+    float halfW = rectWidthMask * 0.5;
+    float halfH = rectHeightMask * 0.5;
 
-    // Compute local coords relative to shape center (of the scaled bounds) and rotate into shape's local space
-    vec2 center = vec2(u_shapeBounds.x + 0.5 * scaledW,
-                       u_shapeBounds.y + 0.5 * scaledH);
-    vec2 local = pixelCoord - center;
+    float scaledWCanvas = u_shapeBounds.z * shapeScaleX;
+    float scaledHCanvas = u_shapeBounds.w * shapeScaleY;
+
     float c = cos(-u_rotation);
     float s = sin(-u_rotation);
-    vec2 rotLocal = vec2(c * local.x - s * local.y, s * local.x + c * local.y);
 
-    // Rectangle inclusion in rotated local space (apply scale about center)
-    float halfW = 0.5 * scaledW;
-    float halfH = 0.5 * scaledH;
-    bool insideRect = abs(rotLocal.x) <= halfW &&
-                      abs(rotLocal.y) <= halfH;
-
-    // Ellipse inclusion in rotated local space: ((x)/rx)^2 + ((y)/ry)^2 <= 1
-    vec2 radii = vec2(max(halfW, 0.0001), max(halfH, 0.0001));
-    vec2 d = rotLocal / radii;
-    bool insideEllipse = dot(d, d) <= 1.0;
-
-    // Triangle (upward) inclusion: base along bottom edge of bounds, apex at top-center
-    // Define triangle vertices in rotated local space with origin at shape center
-    vec2 tApex = vec2(0.0, -halfH);
-    vec2 tLeft = vec2(-halfW, halfH);
-    vec2 tRight = vec2(halfW, halfH);
-    bool insideTriangle = pointInTriangle(rotLocal, tApex, tLeft, tRight);
-
-    // Star (5-point) inclusion using even-odd point-in-polygon computed on-the-fly
-    // Radii based on requested values: outerRadius = min(width,height)/2, innerRadius = min(width,height)/4
-    const int MAX_VERTS = 10; // 5-point star => 10 vertices (outer/inner alternating)
-    float baseRadius = min(halfW, halfH);
-    float rOuter = baseRadius;
-    float rInner = 0.5 * baseRadius;
-    // Initialize previous vertex to the last star vertex (index 9, which is inner)
-    float prevAngle = float(MAX_VERTS - 1) * 3.14159265358979323846 / 5.0;
-    float prevRadius = rInner;
-    vec2 prevVertex = vec2(prevRadius * sin(prevAngle), -prevRadius * cos(prevAngle));
-    
-    // Even-odd ray casting without array indexing
+    bool insideRect = false;
+    bool insideEllipse = false;
+    bool insideTriangle = false;
     bool insideStar = false;
-    bool useOuter = true; // i=0 uses outer radius
-    for (int i = 0; i < MAX_VERTS; i++) {
-      float radius = useOuter ? rOuter : rInner;
-      float angle = float(i) * 3.14159265358979323846 / 5.0;
-      vec2 vi = vec2(radius * sin(angle), -radius * cos(angle));
-      bool intersect = ((vi.y > rotLocal.y) != (prevVertex.y > rotLocal.y)) &&
-        (rotLocal.x < (prevVertex.x - vi.x) * (rotLocal.y - vi.y) / ((prevVertex.y - vi.y) + 0.000001) + vi.x);
-      if (intersect) {
-        insideStar = !insideStar;
+
+    if (u_shapeKind == 0) {
+      // Rectangle rotates around its top-left corner to match editor behavior
+      vec2 pivot = vec2(u_shapeBounds.x, u_shapeBounds.y);
+      vec2 localCanvas = pixelCoord - pivot;
+      vec2 maskSpace = vec2(localCanvas.x * invCanvasScale.x,
+                            localCanvas.y * invCanvasScale.y);
+      vec2 rotRect = vec2(c * maskSpace.x - s * maskSpace.y,
+                          s * maskSpace.x + c * maskSpace.y);
+      insideRect = (rotRect.x >= 0.0) && (rotRect.x <= rectWidthMask) &&
+                   (rotRect.y >= 0.0) && (rotRect.y <= rectHeightMask);
+    } else {
+      // Center-anchored shapes rotate around their midpoint
+      vec2 center = vec2(u_shapeBounds.x + 0.5 * scaledWCanvas,
+                         u_shapeBounds.y + 0.5 * scaledHCanvas);
+      vec2 local = pixelCoord - center;
+      vec2 maskSpace = vec2(local.x * invCanvasScale.x,
+                            local.y * invCanvasScale.y);
+      vec2 rotLocal = vec2(c * maskSpace.x - s * maskSpace.y,
+                           s * maskSpace.x + c * maskSpace.y);
+
+      insideRect = abs(rotLocal.x) <= halfW &&
+                   abs(rotLocal.y) <= halfH;
+
+      // Ellipse inclusion in rotated local space: ((x)/rx)^2 + ((y)/ry)^2 <= 1
+      vec2 radii = vec2(max(halfW, 0.0001), max(halfH, 0.0001));
+      vec2 d = rotLocal / radii;
+      insideEllipse = dot(d, d) <= 1.0;
+
+      // Triangle (upward) inclusion: base along bottom edge of bounds, apex at top-center
+      // Define triangle vertices in rotated local space with origin at shape center
+      vec2 tApex = vec2(0.0, -halfH);
+      vec2 tLeft = vec2(-halfW, halfH);
+      vec2 tRight = vec2(halfW, halfH);
+      insideTriangle = pointInTriangle(rotLocal, tApex, tLeft, tRight);
+
+      // Star (5-point) inclusion using even-odd point-in-polygon computed on-the-fly
+      const int MAX_VERTS = 10; // 5-point star => 10 vertices (outer/inner alternating)
+      float baseRadius = min(halfW, halfH);
+      float rOuter = baseRadius;
+      float rInner = 0.5 * baseRadius;
+      // Initialize previous vertex to the last star vertex (index 9, which is inner)
+      float prevAngle = float(MAX_VERTS - 1) * 3.14159265358979323846 / 5.0;
+      float prevRadius = rInner;
+      vec2 prevVertex = vec2(prevRadius * sin(prevAngle), -prevRadius * cos(prevAngle));
+      
+      // Even-odd ray casting without array indexing
+      bool useOuter = true; // i=0 uses outer radius
+      for (int i = 0; i < MAX_VERTS; i++) {
+        float radius = useOuter ? rOuter : rInner;
+        float angle = float(i) * 3.14159265358979323846 / 5.0;
+        vec2 vi = vec2(radius * sin(angle), -radius * cos(angle));
+        bool intersect = ((vi.y > rotLocal.y) != (prevVertex.y > rotLocal.y)) &&
+          (rotLocal.x < (prevVertex.x - vi.x) * (rotLocal.y - vi.y) / ((prevVertex.y - vi.y) + 0.000001) + vi.x);
+        if (intersect) {
+          insideStar = !insideStar;
+        }
+        prevVertex = vi;
+        useOuter = !useOuter;
       }
-      prevVertex = vi;
-      useOuter = !useOuter;
     }
 
     bool inside = (u_shapeKind == 0) ? insideRect : ((u_shapeKind == 1) ? insideEllipse : ((u_shapeKind == 2) ? insideTriangle : insideStar));
@@ -202,6 +229,7 @@ const applyClipTransform = (shapeBounds: ShapeBounds, clipTransform?: ClipTransf
     newBounds.x += diffX;
   }
 
+
   return newBounds;
 };
 
@@ -217,6 +245,7 @@ const computeCanvasScale = (
 
   const scaleX = baseWidth !== 0 ? canvas.width / baseWidth : 1;
   const scaleY = baseHeight !== 0 ? canvas.height / baseHeight : 1;
+
 
   return { scaleX, scaleY };
 };
@@ -414,6 +443,13 @@ export class ShapeMask extends WebGLMaskBase {
     const sx = keyFrameData.shapeBounds.scaleX ?? 1;
     const sy = keyFrameData.shapeBounds.scaleY ?? 1;
     this.gl.uniform2f(this.gl.getUniformLocation(this.program, 'u_shapeScale'), sx, sy);
+
+    // canvas scaling (used to undo non-uniform scaling before rotation tests)
+    this.gl.uniform2f(
+      this.gl.getUniformLocation(this.program, 'u_canvasScale'),
+      canvasScaleX,
+      canvasScaleY
+    );
 
     // canvas size (pixels)
     this.gl.uniform2f(

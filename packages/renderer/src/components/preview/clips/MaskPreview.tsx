@@ -166,16 +166,19 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
         if (mask.tool === 'lasso' && maskData?.lassoPoints && maskData.lassoPoints.length >= 6) {
           // Close the path
           const closedPoints = [...maskData.lassoPoints, maskData.lassoPoints[0], maskData.lassoPoints[1]];
+          const clipTransform = clip?.transform
           
           return (
+            <Group rotation={clipTransform?.rotation ?? 0}>
             <LassoMaskPreview
               key={`mask-${mask.id}-${activeKeyframe}`}
-              mask={mask}
-              points={closedPoints}
-              animationOffset={animationOffset}
-              rectWidth={rectWidth}
-              rectHeight={rectHeight}
-            />
+                mask={mask}
+                points={closedPoints}
+                animationOffset={animationOffset}
+                rectWidth={rectWidth}
+                rectHeight={rectHeight}
+              />
+            </Group>
           );
         } else if ((mask.tool === 'shape' || (mask.tool as any) === 'rectangle') && (maskData?.shapeBounds)) {
           // Support both new shapeBounds and legacy rectangleBounds (for backward compatibility)
@@ -184,7 +187,12 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
           const clipTransform = clip?.transform
           
           return (
-            <Group key={`mask-group-${mask.id}-${activeKeyframe}`} scaleX={clipTransform?.scaleX ?? 1} scaleY={clipTransform?.scaleY ?? 1} rotation={clipTransform?.rotation ?? 0}>
+            <Group 
+            key={`mask-group-${mask.id}-${activeKeyframe}`} 
+            scaleX={clipTransform?.scaleX ?? 1} 
+            scaleY={clipTransform?.scaleY ?? 1} 
+            rotation={clipTransform?.rotation ?? 0}
+            >
             <ShapeMaskPreview
               key={`mask-${mask.id}-${activeKeyframe}`}
               mask={mask}
@@ -255,7 +263,10 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
             }
           };
 
+          const clipTransform = clip?.transform
+
           return (
+            <Group rotation={clipTransform?.rotation ?? 0}>
             <TouchMaskPreview     
               clip={clip as PreprocessorClipType}
               key={`mask-${mask.id}-${activeKeyframe}`}
@@ -265,6 +276,7 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
               rectHeight={rectHeight}
               onDeletePoints={handleDeletePoints}
             />
+            </Group>
           );
         }
         return null;

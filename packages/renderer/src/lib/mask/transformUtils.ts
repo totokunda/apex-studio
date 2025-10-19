@@ -18,6 +18,47 @@ const transformsEqual = (a?: ClipTransform, b?: ClipTransform): boolean => {
   );
 };
 
+const degToRad = (deg: number): number => (deg * Math.PI) / 180;
+
+const getSafeNumber = (value: number | undefined, fallback: number): number =>
+  isFiniteNumber(value) ? value! : fallback;
+
+const sanitizeScale = (value: number | undefined): number => {
+  if (!isFiniteNumber(value)) return 1;
+  const v = value as number;
+  if (Math.abs(v) < 1e-6) {
+    return v < 0 ? -1e-6 : 1e-6;
+  }
+  return v;
+};
+
+const getScale = (transform: ClipTransform): { scaleX: number; scaleY: number } => ({
+  scaleX: sanitizeScale(transform.scaleX),
+  scaleY: sanitizeScale(transform.scaleY),
+});
+
+const getBaseSize = (transform: ClipTransform): { width: number; height: number } => ({
+  width: getSafeNumber(transform.width, 0),
+  height: getSafeNumber(transform.height, 0),
+});
+
+const getActualSize = (transform: ClipTransform): { width: number; height: number } => {
+  const base = getBaseSize(transform);
+  const scale = getScale(transform);
+  return {
+    width: base.width * scale.scaleX,
+    height: base.height * scale.scaleY,
+  };
+};
+
+const getCenter = (transform: ClipTransform): { x: number; y: number } => {
+  const actual = getActualSize(transform);
+  return {
+    x: getSafeNumber(transform.x, 0) + actual.width / 2,
+    y: getSafeNumber(transform.y, 0) + actual.height / 2,
+  };
+};
+
 const transformPoint = (
   x: number,
   y: number,
@@ -26,22 +67,18 @@ const transformPoint = (
 ): { x: number; y: number } => {
   const deltaX = (to.x ?? 0) - (from.x ?? 0);
   const deltaY = (to.y ?? 0) - (from.y ?? 0);
-
   const fromWidth = from.width ?? 0;
   const fromHeight = from.height ?? 0;
   const toWidth = to.width ?? fromWidth;
   const toHeight = to.height ?? fromHeight;
-
   if (!fromWidth || !fromHeight || !isFiniteNumber(fromWidth) || !isFiniteNumber(fromHeight)) {
     return {
       x: x + deltaX,
       y: y + deltaY,
     };
   }
-
   const relX = (x - (from.x ?? 0)) / fromWidth;
   const relY = (y - (from.y ?? 0)) / fromHeight;
-
   return {
     x: (to.x ?? 0) + relX * (toWidth || fromWidth),
     y: (to.y ?? 0) + relY * (toHeight || fromHeight),
