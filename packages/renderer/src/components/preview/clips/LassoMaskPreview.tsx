@@ -73,6 +73,10 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
     e.cancelBubble = true;
     e.evt?.preventDefault?.();
     e.evt?.stopPropagation?.();
+    try {
+      // Selecting a lasso mask should clear any selected touch points globally
+      window.dispatchEvent(new CustomEvent('apex-mask-clear-touch-selection'));
+    } catch {}
     setSelectedMaskId(mask.id);
     
     // Also select the corresponding clip
@@ -84,6 +88,10 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
   const handleDragStart = useCallback(() => {
     if (!canInteract || !isSelected) return;
     setIsMaskDragging(true);
+    try {
+      // When starting to drag a mask, also clear touch point selections
+      window.dispatchEvent(new CustomEvent('apex-mask-clear-touch-selection'));
+    } catch {}
   }, [canInteract, isSelected, setIsMaskDragging]);
   
   const handleDragEnd = useCallback(() => {

@@ -83,7 +83,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     strokeWidth = 2,
   } = clip as ShapeClipProps;
 
-  const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean }) => {
+  const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean; commit?: boolean }) => {
     if (isRotating) return;
     const node = shapeRef.current;
     const group = groupRef.current;
@@ -121,7 +121,23 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
       top: distTop <= thresholdLocal,
       bottom: distBottom <= thresholdLocal,
     };
-    setGuides(nextGuides);
+    setGuides((prev) => {
+      if (
+        prev.vCenter === nextGuides.vCenter &&
+        prev.hCenter === nextGuides.hCenter &&
+        prev.v25 === nextGuides.v25 &&
+        prev.v75 === nextGuides.v75 &&
+        prev.h25 === nextGuides.h25 &&
+        prev.h75 === nextGuides.h75 &&
+        prev.left === nextGuides.left &&
+        prev.right === nextGuides.right &&
+        prev.top === nextGuides.top &&
+        prev.bottom === nextGuides.bottom
+      ) {
+        return prev;
+      }
+      return nextGuides;
+    });
 
     if (opts.snap) {
       let deltaX = 0;
@@ -166,7 +182,9 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
         const actualHeight = currentHeight * nodeScaleY;
         const saveX = isCentered ? nodeX - actualWidth / 2 : nodeX;
         const saveY = isCentered ? nodeY - actualHeight / 2 : nodeY;
-        setClipTransform(clipId, { x: saveX, y: saveY });
+        if (opts.commit) {
+          setClipTransform(clipId, { x: saveX, y: saveY });
+        }
       }
     }
   }, [rectWidth, rectHeight, scale, setClipTransform, clipId, isRotating, SNAP_THRESHOLD_PX, shapeType, clipTransform, width, height]);
@@ -263,7 +281,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
       })
       shapeRef.current.getLayer()?.batchDraw?.();
     }
-  }, [shapeRef.current, applicators]);
+  }, [applicators]);
 
   const handleClick = useCallback(() => {
     if (isFullscreen) return;
@@ -277,15 +295,20 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 250);
     setIsInteracting(true);
-    updateGuidesAndMaybeSnap({ snap: true });
+    updateGuidesAndMaybeSnap({ snap: true, commit: false });
   }, [clipId, addClipSelection, updateGuidesAndMaybeSnap]);
 
-  const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-    updateGuidesAndMaybeSnap({ snap: true });
+  const handleDragMove = useCallback((_e: Konva.KonvaEventObject<MouseEvent>) => {
+    updateGuidesAndMaybeSnap({ snap: true, commit: false });
+  }, [updateGuidesAndMaybeSnap]);
+
+  const handleDragEnd = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    e.target.getStage()!.container().style.cursor = 'default';
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 250);
+    updateGuidesAndMaybeSnap({ snap: true, commit: false });
     const node = shapeRef.current;
     if (node) {
-      // For centered shapes, node.x() is the center position, so we need to subtract the offset
-      // Use clipTransform dimensions for consistency with snap logic
       const isCentered = shapeType === 'ellipse' || shapeType === 'polygon' || shapeType === 'star';
       const nodeX = node.x();
       const nodeY = node.y();
@@ -301,26 +324,6 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     } else {
       setClipTransform(clipId, { x: e.target.x(), y: e.target.y() });
     }
-  }, [setClipTransform, clipId, updateGuidesAndMaybeSnap, shapeType, width, height, clipTransform]);
-
-  const handleDragEnd = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-    e.target.getStage()!.container().style.cursor = 'default';
-    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 250);
-    // For centered shapes, e.target.x() is the center position, so we need to subtract the offset
-    // Use clipTransform dimensions for consistency
-    const isCentered = shapeType === 'ellipse' || shapeType === 'polygon' || shapeType === 'star';
-    const targetX = e.target.x();
-    const targetY = e.target.y();
-    const targetScaleX = e.target.scaleX();
-    const targetScaleY = e.target.scaleY();
-    const currentWidth = clipTransform?.width ?? width;
-    const currentHeight = clipTransform?.height ?? height;
-    const actualWidth = currentWidth * targetScaleX;
-    const actualHeight = currentHeight * targetScaleY;
-    const saveX = isCentered ? targetX - actualWidth / 2 : targetX;
-    const saveY = isCentered ? targetY - actualHeight / 2 : targetY;
-    setClipTransform(clipId, { x: saveX, y: saveY });
     setIsInteracting(false);
     setGuides({ vCenter: false, hCenter: false, v25: false, v75: false, h25: false, h75: false, left: false, right: false, top: false, bottom: false });
   }, [setClipTransform, clipId, shapeType, width, height, clipTransform]);
@@ -402,9 +405,9 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     const onTransform = () => {
       bumpSuppress();
       if (!isRotating) {
-        updateGuidesAndMaybeSnap({ snap: false });
+        updateGuidesAndMaybeSnap({ snap: false, commit: false });
       }
-      persistTransform();
+      // Avoid committing transform during interaction for performance
     };
     const onTransformEnd = () => {
       bumpSuppress();
@@ -477,6 +480,8 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
       onDragMove: handleDragMove,
       onDragEnd: handleDragEnd,
       onClick: handleClick,
+      perfectDrawEnabled: false,
+      shadowForStrokeEnabled: false,
     };
 
     // Props for shapes positioned from top-left corner

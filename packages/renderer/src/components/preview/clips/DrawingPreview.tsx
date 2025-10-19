@@ -21,10 +21,12 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
   rectHeight,
 }) => {
   const { updateClip } = useClipStore();
+  const removeClip = useClipStore((s) => s.removeClip);
   const tool = useViewportStore((s) => s.tool);
   const isSelected = useControlsStore((s) => s.selectedClipIds.includes(clipId));
   const addClipSelection = useControlsStore((s) => s.addClipSelection);
   const clearSelection = useControlsStore((s) => s.clearSelection);
+  const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
   const selectedLineId = useDrawingStore((s) => s.selectedLineId);
   const setSelectedLineId = useDrawingStore((s) => s.setSelectedLineId);
   const lineRefs = useRef<{ [key: string]: Konva.Line }>({});
@@ -157,6 +159,15 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
       window.removeEventListener('click', handleWindowClick);
     };
   }, [selectedLineId, setSelectedLineId]);
+
+  // Auto-delete empty drawing clips
+  React.useEffect(() => {
+    if (lines && lines.length === 0) {
+      removeClip(clipId);
+      removeClipSelection(clipId);
+      setSelectedLineId(null);
+    }
+  }, [lines, clipId, removeClip, removeClipSelection, setSelectedLineId]);
 
   return (
     <Group 

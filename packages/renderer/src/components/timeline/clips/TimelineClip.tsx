@@ -12,6 +12,7 @@ import { useWebGLFilters } from "@/components/preview/webgl-filters";
 import {useWebGLMask} from "@/components/preview/mask/useWebGLMask"
 
 import { PreprocessorClip } from "./PreprocessorClip";
+import MaskKeyframes from "./MaskKeyframes";
 import { useViewportStore } from "@/lib/viewport";
 const THUMBNAIL_TILE_SIZE = 36;
 
@@ -131,6 +132,15 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const currentClipId = clipId;
     const isSelected = selectedClipIds.includes(currentClipId);
 
+    const showMaskKeyframes = useMemo(() => {
+        if (!isSelected) return false;
+        if (tool !== 'mask') return false;
+        if (!currentClip || currentClip.type !== 'video') return false;
+        if (isDragging) return false; // hide while dragging current clip
+        const masks = (currentClip as VideoClipProps).masks ?? [];
+        return masks.length > 0;
+    }, [currentClip, isSelected, tool, isDragging]);
+
     const [clipPosition, setClipPosition] = useState<{x:number, y:number}>({
         x: clipX + timelinePadding,
         y: timelineY - totalClipHeight
@@ -230,6 +240,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
                     ctx.drawImage(inputCanvas, offset, 0);
                 }
+                // Ensure Konva layer updates immediately after drawing audio waveform
+                groupRef.current?.getLayer()?.batchDraw();
             }
 
             //moveClipToEnd(currentClipId);
@@ -310,7 +322,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     
                 }
             }
-            clipRef.current?.getLayer()?.batchDraw();
+            groupRef.current?.getLayer()?.batchDraw();
             moveClipToEnd(currentClipId);
         }
 
@@ -507,7 +519,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         vignette: vidClip?.vignette
                     });
                 }
-                clipRef.current?.getLayer()?.batchDraw();
+                groupRef.current?.getLayer()?.batchDraw();
             
             // 2) Debounced fetch of exact frames and redraw when available
             if (exactVideoUpdateTimerRef.current != null) {
@@ -610,7 +622,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     }
                 } finally {
                     if (mySeq === exactVideoUpdateSeqRef.current) {
-                        clipRef.current?.getLayer()?.batchDraw();
+                        groupRef.current?.getLayer()?.batchDraw();
                         
                         lastExactRequestKeyRef.current = requestKey;
                         
@@ -632,7 +644,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 ctx.fillStyle = '#894c30';
                 ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
             }
-            clipRef.current?.getLayer()?.batchDraw();
+            groupRef.current?.getLayer()?.batchDraw();
         }
 
         const generateTimelineThumbnailText = async () => {
@@ -644,7 +656,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 ctx.fillStyle = '#E3E3E3';
                 ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
             }
-            clipRef.current?.getLayer()?.batchDraw();
+            groupRef.current?.getLayer()?.batchDraw();
         }
         const generateTimelineThumbnailFilter = async () => {
             if (clipType !== 'filter') return;
@@ -655,7 +667,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 ctx.fillStyle = '#00BFFF';
                 ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
             }
-            clipRef.current?.getLayer()?.batchDraw();
+            groupRef.current?.getLayer()?.batchDraw();
         }
 
         const generateTimelineThumbnailDrawing = async () => {
@@ -1447,6 +1459,17 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         timelinePadding={timelinePadding} />
                     })}
                 </>
+            )}
+            {showMaskKeyframes && currentClip?.type === 'video' && (
+                <MaskKeyframes
+                    clip={currentClip as VideoClipProps}
+                    clipPosition={clipPosition}
+                    clipWidth={clipWidth}
+                    timelineHeight={timelineHeight}
+                    isDragging={isDragging}
+                    currentStartFrame={currentStartFrame}
+                    currentEndFrame={currentEndFrame}
+                />
             )}
             <Rect  
                 ref={rectRefRight}

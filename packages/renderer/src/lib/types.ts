@@ -187,6 +187,7 @@ export type MaskTransform = ClipTransform;
 
 export type MaskTool = 'lasso' | 'shape' | 'draw' | 'touch';
 export type MaskShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'star';
+export type MaskTrackingDirection = 'forward' | 'backward' | 'both';
 
 export interface MaskData {
     // For lasso tool - closed path points
@@ -227,6 +228,7 @@ export type MaskClipProps = {
     keyframes: Map<number, MaskData> | Record<number, MaskData>;
     // Tracking settings
     isTracked: boolean;
+    trackingDirection?: MaskTrackingDirection;
     confidenceThreshold?: number;
     // Transform applied to mask
     transform?: MaskTransform;

@@ -142,6 +142,7 @@ const ShapeMaskTransformProperties: React.FC<ShapeMaskTransformPropertiesProps> 
               value={shapeBounds.x?.toFixed(0).toString() ?? '0'} 
               onChange={(value) => updateShapeBounds({ x: Number(value) })} 
               startLogo="X" 
+              
             />
             <Input 
               emptyLabel 

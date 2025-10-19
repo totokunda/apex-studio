@@ -36,6 +36,8 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
   const lastDataFrameRef = useRef<number | null>(null);
   const [selectedPoints, setSelectedPoints] = useState<Array<{ x: number; y: number; label: 1 | 0 }>>([]);
   const {fps} = useControlsStore();
+  const setSelectedMaskId = useControlsStore((s) => s.setSelectedMaskId);
+  const setIsMaskDragging = useMaskStore((s) => s.setIsMaskDragging);
 
 
   const currentFrame = useMemo(() => {
@@ -298,6 +300,12 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
 
   // Toggle point selection
   const togglePointSelection = (point: { x: number; y: number; label: 1 | 0 }) => {
+    try {
+      // Deselect any mask transforms/dragging in other previews
+      window.dispatchEvent(new CustomEvent('apex-mask-clear-transforms'));
+      setIsMaskDragging(false);
+      setSelectedMaskId(null);
+    } catch {}
     setSelectedPoints((prev) => {
       const isSelected = prev.some(p => p.x === point.x && p.y === point.y && p.label === point.label);
       if (isSelected) {
@@ -307,6 +315,17 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
       }
     });
   };
+
+  // Listen for mask selection elsewhere to clear touch point selection
+  useEffect(() => {
+    const handleClearTouch = () => {
+      setSelectedPoints([]);
+    };
+    window.addEventListener('apex-mask-clear-touch-selection', handleClearTouch as EventListener);
+    return () => {
+      window.removeEventListener('apex-mask-clear-touch-selection', handleClearTouch as EventListener);
+    };
+  }, []);
 
   return (
     <Group visible={tool==='mask'} ref={groupRef} clipX={0} clipY={0}  >

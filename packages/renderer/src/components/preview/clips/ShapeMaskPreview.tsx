@@ -63,6 +63,10 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
     e.cancelBubble = true;
     e.evt?.preventDefault?.();
     e.evt?.stopPropagation?.();
+    try {
+      // Selecting a mask should clear any selected touch points globally
+      window.dispatchEvent(new CustomEvent('apex-mask-clear-touch-selection'));
+    } catch {}
     setSelectedMaskId(mask.id);
     
     // Also select the corresponding clip

@@ -1,11 +1,11 @@
-import { getLocalFrame, useClipStore } from '@/lib/clip';
+import { useClipStore } from '@/lib/clip';
 import { useControlsStore } from '@/lib/control';
-import { MaskClipProps } from '@/lib/types';
+import { MaskClipProps, MaskTrackingDirection } from '@/lib/types';
 import React, { useCallback, useMemo } from 'react';
-import PropertiesSlider from '../PropertiesSlider';
-import { LuPlay, LuPlus, LuTrash2 } from 'react-icons/lu';
+import { LuChevronDown, LuPlay, LuTrash2 } from 'react-icons/lu';
 import { cn } from '@/lib/utils';
 import { getGlobalFrame } from '@/lib/clip';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioItem, DropdownMenuRadioGroup } from '@/components/ui/dropdown-menu';
 
 interface MaskTrackingPropertiesProps {
   mask: MaskClipProps;
@@ -96,60 +96,35 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({ mask, c
   return (
     <div className="flex flex-col gap-y-2 min-w-0">
       <div className="p-4 flex flex-col gap-y-4 px-5 min-w-0">
-        <h4 className="text-brand-light text-[12px] font-medium text-start">Tracking</h4>
-        {/* Confidence Threshold */}
-        <PropertiesSlider
-          label="Confidence Threshold"
-          value={mask.confidenceThreshold ?? 0.5}
-          onChange={(value) => updateMask({ confidenceThreshold: value })}
-          min={0}
-          max={1}
-          step={0.01}
-          toFixed={2}
-        />
-        {/* Keyframe Management */}
-        <div className="flex flex-col gap-y-2">
-          <div className="flex flex-row items-center justify-between">
-            <span className="text-brand-light text-[11px] font-medium">Keyframes</span>
-          </div>
-
-          {/* Keyframe List */}
-          <div className="flex flex-col gap-y-1 max-h-32 overflow-y-auto">
-            {keyframeNumbers.length === 0 ? (
-              <p className="text-brand-light/50 text-[10px] italic">No keyframes</p>
-            ) : (
-              keyframeNumbers.map((frame) => (
-                <div
-                  key={frame}
-                  onClick={() => handleSelectKeyframe(frame)}
-                  className={cn(
-                    "flex flex-row items-center justify-between px-2 py-1.5 rounded border cursor-pointer hover:bg-brand-light/5 transition-all duration-200",
-                    frame === activeKeyframe
-                      ? "bg-brand-light/10 border-brand-light/20"
-                      : "bg-brand border-brand-light/10"
-                  )}
-                >
-                  <span className="text-brand-light text-[11px] flex flex-row items-center">
-                    <span className="mr-0.5">Frame {frame}</span>
-                    {frame === activeKeyframe && (
-                      <span className="text-brand-light/60 text-[8px] ml-1">active</span>
-                    )}
-                  </span>
-                  {keyframeNumbers.length > 1 && (
-                    <button
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleRemoveKeyframe(frame);
-                      }}
-                      className="text-brand-light/60 hover:text-red-400 transition-colors"
-                    >
-                      <LuTrash2 className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
+        <h4 className="text-brand-light text-[12px] font-medium text-start">Mask Tracking</h4>
+        
+        <div>
+          <h3 className="text-brand-light text-[11px] font-medium text-start">
+            Direction
+          </h3>
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="w-full mt-2 flex flex-row items-center justify-between gap-x-2 px-3 py-2 cursor-pointer rounded-md bg-brand border border-brand-light/20 hover:bg-brand-light/10 transition-all duration-200">
+                <span className="text-brand-light text-[11px] font-medium">
+                  {mask.trackingDirection === 'forward' ? 'Forward' : mask.trackingDirection === 'backward' ? 'Backward' : 'Both'}
+                </span>
+                <LuChevronDown className="w-3 h-3 text-brand-light" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className='w-[var(--radix-dropdown-menu-trigger-width)] dark font-poppins bg-brand-background'>
+              <DropdownMenuRadioGroup value={mask.trackingDirection ?? 'both'} onValueChange={(value: string) => updateMask({ trackingDirection: value as MaskTrackingDirection })}>
+                <DropdownMenuRadioItem value='forward' className='w-full'>
+                  <span className="text-brand-light text-[11px] font-medium">Forward</span>
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value='backward' className='w-full'>
+                  <span className="text-brand-light text-[11px] font-medium">Backward</span>
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value='both' className='w-full'>
+                  <span className="text-brand-light text-[11px] font-medium">Both</span>
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+        </DropdownMenu>
         </div>
         <button className="w-full flex flex-row items-center gap-x-2 px-2 py-2.5 cursor-pointer rounded-md justify-center bg-brand border border-brand-light/20 hover:bg-brand-light/10 transition-all duration-200">
           <LuPlay className="w-3 h-3 text-brand-light" />

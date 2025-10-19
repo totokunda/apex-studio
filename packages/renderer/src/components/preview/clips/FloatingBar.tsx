@@ -18,6 +18,7 @@ import ColorInput from '@/components/properties/ColorInput';
 
 
 interface FloatingBarProps {
+  
 }
 
 const TextButton = ({ active, onClick }: { active: boolean; onClick: () => void }) => {
@@ -281,7 +282,7 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                     <div
                         onClick={() => { setTool('mask'); setMaskTool('touch'); }}
                         className={`flex flex-col relative items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
-                          maskTool === 'touch' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                          maskTool === 'touch' && tool === 'mask' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
                         }`}
                       >
               
@@ -294,7 +295,7 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                       <div
                         onClick={() => { setTool('mask'); setMaskTool('lasso'); }}
                         className={`flex flex-col items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
-                          maskTool === 'lasso' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                          maskTool === 'lasso' && tool === 'mask' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
                         }`}
                       >
                         <LuLasso className="w-4 h-4" />
@@ -303,7 +304,7 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                       <div
                         onClick={() => { setTool('mask'); setMaskTool('shape'); }}
                         className={`flex flex-col items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
-                          maskTool === 'shape' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
+                          maskTool === 'shape' && tool === 'mask' ? 'bg-brand-accent-two-shade border-brand-accent-two text-brand-light' : 'text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5'
                         }`}
                       >
                         {maskShape === 'rectangle' && <LuSquare className="w-4 h-4" />}
@@ -411,7 +412,6 @@ const FloatingBar:React.FC<FloatingBarProps> = () => {
                             </div>
                           </div>
                         </div>
-
                     </>
                   )}
 

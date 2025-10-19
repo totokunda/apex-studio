@@ -15,7 +15,7 @@ import TextPreview from './clips/TextPreview';
 import DrawingPreview from './clips/DrawingPreview';
 import MaskPreview from './clips/MaskPreview';
 import { useControlsStore } from '@/lib/control';
-import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps, DrawingClipProps, DrawingLine, PreprocessorClipType, MaskClipProps, MaskData } from '@/lib/types';
+import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps, DrawingClipProps, DrawingLine, PreprocessorClipType, MaskClipProps, MaskData, ClipTransform } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 import { SlSizeFullscreen } from 'react-icons/sl';
 import FullscreenPreview from './FullscreenPreview';
@@ -25,6 +25,104 @@ import { useDrawingStore } from '@/lib/drawing';
 import { useMaskStore } from '@/lib/mask';
 import { erasePolylineByEraser, transformEraserToLocal, mergeConnectedLines } from '@/lib/eraser-utils';
 import { calculateArea, doPolygonsIntersect, isPolygonInsidePolygon, mergePolygons } from '@/lib/polygon';
+
+const getFiniteNumber = (value: number | undefined, fallback = 0): number =>
+  Number.isFinite(value) ? (value as number) : fallback;
+
+const getSafeScale = (value: number | undefined): number => {
+  const scale = Number.isFinite(value) ? (value as number) : 1;
+  if (Math.abs(scale) < 1e-6) {
+    return scale < 0 ? -1e-6 : 1e-6;
+  }
+  return scale;
+};
+
+const getTransformCenter = (transform: ClipTransform): { x: number; y: number } => {
+  const baseWidth = Math.abs(getFiniteNumber(transform.width));
+  const baseHeight = Math.abs(getFiniteNumber(transform.height));
+  const scaleX = Math.abs(getSafeScale(transform.scaleX));
+  const scaleY = Math.abs(getSafeScale(transform.scaleY));
+  const actualWidth = baseWidth * (scaleX || 1);
+  const actualHeight = baseHeight * (scaleY || 1);
+  const originX = getFiniteNumber(transform.x);
+  const originY = getFiniteNumber(transform.y);
+  return {
+    x: originX + actualWidth / 2,
+    y: originY + actualHeight / 2,
+  };
+};
+
+
+const normalizeMaskPointForRotation = (
+  x: number,
+  y: number,
+  transform?: ClipTransform | null
+): { x: number; y: number } => {
+  if (!transform) return { x, y };
+  const rotation = getFiniteNumber(transform.rotation);
+  if (Math.abs(rotation) < 1e-6) {
+    return { x, y };
+  }
+  const originX = getFiniteNumber(transform.x);
+  const originY = getFiniteNumber(transform.y);
+  const angleRad = (rotation * Math.PI) / 180;
+  const dx = x - originX;
+  const dy = y - originY;
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+  const unrotatedX = originX + cos * dx + sin * dy;
+  const unrotatedY = originY - sin * dx + cos * dy;
+  return { x: unrotatedX, y: unrotatedY };
+};
+
+const normalizeFlatPointsForRotation = (
+  points: number[],
+  transform?: ClipTransform | null
+): number[] => {
+  if (!transform || !points.length) {
+    return points.slice();
+  }
+  const rotation = getFiniteNumber(transform.rotation);
+  if (Math.abs(rotation) < 1e-6) {
+    return points.slice();
+  }
+  const normalized: number[] = new Array(points.length);
+  for (let i = 0; i < points.length; i += 2) {
+    const x = points[i];
+    const y = points[i + 1];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      normalized[i] = x;
+      normalized[i + 1] = y;
+      continue;
+    }
+    const point = normalizeMaskPointForRotation(x, y, transform);
+    normalized[i] = point.x;
+    normalized[i + 1] = point.y;
+  }
+  return normalized;
+};
+
+const denormalizeMaskPointForRotation = (
+  x: number,
+  y: number,
+  transform?: ClipTransform | null
+): { x: number; y: number } => {
+  if (!transform) return { x, y };
+  const rotation = getFiniteNumber(transform.rotation);
+  if (Math.abs(rotation) < 1e-6) {
+    return { x, y };
+  }
+  const originX = getFiniteNumber(transform.x);
+  const originY = getFiniteNumber(transform.y);
+  const angleRad = (rotation * Math.PI) / 180;
+  const dx = x - originX;
+  const dy = y - originY;
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+  const rotatedX = originX + cos * dx - sin * dy;
+  const rotatedY = originY + sin * dx + cos * dy;
+  return { x: rotatedX, y: rotatedY };
+};
 
 interface PreviewProps {
 
@@ -46,6 +144,7 @@ const Preview:React.FC<PreviewProps> = () => {
   const setContentBounds = useViewportStore((s) => s.setContentBounds);
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const {clips, clipWithinFrame, timelines, addClip, addTimeline, updateClip} = useClipStore();
+  const getClipTransform = useClipStore((s) => s.getClipTransform);
   // Note: we use imperative store access in the recenter effect to avoid rerender loops
   const focusFrame = useControlsStore((s) => s.focusFrame);
   const totalTimelineFrames = useControlsStore((s) => s.totalTimelineFrames);
@@ -86,6 +185,14 @@ const Preview:React.FC<PreviewProps> = () => {
   const [touchLassoPoints, setTouchLassoPoints] = useState<number[]>([]);
   const isMaskDragging = useMaskStore((s) => s.isMaskDragging);
   const isOverMask = useMaskStore((s) => s.isOverMask);
+  const maskShapeTargetClipRef = useRef<PreprocessorClipType | null>(null);
+  const maskShapeTransformRef = useRef<ClipTransform | null>(null);
+  const maskRectStartNormalizedRef = useRef<{ x: number; y: number } | null>(null);
+  const resetMaskShapeDrawingRefs = useCallback(() => {
+    maskShapeTargetClipRef.current = null;
+    maskShapeTransformRef.current = null;
+    maskRectStartNormalizedRef.current = null;
+  }, []);
   // Memoize applicator factory configuration
   const applicatorConfig = useMemo(() => ({
     haldClutInstance,
@@ -324,6 +431,19 @@ const Preview:React.FC<PreviewProps> = () => {
       // Convert screen coordinates to world coordinates
       const worldX = (pointerPos.x - position.x) / scale;
       const worldY = (pointerPos.y - position.y) / scale;
+      const targetClip = getTopmostClipAtFrame() as PreprocessorClipType;
+      if (targetClip && (targetClip.type === 'video' || targetClip.type === 'image')) {
+        maskShapeTargetClipRef.current = targetClip;
+        const clipTransform = getClipTransform(targetClip.clipId) ?? targetClip.transform;
+        maskShapeTransformRef.current = clipTransform || null;
+        maskRectStartNormalizedRef.current = clipTransform
+          ? normalizeMaskPointForRotation(worldX, worldY, clipTransform)
+          : { x: worldX, y: worldY };
+      } else {
+        maskShapeTargetClipRef.current = null;
+        maskShapeTransformRef.current = null;
+        maskRectStartNormalizedRef.current = { x: worldX, y: worldY };
+      }
       
       setIsDrawingMaskRect(true);
       setMaskRectStart({ x: worldX, y: worldY });
@@ -373,6 +493,8 @@ const Preview:React.FC<PreviewProps> = () => {
 
 
         const localFrame = targetClip.type === 'image' ? 0 : getLocalFrame(focusFrame, targetClip);
+        const clipTransform = getClipTransform(targetClip.clipId) ?? targetClip.transform;
+        const normalizedPoint = normalizeMaskPointForRotation(worldX, worldY, clipTransform);
         
         // Get existing masks
         const currentMasks = targetClip.masks || [];
@@ -393,7 +515,10 @@ const Preview:React.FC<PreviewProps> = () => {
           
           const touchPoints = currentFrameData?.touchPoints || [];
           // Add new point with label
-          const updatedTouchPoints = [...touchPoints, { x: worldX, y: worldY, label: touchLabel === 'positive' ? 1 as const : 0 as const }];
+          const updatedTouchPoints = [
+            ...touchPoints,
+            { x: normalizedPoint.x, y: normalizedPoint.y, label: touchLabel === 'positive' ? 1 as const : 0 as const },
+          ];
 
           // Update keyframes
           if (keyframes instanceof Map) {
@@ -423,7 +548,9 @@ const Preview:React.FC<PreviewProps> = () => {
             featherAmount: featherAmount,
             keyframes: {
               [localFrame]: {
-                touchPoints: [{ x: worldX, y: worldY, label: touchLabel === 'positive' ? 1 as const : 0 as const }],
+                touchPoints: [
+                  { x: normalizedPoint.x, y: normalizedPoint.y, label: touchLabel === 'positive' ? 1 as const : 0 as const },
+                ],
               },
             },
             isTracked: false,
@@ -435,7 +562,7 @@ const Preview:React.FC<PreviewProps> = () => {
             backgroundColor: '#FFFFFF',
             backgroundOpacity: 100,
             backgroundColorEnabled: true,
-            transform: targetClip.transform ? { ...targetClip.transform } : undefined,
+            transform: clipTransform ? { ...clipTransform } : undefined,
           };
           
           currentMasks.push(newMask);
@@ -644,35 +771,86 @@ const Preview:React.FC<PreviewProps> = () => {
       
       const worldX = (pointerPos.x - position.x) / scale;
       const worldY = (pointerPos.y - position.y) / scale;
-
-      // add constraints for star and polygon
-      if (maskShape === 'star') {
-        const dx = worldX - maskRectStart.x;
-        const dy = worldY - maskRectStart.y;
-        const size = Math.max(Math.abs(dx), Math.abs(dy));
-        const sx = dx >= 0 ? 1 : -1;
-        const sy = dy >= 0 ? 1 : -1;
-        const constrainedX = maskRectStart.x + sx * size;
-        const constrainedY = maskRectStart.y + sy * size;
-        setMaskRectCurrent({ x: constrainedX, y: constrainedY });
-      } else if (maskShape === 'polygon') {
-        const dx = worldX - maskRectStart.x;
-        const dy = worldY - maskRectStart.y;
-        const ratio = 1.1543665517482078;
-        let width = Math.abs(dx);
-        let height = Math.abs(dy);
-        if (width / (height || 1) >= ratio) {
-          height = width / ratio;
-        } else {
-          width = height * ratio;
+      const clipTransform = maskShapeTransformRef.current;
+      const startNormalized =
+        maskRectStartNormalizedRef.current ??
+        (clipTransform
+          ? normalizeMaskPointForRotation(maskRectStart.x, maskRectStart.y, clipTransform)
+          : { x: maskRectStart.x, y: maskRectStart.y });
+      maskRectStartNormalizedRef.current = startNormalized;
+      
+      if (clipTransform) {
+        let normalizedCurrent = normalizeMaskPointForRotation(worldX, worldY, clipTransform);
+        
+        if (maskShape === 'star') {
+          const dx = normalizedCurrent.x - startNormalized.x;
+          const dy = normalizedCurrent.y - startNormalized.y;
+          const size = Math.max(Math.abs(dx), Math.abs(dy));
+          const sx = dx >= 0 ? 1 : -1;
+          const sy = dy >= 0 ? 1 : -1;
+          normalizedCurrent = {
+            x: startNormalized.x + sx * size,
+            y: startNormalized.y + sy * size,
+          };
+        } else if (maskShape === 'polygon') {
+          const dx = normalizedCurrent.x - startNormalized.x;
+          const dy = normalizedCurrent.y - startNormalized.y;
+          const ratio = 1.1543665517482078;
+          let width = Math.abs(dx);
+          let height = Math.abs(dy);
+          if (Math.abs(height) < 1e-6) {
+            height = width / ratio;
+          } else if (Math.abs(width) < 1e-6) {
+            width = height * ratio;
+          }
+          if (width / height >= ratio) {
+            height = width / ratio;
+          } else {
+            width = height * ratio;
+          }
+          const sx = dx >= 0 ? 1 : -1;
+          const sy = dy >= 0 ? 1 : -1;
+          normalizedCurrent = {
+            x: startNormalized.x + sx * width,
+            y: startNormalized.y + sy * height,
+          };
         }
-        const sx = dx >= 0 ? 1 : -1;
-        const sy = dy >= 0 ? 1 : -1;
-        const constrainedX = maskRectStart.x + sx * width;
-        const constrainedY = maskRectStart.y + sy * height;
-        setMaskRectCurrent({ x: constrainedX, y: constrainedY });
+        
+        const constrainedWorld = denormalizeMaskPointForRotation(
+          normalizedCurrent.x,
+          normalizedCurrent.y,
+          clipTransform
+        );
+        setMaskRectCurrent(constrainedWorld);
       } else {
-        setMaskRectCurrent({ x: worldX, y: worldY });
+        if (maskShape === 'star') {
+          const dx = worldX - maskRectStart.x;
+          const dy = worldY - maskRectStart.y;
+          const size = Math.max(Math.abs(dx), Math.abs(dy));
+          const sx = dx >= 0 ? 1 : -1;
+          const sy = dy >= 0 ? 1 : -1;
+          const constrainedX = maskRectStart.x + sx * size;
+          const constrainedY = maskRectStart.y + sy * size;
+          setMaskRectCurrent({ x: constrainedX, y: constrainedY });
+        } else if (maskShape === 'polygon') {
+          const dx = worldX - maskRectStart.x;
+          const dy = worldY - maskRectStart.y;
+          const ratio = 1.1543665517482078;
+          let width = Math.abs(dx);
+          let height = Math.abs(dy);
+          if (width / (height || 1) >= ratio) {
+            height = width / ratio;
+          } else {
+            width = height * ratio;
+          }
+          const sx = dx >= 0 ? 1 : -1;
+          const sy = dy >= 0 ? 1 : -1;
+          const constrainedX = maskRectStart.x + sx * width;
+          const constrainedY = maskRectStart.y + sy * height;
+          setMaskRectCurrent({ x: constrainedX, y: constrainedY });
+        } else {
+          setMaskRectCurrent({ x: worldX, y: worldY });
+        }
       }
       return;
     }
@@ -940,6 +1118,8 @@ const Preview:React.FC<PreviewProps> = () => {
       if (!targetClip || (targetClip.type !== 'video' && targetClip.type !== 'image')) return;
         
       const localFrame = targetClip.type === 'image' ? 0 : getLocalFrame(focusFrame, targetClip);
+      const clipTransform = getClipTransform(targetClip.clipId) ?? targetClip.transform;
+      const normalizedLasso = normalizeFlatPointsForRotation(lassoPoints, clipTransform);
         // Create the mask
         const newMask = {
           id: uuidv4(),
@@ -948,7 +1128,7 @@ const Preview:React.FC<PreviewProps> = () => {
           featherAmount: featherAmount,
           keyframes: {
             [localFrame]: {
-              lassoPoints: [...lassoPoints],
+              lassoPoints: normalizedLasso,
             },
           },
           isTracked: false,
@@ -960,18 +1140,18 @@ const Preview:React.FC<PreviewProps> = () => {
           backgroundColor: '#FFFFFF',
           backgroundOpacity: 100,
           backgroundColorEnabled: true,
-          transform: targetClip.transform ? { ...targetClip.transform } : undefined,
+          transform: clipTransform ? { ...clipTransform } : undefined,
         };
         
         // Get existing masks and check for containment
         const currentMasks = targetClip.masks || [];
         let masksToKeep = [...currentMasks];
         
-        const newMaskArea = calculateArea(lassoPoints);
+        const newMaskArea = calculateArea(normalizedLasso);
         
         // Track masks that intersect with the new mask for merging
         const intersectingMasks: any[] = [];
-        let mergedPoints = [...lassoPoints];
+        let mergedPoints = [...normalizedLasso];
         
         // Check each existing mask at this frame for containment and intersection
         masksToKeep = currentMasks.filter((existingMask) => {
@@ -1064,8 +1244,56 @@ const Preview:React.FC<PreviewProps> = () => {
     if (tool === 'mask' && maskTool === 'shape' && isDrawingMaskRect && maskRectStart && maskRectCurrent) {
       setIsDrawingMaskRect(false);
       
-      let width = Math.abs(maskRectCurrent.x - maskRectStart.x);
-      let height = Math.abs(maskRectCurrent.y - maskRectStart.y);
+      const storedClip = maskShapeTargetClipRef.current;
+      const candidateClip =
+        storedClip && (storedClip.type === 'video' || storedClip.type === 'image')
+          ? storedClip
+          : (getTopmostClipAtFrame() as PreprocessorClipType);
+      const targetClip =
+        candidateClip && (candidateClip.type === 'video' || candidateClip.type === 'image')
+          ? candidateClip
+          : null;
+      
+      if (!targetClip) {
+        resetMaskShapeDrawingRefs();
+        setMaskRectStart(null);
+        setMaskRectCurrent(null);
+        return;
+      }
+      
+      const storedTransform = maskShapeTransformRef.current;
+      const clipTransform =
+        storedClip &&
+        storedTransform &&
+        storedClip.clipId === targetClip.clipId
+          ? storedTransform
+          : getClipTransform(targetClip.clipId) ?? targetClip.transform;
+      const worldMinX = Math.min(maskRectStart.x, maskRectCurrent.x);
+      const worldMaxX = Math.max(maskRectStart.x, maskRectCurrent.x);
+      const worldMinY = Math.min(maskRectStart.y, maskRectCurrent.y);
+      const worldMaxY = Math.max(maskRectStart.y, maskRectCurrent.y);
+      const normalizedCorners = [
+        normalizeMaskPointForRotation(worldMinX, worldMinY, clipTransform),
+        normalizeMaskPointForRotation(worldMaxX, worldMinY, clipTransform),
+        normalizeMaskPointForRotation(worldMinX, worldMaxY, clipTransform),
+        normalizeMaskPointForRotation(worldMaxX, worldMaxY, clipTransform),
+      ];
+      const xs = normalizedCorners.map((corner) => corner.x);
+      const ys = normalizedCorners.map((corner) => corner.y);
+      let x = Math.min(...xs);
+      let y = Math.min(...ys);
+      const maxX = Math.max(...xs);
+      const maxY = Math.max(...ys);
+      let width = maxX - x;
+      let height = maxY - y;
+      
+      if (width <= 5 || height <= 5) {
+        resetMaskShapeDrawingRefs();
+        setMaskRectStart(null);
+        setMaskRectCurrent(null);
+        return;
+      }
+
       if (maskShape === 'star') {
         const size = Math.max(width, height);
         width = size;
@@ -1078,171 +1306,151 @@ const Preview:React.FC<PreviewProps> = () => {
           width = height * ratio;
         }
       }
-      
-      // Only create mask if shape has meaningful size
-      if (width > 5 && height > 5) {
-        const targetClip = getTopmostClipAtFrame() as PreprocessorClipType;
-        
-        if (!targetClip || (targetClip.type !== 'video' && targetClip.type !== 'image')) return;
-          
-          const localFrame = targetClip.type === 'image' ? 0 : getLocalFrame(focusFrame, targetClip);
-          const x = Math.min(maskRectStart.x, maskRectCurrent.x);
-          const y = Math.min(maskRectStart.y, maskRectCurrent.y);
-          
-          // Create the mask
-          const newMask = {
-            id: uuidv4(),
-            clipId: targetClip.clipId,
-            tool: 'shape' as const,
-            featherAmount: featherAmount,
-            keyframes: {
-              [localFrame]: {
-                shapeBounds: {
-                  x,
-                  y,
-                  width,
-                  height,
-                  rotation: 0,
-                  shapeType: maskShape,
-                  renderOnce: maskShape === 'polygon' || maskShape === 'star',
-                },
-              },
+
+      const localFrame = targetClip.type === 'image' ? 0 : getLocalFrame(focusFrame, targetClip);
+
+      // Create the mask
+      const newMask = {
+        id: uuidv4(),
+        clipId: targetClip.clipId,
+        tool: 'shape' as const,
+        featherAmount: featherAmount,
+        keyframes: {
+          [localFrame]: {
+            shapeBounds: {
+              x,
+              y,
+              width,
+              height,
+              rotation: 0,
+              shapeType: maskShape,
+              renderOnce: maskShape === 'polygon' || maskShape === 'star',
             },
-            isTracked: false,
-            createdAt: Date.now(),
-            lastModified: Date.now(),
-            maskColor: '#000000',
-            maskOpacity: 100,
-            maskColorEnabled: true,
-            backgroundColor: '#FFFFFF',
-            backgroundOpacity: 100,
-            backgroundColorEnabled: true,
-            transform: targetClip.transform ? { ...targetClip.transform } : undefined,
-          };
-          
-          // Get existing masks and check for containment
-          const currentMasks = targetClip.masks || [];
-          
-          // Helper function to check if one rectangle is inside another (axis-aligned)
-          const isRectInsideRect = (
-            inner: { x: number; y: number; width: number; height: number },
-            outer: { x: number; y: number; width: number; height: number }
-          ) => {
-            // Check if all corners of inner rectangle are inside outer rectangle
-            const innerRight = inner.x + inner.width;
-            const innerBottom = inner.y + inner.height;
-            const outerRight = outer.x + outer.width;
-            const outerBottom = outer.y + outer.height;
-            
-            return (
-              inner.x >= outer.x &&
-              inner.y >= outer.y &&
-              innerRight <= outerRight &&
-              innerBottom <= outerBottom
-            );
-          };
-          
-          const newMaskArea = width * height;
-          const newRectBounds = { x, y, width, height };
-          
-          // Filter out masks that are consumed by the new one
-          const masksToKeep = currentMasks.filter((existingMask) => {
-            
-            if (existingMask.tool !== 'shape') {
-              return true; // Keep non-shape masks
-            }
-            
-            // Get the rectangle bounds for this mask at this frame
-            const keyframes = existingMask.keyframes instanceof Map 
-              ? existingMask.keyframes 
-              : (existingMask.keyframes as Record<number, any>);
-            
-            const keyframeNumbers = keyframes instanceof Map
-              ? Array.from(keyframes.keys()).sort((a, b) => a - b)
-              : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
-            
-            const activeKeyframe = keyframeNumbers.filter((k) => k <= localFrame).pop();
-            
-            if (activeKeyframe === undefined) {
-              return true; // Keep if no keyframe data
-            }
-            
-            const maskData = keyframes instanceof Map 
-              ? keyframes.get(activeKeyframe) 
-              : keyframes[activeKeyframe];
-            
-            const existingBounds = maskData?.shapeBounds || maskData?.rectangleBounds;
-            if (!existingBounds) {
-              return true; // Keep if no bounds
-            }
-            
-            const existingRectBounds = existingBounds;
-            const existingArea = existingRectBounds.width * existingRectBounds.height;
-            
-            // Check containment
-            const newInsideExisting = isRectInsideRect(newRectBounds, existingRectBounds);
-            const existingInsideNew = isRectInsideRect(existingRectBounds, newRectBounds);
-            
-            if (newInsideExisting || existingInsideNew) {
-              // One mask is inside the other - keep the larger one
-              return existingArea > newMaskArea;
-            }
-            
-            return true; // Keep if no containment
-          });
-          
-          // Only add the new mask if it wasn't consumed by a larger mask
-          const shouldAddNewMask = !currentMasks.some((existingMask) => {
-
-            if (existingMask.tool !== 'shape') {
-              return false;
-            }
-            
-            const keyframes = existingMask.keyframes instanceof Map 
-              ? existingMask.keyframes 
-              : (existingMask.keyframes as Record<number, any>);
-            
-            const keyframeNumbers = keyframes instanceof Map
-              ? Array.from(keyframes.keys()).sort((a, b) => a - b)
-              : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
-            
-            const activeKeyframe = keyframeNumbers.filter((k) => k <= localFrame).pop();
-            
-            if (activeKeyframe === undefined) return false;
-            
-            const maskData = keyframes instanceof Map 
-              ? keyframes.get(activeKeyframe) 
-              : keyframes[activeKeyframe];
-            
-            const existingBounds = maskData?.shapeBounds || maskData?.rectangleBounds;
-            if (!existingBounds) return false;
-            
-            const existingRectBounds = existingBounds;
-            const existingArea = existingRectBounds.width * existingRectBounds.height;
-            
-            const newInsideExisting = isRectInsideRect(newRectBounds, existingRectBounds);
-            
-            // New mask is consumed by existing larger mask
-            return newInsideExisting && existingArea > newMaskArea;
-          });
-          
-          if (shouldAddNewMask) {
-            masksToKeep.push(newMask);
-          }
-          
-          updateClip(targetClip.clipId, {
-            masks: masksToKeep,
-          });
-
-          if (shouldAddNewMask) {
-            setSelectedMaskId(newMask.id);
-          }
+          },
+        },
+        isTracked: false,
+        createdAt: Date.now(),
+        lastModified: Date.now(),
+        maskColor: '#000000',
+        maskOpacity: 100,
+        maskColorEnabled: true,
+        backgroundColor: '#FFFFFF',
+        backgroundOpacity: 100,
+        backgroundColorEnabled: true,
+        transform: clipTransform ? { ...clipTransform } : undefined,
+      };
+      
+      const currentMasks = targetClip.masks || [];
+      
+      const isRectInsideRect = (
+        inner: { x: number; y: number; width: number; height: number },
+        outer: { x: number; y: number; width: number; height: number }
+      ) => {
+        const innerRight = inner.x + inner.width;
+        const innerBottom = inner.y + inner.height;
+        const outerRight = outer.x + outer.width;
+        const outerBottom = outer.y + outer.height;
         
+        return (
+          inner.x >= outer.x &&
+          inner.y >= outer.y &&
+          innerRight <= outerRight &&
+          innerBottom <= outerBottom
+        );
+      };
+      
+      const newMaskArea = width * height;
+      const newRectBounds = { x, y, width, height };
+      
+      const masksToKeep = currentMasks.filter((existingMask) => {
+        if (existingMask.tool !== 'shape') {
+          return true;
+        }
+        
+        const keyframes = existingMask.keyframes instanceof Map
+          ? existingMask.keyframes
+          : (existingMask.keyframes as Record<number, any>);
+        
+        const keyframeNumbers = keyframes instanceof Map
+          ? Array.from(keyframes.keys()).sort((a, b) => a - b)
+          : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
+        
+        const activeKeyframe = keyframeNumbers.filter((k) => k <= localFrame).pop();
+        
+        if (activeKeyframe === undefined) {
+          return true;
+        }
+        
+        const maskData = keyframes instanceof Map
+          ? keyframes.get(activeKeyframe)
+          : keyframes[activeKeyframe];
+        
+        const existingBounds = maskData?.shapeBounds || maskData?.rectangleBounds;
+        if (!existingBounds) {
+          return true;
+        }
+        
+        const existingRectBounds = existingBounds;
+        const existingArea = existingRectBounds.width * existingRectBounds.height;
+        
+        const newInsideExisting = isRectInsideRect(newRectBounds, existingRectBounds);
+        const existingInsideNew = isRectInsideRect(existingRectBounds, newRectBounds);
+        
+        if (newInsideExisting || existingInsideNew) {
+          return existingArea > newMaskArea;
+        }
+        
+        return true;
+      });
+      
+      const shouldAddNewMask = !currentMasks.some((existingMask) => {
+        if (existingMask.tool !== 'shape') {
+          return false;
+        }
+        
+        const keyframes = existingMask.keyframes instanceof Map
+          ? existingMask.keyframes
+          : (existingMask.keyframes as Record<number, any>);
+        
+        const keyframeNumbers = keyframes instanceof Map
+          ? Array.from(keyframes.keys()).sort((a, b) => a - b)
+          : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
+        
+        const activeKeyframe = keyframeNumbers.filter((k) => k <= localFrame).pop();
+        
+        if (activeKeyframe === undefined) return false;
+        
+        const maskData = keyframes instanceof Map
+          ? keyframes.get(activeKeyframe)
+          : keyframes[activeKeyframe];
+        
+        const existingBounds = maskData?.shapeBounds || maskData?.rectangleBounds;
+        if (!existingBounds) return false;
+        
+        const existingRectBounds = existingBounds;
+        const existingArea = existingRectBounds.width * existingRectBounds.height;
+        
+        const newInsideExisting = isRectInsideRect(newRectBounds, existingRectBounds);
+        
+        return newInsideExisting && existingArea > newMaskArea;
+      });
+      
+      if (shouldAddNewMask) {
+        masksToKeep.push(newMask);
+      }
+      
+      updateClip(targetClip.clipId, {
+        masks: masksToKeep,
+      });
+
+      if (shouldAddNewMask) {
+        setSelectedMaskId(newMask.id);
       }
       
       // Reset rectangle drawing state
       setMaskRectStart(null);
       setMaskRectCurrent(null);
+      resetMaskShapeDrawingRefs();
       return;
     }
     
@@ -1437,7 +1645,7 @@ const Preview:React.FC<PreviewProps> = () => {
       setShapeStart(null);
       setShapeCurrent(null);
     }
-  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline, isDrawingText, textStart, textCurrent, setCurrentLineId, maskTool, isDrawingLasso, lassoPoints, featherAmount, focusFrame, isMaskDragging,  getTopmostClipAtFrame, isDrawingMaskRect, maskRectStart, maskRectCurrent, isDrawingMaskBrush, maskBrushPoints, maskBrushSize, maskShape, touchDrawMode, isDrawingTouchLasso, touchLassoPoints]);
+  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline, isDrawingText, textStart, textCurrent, setCurrentLineId, maskTool, isDrawingLasso, lassoPoints, featherAmount, focusFrame, isMaskDragging,  getTopmostClipAtFrame, isDrawingMaskRect, maskRectStart, maskRectCurrent, isDrawingMaskBrush, maskBrushPoints, maskBrushSize, maskShape, touchDrawMode, isDrawingTouchLasso, touchLassoPoints, resetMaskShapeDrawingRefs]);
 
   const onMouseLeave = useCallback((e:KonvaEventObject<MouseEvent>) => {
      // set pointer to default 
@@ -1778,6 +1986,126 @@ const Preview:React.FC<PreviewProps> = () => {
   const renderMaskRectPreview = useCallback(() => {
     if (!isDrawingMaskRect || !maskRectStart || !maskRectCurrent) return null;
     
+    const sharedProps = {
+      stroke: 'rgb(0, 127, 245)',
+      strokeWidth: 1.5,
+      fill: 'rgba(0, 127, 245, 0.2)',
+      dash: [5, 5],
+      listening: false,
+    };
+
+    const clipTransform = maskShapeTransformRef.current;
+    if (clipTransform) {
+      const worldMinX = Math.min(maskRectStart.x, maskRectCurrent.x);
+      const worldMaxX = Math.max(maskRectStart.x, maskRectCurrent.x);
+      const worldMinY = Math.min(maskRectStart.y, maskRectCurrent.y);
+      const worldMaxY = Math.max(maskRectStart.y, maskRectCurrent.y);
+      const normalizedCorners = [
+        normalizeMaskPointForRotation(worldMinX, worldMinY, clipTransform),
+        normalizeMaskPointForRotation(worldMaxX, worldMinY, clipTransform),
+        normalizeMaskPointForRotation(worldMinX, worldMaxY, clipTransform),
+        normalizeMaskPointForRotation(worldMaxX, worldMaxY, clipTransform),
+      ];
+      const xs = normalizedCorners.map((corner) => corner.x);
+      const ys = normalizedCorners.map((corner) => corner.y);
+      let x = Math.min(...xs);
+      let y = Math.min(...ys);
+      const maxX = Math.max(...xs);
+      const maxY = Math.max(...ys);
+      let width = maxX - x;
+      let height = maxY - y;
+
+      if (width <= 0 || height <= 0) {
+        return null;
+      }
+
+      if (maskShape === 'star') {
+        const size = Math.max(width, height);
+        width = size;
+        height = size;
+      } else if (maskShape === 'polygon') {
+        const ratio = 1.1543665517482078;
+        if (Math.abs(height) < 1e-6) {
+          height = width / ratio;
+        } else if (Math.abs(width) < 1e-6) {
+          width = height * ratio;
+        } else if (width / height >= ratio) {
+          height = width / ratio;
+        } else {
+          width = height * ratio;
+        }
+      }
+
+      const centerLocal = { x: x + width / 2, y: y + height / 2 };
+      const centerWorld = denormalizeMaskPointForRotation(centerLocal.x, centerLocal.y, clipTransform);
+      const rotation = getFiniteNumber(clipTransform.rotation);
+
+      switch (maskShape) {
+        case 'rectangle':
+          return (
+            <Rect
+              {...sharedProps}
+              x={centerWorld.x}
+              y={centerWorld.y}
+              width={width}
+              height={height}
+              offsetX={width / 2}
+              offsetY={height / 2}
+              rotation={rotation}
+            />
+          );
+        case 'ellipse':
+          return (
+            <KonvaEllipse
+              {...sharedProps}
+              x={centerWorld.x}
+              y={centerWorld.y}
+              radiusX={width / 2}
+              radiusY={height / 2}
+              rotation={rotation}
+            />
+          );
+        case 'polygon': {
+          const radius = Math.min(width / Math.sqrt(3), height / 1.5);
+          return (
+            <RegularPolygon
+              {...sharedProps}
+              x={centerWorld.x}
+              y={centerWorld.y}
+              sides={3}
+              radius={radius}
+              rotation={rotation}
+            />
+          );
+        }
+        case 'star':
+          return (
+            <KonvaStar
+              {...sharedProps}
+              x={centerWorld.x}
+              y={centerWorld.y}
+              numPoints={5}
+              innerRadius={width / 4}
+              outerRadius={width / 2}
+              rotation={rotation}
+            />
+          );
+        default:
+          return (
+            <Rect
+              {...sharedProps}
+              x={centerWorld.x}
+              y={centerWorld.y}
+              width={width}
+              height={height}
+              offsetX={width / 2}
+              offsetY={height / 2}
+              rotation={rotation}
+            />
+          );
+      }
+    }
+    
     const x = Math.min(maskRectStart.x, maskRectCurrent.x);
     const y = Math.min(maskRectStart.y, maskRectCurrent.y);
     let width = Math.abs(maskRectCurrent.x - maskRectStart.x);
@@ -1787,14 +2115,6 @@ const Preview:React.FC<PreviewProps> = () => {
       width = size;
       height = size;
     }
-    
-    const sharedProps = {
-      stroke: 'rgb(0, 127, 245)',
-      strokeWidth: 1.5,
-      fill: 'rgba(0, 127, 245, 0.2)',
-      dash: [5, 5],
-      listening: false,
-    };
     
     switch (maskShape) {
       case 'rectangle':
