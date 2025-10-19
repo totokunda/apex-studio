@@ -309,7 +309,7 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
   };
 
   return (
-    <Group visible={tool==='mask'} ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight} >
+    <Group visible={tool==='mask'} ref={groupRef} clipX={0} clipY={0}  >
       {/* Render contours with zebra stripes (generated from lasso strokes and touch points) */}
       {displayContours.map((contour, index) => (
         <Group key={`contour-${index}`}>

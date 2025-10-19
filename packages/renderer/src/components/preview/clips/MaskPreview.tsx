@@ -1,15 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Group } from 'react-konva';
+import Konva from 'konva';
 import { getLocalFrame, useClipStore } from '@/lib/clip';
 import { useControlsStore } from '@/lib/control';
-import { AnyClipProps, MaskClipProps, MaskData, MaskShapeTool, PreprocessorClipType } from '@/lib/types';
-import LassoMaskPreview from './LassoMaskPreview';
-import ShapeMaskPreview from './ShapeMaskPreview';
-import DrawMaskPreview from './DrawMaskPreview';
-import TouchMaskPreview from './TouchMaskPreview';
-import Konva from 'konva';
+import {
+  AnyClipProps,
+  ClipTransform,
+  MaskClipProps,
+  MaskData,
+  MaskShapeTool,
+  PreprocessorClipType,
+} from '@/lib/types';
 import { useViewportStore } from '@/lib/viewport';
 import { useMaskStore } from '@/lib/mask';
+import LassoMaskPreview from './LassoMaskPreview';
+import ShapeMaskPreview from './ShapeMaskPreview';
+import TouchMaskPreview from './TouchMaskPreview';
+import DrawMaskPreview from './DrawMaskPreview';
 
 interface MaskPreviewProps {
   clips: AnyClipProps[];
@@ -25,7 +32,39 @@ interface MaskRenderData {
   activeKeyframe: number;
 }
 
-const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips, rectWidth, rectHeight }) => {
+type GroupTransform = {
+  x?: number;
+  y?: number;
+  rotation?: number;
+};
+
+interface MaskGroupTransforms {
+  outer: GroupTransform;
+  inner: GroupTransform;
+}
+
+const buildMaskGroupTransforms = (transform?: ClipTransform): MaskGroupTransforms => {
+  if (!transform) {
+    return { outer: {}, inner: {} };
+  }
+
+  const x = Number.isFinite(transform.x) ? transform.x : 0;
+  const y = Number.isFinite(transform.y) ? transform.y : 0;
+  const rotation = Number.isFinite(transform.rotation) ? transform.rotation : 0;
+
+  return {
+    outer: { x, y, rotation },
+    inner: { x: -x, y: -y },
+  };
+};
+
+const MaskPreview: React.FC<MaskPreviewProps> = ({
+  clips,
+  sortClips,
+  filterClips,
+  rectWidth,
+  rectHeight,
+}) => {
   const { clipWithinFrame } = useClipStore();
   const focusFrame = useControlsStore((s) => s.focusFrame);
   const [animationOffset, setAnimationOffset] = useState(0);
@@ -35,81 +74,66 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
   const setIsOverMask = useMaskStore((s) => s.setIsOverMask);
   const isOverMask = useMaskStore((s) => s.isOverMask);
   const updateClip = useClipStore((s) => s.updateClip);
+  const getClipTransform = useClipStore((s) => s.getClipTransform);
 
   const ref = useRef<Konva.Group>(null);
   const prevMaskIdsRef = useRef<Set<string>>(new Set());
-  // get the clip for the mask 
-  
 
-  // Compute which masks should be visible
   useEffect(() => {
     const masksData: MaskRenderData[] = [];
     let foundMasks = false;
 
     sortClips(filterClips(clips)).forEach((clip) => {
-      if ((clip.type !== 'video' && clip.type !== 'image')) return;
+      if (clip.type !== 'video' && clip.type !== 'image') return;
 
-      // Only render masks when the parent clip is active at the current focus frame
       const clipIsActive = clipWithinFrame(clip, focusFrame);
       if (!clipIsActive) return;
 
       const masks = (clip as any).masks || [];
 
       masks.forEach((mask: MaskClipProps) => {
-          // Handle both Map and Record types for keyframes
-          const keyframes = mask.keyframes instanceof Map 
-            ? mask.keyframes 
-            : (mask.keyframes as Record<number, any>);
+        const keyframes = mask.keyframes instanceof Map ? mask.keyframes : (mask.keyframes as Record<number, any>);
 
-          const keyframeNumbers = keyframes instanceof Map
-            ? Array.from(keyframes.keys()).map(Number).sort((a, b) => a - b)
-            : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
+        const keyframeNumbers = keyframes instanceof Map
+          ? Array.from(keyframes.keys()).map(Number).sort((a, b) => a - b)
+          : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
 
-          if (keyframeNumbers.length === 0) return;
+        if (keyframeNumbers.length === 0) return;
 
-          // Calculate local frame relative to this clip (aligns with how mask keyframes are stored)
-          const startFrame = clip.startFrame ?? 0;
-          const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? (clip.framesToGiveStart ?? 0) : 0;
-          const realStartFrame = startFrame + framesToGiveStart;
-          const localFrame = focusFrame - realStartFrame;
+        const startFrame = clip.startFrame ?? 0;
+        const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? (clip.framesToGiveStart ?? 0) : 0;
+        const realStartFrame = startFrame + framesToGiveStart;
+        const localFrame = focusFrame - realStartFrame;
 
-          // Helper: nearest keyframe selection (same behavior as shape.ts)
-          const nearestKeyframe = (frame: number) => {
-            if (frame < keyframeNumbers[0]) return keyframeNumbers[0];
-            const atOrBefore = keyframeNumbers.filter((k) => k <= frame).pop();
-            return atOrBefore ?? keyframeNumbers[keyframeNumbers.length - 1];
-          };
+        const nearestKeyframe = (frame: number) => {
+          if (frame < keyframeNumbers[0]) return keyframeNumbers[0];
+          const atOrBefore = keyframeNumbers.filter((k) => k <= frame).pop();
+          return atOrBefore ?? keyframeNumbers[keyframeNumbers.length - 1];
+        };
 
-          // Prefer localFrame for video; for image it should render for the entire clip duration
-          // Fallback to focusFrame if keys were stored globally
-          const candidateLocal = nearestKeyframe(localFrame);
-          const candidateGlobal = nearestKeyframe(focusFrame);
-          const activeKeyframe = clip.type === 'video' ? (candidateLocal ?? candidateGlobal) : 0;
+        const candidateLocal = nearestKeyframe(localFrame);
+        const candidateGlobal = nearestKeyframe(focusFrame);
+        const activeKeyframe = clip.type === 'video' ? (candidateLocal ?? candidateGlobal) : 0;
 
+        if (activeKeyframe !== undefined) {
+          const maskData = keyframes instanceof Map ? keyframes.get(activeKeyframe) : keyframes[activeKeyframe];
 
-          if (activeKeyframe !== undefined) {
-            const maskData = keyframes instanceof Map 
-              ? keyframes.get(activeKeyframe) 
-              : keyframes[activeKeyframe];
-
-            if (maskData) {
-              masksData.push({
-                mask,
-                maskData,
-                activeKeyframe,
-              });
-              foundMasks = true;
-            }
+          if (maskData) {
+            masksData.push({
+              mask,
+              maskData,
+              activeKeyframe,
+            });
+            foundMasks = true;
           }
+        }
       });
     });
 
     setMasksToRender(masksData);
     setHasMasks(foundMasks);
-    
   }, [clips, focusFrame, sortClips, filterClips, clipWithinFrame]);
 
-  // Animate zebra stripe effect
   useEffect(() => {
     if (!hasMasks) {
       setAnimationOffset(0);
@@ -118,7 +142,7 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
 
     let animationFrameId: number;
     const animate = () => {
-      setAnimationOffset(prev => (prev + 0.5) % 20);
+      setAnimationOffset((prev) => (prev + 0.5) % 20);
       animationFrameId = requestAnimationFrame(animate);
     };
 
@@ -126,31 +150,20 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
     return () => cancelAnimationFrame(animationFrameId);
   }, [hasMasks]);
 
-  // Reset hover state when masks are deleted while hovering
   useEffect(() => {
-    // Create a set of currently rendered mask IDs
     const currentMaskIds = new Set(masksToRender.map(({ mask }) => mask.id));
-    
-    // If isOverMask is true but no masks are being rendered, reset the hover state
+
     if (isOverMask && currentMaskIds.size === 0) {
       setIsOverMask(false);
     }
-    
-    // If a mask was removed while being hovered (comparing with previous render)
-    // Check if any previously rendered mask is now missing
+
     if (isOverMask && prevMaskIdsRef.current.size > 0) {
-      const hadMaskRemoved = Array.from(prevMaskIdsRef.current).some(
-        (prevId) => !currentMaskIds.has(prevId)
-      );
-      
-      // If a mask was removed and we're in mask tool mode, reset hover state
-      // This ensures cursor returns to crosshair
+      const hadMaskRemoved = Array.from(prevMaskIdsRef.current).some((prevId) => !currentMaskIds.has(prevId));
       if (hadMaskRemoved && tool === 'mask') {
         setIsOverMask(false);
       }
     }
-    
-    // Update the ref for next render
+
     prevMaskIdsRef.current = currentMaskIds;
   }, [masksToRender, isOverMask, setIsOverMask, tool]);
 
@@ -159,93 +172,81 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
   return (
     <Group ref={ref}>
       {masksToRender.map(({ mask, maskData, activeKeyframe }) => {
-
         const clip = clips.find((c) => c.clipId === mask.clipId);
         if (!clip) return null;
+
+        const clipTransform = getClipTransform(mask.clipId!) ?? clip.transform;
+        const { outer, inner } = buildMaskGroupTransforms(clipTransform);
         const localFrame = getLocalFrame(focusFrame, clip);
+
         if (mask.tool === 'lasso' && maskData?.lassoPoints && maskData.lassoPoints.length >= 6) {
-          // Close the path
           const closedPoints = [...maskData.lassoPoints, maskData.lassoPoints[0], maskData.lassoPoints[1]];
-          const clipTransform = clip?.transform
-          
+
           return (
-            <Group rotation={clipTransform?.rotation ?? 0}>
-            <LassoMaskPreview
-              key={`mask-${mask.id}-${activeKeyframe}`}
-                mask={mask}
-                points={closedPoints}
-                animationOffset={animationOffset}
-                rectWidth={rectWidth}
-                rectHeight={rectHeight}
-              />
+            <Group key={`mask-${mask.id}-${activeKeyframe}`} {...outer}>
+              <Group {...inner}>
+                <LassoMaskPreview
+                  mask={mask}
+                  points={closedPoints}
+                  animationOffset={animationOffset}
+                  rectWidth={rectWidth}
+                  rectHeight={rectHeight}
+                />
+              </Group>
             </Group>
           );
-        } else if ((mask.tool === 'shape' || (mask.tool as any) === 'rectangle') && (maskData?.shapeBounds)) {
-          // Support both new shapeBounds and legacy rectangleBounds (for backward compatibility)
-          const bounds = maskData.shapeBounds
+        }
+
+        if ((mask.tool === 'shape' || (mask.tool as any) === 'rectangle') && maskData?.shapeBounds) {
+          const bounds = maskData.shapeBounds;
           const shapeType: MaskShapeTool = bounds?.shapeType || 'rectangle';
-          const clipTransform = clip?.transform
-          
+
           return (
-            <Group 
-            key={`mask-group-${mask.id}-${activeKeyframe}`} 
-            scaleX={clipTransform?.scaleX ?? 1} 
-            scaleY={clipTransform?.scaleY ?? 1} 
-            rotation={clipTransform?.rotation ?? 0}
-            >
-            <ShapeMaskPreview
-              key={`mask-${mask.id}-${activeKeyframe}`}
-              mask={mask}
-              x={bounds.x}
-              y={bounds.y}
-              width={bounds.width}
-              height={bounds.height}
-              rotation={bounds.rotation ?? 0}
-              shapeType={shapeType}
-              scaleX={bounds.scaleX ?? 1}
-              scaleY={bounds.scaleY ?? 1}
-              animationOffset={animationOffset}
-              rectWidth={rectWidth}
-              rectHeight={rectHeight}
-            />
+            <Group key={`mask-group-${mask.id}-${activeKeyframe}`} {...outer}>
+              <Group {...inner}>
+                <ShapeMaskPreview
+                  key={`mask-${mask.id}-${activeKeyframe}`}
+                  mask={mask}
+                  x={bounds.x}
+                  y={bounds.y}
+                  width={bounds.width}
+                  height={bounds.height}
+                  rotation={bounds.rotation ?? 0}
+                  shapeType={shapeType}
+                  scaleX={bounds.scaleX ?? 1}
+                  scaleY={bounds.scaleY ?? 1}
+                  animationOffset={animationOffset}
+                  rectWidth={rectWidth}
+                  rectHeight={rectHeight}
+                />
+              </Group>
             </Group>
           );
-        } else if (mask.tool === 'draw' && maskData?.drawStrokes) {
-          return (
-            <DrawMaskPreview
-              key={`mask-${mask.id}-${activeKeyframe}`}
-              mask={mask}
-              drawStrokes={maskData.drawStrokes}
-              animationOffset={animationOffset}
-              rectWidth={rectWidth}
-              rectHeight={rectHeight}
-            />
-          );
-          } else if (mask.tool === 'touch' && (maskData?.touchPoints)) {
+        }
 
-            const activeDataKeyPoints = localFrame === activeKeyframe || clip.type === 'image' ? maskData.touchPoints : [];
+        if (mask.tool === 'touch' && maskData?.touchPoints) {
+          const activeDataKeyPoints =
+            localFrame === activeKeyframe || clip.type === 'image' ? maskData.touchPoints : [];
 
-            const handleDeletePoints = (pointsToDelete: Array<{ x: number; y: number; label: 1 | 0 }>) => {
+          const handleDeletePoints = (pointsToDelete: Array<{ x: number; y: number; label: 1 | 0 }>) => {
             const updatedTouchPoints = (maskData.touchPoints || []).filter((point: { x: number; y: number; label: 1 | 0 }) => {
-              return !pointsToDelete.some(p => p.x === point.x && p.y === point.y && p.label === point.label);
+              return !pointsToDelete.some((p) => p.x === point.x && p.y === point.y && p.label === point.label);
             });
 
-            const targetClip = clips.find(c => c.clipId === mask.clipId);
-            
+            const targetClip = clips.find((c) => c.clipId === mask.clipId);
+
             if (targetClip && mask.clipId) {
               const currentMasks = (targetClip as PreprocessorClipType).masks || [];
-              
-              // If no points remain and no lasso strokes, remove the mask entirely
-              if (updatedTouchPoints.length === 0 ) {
+
+              if (updatedTouchPoints.length === 0) {
                 const updatedMasks = currentMasks.filter((m) => m.id !== mask.id);
                 updateClip(mask.clipId, { masks: updatedMasks });
-                // Also clear the selected mask if this was selected
+
                 const { setSelectedMaskId, selectedMaskId } = useControlsStore.getState();
                 if (selectedMaskId === mask.id) {
                   setSelectedMaskId(null);
                 }
               } else {
-                // Update the mask keyframes
                 const keyframes = mask.keyframes instanceof Map ? mask.keyframes : (mask.keyframes as Record<number, any>);
                 const updatedKeyframes = keyframes instanceof Map ? new Map(keyframes) : { ...keyframes };
 
@@ -256,29 +257,45 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
                 }
 
                 const updatedMasks = currentMasks.map((m: any) =>
-                  m.id === mask.id ? { ...m, keyframes: updatedKeyframes } : m
+                  m.id === mask.id ? { ...m, keyframes: updatedKeyframes } : m,
                 );
                 updateClip(mask.clipId, { masks: updatedMasks });
               }
             }
           };
 
-          const clipTransform = clip?.transform
-
           return (
-            <Group rotation={clipTransform?.rotation ?? 0}>
-            <TouchMaskPreview     
-              clip={clip as PreprocessorClipType}
-              key={`mask-${mask.id}-${activeKeyframe}`}
-              touchPoints={activeDataKeyPoints}
-              animationOffset={animationOffset}
-              rectWidth={rectWidth}
-              rectHeight={rectHeight}
-              onDeletePoints={handleDeletePoints}
-            />
+            <Group key={`mask-${mask.id}-${activeKeyframe}`} {...outer}>
+              <Group {...inner}>
+                <TouchMaskPreview
+                  clip={clip as PreprocessorClipType}
+                  touchPoints={activeDataKeyPoints}
+                  animationOffset={animationOffset}
+                  rectWidth={rectWidth}
+                  rectHeight={rectHeight}
+                  onDeletePoints={handleDeletePoints}
+                />
+              </Group>
             </Group>
           );
         }
+
+        if (mask.tool === 'draw' && maskData?.drawStrokes) {
+          return (
+            <Group key={`mask-${mask.id}-${activeKeyframe}`} {...outer}>
+              <Group {...inner}>
+                <DrawMaskPreview
+                  mask={mask}
+                  drawStrokes={maskData.drawStrokes}
+                  animationOffset={animationOffset}
+                  rectWidth={rectWidth}
+                  rectHeight={rectHeight}
+                />
+              </Group>
+            </Group>
+          );
+        }
+
         return null;
       })}
     </Group>
@@ -286,4 +303,3 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({ clips, sortClips, filterClips
 };
 
 export default MaskPreview;
-

@@ -19,6 +19,35 @@ const PositionProperties: React.FC<PositionPropertiesProps> = ({ clipId }) => {
 
     const [spinning, setSpinning] = useState(false);
 
+    const handleRotationChange = (newRotation: number) => {
+      if (!clip?.transform) return;
+      if (!isFinite(newRotation)) return;
+
+      const { x = 0, y = 0, width = 0, height = 0, scaleX = 1, scaleY = 1, rotation = 0 } = clip.transform;
+
+      const scaledWidth = (width || 0) * (scaleX || 1);
+      const scaledHeight = (height || 0) * (scaleY || 1);
+
+      // Vector from top-left to visual center
+      const vx = scaledWidth / 2;
+      const vy = scaledHeight / 2;
+
+      const r0 = (rotation * Math.PI) / 180;
+      const r1 = (newRotation * Math.PI) / 180;
+
+      // Rotate v by r: R(r) * v
+      const r0vx = vx * Math.cos(r0) - vy * Math.sin(r0);
+      const r0vy = vx * Math.sin(r0) + vy * Math.cos(r0);
+      const r1vx = vx * Math.cos(r1) - vy * Math.sin(r1);
+      const r1vy = vx * Math.sin(r1) + vy * Math.cos(r1);
+
+      // Keep center fixed: P' = P + R(r0)v - R(r1)v
+      const nx = x + (r0vx - r1vx);
+      const ny = y + (r0vy - r1vy);
+
+      setClipTransform(clipId, { x: nx, y: ny, rotation: newRotation });
+    };
+
     const handleAlign = (type: 'left' | 'center-h' | 'right' | 'top' | 'center-v' | 'bottom') => {
       if (!clip?.transform || !contentBounds) return;
       
@@ -126,7 +155,7 @@ const PositionProperties: React.FC<PositionPropertiesProps> = ({ clipId }) => {
           <Input label="Position" value={clip?.transform?.x.toFixed(0).toString() ?? '0'} onChange={(value) => updateClip(clipId, { transform: { ...clip?.transform!, x: Number(value) } })} startLogo="X"  />
           <Input emptyLabel  value={clip?.transform?.y.toFixed(0).toString() ?? '0'} onChange={(value) => updateClip(clipId, { transform: { ...clip?.transform!, y: Number(value) }    })} startLogo="Y" />
         </div>
-        <Input label="Rotation" value={clip?.transform?.rotation.toFixed(0).toString() ?? '0'} onChange={(value) => updateClip(clipId, { transform: { ...clip?.transform!, rotation: Number(value) } })} startLogo="R"  />
+        <Input label="Rotation" value={clip?.transform?.rotation.toFixed(0).toString() ?? '0'} onChange={(value) => handleRotationChange(Number(value))} startLogo="R"  />
         </div>
     </div>
   )

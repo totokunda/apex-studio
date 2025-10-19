@@ -168,6 +168,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
   const getValidTab = (currentTab: string) => {
     // Check if current tab is valid for this clip type
+    if (hasMask) return "mask";
     if (currentTab === "line" && hasLine) return "line";
     if (currentTab === "mask" && hasMask) return "mask";
     if (currentTab === "text" && hasText) return "text";
@@ -182,7 +183,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     // If current tab is invalid, return first available tab
     if (hasValidPreprocessor) return "preprocessor-info";
     if (hasLine) return "line";
-    if (hasMask) return "mask";
     if (hasTransform) return "transform";
     if (hasAudio) return "audio";
     if (hasAppearance) return "appearance";
@@ -267,12 +267,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
-            {(hasTransform) && <TabsTrigger value="transform" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
+            {(hasTransform && !hasMask) && <TabsTrigger value="transform" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
             {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Mask</TabsTrigger>}
-            {(hasAudio) && <TabsTrigger value="audio" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
-            {(hasDuration) && <TabsTrigger value="duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
-            {(hasAdjust) && <TabsTrigger value="adjust" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Adjust</TabsTrigger>}
-            {(hasAppearance) && <TabsTrigger value="appearance" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
+            {(hasAudio && !hasMask) && <TabsTrigger value="audio" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
+            {(hasDuration && !hasMask) && <TabsTrigger value="duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            {(hasAdjust && !hasMask) && <TabsTrigger value="adjust" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Adjust</TabsTrigger>}
+            {(hasAppearance && !hasMask) && <TabsTrigger value="appearance" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
           </TabsList>
           <LuChevronRight onClick={() => {
             if (tabRef.current) {
@@ -296,23 +296,23 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           </TabsContent>}
           
           {(hasText) && <TabsContent value="text" className="min-w-0 m-0">  <TextProperties clipId={clipId} /> </TabsContent>}
-          {(hasTransform) && <TabsContent  value="transform" className="min-w-0 divide-y divide-brand-light/10 m-0">
+          {(hasTransform && !hasMask) && <TabsContent  value="transform" className="min-w-0 divide-y divide-brand-light/10 m-0">
             <PositionProperties clipId={clipId}  />
             <LayoutProperties clipId={clipId}  />
           </TabsContent>}
           {(hasMask) && <TabsContent value="mask" className="min-w-0 m-0">
             <MaskPropertiesPanel clipId={clipId} />
           </TabsContent>}
-          {(hasAudio) && <TabsContent value="audio" className="min-w-0 m-0">
+          {(hasAudio && !hasMask) && <TabsContent value="audio" className="min-w-0 m-0">
             <AudioProperties clipId={clipId} />
           </TabsContent>}
-          {(hasDuration) && <TabsContent value="duration" className="min-w-0 m-0">
+          {(hasDuration && !hasMask) && <TabsContent value="duration" className="min-w-0 m-0">
             <DurationProperties clipId={clipId} />
           </TabsContent>}
-          {(hasAdjust) && <TabsContent value="adjust" className="min-w-0 m-0">
+          {(hasAdjust && !hasMask) && <TabsContent value="adjust" className="min-w-0 m-0">
             <AdjustProperties clipId={clipId} />
           </TabsContent>}
-          {(hasAppearance) && <TabsContent value="appearance" className="min-w-0 m-0">
+          {(hasAppearance && !hasMask) && <TabsContent value="appearance" className="min-w-0 m-0">
             <AppearanceProperties clipId={clipId} />
           </TabsContent>}
           </div>

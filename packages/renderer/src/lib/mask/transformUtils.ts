@@ -59,6 +59,7 @@ const getCenter = (transform: ClipTransform): { x: number; y: number } => {
   };
 };
 
+
 const transformPoint = (
   x: number,
   y: number,
