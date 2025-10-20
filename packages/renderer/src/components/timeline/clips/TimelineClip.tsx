@@ -14,6 +14,7 @@ import {useWebGLMask} from "@/components/preview/mask/useWebGLMask"
 import { PreprocessorClip } from "./PreprocessorClip";
 import MaskKeyframes from "./MaskKeyframes";
 import { useViewportStore } from "@/lib/viewport";
+import { useContextMenuStore } from '@/lib/context-menu';
 const THUMBNAIL_TILE_SIZE = 36;
 
 const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType,  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 54, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
@@ -85,6 +86,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const [isDragging, setIsDragging] = useState(false);
     const rectRefLeft = useRef<Konva.Rect>(null);
     const rectRefRight = useRef<Konva.Rect>(null);
+    // global context menu used instead of local state
     const { applyFilters } = useWebGLFilters();
     const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
     
@@ -1115,6 +1117,62 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         setSelectedPreprocessorId(null);
     }, [isSelected, currentClipId, toggleClipSelection, moveClipToEnd]);
 
+    const handleContextMenu = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+        e.evt.preventDefault();
+        const stage = e.target.getStage();
+        const container = stage?.container();
+        if (!container) return;
+        // Select this clip if it's not already part of the selection
+        const sel = useControlsStore.getState().selectedClipIds || [];
+        if (!sel.includes(currentClipId)) {
+            useControlsStore.getState().setSelectedClipIds([currentClipId]);
+        }
+        // Use global context menu store
+        const controls = useControlsStore.getState();
+        const clipsState = useClipStore.getState();
+        const clip = clipsState.getClipById(currentClipId);
+        const isVideo = clip?.type === 'video';
+        const isSeparated = (() => {
+            if (!clip || clip.type !== 'video') return false;
+            try {
+                const url = new URL(clip.src);
+                if ((url.hash || '').replace('#','') === 'video') return true;
+                const audioURL = new URL(clip.src); audioURL.hash = 'audio';
+                return (clipsState.clips || []).some(c => c.type === 'audio' && c.src === audioURL.toString());
+            } catch { return false; }
+        })();
+        const targetIds = (controls.selectedClipIds || []).includes(currentClipId) ? controls.selectedClipIds : [currentClipId];
+        useContextMenuStore.getState().openMenu({
+            position: { x: e.evt.clientX, y: e.evt.clientY },
+            target: { type: 'clip', clipIds: targetIds, primaryClipId: currentClipId, isVideo: !!isVideo },
+            groups: [
+                {
+                    id: 'edit',
+                    items: [
+                        { id: 'copy', label: 'Copy', action: 'copy', shortcut: '⌘C' },
+                        { id: 'cut', label: 'Cut', action: 'cut', shortcut: '⌘X' },
+                        { id: 'paste', label: 'Paste', action: 'paste', shortcut: '⌘V' },
+                        { id: 'delete', label: 'Delete', action: 'delete', shortcut: 'Del' },
+                    ],
+                },
+                {
+                    id: 'clip-actions',
+                    items: [
+                        { id: 'split', label: 'Split at Playhead', action: 'split' },
+                        { id: 'separate', label: 'Separate Audio', action: 'separateAudio', disabled: !isVideo || isSeparated },
+                    ],
+                },
+                {
+                    id: 'other',
+                    items: [
+                        { id: 'export', label: 'Export…', action: 'export' },
+                        { id: 'group', label: 'Group…', action: 'group', disabled: (controls.selectedClipIds || []).length < 2 },
+                    ],
+                },
+            ],
+        });
+    }, [currentClipId]);
+
     useEffect(() => {
         if (isSelected) {
             rectRefLeft.current?.moveToTop();
@@ -1318,6 +1376,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 onDragEnd={handleDragEnd} 
                 onDragMove={handleDragMove} 
                 onDragStart={handleDragStart}
+                onContextMenu={handleContextMenu}
                 x={isDragging ? tempClipPosition.x : clipPosition.x } 
                 y={(isDragging ? tempClipPosition.y : clipPosition.y)} 
                 width={clipWidth}
@@ -1442,6 +1501,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 )}
      
             </Group>            
+            {/* Per-clip menu component retained (optional); global menu now handles rendering */}
             {hasPreprocessors && (currentClip?.type === 'video' || currentClip?.type === 'image') && (
                 <>
                     {(currentClip as VideoClipProps | ImageClipProps).preprocessors.map((preprocessor) => {

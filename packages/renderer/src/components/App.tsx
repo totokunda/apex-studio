@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { useClipStore } from "@/lib/clip";
 import { Preprocessor } from "@/lib/preprocessor/api";
 import { PreprocessorItem } from "./menus/PreprocessorMenu";
+import GlobalContextMenu from "@/components/GlobalContextMenu";
 
 const App:React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -130,6 +131,7 @@ const App:React.FC = () => {
         )}
       </div>
     </main>
+    <GlobalContextMenu />
     <DragOverlay dropAnimation={null}>
       {activeDragItem ? (
         <>

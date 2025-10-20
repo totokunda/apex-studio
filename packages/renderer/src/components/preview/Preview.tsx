@@ -2165,7 +2165,8 @@ const Preview:React.FC<PreviewProps> = () => {
            <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale} width={rectWidth} height={rectHeight} >
             <Rect x={0} y={0}  width={rectWidth} height={rectHeight} fill={'#000000'} />
                {sortClips(filterClips(clips)).map((clip) => {
-                const hasOverlap = (clip.type === 'video' || clip.type === 'image') ? true : false;
+                const startFrame = clip.startFrame || 0;
+                const hasOverlap = (clip.type === 'video' || clip.type === 'image') && (startFrame > 0) ? true : false;
                 
                 const clipAtFrame = clipWithinFrame(clip, focusFrame, hasOverlap, 1);
                 const clipAtFrameNoOverlap = clipWithinFrame(clip, focusFrame);
@@ -2217,7 +2218,7 @@ const Preview:React.FC<PreviewProps> = () => {
     {/* Mount non-visual audio previews OUTSIDE Konva tree so effects run */}
     {<>
         {sortClips(filterClips(clips, true)).map((clip) => {
-          const hasOverlap = (clip.type === 'video') ? true : false;
+          const hasOverlap = (clip.type === 'video' && (clip.startFrame || 0) > 0) ? true : false;
           const clipAtFrame = clipWithinFrame(clip, focusFrame, hasOverlap, 1);
           if (!clipAtFrame) return null;
           if (clip.type === 'audio' || clip.type === 'video') {

@@ -33,7 +33,7 @@ interface ClipStore {
     clipboard: AnyClipProps[];
     copyClips: (clipIds: string[]) => void;
     cutClips: (clipIds: string[]) => void;
-    pasteClips: (atFrame?: number) => void;
+    pasteClips: (atFrame?: number, targetTimelineId?: string) => void;
     getClipAtFrame: (frame: number) => [AnyClipProps, number] | null;
     activeMediaItem: MediaItem | null;
     setActiveMediaItem: (mediaItem: MediaItem | null) => void;
@@ -111,7 +111,7 @@ export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string):
 export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string):number => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
-    if (clip.type === 'video' || clip.type === 'image' ) {
+    if (clip.type === 'video' || clip.type === 'image'  ||(clip.type as any === 'media')) {
         return 72;
     } 
     if (clip.type === 'audio') {
@@ -967,12 +967,34 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration, clipboard: toCut.map(c => ({ ...c })) };
     }),
-    pasteClips: (atFrame?: number) => set((state) => {
+    pasteClips: (atFrame?: number, targetTimelineId?: string) => set((state) => {
         const clipboardItems = state.clipboard || [];
         if (clipboardItems.length === 0) return { clips: state.clips };
         const baseStart = Math.min(...clipboardItems.map(c => c.startFrame || 0));
         const insertionFrame = Math.max(0, Math.round(atFrame || 0));
         const newIds: string[] = [];
+        // Determine the destination timeline per item: prefer provided target, otherwise a compatible existing timeline or create one
+        const chooseTimelineFor = (template: AnyClipProps): string => {
+            if (targetTimelineId) return targetTimelineId;
+            const desiredType = getTimelineTypeForClip(template);
+            const existing = state.timelines.find(t => t.type === desiredType);
+            if (existing) return existing.timelineId;
+            // If no matching timeline, create one beside last timeline
+            const timelineId = uuidv4();
+            const last = state.timelines[state.timelines.length - 1];
+            const newTimeline: TimelineProps = {
+                timelineId,
+                type: desiredType,
+                timelineHeight: getTimelineHeightForClip(desiredType),
+                timelineWidth: last?.timelineWidth ?? 0,
+                timelineY: (last?.timelineY ?? 0) + (last?.timelineHeight ?? 54),
+                timelinePadding: last?.timelinePadding ?? 24,
+                muted: false,
+                hidden: false,
+            };
+            state.addTimeline(newTimeline);
+            return timelineId;
+        };
         const pasted = clipboardItems.map(template => {
             const templateStart = template.startFrame || 0;
             const templateEnd = template.endFrame || 0;
@@ -982,7 +1004,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const end = start + duration;
             const newId = uuidv4();
             newIds.push(newId);
-            return { ...template, clipId: newId, startFrame: start, endFrame: end, framesToGiveEnd: 0, framesToGiveStart: 0 } as AnyClipProps;
+            const timelineId = chooseTimelineFor(template);
+            return { ...template, clipId: newId, timelineId, startFrame: start, endFrame: end, framesToGiveEnd: 0, framesToGiveStart: 0 } as AnyClipProps;
         });
         const newClips = [...state.clips, ...pasted];
         const resolvedClips = resolveOverlaps(newClips);

@@ -13,6 +13,7 @@ import { SlSizeActual } from 'react-icons/sl';
 import { FaCirclePause, FaCirclePlay } from 'react-icons/fa6';
 import { getApplicatorsForClip } from '@/lib/applicator-utils';
 import { useWebGLHaldClut } from './webgl-filters';
+import DrawingPreview from './clips/DrawingPreview';
 
 interface FullscreenPreviewProps {
   onExit: () => void;
@@ -232,7 +233,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
   return (
     <div
       ref={containerRef}
-      className="fixed inset-0 z-50 bg-black"
+      className="fixed inset-0 z-[9999] bg-black"
       onMouseMove={handleMouseMove}
     >
       <Stage
@@ -245,7 +246,10 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
           <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale}>
             <Rect x={0} y={0} width={rectWidth} height={rectHeight} fill={'#000000'} />
             {sortClips(filterClips(clips)).map((clip) => {
-              const clipAtFrame = clipWithinFrame(clip, focusFrame);
+              const startFrame = clip.startFrame || 0;
+              const hasOverlap = (clip.type === 'video' || clip.type === 'image') && (startFrame > 0) ? true : false;
+              const clipAtFrame = clipWithinFrame(clip, focusFrame, hasOverlap, 1);
+              const clipAtFrameNoOverlap = clipWithinFrame(clip, focusFrame);
               if (!clipAtFrame) return null;
               
               // Get applicators for clips that support effects (video, image, etc.)
@@ -253,13 +257,15 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
               
               switch (clip.type) {
                 case 'video':
-                  return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
+                  return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={clipAtFrameNoOverlap} />;
                 case 'image':
-                  return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
+                  return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={clipAtFrameNoOverlap} />;
                 case 'shape':
                   return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
                 case 'text':
                   return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
+                case 'draw':
+                    return <DrawingPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
                 default:
                   // Applicator clips (filter, mask, processor, etc.) don't render visually
                   return null;

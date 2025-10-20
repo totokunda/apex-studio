@@ -1237,6 +1237,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     
   }, [controlStore, setSelectedPreprocessorId]);
 
+  
+
   return (
     <div  className='relative h-full flex flex-row overflow-hidden'>
       {hasClips && <TimelineSidebar clampedScroll={clampedScroll} />}

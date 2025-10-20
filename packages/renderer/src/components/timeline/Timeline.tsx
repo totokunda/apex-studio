@@ -1,10 +1,12 @@
 import React, {useMemo } from "react";
 import { Rect,  Line,  Group } from "react-konva";
 import { ImageClipProps, TimelineProps, VideoClipProps,  } from "@/lib/types";
-import { useClipStore, getTimelineX, PREPROCESSOR_BAR_HEIGHT } from "@/lib/clip";
+import { useClipStore, getTimelineX } from "@/lib/clip";
 import TimelineClip from "./clips/TimelineClip";
 import GhostTimeline from "./clips/GhostTimeline";
 import { useControlsStore } from "@/lib/control";
+import { useContextMenuStore } from "@/lib/context-menu";
+import { calculateFrameFromX } from "@/lib/preprocessorHelpers";
 
 const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({timelineWidth, timelineY, timelineHeight = 54, timelinePadding = 24, timelineId, index, scrollY, type, muted, hidden}) => {
     const {hoveredTimelineId, getClipsForTimeline} = useClipStore();
@@ -55,7 +57,33 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
             )
            }
             <Rect
-            id={timelineId} x={timelineX} y={timelineY! + 32} cornerRadius={4} width={timelineWidth! - (timelineX) + 8} height={renderedTimelineHeight} fill={'rgba(11, 11, 13, 0.25)'}/>
+            id={timelineId}
+            x={timelineX}
+            y={timelineY! + 32}
+            cornerRadius={4}
+            width={timelineWidth! - (timelineX) + 8}
+            height={renderedTimelineHeight}
+            fill={'rgba(11, 11, 13, 0.25)'}
+            onContextMenu={(e) => {
+                e.evt.preventDefault();
+                const stage = e.target.getStage();
+                const pos = stage?.getPointerPosition();
+                if (!pos) return;
+                const [startFrame, endFrame] = timelineDuration;
+                const innerWidth = timelineWidth!; // stage width used in calculateFrameFromX expects total stage width
+                const frame = calculateFrameFromX(pos.x, timelinePadding, innerWidth, [startFrame, endFrame]);
+                const progress = Math.max(0, Math.min(1, (pos.x - timelinePadding) / Math.max(1, innerWidth)));
+                useControlsStore.getState().setFocusAnchorRatio(progress);
+                useControlsStore.getState().setFocusFrame(frame, false);
+                useContextMenuStore.getState().openMenu({
+                    position: { x: e.evt.clientX, y: e.evt.clientY },
+                    target: { type: 'timeline', timelineId },
+                    groups: [
+                        { id: 'edit', items: [ { id: 'paste', label: 'Paste at Playhead', action: 'paste', shortcut: '⌘V' } ] }
+                    ]
+                });
+            }}
+            />
             {clips.map((clip) => (
                     <TimelineClip 
                             key={clip.clipId} 

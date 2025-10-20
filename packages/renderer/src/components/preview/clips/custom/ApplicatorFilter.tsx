@@ -4,7 +4,7 @@ import { BaseClipApplicator } from '../apply/base';
 interface ApplicatorFilterNode extends Konva.Node {
     applicators?: BaseClipApplicator[];
 }
-
+ 
 function ApplicatorFilter(this: ApplicatorFilterNode, imageData: ImageData) {
     //@ts-ignore
     const applicators = this.attrs.applicators as BaseClipApplicator[];

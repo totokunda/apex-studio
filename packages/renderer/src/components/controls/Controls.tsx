@@ -291,6 +291,63 @@ const Controls = () => {
         clipsStore.pasteClips(focusFrame);
         return;
       }
+
+      // Zoom shortcuts (viewport)
+      // Cmd/Ctrl + 0 => Zoom to Fit (center content at 75%)
+      // Cmd/Ctrl + 5 => 50%
+      // Cmd/Ctrl + 1 => 100%
+      // Cmd/Ctrl + 2 => 200%
+      const viewport = useViewportStore.getState();
+      const key = e.key.toLowerCase();
+      if (isMod && (key === '0' || key === '1' || key === '2' || key === '5')) {
+        e.preventDefault();
+        if (key === '0') {
+          viewport.centerContentAt(75);
+        } else if (key === '5') {
+          viewport.setScalePercent(50);
+        } else if (key === '1') {
+          viewport.setScalePercent(100);
+        } else if (key === '2') {
+          viewport.setScalePercent(200);
+        }
+        return;
+      }
+
+      // In-mode selections using number keys (no modifiers)
+      // Shape mode: 1=Rectangle, 2=Ellipse, 3=Polygon, 4=Line, 5=Star
+      if (!isMod && viewport.tool === 'shape') {
+        if (key === '1') { e.preventDefault(); viewport.setShape('rectangle'); return; }
+        if (key === '2') { e.preventDefault(); viewport.setShape('ellipse'); return; }
+        if (key === '3') { e.preventDefault(); viewport.setShape('polygon'); return; }
+        if (key === '4') { e.preventDefault(); viewport.setShape('line'); return; }
+        if (key === '5') { e.preventDefault(); viewport.setShape('star'); return; }
+      }
+
+      // Mask mode: 1=Lasso, 2=Shape, 3=Draw, 4=Touch
+      if (!isMod && viewport.tool === 'mask') {
+        const maskStore = useMaskStore.getState();
+        if (key === '1') { e.preventDefault(); maskStore.setTool('lasso'); return; }
+        if (key === '2') { e.preventDefault(); maskStore.setTool('shape'); return; }
+        if (key === '3') { e.preventDefault(); maskStore.setTool('draw'); return; }
+        if (key === '4') { e.preventDefault(); maskStore.setTool('touch'); return; }
+      }
+
+      // Draw mode: 1=Brush, 2=Highlighter, 3=Eraser
+      if (!isMod && viewport.tool === 'draw') {
+        if (key === '1') { e.preventDefault(); drawingStore.setTool('brush'); return; }
+        if (key === '2') { e.preventDefault(); drawingStore.setTool('highlighter'); return; }
+        if (key === '3') { e.preventDefault(); drawingStore.setTool('eraser'); return; }
+      }
+
+      // Tool switching (letters, no modifiers)
+      if (!isMod) {
+        if (key === 'v') { e.preventDefault(); viewport.setTool('pointer'); return; }
+        if (key === 'h') { e.preventDefault(); viewport.setTool('hand'); return; }
+        if (key === 'd') { e.preventDefault(); viewport.setTool('draw'); return; }
+        if (key === 't') { e.preventDefault(); viewport.setTool('text'); return; }
+        if (key === 'm') { e.preventDefault(); viewport.setTool('mask'); return; }
+        if (key === 's') { e.preventDefault(); viewport.setTool('shape'); return; }
+      }
     };
 
     document.addEventListener('keydown', handleKeyDown);
