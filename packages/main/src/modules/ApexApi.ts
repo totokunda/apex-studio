@@ -1,6 +1,7 @@
 import {AppModule} from '../AppModule.js';
 import {ModuleContext} from '../ModuleContext.js';
 import { BrowserWindow, globalShortcut, App, contentTracing, ipcMain } from 'electron';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import inspector from 'node:inspector';
@@ -26,6 +27,7 @@ export class ApexApi implements AppModule {
   private settingsPath: string = '';
   private backendUrl: string = DEFAULT_BACKEND_URL;
   private wsConnections: Map<string, WebSocket> = new Map();
+  private activeMaskStreams: Map<string, { controller: AbortController; reader: ReadableStreamDefaultReader<Uint8Array> | null; id: string } > = new Map();
 
   constructor(backendUrl: string = DEFAULT_BACKEND_URL) {
     this.backendUrl = backendUrl;
@@ -140,6 +142,103 @@ export class ApexApi implements AppModule {
     }) => {
       return this.makeRequest<{status: string; contours?: Array<Array<number>>; message?: string}>('POST', '/mask/create', request);
     });
+
+    ipcMain.handle('mask:track', async (event, request: {
+      id: string;
+      input_path: string;
+      frame_start: number;
+      anchor_frame?: number;
+      frame_end: number;
+      direction?: 'forward' | 'backward' | 'both';
+      model_type?: string;
+    }) => {
+      const streamId = crypto.randomUUID();
+
+      const controller = new AbortController();
+      const response = await fetch(`${this.backendUrl}/mask/track`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/x-ndjson',
+        },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const reader = response.body.getReader();
+      this.activeMaskStreams.set(streamId, { controller, reader, id: request.id });
+
+      const decoder = new TextDecoder();
+      let buffered = '';
+
+      const pump = (): void => {
+        reader.read().then(({ value, done }) => {
+          try {
+            if (done) {
+              const last = buffered.trim();
+              if (last) {
+                const line = last.startsWith('data:') ? last.slice(5) : last;
+                const data = JSON.parse(line);
+                event.sender.send(`mask:track:chunk:${streamId}`, data);
+              }
+              event.sender.send(`mask:track:end:${streamId}`);
+              this.activeMaskStreams.delete(streamId);
+              return;
+            }
+
+            if (value) {
+              buffered += decoder.decode(value, { stream: true });
+            }
+
+            let newlineIdx = buffered.indexOf('\n');
+            while (newlineIdx !== -1) {
+              const rawLine = buffered.slice(0, newlineIdx);
+              buffered = buffered.slice(newlineIdx + 1);
+              const trimmed = rawLine.trim();
+              if (trimmed && trimmed !== '[DONE]') {
+                const line = trimmed.startsWith('data:') ? trimmed.slice(5) : trimmed;
+                const data = JSON.parse(line);
+                event.sender.send(`mask:track:chunk:${streamId}`, data);
+              }
+              newlineIdx = buffered.indexOf('\n');
+            }
+          } catch (err) {
+            event.sender.send(`mask:track:error:${streamId}`, { message: err instanceof Error ? err.message : 'Unknown error' });
+            try { reader.cancel().catch(() => {}); } catch {}
+            this.activeMaskStreams.delete(streamId);
+            return;
+          }
+          pump();
+        }).catch((err) => {
+          event.sender.send(`mask:track:error:${streamId}`, { message: err instanceof Error ? err.message : 'Unknown error' });
+          this.activeMaskStreams.delete(streamId);
+        });
+      };
+      pump();
+
+      return { streamId };
+
+    });
+
+    ipcMain.handle('mask:track:cancel', async (_event, streamId: string) => {
+      const entry = this.activeMaskStreams.get(streamId);
+      if (entry) {
+        // Signal backend to stop processing this mask id, then abort local stream
+        try {
+          await this.makeRequest<'ok' | any>('POST', `/mask/track/cancel/${encodeURIComponent(entry.id)}`);
+        } catch {}
+        try { entry.controller.abort(); } catch {}
+        try { entry.reader?.cancel().catch(() => {}); } catch {}
+        this.activeMaskStreams.delete(streamId);
+      }
+      return { success: true };
+    });
+    
   }
 
   private registerPreprocessorHandlers(): void {
@@ -276,7 +375,6 @@ export class ApexApi implements AppModule {
         },
       };
 
-      console.log(`${this.backendUrl}${endpoint}`, body);
 
       if (body && method === 'POST') {
         options.body = JSON.stringify(body);
@@ -302,6 +400,34 @@ export class ApexApi implements AppModule {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error occurred',
       };
+    }
+  }
+
+  private async makeStreamingRequest(method: 'GET' | 'POST', endpoint: string, body?: any): Promise<ReadableStream<Uint8Array<ArrayBuffer>>> {
+    try {
+      const controller = new AbortController();
+      console.log('body', body);
+      const response = await fetch(`${this.backendUrl}${endpoint}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/x-ndjson',
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+      } 
+
+      // return stream back to the caller
+      console.log('response.body', response.body);
+      return response.body;
+
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Unknown error occurred');
     }
   }
 }

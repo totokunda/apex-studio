@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {Image, Transformer, Group, Line} from 'react-konva'
 import {getVideoIterator} from '@/lib/media/video'
 import {getMediaInfo, getMediaInfoCached} from '@/lib/media/utils'
+import {fetchCanvasSample} from '@/lib/media/canvas'
 import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
@@ -15,7 +16,7 @@ import { useWebGLMask } from '../mask/useWebGLMask'
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
-const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[]}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart, speed: _speed, applicators}) => {
+const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, framesToGiveStart, speed: _speed, applicators, overlap}) => {
     const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
     const focusFrame = useControlsStore((state) => state.focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -173,36 +174,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         };
         applicatorsRef.current = applicators;
     }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators]);
-
-    // If video is paused, reapply filters when they change
-    useEffect(() => {
-        if (!isPlaying && canvasRef.current && originalFrameRef.current && imageRef.current) {
-            let canvas = canvasRef.current;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                // Restore the original unfiltered frame
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(originalFrameRef.current, 0, 0);
-
-                // Apply masks before filters so masked pixels feed the rest of the pipeline
-                const maskedCanvas = applyMask(canvas, maskFrameForCurrentFocus);
-                if (maskedCanvas !== canvas) {
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    ctx.drawImage(maskedCanvas, 0, 0, canvas.width, canvas.height);
-                }
-                
-                // Apply filters to the clean frame
-                applyFilters(canvas, filterParamsRef.current);
-                
-                // Apply applicators (filter clips from layers above)
-                applicatorsRef.current.forEach(applicator => {
-                    canvas = applicator.apply(canvas);
-                });
-                
-                imageRef.current.getLayer()?.batchDraw();
-            }
-        }
-    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators, applyMask, maskFrameForCurrentFocus]);
 
     const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean }) => {
         if (isRotating) return; // disable guides/snapping while rotating
@@ -471,20 +442,42 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             origCtx.drawImage(canvas, 0, 0);
         }
 
+        // Create a working canvas to isolate the processing pipeline
+        const workingCanvas = document.createElement('canvas');
+        workingCanvas.width = canvas.width;
+        workingCanvas.height = canvas.height;
+        const workingCtx = workingCanvas.getContext('2d');
+        if (!workingCtx) return;
+        
+        // Copy current canvas to working canvas
+        workingCtx.drawImage(canvas, 0, 0);
+        
         // Apply masks before running filters/applicators so downstream operations see masked pixels
-        const maskedCanvas = applyMask(canvas, maskFrame);
-        if (maskedCanvas !== canvas) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            try { ctx.drawImage(maskedCanvas, 0, 0, canvas.width, canvas.height); } catch {}
+        const maskedCanvas = applyMask(workingCanvas, maskFrame);
+        if (maskedCanvas !== workingCanvas) {
+            workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+            try { workingCtx.drawImage(maskedCanvas, 0, 0, workingCanvas.width, workingCanvas.height); } catch {}
         }
         
         // Apply WebGL filters for better performance (fast enough for real-time playback)
         // Use ref values to avoid callback recreation on filter/applicator changes
-        applyFilters(canvas, filterParamsRef.current);
-        // apply applicators to canvas
-        applicatorsRef.current.forEach(applicator => {
-            canvas = applicator.apply(canvas);
-        });
+        applyFilters(workingCanvas, filterParamsRef.current);
+        
+        // Apply applicators to canvas
+        let processedCanvas = workingCanvas;
+        for (const applicator of applicatorsRef.current) {
+            const result = applicator.apply(processedCanvas);
+            // Ensure result is copied back to working canvas for chaining
+            if (result !== processedCanvas) {
+                workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+                workingCtx.drawImage(result, 0, 0, workingCanvas.width, workingCanvas.height);
+                processedCanvas = workingCanvas;
+            }
+        }
+        
+        // Always draw the final processed result back to display canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
         
         imageRef.current?.getLayer()?.batchDraw?.();
     }, [applyFilters, applyMask]);
@@ -499,7 +492,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!Number.isFinite(projectFps) || projectFps <= 0) return;
         
         // Map from project fps space to native clip fps space
-        // When using a preprocessor src, we need to subtract framesToGiveStart since it's already in currentFrame
         const isUsingPreprocessorSrc = selectedSrc !== src;
         const adjustedCurrentFrame = isUsingPreprocessorSrc ? currentFrame - (framesToGiveStart || 0) : currentFrame;
         const idealFrame = Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
@@ -507,26 +499,22 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const totalFrames = Math.max(0, Math.floor((mediaInfo.current?.duration || 0) * clipFps));
         const targetFrame = Math.max(0, Math.min(totalFrames, actualFrame)) + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
         
-        // cancel any previous iterator
-        drawTokenRef.current++;
-        // @ts-ignore
-        iteratorRef.current?.return?.();
+        // Skip if we already rendered this frame
+        if (lastRenderedFrameRef.current === targetFrame) return;
         
-        const targetEndFrame = Math.round((mediaInfo.current?.endFrame || 0) / projectFps * clipFps);
-        iteratorRef.current = await getVideoIterator(selectedSrc, { mediaInfo: mediaInfo.current || undefined, fps: clipFps, startIndex: targetFrame, endIndex: targetEndFrame });
+        // Cancel any ongoing operations
+        const myToken = ++drawTokenRef.current;
+        
         try {
-            // try a few samples in case the first frames are undecodable/null
-            let tries = 0;
-            while (tries < 8) {
-                // @ts-ignore
-                const res = await (iteratorRef.current as any).next();
-                const wc: WrappedCanvas | null = res?.value || null;
-                if (wc) {
-                    drawWrappedCanvas(wc, maskFrameForCurrentFocus);
-                    lastRenderedFrameRef.current = targetFrame;
-                    break;
-                }
-                tries++;
+            // Use direct frame fetch for much faster seeking
+            const wc = await fetchCanvasSample(selectedSrc, targetFrame, displayWidth, displayHeight, { mediaInfo: mediaInfo.current || undefined });
+            
+            // Check if operation was cancelled
+            if (myToken !== drawTokenRef.current) return;
+            
+            if (wc) {
+                drawWrappedCanvas(wc, maskFrameForCurrentFocus);
+                lastRenderedFrameRef.current = targetFrame;
             }
         } catch (e) {
             console.warn('[video] seek draw failed', e);
@@ -634,11 +622,81 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         };
     }, [isPlaying, selectedSrc, mediaInfo, displayWidth, displayHeight, fps, speed, frameOffset]);
 
-    // While paused, redraw immediately on scrubs/jumps
+    // If video is paused, reapply filters and applicators when they change
+    useEffect(() => {
+        if (!isPlaying && canvasRef.current && imageRef.current) {
+            // If we have an original frame cached, use it for fast reapplication
+            if (originalFrameRef.current) {
+                let canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    // Create a working canvas for the processing pipeline
+                    const workingCanvas = document.createElement('canvas');
+                    workingCanvas.width = canvas.width;
+                    workingCanvas.height = canvas.height;
+                    const workingCtx = workingCanvas.getContext('2d');
+                    if (!workingCtx) return;
+                    
+                    // Start with the original unfiltered frame
+                    workingCtx.drawImage(originalFrameRef.current, 0, 0);
+
+                    // Apply masks before filters so masked pixels feed the rest of the pipeline
+                    const maskedCanvas = applyMask(workingCanvas, maskFrameForCurrentFocus);
+                    if (maskedCanvas !== workingCanvas) {
+                        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+                        workingCtx.drawImage(maskedCanvas, 0, 0, workingCanvas.width, workingCanvas.height);
+                    }
+                    
+                    // Apply filters to the clean frame
+                    applyFilters(workingCanvas, filterParamsRef.current);
+                    
+                    // Apply applicators (filter clips from layers above)
+                    let processedCanvas = workingCanvas;
+                    for (const applicator of applicatorsRef.current) {
+                        const result = applicator.apply(processedCanvas);
+                        if (result !== processedCanvas) {
+                            workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+                            workingCtx.drawImage(result, 0, 0, workingCanvas.width, workingCanvas.height);
+                            processedCanvas = workingCanvas;
+                        }
+                    }
+                    
+                    // Always draw final result back to display canvas
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
+                    
+                    imageRef.current.getLayer()?.batchDraw();
+                }
+            } else {
+                // If no cached frame exists, decode the current frame
+                void seekAndDraw();
+            }
+        }
+    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators, applyMask, maskFrameForCurrentFocus, seekAndDraw]);
+
+    // Use ref to store the latest seekAndDraw to avoid throttle recreation
+    const seekAndDrawRef = useRef(seekAndDraw);
+    seekAndDrawRef.current = seekAndDraw;
+
+    // Create a stable throttled version for smoother scrubbing
+    const throttledSeekAndDraw = useMemo(() => {
+        return _.throttle(() => {
+            void seekAndDrawRef.current();
+        }, 16, { leading: true, trailing: true }); // ~60fps throttle
+    }, []);
+
+    // While paused, redraw on scrubs/jumps with throttling
     useEffect(() => {
         if (isPlaying) return;
-        void seekAndDraw();
-    }, [currentFrame, isPlaying, seekAndDraw]);
+        throttledSeekAndDraw();
+    }, [currentFrame, isPlaying, throttledSeekAndDraw]);
+
+    // Cleanup throttled function on unmount
+    useEffect(() => {
+        return () => {
+            throttledSeekAndDraw.cancel();
+        };
+    }, [throttledSeekAndDraw]);
 
     // While playing, do not restart iterator on every focusFrame tick; decoding loop drives rendering.
 
@@ -810,7 +868,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         anchorStroke='#E3E3E3' 
         anchorStrokeWidth={1}
         borderStrokeWidth={2}
-        visible={tool === 'pointer' && isSelected && !isFullscreen}
+        visible={tool === 'pointer' && isSelected && !isFullscreen && overlap}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]} 
         boundBoxFunc={transformerBoundBoxFunc as any}
         ref={(node) => {

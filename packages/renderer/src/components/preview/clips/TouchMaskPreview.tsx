@@ -90,6 +90,7 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
         return;
       }
 
+
       if (maskData.contours) {
         setContours(maskData.contours);
       } else {
@@ -125,11 +126,12 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
   const mapFrameToLocalFrame = useMemo(() => {
     if (clip.type === 'image') return 0;
     const clipFps = mediaInfo?.stats.video?.averagePacketRate || 24;
-    return Math.round(currentFrame * (clipFps / fps));
+    const startFrame = (mediaInfo?.startFrame ?? 0)
+    return Math.round(currentFrame * (clipFps / fps)) + Math.round(startFrame * (clipFps / fps));
   }, [currentFrame, fps, mediaInfo, clip.type]);
 
   const { data, loading } = useMask({
-    id: clip.clipId,
+    id: currentMask?.id || '',
     inputPath: clip.src,
     tool: 'touch',
     points: touchDrawMode === 'point' && points.length > 0 ? points : undefined, // Only send points if we have touch points
@@ -276,10 +278,15 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
   }, [touchPoints, renderedTouchPoints, contours]);
 
   const displayContours = useMemo(() => {
-    if (!maskTransform || !clipTransform) {
+    if (!contours) return [] as Array<Array<number>>;
+    if (!clipTransform) return contours;
+    // If maskTransform missing, assume same space as contours (no transform)
+    if (!maskTransform) return contours;
+    try {
+      return projectContoursBetweenTransforms(contours, maskTransform, clipTransform);
+    } catch {
       return contours;
     }
-    return projectContoursBetweenTransforms(contours, maskTransform, clipTransform);
   }, [contours, maskTransform, clipTransform]);
 
   // Handle keyboard events for deletion
@@ -328,9 +335,9 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
   }, []);
 
   return (
-    <Group visible={tool==='mask'} ref={groupRef} clipX={0} clipY={0}  >
+    <Group visible={tool==='mask'} ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight} >
       {/* Render contours with zebra stripes (generated from lasso strokes and touch points) */}
-      {displayContours.map((contour, index) => (
+      {Array.isArray(displayContours) && displayContours.length > 0 && displayContours.map((contour, index) => (
         <Group key={`contour-${index}`}>
           {/* White stripe background */}
           <Line
@@ -360,7 +367,7 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
       ))}
       
       {/* Render rendered touch points (points that have contours) */}
-      {contours.length > 0 && touchDrawMode === 'point' && renderedTouchPoints.map((point, index) => {
+      {Array.isArray(contours) && contours.length > 0 && touchDrawMode === 'point' && renderedTouchPoints.map((point, index) => {
         const isPositive = point.label === 1;
         const color = isPositive ? '#3b82f6' : '#ef4444'; // blue-500 : red-500
         const radius = 8;

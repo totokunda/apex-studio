@@ -11,7 +11,7 @@ import { useWebGLFilters } from '@/components/preview/webgl-filters';
 import { BaseClipApplicator } from './apply/base';
 import { useWebGLMask } from '../mask/useWebGLMask';
 
-const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[]}> = ({ src, clipId, rectWidth, rectHeight, applicators}) => {
+const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean}> = ({ src, clipId, rectWidth, rectHeight, applicators, overlap}) => {
     const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
@@ -320,14 +320,34 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             ctx.imageSmoothingEnabled = true;
             // @ts-ignore
             ctx.imageSmoothingQuality = 'high';
-            // clear the canvas
+            // clear the canvas FIRST to ensure clean slate
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            let canvasToDraw = applyMask(image.canvas as HTMLCanvasElement);
-            ctx.drawImage(canvasToDraw, 0, 0, canvas.width, canvas.height);
+            // Create a fresh working canvas completely isolated from cached canvas
+            const workingCanvas = document.createElement('canvas');
+            workingCanvas.width = canvas.width;
+            workingCanvas.height = canvas.height;
+            const workingCtx = workingCanvas.getContext('2d');
+            if (!workingCtx) return;
 
-            // Apply WebGL filters for better performance
-            canvasToDraw = applyFilters(canvasToDraw, {
+            // Copy the original image to working canvas (never mutate image.canvas!)
+            workingCtx.imageSmoothingEnabled = true;
+            // @ts-ignore
+            workingCtx.imageSmoothingQuality = 'high';
+            workingCtx.drawImage(image.canvas as HTMLCanvasElement, 0, 0, canvas.width, canvas.height);
+
+            // Apply mask to working canvas (may return same or different canvas)
+            let processedCanvas = applyMask(workingCanvas);
+            
+            // If mask returned a different canvas, copy it back to working canvas to maintain single reference
+            if (processedCanvas !== workingCanvas) {
+                workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+                workingCtx.drawImage(processedCanvas, 0, 0, workingCanvas.width, workingCanvas.height);
+                processedCanvas = workingCanvas;
+            }
+            
+            // Apply WebGL filters (modifies canvas in place)
+            applyFilters(processedCanvas, {
                 brightness: clip?.brightness,
                 contrast: clip?.contrast,
                 hue: clip?.hue,
@@ -338,14 +358,20 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
                 vignette: clip?.vignette
             });
 
-            // apply applicators to canvas
-            canvas = applicators.reduce((acc, applicator) => {
-                return applicator.apply(acc);
-            }, canvasToDraw);
+            // Apply applicators to canvas
+            let finalCanvas = processedCanvas;
+            for (const applicator of applicators) {
+                const result = applicator.apply(finalCanvas);
+                // If applicator returned a different canvas, copy it back to maintain working canvas
+                if (result !== finalCanvas) {
+                    workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+                    workingCtx.drawImage(result, 0, 0, workingCanvas.width, workingCanvas.height);
+                    finalCanvas = workingCanvas;
+                }
+            }
 
-            // apply mask to canvas
-            
-
+            // Draw final result to display canvas
+            ctx.drawImage(finalCanvas, 0, 0, canvas.width, canvas.height);
 
             imageRef.current?.getLayer()?.batchDraw?.();
         } catch (e) {
@@ -525,7 +551,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         anchorStroke='#E3E3E3' 
         anchorStrokeWidth={1}
         borderStrokeWidth={2}
-        visible={tool === 'pointer' && isSelected && !isFullscreen}
+        visible={tool === 'pointer' && isSelected && !isFullscreen && overlap}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]} 
         boundBoxFunc={transformerBoundBoxFunc as any}
         ref={(node) => {

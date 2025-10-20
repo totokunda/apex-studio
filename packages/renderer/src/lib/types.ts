@@ -243,6 +243,7 @@ export type MaskClipProps = {
     maskColor?: string;
     maskOpacity?: number;
     maskColorEnabled?: boolean;
+    maxTrackingFrames?: number;
 }
 
 export type PreprocessorClipProps = {

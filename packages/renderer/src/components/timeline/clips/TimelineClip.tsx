@@ -334,8 +334,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             const ratio = width / height;
             const thumbnailWidth = Math.max(timelineHeight * ratio, THUMBNAIL_TILE_SIZE);
             
-            const mediaStartFrame = mediaInfoRef.current?.startFrame ?? 0;
-            const mediaEndFrame = mediaInfoRef.current?.endFrame;
+            
             const speed = Math.max(0.1, Math.min(5, Number((currentClip as any)?.speed ?? 1)));
             
             // Calculate frame indices based on timeline duration and available columns
@@ -395,14 +394,15 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 const speedAdjusted = local * speed;
                 // Map from project fps space to native clip fps space
                 const nativeFpsFrame = Math.round((speedAdjusted / projectFps) * clipFps);
+                const mediaStartFrame = Math.round((mediaInfoRef.current?.startFrame ?? 0) / projectFps * clipFps)
+                const mediaEndFrame = Math.round(( mediaInfoRef.current?.endFrame ?? 0) / projectFps * clipFps)
                 let sourceFrame = nativeFpsFrame + mediaStartFrame;
-                if (mediaEndFrame !== undefined) {
+                if (mediaEndFrame !== 0) {
                     sourceFrame = Math.min(sourceFrame, mediaEndFrame);
                 }
                 return Math.max(mediaStartFrame, sourceFrame);
             });
             
-
             if (numColumnsAlt && frameIndices.length !== numColumnsAlt) {
                 // Trim indices to match the original column count, removing from
                 // left/right based on framesToGiveStart (left) and abs(framesToGiveEnd) (right)

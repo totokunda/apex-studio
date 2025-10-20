@@ -224,7 +224,7 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
           );
         }
 
-        if (mask.tool === 'touch' && maskData?.touchPoints) {
+        if (mask.tool === 'touch') {
           const activeDataKeyPoints =
             localFrame === activeKeyframe || clip.type === 'image' ? maskData.touchPoints : [];
 

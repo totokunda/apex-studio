@@ -317,12 +317,98 @@ async function createMask(request: {
   multimask_output?: boolean;
   simplify_tolerance?: number;
   model_type?: string;
+  id?: string;
 }): Promise<ConfigResponse<{status: string; contours?: Array<Array<number>>; message?: string}>> {
   // check if input_path is a file url
   if (request.input_path.startsWith('file://')) {
     request.input_path = fileURLToPath(request.input_path);
   }
   return await ipcRenderer.invoke('mask:create', request);
+}
+
+type MaskTrackStreamEvent =
+  | { frame_number: number; contours: Array<Array<number>> }
+  | { status: 'error'; error: string };
+
+async function trackMask(request: {
+  id: string;
+  input_path: string;
+  frame_start: number;
+  anchor_frame?: number;
+  frame_end: number;
+  direction?: 'forward' | 'backward' | 'both';
+  model_type?: string;
+}): Promise<ReadableStream<MaskTrackStreamEvent>> {
+  if (request.input_path.startsWith('file://')) {
+    request.input_path = fileURLToPath(request.input_path);
+  }
+  const { streamId } = await ipcRenderer.invoke('mask:track', request) as { streamId: string };
+  const parsedStream = new ReadableStream<MaskTrackStreamEvent>({
+    start(controller) {
+      const onChunk = (_e: unknown, data: any) => {
+        controller.enqueue(data as MaskTrackStreamEvent);
+      };
+      const onError = (_e: unknown, err: any) => {
+        controller.enqueue({ status: 'error', error: err?.message || 'Unknown error' });
+      };
+      const onEnd = () => {
+        controller.close();
+        ipcRenderer.removeAllListeners(`mask:track:chunk:${streamId}`);
+        ipcRenderer.removeAllListeners(`mask:track:error:${streamId}`);
+        ipcRenderer.removeAllListeners(`mask:track:end:${streamId}`);
+      };
+      ipcRenderer.on(`mask:track:chunk:${streamId}`, onChunk);
+      ipcRenderer.on(`mask:track:error:${streamId}`, onError);
+      ipcRenderer.on(`mask:track:end:${streamId}`, onEnd);
+    },
+    cancel() {
+      ipcRenderer.invoke('mask:track:cancel', streamId).catch(() => {});
+      ipcRenderer.removeAllListeners(`mask:track:chunk:${streamId}`);
+      ipcRenderer.removeAllListeners(`mask:track:error:${streamId}`);
+      ipcRenderer.removeAllListeners(`mask:track:end:${streamId}`);
+    },
+  });
+
+  console.log('parsedStream', parsedStream);
+  return parsedStream;
+}
+
+// Lower-level helpers to assemble stream from renderer (avoid returning ReadableStream across contextBridge)
+async function startMaskTrack(request: {
+  id: string;
+  input_path: string;
+  frame_start: number;
+  anchor_frame?: number;
+  frame_end: number;
+  direction?: 'forward' | 'backward' | 'both';
+  model_type?: string;
+}): Promise<{ streamId: string }> {
+  if (request.input_path.startsWith('file://')) {
+    request.input_path = fileURLToPath(request.input_path);
+  }
+  return await ipcRenderer.invoke('mask:track', request);
+}
+
+function onMaskTrackChunk(streamId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`mask:track:chunk:${streamId}`, listener);
+  return () => ipcRenderer.removeListener(`mask:track:chunk:${streamId}`, listener);
+}
+
+function onMaskTrackError(streamId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`mask:track:error:${streamId}`, listener);
+  return () => ipcRenderer.removeListener(`mask:track:error:${streamId}`, listener);
+}
+
+function onMaskTrackEnd(streamId: string, callback: () => void): () => void {
+  const listener = () => callback();
+  ipcRenderer.on(`mask:track:end:${streamId}`, listener);
+  return () => ipcRenderer.removeListener(`mask:track:end:${streamId}`, listener);
+}
+
+async function cancelMaskTrack(streamId: string): Promise<void> {
+  await ipcRenderer.invoke('mask:track:cancel', streamId);
 }
 
 
@@ -429,5 +515,11 @@ export {
   onPreprocessorWebSocketError,
   pathToFileURLString,
   cancelPreprocessor,
-  createMask
+  createMask,
+  trackMask,
+  startMaskTrack,
+  onMaskTrackChunk,
+  onMaskTrackError,
+  onMaskTrackEnd,
+  cancelMaskTrack
 };

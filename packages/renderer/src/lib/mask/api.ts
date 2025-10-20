@@ -1,4 +1,11 @@
-import {createMask as createMaskPreload} from '@app/preload';
+import {
+  createMask as createMaskPreload,
+  startMaskTrack,
+  onMaskTrackChunk,
+  onMaskTrackError,
+  onMaskTrackEnd,
+  cancelMaskTrack as cancelMaskTrackPreload,
+} from '@app/preload';
 import {useEffect, useRef, useState, useCallback} from 'react';
 import type {MediaInfo} from '../types';
 
@@ -616,3 +623,116 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
 export async function createMask(request: MaskRequest): Promise<ConfigResponse<MaskResponse>> {
   return await createMaskPreload(request);
 }
+
+export interface StreamedMaskFrame {
+  stream_id:string;
+  frame_number: number;
+  contours: Array<Array<number>>;
+}
+
+export async function trackMask(
+  request: {
+    id: string;
+    input_path: string;
+    frame_start: number;
+    anchor_frame: number;
+    frame_end: number;
+    direction?: 'forward' | 'backward' | 'both';
+    model_type?: string;
+    max_frames?: number;
+  },
+  options?: {
+    signal?: AbortSignal;
+    onProgress?: (progress: number) => void;
+    onFrame?: (frame: StreamedMaskFrame) => void;
+  }
+): Promise<void> {
+  const { signal, onProgress, onFrame } = options || {};
+
+  const { streamId } = await startMaskTrack(request as any);
+  const anchor = request.anchor_frame ?? request.frame_start;
+  const low = Math.min(request.frame_start, request.frame_end);
+  const high = Math.max(request.frame_start, request.frame_end);
+  let totalFrames: number;
+  if (request.direction === 'both') {
+    let lowerBound = low;
+    let upperBound = high;
+    if (request.max_frames && request.max_frames > 0) {
+      lowerBound = Math.max(low, anchor - request.max_frames);
+      upperBound = Math.min(high, anchor + request.max_frames);
+    }
+    totalFrames = Math.max(1, upperBound - lowerBound + 1);
+  } else {
+    const rawSpan = Math.abs(request.frame_end - anchor);
+    const span = request.max_frames && request.max_frames > 0 ? Math.min(rawSpan, request.max_frames) : rawSpan;
+    totalFrames = span + 1;
+  }
+  const seenFrames = new Set<number>();
+
+  const abortHandler = () => {
+    try {
+      cancelMaskTrackPreload(streamId);
+    } catch {}
+  };
+  if (signal) {
+    if (signal.aborted) {
+      abortHandler();
+      throw new DOMException('Aborted', 'AbortError');
+    }
+    signal.addEventListener('abort', abortHandler, { once: true });
+  }
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const offChunk = onMaskTrackChunk(streamId, (evt: any) => {
+        if (evt && evt.status === 'error') {
+          offChunk();
+          offError();
+          offEnd();
+          reject(new Error(evt.error || 'Mask tracking error'));
+          return;
+        }
+        if (evt && typeof evt.frame_number === 'number') {
+          if (onFrame) {
+            onFrame({ frame_number: evt.frame_number, contours: Array.isArray(evt.contours) ? evt.contours : [], stream_id:streamId});
+          }
+          if (!seenFrames.has(evt.frame_number)) {
+            seenFrames.add(evt.frame_number);
+            if (onProgress && totalFrames > 0) {
+              const progress = Math.min(1, seenFrames.size / totalFrames);
+              onProgress(progress);
+            }
+          }
+        }
+      });
+      const offError = onMaskTrackError(streamId, (err: any) => {
+        offChunk();
+        offError();
+        offEnd();
+        reject(new Error(err?.message || 'Mask tracking error'));
+      });
+      const offEnd = onMaskTrackEnd(streamId, () => {
+        offChunk();
+        offError();
+        offEnd();
+        resolve();
+      });
+    });
+
+    // Ensure we report completion
+    if (onProgress && totalFrames > 0) {
+      onProgress(1);
+    }
+  } finally {
+    if (signal) {
+      signal.removeEventListener('abort', abortHandler);
+    }
+  }
+}
+
+
+export async function cancelMaskTrack(streamId: string): Promise<void> {
+  await cancelMaskTrackPreload(streamId);
+}
+
+export default trackMask;

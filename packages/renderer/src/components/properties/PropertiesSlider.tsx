@@ -38,9 +38,11 @@ interface PropertiesSliderProps {
   max?: number;
   step?: number;
   toFixed?: number;
+  labelClass?: string;
+  disabled?: boolean;
 }
 
-const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChange, renderInput, suffix, min, max, step = 0., toFixed = 1 }) => {
+const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChange, renderInput, suffix, min, max, step = 0., toFixed = 1, labelClass, disabled = false }) => {
   const [tempValue, setTempValue] = useState(value.toFixed(toFixed));
   const [isFocused, setIsFocused] = useState(false);
   const lastValueRef = React.useRef(value);
@@ -102,25 +104,27 @@ const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChan
 
   return (
     <div className="flex flex-col items-start w-full min-w-0">
-      <label className="text-brand-light  text-[11px] mb-1">{label}</label>
+      <label className={cn("text-brand-light  text-[11px] mb-1", labelClass)}>{label}</label>
       <div className="flex flex-row items-center gap-x-2.5 w-full min-w-0">
-      <Slider value={[value]} onValueChange={(value) => onChange(value[0])} min={min} max={max} step={step} />
+      <Slider value={[value]} onValueChange={(value) => onChange(value[0])} min={min} max={max} step={step} disabled={disabled} />
         <div className="flex flex-row items-center">
         <input 
-          className="w-15 h-6 px-1.5 text-center text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1 rounded-l bg-brand"  
-          value={renderInput ? renderInput(tempValue) : (isFocused ? tempValue : tempValue + (suffix || ''))}  
+          className={cn("w-15 h-6 px-1.5 text-center text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1 rounded-l bg-brand", disabled && "opacity-50 cursor-not-allowed")}
+          value={renderInput ? renderInput(tempValue) : (isFocused ? tempValue : tempValue + (suffix || ''))}
           onChange={(e) => setTempValue(e.target.value)}
-          onFocus={() => setIsFocused(true)}
-          onBlur={handleBlur}
-          onKeyDown={handleKeyDown} />
-        <div className="flex flex-col items-center justify-center divide-y divide-brand-light/10 bg-brand  h-6 cursor-pointer rounded-r">
-            <button className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200" onClick={() => {
-              if (!isNaN(value) && isFinite(value)) onChange(Math.min(value + step, max ?? value + step));
+          onFocus={() => !disabled && setIsFocused(true)}
+          onBlur={disabled ? undefined : handleBlur}
+          onKeyDown={disabled ? undefined : handleKeyDown}
+          readOnly={disabled}
+        />
+        <div className={cn("flex flex-col items-center justify-center divide-y divide-brand-light/10 bg-brand  h-6 rounded-r", disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer")}>
+            <button className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200" disabled={disabled} onClick={() => {
+              if (!disabled && !isNaN(value) && isFinite(value)) onChange(Math.min(value + step, max ?? value + step));
             }}>
             <LuChevronUp className="w-2 h-2 cursor-pointer text-brand-light" />
           </button>
-          <button className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200" onClick={() => {
-            if (!isNaN(value) && isFinite(value)) onChange(Math.max(value - step, min ?? value - step));
+          <button className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200" disabled={disabled} onClick={() => {
+            if (!disabled && !isNaN(value) && isFinite(value)) onChange(Math.max(value - step, min ?? value - step));
           }}>
           <LuChevronDown className="w-2 h-2 cursor-pointer text-brand-light" />
           </button>

@@ -159,7 +159,7 @@ const Preview:React.FC<PreviewProps> = () => {
   const setIsFullscreen = useControlsStore((s) => s.setIsFullscreen);
   const haldClutInstance = useWebGLHaldClut();
   const setSelectedMaskId = useControlsStore((s) => s.setSelectedMaskId);
-  const [clutsLoaded, setClutsLoaded] = useState(0);
+  const setSelectedClipIds = useControlsStore((s) => s.setSelectedClipIds);
   const {tool: drawingTool, color: drawingColor, opacity: drawingOpacity, smoothing: drawingSmoothing, getCurrentSize, setCurrentLineId} = useDrawingStore();
   const isDrawingRef = useRef(false);
   const eraserPointsRef = useRef<Array<{ x: number; y: number }>>([]);
@@ -212,7 +212,6 @@ const Preview:React.FC<PreviewProps> = () => {
     const filterClips = clips.filter(c => c.type === 'filter');
     
     if (filterClips.length === 0) {
-      setClutsLoaded(0);
       return;
     }
     
@@ -223,7 +222,6 @@ const Preview:React.FC<PreviewProps> = () => {
         try {
           await haldClutInstance.preloadClut(filterPath);
           loadedCount++;
-          setClutsLoaded(loadedCount);
         } catch (e) {
           console.warn('Failed to preload CLUT:', filterPath, e);
         }
@@ -277,7 +275,7 @@ const Preview:React.FC<PreviewProps> = () => {
     });
     
     // Return the first clip (topmost due to sortClips)
-    return visibleClips.length > 0 ? visibleClips[0] : null;
+    return visibleClips.length > 0 ? visibleClips[visibleClips.length - 1] : null;
   }, [clips, timelines, focusFrame, sortClips, filterClips, clipWithinFrame]);
 
   useEffect(() => {
@@ -432,6 +430,7 @@ const Preview:React.FC<PreviewProps> = () => {
       const worldX = (pointerPos.x - position.x) / scale;
       const worldY = (pointerPos.y - position.y) / scale;
       const targetClip = getTopmostClipAtFrame() as PreprocessorClipType;
+      
       if (targetClip && (targetClip.type === 'video' || targetClip.type === 'image')) {
         maskShapeTargetClipRef.current = targetClip;
         const clipTransform = getClipTransform(targetClip.clipId) ?? targetClip.transform;
@@ -488,6 +487,7 @@ const Preview:React.FC<PreviewProps> = () => {
       // Handle point mode: add touch points
       // Find the topmost clip at the current frame
       const targetClip = getTopmostClipAtFrame() as PreprocessorClipType;
+      console.log(targetClip)
       
       if (!targetClip || (targetClip.type !== 'video' && targetClip.type !== 'image')) return;
 
@@ -538,6 +538,10 @@ const Preview:React.FC<PreviewProps> = () => {
           updateClip(targetClip.clipId, {
             masks: currentMasks,
           });
+
+          // Ensure the related clip and mask are selected
+          setSelectedClipIds([targetClip.clipId]);
+          setSelectedMaskId(existingTouchMask.id);
         } else {
           // Create new touch mask
           
@@ -570,6 +574,10 @@ const Preview:React.FC<PreviewProps> = () => {
           updateClip(targetClip.clipId, {
             masks: currentMasks,
           });
+
+          // Ensure the related clip and mask are selected
+          setSelectedClipIds([targetClip.clipId]);
+          setSelectedMaskId(newMask.id);
         }
       
       
@@ -2158,7 +2166,10 @@ const Preview:React.FC<PreviewProps> = () => {
            <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale} width={rectWidth} height={rectHeight} >
             <Rect x={0} y={0}  width={rectWidth} height={rectHeight} fill={'#000000'} />
                {sortClips(filterClips(clips)).map((clip) => {
-                const clipAtFrame = clipWithinFrame(clip, focusFrame);
+                const hasOverlap = (clip.type === 'video' || clip.type === 'image') ? true : false;
+                
+                const clipAtFrame = clipWithinFrame(clip, focusFrame, hasOverlap, 1);
+                const clipAtFrameNoOverlap = clipWithinFrame(clip, focusFrame);
                 if (!clipAtFrame) return null;
                 
                 // Get applicators for clips that support effects (video, image, etc.)
@@ -2167,17 +2178,16 @@ const Preview:React.FC<PreviewProps> = () => {
                  if (clipAtFrame) {
                    switch (clip.type) {
                     case 'video':
-                      return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators}  />
+                      return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={clipAtFrameNoOverlap}  />
                     case 'image':
-                      return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />
+                      return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={clipAtFrameNoOverlap} />
                     case 'shape':
-                      return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />
+                      return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators}/>
                     case 'text':
                       return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators}  />
                     case 'draw':
                       return <DrawingPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
                     default:
-                      // Applicator clips (filter, mask, processor, etc.) don't render visually
                       return null
                    }
                  } else {
@@ -2208,7 +2218,8 @@ const Preview:React.FC<PreviewProps> = () => {
     {/* Mount non-visual audio previews OUTSIDE Konva tree so effects run */}
     {<>
         {sortClips(filterClips(clips, true)).map((clip) => {
-          const clipAtFrame = clipWithinFrame(clip, focusFrame);
+          const hasOverlap = (clip.type === 'video') ? true : false;
+          const clipAtFrame = clipWithinFrame(clip, focusFrame, hasOverlap, 1);
           if (!clipAtFrame) return null;
           if (clip.type === 'audio' || clip.type === 'video') {
             return <AudioPreview key={`audio-${clip.clipId}`} {...(clip as any)} />
