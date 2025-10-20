@@ -53,8 +53,9 @@ const TopBar:React.FC<TopBarProps> = () => {
       
            <DropdownMenu open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
                 <DropdownMenuTrigger className='text-brand-light/90 dark w-32 h-[34px] relative flex items-center space-x-2 px-2 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer'>
-                  <span className='text-[11px] inline-flex items-center space-x-1 justify-between w-full'> <span>Shortcuts</span> <span className='text-brand-light/50 font-light'>⌘</span>
+                  <span className='text-[11px] inline-flex items-center space-x-1 w-full'><span className='text-brand-light/50 font-light'>⌘</span> <span>Shortcuts</span> 
                     </span>
+                    {shortcutsOpen ? <LuChevronUp className='w-3.5 h-3.5' /> : <LuChevronDown className='w-3.5 h-3.5' />}
                   
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align='end' className='dark w-[400px] font-poppins p-0 overflow-hidden bg-brand'>
@@ -113,7 +114,7 @@ const TopBar:React.FC<TopBarProps> = () => {
                 </DropdownMenuContent>
            </DropdownMenu>
            <DropdownMenu open={sizeOpen} onOpenChange={setSizeOpen}    >
-                <DropdownMenuTrigger  className='text-brand-light/90 dark w-24 h-[34px] flex items-center space-x-1 px-2 relative font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer'>
+                <DropdownMenuTrigger  className='text-brand-light/90 dark w-24 h-[34px] flex items-center space-x-1  px-2 relative font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer'>
                 <PiResize className='w-4 h-4' /> <span className='text-xs'>Size</span>
                 <div className='absolute right-2'>
                 {sizeOpen ? <LuChevronUp className='w-3.5 h-3.5' /> : <LuChevronDown className='w-3.5 h-3.5' />}   
@@ -160,20 +161,20 @@ const TopBar:React.FC<TopBarProps> = () => {
                     {layoutOpen ? <LuChevronUp className='w-4 h-4' /> : <LuChevronDown className='w-4 h-4' />}
                   </div>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align='end' className='dark w-48 font-poppins'>
-                  <DropdownMenuItem className='dark text-[12px] flex items-center gap-x-2' onClick={() => { setLayout('default'); setLayoutOpen(false); }}>
+                <DropdownMenuContent align='end' className='dark w-48 font-poppins bg-brand-background'>
+                  <DropdownMenuItem className='dark text-[11px] font-medium flex items-center gap-x-2' onClick={() => { setLayout('default'); setLayoutOpen(false); }}>
                     <LayoutIcon type='default' />
                     <span>Default</span>
                     {layout === 'default' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className='dark text-[12px] flex items-center gap-x-2' onClick={() => { setLayout('media'); setLayoutOpen(false); }}>
+                  <DropdownMenuItem className='dark text-[11px] font-medium flex items-center gap-x-2' onClick={() => { setLayout('media'); setLayoutOpen(false); }}>
                     <LayoutIcon type='media' />
                     <span>Media</span>
                     {layout === 'media' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className='dark text-[12px] flex items-center gap-x-2' onClick={() => { setLayout('properties'); setLayoutOpen(false); }}>
+                  <DropdownMenuItem className='dark text-[11px] font-medium flex items-center gap-x-2' onClick={() => { setLayout('properties'); setLayoutOpen(false); }}>
                     <LayoutIcon type='properties' />
                     <span>Properties</span>
                     {layout === 'properties' && <LuCheck className='w-4 h-4 ml-auto text-brand-light' />}
@@ -181,8 +182,8 @@ const TopBar:React.FC<TopBarProps> = () => {
                 </DropdownMenuContent>
            </DropdownMenu>
 
-            <button className='text-brand-light space-x-1.5 w-22 flex items-center justify-between px-3.5 font-medium h-[34px] hover:text-brand-light bg-brand-accent border border-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer'>
-            <span className='text-[11px]'>Export</span><LuChevronDown className='w-4 h-4' />
+            <button className='text-brand-light space-x-1.5 w-28 flex items-center justify-between px-3.5 font-medium h-[34px] hover:text-brand-light bg-brand-accent border border-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer'>
+            <span className='text-[11px]'>Export</span><LuChevronDown className='w-3.5 h-3.5' />
             </button>
 
       </div>
