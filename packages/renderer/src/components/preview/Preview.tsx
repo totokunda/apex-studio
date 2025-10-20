@@ -487,7 +487,6 @@ const Preview:React.FC<PreviewProps> = () => {
       // Handle point mode: add touch points
       // Find the topmost clip at the current frame
       const targetClip = getTopmostClipAtFrame() as PreprocessorClipType;
-      console.log(targetClip)
       
       if (!targetClip || (targetClip.type !== 'video' && targetClip.type !== 'image')) return;
 

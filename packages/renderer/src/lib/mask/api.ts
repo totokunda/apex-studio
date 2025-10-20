@@ -5,6 +5,10 @@ import {
   onMaskTrackError,
   onMaskTrackEnd,
   cancelMaskTrack as cancelMaskTrackPreload,
+  startMaskTrackShapes,
+  onMaskTrackShapesChunk,
+  onMaskTrackShapesError,
+  onMaskTrackShapesEnd,
 } from '@app/preload';
 import {useEffect, useRef, useState, useCallback} from 'react';
 import type {MediaInfo} from '../types';
@@ -381,6 +385,128 @@ export function denormalizeContours(
   });
 }
 
+// Helper to denormalize a shape bounds dict from media coordinates to display coordinates
+export function denormalizeShapeBounds(
+  bounds: { x: number; y: number; width: number; height: number; rotation?: number; shapeType?: string; scaleX?: number; scaleY?: number },
+  displayWidth: number,
+  displayHeight: number,
+  mediaInfo: MediaInfo,
+  clipTransform?: {x: number, y: number, width: number, height: number, scaleX?: number, scaleY?: number, rotation?: number}
+): { x: number; y: number; width: number; height: number; rotation?: number; shapeType?: string; scaleX?: number; scaleY?: number } {
+  const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
+  const mediaHeight = mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
+
+  if (!mediaWidth || !mediaHeight) return bounds;
+
+  // If rectangle comes from center-based bounds (backend), convert to top-left pivot
+  // so WebGL rendering (which rotates around top-left) aligns with the intended shape.
+  let pivotBounds = bounds;
+  if (bounds.shapeType === 'rectangle' && typeof bounds.rotation === 'number') {
+    const cx = bounds.x + bounds.width / 2;
+    const cy = bounds.y + bounds.height / 2;
+    const w = Math.max(1, bounds.width);
+    const h = Math.max(1, bounds.height);
+    const theta = (bounds.rotation * Math.PI) / 180;
+    const c = Math.cos(theta);
+    const s = Math.sin(theta);
+    // Pivot is the rotated position of the unrotated top-left corner (-w/2, -h/2)
+    const pivotX = cx - (w / 2) * c + (h / 2) * s;
+    const pivotY = cy - (w / 2) * s - (h / 2) * c;
+    pivotBounds = {
+      x: pivotX,
+      y: pivotY,
+      width: w,
+      height: h,
+      rotation: bounds.rotation,
+      shapeType: bounds.shapeType,
+      scaleX: bounds.scaleX,
+      scaleY: bounds.scaleY,
+    };
+  }
+
+  let imageX: number, imageY: number, imageWidth: number, imageHeight: number;
+  if (clipTransform) {
+    imageX = clipTransform.x;
+    imageY = clipTransform.y;
+    imageWidth = clipTransform.width * (clipTransform.scaleX || 1);
+    imageHeight = clipTransform.height * (clipTransform.scaleY || 1);
+  } else {
+    const mediaAspect = mediaWidth / mediaHeight;
+    const rectAspect = displayWidth / displayHeight;
+    if (rectAspect > mediaAspect) {
+      imageHeight = displayHeight;
+      imageWidth = displayHeight * mediaAspect;
+      imageX = (displayWidth - imageWidth) / 2;
+      imageY = 0;
+    } else {
+      imageWidth = displayWidth;
+      imageHeight = displayWidth / mediaAspect;
+      imageX = 0;
+      imageY = (displayHeight - imageHeight) / 2;
+    }
+  }
+
+  // Center-based shapes: ellipse, polygon (triangle), star
+  const type = (bounds.shapeType || '').toLowerCase();
+  const isCenterShape = type === 'ellipse' || type === 'polygon' || type === 'triangle' || type === 'star';
+
+  if (isCenterShape) {
+    // Scale center position
+    const localCX = (bounds.x / mediaWidth) * imageWidth + imageX;
+    const localCY = (bounds.y / mediaHeight) * imageHeight + imageY;
+    // Scale size from media to image
+    let localW = (bounds.width / mediaWidth) * imageWidth;
+    let localH = (bounds.height / mediaHeight) * imageHeight;
+
+    if (type === 'star') {
+      // Square bounds for star
+      const s = Math.max(1, Math.min(localW, localH));
+      localW = s;
+      localH = s;
+    } else if (type === 'polygon' || type === 'triangle') {
+      // Enforce width/height ratio for triangle
+      const ratio = 1.1543665517482078; // width / height
+      // Fit the largest rect with this ratio inside the given box
+      const maxH = Math.max(1, Math.min(localH, localW / ratio));
+      const maxW = Math.max(1, ratio * maxH);
+      localW = maxW;
+      localH = maxH;
+    }
+
+    // Return top-left pivot for consistency with shader, which computes center from x,y + 0.5*width/height
+    return {
+      x: localCX - localW / 2,
+      y: localCY - localH / 2,
+      width: localW,
+      height: localH,
+      rotation: bounds.rotation,
+      shapeType: bounds.shapeType,
+      scaleX: bounds.scaleX,
+      scaleY: bounds.scaleY,
+    };
+  }
+
+  // Rectangle (top-left pivot semantics)
+  const localX = (pivotBounds.x / mediaWidth) * imageWidth;
+  const localY = (pivotBounds.y / mediaHeight) * imageHeight;
+  const localW = (pivotBounds.width / mediaWidth) * imageWidth;
+  const localH = (pivotBounds.height / mediaHeight) * imageHeight;
+
+  const canvasX = localX + imageX;
+  const canvasY = localY + imageY;
+
+  return {
+    x: canvasX,
+    y: canvasY,
+    width: localW,
+    height: localH,
+    rotation: pivotBounds.rotation,
+    shapeType: pivotBounds.shapeType,
+    scaleX: pivotBounds.scaleX,
+    scaleY: pivotBounds.scaleY,
+  };
+}
+
 // Hook-based API for automatic mask creation
 export interface UseMaskOptions {
   id?: string;
@@ -630,6 +756,71 @@ export interface StreamedMaskFrame {
   contours: Array<Array<number>>;
 }
 
+// In-memory registry of active mask tracking sessions (renderer process scope)
+type MaskTrackSession = {
+  streamId: string;
+  requestMeta: {
+    id: string;
+    frame_start: number;
+    anchor_frame?: number;
+    frame_end: number;
+    direction?: 'forward' | 'backward' | 'both';
+    max_frames?: number;
+  };
+  seenFrames: Set<number>;
+  totalFrames: number;
+  ended: boolean;
+};
+
+const activeMaskTrackSessions: Map<string, MaskTrackSession> = new Map(); // key: mask id
+
+export function getActiveMaskTrackSession(maskId: string): MaskTrackSession | undefined {
+  return activeMaskTrackSessions.get(maskId);
+}
+
+export function attachToMaskTrack(
+  maskId: string,
+  options?: {
+    onProgress?: (progress: number) => void;
+    onFrame?: (frame: StreamedMaskFrame) => void;
+    onEnd?: () => void;
+  }
+): (() => void) | null {
+  const session = activeMaskTrackSessions.get(maskId);
+  if (!session || session.ended) return null;
+  const { streamId } = session;
+  const { onProgress, onFrame, onEnd } = options || {};
+
+  const offChunk = onMaskTrackChunk(streamId, (evt: any) => {
+    if (evt && typeof evt.frame_number === 'number') {
+      session.seenFrames.add(evt.frame_number);
+      if (onFrame) onFrame({ frame_number: evt.frame_number, contours: Array.isArray(evt.contours) ? evt.contours : [], stream_id: streamId });
+      if (onProgress && session.totalFrames > 0) {
+        const progress = Math.min(1, session.seenFrames.size / session.totalFrames);
+        onProgress(progress);
+      }
+    }
+  });
+  const offError = onMaskTrackError(streamId, (_err: any) => {
+    // keep session for possible retries, but mark ended if main tears down
+  });
+  const offEnd = onMaskTrackEnd(streamId, () => {
+    session.ended = true;
+    activeMaskTrackSessions.delete(maskId);
+    offChunk();
+    offError();
+    offEnd();
+    if (onEnd) onEnd();
+  });
+
+  // Provide detach to unsubscribe without affecting the underlying stream
+  return () => {
+    try { offChunk(); } catch {}
+    try { offError(); } catch {}
+    try { offEnd(); } catch {}
+  };
+}
+
 export async function trackMask(
   request: {
     id: string;
@@ -648,7 +839,7 @@ export async function trackMask(
   }
 ): Promise<void> {
   const { signal, onProgress, onFrame } = options || {};
-
+  
   const { streamId } = await startMaskTrack(request as any);
   const anchor = request.anchor_frame ?? request.frame_start;
   const low = Math.min(request.frame_start, request.frame_end);
@@ -668,6 +859,22 @@ export async function trackMask(
     totalFrames = span + 1;
   }
   const seenFrames = new Set<number>();
+
+  // Register session for reconnection
+  activeMaskTrackSessions.set(request.id, {
+    streamId,
+    requestMeta: {
+      id: request.id,
+      frame_start: request.frame_start,
+      anchor_frame: request.anchor_frame,
+      frame_end: request.frame_end,
+      direction: request.direction,
+      max_frames: request.max_frames,
+    },
+    seenFrames,
+    totalFrames,
+    ended: false,
+  });
 
   const abortHandler = () => {
     try {
@@ -709,12 +916,23 @@ export async function trackMask(
         offChunk();
         offError();
         offEnd();
+        // Mark session ended on error
+        const sess = activeMaskTrackSessions.get(request.id);
+        if (sess) {
+          sess.ended = true;
+          activeMaskTrackSessions.delete(request.id);
+        }
         reject(new Error(err?.message || 'Mask tracking error'));
       });
       const offEnd = onMaskTrackEnd(streamId, () => {
         offChunk();
         offError();
         offEnd();
+        const sess = activeMaskTrackSessions.get(request.id);
+        if (sess) {
+          sess.ended = true;
+          activeMaskTrackSessions.delete(request.id);
+        }
         resolve();
       });
     });
@@ -736,3 +954,230 @@ export async function cancelMaskTrack(streamId: string): Promise<void> {
 }
 
 export default trackMask;
+
+export interface StreamedShapeFrame {
+  stream_id: string;
+  frame_number: number;
+  shapeBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation?: number;
+    shapeType?: string;
+    scaleX?: number;
+    scaleY?: number;
+  };
+}
+
+export function attachToShapeTrack(
+  maskId: string,
+  options?: {
+    onProgress?: (progress: number) => void;
+    onFrame?: (frame: StreamedShapeFrame) => void;
+    onEnd?: () => void;
+  }
+): (() => void) | null {
+  const session = activeMaskTrackSessions.get(maskId);
+  if (!session || session.ended) return null;
+  const { streamId } = session;
+  const { onProgress, onFrame, onEnd } = options || {};
+
+  const offChunk = onMaskTrackShapesChunk(streamId, (evt: any) => {
+    if (evt && typeof evt.frame_number === 'number') {
+      session.seenFrames.add(evt.frame_number);
+      if (onFrame) onFrame({ frame_number: evt.frame_number, shapeBounds: evt.shapeBounds, stream_id: streamId });
+      if (onProgress && session.totalFrames > 0) {
+        const progress = Math.min(1, session.seenFrames.size / session.totalFrames);
+        onProgress(progress);
+      }
+    }
+  });
+  const offError = onMaskTrackShapesError(streamId, (_err: any) => {});
+  const offEnd = onMaskTrackShapesEnd(streamId, () => {
+    session.ended = true;
+    activeMaskTrackSessions.delete(maskId);
+    offChunk();
+    offError();
+    offEnd();
+    if (onEnd) onEnd();
+  });
+
+  return () => {
+    try { offChunk(); } catch {}
+    try { offError(); } catch {}
+    try { offEnd(); } catch {}
+  };
+}
+
+export async function trackShapes(
+  request: {
+    id: string;
+    input_path: string;
+    frame_start: number;
+    anchor_frame: number;
+    frame_end: number;
+    direction?: 'forward' | 'backward' | 'both';
+    model_type?: string;
+    max_frames?: number;
+    shape_type?: string;
+  },
+  options?: {
+    signal?: AbortSignal;
+    onProgress?: (progress: number) => void;
+    onFrame?: (frame: StreamedShapeFrame) => void;
+  }
+): Promise<void> {
+  const { signal, onProgress, onFrame } = options || {};
+
+  const { streamId } = await startMaskTrackShapes(request);
+  const anchor = request.anchor_frame ?? request.frame_start;
+  const low = Math.min(request.frame_start, request.frame_end);
+  const high = Math.max(request.frame_start, request.frame_end);
+  let totalFrames: number;
+  if (request.direction === 'both') {
+    let lowerBound = low;
+    let upperBound = high;
+    if (request.max_frames && request.max_frames > 0) {
+      lowerBound = Math.max(low, anchor - request.max_frames);
+      upperBound = Math.min(high, anchor + request.max_frames);
+    }
+    totalFrames = Math.max(1, upperBound - lowerBound + 1);
+  } else {
+    const rawSpan = Math.abs(request.frame_end - anchor);
+    const span = request.max_frames && request.max_frames > 0 ? Math.min(rawSpan, request.max_frames) : rawSpan;
+    totalFrames = span + 1;
+  }
+  const seenFrames = new Set<number>();
+
+  activeMaskTrackSessions.set(request.id, {
+    streamId,
+    requestMeta: {
+      id: request.id,
+      frame_start: request.frame_start,
+      anchor_frame: request.anchor_frame,
+      frame_end: request.frame_end,
+      direction: request.direction,
+      max_frames: request.max_frames,
+    },
+    seenFrames,
+    totalFrames,
+    ended: false,
+  });
+
+  const abortHandler = () => {
+    try {
+      cancelMaskTrackPreload(streamId);
+    } catch {}
+  };
+  if (signal) {
+    if (signal.aborted) {
+      abortHandler();
+      throw new DOMException('Aborted', 'AbortError');
+    }
+    signal.addEventListener('abort', abortHandler, { once: true });
+  }
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const offChunk = onMaskTrackShapesChunk(streamId, (evt: any) => {
+        if (evt && evt.status === 'error') {
+          offChunk();
+          offError();
+          offEnd();
+          reject(new Error(evt.error || 'Shape tracking error'));
+          return;
+        }
+        if (evt && typeof evt.frame_number === 'number') {
+          if (onFrame) {
+            onFrame({ frame_number: evt.frame_number, shapeBounds: evt.shapeBounds, stream_id: streamId });
+          }
+          if (!seenFrames.has(evt.frame_number)) {
+            seenFrames.add(evt.frame_number);
+            if (onProgress && totalFrames > 0) {
+              const progress = Math.min(1, seenFrames.size / totalFrames);
+              onProgress(progress);
+            }
+          }
+        }
+      });
+      const offError = onMaskTrackShapesError(streamId, (err: any) => {
+        offChunk();
+        offError();
+        offEnd();
+        const sess = activeMaskTrackSessions.get(request.id);
+        if (sess) {
+          sess.ended = true;
+          activeMaskTrackSessions.delete(request.id);
+        }
+        reject(new Error(err?.message || 'Shape tracking error'));
+      });
+      const offEnd = onMaskTrackShapesEnd(streamId, () => {
+        offChunk();
+        offError();
+        offEnd();
+        const sess = activeMaskTrackSessions.get(request.id);
+        if (sess) {
+          sess.ended = true;
+          activeMaskTrackSessions.delete(request.id);
+        }
+        resolve();
+      });
+    });
+
+    if (onProgress && totalFrames > 0) onProgress(1);
+  } finally {
+    if (signal) signal.removeEventListener('abort', abortHandler);
+  }
+}
+
+// Convenience workflow: create mask first, then start tracking when successful
+export async function createThenTrackMask(
+  args: {
+    create: MaskRequest; // lasso or shape; points/box should already be normalized if needed
+    track: {
+      id: string;
+      input_path: string;
+      frame_start: number;
+      anchor_frame: number;
+      frame_end: number;
+      direction?: 'forward' | 'backward' | 'both';
+      model_type?: string;
+      max_frames?: number;
+    };
+  },
+  options?: {
+    signal?: AbortSignal;
+    onProgress?: (progress: number) => void;
+    onFrame?: (frame: StreamedMaskFrame) => void;
+  }
+): Promise<void> {
+  const { create, track } = args;
+
+  // Step 1: create the initial mask (lasso: polygon; shape: box)
+  const createResp = await createMask(create);
+
+  if (!createResp.success || !createResp.data || createResp.data.status !== 'success') {
+    const msg = createResp.error || createResp.data?.message || 'Mask creation failed';
+    throw new Error(msg);
+  }
+
+  // Step 2: start streaming tracking updates
+  await trackMask(
+    {
+      id: track.id,
+      input_path: track.input_path,
+      frame_start: track.frame_start,
+      anchor_frame: track.anchor_frame,
+      frame_end: track.frame_end,
+      direction: track.direction,
+      model_type: track.model_type,
+      max_frames: track.max_frames,
+    },
+    {
+      signal: options?.signal,
+      onProgress: options?.onProgress,
+      onFrame: options?.onFrame,
+    }
+  );
+}

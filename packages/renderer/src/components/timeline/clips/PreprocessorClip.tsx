@@ -20,6 +20,8 @@ import { getNearestCachedCanvasSamples } from "@/lib/media/canvas"
 import { useWebGLFilters } from "@/components/preview/webgl-filters"
 import {  toFrameRange } from '@/lib/media/fps'
 import { cn } from '@/lib/utils'
+import { useWebGLMask } from '@/components/preview/mask/useWebGLMask'
+import { useViewportStore } from '@/lib/viewport'
 const THUMBNAIL_TILE_SIZE = 36;
 
 interface PropsPreprocessorClip {
@@ -49,8 +51,8 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const preprocessorStartFrame = preprocessor.startFrame ?? 0;
     const preprocessorEndFrame = preprocessor.endFrame ?? (currentEndFrame - currentStartFrame);
     const textRef = useRef<Konva.Text>(null);
-    
-    
+
+
     // Calculate parent clip dimensions
     const clipDuration = currentEndFrame - currentStartFrame;
     const clipWidth = Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3);
@@ -90,7 +92,16 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
     
     
-    const { fps } = useControlsStore();
+    const { fps, focusFrame } = useControlsStore();
+    const { tool } = useViewportStore();
+
+
+    const {applyMask} = useWebGLMask({
+        focusFrame,
+        masks: clip?.masks ?? [],
+        disabled: (clip?.type !== 'video' && clip?.type !== 'image') || tool === 'mask',
+        clip:clip || undefined,
+    })
 
     const showProgress = useMemo(() => {
         if (preprocessor.status === 'running') {
@@ -648,6 +659,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     
             if (samples?.[0]?.canvas) {
                 const inputCanvas = samples[0].canvas as HTMLCanvasElement;
+                const canvasToTile = applyMask(inputCanvas);
                 const ctx = imageCanvas.getContext('2d');
                 if (ctx) {
                     const targetWidth = Math.max(1, imageCanvas.width);
@@ -655,8 +667,8 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                     ctx.clearRect(0, 0, targetWidth, targetHeight);
     
                     // Determine tile dimensions from the input canvas/image
-                    const tileWidth = Math.max(1, (inputCanvas as any).width || (inputCanvas as any).naturalWidth || 1);
-                    const tileHeight = Math.max(1, (inputCanvas as any).height || (inputCanvas as any).naturalHeight || 1);
+                    const tileWidth = Math.max(1, (canvasToTile as any).width || (canvasToTile as any).naturalWidth || 1);
+                    const tileHeight = Math.max(1, (canvasToTile as any).height || (canvasToTile as any).naturalHeight || 1);
                     const sourceHeight = Math.min(tileHeight, targetHeight);
     
                     // Repeat the inputCanvas horizontally until we fill the target width
@@ -667,7 +679,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                         
                         if (x + drawWidth > 0) {
                             ctx.drawImage(
-                                inputCanvas,
+                                canvasToTile,
                                 x, 0, drawWidth, sourceHeight
                             );
                         }
@@ -734,23 +746,23 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     
             frameIndices = frameIndices.filter((frameIndex) => isNaN(frameIndex) === false && isFinite(frameIndex));
 
-            {
-                const clipFps = mediaInfoRef.current?.stats.video?.averagePacketRate || fps;
+            const projectFps = useControlsStore.getState().fps || 30;
+            const fpsAdjustment = projectFps / clipFps;
 
                 // frameIndices are in clip-relative coordinates, so shift by preprocessor start to get preprocessor-relative frames
-                const frameShift = preprocessorStartFrame;
-                frameIndices = frameIndices.map((frameIndex) => {
-                    const local = frameIndex - frameShift;
-                    const speedAdjusted = local * speed;
-                    // Map from project fps space to native clip fps space
-                    const nativeFpsFrame = Math.round((speedAdjusted / fps) * clipFps);
-                    let sourceFrame = nativeFpsFrame + mediaStartFrame;
-                    if (mediaEndFrame !== undefined) {
-                        sourceFrame = Math.min(sourceFrame, mediaEndFrame);
-                    }
-                    return Math.max(mediaStartFrame, sourceFrame);
-                });
-            }
+            const frameShift = preprocessorStartFrame;
+            frameIndices = frameIndices.map((frameIndex) => {
+                const local = frameIndex - frameShift;
+                const speedAdjusted = local * speed;
+                // Map from project fps space to native clip fps space
+                const nativeFpsFrame = Math.round((speedAdjusted / fps) * clipFps);
+                let sourceFrame = nativeFpsFrame + mediaStartFrame;
+                if (mediaEndFrame !== undefined) {
+                    sourceFrame = Math.min(sourceFrame, mediaEndFrame);
+                }
+                return Math.max(mediaStartFrame, sourceFrame);
+            });
+            
 
             if (frameIndices.length === 0) {
                 return;
@@ -779,6 +791,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                     const sample = nearest[i];
                     if (!sample) continue;
                     const inputCanvas = sample.canvas as HTMLCanvasElement;
+                    const canvasToTile = applyMask(inputCanvas, Math.round(frameIndices[i] * fpsAdjustment));
                     const anyCanvas = inputCanvas as any;
                     const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
                     const tileHeight = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
@@ -790,7 +803,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                     const drawWidth = Math.min(tileWidth, remaining);
                     if (drawWidth <= 0) break;
                     ctx.drawImage(
-                        inputCanvas,
+                        canvasToTile,
                         0, 0, drawWidth, sourceHeight,
                         x, 0, drawWidth, sourceHeight
                     );
@@ -849,6 +862,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                         for (let i = 0; i < exactSamples.length && x2 < targetWidth2; i++) {
                             const sample = exactSamples[i];
                             const inputCanvas = sample.canvas as HTMLCanvasElement;
+                            const canvasToTile = applyMask(inputCanvas, Math.round(frameIndices[i] * fpsAdjustment));
                             const anyCanvas = inputCanvas as any;
                             const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
                             const tileHeight = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
@@ -859,7 +873,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                             const drawWidth2 = Math.min(tileWidth, remaining2);
                             if (drawWidth2 <= 0) break;
                             ctx2.drawImage(
-                                inputCanvas,
+                                canvasToTile,
                                 0, 0, drawWidth2, sourceHeight,
                                 x2, 0, drawWidth2, sourceHeight
                             );
@@ -897,7 +911,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         } else if (mediaInfoRef.current.image) {
             generateTimelineThumbnailImage();
         }
-    }, [preprocessor.status, preprocessor.src, preprocessorWidth, clipWidth, timelineHeight, timelineWidth, timelineDuration, forceRerenderCounter, clip]);
+    }, [preprocessor.status, preprocessor.src, applyMask, preprocessorWidth, clipWidth, timelineHeight, timelineWidth, timelineDuration, forceRerenderCounter, clip]);
 
     const handleRunPreprocessor = useCallback(async () => {
         if (preprocessor.status === 'running') return;

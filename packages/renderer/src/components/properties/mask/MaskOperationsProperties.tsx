@@ -103,7 +103,7 @@ const MaskOperationsProperties: React.FC<MaskOperationsPropertiesProps> = ({ mas
   return (
     <div className="flex flex-col gap-y-2 min-w-0">
       <div className="p-4 flex flex-col gap-y-5 px-5 min-w-0">
-        <h4 className="text-brand-light text-[12px] font-medium text-start">Operations</h4>
+        <h4 className="text-brand-light text-[12px] font-medium text-start">Rendering</h4>
           <div className="flex flex-col gap-y-2">
             <span className="text-brand-light text-[11px] font-medium text-start">Display </span>
             <p className="text-brand-light/40 text-[10px] text-start">
@@ -194,24 +194,6 @@ const MaskOperationsProperties: React.FC<MaskOperationsPropertiesProps> = ({ mas
               </div>
             </div>
           </div>
-
-        {/* Extract Button */}
-        <div className="flex flex-col gap-y-2">
-          <div className="flex flex-col gap-y-1 mb-1.5">
-          <span className="text-brand-light text-[11px] font-medium text-start">Extract</span>
-          <p className="text-brand-light/40 text-[10px] text-start">
-            Extract the masked region to a new clip.
-          </p>
-          </div>
-          <button
-            onClick={handleExtract}
-            className="flex flex-row items-center justify-center gap-x-2 py-2.5 px-4 rounded-md bg-brand border border-brand-light/10 hover:bg-brand-light/10 transition-all duration-200"
-          >
-            <LuScissors className="w-4 h-4 text-brand-light" />
-            <span className="text-brand-light text-[11px] font-medium">Extract Masked Region</span>
-          </button>
-          
-        </div>
       </div>
     </div>
   );

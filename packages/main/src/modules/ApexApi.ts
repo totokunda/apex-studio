@@ -238,6 +238,88 @@ export class ApexApi implements AppModule {
       }
       return { success: true };
     });
+
+    // Shapes tracking stream
+    ipcMain.handle('mask:track-shapes', async (event, request: {
+      id: string;
+      input_path: string;
+      frame_start: number;
+      anchor_frame?: number;
+      frame_end: number;
+      direction?: 'forward' | 'backward' | 'both';
+      model_type?: string;
+    }) => {
+      const streamId = crypto.randomUUID();
+
+      const controller = new AbortController();
+      const response = await fetch(`${this.backendUrl}/mask/track/shapes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/x-ndjson',
+        },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const reader = response.body.getReader();
+      this.activeMaskStreams.set(streamId, { controller, reader, id: request.id });
+
+      const decoder = new TextDecoder();
+      let buffered = '';
+
+      const pump = (): void => {
+        reader.read().then(({ value, done }) => {
+          try {
+            if (done) {
+              const last = buffered.trim();
+              if (last) {
+                const line = last.startsWith('data:') ? last.slice(5) : last;
+                const data = JSON.parse(line);
+                event.sender.send(`mask:track-shapes:chunk:${streamId}`, data);
+              }
+              event.sender.send(`mask:track-shapes:end:${streamId}`);
+              this.activeMaskStreams.delete(streamId);
+              return;
+            }
+
+            if (value) {
+              buffered += decoder.decode(value, { stream: true });
+            }
+
+            let newlineIdx = buffered.indexOf('\n');
+            while (newlineIdx !== -1) {
+              const rawLine = buffered.slice(0, newlineIdx);
+              buffered = buffered.slice(newlineIdx + 1);
+              const trimmed = rawLine.trim();
+              if (trimmed && trimmed !== '[DONE]') {
+                const line = trimmed.startsWith('data:') ? trimmed.slice(5) : trimmed;
+                const data = JSON.parse(line);
+                event.sender.send(`mask:track-shapes:chunk:${streamId}`, data);
+              }
+              newlineIdx = buffered.indexOf('\n');
+            }
+          } catch (err) {
+            event.sender.send(`mask:track-shapes:error:${streamId}`, { message: err instanceof Error ? err.message : 'Unknown error' });
+            try { reader.cancel().catch(() => {}); } catch {}
+            this.activeMaskStreams.delete(streamId);
+            return;
+          }
+          pump();
+        }).catch((err) => {
+          event.sender.send(`mask:track-shapes:error:${streamId}`, { message: err instanceof Error ? err.message : 'Unknown error' });
+          this.activeMaskStreams.delete(streamId);
+        });
+      };
+      pump();
+
+      return { streamId };
+    });
     
   }
 

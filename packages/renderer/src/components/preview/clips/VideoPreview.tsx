@@ -356,6 +356,9 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         let cancelled = false;
         if (lastSelectedSrcRef.current === selectedSrc) return;
         lastSelectedSrcRef.current = selectedSrc;
+        // Force redraw on source switch: reset last rendered frame and clear cached original frame
+        lastRenderedFrameRef.current = -1;
+        originalFrameRef.current = null;
         // @ts-ignore
         iteratorRef.current?.return?.();
         iteratorRef.current = null;
@@ -364,13 +367,21 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         (async () => {
             try {
                 if (!info) info = await getMediaInfo(selectedSrc);
-                if (!cancelled) mediaInfo.current = info;
+                if (!cancelled) {
+                    mediaInfo.current = info;
+                    // Media info arrived; force immediate redraw
+                    lastRenderedFrameRef.current = -1;
+                    try { void (seekAndDrawRef.current?.()); } catch {}
+                }
             } catch (e) {
                 console.error(e);
                 }
             })();
         } else {
             mediaInfo.current = info;
+            // Have cached info; force immediate redraw
+            lastRenderedFrameRef.current = -1;
+            try { void (seekAndDrawRef.current?.()); } catch {}
         }
         return () => { cancelled = true };
     }, [selectedSrc]);
@@ -519,7 +530,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             console.warn('[video] seek draw failed', e);
         }
-    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, frameOffset, framesToGiveStart, maskFrameForCurrentFocus]);
+    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, frameOffset, framesToGiveStart, maskFrameForCurrentFocus, clip?.masks, clip?.preprocessors]);
 
     const startRendering = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -669,6 +680,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 }
             } else {
                 // If no cached frame exists, decode the current frame
+                // Force re-decode even if we already rendered this frame index
+                lastRenderedFrameRef.current = -1;
                 void seekAndDraw();
             }
         }

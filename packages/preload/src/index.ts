@@ -386,6 +386,7 @@ async function startMaskTrack(request: {
   if (request.input_path.startsWith('file://')) {
     request.input_path = fileURLToPath(request.input_path);
   }
+  
   return await ipcRenderer.invoke('mask:track', request);
 }
 
@@ -409,6 +410,87 @@ function onMaskTrackEnd(streamId: string, callback: () => void): () => void {
 
 async function cancelMaskTrack(streamId: string): Promise<void> {
   await ipcRenderer.invoke('mask:track:cancel', streamId);
+}
+
+
+// Shapes tracking (streaming shapeBounds)
+type ShapeTrackStreamEvent =
+  | { frame_number: number; shapeBounds?: any }
+  | { status: 'error'; error: string };
+
+async function trackShapes(request: {
+  id: string;
+  input_path: string;
+  frame_start: number;
+  anchor_frame?: number;
+  frame_end: number;
+  direction?: 'forward' | 'backward' | 'both';
+  model_type?: string;
+}): Promise<ReadableStream<ShapeTrackStreamEvent>> {
+  if (request.input_path.startsWith('file://')) {
+    request.input_path = fileURLToPath(request.input_path);
+  }
+  const { streamId } = await ipcRenderer.invoke('mask:track-shapes', request) as { streamId: string };
+  const parsedStream = new ReadableStream<ShapeTrackStreamEvent>({
+    start(controller) {
+      const onChunk = (_e: unknown, data: any) => {
+        controller.enqueue(data as ShapeTrackStreamEvent);
+      };
+      const onError = (_e: unknown, err: any) => {
+        controller.enqueue({ status: 'error', error: err?.message || 'Unknown error' });
+      };
+      const onEnd = () => {
+        controller.close();
+        ipcRenderer.removeAllListeners(`mask:track-shapes:chunk:${streamId}`);
+        ipcRenderer.removeAllListeners(`mask:track-shapes:error:${streamId}`);
+        ipcRenderer.removeAllListeners(`mask:track-shapes:end:${streamId}`);
+      };
+      ipcRenderer.on(`mask:track-shapes:chunk:${streamId}`, onChunk);
+      ipcRenderer.on(`mask:track-shapes:error:${streamId}`, onError);
+      ipcRenderer.on(`mask:track-shapes:end:${streamId}`, onEnd);
+    },
+    cancel() {
+      ipcRenderer.invoke('mask:track:cancel', streamId).catch(() => {});
+      ipcRenderer.removeAllListeners(`mask:track-shapes:chunk:${streamId}`);
+      ipcRenderer.removeAllListeners(`mask:track-shapes:error:${streamId}`);
+      ipcRenderer.removeAllListeners(`mask:track-shapes:end:${streamId}`);
+    },
+  });
+  return parsedStream;
+}
+
+async function startMaskTrackShapes(request: {
+  id: string;
+  input_path: string;
+  frame_start: number;
+  anchor_frame?: number;
+  frame_end: number;
+  direction?: 'forward' | 'backward' | 'both';
+  model_type?: string;
+  shape_type?: string;
+}): Promise<{ streamId: string }> {
+  if (request.input_path.startsWith('file://')) {
+    request.input_path = fileURLToPath(request.input_path);
+  }
+  return await ipcRenderer.invoke('mask:track-shapes', request);
+}
+
+function onMaskTrackShapesChunk(streamId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`mask:track-shapes:chunk:${streamId}`, listener);
+  return () => ipcRenderer.removeListener(`mask:track-shapes:chunk:${streamId}`, listener);
+}
+
+function onMaskTrackShapesError(streamId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`mask:track-shapes:error:${streamId}`, listener);
+  return () => ipcRenderer.removeListener(`mask:track-shapes:error:${streamId}`, listener);
+}
+
+function onMaskTrackShapesEnd(streamId: string, callback: () => void): () => void {
+  const listener = () => callback();
+  ipcRenderer.on(`mask:track-shapes:end:${streamId}`, listener);
+  return () => ipcRenderer.removeListener(`mask:track-shapes:end:${streamId}`, listener);
 }
 
 
@@ -521,5 +603,11 @@ export {
   onMaskTrackChunk,
   onMaskTrackError,
   onMaskTrackEnd,
-  cancelMaskTrack
+  cancelMaskTrack,
+  // shapes tracking exports
+  trackShapes,
+  startMaskTrackShapes,
+  onMaskTrackShapesChunk,
+  onMaskTrackShapesError,
+  onMaskTrackShapesEnd
 };
