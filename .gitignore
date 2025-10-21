@@ -54,3 +54,4 @@ packages/renderer/public/filters
 # Editor-based Rest Client
 .idea/httpRequests
 /.idea/csv-plugin.xml
+packages/renderer/public/clut-filters/
