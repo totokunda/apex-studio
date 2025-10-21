@@ -10,7 +10,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateAudioWaveformCanvas, getMediaInfoCached } from "@/lib/media/utils";
 import { useWebGLFilters } from "@/components/preview/webgl-filters";
 import {useWebGLMask} from "@/components/preview/mask/useWebGLMask"
-
 import { PreprocessorClip } from "./PreprocessorClip";
 import MaskKeyframes from "./MaskKeyframes";
 import { useViewportStore } from "@/lib/viewport";
@@ -19,8 +18,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { RxText as RxTextIcon } from 'react-icons/rx';
 import { MdOutlineDraw as MdOutlineDrawIcon, MdMovie as MdMovieIcon, MdImage as MdImageIcon, MdAudiotrack as MdAudiotrackIcon } from 'react-icons/md';
 import { LuShapes as LuShapeIcon } from "react-icons/lu";
-
-import { TbFilters as TbFiltersIcon } from 'react-icons/tb';
+import { MdPhotoFilter as MdFilterIcon } from "react-icons/md";
 const THUMBNAIL_TILE_SIZE = 36;
 
 const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType,  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 54, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
@@ -1448,7 +1446,9 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 if (child?.type === 'video' || child?.type === 'image' && child?.src) {
                     const mediaInfo = getMediaInfoCached(child.src);
                     if (!mediaInfo) return null;
-                    const poster = await generatePosterCanvas(child.src, undefined, undefined, { mediaInfo });
+                    const masks = (child as VideoClipProps | ImageClipProps).masks || [];
+                    const preprocessors = (child as VideoClipProps | ImageClipProps).preprocessors || [];
+                    const poster = await generatePosterCanvas(child.src, undefined, undefined, { mediaInfo, masks, preprocessors });
                     if (!poster) return null;
                     return poster;
                 } else if (child?.type === 'audio' && child?.src) {
@@ -1489,7 +1489,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     } else if (child.type === 'draw') {
                         iconSvg = renderToStaticMarkup(React.createElement(MdOutlineDrawIcon, { size: iconSize, color: '#FFFFFF' }));
                     } else if (child.type === 'filter') {
-                        iconSvg = renderToStaticMarkup(React.createElement(TbFiltersIcon, { size: iconSize, color: '#FFFFFF' }));
+                        iconSvg = renderToStaticMarkup(React.createElement(MdFilterIcon, { size: iconSize, color: '#FFFFFF' }));
                     } else if (child.type === 'shape') {
                         iconSvg = renderToStaticMarkup(React.createElement(LuShapeIcon, { size: iconSize, color: '#FFFFFF' }));
                     }
@@ -1628,7 +1628,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                                     { Icon: MdAudiotrackIcon, count: groupCounts.audio },
                                     { Icon: RxTextIcon, count: groupCounts.text },
                                     { Icon: MdOutlineDrawIcon, count: groupCounts.draw },
-                                    { Icon: TbFiltersIcon, count: groupCounts.filter },
+                                    { Icon: MdFilterIcon, count: groupCounts.filter },
                                     { Icon: LuShapeIcon, count: groupCounts.shape },
                                 ].filter(i => i.count > 0);
 

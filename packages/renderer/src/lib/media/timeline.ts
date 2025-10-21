@@ -1,4 +1,4 @@
-import { MediaInfo } from "../types";
+import { MediaInfo, MaskClipProps, PreprocessorClipProps } from "../types";
 import { FramesCache, WrappedAmplitudes } from "./cache";
 import { WrappedCanvas } from "mediabunny";
 import { fetchImage } from "./image";
@@ -6,6 +6,9 @@ import { fetchCanvasSamples, fetchCanvasSample } from "./canvas";
 import { IMAGE_EXTS, AUDIO_EXTS } from "../settings";
 import { getLowercaseExtension, readFileBuffer } from "@app/preload";
 import { getMediaInfo } from "./utils";
+import { ShapeMask } from "@/components/preview/mask/shape";
+import { LassoMask } from "@/components/preview/mask/lasso";
+import { TouchMask } from "@/components/preview/mask/touch";
 
 export const createThumbnailKey = (
     id: string,
@@ -435,11 +438,89 @@ export const generatePosterCanvas = async (
     path: string,
     width?: number,
     height?: number,
-    options?: { mediaInfo?: MediaInfo; frameIndex?: number }
+    options?: { mediaInfo?: MediaInfo; frameIndex?: number; masks?: MaskClipProps[]; preprocessors?: PreprocessorClipProps[] }
 ): Promise<CanvasImageSource | null> => {
     try {
-        // Detect images by extension and render directly without mediabunny
-        const lower = (path || "").split('?')[0].toLowerCase();
+        // Resolve effective path based on preprocessors and frameIndex
+        const baseLower = (path || "").split('?')[0].toLowerCase();
+        const baseDot = baseLower.lastIndexOf('.');
+        const baseExt = baseDot >= 0 ? baseLower.slice(baseDot + 1) : "";
+        let effectivePath = path;
+        let frameIndex: number | undefined = options?.frameIndex;
+
+        // If preprocessors exist, compute a frame index and pick matching src
+        if (options?.preprocessors && options.preprocessors.length > 0) {
+            if (frameIndex === undefined) {
+                if (IMAGE_EXTS.includes(baseExt)) {
+                    frameIndex = 0;
+                } else {
+                    const mi = options?.mediaInfo || await getMediaInfo(path);
+                    if (mi?.video) {
+                        const duration = mi.duration ?? 1;
+                        const numFrames = duration * (mi.stats.video?.averagePacketRate ?? 24);
+                        frameIndex = Math.floor(numFrames * 0.1);
+                    } else {
+                        frameIndex = 0;
+                    }
+                }
+            }
+            const fidx = frameIndex ?? 0;
+            const matched = options.preprocessors.find(p => {
+                if (!p?.src) return false;
+                const s = typeof p.startFrame === 'number' ? p.startFrame : undefined;
+                const e = typeof p.endFrame === 'number' ? p.endFrame : s;
+                if (s === undefined && e === undefined) return false;
+                if (s !== undefined && e !== undefined) return fidx >= s && fidx <= e;
+                if (s !== undefined) return fidx === s;
+                return false;
+            });
+            if (matched?.src) {
+                effectivePath = matched.src;
+            }
+        }
+
+        // Helper to apply masks onto a canvas if provided
+        const applyMasksIfAny = (source: HTMLCanvasElement, fidx?: number): HTMLCanvasElement => {
+            const masks = options?.masks || [];
+            if (!masks || masks.length === 0) return source;
+            const shape = new ShapeMask();
+            const lasso = new LassoMask();
+            const touch = new TouchMask();
+            try {
+                const working = source.cloneNode(false) as HTMLCanvasElement;
+                working.width = source.width;
+                working.height = source.height;
+                const wctx = working.getContext('2d');
+                if (!wctx) return source;
+                wctx.drawImage(source, 0, 0);
+                return masks.reduce((acc, mask, index) => {
+                    const effectiveMask = index === 0 ? mask : { ...mask, backgroundColorEnabled: false } as MaskClipProps;
+                    let masked: HTMLCanvasElement = acc;
+                    if ((mask as any).tool === 'shape') {
+                        masked = shape.apply(acc, effectiveMask, fidx ?? 0, undefined, effectiveMask.transform);
+                    } else if ((mask as any).tool === 'lasso') {
+                        masked = lasso.apply(acc, effectiveMask, fidx ?? 0, undefined, effectiveMask.transform);
+                    } else if ((mask as any).tool === 'touch') {
+                        masked = touch.apply(acc, effectiveMask, fidx ?? 0, undefined, effectiveMask.transform);
+                    }
+                    if (masked !== acc) {
+                        const c = acc.getContext('2d');
+                        if (c) {
+                            c.clearRect(0, 0, acc.width, acc.height);
+                            c.drawImage(masked, 0, 0);
+                        }
+                    }
+                    return acc;
+                }, working);
+            } finally {
+                shape.dispose();
+                lasso.dispose();
+                touch.dispose();
+            }
+        };
+
+        // Detect by effective path extension
+        const lower = (effectivePath || "").split('?')[0].toLowerCase();
         const dot = lower.lastIndexOf('.');
         const ext = dot >= 0 ? lower.slice(dot + 1) : "";
         if (IMAGE_EXTS.includes(ext)) {
@@ -448,8 +529,7 @@ export const generatePosterCanvas = async (
                 el.onload = () => resolve(el);
                 el.onerror = (err) => reject(err);
                 el.crossOrigin = 'anonymous';
-                // convert path to inline data
-                const res = await readFileBuffer(path);
+                const res = await readFileBuffer(effectivePath);
                 const blob = new Blob([res as unknown as ArrayBuffer]);
                 const url = URL.createObjectURL(blob);
                 el.src = url;
@@ -469,7 +549,6 @@ export const generatePosterCanvas = async (
             // @ts-ignore
             ctx.imageSmoothingQuality = 'high';
 
-            // Draw with object-fit: cover to fill target while preserving aspect ratio
             const scale = Math.max(targetW / sourceW, targetH / sourceH);
             const drawW = sourceW * scale;
             const drawH = sourceH * scale;
@@ -480,20 +559,26 @@ export const generatePosterCanvas = async (
 
             ctx.clearRect(0, 0, targetW, targetH);
             ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetW, targetH);
-            return canvas;
+
+            // Apply masks if provided
+            return applyMasksIfAny(canvas, frameIndex);
         }
 
-        // Fallback: treat as video-like source and use mediabunny
-        const mediaInfo = options?.mediaInfo || await getMediaInfo(path);
+        // Video-like: use mediabunny and apply masks
+        const mediaInfo = options?.mediaInfo && effectivePath === path ? options.mediaInfo : await getMediaInfo(effectivePath);
         if (!mediaInfo?.video) return null;
 
         const targetWidth = Math.max(1, Math.floor(width || mediaInfo.video.displayWidth || 320));
         const targetHeight = Math.max(1, Math.floor(height || mediaInfo.video.displayHeight || 180));
-        const duration = mediaInfo.duration ?? 1;
-        const numFrames = duration * (mediaInfo.stats.video?.averagePacketRate ?? 24);
-        const frameIndex = options?.frameIndex ?? Math.floor(numFrames * 0.1);
-        const wrapped = await fetchCanvasSample(path, frameIndex, targetWidth, targetHeight, { mediaInfo, prefetch: false });
-        return wrapped?.canvas ?? null;
+        if (frameIndex === undefined) {
+            const duration = mediaInfo.duration ?? 1;
+            const numFrames = duration * (mediaInfo.stats.video?.averagePacketRate ?? 24);
+            frameIndex = Math.floor(numFrames * 0.1);
+        }
+        const wrapped = await fetchCanvasSample(effectivePath, frameIndex, targetWidth, targetHeight, { mediaInfo, prefetch: false });
+        const baseCanvas = wrapped?.canvas as HTMLCanvasElement | undefined;
+        if (!baseCanvas) return null;
+        return applyMasksIfAny(baseCanvas, frameIndex);
     } catch (e) {
         console.error(e);
         return null;
