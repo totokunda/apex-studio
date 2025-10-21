@@ -14,7 +14,7 @@ import {useWebGLMask} from "@/components/preview/mask/useWebGLMask"
 import { PreprocessorClip } from "./PreprocessorClip";
 import MaskKeyframes from "./MaskKeyframes";
 import { useViewportStore } from "@/lib/viewport";
-import { useContextMenuStore } from '@/lib/context-menu';
+import { useContextMenuStore, ContextMenuItem } from '@/lib/context-menu';
 const THUMBNAIL_TILE_SIZE = 36;
 
 const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType,  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 54, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
@@ -1142,6 +1142,24 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             } catch { return false; }
         })();
         const targetIds = (controls.selectedClipIds || []).includes(currentClipId) ? controls.selectedClipIds : [currentClipId];
+        const aiCommands: ContextMenuItem[] = [];
+        /**AI Commands, we will have to implement with our AI system. */
+        if (isVideo && clip.masks && clip.masks.length === 0 && clip.preprocessors && clip.preprocessors.length === 0) {
+            aiCommands.push({ id: 'extend', label: 'Extend', action: 'extend', });
+            aiCommands.push({ id: 'stabilize', label: 'Stabilize', action: 'stabilize', });
+            aiCommands.push({ id: 'editVideo', label: 'Edit Video', action: 'editVideo', });
+        } else if (clip?.type === 'image' && clip.masks && clip.masks.length === 0 && clip.preprocessors && clip.preprocessors.length === 0) {
+            aiCommands.push({ id: 'animate', label: 'Animate', action: 'animate', });
+            aiCommands.push({ id: 'editImage', label: 'Edit Image', action: 'editImage', });
+        }
+        if ((clip?.type === 'video' || clip?.type === 'image') && clip.masks && clip.masks.length > 0) {
+            aiCommands.push({ id: 'inpaint', label: 'Inpaint', action: 'inpaint', });
+            aiCommands.push({ id: 'outpaint', label: 'Outpaint', action: 'outpaint', });
+        }
+        if ((clip?.type === 'video' || clip?.type === 'image') && clip.preprocessors && clip.preprocessors.length > 0) {
+            aiCommands.push({ id: 'control', label: 'Use as Control', action: 'control', });
+        }
+
         useContextMenuStore.getState().openMenu({
             position: { x: e.evt.clientX, y: e.evt.clientY },
             target: { type: 'clip', clipIds: targetIds, primaryClipId: currentClipId, isVideo: !!isVideo },
@@ -1156,10 +1174,17 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     ],
                 },
                 {
+                    id: 'ai',
+                    label: 'AI',
+                    items: [
+                        ...aiCommands,
+                    ],
+                },
+                {
                     id: 'clip-actions',
                     items: [
                         { id: 'split', label: 'Split at Playhead', action: 'split' },
-                        { id: 'separate', label: 'Separate Audio', action: 'separateAudio', disabled: !isVideo || isSeparated },
+                        { id: 'separate', label: 'Detach Audio', action: 'separateAudio', disabled: !isVideo || isSeparated },
                     ],
                 },
                 {

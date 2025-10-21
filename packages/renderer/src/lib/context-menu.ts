@@ -8,7 +8,15 @@ export type ContextMenuAction =
   | 'split'
   | 'separateAudio'
   | 'export'
-  | 'group';
+  | 'group'
+  | 'extend'
+  | 'stabilize'
+  | 'animate'
+  | 'inpaint'
+  | 'outpaint'
+  | 'control'
+  | 'editImage'
+  | 'editVideo'
 
 export type ContextTarget =
   | { type: 'clip'; clipIds: string[]; primaryClipId: string; isVideo: boolean }

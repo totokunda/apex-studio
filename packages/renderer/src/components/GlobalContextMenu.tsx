@@ -40,8 +40,9 @@ const GlobalContextMenu: React.FC = () => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     let nx = position.x, ny = position.y;
+    const BOTTOM_MARGIN = 10; // ensure some space from bottom edge
     if (rect.right > window.innerWidth) nx -= (rect.right - window.innerWidth);
-    if (rect.bottom > window.innerHeight) ny -= (rect.bottom - window.innerHeight);
+    if (rect.bottom > window.innerHeight - BOTTOM_MARGIN) ny -= (rect.bottom - (window.innerHeight - BOTTOM_MARGIN));
     if (rect.left < 0) nx += -rect.left;
     if (rect.top < 0) ny += -rect.top;
     if (nx !== position.x || ny !== position.y) setPosition({ x: nx, y: ny });
@@ -74,10 +75,10 @@ const GlobalContextMenu: React.FC = () => {
   const content = groups && groups.length > 0 ? (
     <div className='p-1'>
       {groups.map((group, gi) => (
-        <div key={group.id}>
+        group.items.length > 0 && <div key={group.id}>
           {group.label && <div className='px-2.5 py-1 text-[10px] uppercase tracking-wide text-brand-light/50'>{group.label}</div>}
           {group.items.map(item => (
-            <button key={item.id} disabled={item.disabled} onClick={() => onSelect(item.action)} className={cn('w-full px-2.5 py-1.5 text-left text-[11px] flex items-center rounded justify-between hover:bg-brand-light/10 text-brand-light', item.disabled && 'opacity-50 !cursor-default hover:bg-brand')}>
+            <button key={item.id} disabled={item.disabled} onClick={() => onSelect(item.action)} className={cn('w-full px-2.5 py-1.5 text-left text-[11.5px] flex items-center rounded justify-between hover:bg-brand-light/10 text-brand-light', item.disabled && 'opacity-50 !cursor-default hover:bg-brand')}>
               <span>{item.label}</span>
               {item.shortcut && <Key text={item.shortcut} />}
             </button>
@@ -98,7 +99,7 @@ const GlobalContextMenu: React.FC = () => {
   );
 
   return createPortal(
-    <div ref={containerRef} style={{ position: 'fixed', left: position.x, top: position.y, zIndex: 10000 }} className='w-48 font-poppins select-none rounded-md border border-brand-light/10 bg-brand-background-light shadow-lg'>
+    <div ref={containerRef} style={{ position: 'fixed', left: position.x, top: position.y, zIndex: 10000 }} className='w-52 font-poppins select-none rounded-md border border-brand-light/10 bg-brand-background-light shadow-lg'>
       {content}
     </div>,
     document.body
