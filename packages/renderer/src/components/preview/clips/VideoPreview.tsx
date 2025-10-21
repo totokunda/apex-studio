@@ -44,8 +44,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const lastSelectedSrcRef = useRef<string | null>(null); 
     const cachedPreprocessorRangeRef = useRef<{startFrame: number, endFrame: number, selectedSrc: string, frameOffset: number} | null>(null);
     const addedTimestampRef = useRef<number | undefined>(undefined); // last timestamp rendered
-
-
     const clip = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps;
 
     const { applyMask } = useWebGLMask({
@@ -173,7 +171,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             vignette: clip?.vignette
         };
         applicatorsRef.current = applicators;
-    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators]);
+    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applicators.length]);
 
     const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean }) => {
         if (isRotating) return; // disable guides/snapping while rotating
@@ -491,7 +489,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
         
         imageRef.current?.getLayer()?.batchDraw?.();
-    }, [applyFilters, applyMask]);
+    }, [applyFilters, applyMask, applicators.length]);
 
     const seekAndDraw = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -530,7 +528,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             console.warn('[video] seek draw failed', e);
         }
-    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, frameOffset, framesToGiveStart, maskFrameForCurrentFocus, clip?.masks, clip?.preprocessors]);
+    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, frameOffset, framesToGiveStart, maskFrameForCurrentFocus, clip?.masks, clip?.preprocessors, applicators.length]);
 
     const startRendering = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -631,7 +629,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             // @ts-ignore
             iteratorRef.current?.return?.();
         };
-    }, [isPlaying, selectedSrc, mediaInfo, displayWidth, displayHeight, fps, speed, frameOffset]);
+    }, [isPlaying, selectedSrc, mediaInfo, displayWidth, displayHeight, fps, speed, frameOffset, applicators.length]);
 
     // If video is paused, reapply filters and applicators when they change
     useEffect(() => {
@@ -685,7 +683,37 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 void seekAndDraw();
             }
         }
-    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators, applyMask, maskFrameForCurrentFocus, seekAndDraw]);
+    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators, applicators.length, applyMask, maskFrameForCurrentFocus, seekAndDraw]);
+
+    // Ensure any CLUTs needed by filter applicators are preloaded before drawing
+    useEffect(() => {
+        let cancelled = false;
+        const maybePreload = async () => {
+            const preloadTasks: Promise<void>[] = [];
+            for (const app of applicatorsRef.current) {
+                const maybeEnsure = (app as any)?.ensureResources as (() => Promise<void>) | undefined;
+                if (typeof maybeEnsure === 'function') {
+                    preloadTasks.push(maybeEnsure());
+                }
+            }
+            if (preloadTasks.length) {
+                try {
+                    await Promise.all(preloadTasks);
+                } catch {}
+            }
+            if (cancelled) return;
+            // After resources are ready, force redraw immediately
+            if (canvasRef.current) {
+                lastRenderedFrameRef.current = -1;
+                if (!isPlaying) {
+                    void seekAndDrawRef.current();
+                }
+                imageRef.current?.getLayer()?.batchDraw?.();
+            }
+        };
+        void maybePreload();
+        return () => { cancelled = true };
+    }, [applicators, applicators.length, isPlaying]);
 
     // Use ref to store the latest seekAndDraw to avoid throttle recreation
     const seekAndDrawRef = useRef(seekAndDraw);

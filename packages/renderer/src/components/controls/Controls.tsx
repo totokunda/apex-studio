@@ -292,6 +292,40 @@ const Controls = () => {
         return;
       }
 
+      // Group (Cmd/Ctrl + G) and Ungroup (Cmd/Ctrl + Shift + G)
+      if (isMod && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          // Ungroup: if a single selected group, ungroup it; else if children of same group selected, ungroup that group
+          const selected = controls.selectedClipIds || [];
+          if (selected.length === 1) {
+            const clip = clipsStore.getClipById(selected[0]);
+            if (clip && clip.type === 'group') {
+              clipsStore.ungroupClips(clip.clipId);
+            } else if (clip && (clip as any).groupId) {
+              clipsStore.ungroupClips((clip as any).groupId as string);
+            }
+          } else if (selected.length > 1) {
+            // If multiple selected and they share a group, ungroup that
+            const first = clipsStore.getClipById(selected[0]);
+            const gid = (first as any)?.groupId;
+            if (gid && selected.every(id => (clipsStore.getClipById(id) as any)?.groupId === gid)) {
+              clipsStore.ungroupClips(gid);
+            }
+          }
+        } else {
+          // Group: need at least 2 selected non-group items; ignore if any is a group
+          const selected = (controls.selectedClipIds || []).filter(id => {
+            const c = clipsStore.getClipById(id);
+            return c && c.type !== 'group';
+          });
+          if (selected.length >= 2) {
+            clipsStore.groupClips(selected);
+          }
+        }
+        return;
+      }
+
       // Zoom shortcuts (viewport)
       // Cmd/Ctrl + 0 => Zoom to Fit (center content at 75%)
       // Cmd/Ctrl + 5 => 50%

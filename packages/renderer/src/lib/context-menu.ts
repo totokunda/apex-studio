@@ -9,6 +9,7 @@ export type ContextMenuAction =
   | 'separateAudio'
   | 'export'
   | 'group'
+  | 'ungroup'
   | 'extend'
   | 'stabilize'
   | 'animate'

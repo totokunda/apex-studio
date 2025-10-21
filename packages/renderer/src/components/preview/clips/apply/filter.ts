@@ -32,6 +32,35 @@ export class FilterPreview extends BaseClipApplicator<FilterClipProps> {
     }
 
     /**
+     * Returns true if required CLUT resources are already available on GPU
+     */
+    isReady(): boolean {
+        if (!this.haldClutInstance) return false;
+        const filterPath = this.clip.fullPath || this.clip.smallPath;
+        if (!filterPath) return true;
+        try {
+            return this.haldClutInstance.isClutLoaded(filterPath);
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Ensure CLUT resources are preloaded before applying the filter
+     */
+    async ensureResources(): Promise<void> {
+        if (!this.haldClutInstance) return;
+        const filterPath = this.clip.fullPath || this.clip.smallPath;
+        if (!filterPath) return;
+        if (this.haldClutInstance.isClutLoaded(filterPath)) return;
+        try {
+            await this.haldClutInstance.preloadClut(filterPath);
+        } catch (e) {
+            console.warn('[FilterPreview] Failed to preload CLUT', filterPath, e);
+        }
+    }
+
+    /**
      * Applies the filter to the provided canvas if the current frame is within the clip's range
      * NOTE: Assumes the CLUT has already been loaded. Call haldClutInstance.loadClut() before using this.
      * @param canvas - The canvas to apply the filter to

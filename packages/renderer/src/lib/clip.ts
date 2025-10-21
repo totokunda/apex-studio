@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps, ImageClipProps, PreprocessorClipType, MaskClipProps, MaskData } from "./types";
+import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps, ImageClipProps, PreprocessorClipType, MaskClipProps, MaskData, GroupClipProps } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 import { MediaItem } from "@/components/media/Item";
@@ -34,6 +34,8 @@ interface ClipStore {
     copyClips: (clipIds: string[]) => void;
     cutClips: (clipIds: string[]) => void;
     pasteClips: (atFrame?: number, targetTimelineId?: string) => void;
+    groupClips: (clipIds: string[]) => void;
+    ungroupClips: (groupId: string) => void;
     getClipAtFrame: (frame: number) => [AnyClipProps, number] | null;
     activeMediaItem: MediaItem | null;
     setActiveMediaItem: (mediaItem: MediaItem | null) => void;
@@ -94,7 +96,7 @@ export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipPro
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
     if (timeline.type === 'media') {
-        return clip.type === 'video' || clip.type === 'image';
+        return clip.type === 'video' || clip.type === 'image' || (clip as AnyClipProps).type === 'group';
     }
     return timeline.type === clip.type;
 }
@@ -102,7 +104,7 @@ export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipPro
 export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string):TimelineType => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
-    if (clip.type === 'video' || clip.type === 'image') {
+    if (clip.type === 'video' || clip.type === 'image' || clip.type === 'group') {
         return 'media';
     }
     return clip.type;
@@ -111,7 +113,8 @@ export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string):
 export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string):number => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
-    if (clip.type === 'video' || clip.type === 'image'  ||(clip.type as any === 'media')) {
+
+    if (clip.type === 'video' || clip.type === 'image'  ||(clip.type as any === 'media') || clip.type === 'group') {
         return 72;
     } 
     if (clip.type === 'audio') {
@@ -121,13 +124,15 @@ export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string
 }
 
 
-
 // Helper function to resolve overlaps by shifting clips to maintain frame gaps
 const resolveOverlaps = (clips: AnyClipProps[]): AnyClipProps[] => {
     if (clips.length === 0) return clips;
     
     // Sort clips by start frame
-    const sortedClips = [...clips].sort((a, b) => (a.startFrame || 0) - (b.startFrame || 0));
+    // filter clips that are hidden
+    const hiddenClips = clips.filter((clip) => clip.hidden);
+    const visibleClips = clips.filter((clip) => !clip.hidden);
+    const sortedClips = [...visibleClips].sort((a, b) => (a.startFrame || 0) - (b.startFrame || 0));
     const resolvedClips: AnyClipProps[] = [];
     
     for (let i = 0; i < sortedClips.length; i++) {
@@ -151,6 +156,10 @@ const resolveOverlaps = (clips: AnyClipProps[]): AnyClipProps[] => {
         
         resolvedClips.push(currentClip);
     }
+    // add hidden clips to the resolved clips
+    hiddenClips.forEach((clip) => {
+        resolvedClips.push(clip);
+    });
     
     return resolvedClips;
 };
@@ -445,7 +454,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         return { timelines: resolvedTimelines };
     }),
     clipboard: [],
-    getClipsForTimeline: (timelineId: string) => get().clips.filter((clip) => clip.timelineId === timelineId) || [],
+    getClipsForTimeline: (timelineId: string) => get().clips.filter((clip) => clip.timelineId === timelineId && !clip.hidden) || [],
     getClipById: (clipId: string, timelineId?: string) => get().clips.find((clip) => clip.clipId === clipId && (timelineId ? clip.timelineId === timelineId : true)),
     setClips: (clips: AnyClipProps[]) => {
         const resolvedClips = resolveOverlaps(clips);
@@ -460,7 +469,49 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         return { clips: resolvedClips, clipDuration };
     }),
     removeClip: (clipId: string) => set((state) => {
-        const newClips = state.clips.filter((clip) => clip.clipId !== clipId);
+        const clipToDelete = state.clips.find((c) => c.clipId === clipId);
+
+        let newClips: AnyClipProps[] = state.clips;
+
+        if (!clipToDelete) {
+            const resolvedClips = resolveOverlaps(newClips);
+            const clipDuration = calculateTotalClipDuration(resolvedClips);
+            get()._updateZoomLevel(resolvedClips, clipDuration);
+            return { clips: resolvedClips, clipDuration };
+        }
+
+        // Case 1: Deleting a group – remove the group and all its children in one transaction
+        if (clipToDelete.type === 'group') {
+            const nested = (clipToDelete as GroupClipProps).children || [] as any;
+            const childrenSet = new Set((nested as string[][]).flat());
+            newClips = newClips.filter((c) => c.clipId !== clipId && !childrenSet.has(c.clipId));
+        } else {
+            // Case 2: Deleting a non-group clip
+            newClips = newClips.filter((c) => c.clipId !== clipId);
+
+            // If the clip belongs to a group, update the group's children and ungroup if only one remains
+            if (clipToDelete.groupId) {
+                const groupIdx = newClips.findIndex((c) => c.clipId === clipToDelete.groupId);
+                const groupClip = groupIdx !== -1 ? newClips[groupIdx] : undefined;
+                if (groupClip && groupClip.type === 'group') {
+                    const prevChildren = (groupClip as GroupClipProps).children || [] as any;
+                    const updatedNested = (prevChildren as string[][])
+                        .map(sub => sub.filter((childId) => childId !== clipId))
+                        .filter(sub => sub.length > 0);
+
+                    const totalRemaining = updatedNested.reduce((acc, sub) => acc + sub.length, 0);
+                    if (totalRemaining <= 1) {
+                        // Ungroup: remove the group clip; if one child remains, reveal it and clear its groupId
+                        // call ungroupClips as this can get complex
+                        state.ungroupClips(clipToDelete.groupId);
+                    } else {
+                        // Just update group's children nested array
+                        newClips[groupIdx] = { ...(groupClip as GroupClipProps), children: updatedNested } as AnyClipProps;
+                    }
+                }
+            }
+        }
+
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         get()._updateZoomLevel(resolvedClips, clipDuration);
@@ -515,8 +566,36 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         }
 
         const updatedClip = { ...current, ...nextUpdate } as AnyClipProps;
-        const newClips = [...state.clips];
+        let newClips = [...state.clips];
         newClips[index] = updatedClip;
+
+        // If updating a group clip's location, offset its children accordingly
+        if (current.type === 'group') {
+            const oldStart = (current.startFrame ?? 0);
+            const newStart = (updatedClip.startFrame ?? oldStart);
+            const deltaStart = newStart - oldStart;
+            const timelineChanged = typeof updatedClip.timelineId === 'string' && updatedClip.timelineId !== current.timelineId;
+            const newTimelineId = updatedClip.timelineId;
+
+            const childrenNested = (updatedClip as GroupClipProps).children || [] as any;
+            const childIdsFlat: string[] = (childrenNested as string[][]).reduce((acc: string[], sub) => acc.concat(sub), []);
+            if (deltaStart !== 0 || timelineChanged) {
+                newClips = newClips.map((clipItem) => {
+                    if (!childIdsFlat.includes(clipItem.clipId)) return clipItem;
+                    const shiftedStart = (clipItem.startFrame ?? 0) + deltaStart;
+                    const shiftedEnd = (clipItem.endFrame ?? 0) + deltaStart;
+                    const nextChild: AnyClipProps = {
+                        ...clipItem,
+                        startFrame: shiftedStart,
+                        endFrame: shiftedEnd,
+                    };
+                    if (timelineChanged && newTimelineId) {
+                        (nextChild as AnyClipProps).timelineId = newTimelineId;
+                    }
+                    return nextChild;
+                });
+            }
+        }
 
         const resolvedClips = resolveOverlaps(newClips as AnyClipProps[]);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
@@ -617,8 +696,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const sortedClips = [...state.clips].sort((a, b) => (a.startFrame || 0) - (b.startFrame || 0));
         const currentIndex = sortedClips.findIndex(c => c.clipId === clipId);
         if (currentIndex === -1) return { clips: state.clips };
+
         
         const currentClip = sortedClips[currentIndex];
+        if (currentClip.type === 'group') {
+            return { clips: state.clips };
+        }
         const newClips = [...state.clips];
         
         if (side === 'right') {
@@ -685,6 +768,274 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
+    }),
+    groupClips: (clipIds: string[]) => set((state) => {
+        const newClips = [...state.clips];
+        const clips = newClips.filter((c) => clipIds.includes(c.clipId));
+        // Sort clips by vertical timeline position (top to bottom), then by startFrame
+        const sortedByTimeline = [...clips].sort((a, b) => {
+            const ta = state.timelines.find(t => t.timelineId === a.timelineId);
+            const tb = state.timelines.find(t => t.timelineId === b.timelineId);
+            const yA = (ta?.timelineY ?? 0);
+            const yB = (tb?.timelineY ?? 0);
+            if (yA !== yB) return yA - yB; // earlier (smaller) timelineY first
+            return (a.startFrame || 0) - (b.startFrame || 0);
+        });
+        // sort our clips based on location on the tim
+        const startFrame = clips.reduce((min, c) => Math.min(min, c.startFrame || 0), Infinity);
+        const endFrame = clips.reduce((max, c) => Math.max(max, c.endFrame || 0), -Infinity);
+        const groupClipId = uuidv4();
+
+        // Choose a valid media timeline with sufficient free space; if none, create one
+        const desiredType: TimelineType = 'media';
+        const intervalOverlaps = (loA: number, hiA: number, loB: number, hiB: number) => (loA < hiB) && (hiA > loB);
+
+        // Check free space on a timeline between startFrame and endFrame
+        // Exclude the selected clips being grouped since they'll be hidden/removed from timelines
+        const idsToExclude = new Set(clips.map(c => c.clipId));
+        const hasFreeSpace = (timelineId: string) => {
+            const existing = state.getClipsForTimeline(timelineId)
+                .filter(c => !idsToExclude.has(c.clipId))
+                .map(c => ({ lo: c.startFrame || 0, hi: c.endFrame || 0 }))
+                .filter(iv => iv.hi > iv.lo);
+            return !existing.some(iv => intervalOverlaps(startFrame, endFrame, iv.lo, iv.hi));
+        };
+
+        // Candidates: all existing media timelines with free space, pick lowest timelineY
+        const mediaTimelines = state.timelines.filter(t => t.type === desiredType);
+        const candidateTimelines = mediaTimelines.filter(t => hasFreeSpace(t.timelineId))
+            .sort((a, b) => (a.timelineY || 0) - (b.timelineY || 0));
+
+        let targetTimelineId: string | undefined = candidateTimelines[0]?.timelineId;
+
+        const timelines = [...state.timelines];
+
+        // If no suitable existing timeline, create a new media timeline
+        if (!targetTimelineId) {
+            const newTimelineId = uuidv4();
+            const last = state.timelines[state.timelines.length - 1];
+            const newTimeline: TimelineProps = {
+                timelineId: newTimelineId,
+                type: desiredType,
+                timelineHeight: getTimelineHeightForClip('group'),
+                timelineWidth: last?.timelineWidth ?? 0,
+                timelineY: (last?.timelineY ?? 0) + (last?.timelineHeight ?? 54),
+                timelinePadding: last?.timelinePadding ?? 24,
+                muted: false,
+                hidden: false,
+            };
+            timelines.push(newTimeline);
+            targetTimelineId = newTimelineId;
+        }
+
+        // Build nested children arrays: per-timeline lists ordered by y then by startFrame
+        const uniqueSortedTimelineIds: string[] = Array.from(new Set(sortedByTimeline.map(c => c.timelineId || '')));
+        const timelinesByY = uniqueSortedTimelineIds
+            .map(id => ({ id, y: (state.timelines.find(t => t.timelineId === id)?.timelineY) ?? 0 }))
+            .sort((a, b) => a.y - b.y)
+            .map(x => x.id);
+
+        const childrenNested: string[][] = timelinesByY.map(tid => (
+            sortedByTimeline
+                .filter(c => c.timelineId === tid)
+                .sort((a, b) => (a.startFrame || 0) - (b.startFrame || 0))
+                .map(c => c.clipId)
+        )).filter(sub => sub.length > 0);
+
+        const groupClip: GroupClipProps = {
+            type: 'group',
+            clipId: groupClipId,
+            timelineId: targetTimelineId,
+            startFrame: startFrame,
+            endFrame: endFrame,
+            children: childrenNested,
+        };
+
+        // we need to replace our sortedbytimeline clips and add the group clip
+        const clipsToReplace = [...state.clips];
+        sortedByTimeline.forEach((c) => {
+            const index = clipsToReplace.findIndex((x) => x.clipId === c.clipId);
+            if (index !== -1) {
+                clipsToReplace[index] = { ...c, groupId: groupClipId, hidden: true };
+            }
+        });
+
+        const finalClips = [...clipsToReplace, groupClip];
+        const clipDuration = calculateTotalClipDuration(finalClips);
+        const resolvedClips = resolveOverlaps(finalClips);
+        get()._updateZoomLevel(resolvedClips, clipDuration);
+        const resolvedTimelines = resolveOverlapsTimelines(timelines);
+
+        // Select the newly created group
+        try {
+            const controls = useControlsStore.getState();
+            controls.setSelectedClipIds([groupClipId]);
+        } catch {}
+
+        return { clips: resolvedClips, clipDuration, timelines: resolvedTimelines };
+    }),
+    ungroupClips: (_groupId: string) => set((state) => {
+        const groupClip = state.clips.find((c) => c.clipId === _groupId);
+        if (!groupClip || groupClip.type !== 'group') return { clips: state.clips };
+
+        const childrenNested = ((groupClip as GroupClipProps).children || []) as string[][];
+        if (!childrenNested || childrenNested.length === 0) {
+            // No children, just remove the empty group
+            const remaining = state.clips.filter((c) => c.clipId !== _groupId);
+            const resolvedClips = resolveOverlaps(remaining);
+            const clipDuration = calculateTotalClipDuration(resolvedClips);
+            get()._updateZoomLevel(resolvedClips, clipDuration);
+            return { clips: resolvedClips, clipDuration };
+        }
+
+        // Determine ordering: always ungroup upwards
+        // childrenNested is ordered top->bottom; bottom is the last array
+        const bottomIndex = childrenNested.length - 1;
+
+        // Precompute child clips map for quick lookup
+        const clipsById = new Map(state.clips.map((c) => [c.clipId, c] as const));
+
+        // Helper: derive required timeline type for a subarray from its first child
+        const requiredTypeForSub = (ids: string[]): TimelineType => {
+            const first = ids.map((id) => clipsById.get(id)).find(Boolean) as AnyClipProps | undefined;
+            if (!first) return 'media';
+            return getTimelineTypeForClip(first);
+        };
+
+        // Helper: compute [start,end) for a subarray
+        const boundsForSub = (ids: string[]): [number, number] => {
+            const items = ids.map((id) => clipsById.get(id)).filter(Boolean) as AnyClipProps[];
+            const s = items.reduce((min, c) => Math.min(min, c.startFrame || 0), Infinity);
+            const e = items.reduce((max, c) => Math.max(max, c.endFrame || 0), -Infinity);
+            return [Math.max(0, s), Math.max(Math.max(0, s) + 1, e)];
+        };
+
+        const intervalOverlaps = (loA: number, hiA: number, loB: number, hiB: number) => (loA < hiB) && (hiA > loB);
+
+        // Build quick timeline index lookup and locate the group's timeline position
+        const timelines = [...state.timelines];
+        const timelineIndexById = new Map(timelines.map((t, i) => [t.timelineId, i] as const));
+        const groupTimelineIndex = timelineIndexById.get(groupClip.timelineId || '');
+
+        // If group's timeline is missing, fallback to appending to the bottom
+        const fallbackGroupIndex = typeof groupTimelineIndex === 'number' ? groupTimelineIndex : timelines.length - 1;
+
+        // Track planned intervals per timeline to avoid conflicts when placing multiple subarrays
+        const plannedIntervals = new Map<string, Array<[number, number]>>();
+
+        const hasFreeSpace = (timelineId: string, start: number, end: number, excludeClipIds: Set<string>) => {
+            const existing = state.getClipsForTimeline(timelineId)
+                .filter((c) => !excludeClipIds.has(c.clipId))
+                .map((c) => ({ lo: c.startFrame || 0, hi: c.endFrame || 0 }))
+                .filter((iv) => iv.hi > iv.lo);
+            const planned = plannedIntervals.get(timelineId) || [];
+            return ![...existing, ...planned.map(([lo, hi]) => ({ lo, hi }))]
+                .some((iv) => intervalOverlaps(start, end, iv.lo, iv.hi));
+        };
+
+        // Assign a target timeline for a subarray, searching upwards (indices decreasing)
+        const assignTimelineUpwards = (
+            subIds: string[],
+            baseIndex: number,
+            preferExactIndexId?: string
+        ): string => {
+            const [s, e] = boundsForSub(subIds);
+            const excludeIds = new Set<string>(subIds.concat(_groupId));
+            const requiredType = requiredTypeForSub(subIds);
+
+            // 1) Try the preferred timeline (group's timeline) if provided and compatible
+            if (preferExactIndexId) {
+                const tl = timelines.find((t) => t.timelineId === preferExactIndexId);
+                if (tl && tl.type === requiredType && hasFreeSpace(tl.timelineId, s, e, excludeIds)) {
+                    const arr = plannedIntervals.get(tl.timelineId) || [];
+                    arr.push([s, e]);
+                    plannedIntervals.set(tl.timelineId, arr);
+                    return tl.timelineId;
+                }
+            }
+
+            // 2) Search existing timelines above for matching type and free space
+            for (let i = Math.max(0, baseIndex - 1); i >= 0; i--) {
+                const tl = timelines[i];
+                if (!tl) continue;
+                if (tl.type !== requiredType) continue;
+                if (hasFreeSpace(tl.timelineId, s, e, excludeIds)) {
+                    const arr = plannedIntervals.get(tl.timelineId) || [];
+                    arr.push([s, e]);
+                    plannedIntervals.set(tl.timelineId, arr);
+                    return tl.timelineId;
+                }
+            }
+
+            // 3) Create a new timeline of the required type inserted above the baseIndex
+            const newTimelineId = uuidv4();
+            const height = getTimelineHeightForClip(requiredType);
+            const ref = timelines[Math.max(0, baseIndex)];
+            const newTimeline: TimelineProps = {
+                timelineId: newTimelineId,
+                type: requiredType,
+                timelineHeight: height,
+                timelineWidth: ref?.timelineWidth ?? 0,
+                timelineY: 0,
+                timelinePadding: ref?.timelinePadding ?? 24,
+                muted: false,
+                hidden: false,
+            };
+            const insertAt = Math.max(0, baseIndex);
+            timelines.splice(insertAt, 0, newTimeline);
+
+            // Reserve the interval on this newly created timeline
+            plannedIntervals.set(newTimelineId, [[s, e]]);
+            return newTimelineId;
+        };
+
+        // Build assignments from bottom subarray at group's timeline, then upwards
+        const assignments = new Map<number, string>(); // subIndex -> timelineId
+
+        // Bottom subarray: prefer group's timeline
+        const groupTlId = (timelines[fallbackGroupIndex] || {}).timelineId;
+        const bottomTlId = assignTimelineUpwards(childrenNested[bottomIndex], fallbackGroupIndex, groupTlId);
+        assignments.set(bottomIndex, bottomTlId);
+
+        // Remaining subarrays: place upwards (search above the group's index)
+        for (let idx = bottomIndex - 1; idx >= 0; idx--) {
+            const tlId = assignTimelineUpwards(childrenNested[idx], fallbackGroupIndex);
+            assignments.set(idx, tlId);
+        }
+
+        // Reveal children and remove the group
+        const childIdsFlat = childrenNested.flat();
+        const childIdSet = new Set(childIdsFlat);
+
+        const newClips = state.clips
+            .filter((c) => c.clipId !== _groupId)
+            .map((c) => {
+                if (!childIdSet.has(c.clipId)) return c;
+                // Determine which subarray this child belongs to
+                const subIndex = childrenNested.findIndex((sub) => sub.includes(c.clipId));
+                const targetTimelineId = assignments.get(subIndex || 0);
+                return {
+                    ...c,
+                    hidden: false,
+                    groupId: undefined,
+                    timelineId: targetTimelineId ?? c.timelineId,
+                } as AnyClipProps;
+            });
+
+        // Resolve timelines positioning after inserts
+        const resolvedTimelines = resolveOverlapsTimelines(timelines);
+
+        const resolvedClips = resolveOverlaps(newClips);
+        const clipDuration = calculateTotalClipDuration(resolvedClips);
+        get()._updateZoomLevel(resolvedClips, clipDuration);
+
+        // Select all ungrouped children
+        try {
+            const controls = useControlsStore.getState();
+            controls.setSelectedClipIds(childIdsFlat);
+        } catch {}
+
+        return { clips: resolvedClips, clipDuration, timelines: resolvedTimelines };
     }),
     // Create two new clips from the original clip at the cut frame
     splitClip: (cutFrame: number, clipId: string) => set((state) => {
@@ -1084,7 +1435,6 @@ export const getTimelineX = (timelineWidth:number, timelinePadding:number, timel
     const timelineX = timelinePadding - (timelineWidth / (timelineEndFrame - timelineStartFrame)) * timelineStartFrame;
     return Math.max(0, timelineX);
 }
-
 
 export const getLocalFrame = (focusFrame: number, clip: AnyClipProps) => {
     const startFrame = clip.startFrame ?? 0;

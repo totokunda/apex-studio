@@ -33,43 +33,66 @@ export function getApplicableClips(
     const timelines = clipStore.timelines;
     const allClips = clipStore.clips;
     
-    // Find the timeline index of the current clip
-    const clipTimelineIndex = timelines.findIndex(t => t.timelineId === clip.timelineId);
-    if (clipTimelineIndex === -1) return [];
-    
-    // Get all applicable clips from timelines with LOWER indices (rendered above)
-    const applicableClips: AnyClipProps[] = [];
-    
-    for (let i = 0; i < clipTimelineIndex; i++) {
-        const timeline = timelines[i];
-        const timelineClips = allClips.filter(c => c.timelineId === timeline.timelineId);
-        
-        // Check if timeline is hidden
-        if (timeline.hidden) continue;
-        
-        for (const timelineClip of timelineClips) {
-            // Only include clips of applicable types
-            if (!applicatorTypes.includes(timelineClip.type)) continue;
-            
-            // Check if the clip overlaps with the current frame
-            const startFrame = timelineClip.startFrame ?? 0;
-            const endFrame = timelineClip.endFrame ?? 0;
-            const isInRange = focusFrame >= startFrame && focusFrame <= endFrame;
-            
-            if (isInRange) {
-                applicableClips.push(timelineClip);
+    // Helper: effective timelineY for a clip, considering its group container
+    const getEffectiveTimelineY = (c: AnyClipProps): number => {
+        const own = timelines.find(t => t.timelineId === c.timelineId);
+        if (own) return own.timelineY ?? 0;
+        if (c.groupId) {
+            const groupClip = allClips.find(x => x.clipId === c.groupId);
+            if (groupClip) {
+                const groupTl = timelines.find(t => t.timelineId === groupClip.timelineId);
+                if (groupTl) return groupTl.timelineY ?? 0;
             }
         }
-    }
-    
-    // Sort by timeline index (lower index = rendered on top, but we want to apply bottom-up)
-    // So we reverse to apply effects from bottom to top
-    applicableClips.sort((a, b) => {
-        const indexA = timelines.findIndex(t => t.timelineId === a.timelineId);
-        const indexB = timelines.findIndex(t => t.timelineId === b.timelineId);
-        return indexB - indexA; // Higher index (lower layer) applies first
+        return 0;
+    };
+
+    // Determine the effective timelineY of the target clip
+    const targetY = getEffectiveTimelineY(clip);
+    const targetGroupId = clip.groupId;
+    const targetGroup = targetGroupId ? allClips.find(c => c.clipId === targetGroupId) as AnyClipProps | undefined : undefined;
+    const targetChildrenNested = (targetGroup && (targetGroup as any).children as string[][] | undefined) ?? [];
+    const targetChildrenFlat = targetChildrenNested.flat();
+    const targetChildIndex = targetChildrenFlat.indexOf(clip.clipId);
+
+    // Collect applicable clips from timelines with smaller effective y (visually above target)
+    const applicableClips: AnyClipProps[] = allClips.filter((c) => {
+        if (!applicatorTypes.includes(c.type)) return false;
+        // Ignore hidden timelines
+        const effY = getEffectiveTimelineY(c);
+        // Allow if strictly above (smaller y), OR if in the same group and ordered before target by child index
+        let allowedByVertical = effY < targetY;
+        if (!allowedByVertical && targetGroupId && c.groupId === targetGroupId && targetChildIndex !== -1) {
+            const idx = targetChildrenFlat.indexOf(c.clipId);
+            if (idx !== -1 && idx < targetChildIndex) {
+                allowedByVertical = true;
+            }
+        }
+        if (!allowedByVertical) return false;
+        const tl = timelines.find(t => t.timelineId === (allClips.find(x => x.clipId === c.groupId)?.timelineId || c.timelineId));
+        if (tl?.hidden) return false;
+        // Time overlap
+        const s = c.startFrame ?? 0;
+        const e = c.endFrame ?? 0;
+        return focusFrame >= s && focusFrame <= e;
     });
-    
+
+    // Sort top to bottom by effective timelineY (smaller y first), so lower (bigger y) end up later in the list and render later
+    applicableClips.sort((a, b) => {
+        const yA = getEffectiveTimelineY(a);
+        const yB = getEffectiveTimelineY(b);
+        // Smaller y first, larger y (lower on screen) last
+        if (yA !== yB) return yA - yB;
+        // If in the same group as target, order by child index ascending
+        if (targetGroupId && a.groupId === targetGroupId && b.groupId === targetGroupId) {
+            const ia = targetChildrenFlat.indexOf(a.clipId);
+            const ib = targetChildrenFlat.indexOf(b.clipId);
+            if (ia !== ib) return ia - ib;
+        }
+        // Tie-breaker: earlier start first
+        return (a.startFrame ?? 0) - (b.startFrame ?? 0);
+    });
+
     return applicableClips;
 }
 

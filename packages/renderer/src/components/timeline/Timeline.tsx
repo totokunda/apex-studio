@@ -10,7 +10,9 @@ import { calculateFrameFromX } from "@/lib/preprocessorHelpers";
 
 const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({timelineWidth, timelineY, timelineHeight = 54, timelinePadding = 24, timelineId, index, scrollY, type, muted, hidden}) => {
     const {hoveredTimelineId, getClipsForTimeline} = useClipStore();
+
     const clips = getClipsForTimeline(timelineId);
+
     const {timelineDuration} = useControlsStore();
 
 
@@ -36,13 +38,8 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
     const topDashGroupY = timelineTopY - gapBetweenTimelines / 2 - underGroupHeight / 2;
     const bottomDashGroupY = timelineBottomY + gapBetweenTimelines / 2 - underGroupHeight / 2;
 
-    
-    
-
-
     const timelineX = useMemo(() => getTimelineX(timelineWidth!, timelinePadding, timelineDuration), [timelineWidth, timelinePadding, timelineDuration]);
     
-
     return (
         <>
            {

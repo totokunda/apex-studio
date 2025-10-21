@@ -1,7 +1,7 @@
 import { PacketStats, InputVideoTrack, InputAudioTrack, MetadataTags, InputFormat, Input } from "mediabunny";
 import { Preprocessor } from "./preprocessor";
 
-export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
+export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'text' | 'lora' | 'shape' | 'draw' | 'filter' | 'group'
 export type TimelineType = 'media' | 'audio' | 'model'  | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
 export type ViewTool = 'pointer' | 'hand' | 'mask' | 'draw' | 'shape'| 'text'
 export type ShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'line' | 'star'
@@ -33,8 +33,10 @@ export interface ClipTransform {
 }
 
 export interface ClipProps {
-    
-    // May be less relevant when adding more timelines, might just store these separately
+    // For grouping
+    groupId?: string;
+    hidden?: boolean;
+    //
     timelineId?: string;
     startFrame?:number;
     endFrame?:number;
@@ -257,7 +259,13 @@ export type PreprocessorClipProps = {
     status?: 'running' | 'complete' | 'failed';
 }
 
-export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps | DrawingClipProps;
+export type GroupClipProps = ClipProps & {
+    src?: null | undefined;
+    type: 'group';
+    children: string[][]; // clipIds for the children of the group
+}
+
+export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps | DrawingClipProps | GroupClipProps;
 
 export type ZoomLevel = number;
 

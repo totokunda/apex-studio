@@ -323,6 +323,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
 
   // monitor all timelines and if any are empty, remove them
   useEffect(() => {
+    
     const emptyTimelines = timelines.filter((t) => getClipsForTimeline(t.timelineId).length === 0);
       emptyTimelines.forEach((t) => {
       removeTimeline(t.timelineId);
@@ -352,6 +353,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
 
   const handleMediaDragMove = useCallback((data: MediaItem | undefined, pointerY: number, pointerX: number) => {
     if (!data) return;
+    // Record last pointer X for later use on drop when creating a new timeline via dashed hover
+    try { (window as any).__apex_lastPointerX = pointerX; } catch {}
     // check if the pointer is over a dashed line
     const stage = timelinesLayerRef.current;
     const children = stage?.children || [];
@@ -596,7 +599,16 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     // Use validated ghost position to compute frames
     const state = useClipStore.getState();
     const ghostTimelineId = state.ghostTimelineId;
-    const ghostX = state.ghostTimelineId ? state.ghostX : 0;
+    // Use ghostX when we have a ghost target; if we are creating a new timeline via dashed hover,
+    // compute the X from the last pointer position captured in onDragMove (center of draggable)
+    let ghostX = state.ghostTimelineId ? state.ghostX : 0;
+
+    // If we're creating a new timeline (hovered dashed), align start using current mouse position
+    if (hoveredTimelineId && (typeof (window as any).__apex_lastPointerX === 'number')) {
+      const pointerX = Number((window as any).__apex_lastPointerX);
+      const innerX = Math.max(0, Math.min(dimensions.stageWidth, pointerX - 24));
+      ghostX = Math.round(innerX);
+    }
 
     const dropTimelineId = hoveredTimelineId ? timelineId : (ghostTimelineId || timelineId);
     setHoveredTimelineId(null);
@@ -654,13 +666,13 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         }
       }
     }
-    startFrame = existingClips.length === 0 ? (existingClips.length === 0 ? 0 : placementStart) : placementStart;
+    startFrame = existingClips.length === 0 ? (existingClips.length === 0 ? startFrame : placementStart) : placementStart;
     endFrame = startFrame + clipLen;
 
     const newClip: AnyClipProps = {
       timelineId: dropTimelineId,
       clipId: uuidv4(),
-      startFrame: existingClips.length === 0 ? 0 : startFrame,
+      startFrame: existingClips.length === 0 ? startFrame : startFrame,
       endFrame,
       src: data.assetUrl,
       // @ts-ignore
@@ -1236,8 +1248,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     }
     
   }, [controlStore, setSelectedPreprocessorId]);
-
   
+
 
   return (
     <div  className='relative h-full flex flex-row overflow-hidden'>

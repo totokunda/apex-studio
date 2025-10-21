@@ -15,7 +15,7 @@ import TextPreview from './clips/TextPreview';
 import DrawingPreview from './clips/DrawingPreview';
 import MaskPreview from './clips/MaskPreview';
 import { useControlsStore } from '@/lib/control';
-import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps, DrawingClipProps, DrawingLine, PreprocessorClipType, MaskClipProps, MaskData, ClipTransform } from '@/lib/types';
+import { AnyClipProps, PolygonClipProps, ShapeClipProps, TextClipProps, DrawingClipProps, DrawingLine, PreprocessorClipType, MaskData, ClipTransform } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 import { SlSizeFullscreen } from 'react-icons/sl';
 import FullscreenPreview from './FullscreenPreview';
@@ -29,28 +29,9 @@ import { calculateArea, doPolygonsIntersect, isPolygonInsidePolygon, mergePolygo
 const getFiniteNumber = (value: number | undefined, fallback = 0): number =>
   Number.isFinite(value) ? (value as number) : fallback;
 
-const getSafeScale = (value: number | undefined): number => {
-  const scale = Number.isFinite(value) ? (value as number) : 1;
-  if (Math.abs(scale) < 1e-6) {
-    return scale < 0 ? -1e-6 : 1e-6;
-  }
-  return scale;
-};
+ 
 
-const getTransformCenter = (transform: ClipTransform): { x: number; y: number } => {
-  const baseWidth = Math.abs(getFiniteNumber(transform.width));
-  const baseHeight = Math.abs(getFiniteNumber(transform.height));
-  const scaleX = Math.abs(getSafeScale(transform.scaleX));
-  const scaleY = Math.abs(getSafeScale(transform.scaleY));
-  const actualWidth = baseWidth * (scaleX || 1);
-  const actualHeight = baseHeight * (scaleY || 1);
-  const originX = getFiniteNumber(transform.x);
-  const originY = getFiniteNumber(transform.y);
-  return {
-    x: originX + actualWidth / 2,
-    y: originY + actualHeight / 2,
-  };
-};
+ 
 
 
 const normalizeMaskPointForRotation = (
@@ -236,22 +217,62 @@ const Preview:React.FC<PreviewProps> = () => {
   
 
   const sortClips = useCallback((clips: AnyClipProps[]) => {
-    // Sort clips by timeline index - earlier timelines render later (on top)
-    const sortedClips = clips.slice().sort((a, b) => {
-      const indexA = timelines.findIndex(t => t.timelineId === a.timelineId);
-      const indexB = timelines.findIndex(t => t.timelineId === b.timelineId);
-      
-      // Earlier timeline index renders later (higher z-index)
-      return indexB - indexA;
+    // Treat each group as a single sortable unit; then expand children in defined order
+    type GroupUnit = { kind: 'group'; id: string; y: number; start: number; children: AnyClipProps[] };
+    type SingleUnit = { kind: 'single'; y: number; start: number; clip: AnyClipProps };
+
+    const groups = clips.filter(c => c.type === 'group') as AnyClipProps[];
+    const childrenSet = new Set<string>(
+      groups.flatMap(g => {
+        const nested = ((g as any).children as string[][] | undefined) ?? [];
+        return nested.flat();
+      })
+    );
+
+    // Build group units
+    const groupUnits: GroupUnit[] = groups.map((g) => {
+      const y = (timelines.find(t => t.timelineId === g.timelineId)?.timelineY) ?? 0;
+      const start = g.startFrame ?? 0;
+      const nested = ((g as any).children as string[][] | undefined) ?? [];
+      const childIdsFlat = nested.flat();
+      const children = childIdsFlat
+        .map(id => clips.find(c => c.clipId === id))
+        .filter(Boolean) as AnyClipProps[];
+      return { kind: 'group', id: g.clipId, y, start, children };
     });
-    
-    return sortedClips;
-  }, [timelines])
+
+    // Build single units for non-group, non-child clips
+    const singleUnits: SingleUnit[] = clips
+      .filter(c => c.type !== 'group' && !childrenSet.has(c.clipId))
+      .map((c) => {
+        const y = (timelines.find(t => t.timelineId === c.timelineId)?.timelineY) ?? 0;
+        const start = c.startFrame ?? 0;
+        return { kind: 'single', y, start, clip: c };
+      });
+
+    // Sort units: lower on screen first (higher y), then earlier start
+    const units = [...groupUnits, ...singleUnits].sort((a, b) => {
+      if (a.y !== b.y) return b.y - a.y;
+      return a.start - b.start;
+    });
+
+    // Flatten units back to clip list; for groups, expand children in their defined order
+    const result: AnyClipProps[] = [];
+    for (const u of units) {
+      if (u.kind === 'single') {
+        result.push(u.clip);
+      } else {
+        // Ensure children are ordered as in group's children list
+        result.push(...u.children.reverse());
+      }
+    }
+
+    return result;
+  }, [timelines, clips])
 
   const filterClips = useCallback((clips: AnyClipProps[], audio:boolean = false) => {
     const filteredClips = clips.filter((clip) => {
       const timeline = timelines.find((t) => t.timelineId === clip.timelineId);
-      
       if (audio) {
         if (timeline?.muted) {
           return false;
@@ -2165,6 +2186,7 @@ const Preview:React.FC<PreviewProps> = () => {
            <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale} width={rectWidth} height={rectHeight} >
             <Rect x={0} y={0}  width={rectWidth} height={rectHeight} fill={'#000000'} />
                {sortClips(filterClips(clips)).map((clip) => {
+
                 const startFrame = clip.startFrame || 0;
                 const hasOverlap = (clip.type === 'video' || clip.type === 'image') && (startFrame > 0) ? true : false;
                 

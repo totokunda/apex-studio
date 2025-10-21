@@ -69,6 +69,8 @@ const TopBar:React.FC<TopBarProps> = () => {
                         <ShortcutRow action='Zoom to 50%' keys={['⌘', '5']} />
                         <ShortcutRow action='Zoom to 100%' keys={['⌘', '1']} />
                         <ShortcutRow action='Zoom to 200%' keys={['⌘', '2']} />
+                        <ShortcutRow action='Group' keys={['⌘', 'G']} />
+                        <ShortcutRow action='Ungroup' keys={['⌘', '⇧', 'G']} />
                       </div>
                     </div>
                     <div className='p-3'>

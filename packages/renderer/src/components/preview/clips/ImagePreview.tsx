@@ -358,11 +358,22 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
                 vignette: clip?.vignette
             });
 
+            // Ensure resources (e.g., CLUTs) are preloaded for applicators before applying
+            const preloadTasks: Promise<void>[] = [];
+            for (const app of applicators) {
+                const ensure = (app as any)?.ensureResources as (() => Promise<void>) | undefined;
+                if (typeof ensure === 'function') {
+                    preloadTasks.push(ensure());
+                }
+            }
+            if (preloadTasks.length) {
+                try { await Promise.all(preloadTasks); } catch {}
+            }
+
             // Apply applicators to canvas
             let finalCanvas = processedCanvas;
             for (const applicator of applicators) {
                 const result = applicator.apply(finalCanvas);
-                // If applicator returned a different canvas, copy it back to maintain working canvas
                 if (result !== finalCanvas) {
                     workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
                     workingCtx.drawImage(result, 0, 0, workingCanvas.width, workingCanvas.height);

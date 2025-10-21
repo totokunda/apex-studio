@@ -310,7 +310,7 @@ export const generateAudioWaveformCanvas = async (
     path: string,
     width: number,
     height: number,
-    options?: { samples?: number; color?: string; mediaInfo?: MediaInfo; startFrame?: number; endFrame?: number }
+    options?: { samples?: number; color?: string; mediaInfo?: MediaInfo; startFrame?: number; endFrame?: number, sampleWidth?:number, sampleGap?:number }
 ): Promise<HTMLCanvasElement | null> => {
     let ac: AudioContext | null = null;
     try {
@@ -374,8 +374,8 @@ export const generateAudioWaveformCanvas = async (
             const segLen = Math.max(1, segEnd - segStart);
 
             // Layout: compute bar count and per-bar widths so we fill targetW exactly
-            const minBarWidth = targetW >= 240 ? 2 : 1;
-            const baseGap = 1;
+            const minBarWidth = options?.sampleWidth ?? (targetW >= 240 ? 2 : 1);
+            const baseGap = options?.sampleGap ?? 1;
             let barCount = Math.max(1, Math.floor((targetW + baseGap) / (minBarWidth + baseGap)));
             // Safety fallback
             if (barCount < 1) barCount = 1;

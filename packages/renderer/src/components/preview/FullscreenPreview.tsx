@@ -80,12 +80,51 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
   }, [fps]);
   
   const sortClips = useCallback((clips: AnyClipProps[]) => {
-    const sortedClips = clips.slice().sort((a, b) => {
-      const indexA = timelines.findIndex(t => t.timelineId === a.timelineId);
-      const indexB = timelines.findIndex(t => t.timelineId === b.timelineId);
-      return indexB - indexA;
+    // Treat each group as a single unit (ordered by group's timelineY/start) and then expand its children
+    type GroupUnit = { kind: 'group'; id: string; y: number; start: number; children: AnyClipProps[] };
+    type SingleUnit = { kind: 'single'; y: number; start: number; clip: AnyClipProps };
+
+    const groups = clips.filter(c => c.type === 'group');
+    const childrenSet = new Set<string>(
+      groups.flatMap(g => {
+        const nested = ((g as any).children as string[][] | undefined) ?? [];
+        return nested.flat();
+      })
+    );
+
+    const groupUnits: GroupUnit[] = groups.map((g: AnyClipProps) => {
+      const y = (timelines.find(t => t.timelineId === g.timelineId)?.timelineY) ?? 0;
+      const start = g.startFrame ?? 0;
+      const nested = ((g as any).children as string[][] | undefined) ?? [];
+      const childIdsFlat = nested.flat();
+      const children = childIdsFlat
+        .map(id => clips.find(c => c.clipId === id))
+        .filter(Boolean) as AnyClipProps[];
+      return { kind: 'group', id: g.clipId, y, start, children };
     });
-    return sortedClips;
+
+    const singleUnits: SingleUnit[] = clips
+      .filter(c => c.type !== 'group' && !childrenSet.has(c.clipId))
+      .map((c) => {
+        const y = (timelines.find(t => t.timelineId === c.timelineId)?.timelineY) ?? 0;
+        const start = c.startFrame ?? 0;
+        return { kind: 'single', y, start, clip: c };
+      });
+
+    const units = [...groupUnits, ...singleUnits].sort((a, b) => {
+      if (a.y !== b.y) return b.y - a.y; // lower timelines (bigger y) first
+      return a.start - b.start;
+    });
+
+    const result: AnyClipProps[] = [];
+    for (const u of units) {
+      if (u.kind === 'single') {
+        result.push(u.clip);
+      } else {
+        result.push(...u.children);
+      }
+    }
+    return result;
   }, [timelines]);
 
   const filterClips = useCallback((clips: AnyClipProps[], audio: boolean = false) => {
@@ -246,6 +285,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
           <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale}>
             <Rect x={0} y={0} width={rectWidth} height={rectHeight} fill={'#000000'} />
             {sortClips(filterClips(clips)).map((clip) => {
+              if (clip.type === 'group') return null;
               const startFrame = clip.startFrame || 0;
               const hasOverlap = (clip.type === 'video' || clip.type === 'image') && (startFrame > 0) ? true : false;
               const clipAtFrame = clipWithinFrame(clip, focusFrame, hasOverlap, 1);

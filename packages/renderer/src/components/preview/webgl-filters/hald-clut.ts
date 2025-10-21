@@ -20,11 +20,26 @@ export class WebGLHaldClut extends WebGLFilterBase {
   private clutTextures: Map<string, WebGLTexture> = new Map();
   private clutLevels: Map<string, number> = new Map();
   private clutWidths: Map<string, number> = new Map();
+  private loadedClutPaths: Set<string> = new Set();
+  private contextLost = false;
+  private onContextLost = (event: Event) => {
+    event.preventDefault();
+    this.contextLost = true;
+    this.program = null;
+    console.warn('[HaldClut] WebGL context lost');
+  };
+  private onContextRestored = () => {
+    this.contextLost = false;
+    console.info('[HaldClut] WebGL context restored, reinitializing resources');
+    void this.reinitializeResources();
+  };
 
   constructor() {
     // Request WebGL2 context from base class
     super('webgl2');
     this.initShaders();
+    this.canvas.addEventListener('webglcontextlost', this.onContextLost as EventListener, false);
+    this.canvas.addEventListener('webglcontextrestored', this.onContextRestored as EventListener, false);
   }
 
   private initShaders() {
@@ -132,6 +147,23 @@ export class WebGLHaldClut extends WebGLFilterBase {
     }
   }
 
+  private async reinitializeResources(): Promise<void> {
+    if (!this.gl) return;
+    this.initBuffers();
+    this.initShaders();
+    const paths = Array.from(this.loadedClutPaths);
+    this.clutTextures.clear();
+    this.clutLevels.clear();
+    this.clutWidths.clear();
+    for (const p of paths) {
+      try {
+        await this.preloadClut(p);
+      } catch (e) {
+        console.error('[HaldClut] Failed to reload CLUT after context restore:', p, e);
+      }
+    }
+  }
+
   private async loadClutImage(imagePath: string): Promise<HTMLImageElement> {
     // Check cache first
     if (clutImageCache.has(imagePath)) {
@@ -184,6 +216,10 @@ export class WebGLHaldClut extends WebGLFilterBase {
    */
   public async preloadClut(clutImagePath: string): Promise<void> {
     if (!this.gl) return;
+    this.loadedClutPaths.add(clutImagePath);
+    if (this.contextLost || ((this.gl as WebGLRenderingContext).isContextLost && (this.gl as WebGLRenderingContext).isContextLost())) {
+      return;
+    }
 
     // Check if already loaded
     if (this.clutTextures.has(clutImagePath)) {
@@ -232,6 +268,10 @@ export class WebGLHaldClut extends WebGLFilterBase {
   ): HTMLCanvasElement {
     
     if (!this.gl || !this.program) return sourceCanvas;
+    if (((this.gl as WebGLRenderingContext).isContextLost && (this.gl as WebGLRenderingContext).isContextLost())) {
+      this.contextLost = true;
+      return sourceCanvas;
+    }
 
     // Look up the preloaded CLUT texture
     const clutTexture = this.clutTextures.get(clutImagePath);
@@ -329,7 +369,12 @@ export class WebGLHaldClut extends WebGLFilterBase {
     // Check for GL errors
     const error = gl.getError();
     if (error !== gl.NO_ERROR) {
-      console.error('WebGL error after drawing:', error);
+      if ((gl as any).CONTEXT_LOST_WEBGL && error === (gl as any).CONTEXT_LOST_WEBGL) {
+        this.contextLost = true;
+        console.warn('[HaldClut] WebGL context lost during draw');
+      } else {
+        console.error('WebGL error after drawing:', error);
+      }
     }
 
     // Clean up temporary resources
@@ -355,6 +400,9 @@ export class WebGLHaldClut extends WebGLFilterBase {
         this.program = null;
       }
     }
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost as EventListener, false);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored as EventListener, false);
+    this.loadedClutPaths.clear();
     super.dispose();
   }
 
