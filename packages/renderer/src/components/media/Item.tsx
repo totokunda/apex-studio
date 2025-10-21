@@ -42,6 +42,9 @@ export type MediaItem = {
     mediaInfo?: MediaInfo;
     fillCanvas?: boolean;
     hasProxy?: boolean;
+    // Model-specific fields
+    track?: string;
+    modelId?: string;
 }
 
 interface ItemProps {

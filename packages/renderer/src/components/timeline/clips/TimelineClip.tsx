@@ -5,16 +5,12 @@ import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
 import { useControlsStore } from "@/lib/control";
 import { Image, Group, Rect, Text, Line } from 'react-konva';
 import Konva from 'konva';
-import { MediaInfo, ShapeClipProps, TextClipProps, TimelineProps, VideoClipProps, ImageClipProps, ClipType, FilterClipProps, MaskClipProps, PreprocessorClipType } from "@/lib/types";
+import { MediaInfo, ShapeClipProps, TextClipProps, TimelineProps, VideoClipProps, ImageClipProps, ClipType, FilterClipProps, ModelClipProps } from "@/lib/types";
 import { v4 as uuidv4 } from 'uuid';
 import { getMediaInfoCached } from "@/lib/media/utils";
 import { useWebGLFilters } from "@/components/preview/webgl-filters";
-import {useWebGLMask} from "@/components/preview/mask/useWebGLMask"
 
 import { PreprocessorClip } from "./PreprocessorClip";
-import MaskKeyframes from "./MaskKeyframes";
-import { useViewportStore } from "@/lib/viewport";
-import { useContextMenuStore, ContextMenuItem } from '@/lib/context-menu';
 const THUMBNAIL_TILE_SIZE = 36;
 
 const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType,  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 54, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
@@ -38,17 +34,9 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const addTimeline = useClipStore((s) => s.addTimeline);
     const setSelectedPreprocessorId = useClipStore((s) => s.setSelectedPreprocessorId);
     const setIsDraggingGlobal = useClipStore((s) => s.setIsDragging);
-    const focusFrame = useControlsStore((s) => s.focusFrame);
-    const tool = useViewportStore((s) => s.tool);
+    
     // Subscribe directly to this clip's data
     const currentClip = useClipStore((s) => s.clips.find((c) => c.clipId === clipId && (timelineId ? c.timelineId === timelineId : true)));
-
-    const { applyMask } = useWebGLMask({
-        focusFrame: focusFrame,   
-        masks: (currentClip as PreprocessorClipType & {masks: MaskClipProps[]})?.masks || [],
-        disabled: tool === 'mask' || (currentClip?.type !== 'video' && currentClip?.type !== 'image') ,
-        clip: currentClip,
-    });
     const cornerRadius = useMemo(() => {
         return 1;
     }, [currentClip?.type]);
@@ -72,6 +60,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const clipX = useMemo(() => getClipX(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration, timelineId]);
     const clipRef = useRef<Konva.Line>(null);
     const [resizeSide, setResizeSide] = useState<'left' | 'right' | null>(null);
+    const [draggingPreprocessor, setDraggingPreprocessor] = useState<{id: string, offsetX: number} | null>(null);
     const [imageCanvas] = useState<HTMLCanvasElement>(() => document.createElement('canvas'));
     const mediaInfoRef = useRef<MediaInfo | undefined>(getMediaInfoCached(currentClip?.src!));
     const dragInitialWindowRef = useRef<[number, number] | null>(null);
@@ -86,7 +75,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const [isDragging, setIsDragging] = useState(false);
     const rectRefLeft = useRef<Konva.Rect>(null);
     const rectRefRight = useRef<Konva.Rect>(null);
-    // global context menu used instead of local state
     const { applyFilters } = useWebGLFilters();
     const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
     
@@ -133,15 +121,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     // Use global selection state instead of local state
     const currentClipId = clipId;
     const isSelected = selectedClipIds.includes(currentClipId);
-
-    const showMaskKeyframes = useMemo(() => {
-        if (!isSelected) return false;
-        if (tool !== 'mask') return false;
-        if (!currentClip || currentClip.type !== 'video') return false;
-        if (isDragging) return false; // hide while dragging current clip
-        const masks = (currentClip as VideoClipProps).masks ?? [];
-        return masks.length > 0;
-    }, [currentClip, isSelected, tool, isDragging]);
 
     const [clipPosition, setClipPosition] = useState<{x:number, y:number}>({
         x: clipX + timelinePadding,
@@ -242,8 +221,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
                     ctx.drawImage(inputCanvas, offset, 0);
                 }
-                // Ensure Konva layer updates immediately after drawing audio waveform
-                groupRef.current?.getLayer()?.batchDraw();
             }
 
             //moveClipToEnd(currentClipId);
@@ -272,17 +249,17 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     
             if (samples?.[0]?.canvas) {
                 const inputCanvas = samples?.[0]?.canvas as HTMLCanvasElement;
-                const canvasToTile = applyMask(inputCanvas);
+    
                 const ctx = imageCanvas.getContext('2d');
                 if (ctx) {
-
+                    
                     const targetWidth = Math.max(1, imageCanvas.width);
                     const targetHeight = Math.max(1, imageCanvas.height);
                     ctx.clearRect(0, 0, targetWidth, targetHeight);
 
                     // Determine tile dimensions from the input canvas/image
-                    const tileWidth = Math.max(1, (canvasToTile as any).width || (canvasToTile as any).naturalWidth || 1);
-                    const tileHeight = Math.max(1, (canvasToTile as any).height || (canvasToTile as any).naturalHeight || 1);
+                    const tileWidth = Math.max(1, (inputCanvas as any).width || (inputCanvas as any).naturalWidth || 1);
+                    const tileHeight = Math.max(1, (inputCanvas as any).height || (inputCanvas as any).naturalHeight || 1);
                     const sourceHeight = Math.min(tileHeight, targetHeight);
 
                     // When resizing from the left, offset the tiling pattern so new tiles appear from the left
@@ -298,11 +275,11 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     while (x < targetWidth) {
                         const remaining = targetWidth - x;
                         const drawWidth = Math.min(tileWidth, remaining);
-
+                        
                         // Only draw if the tile is visible (x + drawWidth > 0)
                         if (x + drawWidth > 0) {
                             ctx.drawImage(
-                                canvasToTile,
+                                inputCanvas,
                                 x, 0, drawWidth, sourceHeight
                             );
                         }
@@ -321,10 +298,9 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         noise: imgClip?.noise,
                         vignette: imgClip?.vignette
                     });
-                    
                 }
             }
-            groupRef.current?.getLayer()?.batchDraw();
+            clipRef.current?.getLayer()?.batchDraw();
             moveClipToEnd(currentClipId);
         }
 
@@ -336,7 +312,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             const ratio = width / height;
             const thumbnailWidth = Math.max(timelineHeight * ratio, THUMBNAIL_TILE_SIZE);
             
-            
+            const mediaStartFrame = mediaInfoRef.current?.startFrame ?? 0;
+            const mediaEndFrame = mediaInfoRef.current?.endFrame;
             const speed = Math.max(0.1, Math.min(5, Number((currentClip as any)?.speed ?? 1)));
             
             // Calculate frame indices based on timeline duration and available columns
@@ -384,27 +361,24 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             }
 
             frameIndices = frameIndices.filter((frameIndex) => isNaN(frameIndex) === false && isFinite(frameIndex));
-            
             // Map timeline frames to source frames considering speed, in-clip offset, split bounds, and framerate conversion
-            
-            const projectFps = useControlsStore.getState().fps || 30;
-            const clipFps = mediaInfoRef.current?.stats.video?.averagePacketRate || projectFps;
-            const fpsAdjustment = projectFps / clipFps;
-            
-            frameIndices = frameIndices.map((frameIndex) => {
-                const local = Math.max(0, frameIndex - timelineShift);
-                const speedAdjusted = local * speed;
-                // Map from project fps space to native clip fps space
-                const nativeFpsFrame = Math.round((speedAdjusted / projectFps) * clipFps);
-                const mediaStartFrame = Math.round((mediaInfoRef.current?.startFrame ?? 0) / projectFps * clipFps)
-                const mediaEndFrame = Math.round(( mediaInfoRef.current?.endFrame ?? 0) / projectFps * clipFps)
-                let sourceFrame = nativeFpsFrame + mediaStartFrame;
-                if (mediaEndFrame !== 0) {
-                    sourceFrame = Math.min(sourceFrame, mediaEndFrame);
-                }
-                return Math.max(mediaStartFrame, sourceFrame);
-            });
-            
+            {
+                const projectFps = useControlsStore.getState().fps || 30;
+                const clipFps = mediaInfoRef.current?.stats.video?.averagePacketRate || projectFps;
+                
+                frameIndices = frameIndices.map((frameIndex) => {
+                    const local = Math.max(0, frameIndex - timelineShift);
+                    const speedAdjusted = local * speed;
+                    // Map from project fps space to native clip fps space
+                    const nativeFpsFrame = Math.round((speedAdjusted / projectFps) * clipFps);
+                    let sourceFrame = nativeFpsFrame + mediaStartFrame;
+                    if (mediaEndFrame !== undefined) {
+                        sourceFrame = Math.min(sourceFrame, mediaEndFrame);
+                    }
+                    return Math.max(mediaStartFrame, sourceFrame);
+                });
+            }
+
             if (numColumnsAlt && frameIndices.length !== numColumnsAlt) {
                 // Trim indices to match the original column count, removing from
                 // left/right based on framesToGiveStart (left) and abs(framesToGiveEnd) (right)
@@ -437,8 +411,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             }
 
             // 1) Immediate draw using nearest cached frames (synchronous)
-
-            
 
             const nearest = getNearestCachedCanvasSamples(
                     currentClip?.src!,
@@ -477,8 +449,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         const sample = nearest[i];
                         if (!sample) { continue; }
                         const inputCanvas = sample.canvas as HTMLCanvasElement;
-                        const canvasToTile = applyMask(inputCanvas, Math.round(frameIndices[i] * fpsAdjustment));
-                        const anyCanvas = canvasToTile as any;
+                        const anyCanvas = inputCanvas as any;
                         const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
                         const tileHeight = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
                         const sourceHeight = Math.min(tileHeight, targetHeight);
@@ -501,7 +472,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         const drawWidth = Math.min(availableSrcWidth, remaining);
                         if (drawWidth <= 0) break;
                         ctx.drawImage(
-                            canvasToTile,
+                            inputCanvas,
                             srcX, 0, drawWidth, sourceHeight,
                             x, 0, drawWidth, sourceHeight
                         );
@@ -521,7 +492,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         vignette: vidClip?.vignette
                     });
                 }
-                groupRef.current?.getLayer()?.batchDraw();
+                clipRef.current?.getLayer()?.batchDraw();
             
             // 2) Debounced fetch of exact frames and redraw when available
             if (exactVideoUpdateTimerRef.current != null) {
@@ -578,8 +549,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         for (let i = 0; i < exactSamples.length && x2 < targetWidth2; i++) {
                             const sample = exactSamples[i];
                             const inputCanvas = sample.canvas as HTMLCanvasElement;
-                            const canvasToTile = applyMask(inputCanvas, Math.round(frameIndices[i] * fpsAdjustment));
-                            const anyCanvas = canvasToTile as any;
+                            const anyCanvas = inputCanvas as any;
                             const tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
                             const tileHeight = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
                             const sourceHeight = Math.min(tileHeight, targetHeight2);
@@ -602,7 +572,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                             const drawWidth2 = Math.min(availableSrcWidth2, remaining2);
                             if (drawWidth2 <= 0) break;
                             ctx2.drawImage(
-                                canvasToTile,
+                                inputCanvas,
                                 srcX2, 0, drawWidth2, sourceHeight,
                                 x2, 0, drawWidth2, sourceHeight
                             );
@@ -624,7 +594,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     }
                 } finally {
                     if (mySeq === exactVideoUpdateSeqRef.current) {
-                        groupRef.current?.getLayer()?.batchDraw();
+                        clipRef.current?.getLayer()?.batchDraw();
                         
                         lastExactRequestKeyRef.current = requestKey;
                         
@@ -646,7 +616,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 ctx.fillStyle = '#894c30';
                 ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
             }
-            groupRef.current?.getLayer()?.batchDraw();
+            clipRef.current?.getLayer()?.batchDraw();
         }
 
         const generateTimelineThumbnailText = async () => {
@@ -658,7 +628,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 ctx.fillStyle = '#E3E3E3';
                 ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
             }
-            groupRef.current?.getLayer()?.batchDraw();
+            clipRef.current?.getLayer()?.batchDraw();
         }
         const generateTimelineThumbnailFilter = async () => {
             if (clipType !== 'filter') return;
@@ -669,7 +639,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 ctx.fillStyle = '#00BFFF';
                 ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
             }
-            groupRef.current?.getLayer()?.batchDraw();
+            clipRef.current?.getLayer()?.batchDraw();
         }
 
         const generateTimelineThumbnailDrawing = async () => {
@@ -681,6 +651,59 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 ctx.fillStyle = '#9B59B6';
                 ctx.fillRect(0, 0, imageCanvas.width, imageCanvas.height);
             }
+            clipRef.current?.getLayer()?.batchDraw();
+        }
+
+        const generateTimelineThumbnailModel = async () => {
+            if (clipType !== 'model') return;
+            const ctx = imageCanvas.getContext('2d');
+            if (!ctx) return;
+            
+            const width = imageCanvas.width;
+            const height = imageCanvas.height;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, width, height);
+            
+            // Draw background (dark gray placeholder)
+            ctx.fillStyle = '#2A2A2A';
+            ctx.fillRect(0, 0, width, height);
+            
+            // Draw image icon in center
+            const iconSize = Math.min(width, height) * 0.4;
+            const centerX = width / 2;
+            const centerY = height / 2;
+            
+            ctx.strokeStyle = '#666666';
+            ctx.fillStyle = '#666666';
+            ctx.lineWidth = 2;
+            
+            // Draw simple image icon (rectangle with mountain/sun)
+            const rectSize = iconSize;
+            const rectX = centerX - rectSize / 2;
+            const rectY = centerY - rectSize / 2;
+            
+            // Outer rectangle
+            ctx.strokeRect(rectX, rectY, rectSize, rectSize);
+            
+            // Sun/circle in top right
+            const sunRadius = rectSize * 0.15;
+            const sunX = rectX + rectSize * 0.7;
+            const sunY = rectY + rectSize * 0.3;
+            ctx.beginPath();
+            ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Mountain/triangle
+            const mountainHeight = rectSize * 0.35;
+            const mountainBase = rectY + rectSize;
+            ctx.beginPath();
+            ctx.moveTo(rectX + rectSize * 0.2, mountainBase);
+            ctx.lineTo(rectX + rectSize * 0.5, mountainBase - mountainHeight);
+            ctx.lineTo(rectX + rectSize * 0.8, mountainBase);
+            ctx.closePath();
+            ctx.fill();
+            
             clipRef.current?.getLayer()?.batchDraw();
         }
 
@@ -698,9 +721,11 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             generateTimelineThumbnailFilter()
         } else if (clipType === 'draw') {
             generateTimelineThumbnailDrawing()
+        } else if (clipType === 'model') {
+            generateTimelineThumbnailModel()
         } 
     
-    }, [zoomLevel, clipWidth, clipType, currentClip, applyMask, tool, mediaInfoRef.current, resizeSide, thumbnailClipWidth,  maxTimelineWidth, timelineDuration, overHang, resizeSide, forceRerenderCounter]);
+    }, [zoomLevel, clipWidth, clipType, currentClip, mediaInfoRef.current, resizeSide, thumbnailClipWidth,  maxTimelineWidth, timelineDuration, overHang, resizeSide, forceRerenderCounter]);
     
     const calculateFrameFromX = useCallback((xPosition: number) => {
         // Remove padding to get actual timeline position
@@ -1117,86 +1142,20 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         setSelectedPreprocessorId(null);
     }, [isSelected, currentClipId, toggleClipSelection, moveClipToEnd]);
 
-    const handleContextMenu = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-        e.evt.preventDefault();
-        const stage = e.target.getStage();
-        const container = stage?.container();
-        if (!container) return;
-        // Select this clip if it's not already part of the selection
-        const sel = useControlsStore.getState().selectedClipIds || [];
-        if (!sel.includes(currentClipId)) {
-            useControlsStore.getState().setSelectedClipIds([currentClipId]);
+    const handleDoubleClick = useCallback(() => {
+        // Open floating panel only for model clips
+        if (clipType === 'model' && currentClip) {
+            const { setShowFloatingPanel, setFloatingPanelType, setActiveClipId } = useControlsStore.getState();
+            const modelClip = currentClip as ModelClipProps;
+            
+            // Check if it's a text-x model by looking at trackName
+            const isTextModel = modelClip?.trackName?.startsWith('Text') || false;
+            
+            setFloatingPanelType(isTextModel ? 'text' : 'input');
+            setActiveClipId(currentClip.clipId);
+            setShowFloatingPanel(true);
         }
-        // Use global context menu store
-        const controls = useControlsStore.getState();
-        const clipsState = useClipStore.getState();
-        const clip = clipsState.getClipById(currentClipId);
-        const isVideo = clip?.type === 'video';
-        const isSeparated = (() => {
-            if (!clip || clip.type !== 'video') return false;
-            try {
-                const url = new URL(clip.src);
-                if ((url.hash || '').replace('#','') === 'video') return true;
-                const audioURL = new URL(clip.src); audioURL.hash = 'audio';
-                return (clipsState.clips || []).some(c => c.type === 'audio' && c.src === audioURL.toString());
-            } catch { return false; }
-        })();
-        const targetIds = (controls.selectedClipIds || []).includes(currentClipId) ? controls.selectedClipIds : [currentClipId];
-        const aiCommands: ContextMenuItem[] = [];
-        /**AI Commands, we will have to implement with our AI system. */
-        if (isVideo && clip.masks && clip.masks.length === 0 && clip.preprocessors && clip.preprocessors.length === 0) {
-            aiCommands.push({ id: 'extend', label: 'Extend', action: 'extend', });
-            aiCommands.push({ id: 'stabilize', label: 'Stabilize', action: 'stabilize', });
-            aiCommands.push({ id: 'editVideo', label: 'Edit Video', action: 'editVideo', });
-        } else if (clip?.type === 'image' && clip.masks && clip.masks.length === 0 && clip.preprocessors && clip.preprocessors.length === 0) {
-            aiCommands.push({ id: 'animate', label: 'Animate', action: 'animate', });
-            aiCommands.push({ id: 'editImage', label: 'Edit Image', action: 'editImage', });
-        }
-        if ((clip?.type === 'video' || clip?.type === 'image') && clip.masks && clip.masks.length > 0) {
-            aiCommands.push({ id: 'inpaint', label: 'Inpaint', action: 'inpaint', });
-            aiCommands.push({ id: 'outpaint', label: 'Outpaint', action: 'outpaint', });
-        }
-        if ((clip?.type === 'video' || clip?.type === 'image') && clip.preprocessors && clip.preprocessors.length > 0) {
-            aiCommands.push({ id: 'control', label: 'Use as Control', action: 'control', });
-        }
-
-        useContextMenuStore.getState().openMenu({
-            position: { x: e.evt.clientX, y: e.evt.clientY },
-            target: { type: 'clip', clipIds: targetIds, primaryClipId: currentClipId, isVideo: !!isVideo },
-            groups: [
-                {
-                    id: 'edit',
-                    items: [
-                        { id: 'copy', label: 'Copy', action: 'copy', shortcut: '⌘C' },
-                        { id: 'cut', label: 'Cut', action: 'cut', shortcut: '⌘X' },
-                        { id: 'paste', label: 'Paste', action: 'paste', shortcut: '⌘V' },
-                        { id: 'delete', label: 'Delete', action: 'delete', shortcut: 'Del' },
-                    ],
-                },
-                {
-                    id: 'ai',
-                    label: 'AI',
-                    items: [
-                        ...aiCommands,
-                    ],
-                },
-                {
-                    id: 'clip-actions',
-                    items: [
-                        { id: 'split', label: 'Split at Playhead', action: 'split' },
-                        { id: 'separate', label: 'Detach Audio', action: 'separateAudio', disabled: !isVideo || isSeparated },
-                    ],
-                },
-                {
-                    id: 'other',
-                    items: [
-                        { id: 'export', label: 'Export…', action: 'export' },
-                        { id: 'group', label: 'Group…', action: 'group', disabled: (controls.selectedClipIds || []).length < 2 },
-                    ],
-                },
-            ],
-        });
-    }, [currentClipId]);
+    }, [clipType, currentClip]);
 
     useEffect(() => {
         if (isSelected) {
@@ -1396,12 +1355,12 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         <>
             <Group  
                 ref={groupRef}
-                onClick={handleClick} 
-                draggable={resizeSide === null} 
+                onClick={handleClick}
+                onDblClick={handleDoubleClick}
+                draggable={resizeSide === null && !draggingPreprocessor} 
                 onDragEnd={handleDragEnd} 
                 onDragMove={handleDragMove} 
                 onDragStart={handleDragStart}
-                onContextMenu={handleContextMenu}
                 x={isDragging ? tempClipPosition.x : clipPosition.x } 
                 y={(isDragging ? tempClipPosition.y : clipPosition.y)} 
                 width={clipWidth}
@@ -1524,9 +1483,33 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     />
                     </Group>
                 )}
+                {clipType === 'model' && (currentClip as ModelClipProps)?.trackName && (
+                    <Group>
+                    <Rect
+                        x={8 - 4}
+                        y={timelineHeight / 2}
+                        width={textWidth + 8}
+                        height={14}
+                        cornerRadius={2}
+                        fill="rgba(255, 255, 255, 0.15)"
+                        offsetY={7.5}
+                    />
+                    <Text
+                        ref={textRef}
+                        x={8}
+                        y={timelineHeight / 2}
+                        text={`${(currentClip as ModelClipProps)?.name || 'Model'} - ${(currentClip as ModelClipProps)?.trackName || ''}`}
+                        fontSize={10}
+                        fontFamily="Poppins"
+                        fill="white"
+                        align="left"
+                        verticalAlign="middle"
+                        offsetY={5}
+                    />
+                    </Group>
+                )}
      
             </Group>            
-            {/* Per-clip menu component retained (optional); global menu now handles rendering */}
             {hasPreprocessors && (currentClip?.type === 'video' || currentClip?.type === 'image') && (
                 <>
                     {(currentClip as VideoClipProps | ImageClipProps).preprocessors.map((preprocessor) => {
@@ -1544,17 +1527,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         timelinePadding={timelinePadding} />
                     })}
                 </>
-            )}
-            {showMaskKeyframes && currentClip?.type === 'video' && (
-                <MaskKeyframes
-                    clip={currentClip as VideoClipProps}
-                    clipPosition={clipPosition}
-                    clipWidth={clipWidth}
-                    timelineHeight={timelineHeight}
-                    isDragging={isDragging}
-                    currentStartFrame={currentStartFrame}
-                    currentEndFrame={currentEndFrame}
-                />
             )}
             <Rect  
                 ref={rectRefRight}

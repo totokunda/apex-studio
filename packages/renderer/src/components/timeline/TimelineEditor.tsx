@@ -11,7 +11,7 @@ import Droppable from '../dnd/Droppable';
 import {DragEndEvent, useDndMonitor} from '@dnd-kit/core';
 import { MediaItem } from '../media/Item';
 import {v4 as uuidv4} from 'uuid';
-import { AnyClipProps, Filter, FilterClipProps, ImageClipProps, PreprocessorClipProps, TimelineProps, TimelineType, VideoClipProps } from '@/lib/types';
+import { AnyClipProps, Filter, FilterClipProps, ImageClipProps, PreprocessorClipProps, TimelineProps, TimelineType, VideoClipProps, ModelClipProps } from '@/lib/types';
 import TimelineSidebar from './TimelineSidebar';
 import Scrollbar from './Scrollbar';
 import { useWebGLHaldClut } from '../preview/webgl-filters';
@@ -241,6 +241,9 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         if (data.type === 'filter') {
           return fps * 5;
         }
+        if (data.type === 'model') {
+          return fps * 5; // Default 5 seconds for model clips
+        }
         return 0;
       })();
       setGhostStartEndFrame(0, clipFrames);
@@ -274,7 +277,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         // get pointer position 
         
         handlePreprocessorDragMove(data as Preprocessor, pointerY, pointerX);
-      } else if (data?.type === 'image' || data?.type === 'video' || data?.type === 'audio' || data?.type === 'filter') {
+      } else if (data?.type === 'image' || data?.type === 'video' || data?.type === 'audio' || data?.type === 'filter' || data?.type === 'model') {
         handleMediaDragMove(data as MediaItem, pointerY, pointerX);
       }
 
@@ -290,7 +293,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       // Route to appropriate handler based on item type
       if (data.type === 'preprocessor') {
         handlePreprocessorDrop(event, data as Preprocessor);
-      } else if (data?.type === 'image' || data?.type === 'video' || data?.type === 'audio' || data?.type === 'filter') {
+      } else if (data?.type === 'image' || data?.type === 'video' || data?.type === 'audio' || data?.type === 'filter' || data?.type === 'model') {
         handleMediaItemDrop(event, data);
       }
       
@@ -416,7 +419,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       setGhostTimelineId(null);
       setGhostInStage(false);
       return;
-    } 
+    }
 
     // Center ghost under pointer and validate against bounds/overlaps
     const pointerLocalX = pointerX - timelinePadding; // pointer relative to inner timeline
@@ -553,7 +556,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     }
 
     const mediaInfo = data.mediaInfo;
-    if (!mediaInfo && data.type !== 'filter') {
+    if (!mediaInfo && data.type !== 'filter' && data.type !== 'model') {
       setActiveMediaItem(null);
       setGhostTimelineId(null);
       setGhostStartEndFrame(0, 0);
@@ -591,6 +594,12 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       width = 540; // Does not matter
       // Start with smallPath 
       void haldClutRef?.preloadClut((data as unknown as Filter).smallPath);
+    } else if (data.type === 'model') {
+      numFrames = controlStore.fps * 5; // Default 5 seconds for model clips
+      framesToGiveEnd = -Infinity;
+      framesToGiveStart = Infinity;
+      height = 540;
+      width = 540;
     }
 
     // Use validated ghost position to compute frames
@@ -679,6 +688,26 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       (newClip as FilterClipProps).category = (data as unknown as Filter).category;
       (newClip as FilterClipProps).examplePath = (data as unknown as Filter).examplePath;
       (newClip as FilterClipProps).exampleAssetUrl = (data as unknown as Filter).exampleAssetUrl;
+    }
+
+    if (data.type === 'model') {
+      (newClip as ModelClipProps).name = (data as any).name;
+      // Format track name for display
+      const trackMap: { [key: string]: string } = {
+        'text-to-image': 'Text to Image',
+        'image-to-image': 'Image to Image',
+        'text-to-video': 'Text to Video',
+        'image-to-video': 'Image to Video',
+        'audio-image-to-video': 'Audio-Image to Video',
+        'image-control-to-video': 'Image-Control to Video',
+        'image-mask-to-image': 'Image-Mask to Image',
+      };
+      const track = (data as any).track;
+      (newClip as ModelClipProps).trackName = track ? (trackMap[track] || track) : undefined;
+      (newClip as ModelClipProps).modelId = (data as any).modelId;
+      // These will be set when the model is configured
+      (newClip as ModelClipProps).inputMediaPath = undefined;
+      (newClip as ModelClipProps).maskMediaPath = undefined;
     }
 
     if (data.type === 'image' || data.type === 'video') {

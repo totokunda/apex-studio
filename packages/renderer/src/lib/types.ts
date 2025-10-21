@@ -157,6 +157,16 @@ export type FilterClipProps = ClipProps & {
     exampleAssetUrl?: string;
 }
 
+export type ModelClipProps = ClipProps & {
+    src: string;
+    type: 'model';
+    name?: string;
+    trackName?: string;
+    modelId?: string;
+    inputMediaPath?: string;
+    maskMediaPath?: string;
+}
+
 export interface DrawingLineTransform {
     x: number;
     y: number;
@@ -257,7 +267,7 @@ export type PreprocessorClipProps = {
     status?: 'running' | 'complete' | 'failed';
 }
 
-export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps | DrawingClipProps;
+export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps | DrawingClipProps | ModelClipProps;
 
 export type ZoomLevel = number;
 

@@ -43,6 +43,12 @@ const __playbackTick = (now: number) => {
     __playbackRafId = requestAnimationFrame(__playbackTick);
 };
 
+interface FloatingPanelData {
+    imageBlob: Blob | null; // Store the actual blob instead of object URL
+    imageSource: 'dropped' | 'selected' | null; // Track source for debugging
+    promptText: string;
+}
+
 interface ControlStore {
     maxZoomLevel: ZoomLevel;
     setMaxZoomLevel: (level: ZoomLevel) => void;
@@ -78,6 +84,15 @@ interface ControlStore {
     setIsFullscreen: (isFullscreen: boolean) => void;
     selectedMaskId: string | null;
     setSelectedMaskId: (maskId: string | null) => void;
+    showFloatingPanel: boolean;
+    setShowFloatingPanel: (show: boolean) => void;
+    floatingPanelType: 'input' | 'text' | null;
+    setFloatingPanelType: (type: 'input' | 'text' | null) => void;
+    activeClipId: string | null;
+    setActiveClipId: (clipId: string | null) => void;
+    floatingPanelDataByClip: Record<string, FloatingPanelData>;
+    setFloatingPanelData: (clipId: string, data: Partial<FloatingPanelData>) => void;
+    getFloatingPanelData: (clipId: string) => FloatingPanelData;
 }
 
 export const useControlsStore = create<ControlStore>((set, get) => ({
@@ -243,4 +258,26 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     setIsFullscreen: (isFullscreen) => set({ isFullscreen }),
     selectedMaskId: null,
     setSelectedMaskId: (maskId) => set({ selectedMaskId: maskId }),
+    showFloatingPanel: false,
+    setShowFloatingPanel: (show) => set({ showFloatingPanel: show }),
+    floatingPanelType: null,
+    setFloatingPanelType: (type) => set({ floatingPanelType: type }),
+    activeClipId: null,
+    setActiveClipId: (clipId) => set({ activeClipId: clipId }),
+    floatingPanelDataByClip: {},
+    setFloatingPanelData: (clipId, data) => set((state) => ({
+        floatingPanelDataByClip: {
+            ...state.floatingPanelDataByClip,
+            [clipId]: {
+                ...state.floatingPanelDataByClip[clipId],
+                imageBlob: data.imageBlob !== undefined ? data.imageBlob : (state.floatingPanelDataByClip[clipId]?.imageBlob ?? null),
+                imageSource: data.imageSource !== undefined ? data.imageSource : (state.floatingPanelDataByClip[clipId]?.imageSource ?? null),
+                promptText: data.promptText !== undefined ? data.promptText : (state.floatingPanelDataByClip[clipId]?.promptText ?? ''),
+            }
+        }
+    })),
+    getFloatingPanelData: (clipId) => {
+        const state = get();
+        return state.floatingPanelDataByClip[clipId] || { imageBlob: null, imageSource: null, promptText: '' };
+    },
     }));

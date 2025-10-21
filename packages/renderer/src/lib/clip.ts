@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps, ImageClipProps, PreprocessorClipType, MaskClipProps, MaskData } from "./types";
+import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps, ImageClipProps, PreprocessorClipType } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 import { MediaItem } from "@/components/media/Item";
@@ -7,7 +7,6 @@ import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS } from "./settings";
 import { getMediaInfo } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
-import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
 
 export const PREPROCESSOR_BAR_HEIGHT = 24;
 
@@ -33,7 +32,7 @@ interface ClipStore {
     clipboard: AnyClipProps[];
     copyClips: (clipIds: string[]) => void;
     cutClips: (clipIds: string[]) => void;
-    pasteClips: (atFrame?: number, targetTimelineId?: string) => void;
+    pasteClips: (atFrame?: number) => void;
     getClipAtFrame: (frame: number) => [AnyClipProps, number] | null;
     activeMediaItem: MediaItem | null;
     setActiveMediaItem: (mediaItem: MediaItem | null) => void;
@@ -42,6 +41,7 @@ interface ClipStore {
     ghostX: number;
     setGhostX: (x: number) => void;
     ghostGuideLines: [number, number] | null;
+    
     setGhostGuideLines: (guideLines: [number, number] | null) => void;
     muteTimeline: (timelineId: string) => void;
     unmuteTimeline: (timelineId: string) => void;
@@ -80,8 +80,7 @@ interface ClipStore {
     addTimeline: (timeline: Partial<TimelineProps>, index?: number) => void;
     removeTimeline: (timelineId: string) => void;
     updateTimeline: (timelineId: string, timelineToUpdate: Partial<TimelineProps>) => void;
-    clipWithinFrame: (clip: AnyClipProps, frame: number, overlap?:boolean, overlapAmount?:number) => boolean;
-    updateMaskKeyframes: (clipId: string, maskId: string, updater: (keyframes: Map<number, MaskData> | Record<number, MaskData>) => Map<number, MaskData> | Record<number, MaskData>) => void;
+    clipWithinFrame: (clip: AnyClipProps, frame: number) => boolean;
 }
 
 // Helper function to calculate total duration of all clips
@@ -111,7 +110,7 @@ export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string):
 export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string):number => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
-    if (clip.type === 'video' || clip.type === 'image'  ||(clip.type as any === 'media')) {
+    if (clip.type === 'video' || clip.type === 'image' || clip.type === 'model') {
         return 72;
     } 
     if (clip.type === 'audio') {
@@ -323,34 +322,11 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     setClipTransform: (clipId: string, transform: Partial<ClipTransform>) => set((state) => {
         const index = state.clips.findIndex((c) => c.clipId === clipId);
         if (index === -1) return { clips: state.clips };
-
         const current = state.clips[index];
-        const hadTransform = !!current.transform;
         const previous: ClipTransform = current.transform || { x: 0, y: 0, width: 0, height: 0, scaleX: 1, scaleY: 1, rotation: 0, cornerRadius: 0, opacity: 100 };
         const next: ClipTransform = { ...previous, ...transform };
-
-        const updatedClip: AnyClipProps = { ...current, transform: next };
-
-        if (!current.originalTransform) {
-            updatedClip.originalTransform = { ...next };
-        }
-
-        if ((current.type === 'video' || current.type === 'image') && Array.isArray((current as VideoClipProps | ImageClipProps).masks)) {
-            const currentMasks = (current as VideoClipProps | ImageClipProps).masks;
-            if (currentMasks.length > 0) {
-                const remappedMasks = currentMasks.map((mask) => {
-                    const baseTransform = mask.transform ?? previous;
-                    if (!hadTransform) {
-                        return { ...mask, transform: { ...next } };
-                    }
-                    return remapMaskWithClipTransform(mask, baseTransform, next);
-                });
-                (updatedClip as VideoClipProps | ImageClipProps).masks = remappedMasks;
-            }
-        }
-
         const newClips = [...state.clips];
-        newClips[index] = updatedClip;
+        newClips[index] = { ...current, transform: next } as AnyClipProps;
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
@@ -658,34 +634,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         get()._updateZoomLevel(resolvedClips, clipDuration);
         return { clips: resolvedClips, clipDuration };
     }),
-    updateMaskKeyframes: (clipId, maskId, updater) => set((state) => {
-        const newClips = [...state.clips];
-        const clipIndex = newClips.findIndex((c) => c.clipId === clipId && (c.type === 'video' || c.type === 'image'));
-        if (clipIndex === -1) return { clips: state.clips };
-
-        const clip = newClips[clipIndex] as VideoClipProps | ImageClipProps;
-        const masks = [...(clip.masks || [])];
-        const maskIndex = masks.findIndex((m) => m.id === maskId);
-        if (maskIndex === -1) return { clips: state.clips };
-
-        const targetMask = masks[maskIndex];
-        const updatedKeyframes = updater(targetMask.keyframes as Map<number, MaskData> | Record<number, MaskData>);
-
-        masks[maskIndex] = {
-            ...targetMask,
-            keyframes: updatedKeyframes,
-            lastModified: Date.now(),
-        } as MaskClipProps;
-
-        newClips[clipIndex] = {
-            ...clip,
-            masks,
-        } as AnyClipProps;
-
-        const resolvedClips = resolveOverlaps(newClips);
-        const clipDuration = calculateTotalClipDuration(resolvedClips);
-        return { clips: resolvedClips, clipDuration };
-    }),
     // Create two new clips from the original clip at the cut frame
     splitClip: (cutFrame: number, clipId: string) => set((state) => {
         // Find the clip that contains the cut frame
@@ -799,86 +747,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
                 (newClip1 as VideoClipProps | ImageClipProps).preprocessors = clip1Preprocessors;
                 (newClip2 as VideoClipProps | ImageClipProps).preprocessors = clip2Preprocessors;
             }
-            // Split masks and rebase keyframes for each new clip
-            if ((clip as VideoClipProps | ImageClipProps).masks && (clip as VideoClipProps | ImageClipProps).masks.length > 0) {
-                const originalMasks = (clip as VideoClipProps | ImageClipProps).masks;
-
-                const masksForClip1: MaskClipProps[] = [];
-                const masksForClip2: MaskClipProps[] = [];
-
-                // Compute local cut position relative to original clip start
-                const startFrame = clip.startFrame ?? 0;
-                const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? (clip.framesToGiveStart ?? 0) : 0;
-                const realStartFrame = startFrame + framesToGiveStart;
-                const cutLocal = Math.max(0, cutFrame - realStartFrame);
-
-                const makeEmptyKeyframesLike = (kf: Map<number, MaskData> | Record<number, MaskData>) =>
-                    (kf instanceof Map ? new Map<number, MaskData>() : {} as Record<number, MaskData>);
-
-                const setKeyframe = (
-                    target: Map<number, MaskData> | Record<number, MaskData>,
-                    frame: number,
-                    data: MaskData
-                ) => {
-                    if (target instanceof Map) {
-                        target.set(frame, data);
-                    } else {
-                        (target as Record<number, MaskData>)[frame] = data;
-                    }
-                };
-
-                const getKeyframe = (
-                    source: Map<number, MaskData> | Record<number, MaskData>,
-                    frame: number
-                ): MaskData | undefined => {
-                    return source instanceof Map ? source.get(frame) : (source as Record<number, MaskData>)[frame];
-                };
-
-                const getSortedFrames = (kf: Map<number, MaskData> | Record<number, MaskData>): number[] =>
-                    (kf instanceof Map ? Array.from(kf.keys()) : Object.keys(kf).map(Number)).sort((a, b) => a - b);
-
-                for (const mask of originalMasks) {
-                    const keyframes = mask.keyframes;
-                    const frames = getSortedFrames(keyframes);
-
-                    // Image clips only use frame 0; copy that to both sides
-                    if (clip.type === 'image') {
-                        const dataAt0 = getKeyframe(keyframes, 0) ?? (frames.length > 0 ? getKeyframe(keyframes, frames[0]) : undefined);
-                        const now = Date.now();
-                        if (dataAt0) {
-                            const kf1 = makeEmptyKeyframesLike(keyframes);
-                            const kf2 = makeEmptyKeyframesLike(keyframes);
-                            setKeyframe(kf1, 0, { ...dataAt0 });
-                            setKeyframe(kf2, 0, { ...dataAt0 });
-                            masksForClip1.push({ ...mask, keyframes: kf1, clipId: newClip1.clipId, lastModified: now });
-                            masksForClip2.push({ ...mask, keyframes: kf2, clipId: newClip2.clipId, lastModified: now });
-                        }
-                        continue;
-                    }
-
-                    // Video clips: split around cutLocal; left keeps < cutLocal, right keeps >= cutLocal rebased to start at 0
-                    const kfLeft = makeEmptyKeyframesLike(keyframes);
-                    const kfRight = makeEmptyKeyframesLike(keyframes);
-
-                    for (const f of frames) {
-                        const data = getKeyframe(keyframes, f);
-                        if (!data) continue;
-                        if (f < cutLocal) {
-                            setKeyframe(kfLeft, f, { ...data });
-                        } else {
-                            const rebased = Math.max(0, f - cutLocal);
-                            setKeyframe(kfRight, rebased, { ...data });
-                        }
-                    }
-
-                    const now = Date.now();
-                    masksForClip1.push({ ...mask, keyframes: kfLeft, clipId: newClip1.clipId, lastModified: now });
-                    masksForClip2.push({ ...mask, keyframes: kfRight, clipId: newClip2.clipId, lastModified: now });
-                }
-
-                (newClip1 as VideoClipProps | ImageClipProps).masks = masksForClip1;
-                (newClip2 as VideoClipProps | ImageClipProps).masks = masksForClip2;
-            }
         }
 
         if (Object.prototype.hasOwnProperty.call(clip, 'src') && clip.src && (AUDIO_EXTS.includes(getLowercaseExtension(clip.src)) || VIDEO_EXTS.includes(getLowercaseExtension(clip.src)))) {
@@ -909,8 +777,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         get()._updateZoomLevel(resolvedClips, clipDuration);
-        const controlStore = useControlsStore.getState();
-        controlStore.setSelectedClipIds([newClip1.clipId, newClip2.clipId]);
         return { clips: resolvedClips, clipDuration };
     }),
     mergeClips: (clipIds: string[]) => set((state) => {
@@ -967,34 +833,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration, clipboard: toCut.map(c => ({ ...c })) };
     }),
-    pasteClips: (atFrame?: number, targetTimelineId?: string) => set((state) => {
+    pasteClips: (atFrame?: number) => set((state) => {
         const clipboardItems = state.clipboard || [];
         if (clipboardItems.length === 0) return { clips: state.clips };
         const baseStart = Math.min(...clipboardItems.map(c => c.startFrame || 0));
         const insertionFrame = Math.max(0, Math.round(atFrame || 0));
         const newIds: string[] = [];
-        // Determine the destination timeline per item: prefer provided target, otherwise a compatible existing timeline or create one
-        const chooseTimelineFor = (template: AnyClipProps): string => {
-            if (targetTimelineId) return targetTimelineId;
-            const desiredType = getTimelineTypeForClip(template);
-            const existing = state.timelines.find(t => t.type === desiredType);
-            if (existing) return existing.timelineId;
-            // If no matching timeline, create one beside last timeline
-            const timelineId = uuidv4();
-            const last = state.timelines[state.timelines.length - 1];
-            const newTimeline: TimelineProps = {
-                timelineId,
-                type: desiredType,
-                timelineHeight: getTimelineHeightForClip(desiredType),
-                timelineWidth: last?.timelineWidth ?? 0,
-                timelineY: (last?.timelineY ?? 0) + (last?.timelineHeight ?? 54),
-                timelinePadding: last?.timelinePadding ?? 24,
-                muted: false,
-                hidden: false,
-            };
-            state.addTimeline(newTimeline);
-            return timelineId;
-        };
         const pasted = clipboardItems.map(template => {
             const templateStart = template.startFrame || 0;
             const templateEnd = template.endFrame || 0;
@@ -1004,8 +848,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const end = start + duration;
             const newId = uuidv4();
             newIds.push(newId);
-            const timelineId = chooseTimelineFor(template);
-            return { ...template, clipId: newId, timelineId, startFrame: start, endFrame: end, framesToGiveEnd: 0, framesToGiveStart: 0 } as AnyClipProps;
+            return { ...template, clipId: newId, startFrame: start, endFrame: end, framesToGiveEnd: 0, framesToGiveStart: 0 } as AnyClipProps;
         });
         const newClips = [...state.clips, ...pasted];
         const resolvedClips = resolveOverlaps(newClips);
@@ -1030,11 +873,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         if (!clip) return null;
         return [clip, frame - (clip.startFrame || 0)];
     },
-    clipWithinFrame: (clip: AnyClipProps, frame: number, overlap:boolean = false, overlapAmount:number = 0 ) => {
-        if (overlap) {
-            return frame >= (clip.startFrame || 0) - (overlapAmount || 0) && frame <= (clip.endFrame || 0);
-        }
-        return frame >= (clip.startFrame || 0) && frame <= (clip.endFrame || 0);
+    clipWithinFrame: (clip: AnyClipProps, frame: number) => {
+        return frame >= (clip.startFrame || 0)  && frame <= (clip.endFrame || 0);
     },
     getTimelinePosition: (timelineId: string, scrollY?: number) => {
         const timeline = get().timelines.find((t) => t.timelineId === timelineId);
@@ -1083,19 +923,4 @@ export const getTimelineX = (timelineWidth:number, timelinePadding:number, timel
     const [timelineStartFrame, timelineEndFrame] = timelineDuration;
     const timelineX = timelinePadding - (timelineWidth / (timelineEndFrame - timelineStartFrame)) * timelineStartFrame;
     return Math.max(0, timelineX);
-}
-
-
-export const getLocalFrame = (focusFrame: number, clip: AnyClipProps) => {
-    const startFrame = clip.startFrame ?? 0;
-    const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? clip.framesToGiveStart ?? 0 : 0;
-    const realStartFrame = startFrame + framesToGiveStart;
-    return focusFrame - realStartFrame;
-}
-
-export const getGlobalFrame = (focusFrame: number, clip: AnyClipProps) => {
-    const startFrame = clip.startFrame ?? 0;
-    const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? clip.framesToGiveStart ?? 0 : 0;
-    const realStartFrame = startFrame + framesToGiveStart;
-    return focusFrame + realStartFrame;
 }

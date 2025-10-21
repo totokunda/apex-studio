@@ -11,22 +11,65 @@ import MediaModelPanel from "./panels/MediaModelPanel";
 import PreviewPanel from "./panels/PreviewPanel";
 import TimelinePanel from "./panels/TimelinePanel";
 import PropertiesPanel from "./panels/PropertiesPanel";
+import FloatingInputPanel from "./panels/FloatingInputPanel";
+import FloatingTextPanel from "./panels/FloatingTextPanel";
 import { useLayoutConfigStore } from "@/lib/layout-config";
 import Topbar from "./bars/Topbar";
 import { DndContext, DragEndEvent, DragOverlay } from "@dnd-kit/core";
 import { MediaItem, MediaThumb } from "@/components/media/Item";
 import { cn } from "@/lib/utils";
 import { useClipStore } from "@/lib/clip";
+import { useControlsStore } from "@/lib/control";
 import { Preprocessor } from "@/lib/preprocessor/api";
 import { PreprocessorItem } from "./menus/PreprocessorMenu";
-import GlobalContextMenu from "@/components/GlobalContextMenu";
 
 const App:React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useLayoutConfigStore((s) => s.layout);
   const {ghostInStage, clips} = useClipStore();
+  const showFloatingPanel = useControlsStore((s) => s.showFloatingPanel);
+  const setShowFloatingPanel = useControlsStore((s) => s.setShowFloatingPanel);
+  const floatingPanelType = useControlsStore((s) => s.floatingPanelType);
+  const activeClipId = useControlsStore((s) => s.activeClipId);
 
   const [activeDragItem, setActiveDragItem] = useState<MediaItem | Preprocessor | null>(null);
+  const [isMinimized, setIsMinimized] = useState(false);
+
+  // Helper to render drag overlay for different item types
+  const renderDragOverlay = () => {
+    if (!activeDragItem) return null;
+
+    // Check if it's a preprocessor
+    if ((activeDragItem as any).type === 'preprocessor') {
+      return (
+        <div className={cn("overflow-hidden opacity-100", {
+          "opacity-0": ghostInStage && clips.length > 0,
+        })}>
+          <PreprocessorItem preprocessor={activeDragItem as Preprocessor} isDragging={true} />
+        </div>
+      );
+    }
+
+    // Check if it's a model
+    if ((activeDragItem as MediaItem).type === 'model') {
+      return (
+        <div className={cn("w-44 aspect-video rounded-md overflow-hidden bg-[#2A2A2A] flex items-center justify-center border border-brand-light/20 opacity-100", {
+          "opacity-0": ghostInStage && clips.length > 0,
+        })}>
+          <div className="w-12 h-12 border-2 border-brand-light/40 rounded"></div>
+        </div>
+      );
+    }
+
+    // Default media item
+    return (
+      <div className={cn("w-44 aspect-video rounded-md overflow-hidden bg-brand opacity-100", {
+        "opacity-0": ghostInStage && clips.length > 0,
+      })}>
+        <MediaThumb item={activeDragItem as MediaItem} isDragging={true} />
+      </div>
+    );
+  };
 
   // Disable scrolling while dragging
   useEffect(() => {
@@ -72,10 +115,10 @@ const App:React.FC = () => {
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveDragItem(null)}
     >  
-    <main ref={containerRef} className="w-full text-center font-poppins bg-black h-screen flex flex-col">
+    <main ref={containerRef} className="w-full text-center font-poppins bg-black h-screen flex flex-col relative">
       <Topbar />
       <Toaster />  
-      <div className="flex h-full w-full p-3">
+      <div className="flex h-full w-full p-3 relative">
         {layout === 'default' && (
           <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5 overflow-hidden">
             <ResizablePanel defaultSize={70} minSize={30} maxSize={70}>
@@ -131,26 +174,29 @@ const App:React.FC = () => {
         )}
       </div>
     </main>
-    <GlobalContextMenu />
-    <DragOverlay dropAnimation={null}>
-      {activeDragItem ? (
-        <>
-        {activeDragItem?.type !== 'preprocessor' && (
-        <div className={cn("w-44 aspect-video rounded-md overflow-hidden bg-brand opacity-100", {
-          "opacity-0": ghostInStage && clips.length > 0,
-        })}>
-          <MediaThumb item={activeDragItem as MediaItem} isDragging={true} />
-        </div>
-        )}
-        {activeDragItem?.type === 'preprocessor' && (
-          <div className={cn("overflow-hidden opacity-100", {
-            "opacity-0": ghostInStage && clips.length > 0,
-          })}>
-          <PreprocessorItem preprocessor={activeDragItem as Preprocessor} isDragging={true} />
-        </div>
-        )}
-        </>
-      ) : null}
+    
+    {/* Floating Input Panel */}
+    {showFloatingPanel && floatingPanelType === 'input' && activeClipId && (
+      <FloatingInputPanel 
+        clipId={activeClipId}
+        initialPosition={{ x: 400, y: 400 }} 
+        onDelete={() => setShowFloatingPanel(false)}
+        onMinimize={() => setIsMinimized(!isMinimized)}
+      />
+    )}
+    
+    {/* Floating Text Panel */}
+    {showFloatingPanel && floatingPanelType === 'text' && activeClipId && (
+      <FloatingTextPanel 
+        clipId={activeClipId}
+        initialPosition={{ x: 400, y: 400 }} 
+        onDelete={() => setShowFloatingPanel(false)}
+        onMinimize={() => setIsMinimized(!isMinimized)}
+      />
+    )}
+    
+    <DragOverlay dropAnimation={null} style={{ zIndex: 10001 }}>
+      {renderDragOverlay()}
     </DragOverlay>
     </DndContext>
   );
