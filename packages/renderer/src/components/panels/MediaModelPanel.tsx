@@ -7,13 +7,13 @@ import PreprocessorMenu from '@/components/menus/PreprocessorMenu'
 import { ImperativePanelHandle } from 'react-resizable-panels'
 import { HiFilm } from "react-icons/hi";
 import { MdPhotoFilter } from "react-icons/md";
-import { HiOutlineTemplate } from "react-icons/hi";
 import { MdOutlineMovieFilter } from 'react-icons/md'
 import { TbWand } from "react-icons/tb";
 import { LuChevronRight, LuChevronLeft } from 'react-icons/lu'
 import MediaModelTrigger from '../media/MediaModelTrigger'
 import FilterMenu from '../menus/FilterMenu'
 import { VscServerProcess } from "react-icons/vsc";
+import ModelMenu from '../menus/ModelMenu'
 
 interface MediaModelPanelProps { order?: number; defaultSize?: number; minSize?: number; maxSize?: number }
 
@@ -110,6 +110,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
     {section === 'media' && <MediaMenu />}
     {section === 'filters' && <FilterMenu />}
     {section === 'preprocessors' && <PreprocessorMenu />}
+    {section === 'models' && <ModelMenu />}
   </ResizablePanel>
   )
 }

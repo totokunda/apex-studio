@@ -555,6 +555,31 @@ function pathToFileURLString(path: string): string {
   return fileUrl.href;
 }
 
+// Manifest API functions
+async function listManifestModelTypes(): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:types');
+}
+
+async function listManifests(): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:list');
+}
+
+async function listManifestsByModel(model: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:list-by-model', model);
+}
+
+async function listManifestsByType(modelType: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:list-by-type', modelType);
+}
+
+async function listManifestsByModelAndType(model: string, modelType: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:list-by-model-and-type', model, modelType);
+}
+
+async function getManifest(manifestId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:get', manifestId);
+}
+
 export {
   sha256sum,
   versions,
@@ -609,5 +634,12 @@ export {
   startMaskTrackShapes,
   onMaskTrackShapesChunk,
   onMaskTrackShapesError,
-  onMaskTrackShapesEnd
+  onMaskTrackShapesEnd,
+  // manifest exports
+  listManifestModelTypes,
+  listManifests,
+  listManifestsByModel,
+  listManifestsByType,
+  listManifestsByModelAndType,
+  getManifest
 };

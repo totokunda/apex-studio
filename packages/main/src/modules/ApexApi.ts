@@ -45,6 +45,7 @@ export class ApexApi implements AppModule {
     this.registerBackendUrlHandlers();
     this.registerPreprocessorHandlers();
     this.registerMaskHandlers();
+    this.registerManifestHandlers();
   }
 
   private async loadSettings(): Promise<void> {
@@ -445,6 +446,38 @@ export class ApexApi implements AppModule {
         success: false,
         error: 'WebSocket connection not found',
       };
+    });
+  }
+
+  private registerManifestHandlers(): void {
+    // List model types
+    ipcMain.handle('manifest:types', async () => {
+      return this.makeRequest<any>('GET', '/manifest/types');
+    });
+
+    // List all manifests
+    ipcMain.handle('manifest:list', async () => {
+      return this.makeRequest<any>('GET', '/manifest/list');
+    });
+
+    // List manifests by model
+    ipcMain.handle('manifest:list-by-model', async (_event, model: string) => {
+      return this.makeRequest<any>('GET', `/manifest/list/model/${encodeURIComponent(model)}`);
+    });
+
+    // List manifests by model type
+    ipcMain.handle('manifest:list-by-type', async (_event, modelType: string) => {
+      return this.makeRequest<any>('GET', `/manifest/list/type/${encodeURIComponent(modelType)}`);
+    });
+
+    // List manifests by model and type
+    ipcMain.handle('manifest:list-by-model-and-type', async (_event, model: string, modelType: string) => {
+      return this.makeRequest<any>('GET', `/manifest/list/model/${encodeURIComponent(model)}/model_type/${encodeURIComponent(modelType)}`);
+    });
+
+    // Get manifest content by id
+    ipcMain.handle('manifest:get', async (_event, manifestId: string) => {
+      return this.makeRequest<any>('GET', `/manifest/${encodeURIComponent(manifestId)}`);
     });
   }
 
