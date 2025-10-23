@@ -21,6 +21,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const focusFrame = useControlsStore((state) => state.focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
+    const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
     const transformerRef = useRef<Konva.Transformer>(null);
     const drawTokenRef = useRef(0);
@@ -332,6 +333,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         return () => {
             canvasRef.current = null;
             originalFrameRef.current = null;
+            processingCanvasRef.current = null;
         };
     }, []);
 
@@ -424,6 +426,19 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         }
     }, [displayWidth, displayHeight]);
 
+    const ensureProcessingCanvas = useCallback((width: number, height: number) => {
+        let canvas = processingCanvasRef.current;
+        if (!canvas) {
+            canvas = document.createElement('canvas');
+            processingCanvasRef.current = canvas;
+        }
+        if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+        }
+        return canvas;
+    }, []);
+
     const drawWrappedCanvas = useCallback((wc: WrappedCanvas, maskFrame?: number) => {
         let canvas = canvasRef.current;
         if (!canvas) return;
@@ -451,14 +466,11 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             origCtx.drawImage(canvas, 0, 0);
         }
 
-        // Create a working canvas to isolate the processing pipeline
-        const workingCanvas = document.createElement('canvas');
-        workingCanvas.width = canvas.width;
-        workingCanvas.height = canvas.height;
+        const workingCanvas = ensureProcessingCanvas(canvas.width, canvas.height);
         const workingCtx = workingCanvas.getContext('2d');
         if (!workingCtx) return;
         
-        // Copy current canvas to working canvas
+        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
         workingCtx.drawImage(canvas, 0, 0);
         
         // Apply masks before running filters/applicators so downstream operations see masked pixels
@@ -489,7 +501,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
         
         imageRef.current?.getLayer()?.batchDraw?.();
-    }, [applyFilters, applyMask, applicators.length]);
+    }, [applyFilters, applyMask, applicators.length, ensureProcessingCanvas]);
 
     const seekAndDraw = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -566,21 +578,25 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 
 
                 // Determine the decoded sample's frame index in native fps
-                const ts: number | undefined = (wc as any)?.timestamp + (addedTimestampRef.current || 0) * speed;
+                const ts: number | undefined = (wc as any)?.timestamp;
 
-                let sampleIdx = Number.isFinite(ts as number) ? Math.round((ts as number) * clipFps) : (lastRenderedFrameRef.current + 1);
+                // Use floor with a tiny epsilon to avoid boundary flip-flop
+                let sampleIdx = Number.isFinite(ts as number)
+                    ? Math.floor(((ts as number) * clipFps) + 1e-4)
+                    : (lastRenderedFrameRef.current + 1);
 
                 // Compute current timeline-local frame mapped to native fps (clip space)
                 const computeLocalFocusMedia = () => {
                     const store = useControlsStore.getState();
-                    let local = Math.max(0, Math.floor((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
+                    // Timeline-local frames as a float (avoid premature flooring)
+                    let local = Math.max(0, ((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
                     // When using preprocessor src, adjust to match preprocessor video's frame space
                     if (isUsingPreprocessorSrc) {
                         local = local - (framesToGiveStart || 0)
                     }
-                    const speedAdjusted = Math.max(0, Math.floor(local * Math.max(0.1, speed)));
-                    // Map from project fps to native fps
-                    const actualFrameIdx = Math.round((speedAdjusted / projectFps) * clipFps);
+                    const speedAdjusted = Math.max(0, local * Math.max(0.1, speed));
+                    // Map from project fps to native fps using floor to reduce jitter
+                    const actualFrameIdx = Math.floor(((speedAdjusted / projectFps) * clipFps) + 1e-4);
                     return actualFrameIdx + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
                 };
 
@@ -591,13 +607,11 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                     continue;
                 }
 
-                // If we're ahead of the timeline, wait until the timeline catches up
+                // If we're ahead of the timeline, wait until the timeline catches up (sync to rAF)
                 while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
                     if (myToken !== drawTokenRef.current) break;
                     if (!useControlsStore.getState().isPlaying) break;
-                    // Small sleep to pace to project FPS (about half frame duration)
-                    const delayMs = Math.max(4, Math.floor(1000 / Math.max(1, projectFps)) >> 1);
-                    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+                    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
                 }
 
                 if (myToken !== drawTokenRef.current)  break;
@@ -639,14 +653,12 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 let canvas = canvasRef.current;
                 const ctx = canvas.getContext('2d');
                 if (ctx) {
-                    // Create a working canvas for the processing pipeline
-                    const workingCanvas = document.createElement('canvas');
-                    workingCanvas.width = canvas.width;
-                    workingCanvas.height = canvas.height;
+                    const workingCanvas = ensureProcessingCanvas(canvas.width, canvas.height);
                     const workingCtx = workingCanvas.getContext('2d');
                     if (!workingCtx) return;
                     
                     // Start with the original unfiltered frame
+                    workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
                     workingCtx.drawImage(originalFrameRef.current, 0, 0);
 
                     // Apply masks before filters so masked pixels feed the rest of the pipeline
@@ -683,7 +695,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 void seekAndDraw();
             }
         }
-    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators, applicators.length, applyMask, maskFrameForCurrentFocus, seekAndDraw]);
+    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators, applicators.length, applyMask, maskFrameForCurrentFocus, seekAndDraw, ensureProcessingCanvas]);
 
     // Ensure any CLUTs needed by filter applicators are preloaded before drawing
     useEffect(() => {

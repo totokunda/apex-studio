@@ -1,15 +1,7 @@
-import { useEffect, useState } from 'react';
-import {
-  listModelTypes,
-  listManifests,
-  listManifestsByModel,
-  listManifestsByType,
-  listManifestsByModelAndType,
-  getManifest,
-  type ManifestInfo,
-  type ModelTypeInfo,
-  type ConfigResponse,
-} from './api';
+import { useEffect } from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import { ManifestDocument, type ManifestInfo, type ModelTypeInfo } from './api';
+import { useManifestStore } from './store';
 
 type AsyncState<T> = {
   data: T | null;
@@ -17,47 +9,100 @@ type AsyncState<T> = {
   error: string | null;
 }
 
-function useAsync<T>(fn: () => Promise<ConfigResponse<T>>, deps: any[] = []): AsyncState<T> {
-  const [state, setState] = useState<AsyncState<T>>({ data: null, loading: true, error: null });
-  useEffect(() => {
-    let cancelled = false;
-    setState({ data: null, loading: true, error: null });
-    fn().then((res) => {
-      if (cancelled) return;
-      if (res.success) setState({ data: res.data as T, loading: false, error: null });
-      else setState({ data: null, loading: false, error: res.error || 'Request failed' });
-    }).catch((err: any) => {
-      if (cancelled) return;
-      setState({ data: null, loading: false, error: err?.message || 'Request error' });
-    });
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-  return state;
-}
+// legacy async hook removed; Zustand-based hooks below return AsyncState shape
 
 export function useManifestTypes() {
-  return useAsync<ModelTypeInfo[]>(() => listModelTypes(), []);
+  const { modelTypes, loading, error } = useManifestStore(useShallow((s) => ({
+    modelTypes: s.modelTypes,
+    loading: s.loading.modelTypes,
+    error: s.error.modelTypes,
+  })));
+  useEffect(() => {
+    if (modelTypes == null && !loading) {
+      useManifestStore.getState().loadModelTypes(false);
+    }
+  }, [modelTypes, loading]);
+  return { data: modelTypes, loading, error } as AsyncState<ModelTypeInfo[]>;
 }
 
 export function useManifests() {
-  return useAsync<ManifestInfo[]>(() => listManifests(), []);
+  const { manifests, loading, error } = useManifestStore(useShallow((s) => ({
+    manifests: s.manifests,
+    loading: s.loading.manifests,
+    error: s.error.manifests,
+  })));
+  useEffect(() => {
+    if (manifests == null && !loading) {
+      useManifestStore.getState().loadManifests(false);
+    }
+  }, [manifests, loading]);
+  return { data: manifests, loading, error } as AsyncState<ManifestInfo[]>;
 }
 
 export function useManifestsByModel(model: string | null) {
-  return useAsync<ManifestInfo[]>(() => model ? listManifestsByModel(model) : Promise.resolve({ success: true, data: [] as any }), [model]);
+  const { manifestsByModel, loadingMap, errorMap } = useManifestStore(useShallow((s) => ({
+    manifestsByModel: s.manifestsByModel,
+    loadingMap: s.loading.byModel,
+    errorMap: s.error.byModel,
+  })));
+  const data = model ? (manifestsByModel[model] || undefined) : undefined;
+  const isLoading = !!(model && loadingMap[model]);
+  useEffect(() => {
+    if (model && !data && !isLoading) {
+      useManifestStore.getState().loadManifestsByModel(model, false);
+    }
+  }, [model, data, isLoading]);
+  return { data: data || [], loading: isLoading, error: model ? (errorMap[model] || null) : null } as AsyncState<ManifestInfo[]>;
 }
 
 export function useManifestsByType(modelType: string | null) {
-  return useAsync<ManifestInfo[]>(() => modelType ? listManifestsByType(modelType) : Promise.resolve({ success: true, data: [] as any }), [modelType]);
+  const { manifestsByType, loadingMap, errorMap } = useManifestStore(useShallow((s) => ({
+    manifestsByType: s.manifestsByType,
+    loadingMap: s.loading.byType,
+    errorMap: s.error.byType,
+  })));
+  const data = modelType ? (manifestsByType[modelType] || undefined) : undefined;
+  const isLoading = !!(modelType && loadingMap[modelType]);
+  useEffect(() => {
+    if (modelType && !data && !isLoading) {
+      useManifestStore.getState().loadManifestsByType(modelType, false);
+    }
+  }, [modelType, data, isLoading]);
+  return { data: data || [], loading: isLoading, error: modelType ? (errorMap[modelType] || null) : null } as AsyncState<ManifestInfo[]>;
 }
 
 export function useManifestsByModelAndType(model: string | null, modelType: string | null) {
-  return useAsync<ManifestInfo[]>(() => (model && modelType) ? listManifestsByModelAndType(model, modelType) : Promise.resolve({ success: true, data: [] as any }), [model, modelType]);
+  const { dataMap, loadingMap, errorMap } = useManifestStore(useShallow((s) => ({
+    dataMap: s.manifestsByModelAndType,
+    loadingMap: s.loading.byModelAndType,
+    errorMap: s.error.byModelAndType,
+  })));
+  const data = model && modelType ? (dataMap[model]?.[modelType] || undefined) : undefined;
+  const isLoading = !!(model && modelType && loadingMap[model]?.[modelType]);
+  useEffect(() => {
+    if (model && modelType && !data && !isLoading) {
+      useManifestStore.getState().loadManifestsByModelAndType(model, modelType, false);
+    }
+  }, [model, modelType, data, isLoading]);
+  const error = model && modelType ? (errorMap[model]?.[modelType] || null) : null;
+  return { data: data || [], loading: isLoading, error } as AsyncState<ManifestInfo[]>;
 }
 
 export function useManifest(manifestId: string | null) {
-  return useAsync<any>(() => manifestId ? getManifest(manifestId) : Promise.resolve({ success: true, data: null as any }), [manifestId]);
+  const { dataMap, loadingMap, errorMap } = useManifestStore(useShallow((s) => ({
+    dataMap: s.manifestById,
+    loadingMap: s.loading.byId,
+    errorMap: s.error.byId,
+  })));
+  const data = manifestId ? (dataMap[manifestId] ?? undefined) : undefined;
+  const isLoading = !!(manifestId && loadingMap[manifestId]);
+  useEffect(() => {
+    if (manifestId && !data && !isLoading) {
+      useManifestStore.getState().loadManifest(manifestId, false);
+    }
+  }, [manifestId, data, isLoading]);
+  const error = manifestId ? (errorMap[manifestId] || null) : null;
+  return { data: data ?? null, loading: isLoading, error } as AsyncState<ManifestDocument>;
 }
 
 

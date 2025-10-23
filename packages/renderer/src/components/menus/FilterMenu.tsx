@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react'
-import { fetchFilters} from '@app/preload';
 import { Filter } from '@/lib/types';
 import Draggable from '@/components/dnd/Draggable';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { LuSearch, LuChevronLeft, LuChevronRight, LuArrowRight } from "react-icons/lu";
+import { useFiltersStore } from '@/lib/filters/store';
+
 
 const FilterItem = ({ filter }: { filter: Filter }) => {
   return (
@@ -26,6 +27,7 @@ const FilterCategory: React.FC<{category: string, filters: Filter[], width: numb
     const carouselRef = useRef<HTMLDivElement>(null);
     const [showLeftArrow, setShowLeftArrow] = useState(false);
     const [showRightArrow, setShowRightArrow] = useState(false);
+    void width; // param retained to avoid broader refactor
 
     const checkScroll = () => {
         if (carouselRef.current) {
@@ -71,10 +73,8 @@ const FilterCategory: React.FC<{category: string, filters: Filter[], width: numb
     };
 
     return (
-        <div className="flex flex-col gap-y-1 px-7">
-            <div className="flex items-center justify-between py-2" style={{
-                width: width,
-            }}>
+        <div className="flex flex-col gap-y-1 w-full px-4">
+            <div className="flex items-center justify-between py-2" style={{maxWidth: width}}>
                 <span className="text-brand-light text-[13px] font-medium">{category}</span>
                 <button 
                     onClick={onViewAll}
@@ -84,9 +84,7 @@ const FilterCategory: React.FC<{category: string, filters: Filter[], width: numb
                     <LuArrowRight className="w-3.5 h-3.5" />
                 </button>
             </div>
-            <div className="relative" style={{
-                width: width,
-            }}>
+            <div className="relative" style={{width: width}}>
                 {showLeftArrow && (
                     <button
                         onClick={() => scroll('left')}
@@ -151,34 +149,56 @@ const CategoryDetailView: React.FC<{category: string, filters: Filter[], onBack:
 
 const FilterMenu = () => {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [filters, setFilters] = useState<Filter[]>([]);
+  const viewportRef = useRef<HTMLDivElement | null>(null)
+  const { filters, load } = useFiltersStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [scrollWidth, setScrollWidth] = useState(0);
+  const categorySectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const handleCategoryClick = (category: string) => {
+    setActiveCategory(category);
+    const section = categorySectionRefs.current[category];
+    const viewport = viewportRef.current;
+    
+    if (section && viewport) {
+      // Calculate offset from the top of the scrollable container
+      const containerTop = viewport.getBoundingClientRect().top;
+      const sectionTop = section.getBoundingClientRect().top;
+      const scrollOffset = sectionTop - containerTop + viewport.scrollTop;
+      
+      viewport.scrollTo({ top: scrollOffset, behavior: 'smooth' });
+    } else if (section) {
+      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
 
   const filteredFilters = useMemo(() => {
-    if (!searchQuery.trim()) return filters;
+    const list = filters ?? [];
+    if (!searchQuery.trim()) return list;
     const query = searchQuery.toLowerCase();
-    return filters.filter(filter => 
+    return list.filter(filter => 
       filter.name.toLowerCase().includes(query) ||
       filter.category.toLowerCase().includes(query)
     );
   }, [filters, searchQuery]);
 
   const categories = useMemo(() => {
+     setActiveCategory(filters?.[0]?.category || null);
     return [...new Set(filteredFilters.map((filter) => filter.category))]
   }, [filteredFilters]);
 
   useEffect(() => {
-    fetchFilters().then((filters) => {
-      setFilters(filters);
-    });
-  }, []);
+    // trigger a single idempotent load; store prevents refetching
+    load();
+  }, [load]);
 
   useEffect(() => {
     const updateWidth = () => {
       if (scrollRef.current) {
-        const newWidth = scrollRef.current.clientWidth;
+        const viewport = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLDivElement | null;
+        viewportRef.current = viewport;
+        const newWidth = (viewport || scrollRef.current).clientWidth;
         if (newWidth > 0) {
           setScrollWidth(newWidth);
         }
@@ -227,38 +247,56 @@ const FilterMenu = () => {
   }
 
   return (
-    <>
+  <>
       <style>{`
         .carousel-container::-webkit-scrollbar {
           display: none;
         }
       `}</style>
-      <div className="flex flex-col h-full w-full">
-        <div className="px-7 pt-4 pb-2">
-          <div className="relative">
-            <LuSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-light/60" />
-            <input
-              type="text"
-              placeholder="Search filters..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-brand text-brand-light placeholder:text-brand-light/50 rounded-md pl-10 pr-4 py-2.5 text-[12px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all"
-            />
-          </div>
-        </div>
-        <ScrollArea className="flex-1 pb-16" ref={scrollRef}>
-          <div className="flex flex-col gap-y-6 pt-4">
+      <div className="flex flex-row h-full w-full border-t border-brand-light/5 mt-2 bg-brand-background">
+        <div className="flex flex-col border-r border-brand-light/5 min-w-36 w-36 gap-y-1 bg-brand-background">
+          <span className="text-[8.5px] px-2 pt-2.5 mb-1 text-brand-light/60 text-start font-medium">CATEGORIES</span>
+          <div className="flex flex-col gap-y-1 px-1">
             {categories.map((category) => (
-              <FilterCategory 
-                width={scrollWidth - 48} 
-                key={category} 
-                category={category} 
-                filters={filteredFilters.filter((filter) => filter.category === category)}
-                onViewAll={() => setSelectedCategory(category)}
-              />
+              <button
+                key={category}
+                onClick={() => handleCategoryClick(category)}
+                className={"text-start w-full p-[5.5px] px-2 font-medium rounded text-[10.5px]  hover:text-brand-light hover:bg-brand/60 transition-colors truncate " + (activeCategory === category ? "bg-brand/60 text-brand-light" : "text-brand-light/80")}
+                title={category}
+              >
+                {category}
+              </button>
             ))}
           </div>
-        </ScrollArea>
+        </div>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="w-full p-3 rounded flex-shrink-0">
+            <div className="relative bg-brand text-brand-light rounded-md placeholder:text-brand-light/50 items-center flex w-full p-3 space-x-2 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all">
+              <LuSearch className="w-4 h-4 text-brand-light/60" />
+              <input
+                type="text"
+                placeholder="Search filters..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full outline-none bg-brand"
+              />
+            </div>
+          </div>
+          <ScrollArea className="flex-1" ref={scrollRef}>
+            <div className="flex flex-col gap-y-6 pt-1 pb-28">
+              {categories.map((category) => (
+                <div key={category} ref={(el) => { categorySectionRefs.current[category] = el; }} className="w-full">
+                  <FilterCategory 
+                    width={scrollWidth - 36} 
+                    category={category} 
+                    filters={filteredFilters.filter((filter) => filter.category === category)}
+                    onViewAll={() => setSelectedCategory(category)}
+                  />
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        </div>
       </div>
     </>
   )

@@ -19,14 +19,20 @@ import { cn } from "@/lib/utils";
 import { useClipStore } from "@/lib/clip";
 import { Preprocessor } from "@/lib/preprocessor/api";
 import { PreprocessorItem } from "./menus/PreprocessorMenu";
+import { ModelItem } from "./menus/ModelMenu";
+import type { ManifestInfo } from "@/lib/manifest";
 import GlobalContextMenu from "@/components/GlobalContextMenu";
+
+type ManifestInfoWithType = ManifestInfo & {
+  type: 'model';
+};
 
 const App:React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useLayoutConfigStore((s) => s.layout);
   const {ghostInStage, clips} = useClipStore();
 
-  const [activeDragItem, setActiveDragItem] = useState<MediaItem | Preprocessor | null>(null);
+  const [activeDragItem, setActiveDragItem] = useState<MediaItem | Preprocessor | ManifestInfoWithType | null>(null);
 
   // Disable scrolling while dragging
   useEffect(() => {
@@ -66,8 +72,13 @@ const App:React.FC = () => {
     <DndContext
       autoScroll={false}
       onDragStart={(event) => {
-        const data = event?.active?.data?.current as unknown as MediaItem | undefined;
-        if (data && data.name) setActiveDragItem(data);
+        const data = event?.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestInfo | undefined;
+        if (!data) return;
+        // Accept media, preprocessor, or model items
+        // MediaItem has ClipType in data.type; preprocessors use 'preprocessor'; models use 'model'
+        if ((data as any).name) {
+          setActiveDragItem(data as any);
+        }
       }}
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveDragItem(null)}
@@ -135,12 +146,21 @@ const App:React.FC = () => {
     <DragOverlay dropAnimation={null}>
       {activeDragItem ? (
         <>
-        {activeDragItem?.type !== 'preprocessor' && (
+        {(activeDragItem as any)?.type !== 'preprocessor' && (activeDragItem as any)?.type !== 'model' && (
         <div className={cn("w-44 aspect-video rounded-md overflow-hidden bg-brand opacity-100", {
           "opacity-0": ghostInStage && clips.length > 0,
         })}>
           <MediaThumb item={activeDragItem as MediaItem} isDragging={true} />
         </div>
+        )}
+        {(activeDragItem as any)?.type === 'model' && (
+          <div className={cn("opacity-100", { "opacity-0": ghostInStage && clips.length > 0 })}>
+            {(() => {
+              const m = activeDragItem as ManifestInfo;
+ 
+              return <ModelItem manifest={m} isDragging={true} />
+            })()}
+          </div>
         )}
         {activeDragItem?.type === 'preprocessor' && (
           <div className={cn("overflow-hidden opacity-100", {

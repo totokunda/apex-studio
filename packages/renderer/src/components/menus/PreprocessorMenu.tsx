@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { listPreprocessors, Preprocessor } from '@/lib/preprocessor/api'
+import { Preprocessor } from '@/lib/preprocessor/api'
 import Draggable from '../dnd/Draggable'
 import { ScrollArea } from '../ui/scroll-area'
 import { LuInfo, LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuDownload } from "react-icons/lu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { cn } from '@/lib/utils'
 import { useClipStore } from '@/lib/clip'
+import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store'
 
 export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?: boolean}> = ({preprocessor, isDragging}) => {
     const isDownloaded = preprocessor.is_downloaded ?? true;
@@ -67,10 +68,12 @@ const PreprocessorCategory:React.FC<{category: string, preprocessors: Preprocess
     const carouselRef = useRef<HTMLDivElement>(null);
     const [showLeftArrow, setShowLeftArrow] = useState(false);
     const [showRightArrow, setShowRightArrow] = useState(false);
+    void width; // width is no longer used; maintain param to avoid refactor
 
     const checkScroll = () => {
         if (carouselRef.current) {
             const { scrollLeft, scrollWidth, clientWidth } = carouselRef.current;
+
             const hasOverflow = scrollWidth > clientWidth;
             setShowLeftArrow(scrollLeft > 5);
             setShowRightArrow(hasOverflow && scrollLeft + clientWidth < scrollWidth - 5);
@@ -113,10 +116,8 @@ const PreprocessorCategory:React.FC<{category: string, preprocessors: Preprocess
     };
 
     return (
-        <div className="flex flex-col gap-y-1 px-7">
-            <div className="flex items-center justify-between py-2" style={{
-                width: width,
-            }}>
+        <div className="flex flex-col gap-y-1 w-full px-4">
+            <div className="flex items-center justify-between py-2" style={{maxWidth: width}}>
                 <span className="text-brand-light text-[13px] font-medium">{category}</span>
                 <button 
                     onClick={onViewAll}
@@ -126,9 +127,7 @@ const PreprocessorCategory:React.FC<{category: string, preprocessors: Preprocess
                     <LuArrowRight className="w-3.5 h-3.5" />
                 </button>
             </div>
-            <div className="relative" style={{
-                width: width,
-            }}>
+            <div className="relative w-full" style={{width: width}}>
                 {showLeftArrow && (
                     <button
                         onClick={() => scroll('left')}
@@ -193,15 +192,35 @@ const CategoryDetailView: React.FC<{category: string, preprocessors: Preprocesso
 
 const PreprocessorMenu:React.FC = () => {
     const scrollRef = useRef<HTMLDivElement>(null)
-    const [preprocessors, setPreprocessors] = useState<Preprocessor[]>([]);
+    const viewportRef = useRef<HTMLDivElement | null>(null)
+    const { preprocessors, load } = usePreprocessorsListStore();
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
     const [scrollWidth, setScrollWidth] = useState(0);
+    const categorySectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
+    const [activeCategory, setActiveCategory] = useState<string | null>(null);
+    const handleCategoryClick = (category: string) => {
+        setActiveCategory(category);
+        const section = categorySectionRefs.current[category];
+        const viewport = viewportRef.current;
+        
+        if (section && viewport) {
+            // Calculate offset from the top of the scrollable container
+            const containerTop = viewport.getBoundingClientRect().top;
+            const sectionTop = section.getBoundingClientRect().top;
+            const scrollOffset = sectionTop - containerTop + viewport.scrollTop;
+            
+            viewport.scrollTo({ top: scrollOffset, behavior: 'smooth' });
+        } else if (section) {
+            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    };
     
     const filteredPreprocessors = useMemo(() => {
-        if (!searchQuery.trim()) return preprocessors;
+        const list = preprocessors ?? [];
+        if (!searchQuery.trim()) return list;
         const query = searchQuery.toLowerCase();
-        return preprocessors.filter(preprocessor => 
+        return list.filter(preprocessor => 
             preprocessor.name.toLowerCase().includes(query) ||
             preprocessor.description?.toLowerCase().includes(query) ||
             preprocessor.category.toLowerCase().includes(query)
@@ -209,20 +228,21 @@ const PreprocessorMenu:React.FC = () => {
     }, [preprocessors, searchQuery]);
 
     const categories = useMemo(() => {
+        setActiveCategory(preprocessors?.[0]?.category || null);
         return [...new Set(filteredPreprocessors.map((preprocessor) => preprocessor.category))]
     }, [filteredPreprocessors]);
 
     useEffect(() => {
-        listPreprocessors().then((res) => {
-            const preprocessors = res.data?.preprocessors || []
-            setPreprocessors(preprocessors)
-        })
-    }, []);
+        // trigger a single idempotent load; store prevents refetching
+        load();
+    }, [load]);
 
     useEffect(() => {
         const updateWidth = () => {
             if (scrollRef.current) {
-                const newWidth = scrollRef.current.clientWidth;
+                const viewport = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLDivElement | null;
+                viewportRef.current = viewport;
+                const newWidth = (viewport || scrollRef.current).clientWidth;
                 if (newWidth > 0) {
                     setScrollWidth(newWidth);
                 }
@@ -277,32 +297,60 @@ const PreprocessorMenu:React.FC = () => {
                 display: none;
             }
         `}</style>
-        <div className="flex flex-col h-full w-full">
-            <div className="px-7 pt-4  pb-2 ">
-                <div className="relative">
-                    <LuSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-light/60" />
-                    <input
-                        type="text"
-                        placeholder="Search preprocessors..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-brand text-brand-light placeholder:text-brand-light/50  rounded-md pl-10 pr-4 py-2.5 text-[12px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all"
-                    />
+        <div className="flex flex-col h-full w-full border-t border-brand-light/5 mt-2">
+
+            <div className="flex flex-1 min-h-0 w-full">
+                <div className="flex flex-col border-r border-brand-light/5 min-w-36 w-36 gap-y-1 bg-brand-background">
+                    <span className="text-[8.5px] px-2 pt-2.5 mb-1 text-brand-light/60 text-start font-medium">CATEGORIES</span>
+                    <div className="flex flex-col gap-y-1 px-1">
+                        {categories.map((category) => (
+                            <button
+                                key={category}
+                                onClick={() => handleCategoryClick(category)}
+                                className={cn(
+                                    "text-start w-full p-[5.5px] px-2 rounded text-[10.5px] font-medium text-brand-light/80 hover:text-brand-light hover:bg-brand/60 transition-colors truncate",
+                                    { 'bg-brand/60 text-brand-light': activeCategory === category }
+                                )}
+                                title={category}
+                            >
+                                {category}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="flex-1 flex flex-col overflow-hidden">
+                    <div className="w-full p-3 flex-shrink-0">
+                        <div className="relative bg-brand text-brand-light rounded-md placeholder:text-brand-light/50 items-center flex w-full p-3 space-x-2 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all">
+                            <LuSearch className="w-4 h-4 text-brand-light/60" />
+                            <input
+                                type="text"
+                                placeholder="Search preprocessors..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full outline-none bg-brand"
+                            />
+                        </div>
+                    </div>
+                    <ScrollArea className="flex-1" ref={scrollRef}>
+                        <div className="flex flex-col gap-y-5 pt-1 pb-28">
+                            {categories.map((category) => (
+                                <div
+                                    key={category}
+                                    ref={(el) => { categorySectionRefs.current[category] = el; }}
+                                    className="w-full"
+                                >
+                                    <PreprocessorCategory 
+                                        width={scrollWidth - 36} 
+                                        category={category} 
+                                        preprocessors={filteredPreprocessors.filter((preprocessor) => preprocessor.category === category)}
+                                        onViewAll={() => setSelectedCategory(category)}
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    </ScrollArea>
                 </div>
             </div>
-            <ScrollArea className="flex-1 pb-16" ref={scrollRef}>
-                <div className="flex flex-col gap-y-5 pt-4">
-                {categories.map((category) => (
-                    <PreprocessorCategory 
-                        width={scrollWidth - 48} 
-                        key={category} 
-                        category={category} 
-                        preprocessors={filteredPreprocessors.filter((preprocessor) => preprocessor.category === category)}
-                        onViewAll={() => setSelectedCategory(category)}
-                    />
-                ))}
-                </div>
-            </ScrollArea>
         </div>
     </>
   )

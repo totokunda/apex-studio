@@ -12,7 +12,7 @@ interface MediaModelTriggerProps {
   onClose?: () => void;
 }
 
-const MediaModelTrigger:React.FC<MediaModelTriggerProps> = ({ onClick, icon, title, section, onOpen, onClose }) => {
+const MediaModelTrigger:React.FC<MediaModelTriggerProps> = ({ onClick, icon, title, section, onOpen }) => {
     const { openSection, closeSection, section: currentSection } = useSidebarStore();
     const handleClick = useCallback(() => {
         onClick?.();
@@ -30,7 +30,7 @@ const MediaModelTrigger:React.FC<MediaModelTriggerProps> = ({ onClick, icon, tit
         "hover:text-brand-light": currentSection !== section,
     })}>
         {icon}
-        <span className="text-[11.5px]">{title}</span>
+        <span className="text-[11px]">{title}</span>
     </div>
   )
 }

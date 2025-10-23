@@ -262,17 +262,17 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             }
           }} className={cn("text-brand-light h-6 w-6 bg-brand-background/90 border border-brand-light/10 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute left-1 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollLeft ? "block" : "hidden")} />
           <TabsList ref={tabRef} style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}} className={cn("bg-brand w-full rounded-b-none p-0 min-w-0 flex-shrink overflow-x-auto [&::-webkit-scrollbar]:hidden")}>
-            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-info" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Info</TabsTrigger>}
-            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Parameters</TabsTrigger>}
-            {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
-            {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
-            {(hasText) && <TabsTrigger value="text" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
-            {(hasTransform && !hasMask) && <TabsTrigger value="transform" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
-            {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Mask</TabsTrigger>}
-            {(hasAudio && !hasMask) && <TabsTrigger value="audio" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
-            {(hasDuration && !hasMask) && <TabsTrigger value="duration" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
-            {(hasAdjust && !hasMask) && <TabsTrigger value="adjust" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Adjust</TabsTrigger>}
-            {(hasAppearance && !hasMask) && <TabsTrigger value="appearance" className="text-brand-light text-xs h-10 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
+            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-info" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Info</TabsTrigger>}
+            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Parameters</TabsTrigger>}
+            {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
+            {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
+            {(hasTransform && !hasMask) && <TabsTrigger value="transform" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
+            {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Mask</TabsTrigger>}
+            {(hasAudio && !hasMask) && <TabsTrigger value="audio" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
+            {(hasDuration && !hasMask) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            {(hasAdjust && !hasMask) && <TabsTrigger value="adjust" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Adjust</TabsTrigger>}
+            {(hasAppearance && !hasMask) && <TabsTrigger value="appearance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
           </TabsList>
           <LuChevronRight onClick={() => {
             if (tabRef.current) {

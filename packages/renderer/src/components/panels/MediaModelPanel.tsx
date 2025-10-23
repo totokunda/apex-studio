@@ -14,6 +14,7 @@ import MediaModelTrigger from '../media/MediaModelTrigger'
 import FilterMenu from '../menus/FilterMenu'
 import { VscServerProcess } from "react-icons/vsc";
 import ModelMenu from '../menus/ModelMenu'
+import * as TabsPrimitive from "@radix-ui/react-tabs"
 
 interface MediaModelPanelProps { order?: number; defaultSize?: number; minSize?: number; maxSize?: number }
 

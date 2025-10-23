@@ -1,12 +1,8 @@
 
 import React from 'react';
 import {useDraggable} from '@dnd-kit/core';
-// import {CSS} from '@dnd-kit/utilities';
-import { MediaItem } from '../media/Item';
-import { Preprocessor } from '@/lib/preprocessor/api';
 
-
-type GenericData = MediaItem | Preprocessor;
+type GenericData = any;
 
 interface DraggableProps {
     id: string;
@@ -25,6 +21,7 @@ const Draggable:React.FC<React.PropsWithChildren<DraggableProps>> = (props) => {
     transform: undefined,
     opacity: isDragging ? 0.5 : 1,
     transition: isDragging ? 'opacity 0.2s ease-in-out' : undefined,
+    zIndex: isDragging ? 100000000000 : undefined,
   };
 
   return (

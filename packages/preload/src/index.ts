@@ -369,7 +369,6 @@ async function trackMask(request: {
     },
   });
 
-  console.log('parsedStream', parsedStream);
   return parsedStream;
 }
 
@@ -557,7 +556,8 @@ function pathToFileURLString(path: string): string {
 
 // Manifest API functions
 async function listManifestModelTypes(): Promise<ConfigResponse<any>> {
-  return await ipcRenderer.invoke('manifest:types');
+  const res = await ipcRenderer.invoke('manifest:types');
+  return res;
 }
 
 async function listManifests(): Promise<ConfigResponse<any>> {
@@ -629,13 +629,11 @@ export {
   onMaskTrackError,
   onMaskTrackEnd,
   cancelMaskTrack,
-  // shapes tracking exports
   trackShapes,
   startMaskTrackShapes,
   onMaskTrackShapesChunk,
   onMaskTrackShapesError,
   onMaskTrackShapesEnd,
-  // manifest exports
   listManifestModelTypes,
   listManifests,
   listManifestsByModel,

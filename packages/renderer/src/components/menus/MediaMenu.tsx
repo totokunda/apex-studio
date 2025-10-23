@@ -478,7 +478,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             ) : (
               <LuCloudUpload className="w-[18px] h-[18px] cursor-pointer stroke-2" />
             )}
-            <span className="flex flex-row gap-x-2.5 items-center justify-center">
+            <span className="flex flex-row gap-x-2.5 items-center justify-center text-xs">
                 {isUploading ? 'Uploading…' : 'Upload Media'}
             </span>
             </span>
@@ -488,13 +488,13 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             <DropdownMenuContent align='end' sideOffset={2} style={{ width: menuWidth, maxWidth: menuWidth }} className='dark mt-1 flex flex-col text-brand-light bg-brand-background'>
                 <DropdownMenuItem onClick={() => handleUpload(false)} className='w-full cursor-pointer py-2'>
                     <TbFileUpload className="w-[18px] h-[18px] cursor-pointer stroke-2" />
-                    <span className="flex flex-row gap-x-2.5 items-center justify-center text-[12.5px]">
+                    <span className="flex flex-row gap-x-2.5 items-center justify-center text-[12px] font-medium">
                         Upload File
                     </span>
                 </DropdownMenuItem>
                 <DropdownMenuItem    onClick={() => handleUpload(true)} className='w-full cursor-pointer py-2'>
                     <TbFolderUp className="w-[18px] h-[18px] cursor-pointer stroke-2" />
-                    <span className="flex flex-row gap-x-2.5 items-center justify-center text-[12.5px]">
+                    <span className="flex flex-row gap-x-2.5 items-center justify-center text-[12px] font-medium">
                         Upload Directory
                     </span>
                 </DropdownMenuItem>
@@ -525,13 +525,13 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align='start' className='dark w-44 flex flex-col text-brand-light bg-brand-background font-poppins text-[12px]'>
-              <DropdownMenuCheckboxItem className='text-[12px]'
+              <DropdownMenuCheckboxItem className='text-[11px] font-medium'
                 checked={selectedTypes.size === 0}
                 onCheckedChange={(checked) => {
                   if (checked) setSelectedTypes(new Set());
                 }}
               >All</DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem className='text-[12px]'
+              <DropdownMenuCheckboxItem className='text-[11px] font-medium'
                 checked={selectedTypes.has('video')}
                 onCheckedChange={(checked) => {
                   setSelectedTypes((prev) => {
@@ -541,7 +541,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
                   });
                 }}
               >Videos</DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem className='text-[12px]'
+              <DropdownMenuCheckboxItem className='text-[11px] font-medium'
                 checked={selectedTypes.has('image')}
                 onCheckedChange={(checked) => {
                   setSelectedTypes((prev) => {
@@ -551,7 +551,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
                   });
                 }}
               >Images</DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem className='text-[12px]'
+              <DropdownMenuCheckboxItem className='text-[11px] font-medium'
                 checked={selectedTypes.has('audio')}
                 onCheckedChange={(checked) => {
                   setSelectedTypes((prev) => {
@@ -579,25 +579,25 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent align='start' className='dark w-48 flex flex-col text-brand-light bg-brand-background font-poppins'>
               {/* Sort key (mutually exclusive via checkboxes) */}
-              <DropdownMenuCheckboxItem className='text-[12px]'
+              <DropdownMenuCheckboxItem className='text-[11px] font-medium'
                 checked={sortKey === 'name'}
                 onCheckedChange={(checked) => { if (checked) setSortKey('name'); }}
               >Name</DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem className='text-[12px]'
+              <DropdownMenuCheckboxItem className='text-[11px] font-medium'
                 checked={sortKey === 'duration'}
                 onCheckedChange={(checked) => { if (checked) setSortKey('duration'); }}
               >Duration</DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem className='text-[12px]'
+              <DropdownMenuCheckboxItem className='text-[11px] font-medium'
                 checked={sortKey === 'date'}
                 onCheckedChange={(checked) => { if (checked) setSortKey('date'); }}
               >Date Added</DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
               {/* Sort order (mutually exclusive via checkboxes) */}
-              <DropdownMenuCheckboxItem className='text-[12px]'
+              <DropdownMenuCheckboxItem className='text-[11px] font-medium'
                 checked={sortOrder === 'asc'}
                 onCheckedChange={(checked) => { if (checked) setSortOrder('asc'); }}
               >Ascending</DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem className='text-[12px]'
+              <DropdownMenuCheckboxItem className='text-[11px] font-medium'
                 checked={sortOrder === 'desc'}
                 onCheckedChange={(checked) => { if (checked) setSortOrder('desc'); }}
               >Descending</DropdownMenuCheckboxItem>

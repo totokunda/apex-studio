@@ -24,6 +24,7 @@ export function useWebGLMask({
     const shapeMaskRef = useRef<ShapeMask | null>(null);
     const lassoMaskRef = useRef<LassoMask | null>(null);
     const touchMaskRef = useRef<TouchMask | null>(null);
+    const maskWorkingCanvasRef = useRef<HTMLCanvasElement | null>(null);
     // Lazy initialization of mask to reduce WebGL context count
     if (!shapeMaskRef.current) {
         shapeMaskRef.current = new ShapeMask();
@@ -49,6 +50,7 @@ export function useWebGLMask({
                 touchMaskRef.current.dispose();
                 touchMaskRef.current = null;
             }
+            maskWorkingCanvasRef.current = null;
         };
     }, []);
     
@@ -67,13 +69,20 @@ export function useWebGLMask({
             }
         }
 
-        const workingCanvas = sourceCanvas.cloneNode(false) as HTMLCanvasElement;
-        workingCanvas.width = sourceCanvas.width;
-        workingCanvas.height = sourceCanvas.height;
+        let workingCanvas = maskWorkingCanvasRef.current;
+        if (!workingCanvas) {
+            workingCanvas = document.createElement('canvas');
+            maskWorkingCanvasRef.current = workingCanvas;
+        }
+        if (workingCanvas.width !== sourceCanvas.width || workingCanvas.height !== sourceCanvas.height) {
+            workingCanvas.width = sourceCanvas.width;
+            workingCanvas.height = sourceCanvas.height;
+        }
         const workingCtx = workingCanvas.getContext('2d');
         if (!workingCtx) {
             return sourceCanvas;
         }
+        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
         workingCtx.drawImage(sourceCanvas, 0, 0);
 
         return masks.reduce((acc, mask, index) => {

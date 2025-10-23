@@ -867,23 +867,49 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     }
 
     if (!targetTimeline) {
-      setGhostInStage(false);
-      if (preprocessorDragClipRef.current) {
-        removePreprocessorFromClip(preprocessorDragClipRef.current.clipId ?? '', preprocessorDragClipRef.current.id);
-        preprocessorDragClipRef.current = null;
-        try {
-        preprocessorDragKonvaNodeRef.current?.remove();
-        } catch (error) {
-          console.error('Error removing preprocessor drag konva node', error);
-        } finally {
-          preprocessorDragKonvaNodeRef.current = null;
+      // Only allow removal if the pointer leaves vertically (top/bottom) of the original clip
+      const existing = preprocessorDragClipRef.current;
+      if (existing) {
+        const allTimelines = useClipStore.getState().timelines;
+        let originalClip: AnyClipProps | null = null;
+        for (const t of allTimelines) {
+          const tClips = getClipsForTimeline(t.timelineId);
+          const found = tClips.find((c) => c.clipId === existing.clipId);
+          if (found) { originalClip = found; break; }
+        }
+        if (originalClip) {
+          const {top, bottom} = getClipPosition(originalClip.clipId, verticalScrollRef.current);
+          const isVerticallyAligned = pointerY >= top && pointerY <= bottom;
+          if (isVerticallyAligned) {
+            // Keep using the original clip without removing
+            targetTimeline = timelines.find((t) => getClipsForTimeline(t.timelineId).some((c) => c.clipId === originalClip!.clipId)) || null;
+            targetClip = originalClip;
+          }
         }
       }
-      return;
+
+      if (!targetClip) {
+        setGhostInStage(false);
+        if (preprocessorDragClipRef.current) {
+          removePreprocessorFromClip(preprocessorDragClipRef.current.clipId ?? '', preprocessorDragClipRef.current.id);
+          preprocessorDragClipRef.current = null;
+          try {
+          preprocessorDragKonvaNodeRef.current?.remove();
+          } catch (error) {
+            console.error('Error removing preprocessor drag konva node', error);
+          } finally {
+            preprocessorDragKonvaNodeRef.current = null;
+          }
+        }
+        return;
+      }
     }
 
 
     // only look at clips on the target timeline
+    if (!targetTimeline) {
+      return;
+    }
     const clips = getClipsForTimeline(targetTimeline.timelineId);
     for (const clip of clips) { 
       const {top, bottom, left, right} = getClipPosition(clip.clipId, verticalScrollRef.current);
@@ -895,32 +921,55 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     }
 
     if (!targetClip) {
-      setGhostInStage(false);
-      if (preprocessorDragClipRef.current) {
-        removePreprocessorFromClip(preprocessorDragClipRef.current.clipId ?? '', preprocessorDragClipRef.current.id);
-        preprocessorDragClipRef.current = null;
-        try {
-          preprocessorDragKonvaNodeRef.current?.remove();
-        } catch (error) {
-          console.error('Error removing preprocessor drag konva node', error);
-        } finally {
-          preprocessorDragKonvaNodeRef.current = null;
+      // If we're horizontally outside the clip but still within the original clip's vertical band,
+      // treat this as dragging within the original clip instead of removing.
+      const existing = preprocessorDragClipRef.current;
+      if (existing) {
+        // Find the original clip for the dragging preprocessor
+        const allTimelines = useClipStore.getState().timelines;
+        let originalClip: AnyClipProps | null = null;
+        for (const t of allTimelines) {
+          const tClips = getClipsForTimeline(t.timelineId);
+          const found = tClips.find((c) => c.clipId === existing.clipId);
+          if (found) { originalClip = found; break; }
+        }
+        if (originalClip) {
+          const {top, bottom} = getClipPosition(originalClip.clipId, verticalScrollRef.current);
+          const isVerticallyAligned = pointerY >= top && pointerY <= bottom;
+          if (isVerticallyAligned) {
+            targetClip = originalClip;
+          }
         }
       }
-      return;
+
+      if (!targetClip) {
+        setGhostInStage(false);
+        if (preprocessorDragClipRef.current) {
+          removePreprocessorFromClip(preprocessorDragClipRef.current.clipId ?? '', preprocessorDragClipRef.current.id);
+          preprocessorDragClipRef.current = null;
+          try {
+            preprocessorDragKonvaNodeRef.current?.remove();
+          } catch (error) {
+            console.error('Error removing preprocessor drag konva node', error);
+          } finally {
+            preprocessorDragKonvaNodeRef.current = null;
+          }
+        }
+        return;
+      }
     }
 
     // Hide the ghost overlay when dragging over a valid clip
     setGhostInStage(true);
 
     // Calculate start frame from mouse position
-    const timelineWidth = stageWidth - timelinePadding * 2;
+    const timelineWidth = stageWidth;
     const absoluteStartFrame = calculateFrameFromX(
       pointerX,
       timelinePadding,
       timelineWidth,
       [visibleStartFrame, visibleEndFrame]
-    );
+    )
     
     // Convert to relative frame within the clip
     const relativeStartFrame = Math.max(0, absoluteStartFrame - targetClip.startFrame!);
@@ -1023,9 +1072,12 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           const absoluteFrame = calculateFrameFromX(pointerX, timelinePadding, timelineWidth, [visibleStartFrame, visibleEndFrame]);
           
           // Convert to relative frame within the new clip
-          const newRelativeStartFrame = Math.max(0, Math.min(absoluteFrame - targetClip.startFrame!, clipDuration));
-          const duration = (preprocessorDragClipRef.current.endFrame ?? 0) - (preprocessorDragClipRef.current.startFrame ?? 0);
-          const newRelativeEndFrame = Math.min(newRelativeStartFrame + duration, clipDuration);
+          const rawStart = absoluteFrame - targetClip.startFrame!;
+          const rawDuration = (preprocessorDragClipRef.current.endFrame ?? 0) - (preprocessorDragClipRef.current.startFrame ?? 0);
+          const desiredDuration = Math.min(Math.max(rawDuration, 0), clipDuration);
+          const maxStart = Math.max(0, clipDuration - desiredDuration);
+          const newRelativeStartFrame = Math.max(0, Math.min(rawStart, maxStart));
+          const newRelativeEndFrame = newRelativeStartFrame + desiredDuration;
           
           // Update clipId and add to new clip
           preprocessorDragClipRef.current.clipId = targetClip.clipId;
@@ -1039,9 +1091,13 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           const absoluteFrame = calculateFrameFromX(pointerX, timelinePadding, timelineWidth, [visibleStartFrame, visibleEndFrame]);
           
           // Convert to relative frame within the clip
-          const newRelativeStartFrame = Math.max(0, Math.min(absoluteFrame - targetClip.startFrame!, clipDuration));
-          const duration = (preprocessorDragClipRef.current.endFrame ?? 0) - (preprocessorDragClipRef.current.startFrame ?? 0);
-          const newRelativeEndFrame = Math.min(newRelativeStartFrame + duration, clipDuration);
+          const rawStart = absoluteFrame - targetClip.startFrame!;
+          const clipDuration = targetClip.endFrame! - targetClip.startFrame!;
+          const rawDuration = (preprocessorDragClipRef.current.endFrame ?? 0) - (preprocessorDragClipRef.current.startFrame ?? 0);
+          const desiredDuration = Math.min(Math.max(rawDuration, 0), clipDuration);
+          const maxStart = Math.max(0, clipDuration - desiredDuration);
+          const newRelativeStartFrame = Math.max(0, Math.min(rawStart, maxStart));
+          const newRelativeEndFrame = newRelativeStartFrame + desiredDuration;
           
           // Calculate the visual X position from the frame data (ensure consistency)
           const finalAbsoluteFrame = targetClip.startFrame! + newRelativeStartFrame;
