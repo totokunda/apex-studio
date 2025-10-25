@@ -96,6 +96,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const { tool } = useViewportStore();
 
 
+
     const {applyMask} = useWebGLMask({
         focusFrame,
         masks: clip?.masks ?? [],
@@ -148,7 +149,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
 
     // Fallback mechanism: if progress reaches 100% but result doesn't come through, manually fetch it
     useEffect(() => {
-        if (preprocessor.status !== 'running' || progress < 0.99) return;
+        if (preprocessor.status !== 'running' || progress < 99.9) return;
 
         const timeoutId = setTimeout(async () => {
             // Check if we still don't have a result after waiting
@@ -1041,7 +1042,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                 <Rect
                     x={0}
                     y={0}
-                    width={preprocessorWidth * (progress ?? 0)}
+                    width={preprocessorWidth * (progress  ?? 0) / 100}
                     height={timelineHeight}
                     fill={'rgb(174, 129, 206)'}
                     cornerRadius={cornerRadius}

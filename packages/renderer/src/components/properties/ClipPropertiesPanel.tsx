@@ -26,6 +26,7 @@ import { usePreprocessorJobActions } from '@/lib/preprocessor/api';
 import { useDrawingStore } from '@/lib/drawing';
 import { useViewportStore } from '@/lib/viewport';
 import MaskPropertiesPanel from './mask/MaskPropertiesPanel';
+import PreprocessorPage from '../preprocessors/PreprocessorPage'
 
 interface PropertiesPanelProps {
     panelSize: number;
@@ -177,11 +178,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (currentTab === "duration" && hasDuration) return "duration";
     if (currentTab === "appearance" && hasAppearance) return "appearance";
     if (currentTab === "adjust" && hasAdjust) return "adjust";
-    if (currentTab === "preprocessor-info" && hasValidPreprocessor) return "preprocessor-info";
     if (currentTab === "preprocessor-parameters" && hasValidPreprocessor) return "preprocessor-parameters";
     if (currentTab === "preprocessor-duration" && hasValidPreprocessor && hasPreprocessorDuration) return "preprocessor-duration";
     // If current tab is invalid, return first available tab
-    if (hasValidPreprocessor) return "preprocessor-info";
+    if (hasValidPreprocessor) return "preprocessor-parameters";
     if (hasLine) return "line";
     if (hasTransform) return "transform";
     if (hasAudio) return "audio";
@@ -262,8 +262,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             }
           }} className={cn("text-brand-light h-6 w-6 bg-brand-background/90 border border-brand-light/10 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute left-1 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollLeft ? "block" : "hidden")} />
           <TabsList ref={tabRef} style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}} className={cn("bg-brand w-full rounded-b-none p-0 min-w-0 flex-shrink overflow-x-auto [&::-webkit-scrollbar]:hidden")}>
-            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-info" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Info</TabsTrigger>}
-            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Parameters</TabsTrigger>}
+            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
             {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
@@ -282,9 +281,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         </div>
         <ScrollArea className="flex-1 overflow-y-auto">
           <div style={{ paddingBottom: hasValidPreprocessor ? '20px' : '0' }}>
-            {(hasValidPreprocessor && selectedPreprocessorId && preprocessor) && <TabsContent value="preprocessor-info" className="min-w-0 m-0">
-              <PreprocessorInfoPanel preprocessor={preprocessor} />
-            </TabsContent>}
             {(hasValidPreprocessor && selectedPreprocessorId && preprocessor) && <TabsContent value="preprocessor-parameters" className="min-w-0 m-0">
               <PreprocessorParametersPanel preprocessor={preprocessor}/>
             </TabsContent>}
@@ -323,7 +319,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 100, pointerEvents: 'auto' }}>
           <button
             onClick={preprocessor?.status === 'running' ? handleStopPreprocessor : handleRunPreprocessor}
-            className="w-full py-3 px-6 rounded-lg font-semibold text-[13px] flex items-center justify-center gap-x-3 transition-all duration-200 shadow-lg hover:opacity-90"
+            className="w-full py-2.5 px-6 rounded-lg font-semibold text-[12px] flex items-center justify-center gap-x-3 transition-all duration-200 shadow-lg hover:opacity-90"
             style={{
               backgroundColor: preprocessor?.status === 'running' ? '#DC2626' : '#A477C4',
               color: '#FFFFFF'

@@ -2,69 +2,187 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Preprocessor } from '@/lib/preprocessor/api'
 import Draggable from '../dnd/Draggable'
 import { ScrollArea } from '../ui/scroll-area'
-import { LuInfo, LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuDownload } from "react-icons/lu";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { LuInfo, LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuDownload, LuImage, LuVideo, LuLoader } from "react-icons/lu";
 import { cn } from '@/lib/utils'
-import { useClipStore } from '@/lib/clip'
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store'
+import PreprocessorPage from '../preprocessors/PreprocessorPage'
+import { downloadPreprocessor as downloadPreprocessorApi, usePreprocessorJob, useJobProgress, getPreprocessorStatus, usePreprocessorJobStore } from '@/lib/preprocessor/api'
 
-export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?: boolean}> = ({preprocessor, isDragging}) => {
-    const isDownloaded = preprocessor.is_downloaded ?? true;
-    const {clips} = useClipStore();
+export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?: boolean, onMoreInfo?: (id: string) => void}> = ({preprocessor, isDragging, onMoreInfo}) => {
+    const isDownloaded = !!preprocessor.is_downloaded;
+    const [jobId, setJobId] = useState<string | null>(null);
+    const [starting, setStarting] = useState(false);
+    // Subscribe to the job we started (same mechanism as details page)
+    const { isProcessing, isComplete } = usePreprocessorJob(jobId, true);
+    // Read-only global job state for this preprocessor; do not auto-start tracking to avoid false pending state
+    const globalJob = useJobProgress(preprocessor.id);
+    const isGlobalProcessing = !!(globalJob && (globalJob.status === 'running' || globalJob.status === 'pending'));
+    const { load } = usePreprocessorsListStore();
+    const startTracking = usePreprocessorJobStore((s) => s.startTracking);
+    const isActivelyTracked = usePreprocessorJobStore((s) => s.activeJobs.has(preprocessor.id));
 
-    const disabled = useMemo(() => {
-        return clips.length === 0;
-    }, [clips]);
+    useEffect(() => {
+        if (isComplete && jobId) {
+            (async () => {
+                try { await load(true); } catch {}
+                setJobId(null);
+                setStarting(false);
+            })();
+        }
+    }, [isComplete, jobId, load]);
+
+    // If a job already exists in the store for this preprocessor, adopt it locally
+    useEffect(() => {
+        if (!jobId && globalJob && (globalJob.status === 'running' || globalJob.status === 'pending')) {
+            setJobId(preprocessor.id);
+            setStarting(false);
+        }
+    }, [jobId, globalJob, preprocessor.id]);
+
+    // Adopt downloads started elsewhere (e.g., details page) without creating phantom jobs
+    useEffect(() => {
+        let cancelled = false;
+        if (isDownloaded) return;
+        // If store says it's processing but we are not actively tracking, reattach tracking
+        if (isGlobalProcessing && !isActivelyTracked) {
+            (async () => { try { await startTracking(preprocessor.id); } catch {} })();
+            setJobId(preprocessor.id);
+            setStarting(false);
+            return;
+        }
+        if (isGlobalProcessing) return; // already tracked
+        if (jobId && isProcessing) return; // local job already tracked
+        (async () => {
+            try {
+                const res = await getPreprocessorStatus(preprocessor.id);
+                const st = res?.data?.status;
+                if (!cancelled && res.success && (st === 'running' || st === 'pending')) {
+                    try { await startTracking(preprocessor.id); } catch {}
+                    // Also adopt locally so the UI updates immediately
+                    setJobId(preprocessor.id);
+                    setStarting(false);
+                }
+            } catch {}
+        })();
+        return () => { cancelled = true; };
+    }, [preprocessor.id, isDownloaded, isGlobalProcessing, isActivelyTracked, jobId, isProcessing, startTracking]);
+
+    const handleDownload = async () => {
+        // Mirror gating from details page: don't block on stale global processing state
+        if (starting || (jobId && isProcessing)) return;
+        setStarting(true);
+        try {
+            const res = await downloadPreprocessorApi(preprocessor.id, preprocessor.id);
+            if (res.success) {
+                setJobId(preprocessor.id);
+            } else {
+                setStarting(false);
+            }
+        } catch {
+            setStarting(false);
+        }
+    };
+
+    const formatSize = (bytes: number): string | null => {
+        if (bytes === 0) {
+            return null
+        }
+        if (bytes < 1024) {
+            return `${bytes} B`;
+        } else if (bytes < 1024 * 1024) {
+            return `${(bytes / 1024).toFixed(0)} KB`;
+        } else if (bytes < 1024 * 1024 * 1024) {
+            return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+        } else {
+            return `${(bytes / (1024 * 1024 * 1024)).toFixed(0)} GB`;
+        }
+    };
+
+    const totalDownloadSize = useMemo(() => {
+        const bytes = preprocessor.files?.reduce((acc, file) => acc + file.size_bytes, 0) ?? 0;
+        return formatSize(bytes);
+    }, [preprocessor.files]);
+
 
     return (
-        <Draggable data={{
-            ...preprocessor,
-            type: 'preprocessor',
-            processor_url: `/preprocessors/${preprocessor.id}.png`,
-        }} id={preprocessor.id} disabled={disabled}>
-           <div className={cn("flex flex-col gap-y-2.5 cursor-pointer w-28 transition-all duration-200 rounded-md ", {
-            'w-28': !isDragging,
-            'w-24': isDragging,
-            'opacity-50': disabled,
-            'cursor-not-allowed': disabled,
-            'pointer-events-none': disabled,
-           })}>
-            <div className="flex items-center gap-x-1 relative">
-                <TooltipProvider>
-                    <Tooltip>
-                        <TooltipTrigger asChild className={cn('absolute bottom-1.5 left-1.5 bg-brand/90 rounded-md', {
-                            'hidden': isDragging,
-                        })}>
-                            <LuInfo className="w-4 h-4 text-brand-light" />
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-[280px] p-2.5  bg-brand font-poppins border border-brand-light/10 rounded-md w-full text-wrap">
-                            <div className="flex flex-col gap-y-1.5 w-full">
-                                <div className="flex flex-col gap-y-0.5">
-                                    <span className="font-medium text-[12px]">{preprocessor.name}</span>
-                                    <span className="text-[11px] text-brand-light/70 bg-brand/30 rounded">{preprocessor.category}</span>
+        <div className={cn("flex flex-col cursor-pointer w-28 transition-all duration-200 rounded-md border shadow border-brand-light/10", {
+            'w-36': !isDragging,
+            'w-32': isDragging
+        })}>
+            <Draggable data={{
+                ...preprocessor,
+                type: 'preprocessor',
+                processor_url: `/preprocessors/${preprocessor.id}.png`,
+            }} id={preprocessor.id}>
+                <div className="flex flex-col">
+                    <div className="flex items-center gap-x-1 relative">
+                        <img src={`/preprocessors/${preprocessor.id}.png`} alt={preprocessor.name} className={cn(" h-48 aspect-square object-cover rounded-t-md", {
+                            'h-48': !isDragging,
+                            'h-44': isDragging
+                        })} />
+                    </div>
+                    <div className="w-full bg-brand p-2 rounded-b-md">
+                        <div className="w-full flex flex-col gap-y-1 ">
+                            <div className="w-full flex flex-col gap-y-1">
+                                <div className="truncate leading-tight font-medium text-brand-light text-[10px] text-start">{preprocessor.name}</div>
+                                <div className="w-full flex items-center justify-between">
+                                    {totalDownloadSize && (
+                                        <span className="text-brand-light/50 text-[9px] w-full text-start">{totalDownloadSize}</span>
+                                    )}
+                                    <div className={cn("w-full flex items-center gap-x-1 text-brand-light/50", {
+                                        'justify-end': totalDownloadSize,
+                                        'justify-start': !totalDownloadSize,
+                                    })}>
+                                        {preprocessor.supports_image && (
+                                            <LuImage className="w-3 h-3" />
+                                        )}
+                                        {preprocessor.supports_video && (
+                                            <LuVideo className="w-3 h-3" />
+                                        )}
+                                    </div>
                                 </div>
-                                <p className="text-[10.5px] text-brand-light w-full">{preprocessor.description}</p>
                             </div>
-                        </TooltipContent>
-                    </Tooltip>
-                </TooltipProvider>
-                <img src={`/preprocessors/${preprocessor.id}.png`} alt={preprocessor.name} className=" h-full object-cover rounded-md" />
-                <div className="absolute bottom-1.5 right-1.5 rounded-full p-1">
-                    {isDownloaded ? (
-                        null
-                    ) : (
-                        <LuDownload className="w-3 h-3 text-brand-light/60" />
+                        </div>
+                    </div>
+                </div>
+            </Draggable>
+            {!isDragging && (
+                <div className='flex items-center gap-x-1 w-full p-2 pt-0 bg-brand'>
+                    <button
+                        onClick={() => onMoreInfo?.(preprocessor.id)}
+                        type='button'
+                        className='text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1'
+                        title='Show more info'
+                    >
+                        <LuInfo className='w-3 h-3' />
+                        <span>More info</span>
+                    </button>
+                    {isDownloaded ? null : (
+                        <button
+                            type="button"
+                            onClick={handleDownload}
+                            disabled={starting || (!!jobId && isProcessing) || isGlobalProcessing}
+                            className={cn(
+                                "inline-flex items-center justify-center gap-x-1 text-[9px] bg-brand-background border border-brand-light/10 rounded py-1 px-1 h-[25px] min-w-7",
+                                {
+                                    'text-brand-light/60 cursor-default! opacity-70': jobId,
+                                    'text-brand-light/80 hover:text-brand-light hover:bg-brand-background/70': !jobId
+                                }
+                            )}
+                            title={starting ? 'Starting…' : 'Download'}
+                        >
+                            {(jobId)
+                                ? <LuLoader className="w-3 h-3 animate-spin" />
+                                : <LuDownload className="w-3 h-3" />}
+                        </button>
                     )}
                 </div>
-            </div>
-            {!isDragging && <div className="w-full truncate leading-tight font-medium text-brand-light text-[10px] text-start ">{preprocessor.name}
-            </div>} 
-            </div>
-        </Draggable>
+            )}
+        </div>
     )
 }
 
-const PreprocessorCategory:React.FC<{category: string, preprocessors: Preprocessor[], width: number, onViewAll: () => void}> = ({category, preprocessors, width, onViewAll}) => {
+const PreprocessorCategory:React.FC<{category: string, preprocessors: Preprocessor[], width: number, onViewAll: () => void, onMoreInfo: (id: string) => void}> = ({category, preprocessors, width, onViewAll, onMoreInfo}) => {
     const carouselRef = useRef<HTMLDivElement>(null);
     const [showLeftArrow, setShowLeftArrow] = useState(false);
     const [showRightArrow, setShowRightArrow] = useState(false);
@@ -155,7 +273,7 @@ const PreprocessorCategory:React.FC<{category: string, preprocessors: Preprocess
                 >
                     {preprocessors.map((preprocessor) => (
                         <div key={preprocessor.name} className="flex-shrink-0">
-                            <PreprocessorItem preprocessor={preprocessor} />
+                            <PreprocessorItem preprocessor={preprocessor} onMoreInfo={onMoreInfo} />
                         </div>
                     ))}
                 </div>
@@ -164,7 +282,7 @@ const PreprocessorCategory:React.FC<{category: string, preprocessors: Preprocess
     )
 }
 
-const CategoryDetailView: React.FC<{category: string, preprocessors: Preprocessor[], onBack: () => void}> = ({category, preprocessors, onBack}) => {
+const CategoryDetailView: React.FC<{category: string, preprocessors: Preprocessor[], onBack: () => void, onMoreInfo: (id: string) => void}> = ({category, preprocessors, onBack, onMoreInfo}) => {
     return (
         <div className="flex flex-col h-full w-full">
             <div className="px-7 pt-4 pb-4 border-b border-brand/20">
@@ -177,10 +295,10 @@ const CategoryDetailView: React.FC<{category: string, preprocessors: Preprocesso
             </div>
             <ScrollArea className="flex-1 pb-16">
                 <div className="px-7 pt-6">
-                    <div className="grid gap-x-2 gap-y-3" style={{gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))'}}>
+                    <div className="grid gap-x-2 gap-y-3" style={{gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))'}}>
                         {preprocessors.map((preprocessor) => (
                             <div key={preprocessor.name} className="flex justify-center">
-                                <PreprocessorItem preprocessor={preprocessor} />
+                                <PreprocessorItem preprocessor={preprocessor} onMoreInfo={onMoreInfo} />
                             </div>
                         ))}
                     </div>
@@ -196,6 +314,7 @@ const PreprocessorMenu:React.FC = () => {
     const { preprocessors, load } = usePreprocessorsListStore();
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+    const [selectedPreprocessorId, setSelectedPreprocessorId] = useState<string | null>(null);
     const [scrollWidth, setScrollWidth] = useState(0);
     const categorySectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
     const [activeCategory, setActiveCategory] = useState<string | null>(null);
@@ -271,7 +390,53 @@ const PreprocessorMenu:React.FC = () => {
             resizeObserver.disconnect();
             window.removeEventListener('resize', updateWidth);
         };
-    }, [selectedCategory]);
+    }, [selectedCategory, selectedPreprocessorId]);
+
+    // Sync active category to manual scroll position
+    useEffect(() => {
+        if (selectedCategory || selectedPreprocessorId) return; // Only in overview mode
+        const viewport = viewportRef.current;
+        if (!viewport) return;
+
+        let rafId = 0;
+        const handleScroll = () => {
+            cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(() => {
+                const viewportTop = viewport.getBoundingClientRect().top;
+                let nearestCategory: string | null = null;
+                let nearestDelta = Infinity;
+                for (const category of categories) {
+                    const section = categorySectionRefs.current[category];
+                    if (!section) continue;
+                    const sectionTop = section.getBoundingClientRect().top;
+                    const delta = Math.abs(sectionTop - viewportTop);
+                    if (delta < nearestDelta) {
+                        nearestDelta = delta;
+                        nearestCategory = category;
+                    }
+                }
+                if (nearestCategory && nearestCategory !== activeCategory) {
+                    setActiveCategory(nearestCategory);
+                }
+            });
+        };
+
+        viewport.addEventListener('scroll', handleScroll, { passive: true });
+        window.addEventListener('resize', handleScroll);
+        handleScroll();
+
+        return () => {
+            viewport.removeEventListener('scroll', handleScroll as EventListener);
+            window.removeEventListener('resize', handleScroll);
+            cancelAnimationFrame(rafId);
+        };
+    }, [categories, selectedCategory, selectedPreprocessorId, activeCategory]);
+
+    if (selectedPreprocessorId) {
+        return (
+            <PreprocessorPage preprocessorId={selectedPreprocessorId} onBack={() => setSelectedPreprocessorId(null)} />
+        );
+    }
 
     if (selectedCategory) {
         return (
@@ -285,6 +450,7 @@ const PreprocessorMenu:React.FC = () => {
                     category={selectedCategory}
                     preprocessors={filteredPreprocessors.filter(p => p.category === selectedCategory)}
                     onBack={() => setSelectedCategory(null)}
+                    onMoreInfo={(id) => setSelectedPreprocessorId(id)}
                 />
             </>
         );
@@ -344,6 +510,7 @@ const PreprocessorMenu:React.FC = () => {
                                         category={category} 
                                         preprocessors={filteredPreprocessors.filter((preprocessor) => preprocessor.category === category)}
                                         onViewAll={() => setSelectedCategory(category)}
+                                        onMoreInfo={(id) => setSelectedPreprocessorId(id)}
                                     />
                                 </div>
                             ))}

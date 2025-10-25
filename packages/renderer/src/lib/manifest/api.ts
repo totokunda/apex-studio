@@ -56,6 +56,7 @@ export type ManifestComponentModelPathItem = {
   variant?: string;
   precision?: string;
   type?: string;
+  file_size?: number;
   resource_requirements?: ManifestResourceRequirements;
   [key: string]: any;
 };
@@ -79,7 +80,7 @@ export type ManifestComponent = {
   scheduler_options?: ManifestSchedulerOption[];
   gguf_files?: { type: string; path: string }[];
   deprecated?: boolean;
-  downloaded?: boolean;
+  is_downloaded?: boolean;
   // Common text encoder extras seen in manifests
   tokenizer_class?: string;
   tokenizer_name?: string;

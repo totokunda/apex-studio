@@ -1,11 +1,11 @@
 import {AppModule} from '../AppModule.js';
 import {ModuleContext} from '../ModuleContext.js';
-import { BrowserWindow, globalShortcut, App, contentTracing, ipcMain } from 'electron';
+import {  App, ipcMain } from 'electron';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import inspector from 'node:inspector';
-import WebSocket from 'ws';
+import { WebSocketManager } from './WebSocketManager.js';
 
 const session = new inspector.Session();
 session.connect();
@@ -26,11 +26,12 @@ export class ApexApi implements AppModule {
   private app: App | null = null;
   private settingsPath: string = '';
   private backendUrl: string = DEFAULT_BACKEND_URL;
-  private wsConnections: Map<string, WebSocket> = new Map();
+  private wsManager: WebSocketManager | null = null;
   private activeMaskStreams: Map<string, { controller: AbortController; reader: ReadableStreamDefaultReader<Uint8Array> | null; id: string } > = new Map();
 
   constructor(backendUrl: string = DEFAULT_BACKEND_URL) {
     this.backendUrl = backendUrl;
+    this.wsManager = new WebSocketManager(this.backendUrl);
   }
 
 
@@ -40,10 +41,14 @@ export class ApexApi implements AppModule {
     
     this.settingsPath = path.join(this.app.getPath('userData'), 'apex-settings.json');
     await this.loadSettings();
+    this.wsManager?.setBaseUrl(this.backendUrl);
     
     this.registerConfigHandlers();
     this.registerBackendUrlHandlers();
+    this.registerWebSocketHandlers();
+    this.registerJobHandlers();
     this.registerPreprocessorHandlers();
+    this.registerComponentsHandlers();
     this.registerMaskHandlers();
     this.registerManifestHandlers();
   }
@@ -86,6 +91,7 @@ export class ApexApi implements AppModule {
         // Validate URL format
         new URL(url);
         this.backendUrl = url;
+        this.wsManager?.setBaseUrl(url);
         await this.saveSettings();
         return {
           success: true,
@@ -108,6 +114,15 @@ export class ApexApi implements AppModule {
 
     ipcMain.handle('config:set-home-dir', async (_event, homeDir: string) => {
       return this.makeRequest<{home_dir: string}>('POST', '/config/home-dir', { home_dir: homeDir });
+    });
+
+    // Components path handlers
+    ipcMain.handle('config:get-components-path', async () => {
+      return this.makeRequest<{components_path: string}>('GET', '/config/components-path');
+    });
+
+    ipcMain.handle('config:set-components-path', async (_event, componentsPath: string) => {
+      return this.makeRequest<{components_path: string}>('POST', '/config/components-path', { components_path: componentsPath });
     });
 
     // Torch device handlers
@@ -372,81 +387,12 @@ export class ApexApi implements AppModule {
       return this.makeRequest<any>('GET', `/preprocessor/result/${encodeURIComponent(jobId)}`);
     });
 
-    // WebSocket connection for job updates
-    ipcMain.handle('preprocessor:connect-ws', async (event, jobId: string) => {
-      const connectionKey = `${jobId}`;
-      
-      // Close existing connection if any
-      if (this.wsConnections.has(connectionKey)) {
-        const existingWs = this.wsConnections.get(connectionKey);
-        if (existingWs && existingWs.readyState === WebSocket.OPEN) {
-          existingWs.close();
-        }
-        this.wsConnections.delete(connectionKey);
-      }
-
-      try {
-        const wsUrl = this.backendUrl.replace('http://', 'ws://').replace('https://', 'wss://');
-        const ws = new WebSocket(`${wsUrl}/ws/job/${jobId}`);
-        
-        ws.on('open', () => {
-          event.sender.send(`preprocessor:ws-status:${jobId}`, { status: 'connected' });
-        });
-
-        ws.on('message', (data) => {
-          try {
-            const message = JSON.parse(data.toString());
-            event.sender.send(`preprocessor:ws-update:${jobId}`, message);
-          } catch (error) {
-            console.error('Failed to parse WebSocket message:', error);
-          }
-        });
-
-        ws.on('error', (error) => {
-          event.sender.send(`preprocessor:ws-error:${jobId}`, { error: error.message });
-        });
-
-        ws.on('close', () => {
-          this.wsConnections.delete(connectionKey);
-          event.sender.send(`preprocessor:ws-status:${jobId}`, { status: 'disconnected' });
-        });
-
-        this.wsConnections.set(connectionKey, ws);
-        
-        return {
-          success: true,
-          data: { connectionKey, jobId },
-        };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : 'Failed to connect to WebSocket',
-        };
-      }
+    // Delete preprocessor (remove downloaded files and unmark)
+    ipcMain.handle('preprocessor:delete', async (_event, name: string) => {
+      return this.makeRequest<any>('DELETE', `/preprocessor/delete/${encodeURIComponent(name)}`);
     });
 
-    // Disconnect WebSocket
-    ipcMain.handle('preprocessor:disconnect-ws', async (_event, jobId: string) => {
-      const connectionKey = `${jobId}`;
-      
-      if (this.wsConnections.has(connectionKey)) {
-        const ws = this.wsConnections.get(connectionKey);
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.close();
-        }
-        this.wsConnections.delete(connectionKey);
-        
-        return {
-          success: true,
-          data: { message: 'WebSocket disconnected' },
-        };
-      }
-      
-      return {
-        success: false,
-        error: 'WebSocket connection not found',
-      };
-    });
+    // WebSocket handlers migrated to unified ws:* IPC
   }
 
   private registerManifestHandlers(): void {
@@ -481,7 +427,91 @@ export class ApexApi implements AppModule {
     });
   }
 
-  private async makeRequest<T>(method: 'GET' | 'POST', endpoint: string, body?: any): Promise<ConfigResponse<T>> {
+  private registerComponentsHandlers(): void {
+    // Start components download
+    ipcMain.handle('components:download', async (_event, paths: string[], savePath?: string, jobId?: string) => {
+      const body = { paths, save_path: savePath, job_id: jobId };
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/components/download', body);
+    });
+
+    // Delete a downloaded component (file or directory under components path)
+    ipcMain.handle('components:delete', async (_event, targetPath: string) => {
+      return this.makeRequest<{status: string; path: string}>('DELETE', '/components/delete', { path: targetPath });
+    });
+
+    // Poll components download status
+    ipcMain.handle('components:status', async (_event, jobId: string) => {
+      return this.makeRequest<any>('GET', `/jobs/status/${encodeURIComponent(jobId)}`);
+    });
+
+    // Cancel components download
+    ipcMain.handle('components:cancel', async (_event, jobId: string) => {
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/jobs/cancel/${encodeURIComponent(jobId)}`);
+    });
+
+    // WebSocket handlers migrated to unified ws:* IPC
+  }
+
+  private registerJobHandlers(): void {
+    // Unified job status
+    ipcMain.handle('jobs:status', async (_event, jobId: string) => {
+      return this.makeRequest<any>('GET', `/jobs/status/${encodeURIComponent(jobId)}`);
+    });
+
+    // Unified job cancel
+    ipcMain.handle('jobs:cancel', async (_event, jobId: string) => {
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/jobs/cancel/${encodeURIComponent(jobId)}`);
+    });
+  }
+
+  private registerWebSocketHandlers(): void {
+    // Unified connect: expects { key, pathOrUrl }
+    ipcMain.handle('ws:connect', async (event, request: { key: string; pathOrUrl: string }) => {
+      const { key, pathOrUrl } = request;
+      const result = this.wsManager!.connect(key, pathOrUrl, {
+        onOpen: () => {
+          event.sender.send(`ws-status:${key}`, { status: 'connected' });
+        },
+        onMessage: (data) => {
+          try {
+            const message = JSON.parse(data);
+            event.sender.send(`ws-update:${key}`, message);
+          } catch (error) {
+            // Forward as error if message is not JSON
+            event.sender.send(`ws-error:${key}`, { error: 'Invalid JSON message', raw: data });
+          }
+        },
+        onError: (error) => {
+          event.sender.send(`ws-error:${key}`, { error: error.message });
+        },
+        onClose: () => {
+          event.sender.send(`ws-status:${key}`, { status: 'disconnected' });
+        }
+      });
+      if (result.success) {
+        return { success: true, data: { key } };
+      }
+      return { success: false, error: result.error || 'Failed to connect to WebSocket' };
+    });
+
+    // Unified disconnect: expects key
+    ipcMain.handle('ws:disconnect', async (_event, key: string) => {
+      const result = this.wsManager!.disconnect(key);
+      if (result.success) {
+        return { success: true, data: { message: 'WebSocket disconnected' } };
+      }
+      return { success: false, error: result.error || 'WebSocket connection not found' };
+    });
+
+    // Optional: status check
+    ipcMain.handle('ws:status', async (_event, key: string) => {
+      const connected = this.wsManager?.has(key) ?? false;
+      return { success: true, data: { key, connected } };
+    });
+  }
+
+
+  private async makeRequest<T>(method: 'GET' | 'POST' | 'DELETE', endpoint: string, body?: any): Promise<ConfigResponse<T>> {
     try {
       const options: RequestInit = {
         method,
@@ -491,7 +521,7 @@ export class ApexApi implements AppModule {
       };
 
 
-      if (body && method === 'POST') {
+      if (body && method !== 'GET') {
         options.body = JSON.stringify(body);
       }
 
@@ -518,33 +548,6 @@ export class ApexApi implements AppModule {
     }
   }
 
-  private async makeStreamingRequest(method: 'GET' | 'POST', endpoint: string, body?: any): Promise<ReadableStream<Uint8Array<ArrayBuffer>>> {
-    try {
-      const controller = new AbortController();
-      console.log('body', body);
-      const response = await fetch(`${this.backendUrl}${endpoint}`, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/x-ndjson',
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-
-      if (!response.ok || !response.body) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
-      } 
-
-      // return stream back to the caller
-      console.log('response.body', response.body);
-      return response.body;
-
-    } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Unknown error occurred');
-    }
-  }
 }
 
 export function apexApi(...args: ConstructorParameters<typeof ApexApi>) {

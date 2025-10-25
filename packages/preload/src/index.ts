@@ -299,6 +299,53 @@ async function listPreprocessors(checkDownloaded: boolean = true): Promise<Confi
   return await ipcRenderer.invoke('preprocessor:list', checkDownloaded);
 }
 
+async function deletePreprocessor(name: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('preprocessor:delete', name);
+}
+
+// Components API functions
+async function downloadComponents(paths: string[], savePath?: string, jobId?: string): Promise<ConfigResponse<{job_id: string; status: string; message?: string}>> {
+  return await ipcRenderer.invoke('components:download', paths, savePath, jobId);
+}
+
+async function deleteComponent(targetPath: string): Promise<ConfigResponse<{status: string; path: string}>> {
+  return await ipcRenderer.invoke('components:delete', targetPath);
+}
+
+async function getComponentsStatus(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('jobs:status', jobId);
+}
+
+async function cancelComponents(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('jobs:cancel', jobId);
+}
+
+async function connectComponentsWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('components:connect-ws', jobId);
+}
+
+async function disconnectComponentsWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('components:disconnect-ws', jobId);
+}
+
+function onComponentsWebSocketUpdate(jobId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`components:ws-update:${jobId}`, listener);
+  return () => ipcRenderer.removeListener(`components:ws-update:${jobId}`, listener);
+}
+
+function onComponentsWebSocketStatus(jobId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`components:ws-status:${jobId}`, listener);
+  return () => ipcRenderer.removeListener(`components:ws-status:${jobId}`, listener);
+}
+
+function onComponentsWebSocketError(jobId: string, callback: (data: any) => void): () => void {
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(`components:ws-error:${jobId}`, listener);
+  return () => ipcRenderer.removeListener(`components:ws-error:${jobId}`, listener);
+}
+
 async function getPreprocessor(name: string): Promise<ConfigResponse<any>> {
   return await ipcRenderer.invoke('preprocessor:get', name);
 }
@@ -512,7 +559,7 @@ async function runPreprocessor(request: {
 
 
 async function getPreprocessorStatus(jobId: string): Promise<ConfigResponse<any>> {
-  return await ipcRenderer.invoke('preprocessor:status', jobId);
+  return await ipcRenderer.invoke('jobs:status', jobId);
 }
 
 async function getPreprocessorResult(jobId: string): Promise<ConfigResponse<any>> {
@@ -546,7 +593,50 @@ function onPreprocessorWebSocketError(jobId: string, callback: (data: any) => vo
 }
 
 async function cancelPreprocessor(jobId: string): Promise<ConfigResponse<any>> {
-  return await ipcRenderer.invoke('preprocessor:cancel', jobId);
+  return await ipcRenderer.invoke('jobs:cancel', jobId);
+}
+
+// Unified job helpers
+async function jobStatus(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('jobs:status', jobId);
+}
+
+async function jobCancel(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('jobs:cancel', jobId);
+}
+
+// Unified WebSocket helpers (renderer-wide API)
+async function wsConnect(key: string, pathOrUrl: string): Promise<ConfigResponse<{ key: string }>> {
+  return await ipcRenderer.invoke('ws:connect', { key, pathOrUrl });
+}
+
+async function wsDisconnect(key: string): Promise<ConfigResponse<{ message: string }>> {
+  return await ipcRenderer.invoke('ws:disconnect', key);
+}
+
+async function wsStatus(key: string): Promise<ConfigResponse<{ key: string; connected: boolean }>> {
+  return await ipcRenderer.invoke('ws:status', key);
+}
+
+function onWsUpdate(key: string, callback: (data: any) => void): () => void {
+  const channel = `ws-update:${key}`;
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
+function onWsStatus(key: string, callback: (data: any) => void): () => void {
+  const channel = `ws-status:${key}`;
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
+function onWsError(key: string, callback: (data: any) => void): () => void {
+  const channel = `ws-error:${key}`;
+  const listener = (_event: any, data: any) => callback(data);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
 }
 
 function pathToFileURLString(path: string): string {
@@ -601,6 +691,12 @@ export {
   getPathForFile,
   createProxy,
   removeProxy,
+  wsConnect,
+  wsDisconnect,
+  wsStatus,
+  onWsUpdate,
+  onWsStatus,
+  onWsError,
   getBackendUrl,
   setBackendUrl,
   getHomeDir,
@@ -620,6 +716,15 @@ export {
   onPreprocessorWebSocketUpdate,
   onPreprocessorWebSocketStatus,
   onPreprocessorWebSocketError,
+  downloadComponents,
+  deleteComponent,
+  getComponentsStatus,
+  cancelComponents,
+  connectComponentsWebSocket,
+  disconnectComponentsWebSocket,
+  onComponentsWebSocketUpdate,
+  onComponentsWebSocketStatus,
+  onComponentsWebSocketError,
   pathToFileURLString,
   cancelPreprocessor,
   createMask,
@@ -639,5 +744,6 @@ export {
   listManifestsByModel,
   listManifestsByType,
   listManifestsByModelAndType,
-  getManifest
+  getManifest,
+  deletePreprocessor
 };

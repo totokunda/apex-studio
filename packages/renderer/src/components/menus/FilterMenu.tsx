@@ -229,6 +229,46 @@ const FilterMenu = () => {
     };
   }, [selectedCategory]);
 
+  // Sync active category to manual scroll position
+  useEffect(() => {
+    if (selectedCategory) return; // Only in overview mode
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    let rafId = 0;
+    const handleScroll = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const viewportTop = viewport.getBoundingClientRect().top;
+        let nearestCategory: string | null = null;
+        let nearestDelta = Infinity;
+        for (const category of categories) {
+          const section = categorySectionRefs.current[category];
+          if (!section) continue;
+          const sectionTop = section.getBoundingClientRect().top;
+          const delta = Math.abs(sectionTop - viewportTop);
+          if (delta < nearestDelta) {
+            nearestDelta = delta;
+            nearestCategory = category;
+          }
+        }
+        if (nearestCategory && nearestCategory !== activeCategory) {
+          setActiveCategory(nearestCategory);
+        }
+      });
+    };
+
+    viewport.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('resize', handleScroll);
+    handleScroll();
+
+    return () => {
+      viewport.removeEventListener('scroll', handleScroll as EventListener);
+      window.removeEventListener('resize', handleScroll);
+      cancelAnimationFrame(rafId);
+    };
+  }, [categories, selectedCategory, activeCategory]);
+
   if (selectedCategory) {
     return (
       <>

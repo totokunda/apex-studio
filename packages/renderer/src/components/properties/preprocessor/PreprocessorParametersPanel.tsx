@@ -133,13 +133,13 @@ const PreprocessorParametersPanel: React.FC<PreprocessorParametersPanelProps> = 
   if (!hasParameters) {
     return (
       <div className="p-6 flex items-center justify-center">
-        <span className="text-brand-light/60 text-[12px]">No parameters available</span>
+        <span className="text-brand-light/60 text-[12px]">No inputs available</span>
       </div>
     );
   }
 
   return (
-    <div className="p-6 flex flex-col gap-y-4 max-h-[calc(100vh-150px)]">
+    <div className="p-6 flex flex-col gap-y-4 ">
       <div className="flex flex-col gap-y-4 ">
         {preprocessor.preprocessor.parameters!.map((param, index) => (
           <div key={index} className="flex flex-col gap-y-2 p-4 rounded-lg bg-brand-light/5 border border-brand-light/10">

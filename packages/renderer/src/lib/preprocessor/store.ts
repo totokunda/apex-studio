@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { subscribeWithSelector } from 'zustand/middleware';
 import { PreprocessorJob, getPreprocessorResult, JobResult } from "./api";
 
 export interface JobProgress {
@@ -9,6 +10,15 @@ export interface JobProgress {
   error?: string;
   result?: JobResult;
   lastUpdate?: number;
+  files?: Record<string, {
+    filename: string;
+    progress?: number; // 0-100
+    downloadedBytes?: number;
+    totalBytes?: number;
+    downloadSpeed?: number; // bytes/sec
+    lastUpdateTime?: number;
+    status?: 'downloading' | 'completed' | 'error';
+  }>;
 }
 
 interface PreprocessorJobStore {
@@ -28,7 +38,7 @@ interface PreprocessorJobStore {
   _jobInstances: Map<string, PreprocessorJob>;
 }
 
-export const usePreprocessorJobStore = create<PreprocessorJobStore>((set, get) => ({
+export const usePreprocessorJobStore = create<PreprocessorJobStore>()(subscribeWithSelector((set, get) => ({
   jobs: {},
   activeJobs: new Set(),
   _jobInstances: new Map(),
@@ -59,12 +69,44 @@ export const usePreprocessorJobStore = create<PreprocessorJobStore>((set, get) =
 
     // Setup listeners
     job.onUpdate(async (data) => {
-      
+      const now = Date.now();
+      const existing = get().jobs[jobId];
+      // Update per-file map if metadata present
+      let nextFiles = { ...(existing?.files || {}) } as NonNullable<JobProgress['files']>;
+      try {
+        const meta = data?.metadata || {};
+        const filename = (meta.filename || meta.label || '').toString();
+        const downloaded = meta.downloaded ?? meta.bytes_downloaded ?? meta.current_bytes;
+        const total = meta.total ?? meta.bytes_total ?? meta.total_bytes;
+        if (filename) {
+          const prev = nextFiles[filename];
+          let speed: number | undefined;
+          if (typeof downloaded === 'number' && prev?.downloadedBytes != null && prev?.lastUpdateTime) {
+            const dt = (now - prev.lastUpdateTime) / 1000;
+            const db = downloaded - (prev.downloadedBytes || 0);
+            if (dt > 0 && db > 0) speed = db / dt;
+          }
+          const pct = (typeof downloaded === 'number' && typeof total === 'number' && total > 0)
+            ? Math.max(0, Math.min(100, Math.floor((downloaded / total) * 100)))
+            : (typeof data.progress === 'number' ? (data.progress <= 1 ? data.progress * 100 : data.progress) : prev?.progress);
+          nextFiles[filename] = {
+            filename,
+            progress: pct ?? prev?.progress,
+            downloadedBytes: typeof downloaded === 'number' ? downloaded : prev?.downloadedBytes,
+            totalBytes: typeof total === 'number' ? total : prev?.totalBytes,
+            downloadSpeed: speed ?? prev?.downloadSpeed,
+            lastUpdateTime: now,
+            status: (data?.status === 'complete' || data?.status === 'completed') ? 'completed' : (data?.status === 'error' ? 'error' : 'downloading'),
+          };
+        }
+      } catch {}
+
       get().updateJobProgress(jobId, {
-        progress: data.progress,
-        currentStep: data.step,
-        status: data.status || 'processing',
-        lastUpdate: Date.now(),
+        progress: typeof data?.progress === 'number' ? (data.progress <= 1 ? data.progress * 100 : data.progress) : existing?.progress,
+        currentStep: (data?.message || data?.step || existing?.currentStep) as any,
+        status: (data?.status as any) || 'running',
+        lastUpdate: now,
+        files: nextFiles,
       });
 
       if (data.status === 'complete') {
@@ -81,7 +123,6 @@ export const usePreprocessorJobStore = create<PreprocessorJobStore>((set, get) =
         fetchWithRetry();
       }
     });
-
 
     job.onStatus(async (data) => {
       get().updateJobProgress(jobId, {
@@ -118,7 +159,6 @@ export const usePreprocessorJobStore = create<PreprocessorJobStore>((set, get) =
     const job = get()._jobInstances.get(jobId);
     if (job) {
       await job.disconnect();
-      await job.cancel();
       get()._jobInstances.delete(jobId);
       
       set((state) => {
@@ -192,5 +232,5 @@ export const usePreprocessorJobStore = create<PreprocessorJobStore>((set, get) =
       get().clearJob(jobId);
     });
   },
-}));
+})));
 

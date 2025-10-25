@@ -5,13 +5,9 @@ import {
   runPreprocessor as runPreprocessorPreload,
   getPreprocessorStatus as getPreprocessorStatusPreload,
   getPreprocessorResult as getPreprocessorResultPreload,
-  connectPreprocessorWebSocket,
-  disconnectPreprocessorWebSocket,
-  onPreprocessorWebSocketUpdate,
-  onPreprocessorWebSocketStatus,
-  onPreprocessorWebSocketError,
   cancelPreprocessor as cancelPreprocessorPreload,
 } from '@app/preload';
+import { wsClient } from '../ws/client';
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -38,6 +34,11 @@ export interface PreprocessorParameter {
   options?: ParameterOption[];
 }
 
+export interface PreprocessorFile {
+  path: string;
+  size_bytes: number;
+}
+
 export interface Preprocessor {
   type: 'preprocessor';
   name: string;
@@ -47,6 +48,7 @@ export interface Preprocessor {
   supports_video?: boolean;
   supports_image?: boolean;
   parameters?: PreprocessorParameter[];
+  files?: PreprocessorFile[];
   is_downloaded?: boolean;
   download_size?: string;
   processor_url?: string;
@@ -131,14 +133,24 @@ export async function getPreprocessorResult(jobId: string): Promise<ConfigRespon
  * Connect to WebSocket for real-time job updates
  */
 export async function connectJobWebSocket(jobId: string): Promise<ConfigResponse<any>> {
-  return await connectPreprocessorWebSocket(jobId);
+  try {
+    await wsClient.connect(`preprocessor:${jobId}`, `/ws/job/${jobId}`);
+    return { success: true, data: { jobId } };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
 }
 
 /**
  * Disconnect from WebSocket
  */
 export async function disconnectJobWebSocket(jobId: string): Promise<ConfigResponse<any>> {
-  return await disconnectPreprocessorWebSocket(jobId);
+  try {
+    await wsClient.disconnect(`preprocessor:${jobId}`);
+    return { success: true, data: { jobId } };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
 }
 
 /**
@@ -146,7 +158,7 @@ export async function disconnectJobWebSocket(jobId: string): Promise<ConfigRespo
  * Returns an unsubscribe function
  */
 export function subscribeToJobUpdates(jobId: string, callback: (data: any) => void): () => void {
-  return onPreprocessorWebSocketUpdate(jobId, callback);
+  return wsClient.onUpdate(`preprocessor:${jobId}`, callback);
 }
 
 /**
@@ -154,7 +166,7 @@ export function subscribeToJobUpdates(jobId: string, callback: (data: any) => vo
  * Returns an unsubscribe function
  */
 export function subscribeToJobStatus(jobId: string, callback: (data: any) => void): () => void {
-  return onPreprocessorWebSocketStatus(jobId, callback);
+  return wsClient.onStatus(`preprocessor:${jobId}`, callback);
 }
 
 /**
@@ -162,7 +174,7 @@ export function subscribeToJobStatus(jobId: string, callback: (data: any) => voi
  * Returns an unsubscribe function
  */
 export function subscribeToJobErrors(jobId: string, callback: (data: any) => void): () => void {
-  return onPreprocessorWebSocketError(jobId, callback);
+  return wsClient.onError(`preprocessor:${jobId}`, callback);
 }
 
 /**
@@ -172,6 +184,16 @@ export function subscribeToJobErrors(jobId: string, callback: (data: any) => voi
  */
 export async function cancelPreprocessor(jobId: string): Promise<ConfigResponse<any>> {
   return await cancelPreprocessorPreload(jobId);
+}
+
+/**
+ * Delete a preprocessor and its downloaded files
+ */
+export async function deletePreprocessor(name: string): Promise<ConfigResponse<any>> {
+  // Invoke the preload API to hit ApexApi -> backend DELETE endpoint
+  // @ts-ignore
+  const { deletePreprocessor: deletePreprocessorPreload } = await import('@app/preload');
+  return await deletePreprocessorPreload(name);
 }
 
 /**

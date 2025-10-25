@@ -2,16 +2,22 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useManifestTypes, useManifests, type ManifestInfo } from '@/lib/manifest';
 import { cn } from '@/lib/utils';
 import { ScrollArea } from '../ui/scroll-area';
-import { LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuInfo, LuDownload, LuCheck } from "react-icons/lu";
+import { LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuInfo, LuDownload, LuCheck, LuLoader } from "react-icons/lu";
 import Draggable from '../dnd/Draggable';
 import { v4 as uuidv4 } from 'uuid';
 import { useManifestStore } from '@/lib/manifest/store';
+import { useManifest } from '@/lib/manifest/hooks';
+import { useComponentsDownloadStore } from '@/lib/components-download/store';
+import { useShallow } from 'zustand/react/shallow';
 import ModelPage from '../models/ModelPage';
 // check 
 
 
 export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean }> = ({ manifest, isDragging }) => {
   const { setSelectedManifestId } = useManifestStore();
+  const { data: fullManifest } = useManifest(manifest.id);
+  const downloads = useComponentsDownloadStore(useShallow((s) => s.entries));
+  const startPath = useComponentsDownloadStore((s) => s.startPath);
   const isVideoDemo = React.useMemo(() => {
     const value = (manifest.demo_path || '').toLowerCase();
     try {
@@ -24,8 +30,77 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean }
     }
   }, [manifest.demo_path]);
 
+  const defaultVariantItems = useMemo(() => {
+    const out: Array<{ path: string; savePath?: string; isDownloaded?: boolean; isConfig?: boolean }> = [];
+    const doc = fullManifest as any;
+    const components = doc?.spec?.components || [];
+    for (const comp of components) {
+      const modelPaths = Array.isArray(comp.model_path) ? comp.model_path : comp.model_path ? [{ path: comp.model_path }] : [];
+      for (const item of modelPaths) {
+        if (typeof item === 'string') {
+          out.push({ path: item, savePath: comp.save_path, isDownloaded: false, isConfig: false });
+        } else {
+          const v = (item?.variant ?? '').toLowerCase();
+          if (v === '' || v === 'default') {
+            if (item?.path) out.push({ path: item.path, savePath: comp.save_path, isDownloaded: !!item.is_downloaded, isConfig: false });
+          }
+        }
+      }
+      if (comp?.config_path) {
+        out.push({ path: comp.config_path, savePath: comp.save_path, isDownloaded: false, isConfig: true });
+      }
+    }
+    return out.filter((it) => !!it.path);
+  }, [fullManifest]);
+
+  const isDownloading = useMemo(() => {
+    return defaultVariantItems.some(({ path }) => {
+      const e = downloads[path];
+      return e && (e.status === 'downloading' || e.status === 'pending');
+    });
+  }, [defaultVariantItems, downloads]);
+
+  const allDownloaded = useMemo(() => {
+    if (defaultVariantItems.length === 0) return !!manifest.downloaded;
+    return defaultVariantItems.filter((x) => !x.isConfig).every(({ path, isDownloaded }) => {
+      const e = downloads[path];
+      if (e?.status === 'completed') return true;
+      return !!isDownloaded;
+    });
+  }, [defaultVariantItems, downloads, manifest.downloaded]);
+
+  const handleDownloadAllDefault = async () => {
+    try {
+      await useManifestStore.getState().loadManifest(manifest.id, true);
+      const doc = useManifestStore.getState().manifestById[manifest.id] as any;
+      const components = doc?.spec?.components || [];
+      for (const comp of components) {
+        const modelPaths = Array.isArray(comp.model_path) ? comp.model_path : comp.model_path ? [{ path: comp.model_path }] : [];
+        // Only default variants (treat string paths as default)
+        const filtered = modelPaths.filter((item: any) => {
+          if (typeof item === 'string') return true;
+          const v = (item?.variant ?? '').toLowerCase();
+          return v === '' || v.toLowerCase() === 'default';
+        });
+        for (const item of filtered) {
+          const p = typeof item === 'string' ? item : item?.path;
+          const already = typeof item === 'object' && !!item?.is_downloaded;
+          if (!p || already) continue;
+          await startPath(p, comp?.save_path);
+        }
+        if (comp?.config_path) {
+          const cp = comp.config_path as string;
+          const entry = useComponentsDownloadStore.getState().entries[cp];
+          if (!entry || entry.status === 'error' || entry.status === 'canceled') {
+            await startPath(cp, comp?.save_path);
+          }
+        }
+      }
+    } catch {}
+  };
+
   return (
-    <div className={cn("flex flex-col transition-all font-poppins duration-200 rounded-md relative bg-brand border border-brand-light/5 shadow-md cursor-grab active:cursor-grabbing w-52", {
+    <div className={cn("flex flex-col transition-all font-poppins duration-200 rounded-md relative bg-brand border border-brand-light/5 shadow-md cursor-grab active:cursor-grabbing w-56", {
     })}>
     <Draggable id={uuidv4()} data={{
       type: 'model',
@@ -44,7 +119,7 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean }
               playsInline
             />
           ) : (
-            <img src={manifest.demo_path} alt={manifest.name} className="h-full object-cover rounded-t-md" />
+            <img src={manifest.demo_path} alt={manifest.name} className="h-full w-full object-cover rounded-t-md" />
           )}
         </div>
       </div>
@@ -73,18 +148,25 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean }
               <span>More info</span>
             </button>
             <button
+          onClick={handleDownloadAllDefault}
               type='button'
-              disabled={!!manifest.downloaded}
+          disabled={allDownloaded}
               className={cn(
                 'text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded px-2 py-1 border flex-1',
-                manifest.downloaded
-                  ? 'text-brand-light/80 bg-brand-background border-brand-light/10 cursor-default'
-                  : 'text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10'
+            allDownloaded
+              ? 'text-brand-light/80 bg-brand-background border-brand-light/10 cursor-default'
+              : 'text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10'
               )}
-              title={manifest.downloaded ? 'Already downloaded' : 'Download model'}
+          title={allDownloaded ? 'Already downloaded' : (isDownloading ? 'Downloading…' : 'Download default variant')}
             >
-              {manifest.downloaded ? <LuCheck className='w-3 h-3' /> : <LuDownload className='w-3 h-3' />}
-              <span>{manifest.downloaded ? 'Downloaded' : 'Download'}</span>
+          {allDownloaded ? (
+            <LuCheck className='w-3 h-3' />
+          ) : isDownloading ? (
+            <LuLoader className='w-3 h-3 animate-spin' />
+          ) : (
+            <LuDownload className='w-3 h-3' />
+          )}
+          <span>{allDownloaded ? 'Downloaded' : isDownloading ? 'Downloading…' : 'Download'}</span>
             </button>
           </div>
       )}
@@ -202,7 +284,7 @@ const ModelMenu:React.FC = () => {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const { data: manifestsData } = useManifests();
   const { data: modelTypesData } = useManifestTypes();
-  const { selectedManifestId, clearSelectedManifestId } = useManifestStore();
+  const { selectedManifestId} = useManifestStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -282,6 +364,46 @@ const ModelMenu:React.FC = () => {
       window.removeEventListener('resize', updateWidth);
     };
   }, [selectedCategory, selectedManifestId]);
+
+  // Sync active category to manual scroll position
+  useEffect(() => {
+    if (selectedCategory) return; // Only in overview mode
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    let rafId = 0;
+    const handleScroll = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const viewportTop = viewport.getBoundingClientRect().top;
+        let nearestCategory: string | null = null;
+        let nearestDelta = Infinity;
+        for (const category of categories) {
+          const section = categorySectionRefs.current[category];
+          if (!section) continue;
+          const sectionTop = section.getBoundingClientRect().top;
+          const delta = Math.abs(sectionTop - viewportTop);
+          if (delta < nearestDelta) {
+            nearestDelta = delta;
+            nearestCategory = category;
+          }
+        }
+        if (nearestCategory && nearestCategory !== activeCategory) {
+          setActiveCategory(nearestCategory);
+        }
+      });
+    };
+
+    viewport.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('resize', handleScroll);
+    handleScroll();
+
+    return () => {
+      viewport.removeEventListener('scroll', handleScroll as EventListener);
+      window.removeEventListener('resize', handleScroll);
+      cancelAnimationFrame(rafId);
+    };
+  }, [categories, selectedCategory, activeCategory]);
 
   if (selectedManifestId) {
     return (
