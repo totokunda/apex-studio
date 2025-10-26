@@ -10,11 +10,10 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import AppearanceProperties from './AppearanceProperties'
 import AdjustProperties from './AdjustProperties'  
-import {LuChevronRight, LuChevronLeft} from 'react-icons/lu'
+import {LuChevronRight, LuChevronLeft, LuMonitorCog} from 'react-icons/lu'
 import { cn } from '@/lib/utils'  
 import TextProperties from './TextProperties'
 import LineProperties from './LineProperties'
-import PreprocessorInfoPanel from './preprocessor/PreprocessorInfoPanel'
 import PreprocessorDurationPanel from './preprocessor/PreprocessorDurationPanel'
 import PreprocessorParametersPanel from './preprocessor/PreprocessorParametersPanel'
 import { FaPlay, FaStop } from 'react-icons/fa'
@@ -26,7 +25,9 @@ import { usePreprocessorJobActions } from '@/lib/preprocessor/api';
 import { useDrawingStore } from '@/lib/drawing';
 import { useViewportStore } from '@/lib/viewport';
 import MaskPropertiesPanel from './mask/MaskPropertiesPanel';
-import PreprocessorPage from '../preprocessors/PreprocessorPage'
+import { ModelInputsProperties } from './model/ModelInputsProperties'
+import { RiAiGenerate } from 'react-icons/ri'
+import { ModelHistoryProperties } from './model/ModelHistoryProperties'
 
 interface PropertiesPanelProps {
     panelSize: number;
@@ -70,6 +71,11 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
   const hasAppearance = useMemo(() => {
     if (clip?.type === 'image' || clip?.type === 'video' || clip?.type === 'shape' || clip?.type === 'text') return true;
+    return false;
+  }, [clip?.type]);
+
+  const hasModel = useMemo(() => {
+    if (clip?.type === 'model') return true;
     return false;
   }, [clip?.type]);
 
@@ -180,9 +186,11 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (currentTab === "adjust" && hasAdjust) return "adjust";
     if (currentTab === "preprocessor-parameters" && hasValidPreprocessor) return "preprocessor-parameters";
     if (currentTab === "preprocessor-duration" && hasValidPreprocessor && hasPreprocessorDuration) return "preprocessor-duration";
+    if (currentTab === "model-inputs" && hasModel) return "model-inputs";
     // If current tab is invalid, return first available tab
     if (hasValidPreprocessor) return "preprocessor-parameters";
     if (hasLine) return "line";
+    if (hasModel) return "model-inputs";
     if (hasTransform) return "transform";
     if (hasAudio) return "audio";
     if (hasAppearance) return "appearance";
@@ -264,6 +272,8 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           <TabsList ref={tabRef} style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}} className={cn("bg-brand w-full rounded-b-none p-0 min-w-0 flex-shrink overflow-x-auto [&::-webkit-scrollbar]:hidden")}>
             {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
             {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
+            {(hasModel) && <TabsTrigger value="model-history" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">History</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
             {(hasTransform && !hasMask) && <TabsTrigger value="transform" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
@@ -311,6 +321,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasAppearance && !hasMask) && <TabsContent value="appearance" className="min-w-0 m-0">
             <AppearanceProperties clipId={clipId} />
           </TabsContent>}
+          {(hasModel) && <TabsContent value="model-inputs" className="min-w-0 m-0">
+            <ModelInputsProperties clipId={clipId} />
+          </TabsContent>}
+          {(hasModel) && <TabsContent value="model-history" className="min-w-0 m-0">
+            <ModelHistoryProperties clipId={clipId} />
+          </TabsContent>}
           </div>
         </ScrollArea>
       </Tabs>
@@ -319,7 +335,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 100, pointerEvents: 'auto' }}>
           <button
             onClick={preprocessor?.status === 'running' ? handleStopPreprocessor : handleRunPreprocessor}
-            className="w-full py-2.5 px-6 rounded-lg font-semibold text-[12px] flex items-center justify-center gap-x-3 transition-all duration-200 shadow-lg hover:opacity-90"
+            className="w-full py-2.5 px-6 rounded-lg font-medium text-[12px] flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90"
             style={{
               backgroundColor: preprocessor?.status === 'running' ? '#DC2626' : '#A477C4',
               color: '#FFFFFF'
@@ -340,11 +356,30 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             }}
           >
             {preprocessor?.status === 'running' ? (
-              <FaStop size={12} />  
+              <FaStop size={16} />  
             ) : (
-              <FaPlay size={12} />
+              <LuMonitorCog size={16} />
             )}
-            <span>{preprocessor?.status === 'running' ? 'Stop Preprocessor' : 'Run Preprocessor'}</span>
+            <span>{preprocessor?.status === 'running' ? 'Stop' : 'Preprocess'}</span>
+          </button>
+        </div>
+      )}
+
+    {hasModel && (
+        <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 100, pointerEvents: 'auto' }}>
+          <button
+          
+            className="w-full py-2.5 px-6 rounded-lg font-medium text-[12px] flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90"
+            style={{
+              backgroundColor: preprocessor?.status === 'running' ? '#DC2626' : '#A477C4',
+              color: '#FFFFFF'
+            }}
+            onMouseEnter={(e) => {
+              
+            }}
+          >
+            <RiAiGenerate size={16} />
+            <span>Generate</span>
           </button>
         </div>
       )}

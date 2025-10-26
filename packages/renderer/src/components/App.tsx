@@ -157,7 +157,6 @@ const App:React.FC = () => {
           <div className={cn("opacity-100", { "opacity-0": ghostInStage && clips.length > 0 })}>
             {(() => {
               const m = activeDragItem as ManifestInfo;
- 
               return <ModelItem manifest={m} isDragging={true} />
             })()}
           </div>

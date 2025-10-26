@@ -14,6 +14,7 @@ import { useLayoutConfigStore } from "@/lib/layout-config";
 import { useViewportStore } from '@/lib/viewport';
 import { PiResize } from 'react-icons/pi';
 import { LayoutIcon } from './LayoutIcon';
+import { TbPackageExport } from 'react-icons/tb';
 interface TopBarProps {
 
 }
@@ -184,8 +185,8 @@ const TopBar:React.FC<TopBarProps> = () => {
                 </DropdownMenuContent>
            </DropdownMenu>
 
-            <button className='text-brand-light space-x-1.5 w-28 flex items-center justify-between px-3.5 font-medium h-[34px] hover:text-brand-light bg-brand-accent border border-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer'>
-            <span className='text-[11px]'>Export</span><LuChevronDown className='w-3.5 h-3.5' />
+            <button className='text-brand-light space-x-1.5 flex items-center justify-center px-5 font-medium h-[34px] hover:text-brand-light bg-brand-accent border border-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer'>
+            <TbPackageExport size={16} /><span className='text-[11px]'>Export</span>
             </button>
 
       </div>

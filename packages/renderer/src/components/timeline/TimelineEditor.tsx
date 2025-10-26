@@ -11,7 +11,7 @@ import Droppable from '../dnd/Droppable';
 import {DragEndEvent, useDndMonitor} from '@dnd-kit/core';
 import { MediaItem } from '../media/Item';
 import {v4 as uuidv4} from 'uuid';
-import { AnyClipProps, Filter, FilterClipProps, ImageClipProps, PreprocessorClipProps, TimelineProps, TimelineType, VideoClipProps } from '@/lib/types';
+import { AnyClipProps, Filter, FilterClipProps, ImageClipProps, ModelClipProps, PreprocessorClipProps, TimelineProps, TimelineType, VideoClipProps } from '@/lib/types';
 import TimelineSidebar from './TimelineSidebar';
 import Scrollbar from './Scrollbar';
 import { useWebGLHaldClut } from '../preview/webgl-filters';
@@ -19,6 +19,8 @@ import { ensureFullMediaStats } from '@/lib/media/utils';
 import { Preprocessor } from '@/lib/preprocessor';
 import { calculateFrameFromX, getOtherPreprocessors } from '@/lib/preprocessorHelpers';
 import {convertFrameRange} from '@/lib/media/fps';
+
+import { getManifest, ManifestInfoWithType } from '@/lib/manifest/api';
 
 interface TimelineEditorProps {
 
@@ -212,7 +214,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
 
   useDndMonitor({
     onDragStart: (event) => {
-      const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | undefined;
+      const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestInfoWithType | undefined;
       if (!data) return;
       
       setIsDragging(true);
@@ -222,9 +224,15 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         setGhostStartEndFrame(0, clipFrames);
         return;
       }
+ 
+      if (data.type === 'model') {
+        const clipFrames = (data as ManifestInfoWithType).desired_duration ?? 5 * controlStore.fps;
+        setGhostStartEndFrame(0, clipFrames);
+        return;
+      }
 
       const mediaInfo = data.mediaInfo;
-      setActiveMediaItem(data);
+      setActiveMediaItem(data as MediaItem);
       const clipFrames = (() => {
         const fps = controlStore.fps;
         if (data.type === 'image') return fps * 5;
@@ -249,8 +257,9 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const container = containerRef.current;
       let pointerX: number | null = null;
       let pointerY: number | null = null;
-      const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | undefined;
+      const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestInfoWithType | undefined;
       if (clips.length === 0) return;
+
 
     if (container) {
         const rect = container.getBoundingClientRect();
@@ -272,12 +281,10 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
 
       if (data?.type === 'preprocessor') {
         // get pointer position 
-        
         handlePreprocessorDragMove(data as Preprocessor, pointerY, pointerX);
-      } else if (data?.type === 'image' || data?.type === 'video' || data?.type === 'audio' || data?.type === 'filter') {
-        handleMediaDragMove(data as MediaItem, pointerY, pointerX);
+      } else if (data?.type === 'image' || data?.type === 'video' || data?.type === 'audio' || data?.type === 'filter' || data?.type === 'model') {
+        handleDragMove(data as MediaItem, pointerY, pointerX);
       }
-
     },
     onDragEnd: (event) => {
       const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | undefined;
@@ -290,8 +297,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       // Route to appropriate handler based on item type
       if (data.type === 'preprocessor') {
         handlePreprocessorDrop(event, data as Preprocessor);
-      } else if (data?.type === 'image' || data?.type === 'video' || data?.type === 'audio' || data?.type === 'filter') {
-        handleMediaItemDrop(event, data);
+      } else if (data?.type === 'image' || data?.type === 'video' || data?.type === 'audio' || data?.type === 'filter' || data?.type === 'model') {
+        handleDrop(event, data);
       }
       
       setIsDragging(false);
@@ -351,7 +358,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
   }, [size.width, size.height]);
 
 
-  const handleMediaDragMove = useCallback((data: MediaItem | undefined, pointerY: number, pointerX: number) => {
+  const handleDragMove = useCallback((data: MediaItem | undefined, pointerY: number, pointerX: number) => {
     if (!data) return;
     // Record last pointer X for later use on drop when creating a new timeline via dashed hover
     try { (window as any).__apex_lastPointerX = pointerX; } catch {}
@@ -517,7 +524,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     setGhostX,
   ]);
 
-  const handleMediaItemDrop = useCallback((_event: any, data: MediaItem) => {
+  const handleDrop = useCallback((_event: any, data: MediaItem | ManifestInfoWithType) => {
     const timelines = useClipStore.getState().timelines;
     let timelineId: string | undefined = undefined;
     const timelineHeight = getTimelineHeightForClip(data);
@@ -555,8 +562,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       addTimeline(newTimeline, hoveredTimelineIdx);
     }
 
-    const mediaInfo = data.mediaInfo;
-    if (!mediaInfo && data.type !== 'filter') {
+    const mediaInfo = (data as MediaItem)?.mediaInfo;
+    if (!mediaInfo && data.type !== 'filter' && data.type !== 'model') {
       setActiveMediaItem(null);
       setGhostTimelineId(null);
       setGhostStartEndFrame(0, 0);
@@ -594,6 +601,12 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       width = 540; // Does not matter
       // Start with smallPath 
       void haldClutRef?.preloadClut((data as unknown as Filter).smallPath);
+    } else if (data.type === 'model') {
+      numFrames = (data as ManifestInfoWithType).desired_duration ?? 5 * controlStore.fps;
+      framesToGiveEnd = -Infinity;
+      framesToGiveStart = Infinity;
+      height = 540; // Does not matter
+      width = 540; // Does not matter
     }
 
     // Use validated ghost position to compute frames
@@ -674,7 +687,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       clipId: uuidv4(),
       startFrame: existingClips.length === 0 ? startFrame : startFrame,
       endFrame,
-      src: data.assetUrl,
+      src: (data as MediaItem)?.assetUrl,
       // @ts-ignore
       type: data.type, // ignore for now since we don't have all types implemented yet
       framesToGiveEnd: framesToGiveEnd,
@@ -698,17 +711,35 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       (newClip as VideoClipProps | ImageClipProps).masks = [];
     }
 
-    addClip(newClip as AnyClipProps);
+    if (data.type === 'model') {
+      // We need to get the manifest document from the data
+      getManifest((data as ManifestInfoWithType).id).then((manifest) => {
+        if (manifest.data) {
+          (newClip as ModelClipProps).manifest = manifest.data;
+          (newClip as ModelClipProps).category = (data as ManifestInfoWithType).category;
+          addClip(newClip as AnyClipProps);
+        }
+        setActiveMediaItem(null);
+        setGhostTimelineId(null);
+        setGhostStartEndFrame(0, 0);
+        setGhostX(0);
+      });
+    } else{ 
+      addClip(newClip as AnyClipProps);
 
-    // Upgrade to full stats when clip is added to timeline (for media clips only)
-    if (data.assetUrl && (data.type === 'video' || data.type === 'audio')) {
-      void ensureFullMediaStats(data.assetUrl);
+      // Upgrade to full stats when clip is added to timeline (for media clips only)
+      if ((data as MediaItem)?.assetUrl && ((data as MediaItem)?.type === 'video' || (data as MediaItem)?.type === 'audio')) {
+        void ensureFullMediaStats((data as MediaItem)?.assetUrl);
+      }
+  
+      setActiveMediaItem(null);
+      setGhostTimelineId(null);
+      setGhostStartEndFrame(0, 0);
+      setGhostX(0);
+
     }
 
-    setActiveMediaItem(null);
-    setGhostTimelineId(null);
-    setGhostStartEndFrame(0, 0);
-    setGhostX(0);
+    
 
     // Baseline and zoom level recalibration happen within addClip -> _updateZoomLevel
   }, [size.width, hoveredTimelineId, controlStore, dimensions.stageWidth, haldClutRef, addTimeline, setActiveMediaItem, setGhostTimelineId, setGhostStartEndFrame, setGhostX, setHoveredTimelineId, addClip]);
@@ -914,7 +945,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     for (const clip of clips) { 
       const {top, bottom, left, right} = getClipPosition(clip.clipId, verticalScrollRef.current);
       const isInside = pointerY >= top && pointerY <= bottom && pointerX >= left && pointerX <= right;
-      if (isInside) {
+      if (isInside && (clip.type === 'image' || clip.type === 'video')) {
         targetClip = clip;
         break;
       }

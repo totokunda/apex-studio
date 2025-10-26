@@ -8,6 +8,7 @@ import { getMediaInfo } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
 import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
+import { ManifestInfoWithType } from "./manifest/api";
 
 export const PREPROCESSOR_BAR_HEIGHT = 24;
 
@@ -92,29 +93,29 @@ const calculateTotalClipDuration = (clips: AnyClipProps[]): number => {
     return maxEndFrame;
 };
 
-export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipProps | MediaItem | string | Preprocessor) => {
+export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipProps | MediaItem | string | Preprocessor | ManifestInfoWithType) => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
     if (timeline.type === 'media') {
-        return clip.type === 'video' || clip.type === 'image' || (clip as AnyClipProps).type === 'group';
+        return clip.type === 'video' || clip.type === 'image' || (clip as AnyClipProps).type === 'group' || (clip as AnyClipProps).type === 'model';
     }
     return timeline.type === clip.type;
 }
 
-export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string):TimelineType => {
+export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string | ManifestInfoWithType):TimelineType => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
-    if (clip.type === 'video' || clip.type === 'image' || clip.type === 'group') {
+    if (clip.type === 'video' || clip.type === 'image' || clip.type === 'group' || clip.type === 'model') {
         return 'media';
     }
     return clip.type;
 }
 
-export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string):number => {
+export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string | ManifestInfoWithType):number => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
 
-    if (clip.type === 'video' || clip.type === 'image'  ||(clip.type as any === 'media') || clip.type === 'group') {
+    if (clip.type === 'video' || clip.type === 'image'  ||(clip.type as any === 'media') || clip.type === 'group' || clip.type === 'model') {
         return 72;
     } 
     if (clip.type === 'audio') {

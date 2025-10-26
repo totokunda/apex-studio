@@ -1,5 +1,6 @@
 import { PacketStats, InputVideoTrack, InputAudioTrack, MetadataTags, InputFormat, Input } from "mediabunny";
 import { Preprocessor } from "./preprocessor";
+import { ManifestDocument, ManifestInfoWithType } from "./manifest/api";
 
 export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'text' | 'lora' | 'shape' | 'draw' | 'filter' | 'group'
 export type TimelineType = 'media' | 'audio' | 'model'  | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
@@ -265,7 +266,14 @@ export type GroupClipProps = ClipProps & {
     children: string[][]; // clipIds for the children of the group
 }
 
-export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps | DrawingClipProps | GroupClipProps;
+export type ModelClipProps = ClipProps & {
+    src: string |  null | undefined;
+    type: 'model';
+    manifest: ManifestDocument;
+    category: string;
+}
+
+export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps | DrawingClipProps | GroupClipProps | ModelClipProps;
 
 export type ZoomLevel = number;
 

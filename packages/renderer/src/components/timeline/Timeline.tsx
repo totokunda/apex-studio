@@ -108,7 +108,7 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
             </Group>
             {(hidden || (muted && type === 'audio')) && (
                 <Rect
-                id={`hidden-${timelineId}`} x={timelineX} y={timelineY! + 32} cornerRadius={4} width={timelineWidth! - timelineX + 8} height={timelineHeight - 8} fill={'rgba(11, 11, 13, 0.60)'}/>
+                id={`hidden-${timelineId}`} x={timelineX} y={timelineY! + 32} cornerRadius={0} width={timelineWidth! - timelineX + 8} height={timelineHeight - 8} fill={'rgba(11, 11, 13, 0.60)'}/>
             )}
         </>
     )

@@ -14,7 +14,8 @@ import MediaModelTrigger from '../media/MediaModelTrigger'
 import FilterMenu from '../menus/FilterMenu'
 import { VscServerProcess } from "react-icons/vsc";
 import ModelMenu from '../menus/ModelMenu'
-import * as TabsPrimitive from "@radix-ui/react-tabs"
+import { LuBox } from "react-icons/lu";
+
 
 interface MediaModelPanelProps { order?: number; defaultSize?: number; minSize?: number; maxSize?: number }
 
@@ -95,7 +96,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
       <div ref={triggersRef} style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}} className="overflow-x-auto [&::-webkit-scrollbar]:hidden">
         <div className="flex flex-row gap-x-2 w-fit">
           <MediaModelTrigger icon={<HiFilm className="h-4 w-4" />} title="Media" section="media" onOpen={resizePanelOpen} onClose={resizePanelClose} />
-          <MediaModelTrigger icon={<TbWand className="h-4 w-4 stroke-2" />} title="Models" section="models" onOpen={resizePanelOpen} onClose={resizePanelClose} />
+          <MediaModelTrigger icon={<LuBox className="h-4 w-4 stroke-2" />} title="Models" section="models" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<VscServerProcess className="h-4 w-4 " />} title="Preprocessors" section="preprocessors" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<MdPhotoFilter className="h-4 w-4 " />} title="Filters" section="filters" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<MdOutlineMovieFilter className="h-4 w-4 " />} title="LoRAs" section="loras" onOpen={resizePanelOpen} onClose={resizePanelClose} />

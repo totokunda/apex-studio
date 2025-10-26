@@ -514,8 +514,12 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
       case 'ellipse':
         return <Ellipse {...centerProps} radiusX={width / 2} radiusY={height / 2} {...applicatorProps} />;
       
-      case 'polygon':
-        return <RoundedRegularPolygon {...centerProps} sides={sides} radius={Math.min(width, height) / 2} cornerRadius={clipTransform?.cornerRadius ?? 0} {...applicatorProps} />;
+      case 'polygon': {
+        // Match dashed preview geometry: fit equilateral triangle inside width/height
+        // For RegularPolygon/triangle: width = R*sqrt(3), height = 1.5*R
+        const radius = Math.min(width / Math.sqrt(3), height / 1.5);
+        return <RoundedRegularPolygon {...centerProps} sides={sides} radius={radius} cornerRadius={clipTransform?.cornerRadius ?? 0} {...applicatorProps} />;
+      }
       
       case 'line':
         return <Line {...cornerProps} points={[0, 0, width, 0]} {...applicatorProps} />;

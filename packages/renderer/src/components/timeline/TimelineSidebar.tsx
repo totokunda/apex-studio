@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useClipStore } from '@/lib/clip';
 import { GoFileMedia } from "react-icons/go";
-import { LuAudioWaveform, LuPaintbrush, LuShapes, LuType } from "react-icons/lu";
+import { LuAudioWaveform, LuBox, LuPaintbrush, LuShapes, LuType } from "react-icons/lu";
 import { IoVolumeMute } from "react-icons/io5";
 import { IoVolumeHigh } from "react-icons/io5";
 import { IoEye } from "react-icons/io5";
@@ -49,6 +49,9 @@ const TimelineSidebarItem:React.FC<TimelineProps & {
         )}
         {(type === 'draw') && (
             <LuPaintbrush className='w-3 h-3 text-brand-light/50' />
+        )}
+        {(type === 'model') && (
+            <LuBox className='w-3 h-3 text-brand-light/50' />
         )}
         </>
     }

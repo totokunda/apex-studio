@@ -5,7 +5,7 @@ import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
 import { useControlsStore } from "@/lib/control";
 import { Image, Group, Rect, Text, Line } from 'react-konva';
 import Konva from 'konva';
-import { MediaInfo, ShapeClipProps, TextClipProps, TimelineProps, VideoClipProps, ImageClipProps, ClipType, FilterClipProps, MaskClipProps, PreprocessorClipType,  GroupClipProps } from "@/lib/types";
+import { MediaInfo, ShapeClipProps, TextClipProps, TimelineProps, VideoClipProps, ImageClipProps, ClipType, FilterClipProps, MaskClipProps, PreprocessorClipType,  GroupClipProps, ModelClipProps } from "@/lib/types";
 import { v4 as uuidv4 } from 'uuid';
 import { generateAudioWaveformCanvas, getMediaInfoCached } from "@/lib/media/utils";
 import { useWebGLFilters } from "@/components/preview/webgl-filters";
@@ -17,9 +17,32 @@ import { useContextMenuStore, ContextMenuItem } from '@/lib/context-menu';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { RxText as RxTextIcon } from 'react-icons/rx';
 import { MdOutlineDraw as MdOutlineDrawIcon, MdMovie as MdMovieIcon, MdImage as MdImageIcon, MdAudiotrack as MdAudiotrackIcon } from 'react-icons/md';
-import { LuShapes as LuShapeIcon } from "react-icons/lu";
+import { LuShapes as LuShapeIcon, LuBox as LuBoxIcon } from "react-icons/lu";
+import { FaRegFileImage as FaRegFileImageIcon, FaRegFileVideo as FaRegFileVideoIcon, FaRegFileAudio as FaRegFileAudioIcon } from 'react-icons/fa6';
+import { TbMask as TbMaskIcon } from 'react-icons/tb';
+import { RiImageAiLine as RiImageAiLineIcon, RiVideoAiLine as RiVideoAiLineIcon } from 'react-icons/ri';
+import { LuImages as LuImagesIcon } from 'react-icons/lu';
+import { BiSolidVideos as BiSolidVideosIcon } from 'react-icons/bi';
+import { useManifestStore } from "@/lib/manifest/store";
 import { MdPhotoFilter as MdFilterIcon } from "react-icons/md";
+import RotatingCube from "@/components/common/RotatingCube";
+import { ManifestDocument } from "@/lib/manifest/api";
+import { TbFileTextSpark } from "react-icons/tb";
+
 const THUMBNAIL_TILE_SIZE = 36;
+
+/**
+ * text rx/RxText
+ * image fa6/FaRegFileImage
+ * video fa6/FaRegFileVideo
+ * audio fa/FaRegFileAudio
+ * image+mask fa6/FaRegFileImage + tb/TbMask
+ * video+mask fa6/FaRegFileVideo2 + tb/TbMask
+ * image+preprocessor ri/RiImageAiLine
+ * video+preprocessor ri/RiVideoAiLine
+ * image_list lu/LuImages
+ * video_list bi/BiSolidVideos
+ */
 
 const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType,  scrollY: number}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 54, timelinePadding = 24, clipId,  timelineId, clipType, scrollY}) => {
     // Select only what we need to avoid unnecessary rerenders
@@ -46,7 +69,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const tool = useViewportStore((s) => s.tool);
     const getClipById = useClipStore((s) => s.getClipById);
     const [groupedCanvases, setGroupedCanvases] = useState<HTMLCanvasElement[]>([]);
-    const [ groupCounts, setGroupCounts] = useState<{video:number,image:number,audio:number,text:number,draw:number,filter:number,shape:number}>({ video: 0, image: 0, audio: 0, text: 0, draw: 0, filter: 0, shape: 0 });
+    const [ groupCounts, setGroupCounts] = useState<{video:number,image:number,audio:number,text:number,draw:number,filter:number,shape:number,model:number}>({ video: 0, image: 0, audio: 0, text: 0, draw: 0, filter: 0, shape: 0, model: 0 });
     // Subscribe directly to this clip's data
     const currentClip = useClipStore((s) => s.clips.find((c) => c.clipId === clipId && (timelineId ? c.timelineId === timelineId : true)));
 
@@ -96,6 +119,10 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     // global context menu used instead of local state
     const { applyFilters } = useWebGLFilters();
     const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
+    // Manifest data for model clips
+    const loadManifest = useManifestStore((s) => s.loadManifest);
+    const getLoadedManifest = useManifestStore((s) => s.getLoadedManifest);
+    const [modelUiCounts, setModelUiCounts] = useState<Record<string, number> | null>(null);
     
     // Sizing for stacked canvases inside group clips
     const groupCardHeight = useMemo(() => Math.max(1, timelineHeight - 24), [timelineHeight]);
@@ -116,6 +143,31 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             }
         };
     }, []);
+
+    // Load manifest UI schema for model clip and compute input type counts
+    useEffect(() => {
+        if (!currentClip || currentClip.type !== 'model') {
+            setModelUiCounts(null);
+            return;
+        }
+        const manifestId = (currentClip as ModelClipProps)?.manifest?.metadata?.id;
+        if (!manifestId) {
+            setModelUiCounts(null);
+            return;
+        }
+        const computeCounts = (doc:ManifestDocument) => {
+            const ui = doc?.ui || doc?.spec?.ui;
+            if (!ui || !Array.isArray(ui.inputs)) { setModelUiCounts(null); return; }
+            const counts: Record<string, number> = {};
+            for (const inp of ui.inputs) {
+                const t = String(inp?.type || '').toLowerCase();
+                counts[t] = (counts[t] || 0) + 1;
+            }
+            setModelUiCounts(counts);
+        };
+        
+        computeCounts((currentClip as ModelClipProps)?.manifest);
+    }, [currentClip, loadManifest, getLoadedManifest]);
 
 
     const restoreWindowIfChanged = useCallback((anchorStartFrame: number) => {
@@ -1430,7 +1482,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             const childIds = (currentClip as GroupClipProps).children.flat();
             const children = childIds.map((childId) => getClipById(childId));
             // Compute per-type counts for badge row
-            const counts = { video: 0, image: 0, audio: 0, text: 0, draw: 0, filter: 0, shape: 0 } as {video:number,image:number,audio:number,text:number,draw:number,filter:number,shape:number};
+            const counts = { video: 0, image: 0, audio: 0, text: 0, draw: 0, filter: 0, shape: 0, model: 0 } as {video:number,image:number,audio:number,text:number,draw:number,filter:number,shape:number,model:number};
             for (const ch of children) {
                 if (!ch) continue;
                 if (ch.type === 'video') counts.video++;
@@ -1440,6 +1492,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 else if (ch.type === 'draw') counts.draw++;
                 else if (ch.type === 'filter') counts.filter++;
                 else if (ch.type === 'shape') counts.shape++;
+                else if (ch.type === 'model') counts.model++;
             }
             setGroupCounts(counts);
             const canvases = await Promise.all(children.reverse().slice(0, 3).map(async (child) => {
@@ -1463,7 +1516,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     const waveform = await generateAudioWaveformCanvas(child.src, width, height, { color: '#7791C4', mediaInfo: mediaInfo });
                     if (!waveform) return null;
                     return waveform;
-                      } else if (child?.type === 'text' || child?.type === 'draw' || child?.type === 'filter' || child?.type === 'shape' ) {
+                      } else if (child?.type === 'text' || child?.type === 'draw' || child?.type === 'filter' || child?.type === 'shape' || child?.type === 'model') {
                     const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
                     const cssWidth = timelineWidth || 240;
                     const cssHeight = Math.round(cssWidth * 9 / 16);
@@ -1479,6 +1532,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     if (child.type === 'draw') bg = '#9B59B6';
                     if (child.type === 'filter') bg = '#00BFFF';
                     if (child.type === 'shape') bg = '#894c30';
+                    if (child.type === 'model') bg = '#6247aa';
                     ctx.fillStyle = bg;
                     ctx.fillRect(0, 0, canvas.width, canvas.height);
                     // Prepare the icon SVG
@@ -1492,6 +1546,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         iconSvg = renderToStaticMarkup(React.createElement(MdFilterIcon, { size: iconSize, color: '#FFFFFF' }));
                     } else if (child.type === 'shape') {
                         iconSvg = renderToStaticMarkup(React.createElement(LuShapeIcon, { size: iconSize, color: '#FFFFFF' }));
+                    } else if (child.type === 'model') {
+                        iconSvg = renderToStaticMarkup(React.createElement(LuBoxIcon, { size: iconSize, color: '#FFFFFF' }));
                     }
                     if (iconSvg) {
                         const img = new (window as any).Image() as HTMLImageElement;
@@ -1517,6 +1573,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         }
     })();
     }, [currentClip, getClipById, clipType]);
+
+    // (removed) shimmer animation for model clip background gradient
 
     return (
         <>
@@ -1630,6 +1688,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                                     { Icon: MdOutlineDrawIcon, count: groupCounts.draw },
                                     { Icon: MdFilterIcon, count: groupCounts.filter },
                                     { Icon: LuShapeIcon, count: groupCounts.shape },
+                                    { Icon: LuBoxIcon, count: groupCounts.model },
                                 ].filter(i => i.count > 0);
 
                                 const startX = groupCardWidth + 28;
@@ -1667,15 +1726,119 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     
                     </Group>
                 ) : (
-                    <Image 
-                        x={imageX}
-                        y={0}
-                        image={imageCanvas} 
-                        width={imageWidth}
-                        height={timelineHeight}
-                        cornerRadius={cornerRadius}
-                        fill={clipType === 'audio' ? '#1A2138' : '#FFFFFF'} 
-                    />
+                    <>
+                        {clipType === 'model' ? (
+                            <>
+                                <Rect
+                                    x={0}
+                                    y={0}
+                                    width={clipWidth}
+                                    height={timelineHeight}
+                                    cornerRadius={cornerRadius}
+                                    fillLinearGradientStartPoint={{ x: 0, y: 0 }}
+                                    fillLinearGradientEndPoint={{ x: 0, y: timelineHeight }}
+                                    fillLinearGradientColorStops={[
+                                        0, '#6F56C6',
+                                        0.08, '#6A50C0',
+                                        0.5, '#5A40B2',
+                                        1, '#4A329E'
+                                    ]}
+                                    shadowColor={'#000000'}
+                                    shadowBlur={8}
+                                    shadowOffsetY={2}
+                                    shadowOpacity={0.22}
+                                />
+
+                          
+                                {(() => {
+                                    const size = Math.max(10, Math.min(18, Math.floor(timelineHeight * 0.55)));
+                                    const cx = Math.floor(size / 2) + 4
+                                    const cy = timelineHeight - 14
+                                    return (
+                                        <>
+                                        <RotatingCube
+                                            baseColors={['#ffffff', '#6247AA', '#6247AA', '#6247AA', '#6247AA', '#ffffff']}
+                                            x={cx}
+                                            y={cy}
+                                            size={8}
+                                            opacity={1}
+                                            stroke="#ffffff"
+                                            strokeWidth={1}
+                                            phaseKey={`${timelineDuration[0]}-${timelineDuration[1]}`}
+                                            listening={false}
+                                        />
+                                        <Text
+                                            x={size + 7}
+                                            y={timelineHeight - 19}
+                                            text={((currentClip as ModelClipProps)?.manifest?.metadata?.name ?? '')}
+                                            fontSize={10}
+                                            fontFamily="Poppins"
+                                            fontStyle="500"
+                                            fill="white"
+                                            align="left"
+                                        />
+                                        {(() => {
+                                            const counts = modelUiCounts || {};
+                                            const ordered: { Icon: any; count: number }[] = [
+                                                { Icon: FaRegFileImageIcon, count: counts['image'] || 0 },
+                                                { Icon: FaRegFileVideoIcon, count: counts['video'] || 0 },
+                                                { Icon: FaRegFileAudioIcon, count: counts['audio'] || 0 },
+                                                { Icon: TbFileTextSpark, count: counts['text'] || 0 },
+                                                { Icon: TbMaskIcon, count: (counts['image+mask'] || 0) + (counts['video+mask'] || 0) },
+                                                { Icon: RiImageAiLineIcon, count: counts['image+preprocessor'] || 0 },
+                                                { Icon: RiVideoAiLineIcon, count: counts['video+preprocessor'] || 0 },
+                                                { Icon: LuImagesIcon, count: counts['image_list'] || 0 },
+                                                { Icon: BiSolidVideosIcon, count: counts['video_list'] || 0 },
+                                            ].filter(i => i.count > 0);
+                                            if (ordered.length === 0) return null;
+                                            const iconSlotWidth = 28;
+                                            const totalIconsWidth = ordered.length * iconSlotWidth;
+                                            const rightPadding = 0;
+                                            const startX = Math.max(6, clipWidth - totalIconsWidth - rightPadding);
+                                            const startY = timelineHeight - 19;
+                                            let curX = startX;
+                                            return ordered.map((it, idx) => {
+                                                const Ico = it.Icon;
+                                                const group = (
+                                                    <Group key={`mstat-${idx}`}>
+                                                        <Image
+                                                            x={curX}
+                                                            y={startY - 1}
+                                                            width={12}
+                                                            height={12}
+                                                            image={(() => {
+                                                                const svg = renderToStaticMarkup(React.createElement(Ico, { size: 11, color: '#FFFFFF' }));
+                                                                const img = new (window as any).Image();
+                                                                img.crossOrigin = 'anonymous';
+                                                                img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+                                                                return img as any;
+                                                            })()}
+                                                            opacity={1}
+                                                        />
+                                                        <Text x={curX + 16} y={startY - 1} text={`${it.count}`} fontSize={11} fontStyle="500" fontFamily="Poppins" fill="rgba(255,255,255,0.82)" />
+                                                    </Group>
+                                                );
+                                                curX += iconSlotWidth;
+                                                return group;
+                                            });
+                                        })()}
+                                        </>
+                                    );
+                                })()}
+                                
+                            </>
+                        ) : (
+                            <Image 
+                                x={imageX}
+                                y={0}
+                                image={imageCanvas} 
+                                width={imageWidth}
+                                height={timelineHeight}
+                                cornerRadius={cornerRadius}
+                                fill={clipType === 'audio' ? '#1A2138' : '#FFFFFF'} 
+                            />
+                        )}
+                    </>
                 )}
                 {clipType === 'shape' && (currentClip  as ShapeClipProps)?.shapeType && (
                     <Group>
@@ -1690,7 +1853,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     />
                     <Text
                         ref={textRef}
-                        x={12}
+                        x={9}
                         y={timelineHeight / 2}
                         text={((currentClip as ShapeClipProps)?.shapeType?.charAt(0).toUpperCase() ?? '')  + ((currentClip as ShapeClipProps)?.shapeType?.slice(1 ) ?? '')}
                         fontSize={9.5}
@@ -1716,7 +1879,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     />
                     <Text
                         ref={textRef}
-                        x={12}
+                        x={9}
                         y={timelineHeight / 2}
                         text={((currentClip as TextClipProps)?.text?.replace('\n', ' ') ?? '')}
                         fontSize={10}
@@ -1742,7 +1905,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     />
                     <Text
                         ref={textRef}
-                        x={12}
+                        x={9}
                         y={timelineHeight / 2}
                         text={((currentClip as FilterClipProps)?.name ?? '')}
                         fontSize={9.5}
@@ -1768,7 +1931,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     />
                     <Text
                         ref={textRef}
-                        x={12}
+                        x={9}
                         y={timelineHeight / 2}
                         text="Drawing"
                         fontSize={9.5}
@@ -1910,3 +2073,4 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 }
 
 export default TimelineClip;
+

@@ -1624,6 +1624,13 @@ const Preview:React.FC<PreviewProps> = () => {
         const size = Math.max(width, height);
         width = size;
         height = size;
+      } else if (shape === 'polygon') {
+        const ratio = 1.1543665517482078;
+        if (width / (height || 1) >= ratio) {
+          height = width / ratio;
+        } else {
+          width = height * ratio;
+        }
       }
       
       // Only create shape if it has meaningful size

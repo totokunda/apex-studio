@@ -32,6 +32,12 @@ export type ManifestInfo = {
   license: string;
   demo_path: string;
   downloaded?: boolean;
+  desired_duration?: number;
+};
+
+export type ManifestInfoWithType = ManifestInfo & {
+  type: 'model';
+  category: string;
 };
 
 // Manifest v1 Types (aligned with backend schema_v1 and manifest_updated YAMLs)
@@ -111,6 +117,133 @@ export type ManifestMetadata = {
   [key: string]: any;
 };
 
+// UI Schema (derived from manifest_updated YAML structure)
+export type UILayoutFlow = 'row' | 'column';
+
+export type UIFloatingRegion = {
+  inputs: string[];
+  flow?: UILayoutFlow;
+};
+
+export type UIFloatingPanel = {
+  regions: Record<string, UIFloatingRegion>;
+};
+
+export type UIPanelLayout = {
+  flow?: UILayoutFlow;
+  rows: string[][];
+};
+
+export type UIPanel = {
+  name: string;
+  label?: string;
+  collapsible?: boolean;
+  layout: UIPanelLayout;
+};
+
+export type UIInputBase = {
+  id: string;
+  label?: string;
+  description?: string;
+  panel?: string;
+  required?: boolean;
+  default?: any;
+  floating_panel?: boolean;
+};
+
+export type UIInputText = UIInputBase & {
+  type: 'text';
+};
+
+export type UIInputNumber = UIInputBase & {
+  type: 'number';
+  value_type?: 'integer' | 'float' | string;
+  min?: number;
+  max?: number;
+  step?: number;
+};
+
+export type UIInputNumberList = UIInputBase & {
+  type: 'number_list';
+  value_type?: 'integer' | 'float' | string;
+  items?: UIInputNumber[];
+};
+
+
+export type UIInputRandom = UIInputBase & {
+  type: 'random';
+  min?: number;
+  max?: number;
+};
+
+export type UIInputVideo = UIInputBase & {
+  type: 'video';
+};
+
+export type UIInputVideoMask = UIInputBase & {
+  type: 'video+mask';
+};
+
+export type UIInputImageList = UIInputBase & {
+  type: 'image_list';
+  max_images?: number;
+};
+
+export type UIInputVideoList = UIInputBase & {
+  type: 'video_list';
+  max_videos?: number;
+};
+
+export type UIInputImagePreprocessor = UIInputBase & {
+  type: 'image+preprocessor';
+};
+
+export type UIInputVideoPreprocessor = UIInputBase & {
+  type: 'video+preprocessor';
+};
+
+export type UIInputImage = UIInputBase & {
+  type: 'image';
+};
+
+export type UIInputAudio = UIInputBase & {
+  type: 'audio';
+};
+
+export type UIInputSelect = UIInputBase & {
+  type: 'select';
+  options?: { name: string; value: string }[];
+};
+
+
+export type UIInputOther = UIInputBase & {
+  type: string;
+  [key: string]: any;
+};
+
+export type UIInput =
+  | UIInputText
+  | UIInputNumber
+  | UIInputRandom
+  | UIInputVideo
+  | UIInputVideoMask
+  | UIInputImageList
+  | UIInputVideoList
+  | UIInputImagePreprocessor
+  | UIInputVideoPreprocessor
+  | UIInputImage
+  | UIInputAudio
+  | UIInputSelect
+  | UIInputNumberList
+  | UIInputOther;
+
+export type UISchema = {
+  floating_panel?: UIFloatingPanel;
+  panels?: UIPanel[];
+  inputs: UIInput[];
+  [key: string]: any;
+};
+
 export type ManifestSpec = {
   engine?: string;
   model_type?: string | string[];
@@ -125,7 +258,7 @@ export type ManifestSpec = {
   loras?: Array<string | Record<string, any>>;
   save?: Record<string, any>;
   resource_requirements?: ManifestResourceRequirements;
-  ui?: any; // UI schema is large; typed loosely here
+  ui?: UISchema; // Typed UI schema
   [key: string]: any;
 };
 
@@ -134,7 +267,7 @@ export type ManifestDocument = {
   kind: 'Model' | 'Pipeline' | string;
   metadata: ManifestMetadata;
   spec: ManifestSpec;
-  ui?: any; // allow top-level UI per loader normalization
+  ui?: UISchema; // allow top-level UI per loader normalization
   [key: string]: any;
 };
 

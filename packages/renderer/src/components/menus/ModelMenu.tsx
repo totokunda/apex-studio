@@ -4,7 +4,6 @@ import { cn } from '@/lib/utils';
 import { ScrollArea } from '../ui/scroll-area';
 import { LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuInfo, LuDownload, LuCheck, LuLoader } from "react-icons/lu";
 import Draggable from '../dnd/Draggable';
-import { v4 as uuidv4 } from 'uuid';
 import { useManifestStore } from '@/lib/manifest/store';
 import { useManifest } from '@/lib/manifest/hooks';
 import { useComponentsDownloadStore } from '@/lib/components-download/store';
@@ -13,11 +12,14 @@ import ModelPage from '../models/ModelPage';
 // check 
 
 
-export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean }> = ({ manifest, isDragging }) => {
+export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, category?: string }> = ({ manifest, isDragging, category }) => {
   const { setSelectedManifestId } = useManifestStore();
   const { data: fullManifest } = useManifest(manifest.id);
   const downloads = useComponentsDownloadStore(useShallow((s) => s.entries));
   const startPath = useComponentsDownloadStore((s) => s.startPath);
+  const tagsContainerRef = useRef<HTMLDivElement>(null);
+  const hiddenMeasureRef = useRef<HTMLDivElement>(null);
+  const [visibleTagCount, setVisibleTagCount] = useState<number | null>(null);
   const isVideoDemo = React.useMemo(() => {
     const value = (manifest.demo_path || '').toLowerCase();
     try {
@@ -69,6 +71,49 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean }
     });
   }, [defaultVariantItems, downloads, manifest.downloaded]);
 
+  // Compute how many tags fit on a single line
+  useEffect(() => {
+    const computeVisibleTags = () => {
+      const container = tagsContainerRef.current;
+      const measure = hiddenMeasureRef.current;
+      if (!container || !measure) return;
+      // Match the measurement container width to the visible container
+      const width = container.clientWidth;
+      if (width <= 0) return;
+      measure.style.width = width + 'px';
+
+      // Force layout read after width set
+      // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+      measure.offsetWidth;
+
+      const children = Array.from(measure.children) as HTMLElement[];
+      if (children.length === 0) {
+        setVisibleTagCount(0);
+        return;
+      }
+      let firstTop = Infinity;
+      let count = 0;
+      for (const child of children) {
+        const top = child.offsetTop;
+        if (firstTop === Infinity) firstTop = top;
+        if (top === firstTop) {
+          count += 1;
+        }
+      }
+      setVisibleTagCount(count);
+    };
+
+    computeVisibleTags();
+
+    const ro = new ResizeObserver(() => computeVisibleTags());
+    if (tagsContainerRef.current) ro.observe(tagsContainerRef.current);
+    window.addEventListener('resize', computeVisibleTags);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', computeVisibleTags);
+    };
+  }, [manifest.tags]);
+
   const handleDownloadAllDefault = async () => {
     try {
       await useManifestStore.getState().loadManifest(manifest.id, true);
@@ -99,76 +144,105 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean }
     } catch {}
   };
 
-  return (
-    <div className={cn("flex flex-col transition-all font-poppins duration-200 rounded-md relative bg-brand border border-brand-light/5 shadow-md cursor-grab active:cursor-grabbing w-56", {
-    })}>
-    <Draggable id={uuidv4()} data={{
-      type: 'model',
-      ...manifest,
-    }}>
-      <div className="flex flex-col items-center relative w-full ">
+  const card = (
+    <div className="flex flex-col items-center relative w-full ">
 
-        <div className="h-32 rounded-t-md overflow-hidden  flex items-center justify-center w-full aspect-square">
-          {isVideoDemo ? (
-            <video
-              src={manifest.demo_path}
-              className="h-full w-full object-cover rounded-t-md"
-              autoPlay
-              muted
-              loop
-              playsInline
-            />
-          ) : (
-            <img src={manifest.demo_path} alt={manifest.name} className="h-full w-full object-cover rounded-t-md" />
-          )}
-        </div>
+      <div className={cn("rounded-t-md overflow-hidden  flex items-center justify-center w-full aspect-square h-28", {
+      })}>
+        {isVideoDemo ? (
+          <video
+            src={manifest.demo_path}
+            className="h-full w-full object-cover rounded-t-md"
+            autoPlay
+            muted
+            loop
+            playsInline
+          />
+        ) : (
+          <img src={manifest.demo_path} alt={manifest.name} className="h-full w-full object-cover rounded-t-md" />
+        )}
       </div>
-        
-      <div className='flex flex-col gap-y-1.5 py-3.5 pb-2 px-3 border-t border-brand-light/5 w-full '>
+    </div>
+  );
+
+  const details = (
+    <div className='flex flex-col gap-y-1.5 py-3.5 pb-2 px-3 border-t border-brand-light/5 w-full '>
       <div className="w-full truncate leading-tight font-semibold text-brand-light text-[12px] text-start">{manifest.name}</div>
-      <div className='flex items-center gap-x-1 w-full flex-wrap justify-start gap-y-1'>
-          {manifest.tags.map((tag) => (
-            <span key={tag} className="text-[8px] text-brand-light bg-brand-background border shadow border-brand-light/10 rounded px-2 py-0.5 ">{tag}</span>
-          ))}
-        </div>
+      <div ref={tagsContainerRef} className='flex items-center gap-x-1 w-full justify-start gap-y-1 overflow-hidden'>
+        {(visibleTagCount == null ? manifest.tags : manifest.tags.slice(0, visibleTagCount)).map((tag) => (
+          <span key={tag} className="text-[8px] text-brand-light bg-brand-background border shadow border-brand-light/10 rounded px-2 py-0.5 ">{tag}</span>
+        ))}
       </div>
-    
-    </Draggable>
-    {!isDragging && (
-          <div className='flex items-center gap-x-1 w-full p-3 pt-0'>
-            <button
-              onClick={() => {
-                setSelectedManifestId(manifest.id);
-              }}
-              type='button'
-              className='text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1'
-              title='Show more info'
-            >
-              <LuInfo className='w-3 h-3' />
-              <span>More info</span>
-            </button>
-            <button
-          onClick={handleDownloadAllDefault}
-              type='button'
-          disabled={allDownloaded}
-              className={cn(
-                'text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded px-2 py-1 border flex-1',
-            allDownloaded
-              ? 'text-brand-light/80 bg-brand-background border-brand-light/10 cursor-default'
-              : 'text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10'
-              )}
-          title={allDownloaded ? 'Already downloaded' : (isDownloading ? 'Downloading…' : 'Download default variant')}
-            >
-          {allDownloaded ? (
-            <LuCheck className='w-3 h-3' />
-          ) : isDownloading ? (
-            <LuLoader className='w-3 h-3 animate-spin' />
-          ) : (
-            <LuDownload className='w-3 h-3' />
-          )}
-          <span>{allDownloaded ? 'Downloaded' : isDownloading ? 'Downloading…' : 'Download'}</span>
-            </button>
-          </div>
+      <div
+        ref={hiddenMeasureRef}
+        aria-hidden
+        style={{ position: 'fixed', top: -10000, left: -10000, visibility: 'hidden' }}
+        className='flex items-center gap-x-1 flex-wrap justify-start gap-y-1'
+      >
+        {manifest.tags.map((tag) => (
+          <span key={tag} className="text-[8px] text-brand-light bg-brand-background border shadow border-brand-light/10 rounded px-2 py-0.5 ">{tag}</span>
+        ))}
+      </div>
+    </div>
+  );
+
+  const stableId = `model-${manifest.id}-${category}`;
+
+  return (
+    <div className={cn("flex flex-col transition-all font-poppins duration-200 rounded-md relative bg-brand border border-brand-light/5 shadow-md cursor-grab active:cursor-grabbing", {
+      "w-48":  true,
+      "opacity-[0.975]": isDragging,
+    })}>
+      {isDragging ? (
+        <>
+          {card}
+          {details}
+        </>
+      ) : (
+        <Draggable id={stableId} data={{
+          type: 'model',
+          category: category,
+          ...manifest,
+        }}>
+          {card}
+          {details}
+        </Draggable>
+      )}
+      {!isDragging && (
+        <div className='flex items-center gap-x-1 w-full p-3 pt-0'>
+          <button
+            onClick={() => {
+              setSelectedManifestId(manifest.id);
+            }}
+            type='button'
+            className='text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1'
+            title='Show more info'
+          >
+            <LuInfo className='w-3 h-3' />
+            <span>Info</span>
+          </button>
+          <button
+            onClick={handleDownloadAllDefault}
+            type='button'
+            disabled={allDownloaded}
+            className={cn(
+              'text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded px-2 py-1 border flex-1',
+              allDownloaded
+                ? 'text-brand-light/80 bg-brand-background border-brand-light/10 cursor-default'
+                : 'text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10'
+            )}
+            title={allDownloaded ? 'Already downloaded' : (isDownloading ? 'Downloading…' : 'Download default variant')}
+          >
+            {allDownloaded ? (
+              <LuCheck className='w-3 h-3' />
+            ) : isDownloading ? (
+              <LuLoader className='w-3 h-3 animate-spin' />
+            ) : (
+              <LuDownload className='w-3 h-3' />
+            )}
+            <span>{allDownloaded ? 'Downloaded' : isDownloading ? 'Downloading…' : 'Download'}</span>
+          </button>
+        </div>
       )}
     </div>
   );
@@ -244,7 +318,7 @@ const ModelCategory:React.FC<{ category: string, manifests: ManifestInfo[], widt
         <div ref={carouselRef} className="carousel-container flex gap-x-2 overflow-x-auto rounded-md" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', WebkitOverflowScrolling: 'touch' }}>
           {manifests.map((manifest) => (
             <div key={manifest.id} className="flex-shrink-0">
-              <ModelItem manifest={manifest}  />
+              <ModelItem manifest={manifest} category={category} />
             </div>
           ))}
         </div>
