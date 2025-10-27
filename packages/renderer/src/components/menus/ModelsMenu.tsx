@@ -8,31 +8,33 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import Draggable from '@/components/dnd/Draggable';
+import { getAllManifests, ManifestInfo } from '@/lib/manifest';
 
 // Model/Track types
-type ModelTrackType = 'diffusion' | 'vae' | 'text-encoder' | 'lora' | 'upscaler';
+type ModelTrackType = 'diffusion';
 
 interface ModelItem {
     id: string;
     name: string;
     type: ModelTrackType;
-    size: string;
-    sizeBytes: number;
     dateAdded: number;
     description?: string;
     track?: string;
 }
 
-// Sample models data - this should eventually come from a backend/manifest API
-const sampleModels: ModelItem[] = [
-    { id: '1', name: 'Wan 2.2', type: 'diffusion', size: '6.5 GB', sizeBytes: 6500000000, dateAdded: Date.now(), description: 'Highest quality open model', track: 'text-to-video' },
-    { id: '2', name: 'Wan 2.2', type: 'diffusion', size: '6.5 GB', sizeBytes: 6500000000, dateAdded: Date.now(),  description: 'Highest quality open model', track: 'image-to-video' },
-    { id: '3', name: 'Qwen-Image', type: 'diffusion', size: '4.2 GB', sizeBytes: 4200000000, dateAdded: Date.now(), description: 'Popular image generation open model', track: 'text-to-image' },
-    { id: '4', name: 'Flux-dev', type: 'diffusion', size: '5.8 GB', sizeBytes: 5800000000, dateAdded: Date.now(), description: 'Popular image generation open model', track: 'text-to-image' },
-    { id: '5', name: 'Qwen-Edit', type: 'diffusion', size: '4.3 GB', sizeBytes: 4300000000, dateAdded: Date.now(), description: 'Popular image edit open model', track: 'image-to-image' },
-    { id: '6', name: 'Flux-kontext', type: 'diffusion', size: '5.9 GB', sizeBytes: 5900000000, dateAdded: Date.now(), description: 'Popular image edit open model', track: 'image-to-image' },
-    { id: '7', name: 'Flux-fill', type: 'diffusion', size: '5.7 GB', sizeBytes: 5700000000, dateAdded: Date.now(), description: 'Advanced inpainting model', track: 'image-mask-to-image' },
-];
+// Map API model_type to track names used in the UI
+const MODEL_TYPE_TO_TRACK: Record<string, string> = {
+    't2v': 'text-to-video',
+    'i2v': 'image-to-video',
+    'v2v': 'video-to-video',
+    'x2v': 'any-to-video',
+    't2i': 'text-to-image',
+    'i2i': 'image-to-image',
+    'edit': 'image-to-image',
+    'ic2i': 'image-control-to-image',
+    'vace': 'video-animation-control',
+    'control': 'image-control-to-video', // Fallback for any control types
+};
 
 const ModelCard: React.FC<{ modelItem: ModelItem }> = ({ modelItem }) => {
     // Convert model to draggable data format
@@ -53,11 +55,14 @@ const ModelCard: React.FC<{ modelItem: ModelItem }> = ({ modelItem }) => {
             'image-to-image': 'Image to Image',
             'text-to-video': 'Text to Video',
             'image-to-video': 'Image to Video',
-            'audio-image-to-video': 'Audio-Image to Video',
+            'any-to-video': 'Any to Video',
+            'video-to-video': 'Video to Video',
+            'video-animation-control': 'Video Animation Control',
+            'image-control-to-image': 'Image-Control to Image',
             'image-control-to-video': 'Image-Control to Video',
             'image-mask-to-image': 'Image-Mask to Image',
         };
-        return track ? (trackMap[track] || 'Track') : 'Track';
+        return track && trackMap[track] ? trackMap[track] : '';
     };
 
     return (
@@ -88,9 +93,29 @@ const ModelCard: React.FC<{ modelItem: ModelItem }> = ({ modelItem }) => {
     );
 };
 
+/**
+ * Convert ManifestInfo from API to ModelItem for UI
+ */
+function convertManifestToModelItem(manifest: ManifestInfo): ModelItem {
+    // Each manifest now has only ONE model_type
+    const modelType = Array.isArray(manifest.model_type) ? manifest.model_type[0] : manifest.model_type;
+    const track = MODEL_TYPE_TO_TRACK[modelType.toLowerCase()] || modelType;
+    
+    return {
+        id: manifest.id,  // ← Simplified! Just use metadata.id directly
+        name: manifest.name,
+        type: 'diffusion' as ModelTrackType,
+        dateAdded: Date.now(),
+        description: manifest.description,
+        track,
+    };
+}
+
 const ModelsMenu: React.FC = () => {
     const [selectedTrack, setSelectedTrack] = useState<string>('popular');
     const [dropdownOpen, setDropdownOpen] = useState(false);
+    const [models, setModels] = useState<ModelItem[]>([]);
+    const [loading, setLoading] = useState(true);
     
     const uploadBarRef = useRef<HTMLDivElement | null>(null);
     const panelRef = useRef<HTMLDivElement | null>(null);
@@ -103,10 +128,39 @@ const ModelsMenu: React.FC = () => {
         { id: 'image-to-image', name: 'Image to Image' },
         { id: 'text-to-video', name: 'Text to Video' },
         { id: 'image-to-video', name: 'Image to Video' },
-        { id: 'audio-image-to-video', name: 'Audio-Image to Video' },
+        { id: 'any-to-video', name: 'Any to Video' },
+        { id: 'video-to-video', name: 'Video to Video' },
+        { id: 'video-animation-control', name: 'Video Animation Control' },
+        { id: 'image-control-to-image', name: 'Image-Control to Image' },
         { id: 'image-control-to-video', name: 'Image-Control to Video' },
         { id: 'image-mask-to-image', name: 'Image-Mask to Image' },
     ];
+
+    // Fetch models from API on mount
+    useEffect(() => {
+        const fetchModels = async () => {
+            setLoading(true);
+            try {
+                const manifests = await getAllManifests();
+                console.log('Fetched manifests from API:', manifests);
+                
+                // Convert manifests to model items
+                const modelItems: ModelItem[] = manifests.map(manifest => 
+                    convertManifestToModelItem(manifest)
+                );
+                
+                setModels(modelItems);
+                console.log('Converted to model items:', modelItems);
+            } catch (error) {
+                console.error('Failed to fetch models:', error);
+                setModels([]);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchModels();
+    }, []);
 
     useEffect(() => {
         const el = uploadBarRef.current;
@@ -179,13 +233,23 @@ const ModelsMenu: React.FC = () => {
 
             {/* Models Content Area with ScrollArea */}
             <ScrollArea style={{ height: Math.max(0, panelHeight - 120) }} className="px-5 py-4">
-                <div className="grid gap-3 w-full" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))' }}>
-                    {sampleModels
-                        .filter(modelItem => selectedTrack === 'popular' || modelItem.track === selectedTrack)
-                        .map((modelItem) => (
-                            <ModelCard key={modelItem.id} modelItem={modelItem} />
-                        ))}
-                </div>
+                {loading ? (
+                    <div className="flex items-center justify-center h-32">
+                        <div className="text-brand-light/50 text-sm">Loading models from API...</div>
+                    </div>
+                ) : models.length === 0 ? (
+                    <div className="flex items-center justify-center h-32">
+                        <div className="text-brand-light/50 text-sm">No models available</div>
+                    </div>
+                ) : (
+                    <div className="grid gap-3 w-full" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))' }}>
+                        {models
+                            .filter(modelItem => selectedTrack === 'popular' || modelItem.track === selectedTrack)
+                            .map((modelItem) => (
+                                <ModelCard key={modelItem.id} modelItem={modelItem} />
+                            ))}
+                    </div>
+                )}
             </ScrollArea>
         </div>
     )

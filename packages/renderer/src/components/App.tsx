@@ -11,8 +11,7 @@ import MediaModelPanel from "./panels/MediaModelPanel";
 import PreviewPanel from "./panels/PreviewPanel";
 import TimelinePanel from "./panels/TimelinePanel";
 import PropertiesPanel from "./panels/PropertiesPanel";
-import FloatingInputPanel from "./panels/FloatingInputPanel";
-import FloatingTextPanel from "./panels/FloatingTextPanel";
+import DynamicFloatingPanel from "./panels/DynamicFloatingPanel";
 import { useLayoutConfigStore } from "@/lib/layout-config";
 import Topbar from "./bars/Topbar";
 import { DndContext, DragEndEvent, DragOverlay } from "@dnd-kit/core";
@@ -22,18 +21,30 @@ import { useClipStore } from "@/lib/clip";
 import { useControlsStore } from "@/lib/control";
 import { Preprocessor } from "@/lib/preprocessor/api";
 import { PreprocessorItem } from "./menus/PreprocessorMenu";
+import { ModelClipProps } from "@/lib/types";
 
 const App:React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useLayoutConfigStore((s) => s.layout);
-  const {ghostInStage, clips} = useClipStore();
+  const {ghostInStage, clips, getClipById} = useClipStore();
   const showFloatingPanel = useControlsStore((s) => s.showFloatingPanel);
   const setShowFloatingPanel = useControlsStore((s) => s.setShowFloatingPanel);
-  const floatingPanelType = useControlsStore((s) => s.floatingPanelType);
   const activeClipId = useControlsStore((s) => s.activeClipId);
 
   const [activeDragItem, setActiveDragItem] = useState<MediaItem | Preprocessor | null>(null);
-  const [isMinimized, setIsMinimized] = useState(false);
+
+  // Get manifest ID from model clip (now just returns modelId directly since it's the same as metadata.id)
+  const getManifestIdFromClip = (clipId: string): string | null => {
+    const clip = getClipById(clipId) as ModelClipProps | undefined;
+    if (!clip || clip.type !== 'model' || !clip.modelId) {
+      console.warn('[App] Cannot get manifestId: clip not found or not a model', clipId);
+      return null;
+    }
+    
+    // Since each manifest now has only ONE model_type, modelId === metadata.id
+    console.log('[App] Using manifestId:', clip.modelId, 'from clip:', clipId);
+    return clip.modelId;
+  };
 
   // Helper to render drag overlay for different item types
   const renderDragOverlay = () => {
@@ -175,25 +186,30 @@ const App:React.FC = () => {
       </div>
     </main>
     
-    {/* Floating Input Panel */}
-    {showFloatingPanel && floatingPanelType === 'input' && activeClipId && (
-      <FloatingInputPanel 
-        clipId={activeClipId}
-        initialPosition={{ x: 400, y: 400 }} 
-        onDelete={() => setShowFloatingPanel(false)}
-        onMinimize={() => setIsMinimized(!isMinimized)}
-      />
-    )}
-    
-    {/* Floating Text Panel */}
-    {showFloatingPanel && floatingPanelType === 'text' && activeClipId && (
-      <FloatingTextPanel 
-        clipId={activeClipId}
-        initialPosition={{ x: 400, y: 400 }} 
-        onDelete={() => setShowFloatingPanel(false)}
-        onMinimize={() => setIsMinimized(!isMinimized)}
-      />
-    )}
+    {/* Dynamic Floating Panel - API Driven */}
+    {showFloatingPanel && activeClipId && (() => {
+      const manifestId = getManifestIdFromClip(activeClipId);
+      const clip = getClipById(activeClipId) as ModelClipProps | undefined;
+      const modelName = clip?.name || 'Model';
+      const trackName = clip?.trackName || '';
+      
+      if (!manifestId) {
+        console.warn('[App] No manifestId found for clip:', activeClipId);
+        return null;
+      }
+      
+      return (
+        <DynamicFloatingPanel 
+          id={`dynamic-panel-${activeClipId}`}
+          clipId={activeClipId}
+          manifestId={manifestId}
+          modelName={modelName}
+          trackName={trackName}
+          initialPosition={{ x: 400, y: 300 }} 
+          onDelete={() => setShowFloatingPanel(false)}
+        />
+      );
+    })()}
     
     <DragOverlay dropAnimation={null} style={{ zIndex: 10001 }}>
       {renderDragOverlay()}

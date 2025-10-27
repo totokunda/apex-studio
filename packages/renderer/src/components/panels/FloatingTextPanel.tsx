@@ -1,30 +1,77 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { X, Minus } from 'lucide-react';
+import { X, ChevronDown, Check } from 'lucide-react';
 import { useControlsStore } from '@/lib/control';
+import { useClipStore } from '@/lib/clip';
+import type { ModelClipProps } from '@/lib/types';
 
 interface FloatingTextPanelProps {
   id?: string;
   clipId: string;
   initialPosition: { x: number; y: number };
   onDelete?: () => void;
-  onMinimize?: () => void;
 }
 
 const FloatingTextPanel: React.FC<FloatingTextPanelProps> = ({ 
   id = 'floating-text-panel',
   clipId,
   initialPosition,
-  onDelete,
-  onMinimize
+  onDelete
 }) => {
   const setFloatingPanelData = useControlsStore((s) => s.setFloatingPanelData);
   const getFloatingPanelData = useControlsStore((s) => s.getFloatingPanelData);
+  const setActiveClipId = useControlsStore((s) => s.setActiveClipId);
+  const getClipById = useClipStore((s) => s.getClipById);
+  const clips = useClipStore((s) => s.clips);
   
   const [position, setPosition] = useState(initialPosition);
   const [size, setSize] = useState({ width: 300, height: 150 });
   const [promptText, setPromptText] = useState<string>('');
   const [isResizing, setIsResizing] = useState(false);
+  const [showModelMenu, setShowModelMenu] = useState<boolean>(false);
+  const [hoveredModelClipId, setHoveredModelClipId] = useState<string | null>(null);
+  
+  // Get clip data for model info
+  const clip = getClipById(clipId) as ModelClipProps | undefined;
+  const modelName = clip?.name || 'Model';
+  const trackName = clip?.trackName || '';
+  
+  // Format track name to abbreviation (e.g., "Text to Video" -> "T2V")
+  const formatTrackAbbreviation = (track: string): string => {
+    const trackMap: { [key: string]: string } = {
+      'Text to Image': 'T2I',
+      'Image to Image': 'I2I',
+      'Text to Video': 'T2V',
+      'Image to Video': 'I2V',
+      'Audio-Image to Video': 'AI2V',
+      'Image-Control to Video': 'IC2V',
+      'Image-Mask to Image': 'IM2I',
+    };
+    return trackMap[track] || track;
+  };
+  
+  const modelPillText = trackName 
+    ? `${modelName} - ${formatTrackAbbreviation(trackName)}`
+    : modelName;
+  
+  // Get all model clips from timeline
+  const modelClips = useMemo(() => {
+    return clips.filter(c => c.type === 'model') as ModelClipProps[];
+  }, [clips]);
+  
+  // Handler for switching to a different model clip
+  const handleModelSwitch = (targetClipId: string) => {
+    setShowModelMenu(false);
+    
+    // Get the target clip to determine its panel type
+    const targetClip = getClipById(targetClipId) as ModelClipProps | undefined;
+    const isTextModel = targetClip?.trackName?.startsWith('Text') || false;
+    
+    // Update both the active clip and panel type
+    const { setFloatingPanelType } = useControlsStore.getState();
+    setFloatingPanelType(isTextModel ? 'text' : 'input');
+    setActiveClipId(targetClipId);
+  };
   
   // Track if component has fully initialized to prevent saving on mount
   const hasLoadedRef = useRef(false);
@@ -187,60 +234,127 @@ const FloatingTextPanel: React.FC<FloatingTextPanelProps> = ({
         flex flex-col
         font-poppins
         ${isOver ? 'ring-2 ring-brand-accent' : ''}
-        ${isDragging ? 'opacity-70' : 'opacity-100'}
+
       `}
     >
-      {/* Chrome-style Tab */}
+      {/* Top Tab - Draggable Area */}
       <div 
         ref={setDraggableRef}
         {...attributes}
         {...listeners}
         className="relative flex items-center justify-end px-3 py-2 cursor-grab active:cursor-grabbing bg-brand border-b border-brand-light/10 rounded-t-xl"
       >
-        {/* Title - Centered */}
-        <span className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 text-brand-light text-sm font-poppins font-medium">Apex Studio</span>
-        
-        {/* Buttons */}
-        <div className="flex items-center gap-2">
-          {/* Minimize Button */}
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMinimize?.();
-            }}
-            className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-400 flex items-center justify-center transition-colors pointer-events-auto font-poppins"
-            title="Minimize panel"
-          >
-            <Minus size={10} className="text-black" />
-          </button>
-          
-          {/* Close Button */}
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete?.();
-            }}
-            className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-400 flex items-center justify-center transition-colors pointer-events-auto font-poppins"
-            title="Close panel"
-          >
-            <X size={10} className="text-black" />
-          </button>
-        </div>
+        {/* Close Button */}
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete?.();
+          }}
+          className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-400 flex items-center justify-center transition-colors pointer-events-auto"
+          title="Close panel"
+        >
+          <X size={10} className="text-black" />
+        </button>
       </div>
 
       {/* Panel Content Area */}
-      <div className="flex-1 p-4 overflow-auto flex flex-col">
-        {/* Text Input Field - Full Height */}
+      <div className="flex-1 px-4 pt-4 pb-2 overflow-auto flex flex-col">
+        {/* Text Input Field - Full Height, No Border */}
         <textarea
           placeholder="Write your prompt..."
           value={promptText}
           onChange={(e) => setPromptText(e.target.value)}
-          className="w-full flex-1 bg-brand border border-brand-light/20 rounded-lg p-3 text-white font-poppins text-sm resize-none focus:outline-none focus:border-brand-accent/50 placeholder:text-brand-light/40"
+          className="w-full flex-1 bg-transparent text-white font-poppins text-sm resize-none focus:outline-none placeholder:text-brand-light/40"
         />
+      </div>
+
+      {/* Bottom Bar with Model Pill */}
+      <div className="relative flex items-center justify-start px-3 py-2 bg-brand rounded-b-xl">
+        {/* Model Pill Button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowModelMenu(!showModelMenu);
+          }}
+          className="flex items-center gap-2 px-3 py-1 bg-white/10 hover:bg-white/15 rounded-full transition-colors cursor-pointer"
+        >
+          <span className="text-white text-xs font-poppins font-medium whitespace-nowrap">
+            {modelPillText}
+          </span>
+          <ChevronDown 
+            size={14} 
+            className={`text-white transition-transform ${showModelMenu ? 'rotate-180' : ''}`}
+          />
+        </button>
+        
+        {/* Model Selector Menu */}
+        {showModelMenu && modelClips.length > 0 && (
+          <>
+            {/* Dimmed overlay */}
+            <div
+              className="fixed inset-0 bg-transparent"
+              style={{ zIndex: 9997 }}
+              onClick={() => setShowModelMenu(false)}
+            />
+            
+            {/* Menu Dropdown */}
+            <div 
+              className="absolute bottom-full left-3 mb-2 bg-brand-background border border-brand-light/10 rounded-lg shadow-2xl overflow-hidden"
+              style={{ 
+                pointerEvents: 'auto',
+                minWidth: '220px',
+                maxHeight: '300px',
+                overflowY: 'auto',
+                zIndex: 9998
+              }}
+            >
+              {/* Function Header */}
+              <div className="px-4 py-2 bg-brand-light/5 border-b border-brand-light/10">
+                <span className="text-brand-light/60 text-xs font-poppins font-medium uppercase tracking-wider">
+                  Function
+                </span>
+              </div>
+              
+              {/* Model Clips List */}
+              {modelClips.map((modelClip) => {
+                const isActive = modelClip.clipId === clipId;
+                const displayName = modelClip.name || 'Model';
+                const displayTrack = modelClip.trackName || '';
+                
+                return (
+                  <button
+                    key={modelClip.clipId}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleModelSwitch(modelClip.clipId);
+                    }}
+                    onMouseEnter={() => setHoveredModelClipId(modelClip.clipId)}
+                    onMouseLeave={() => setHoveredModelClipId(null)}
+                    className={`w-full px-4 py-3 text-left font-poppins transition-colors flex items-center justify-between ${
+                      hoveredModelClipId === modelClip.clipId ? 'bg-white/10' : ''
+                    } ${isActive ? 'bg-white/5' : ''}`}
+                  >
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white text-sm font-medium">
+                        {displayName}
+                      </span>
+                      {displayTrack && (
+                        <span className="text-brand-light/60 text-xs">
+                          {displayTrack}
+                        </span>
+                      )}
+                    </div>
+                    {isActive && (
+                      <Check size={16} className="text-brand-accent" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Resize Handles */}

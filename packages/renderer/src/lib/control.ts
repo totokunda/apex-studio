@@ -44,9 +44,10 @@ const __playbackTick = (now: number) => {
 };
 
 interface FloatingPanelData {
-    imageBlob: Blob | null; // Store the actual blob instead of object URL
-    imageSource: 'dropped' | 'selected' | null; // Track source for debugging
-    promptText: string;
+    imageBlob?: Blob | null; // Store the actual blob instead of object URL (legacy)
+    imageSource?: 'dropped' | 'selected' | null; // Track source for debugging (legacy)
+    promptText?: string; // Legacy text field
+    [key: string]: any; // Dynamic form values - supports any input type
 }
 
 interface ControlStore {
@@ -93,6 +94,7 @@ interface ControlStore {
     floatingPanelDataByClip: Record<string, FloatingPanelData>;
     setFloatingPanelData: (clipId: string, data: Partial<FloatingPanelData>) => void;
     getFloatingPanelData: (clipId: string) => FloatingPanelData;
+    clearFloatingPanelData: (clipId: string) => void;
 }
 
 export const useControlsStore = create<ControlStore>((set, get) => ({
@@ -270,14 +272,17 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
             ...state.floatingPanelDataByClip,
             [clipId]: {
                 ...state.floatingPanelDataByClip[clipId],
-                imageBlob: data.imageBlob !== undefined ? data.imageBlob : (state.floatingPanelDataByClip[clipId]?.imageBlob ?? null),
-                imageSource: data.imageSource !== undefined ? data.imageSource : (state.floatingPanelDataByClip[clipId]?.imageSource ?? null),
-                promptText: data.promptText !== undefined ? data.promptText : (state.floatingPanelDataByClip[clipId]?.promptText ?? ''),
+                ...data, // Merge all dynamic form values
             }
         }
     })),
     getFloatingPanelData: (clipId) => {
         const state = get();
-        return state.floatingPanelDataByClip[clipId] || { imageBlob: null, imageSource: null, promptText: '' };
+        return state.floatingPanelDataByClip[clipId] || {};
     },
+    clearFloatingPanelData: (clipId) => set((state) => {
+        const newData = { ...state.floatingPanelDataByClip };
+        delete newData[clipId];
+        return { floatingPanelDataByClip: newData };
+    }),
     }));

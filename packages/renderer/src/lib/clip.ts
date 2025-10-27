@@ -440,6 +440,11 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const resolvedClips = resolveOverlaps(newClips);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         get()._updateZoomLevel(resolvedClips, clipDuration);
+        
+        // Clean up floating panel data for this clip
+        const { clearFloatingPanelData } = useControlsStore.getState();
+        clearFloatingPanelData(clipId);
+        
         return { clips: resolvedClips, clipDuration };
     }),
     updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) => set((state) => {
@@ -923,4 +928,18 @@ export const getTimelineX = (timelineWidth:number, timelinePadding:number, timel
     const [timelineStartFrame, timelineEndFrame] = timelineDuration;
     const timelineX = timelinePadding - (timelineWidth / (timelineEndFrame - timelineStartFrame)) * timelineStartFrame;
     return Math.max(0, timelineX);
+}
+
+export const getLocalFrame = (focusFrame: number, clip: AnyClipProps) => {
+    const startFrame = clip.startFrame ?? 0;
+    const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? clip.framesToGiveStart ?? 0 : 0;
+    const realStartFrame = startFrame + framesToGiveStart;
+    return focusFrame - realStartFrame;
+}
+
+export const getGlobalFrame = (focusFrame: number, clip: AnyClipProps) => {
+    const startFrame = clip.startFrame ?? 0;
+    const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? clip.framesToGiveStart ?? 0 : 0;
+    const realStartFrame = startFrame + framesToGiveStart;
+    return focusFrame + realStartFrame;
 }
