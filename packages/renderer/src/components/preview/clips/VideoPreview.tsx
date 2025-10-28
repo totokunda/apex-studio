@@ -588,13 +588,14 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 // Compute current timeline-local frame mapped to native fps (clip space)
                 const computeLocalFocusMedia = () => {
                     const store = useControlsStore.getState();
-                    // Timeline-local frames as a float (avoid premature flooring)
-                    let local = Math.max(0, ((store.focusFrame || 0) - startFrame + (framesToGiveStart || 0)));
-                    // When using preprocessor src, adjust to match preprocessor video's frame space
-                    if (isUsingPreprocessorSrc) {
-                        local = local - (framesToGiveStart || 0)
-                    }
-                    const speedAdjusted = Math.max(0, local * Math.max(0.1, speed));
+                    // Base timeline-local frames relative to clip start (no give-start applied)
+                    const baseLocal = Math.max(0, ((store.focusFrame || 0) - startFrame));
+                    // When using preprocessor src, align to its own frame space by subtracting its start offset.
+                    // Otherwise, include framesToGiveStart to match the main clip's reference frame.
+                    const localProjectFrames = isUsingPreprocessorSrc
+                        ? Math.max(0, baseLocal - Math.max(0, frameOffset))
+                        : Math.max(0, baseLocal + (framesToGiveStart || 0));
+                    const speedAdjusted = Math.max(0, localProjectFrames * Math.max(0.1, speed));
                     // Map from project fps to native fps using floor to reduce jitter
                     const actualFrameIdx = Math.floor(((speedAdjusted / projectFps) * clipFps) + 1e-4);
                     return actualFrameIdx + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);

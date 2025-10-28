@@ -66,10 +66,7 @@ export const ScrubControl:React.FC<ScrubControlProps> = ({stageHeight, stageWidt
 
     const handleMouseUp = () => {
         setIsDragging(false);
-        if (wasPlaying) {
-            play();
-            setWasPlaying(false);
-        }
+       
         
         // Determine snapping strategy based on zoom config (frame vs second)
         const config = getZoomLevelConfig(zoomLevel, timelineDuration, fps);
@@ -109,7 +106,13 @@ export const ScrubControl:React.FC<ScrubControlProps> = ({stageHeight, stageWidt
         const progress = (clampedCenterX - startPadding) / stageWidth;
         const framePosition = startFrame + (progress * (endFrame - startFrame));
         setFocusFrame(Math.round(framePosition));
+
         setFocusAnchorRatio(progress);
+
+        if (wasPlaying) {
+            play();
+            setWasPlaying(false);
+        }
     };
 
     // Reposition scrubber when the visible range or focus frame changes (e.g., zoom in/out)

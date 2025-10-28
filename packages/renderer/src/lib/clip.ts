@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps, ImageClipProps, PreprocessorClipType, MaskClipProps, MaskData, GroupClipProps } from "./types";
+import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps, ImageClipProps, PreprocessorClipType, MaskClipProps, MaskData, GroupClipProps, ModelClipProps } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 import { MediaItem } from "@/components/media/Item";
@@ -8,7 +8,7 @@ import { getMediaInfo } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
 import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
-import { ManifestInfoWithType } from "./manifest/api";
+import { ManifestInfoWithType, UIInput } from "./manifest/api";
 
 export const PREPROCESSOR_BAR_HEIGHT = 24;
 
@@ -85,6 +85,7 @@ interface ClipStore {
     updateTimeline: (timelineId: string, timelineToUpdate: Partial<TimelineProps>) => void;
     clipWithinFrame: (clip: AnyClipProps, frame: number, overlap?:boolean, overlapAmount?:number) => boolean;
     updateMaskKeyframes: (clipId: string, maskId: string, updater: (keyframes: Map<number, MaskData> | Record<number, MaskData>) => Map<number, MaskData> | Record<number, MaskData>) => void;
+    updateModelInput: (clipId: string, inputId: string, inputToUpdate: Partial<UIInput>) => void;
 }
 
 // Helper function to calculate total duration of all clips
@@ -764,6 +765,60 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         newClips[clipIndex] = {
             ...clip,
             masks,
+        } as AnyClipProps;
+
+        const resolvedClips = resolveOverlaps(newClips);
+        const clipDuration = calculateTotalClipDuration(resolvedClips);
+        return { clips: resolvedClips, clipDuration };
+    }),
+    updateModelInput: (clipId: string, inputId: string, inputToUpdate: Partial<UIInput>) => set((state) => {
+        const newClips = [...state.clips];
+        const clipIndex = newClips.findIndex((c) => c.clipId === clipId && c.type === 'model');
+        if (clipIndex === -1) return { clips: state.clips };
+
+        const clip = newClips[clipIndex] as ModelClipProps;
+        const manifest = clip.manifest;
+        if (!manifest) return { clips: state.clips };
+
+        const ui = manifest.spec?.ui || manifest.ui;
+        if (!ui || !Array.isArray(ui.inputs)) return { clips: state.clips };
+
+        const inputs: UIInput[] = ui.inputs.map((inp: UIInput) => {
+            if (inp.id !== inputId) return inp;
+            // Merge shallowly; ensure value override if provided
+            const merged: UIInput = { ...inp, ...inputToUpdate } as UIInput;
+            return merged;
+        });
+
+        // Rebuild manifest immutably preserving structure (prefer spec.ui if present)
+        let updatedManifest = { ...manifest } as any;
+        if (manifest.spec && manifest.spec.ui) {
+            updatedManifest = {
+                ...manifest,
+                spec: {
+                    ...manifest.spec,
+                    ui: {
+                        ...(manifest.spec.ui || {}),
+                        inputs,
+                    },
+                },
+            } as any;
+        } else if (manifest.ui) {
+            updatedManifest = {
+                ...manifest,
+                ui: {
+                    ...(manifest.ui || {}),
+                    inputs,
+                },
+            } as any;
+        } else {
+            // No UI present; nothing to update
+            return { clips: state.clips };
+        }
+
+        newClips[clipIndex] = {
+            ...clip,
+            manifest: updatedManifest,
         } as AnyClipProps;
 
         const resolvedClips = resolveOverlaps(newClips);
