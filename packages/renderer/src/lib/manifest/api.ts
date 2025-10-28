@@ -137,12 +137,14 @@ export type UIPanelLayout = {
 export type UIPanel = {
   name: string;
   label?: string;
+  icon?: string;
   collapsible?: boolean;
   layout: UIPanelLayout;
 };
 
 export type UIInputBase = {
   id: string;
+  value?: string;
   label?: string;
   description?: string;
   panel?: string;
@@ -153,10 +155,19 @@ export type UIInputBase = {
 
 export type UIInputText = UIInputBase & {
   type: 'text';
+  placeholder?: string;
 };
 
 export type UIInputNumber = UIInputBase & {
   type: 'number';
+  value_type?: 'integer' | 'float' | string;
+  min?: number;
+  max?: number;
+  step?: number;
+};
+
+export type UIInputNumberSlider = UIInputBase & {
+  type: 'number+slider';
   value_type?: 'integer' | 'float' | string;
   min?: number;
   max?: number;
@@ -174,6 +185,7 @@ export type UIInputRandom = UIInputBase & {
   type: 'random';
   min?: number;
   max?: number;
+  step?: number;
 };
 
 export type UIInputVideo = UIInputBase & {
@@ -224,6 +236,7 @@ export type UIInputOther = UIInputBase & {
 export type UIInput =
   | UIInputText
   | UIInputNumber
+  | UIInputNumberSlider
   | UIInputRandom
   | UIInputVideo
   | UIInputVideoMask

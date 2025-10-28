@@ -59,7 +59,7 @@ const TopBar:React.FC<TopBarProps> = () => {
                     {shortcutsOpen ? <LuChevronUp className='w-3.5 h-3.5' /> : <LuChevronDown className='w-3.5 h-3.5' />}
                   
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align='end' className='dark w-[400px] font-poppins p-0 overflow-hidden bg-brand'>
+                <DropdownMenuContent align='end' className='dark w-[400px] font-poppins p-0 overflow-hidden bg-brand z-[100]'>
                   <div className='bg-brand border-b border-brand-light/10 px-3 py-2'>
                     <span className='text-[11px] uppercase tracking-wide text-brand-light/70'>Keyboard Shortcuts</span>
                   </div>

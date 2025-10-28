@@ -66,7 +66,7 @@ interface ItemProps {
 }
 
 // Stable, memoized thumbnail component to prevent re-renders on parent resize
-export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean }> = React.memo(({ item, isDragging }) => {
+export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean, className?: string }> = React.memo(({ item, isDragging, className }) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
   
@@ -160,7 +160,7 @@ export const MediaThumb: React.FC<{ item: MediaItem, isDragging?: boolean }> = R
     }, [item.assetUrl, item.type]);
   
     return (
-      <span className="flex flex-row gap-x-2.5 items-center justify-center relative overflow-hidden rounded-md">
+      <span className={cn("flex flex-row gap-x-2.5 items-center justify-center relative overflow-hidden rounded-md", className)}>
         <canvas ref={canvasRef} className="w-full h-full block" />
         {mediaInfo?.duration && (
           <span className="text-[10px] text-brand-light/90 absolute bottom-1 left-1 p-1 rounded bg-brand-background-dark/60 z-10">

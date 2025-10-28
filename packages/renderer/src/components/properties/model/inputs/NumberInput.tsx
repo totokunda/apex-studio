@@ -1,10 +1,12 @@
 import { cn } from '@/lib/utils';
 import React, { useEffect, useState } from 'react'
-import { LuChevronDown, LuChevronUp } from 'react-icons/lu';
+import { LuChevronDown, LuChevronUp, LuInfo } from 'react-icons/lu';
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
-interface InputProps<T> {
+interface NumberInputProps<T> {
   className?: string;
   label?: string;
+  description?: string;
   value: T;
   onChange: (value: T) => void;
   startLogo?: string;
@@ -15,7 +17,7 @@ interface InputProps<T> {
   emptyLabel?: boolean;
 }
 
-const Input: React.FC<InputProps<string>> = ({ value, onChange, label, className, startLogo, canStep, step, max, min, emptyLabel }) => {
+const NumberInput: React.FC<NumberInputProps<string>> = ({ value, onChange, label, description, className, startLogo, step, max, min, emptyLabel }) => {
     const [tempValue, setTempValue] = useState(value);
     const lastValueRef = React.useRef(value);
     
@@ -63,21 +65,33 @@ const Input: React.FC<InputProps<string>> = ({ value, onChange, label, className
     
   return (
     <div className="flex flex-col items-start w-full gap-y-1 min-w-0">
-    <label className="text-brand-light  text-[10.5px] font-medium w-full text-start mb-0.5">{label}</label>
+    <div className="flex items-center gap-1.5">
+      <label className="text-brand-light  text-[10px] font-medium text-start">{label}</label>
+      {description && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" className="text-brand-light/70 hover:text-brand-light focus:outline-none">
+              <LuInfo className="w-3 h-3" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent sideOffset={6} className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10">
+            {description}
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </div>
     {emptyLabel && <span className="mb-3"></span>}
 
     <div className="relative w-full flex flex-row items-center min-w-0">
             {startLogo && <span className="text-brand-light/50 font-medium text-[11px] absolute left-2 top-1/2 -translate-y-1/2">{startLogo}</span>}
-            <input className={cn(`w-full h-6 px-1.5 text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1  bg-brand ${className}`, {
+            <input className={cn(`w-full h-7 px-2 text-brand-light text-[11px] outline-none rounded-l font-normal items-center border border-brand-light/5  bg-brand-background/50 ${className}`, {
                 'pl-6': startLogo,
-                "rounded-l": canStep,
-                "rounded": !canStep,
             })} 
             value={tempValue} 
             onChange={(e) => setTempValue(e.target.value)}
             onBlur={handleBlur}
             onKeyDown={handleKeyDown} />
-        {canStep && <div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand  h-6 cursor-pointer rounded-r">
+        {<div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand-background/50  h-6 cursor-pointer rounded-r">
             <button className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center" 
             onClick={() => {
               const numValue = Number(value);
@@ -99,8 +113,9 @@ const Input: React.FC<InputProps<string>> = ({ value, onChange, label, className
         </div>
         }
     </div>
+    {/* description moved to tooltip */}
     </div>
   )
 }
 
-export default Input
+export default NumberInput

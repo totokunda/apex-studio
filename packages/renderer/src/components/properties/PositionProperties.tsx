@@ -122,7 +122,7 @@ const PositionProperties: React.FC<PositionPropertiesProps> = ({ clipId }) => {
         </span>
       </div>
       <div className="flex flex-col gap-y-2">
-      <span className="text-brand-light text-[11px]  text-start">Alignment</span>
+      <span className="text-brand-light text-[10.5px] font-medium text-start">Alignment</span>
       <div className="flex flex-row gap-x-2 w-full ">
         
         <div className="flex flex-row divide-x divide-brand-light/10 h-6 w-1/2 cursor-pointer rounded bg-brand">
