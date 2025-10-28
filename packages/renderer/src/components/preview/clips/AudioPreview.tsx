@@ -9,11 +9,11 @@ type ClipWithSrc = Extract<AnyClipProps, { src: string }>;
 
 // Schedules audio playback for a clip in sync with the timeline. Renders nothing.
 const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props) => {
-  const { src, startFrame = 0, framesToGiveStart, volume = 0, fadeIn = 0, fadeOut = 0, speed: _speed } = props as AudioClipProps;
+  const { src, startFrame = 0, trimStart, volume = 0, fadeIn = 0, fadeOut = 0, speed: _speed } = props as AudioClipProps;
   const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
   const fps = useControlsStore((s) => s.fps);
   const focusFrame = useControlsStore((s) => s.focusFrame);
-  const currentFrame = useMemo(() => focusFrame - startFrame + (framesToGiveStart || 0), [focusFrame, startFrame, framesToGiveStart]);
+  const currentFrame = useMemo(() => focusFrame - startFrame + (trimStart || 0), [focusFrame, startFrame, trimStart]);
   const isPlaying = useControlsStore((s) => s.isPlaying);
   const prevIsPlayingRef = useRef<boolean>(isPlaying);
   const startTimeRef = useRef(0);
@@ -23,7 +23,10 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
   const audioQueueRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const lastResyncTimeRef = useRef<number>(0);
   const hasValidCurrentFrame = useMemo(() => currentFrame >= 0, [currentFrame]);
-  
+  const soundtouchNodeRef = useRef<AudioWorkletNode | null>(null);
+  const soundtouchInitPromiseRef = useRef<Promise<boolean> | null>(null);
+  const soundtouchUnavailableRef = useRef<boolean>(false);
+  const lastConfiguredSpeedRef = useRef<number | null>(null);
 
   useEffect(() => {
     const wasPlaying = prevIsPlayingRef.current;
@@ -109,6 +112,104 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
   }, []);
 
 
+  const ensureSoundtouchNode = useCallback(async () => {
+    if (!ctx?.audioWorklet || soundtouchUnavailableRef.current) {
+      return null;
+    }
+    if (!soundtouchInitPromiseRef.current) {
+      const candidates = (() => {
+        if (typeof window === 'undefined') {
+          return ['soundtouch-worklet.js'];
+        }
+        const baseHref = window.location?.href || '';
+        const origin = window.location?.origin || '';
+        const urls = new Set<string>();
+        if (baseHref) {
+          try { urls.add(new URL('soundtouch-worklet.js', baseHref).toString()); } catch {}
+        }
+        if (origin) {
+          try { urls.add(new URL('soundtouch-worklet.js', origin).toString()); } catch {}
+        }
+        urls.add('/soundtouch-worklet.js');
+        urls.add('soundtouch-worklet.js');
+        return Array.from(urls);
+      })();
+      soundtouchInitPromiseRef.current = (async () => {
+        for (const candidate of candidates) {
+          try {
+            await ctx.audioWorklet.addModule(candidate);
+            return true;
+          } catch (err) {
+            console.warn('[audio] Failed to load soundtouch worklet', { candidate, err });
+          }
+        }
+        return false;
+      })();
+    }
+    const ready = await soundtouchInitPromiseRef.current;
+    if (!ready) {
+      soundtouchUnavailableRef.current = true;
+      return null;
+    }
+    if (!soundtouchNodeRef.current) {
+      try {
+        const node = new AudioWorkletNode(ctx, 'soundtouch-processor', {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          channelCount: 2,
+          channelCountMode: 'explicit',
+          channelInterpretation: 'speakers',
+          outputChannelCount: [2],
+        });
+        node.connect(gainNode);
+        soundtouchNodeRef.current = node;
+      } catch (err) {
+        console.warn('[audio] Failed to create soundtouch node', err);
+        soundtouchUnavailableRef.current = true;
+        soundtouchNodeRef.current = null;
+        return null;
+      }
+    }
+    return soundtouchNodeRef.current;
+  }, [ctx, gainNode]);
+
+  const configureSoundtouchForSpeed = useCallback((playbackSpeed: number) => {
+    if (!ctx) return;
+    const node = soundtouchNodeRef.current;
+    if (!node) return;
+    const safeSpeed = Math.min(5, Math.max(0.1, Number.isFinite(playbackSpeed) && playbackSpeed > 0 ? playbackSpeed : 1));
+    if (lastConfiguredSpeedRef.current === safeSpeed) return;
+    lastConfiguredSpeedRef.current = safeSpeed;
+
+    const desiredPitchRatio = Number.isFinite(safeSpeed) && safeSpeed > 0 ? 1 / safeSpeed : 1;
+    const tempoParam = node.parameters.get('tempo');
+    const rateParam = node.parameters.get('rate');
+    const pitchParam = node.parameters.get('pitch');
+    const pitchSemitoneParam = node.parameters.get('pitchSemitones');
+
+    const minPitchLog = Math.log2(0.25);
+    const maxPitchLog = Math.log2(4);
+    const semitoneMin = -24;
+    const semitoneMax = 24;
+
+    const ratioLog = Math.log2(Math.max(1e-6, desiredPitchRatio));
+    let semitoneValue = 0;
+    if (ratioLog < minPitchLog) {
+      semitoneValue = Math.max(semitoneMin, -Math.ceil((minPitchLog - ratioLog) * 12));
+    } else if (ratioLog > maxPitchLog) {
+      semitoneValue = Math.min(semitoneMax, Math.ceil((ratioLog - maxPitchLog) * 12));
+    }
+    let adjustedLog = ratioLog - semitoneValue / 12;
+    adjustedLog = Math.min(maxPitchLog, Math.max(minPitchLog, adjustedLog));
+    const basePitch = Math.pow(2, adjustedLog);
+
+    const now = ctx.currentTime;
+    tempoParam?.setValueAtTime(1, now);
+    rateParam?.setValueAtTime(1, now);
+    pitchParam?.setValueAtTime(basePitch, now);
+    pitchSemitoneParam?.setValueAtTime(semitoneValue, now);
+  }, [ctx]);
+
   const startRendering = useCallback(async () => {
     // Only play audio when clip is actually active (not during prebuffer period)
     if (!isPlaying || !ctx || !mediaInfoRef.current || !mediaInfoRef.current.audio || !fps || !hasValidCurrentFrame) {
@@ -138,6 +239,11 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
 
     iteratorRef.current = await getAudioIterator(src, { mediaInfo:mediaInfoRef.current || undefined, fps, startIndex: mediaFrameIndex, endIndex });
 
+    const soundtouchNode = await ensureSoundtouchNode();
+    if (soundtouchNode) {
+      configureSoundtouchForSpeed(speed);
+    }
+
     for await (const buf of iteratorRef.current) {
       if (!buf) continue; // Skip null buffers but keep trying
       const buffer = buf.buffer || null;
@@ -159,15 +265,20 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
       }
       
       const node = ctx.createBufferSource();
-		  node.buffer = buffer;
-      try { node.playbackRate.value = Math.max(0.1, speed);
-        (node as any).preservesPitch = true;
-       } catch {}
-		  
+      node.buffer = buffer;
+      const playbackRate = Math.max(0.1, speed);
+      node.playbackRate.setValueAtTime(playbackRate, ctx.currentTime);
+      if (!soundtouchNode) {
+        try { (node as any).preservesPitch = true; } catch {}
+      }
 		  // Apply volume and fade effects
-		  const nodeGain = ctx.createGain();
-		  node.connect(nodeGain);
-		  nodeGain.connect(gainNode);
+      const nodeGain = ctx.createGain();
+      node.connect(nodeGain);
+      if (soundtouchNode) {
+        nodeGain.connect(soundtouchNode);
+      } else {
+        nodeGain.connect(gainNode);
+      }
 		  
 		  const baseGain = dbToGain(volume || 0);
 		  const fadeInDuration = fadeIn || 0;
@@ -212,6 +323,8 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
       audioQueueRef.current.add(node);
       node.onended = () => {
         audioQueueRef.current.delete(node);
+        try { node.disconnect(); } catch {}
+        try { nodeGain.disconnect(); } catch {}
       };
 
       // More aggressive buffering for seamless playback - queue up to 2 seconds ahead
@@ -227,7 +340,7 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
         });
       }
     }
-  }, [isPlaying, ctx, mediaInfoRef.current, fps, src, gainNode, volume, fadeIn, fadeOut, speed, hasValidCurrentFrame]);
+  }, [isPlaying, ctx, mediaInfoRef.current, fps, src, gainNode, volume, fadeIn, fadeOut, speed, hasValidCurrentFrame, ensureSoundtouchNode, configureSoundtouchForSpeed]);
 
 
 
@@ -249,6 +362,10 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
       // @ts-ignore
       iteratorRef.current?.return?.();
       iteratorRef.current = null;
+      try {
+        soundtouchNodeRef.current?.disconnect();
+      } catch {}
+      soundtouchNodeRef.current = null;
     };
   }, []);
 
@@ -256,5 +373,3 @@ const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props
 }
 
 export default AudioPreview;
-
-

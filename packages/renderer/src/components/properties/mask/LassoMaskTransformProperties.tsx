@@ -35,8 +35,8 @@ const LassoMaskTransformProperties: React.FC<LassoMaskTransformPropertiesProps> 
 
     // Compute local frame relative to the clip
     const startFrame = (clip as any).startFrame ?? 0;
-    const framesToGiveStart = isFinite((clip as any).framesToGiveStart ?? 0) ? ((clip as any).framesToGiveStart ?? 0) : 0;
-    const realStartFrame = startFrame + framesToGiveStart;
+    const trimStart = isFinite((clip as any).trimStart ?? 0) ? ((clip as any).trimStart ?? 0) : 0;
+    const realStartFrame = startFrame + trimStart;
     const localFrame = focusFrame - realStartFrame;
 
     const nearestKeyframe = (frame: number) => {

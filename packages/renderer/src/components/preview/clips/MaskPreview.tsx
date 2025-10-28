@@ -101,8 +101,8 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
         if (keyframeNumbers.length === 0) return;
 
         const startFrame = clip.startFrame ?? 0;
-        const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? (clip.framesToGiveStart ?? 0) : 0;
-        const realStartFrame = startFrame + framesToGiveStart;
+        const trimStart = isFinite(clip.trimStart ?? 0) ? (clip.trimStart ?? 0) : 0;
+        const realStartFrame = startFrame + trimStart;
         const localFrame = focusFrame - realStartFrame;
 
         const nearestKeyframe = (frame: number) => {

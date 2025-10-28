@@ -247,7 +247,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 
     useEffect(() => {
         thumbnailClipWidth.current = Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3);
-    }, [zoomLevel, timelineWidth, clipType, timelineDuration, currentClip?.framesToGiveStart, currentClip?.framesToGiveEnd, currentClip?.startFrame, currentClip?.endFrame]);
+    }, [zoomLevel, timelineWidth, clipType, timelineDuration, currentClip?.trimStart, currentClip?.trimEnd, currentClip?.startFrame, currentClip?.endFrame]);
 
     useEffect(() => {
         const newY = timelineY - totalClipHeight;
@@ -270,7 +270,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             
             const width = mediaInfoRef.current?.stats.audio?.averagePacketRate ?? 1;
             const height = timelineHeight;
-            const timelineShift = currentStartFrame - (currentClip.framesToGiveStart ?? 0);
+            const timelineShift = currentStartFrame - (currentClip.trimStart ?? 0);
             const visibleStartFrame = Math.max(currentStartFrame, timelineDuration[0]);
             const visibleEndFrame = Math.min(currentEndFrame, timelineDuration[1]) * speed;
             const duration = (timelineDuration[1] - timelineDuration[0]);
@@ -405,17 +405,17 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             let numColumns = Math.ceil((tClipWidth - overHang) / thumbnailWidth) + 1;
 
             let numColumnsAlt:number | undefined = undefined;
-            if (currentClip.framesToGiveStart || currentClip.framesToGiveEnd) {
-                const realStartFrame = currentStartFrame - (currentClip.framesToGiveStart ?? 0);
-                const realEndFrame = currentEndFrame - (currentClip.framesToGiveEnd ?? 0);
+            if (currentClip.trimStart || currentClip.trimEnd) {
+                const realStartFrame = currentStartFrame - (currentClip.trimStart ?? 0);
+                const realEndFrame = currentEndFrame - (currentClip.trimEnd ?? 0);
                 tClipWidth = Math.max(getClipWidth(realStartFrame, realEndFrame, timelineWidth, timelineDuration), 3);
                 const tempNumColumns = Math.ceil((tClipWidth - overHang) / thumbnailWidth);
                 numColumnsAlt = numColumns;
                 numColumns = tempNumColumns;
             }
-            const timelineShift = currentStartFrame - (currentClip.framesToGiveStart ?? 0);
+            const timelineShift = currentStartFrame - (currentClip.trimStart ?? 0);
             const realStartFrame = timelineShift;
-            const realEndFrame = currentEndFrame - (currentClip.framesToGiveEnd ?? 0);
+            const realEndFrame = currentEndFrame - (currentClip.trimEnd ?? 0);
             let timelineStartFrame = Math.max(timelineDuration[0], realStartFrame);
             let timelineEndFrame = Math.min(timelineDuration[1], realEndFrame);
             const timelineSpan = timelineEndFrame - timelineStartFrame;
@@ -469,11 +469,11 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             
             if (numColumnsAlt && frameIndices.length !== numColumnsAlt) {
                 // Trim indices to match the original column count, removing from
-                // left/right based on framesToGiveStart (left) and abs(framesToGiveEnd) (right)
+                // left/right based on trimStart (left) and abs(trimEnd) (right)
                 if (frameIndices.length > numColumnsAlt) {
                     const surplus = frameIndices.length - numColumnsAlt;
-                    const giveStart = Math.max(0, currentClip?.framesToGiveStart ?? 0);
-                    const giveEnd = Math.max(0, -(currentClip?.framesToGiveEnd ?? 0));
+                    const giveStart = Math.max(0, currentClip?.trimStart ?? 0);
+                    const giveEnd = Math.max(0, -(currentClip?.trimEnd ?? 0));
                     const totalGive = giveStart + giveEnd;
                     let leftRemove = 0;
                     let rightRemove = 0;

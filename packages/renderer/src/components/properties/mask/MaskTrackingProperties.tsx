@@ -40,8 +40,8 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({ mask, c
 
   const clipDuration = useMemo(() => {
     if (!clip || !isVideoClip) return 0;
-    const realEnd = Math.max(0, (clip.endFrame ?? 0) - (clip.framesToGiveEnd ?? 0));
-    const realStart = Math.max(0, (clip.startFrame ?? 0) + (clip.framesToGiveStart ?? 0));
+    const realEnd = Math.max(0, (clip.endFrame ?? 0) - (clip.trimEnd ?? 0));
+    const realStart = Math.max(0, (clip.startFrame ?? 0) + (clip.trimStart ?? 0));
     return Math.max(0, realEnd - realStart);
   }, [clip, isVideoClip]);
 

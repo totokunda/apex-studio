@@ -207,7 +207,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         let extraDist = 0;
         let positionX = preprocessorWidth <= imageWidth? 0:  (-preprocessorXPosition);
 
-        const clipOffset = 0 // currentStartFrame - (isFinite(clip?.framesToGiveStart ?? 0) ? clip?.framesToGiveStart ?? 0 : 0);
+        const clipOffset = 0 // currentStartFrame - (isFinite(clip?.trimStart ?? 0) ? clip?.trimStart ?? 0 : 0);
         const timelineStartFrame = timelineDuration[0] - clipOffset;
         const timelineEndFrame = timelineDuration[1] - clipOffset;
         const pxPerFrame = timelineWidth / (timelineEndFrame - timelineStartFrame);
@@ -228,7 +228,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         }
 
         return positionX + extraDist
-    }, [preprocessorXPosition, imageWidth, preprocessorX, currentStartFrame, clip?.framesToGiveStart, timelineDuration]);
+    }, [preprocessorXPosition, imageWidth, preprocessorX, currentStartFrame, clip?.trimStart, timelineDuration]);
 
     // Track Alt key state globally
     useEffect(() => {

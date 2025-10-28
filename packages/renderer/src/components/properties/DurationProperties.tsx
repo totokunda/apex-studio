@@ -54,16 +54,16 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
         resizeClip(clipId, 'right', value);
     }
 
-    const startFrameMin = Math.max(0, startFrame - Math.abs(clip?.framesToGiveStart ?? 0));
+    const startFrameMin = Math.max(0, startFrame - Math.abs(clip?.trimStart ?? 0));
     const startFrameMax = endFrame - 1;
     const endFrameMin = startFrame + 1;
     const rawTotalFrames = Math.max(0, Math.floor(((getMediaInfoCached(clip?.src)?.duration ?? 0) * fps)));
     const effectiveSpeed = Math.max(0.1, Math.min(5, Number(clip?.speed ?? 1)));
     const maxByMedia = Math.max(0, Math.floor(rawTotalFrames / effectiveSpeed));
-    const endFrameMax = Math.min(maxByMedia, endFrame + Math.abs(clip?.framesToGiveEnd ?? 0));
+    const endFrameMax = Math.min(maxByMedia, endFrame + Math.abs(clip?.trimEnd ?? 0));
 
     const canRefresh = useMemo(() => {
-        return isFinite(clip?.framesToGiveEnd ?? 0) && isFinite(clip?.framesToGiveStart ?? 0);
+        return isFinite(clip?.trimEnd ?? 0) && isFinite(clip?.trimStart ?? 0);
     }, [clip?.type]);
 
   return (
@@ -73,8 +73,8 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
         <h4 className="text-brand-light text-[12px] font-medium text-start">Duration</h4>
         {(canRefresh) && <span
           onClick={() => {
-            const startFrame = (clip?.startFrame ?? 0) - (clip?.framesToGiveStart ?? 0);
-            const endFrame = (clip?.endFrame ?? 0) - (clip?.framesToGiveEnd ?? 0);
+            const startFrame = (clip?.startFrame ?? 0) - (clip?.trimStart ?? 0);
+            const endFrame = (clip?.endFrame ?? 0) - (clip?.trimEnd ?? 0);
             resizeClip(clipId, 'left', startFrame);
             resizeClip(clipId, 'right', endFrame);
             setTimeout(() => {

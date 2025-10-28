@@ -572,8 +572,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     }
 
     let numFrames: number = 0;
-    let framesToGiveEnd = 0;
-    let framesToGiveStart = 0;
+    let trimEnd = 0;
+    let trimStart = 0;
     let height: number | undefined = undefined;
     let width: number | undefined = undefined;
 
@@ -589,22 +589,22 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       numFrames = Math.round(duration * fps);
     } else if (data.type === 'image') {
       numFrames = controlStore.fps * 5;
-      framesToGiveEnd = -Infinity;
-      framesToGiveStart = Infinity;
+      trimEnd = -Infinity;
+      trimStart = Infinity;
       height = mediaInfo?.image?.height;
       width = mediaInfo?.image?.width;
     } else if (data.type === 'filter') {
       numFrames = controlStore.fps * 5;
-      framesToGiveEnd = -Infinity;
-      framesToGiveStart = Infinity;
+      trimEnd = -Infinity;
+      trimStart = Infinity;
       height = 540; // Does not matter
       width = 540; // Does not matter
       // Start with smallPath 
       void haldClutRef?.preloadClut((data as unknown as Filter).smallPath);
     } else if (data.type === 'model') {
       numFrames = (data as ManifestInfoWithType).desired_duration ?? 5 * controlStore.fps;
-      framesToGiveEnd = -Infinity;
-      framesToGiveStart = Infinity;
+      trimEnd = -Infinity;
+      trimStart = Infinity;
       height = 540; // Does not matter
       width = 540; // Does not matter
     }
@@ -690,8 +690,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       src: (data as MediaItem)?.assetUrl,
       // @ts-ignore
       type: data.type, // ignore for now since we don't have all types implemented yet
-      framesToGiveEnd: framesToGiveEnd,
-      framesToGiveStart: framesToGiveStart,
+      trimEnd: trimEnd,
+      trimStart: trimStart,
       height: height,
       width: width,
       speed: 1.0

@@ -679,7 +679,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const newEndFrame = Math.max((currentClip.startFrame || 0) + 1, newFrame);
             const frameDelta = newEndFrame - oldEndFrame;
 
-            if (frameDelta + (currentClip.framesToGiveEnd || 0) > 0) {
+            if (frameDelta + (currentClip.trimEnd || 0) > 0) {
                 return false;
             }
         } else if (side === 'left') {
@@ -688,7 +688,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const newStartFrame = Math.min((currentClip.endFrame || 0) - 1, newFrame);
             let frameDelta = newStartFrame - oldStartFrame;
 
-            if (frameDelta + (currentClip.framesToGiveStart || 0) < 0) {
+            if (frameDelta + (currentClip.trimStart || 0) < 0) {
                 return false;
             }
         }
@@ -712,12 +712,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const newEndFrame = Math.max((currentClip.startFrame || 0) + 1, newFrame);
             const frameDelta = newEndFrame - oldEndFrame;
 
-            if (frameDelta + (currentClip.framesToGiveEnd || 0) > 0) {
+            if (frameDelta + (currentClip.trimEnd || 0) > 0) {
                 return { clips: state.clips };
             }
 
             const currentClipIndex = newClips.findIndex(c => c.clipId === clipId);
-            newClips[currentClipIndex] = { ...currentClip, endFrame: newEndFrame, framesToGiveEnd: frameDelta + (currentClip.framesToGiveEnd || 0) };
+            newClips[currentClipIndex] = { ...currentClip, endFrame: newEndFrame, trimEnd: frameDelta + (currentClip.trimEnd || 0) };
 
         } else if (side === 'left') {
             // Resize left edge - adjust current clip's start and shift all clips before it
@@ -725,16 +725,16 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const newStartFrame = Math.min((currentClip.endFrame || 0) - 1, newFrame);
             let frameDelta = newStartFrame - oldStartFrame;
 
-            if (frameDelta + (currentClip.framesToGiveStart || 0) < 0) {
+            if (frameDelta + (currentClip.trimStart || 0) < 0) {
                 return { clips: state.clips };
             }
 
-            if (frameDelta == 0 && (currentClip.framesToGiveStart || 0) >  0) {
-                frameDelta = Math.max(0, Math.min(1, (currentClip.framesToGiveStart || 0) - 1)); 
+            if (frameDelta == 0 && (currentClip.trimStart || 0) >  0) {
+                frameDelta = Math.max(0, Math.min(1, (currentClip.trimStart || 0) - 1)); 
 
             } else {
                 const currentClipIndex = newClips.findIndex(c => c.clipId === clipId);
-                newClips[currentClipIndex] = { ...currentClip, startFrame: newStartFrame, framesToGiveStart: frameDelta + (currentClip.framesToGiveStart || 0) };
+                newClips[currentClipIndex] = { ...currentClip, startFrame: newStartFrame, trimStart: frameDelta + (currentClip.trimStart || 0) };
             }
         }
 
@@ -1110,17 +1110,17 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         // create new clip ids
         const newClipId1 = uuidv4();
         const newClipId2 = uuidv4();
-        const infinityFramestoGiveEnd = !isFinite(clip.framesToGiveEnd || 0);
-        const infinityFramestoGiveStart = !isFinite(clip.framesToGiveStart || 0);
+        const infinitytrimEnd = !isFinite(clip.trimEnd || 0);
+        const infinitytrimStart = !isFinite(clip.trimStart || 0);
 
         // First clip: from original start to cut frame
-        // Keeps original framesToGiveStart, but can't extend past cut
+        // Keeps original trimStart, but can't extend past cut
         const newClip1: AnyClipProps = { 
             ...clip, 
             endFrame: cutFrame, 
             clipId: newClipId1,
-            framesToGiveStart: infinityFramestoGiveStart ? Infinity : 0,
-            framesToGiveEnd: infinityFramestoGiveEnd ? -Infinity : 0,
+            trimStart: infinitytrimStart ? Infinity : 0,
+            trimEnd: infinitytrimEnd ? -Infinity : 0,
         };
         
         // Second clip: from cut frame to original end
@@ -1129,8 +1129,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             ...clip, 
             startFrame: cutFrame, 
             clipId: newClipId2,
-            framesToGiveStart: infinityFramestoGiveStart ? Infinity : 0,
-            framesToGiveEnd: infinityFramestoGiveEnd ? -Infinity : 0,
+            trimStart: infinitytrimStart ? Infinity : 0,
+            trimEnd: infinitytrimEnd ? -Infinity : 0,
         };
         
         if (clip.type === 'image' || clip.type === 'video') { 
@@ -1215,8 +1215,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
                 // Compute local cut position relative to original clip start
                 const startFrame = clip.startFrame ?? 0;
-                const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? (clip.framesToGiveStart ?? 0) : 0;
-                const realStartFrame = startFrame + framesToGiveStart;
+                const trimStart = isFinite(clip.trimStart ?? 0) ? (clip.trimStart ?? 0) : 0;
+                const realStartFrame = startFrame + trimStart;
                 const cutLocal = Math.max(0, cutFrame - realStartFrame);
 
                 const makeEmptyKeyframesLike = (kf: Map<number, MaskData> | Record<number, MaskData>) =>
@@ -1294,7 +1294,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             if (Object.prototype.hasOwnProperty.call(clip, 'speed')) {
                 speed = (clip as AudioClipProps).speed || 1;
             }
-            const frameShift = (clip.startFrame || 0) - (clip.framesToGiveStart || 0);
+            const frameShift = (clip.startFrame || 0) - (clip.trimStart || 0);
             const url1 = new URL(clip.src);
             const url2 = new URL(clip.src);
             const startFrame1 = (clip.startFrame || 0) - frameShift;
@@ -1412,7 +1412,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const newId = uuidv4();
             newIds.push(newId);
             const timelineId = chooseTimelineFor(template);
-            return { ...template, clipId: newId, timelineId, startFrame: start, endFrame: end, framesToGiveEnd: 0, framesToGiveStart: 0 } as AnyClipProps;
+            return { ...template, clipId: newId, timelineId, startFrame: start, endFrame: end, trimEnd: 0, trimStart: 0 } as AnyClipProps;
         });
         const newClips = [...state.clips, ...pasted];
         const resolvedClips = resolveOverlaps(newClips);
@@ -1494,14 +1494,14 @@ export const getTimelineX = (timelineWidth:number, timelinePadding:number, timel
 
 export const getLocalFrame = (focusFrame: number, clip: AnyClipProps) => {
     const startFrame = clip.startFrame ?? 0;
-    const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? clip.framesToGiveStart ?? 0 : 0;
-    const realStartFrame = startFrame + framesToGiveStart;
+    const trimStart = isFinite(clip.trimStart ?? 0) ? clip.trimStart ?? 0 : 0;
+    const realStartFrame = startFrame + trimStart;
     return focusFrame - realStartFrame;
 }
 
 export const getGlobalFrame = (focusFrame: number, clip: AnyClipProps) => {
     const startFrame = clip.startFrame ?? 0;
-    const framesToGiveStart = isFinite(clip.framesToGiveStart ?? 0) ? clip.framesToGiveStart ?? 0 : 0;
-    const realStartFrame = startFrame + framesToGiveStart;
+    const trimStart = isFinite(clip.trimStart ?? 0) ? clip.trimStart ?? 0 : 0;
+    const realStartFrame = startFrame + trimStart;
     return focusFrame + realStartFrame;
 }

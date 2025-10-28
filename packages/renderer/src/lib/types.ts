@@ -1,6 +1,6 @@
 import { PacketStats, InputVideoTrack, InputAudioTrack, MetadataTags, InputFormat, Input } from "mediabunny";
 import { Preprocessor } from "./preprocessor";
-import { ManifestDocument, ManifestInfoWithType } from "./manifest/api";
+import { ManifestDocument } from "./manifest/api";
 
 export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'text' | 'lora' | 'shape' | 'draw' | 'filter' | 'group'
 export type TimelineType = 'media' | 'audio' | 'model'  | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
@@ -41,8 +41,8 @@ export interface ClipProps {
     timelineId?: string;
     startFrame?:number;
     endFrame?:number;
-    framesToGiveEnd?:number;
-    framesToGiveStart?:number;
+    trimEnd?:number;
+    trimStart?:number;
     clipPadding?:number;
     clipId: string;
     width?: number;
