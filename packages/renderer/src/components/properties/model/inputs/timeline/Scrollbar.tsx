@@ -50,6 +50,9 @@ const Scrollbar:React.FC<ScrollbarProps> = ({
         }
     }, [focusFrame, timelineDuration, totalTimelineFrames, maxScrollbarX]);
 
+    useEffect(() => {
+        horizontalScrollStateRef.current.startFrame = timelineDuration[0];
+    }, [timelineDuration]);
 
     return (
        <Rect
@@ -77,20 +80,28 @@ const Scrollbar:React.FC<ScrollbarProps> = ({
           onDragMove={(e) => {
             const x = e.target.x();
             setScrollbarX(x);
-            
+
             const [startFrame, endFrame] = timelineDuration;
             const visibleDuration = endFrame - startFrame;
-            const scrollableFrames = totalTimelineFrames - visibleDuration;
-            
-            const targetStartFrame = maxScrollbarX > 0 
-              ? Math.round((x / maxScrollbarX) * scrollableFrames)
-              : 0;
-            
-            const framesToShift = targetStartFrame - startFrame;
-            
+            const scrollableFrames = Math.max(0, totalTimelineFrames - visibleDuration);
+
+            if (maxScrollbarX <= 0 || scrollableFrames <= 0) {
+              horizontalScrollStateRef.current.lastX = x;
+              return;
+            }
+
+            const targetStartFrame = Math.round((x / maxScrollbarX) * scrollableFrames);
+            const clampedTarget = Math.max(0, Math.min(scrollableFrames, targetStartFrame));
+
+            const currentStart = horizontalScrollStateRef.current.startFrame;
+            const framesToShift = clampedTarget - currentStart;
+
             if (framesToShift !== 0) {
               assetStore.shiftTimelineDuration(framesToShift);
+              horizontalScrollStateRef.current.startFrame = currentStart + framesToShift;
             }
+
+            horizontalScrollStateRef.current.lastX = x;
           }}
           onDragEnd={(e) => {
             const x = e.target.x();
