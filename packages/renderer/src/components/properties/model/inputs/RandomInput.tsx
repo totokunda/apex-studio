@@ -131,7 +131,7 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
             onClick={switchToManual}
             className={cn(
               "px-2 py-0.5 text-[10px] font-medium transition-all duration-200",
-              !isAuto ? "bg-brand-light/[0.075] text-brand-lighter" : "bg-brand-background/50 text-brand-light/70 hover:bg-brand-light/5"
+              !isAuto ? "bg-brand-light/[0.075] text-brand-lighter" : "bg-brand text-brand-light/70 hover:bg-brand-light/5"
             )}
           >
             Manual
@@ -141,7 +141,7 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
             onClick={switchToAuto}
             className={cn(
               "px-2 py-0.5 text-[10px] font-medium transition-all duration-200 border-l border-brand-light/10",
-              isAuto ? "bg-brand-light/[0.075] text-brand-lighter" : "bg-brand-background/50 text-brand-light/70 hover:bg-brand-light/5"
+              isAuto ? "bg-brand-light/[0.075] text-brand-lighter" : "bg-brand text-brand-light/70 hover:bg-brand-light/5"
             )}
           >
             Auto
@@ -153,7 +153,7 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
       <div className="relative w-full flex flex-row items-center min-w-0">
         {startLogo && <span className="text-brand-light/50 font-medium text-[11px] absolute left-2 top-1/2 -translate-y-1/2">{startLogo}</span>}
         <input
-          className={cn(`w-full h-7 px-2 text-brand-light text-[11px] rounded-l font-normal items-center border border-brand-light/5  bg-brand-background/50 ${className}`, {
+          className={cn(`w-full h-7 px-2 text-brand-light text-[11px] rounded-l font-normal items-center border border-brand-light/5  bg-brand ${className}`, {
             'pl-6': startLogo,
           })}
           value={tempValue}
@@ -162,7 +162,7 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
           onKeyDown={handleKeyDown}
           readOnly={isAuto}
         />
-        <div className="flex items-center w-6 justify-center bg-brand-background/50 h-6 cursor-pointer rounded-r">
+        <div className="flex items-center w-6 justify-center bg-brand h-6 cursor-pointer rounded-r">
           <button
             type="button"
             className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center"

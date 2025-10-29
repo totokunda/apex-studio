@@ -20,7 +20,7 @@ const TextInput: React.FC<TextInputProps> = ({ label, description, value, onChan
   }, [value]);
 
   return (
-    <div className="flex flex-col items-start w-full gap-y-1 min-w-0 relative h-full px-3 py-8 placeholder:text-brand-light/40  text-brand-light text-[11px] font-normal border border-brand-light/10 shadow bg-brand-background/50 rounded-[7px]">
+    <div className="flex flex-col items-start w-full gap-y-1 min-w-0 relative h-full px-3 py-8 placeholder:text-brand-light/40  text-brand-light text-[11px] font-normal border border-brand-light/5 shadow bg-brand rounded-[7px]">
       <label className="text-brand-light text-[10.5px] w-full text-start font-medium absolute top-3 left-3">{label}</label>
       {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start mb-0.5 absolute bottom-3 left-3">{description}</span>}
       <textarea

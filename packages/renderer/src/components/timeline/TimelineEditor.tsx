@@ -552,7 +552,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const hoveredTimeline = hoveredTimelineIdx !== -1 ? timelines[hoveredTimelineIdx] : null;
       timelineId = uuidv4();
       const newTimeline = {
-        type: data.type === 'image' || data.type === 'video' ? 'media' : data.type as TimelineType,
+        type: getTimelineTypeForClip(data),
         timelineId,
         timelinePadding: 24,
         timelineWidth: size.width,

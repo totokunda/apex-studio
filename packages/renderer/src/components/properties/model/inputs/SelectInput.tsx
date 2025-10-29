@@ -54,7 +54,7 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
           <div className="w-full">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="w-full py-1.5 px-3.5 rounded-[5px] font-medium bg-brand-background/50 border border-brand-light/5 text-brand-light text-[10.5px] focus:outline-none focus:ring-2 focus:ring-brand-light/20 flex items-center justify-between hover:bg-brand-light/5 transition-all duration-200">
+                <button className="w-full py-1.5 px-3.5 rounded-[5px] font-medium bg-brand border border-brand-light/5 text-brand-light text-[10.5px] focus:outline-none focus:ring-2 focus:ring-brand-light/20 flex items-center justify-between hover:bg-brand-light/5 transition-all duration-200">
                   <span>{selectedOption?.name || 'Select option'}</span>
                   <LuChevronDown className="w-3.5 h-3.5 text-brand-light/60" />
                 </button>
@@ -84,7 +84,7 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
         <div className="flex-1">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="w-full py-1.5 px-3.5 rounded-[5px] font-medium bg-brand-background/50 border border-brand-light/5 text-brand-light text-[10.5px] focus:outline-none focus:ring-2 focus:ring-brand-light/20 flex items-center justify-between hover:bg-brand-light/5 transition-all duration-200">
+              <button className="w-full py-1.5 px-3.5 rounded-[5px] font-medium bg-brand border border-brand-light/5 text-brand-light text-[10.5px] focus:outline-none focus:ring-2 focus:ring-brand-light/20 flex items-center justify-between hover:bg-brand-light/5 transition-all duration-200">
                 <span>{selectedOption?.name || 'Select option'}</span>
                 <LuChevronDown className="w-3.5 h-3.5 text-brand-light/60" />
               </button>
@@ -135,7 +135,7 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
                 "flex-1 py-1.5 px-3 text-[10px] transition-all duration-200 font-medium",
                 String(selectedOption?.value) === String(option.value)
                   ? "bg-brand-light/[0.1] text-brand-lighter"
-                  : "bg-brand-background/50 text-brand-light/60 hover:bg-brand-light/5",
+                  : "bg-brand text-brand-light/60 hover:bg-brand-light/5",
               )}
             >
               {option.name}
@@ -158,7 +158,7 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
               "flex-1 py-1.5 px-3 text-[10px] transition-all duration-200 font-medium",
               String(selectedOption?.value) === String(option.value)
                 ? "bg-brand-light/[0.075] text-brand-lighter"
-                : "bg-brand-background/50 text-brand-light/60 hover:bg-brand-light/5",
+                : "bg-brand text-brand-light/60 hover:bg-brand-light/5",
               index !== 0 && "border-l border-brand-light/10"
             )}
           >

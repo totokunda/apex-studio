@@ -218,16 +218,16 @@ const Item:React.FC<ItemProps> = ({ item, renamingItem, setRenamingItem, renameC
                           <>
                             
                             {!item.hasProxy ? (
-                              <DropdownMenuItem className='py-1.5' onClick={() => onCreateProxy?.(item)}>
-                                <TbVideo className="w-4 h-4" />
-                                <span className="flex flex-row gap-x-2.5 items-center justify-center text-xs">
+                              <DropdownMenuItem className='py-1 rounded' onClick={() => onCreateProxy?.(item)}>
+                                <TbVideo className="w-3.5 h-3.5" />
+                                <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11px]">
                                   Create File Proxy
                                 </span>
                               </DropdownMenuItem>
                             ) : (
-                              <DropdownMenuItem className='py-1.5' onClick={() => onRemoveProxy?.(item)}>
-                                <TbVideoOff className="w-4 h-4" />
-                                <span className="flex flex-row gap-x-2.5 items-center justify-center text-xs">
+                              <DropdownMenuItem className='py-1 rounded' onClick={() => onRemoveProxy?.(item)}>
+                                <TbVideoOff className="w-3.5 h-3.5" />
+                                <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11px]">
                                   Remove File Proxy
                                 </span>
                               </DropdownMenuItem>
@@ -235,17 +235,17 @@ const Item:React.FC<ItemProps> = ({ item, renamingItem, setRenamingItem, renameC
                             <DropdownMenuSeparator />
                           </>
                         )}
-                      <DropdownMenuItem className='py-1.5' onClick={() => startRename(item)}>
-                          <TbPencil className="w-4 h-4" />
-                          <span className="flex flex-row gap-x-2.5 items-center justify-center text-xs">
+                      <DropdownMenuItem className='py-1 rounded' onClick={() => startRename(item)}>
+                          <TbPencil className="w-3.5 h-3.5" />
+                          <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11px]">
                             Rename
                           </span>
                         </DropdownMenuItem>
                         
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className='py-1.5' onClick={() => {setDeleteItem(item.name); setDeleteAlertOpen(true)}}>
-                            <TbTrash className="w-4 h-4" />
-                            <span className="flex flex-row gap-x-2.5 items-center justify-center text-xs">
+                        <DropdownMenuItem className='py-1 rounded' onClick={() => {setDeleteItem(item.name); setDeleteAlertOpen(true)}}>
+                            <TbTrash className="w-3.5 h-3.5" />
+                            <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11px]">
                               Delete
                             </span>
                         </DropdownMenuItem>

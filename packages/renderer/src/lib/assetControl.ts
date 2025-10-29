@@ -34,6 +34,9 @@ interface AssetControlStore {
     selectedAssetClipId: string | null;
     setSelectedAssetClipId: (clipId: string | null) => void;
     clearSelectedAsset: () => void;
+    // Optional handler invoked whenever setSelectedAssetClipId is called (including deselect with null)
+    selectedAssetChangeHandler: ((clipId: string | null) => void) | null;
+    setSelectedAssetChangeHandler: (handler: ((clipId: string | null) => void) | null) => void;
 }
 
 export const useAssetControlsStore = create<AssetControlStore>((set, get) => ({
@@ -77,8 +80,16 @@ export const useAssetControlsStore = create<AssetControlStore>((set, get) => ({
 
     // Asset selection
     selectedAssetClipId: null,
-    setSelectedAssetClipId: (clipId) => set({ selectedAssetClipId: clipId }),
+    setSelectedAssetClipId: (clipId) => {
+        set({ selectedAssetClipId: clipId });
+        try {
+            const handler = get().selectedAssetChangeHandler;
+            if (typeof handler === 'function') handler(clipId);
+        } catch {}
+    },
     clearSelectedAsset: () => set({ selectedAssetClipId: null }),
+    selectedAssetChangeHandler: null,
+    setSelectedAssetChangeHandler: (handler) => set({ selectedAssetChangeHandler: handler ?? null }),
 }));
 
 // Mirrors the main controls' zoom baseline update, but scoped to the asset controls store.

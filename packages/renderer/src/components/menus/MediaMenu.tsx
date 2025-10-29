@@ -20,6 +20,7 @@ import { DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu";
 import { listConvertedMedia, importMediaPaths, ensureUniqueConvertedName, renameMediaPair, deleteMediaPair, getLowercaseExtension, pickMediaPaths, getPathForFile, createProxy, removeProxy } from '@app/preload';
 import { getMediaInfo } from '@/lib/media/utils';
 import { VIDEO_EXTS, IMAGE_EXTS, AUDIO_EXTS } from '@/lib/settings';
+import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/library';
  
 function isSupported(p: string) {
     try {
@@ -132,6 +133,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
     const [isDragging, setIsDragging] = useState(false);
     const dragCounterRef = useRef(0);
     const [creatingProxies, setCreatingProxies] = useState<Set<string>>(new Set());
+    const mediaLibraryVersion = useMediaLibraryVersion();
 
     useEffect(() => {
       const el = uploadBarRef.current;
@@ -186,7 +188,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
       }
     }, []);
 
-    useEffect(() => { loadMediaList(); }, [loadMediaList]);
+    useEffect(() => { loadMediaList(); }, [loadMediaList, mediaLibraryVersion]);
     
     const handleUpload = async (directory: boolean = false) => {
         try {
@@ -211,6 +213,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             hasProxy: it.hasProxy
           }));
           setItems((prev) => [...prev, ...newItems].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
+          bumpMediaLibraryVersion();
         } catch (error) {
           console.error(error);
           toast.error("Failed to upload file", {
@@ -262,6 +265,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             hasProxy: it.hasProxy
           }));
           setItems((prev) => [...prev, ...newItems].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
+          bumpMediaLibraryVersion();
         } catch (error) {
           console.error(error);
           toast.error("Failed to import files", { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
@@ -361,6 +365,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             }
             return item;
           }).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
+          bumpMediaLibraryVersion();
         } catch (e) {
           console.error(e);
           toast.error("Failed to rename", { position: "bottom-right", duration: 3000, style:{ width: 'fit-content' } });
@@ -400,6 +405,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             if (item) delete next[item.assetUrl];
             return next;
           });
+          bumpMediaLibraryVersion();
         } catch (e) {
           console.error(e);
           toast.error('Failed to delete', {
@@ -420,6 +426,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
           toast.dismiss(loadingId);
           toast.success('Proxy created', { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
           await loadMediaList();
+          bumpMediaLibraryVersion();
         } catch (e) {
           console.error(e);
           toast.error('Failed to create proxy', { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
@@ -437,6 +444,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
           await removeProxy(item.name);
           toast.success('Proxy removed', { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });
           await loadMediaList();
+          bumpMediaLibraryVersion();
         } catch (e) {
           console.error(e);
           toast.error('Failed to remove proxy', { position: "bottom-right", duration: 3000, style: { width: 'fit-content' } });

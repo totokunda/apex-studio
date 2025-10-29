@@ -236,7 +236,12 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             extraDist += distFromEndPixels;
         } else if (preprocessorSpan <= timelineSpan && preprocessorStartFrame < timelineStartFrame) {
             extraDist += (timelineStartFrame - preprocessorStartFrame) * pxPerFrame - timelinePadding
+        } 
+
+        if (timelineStartFrame === 0 && timelineSpan < preprocessorSpan) {
+            extraDist += timelinePadding;
         }
+
 
         return positionX + extraDist
     }, [preprocessorXPosition, imageWidth, preprocessorX, currentStartFrame, clip?.trimStart, timelineDuration]);

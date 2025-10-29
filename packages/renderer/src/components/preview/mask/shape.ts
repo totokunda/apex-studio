@@ -263,24 +263,32 @@ export class ShapeMask extends WebGLMaskBase {
   }
   
   private initResources() {
-    if (this.gl && !this.gl.isContextLost()) {
-      this.program = this.createProgram(vertexShader, fragmentShader);
-      if (!this.program) {
-        console.error('Failed to create shader program');
-      } else {
-      }
-      this.initQuadBuffers();
-    } else {
+    const gl = this.ensureContext();
+    if (!gl || (typeof gl.isContextLost === 'function' && gl.isContextLost())) {
       console.error('No WebGL context in ShapeMask or context is lost');
+      return;
     }
+    this.program = this.createProgram(vertexShader, fragmentShader);
+    if (!this.program) {
+      console.error('Failed to create shader program');
+    }
+    this.initQuadBuffers();
   }
   
+  protected onContextLost(): void {
+    super.onContextLost();
+    this.program = null;
+    this.positionBuffer = null;
+    this.texcoordBuffer = null;
+  }
+
   protected onContextRestored(): void {
     this.initResources();
   }
 
   private initQuadBuffers() {
-    if (!this.gl) return;
+    const gl = this.ensureContext();
+    if (!gl) return;
 
     // Full-screen quad in clip space for TRIANGLE_STRIP
     const positions = new Float32Array([
@@ -297,16 +305,16 @@ export class ShapeMask extends WebGLMaskBase {
       1, 0,
     ]);
 
-    this.positionBuffer = this.gl.createBuffer();
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-    this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW);
+    this.positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
 
-    this.texcoordBuffer = this.gl.createBuffer();
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texcoordBuffer);
-    this.gl.bufferData(this.gl.ARRAY_BUFFER, texcoords, this.gl.STATIC_DRAW);
+    this.texcoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.texcoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, texcoords, gl.STATIC_DRAW);
 
     // leave ARRAY_BUFFER unbound
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
   private hexToRgb(hex: string): { r: number; g: number; b: number } {
@@ -501,12 +509,16 @@ export class ShapeMask extends WebGLMaskBase {
   }
 
   public dispose() {
-    super.dispose();
-    if (this.gl) {
-      if (this.program) this.gl.deleteProgram(this.program);
-      if (this.positionBuffer) this.gl.deleteBuffer(this.positionBuffer);
-      if (this.texcoordBuffer) this.gl.deleteBuffer(this.texcoordBuffer);
+    const gl = this.gl;
+    if (gl) {
+      if (this.program) gl.deleteProgram(this.program);
+      if (this.positionBuffer) gl.deleteBuffer(this.positionBuffer);
+      if (this.texcoordBuffer) gl.deleteBuffer(this.texcoordBuffer);
     }
+    this.program = null;
+    this.positionBuffer = null;
+    this.texcoordBuffer = null;
+    super.dispose();
   }
 
 

@@ -86,7 +86,7 @@ const App:React.FC = () => {
     <main ref={containerRef} className="w-full text-center font-poppins bg-black h-screen flex flex-col">
       <Topbar />
       <Toaster />  
-      <div className="flex h-full w-full p-3">
+      <div className="flex h-[calc(100vh-36px)] min-h-[calc(100vh-36px)] w-full p-3">
         {layout === 'default' && (
           <ResizablePanelGroup direction="vertical" className="flex-1 gap-0.5 overflow-hidden">
             <ResizablePanel defaultSize={70} minSize={30} maxSize={70}>

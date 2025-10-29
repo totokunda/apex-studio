@@ -6,7 +6,6 @@ import { cn } from '@/lib/utils';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@radix-ui/react-tabs';
 import { LuSearch, LuUpload } from 'react-icons/lu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { useMediaCache } from '@/lib/media/cache';
 import { MediaItem, MediaThumb } from '@/components/media/Item';
 import { getMediaInfo } from '@/lib/media/utils';
 import { listConvertedMedia } from '@app/preload';
@@ -16,9 +15,10 @@ import { useClipStore } from '@/lib/clip';
 import { useAssetControlsStore } from '@/lib/assetControl';
 import TimelineClipPosterPreview from './TimelineClipPosterPreview';
 import { AnyClipProps, ImageClipProps, VideoClipProps } from '@/lib/types';
-import { VIDEO_EXTS, DEFAULT_FPS } from '@/lib/settings';
-import { getLowercaseExtension } from '@app/preload';
+import { VIDEO_EXTS, IMAGE_EXTS, DEFAULT_FPS } from '@/lib/settings';
+import { getLowercaseExtension, pickMediaPaths, importMediaPaths, getPathForFile } from '@app/preload';
 import { useViewportStore } from '@/lib/viewport';
+import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/library';
 
 
 export type ImageSelection = { kind: 'media', assetUrl: string } | { kind: 'clip', clipId: string } | null;
@@ -44,14 +44,17 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [filteredMediaItems, setFilteredMediaItems] = useState<MediaItem[]>([]);
-    const {media} = useMediaCache();
+    // media cache not needed for list sync here; we subscribe to library version instead
     const {clips} = useClipStore();
     const getClipById = useClipStore((s) => s.getClipById);
-    const selectedAssetClipId = useAssetControlsStore((s) => s.selectedAssetClipId);
     const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
+  const setSelectedAssetChangeHandler = useAssetControlsStore((s) => s.setSelectedAssetChangeHandler);
+
     useEffect(() => {
         setFilteredMediaItems(mediaItems.filter((media) => media.name.toLowerCase().includes(searchQuery.toLowerCase())));
     }, [searchQuery, mediaItems]);
+
+    const mediaLibraryVersion = useMediaLibraryVersion();
 
     useEffect(() => {
         (async () => {
@@ -70,21 +73,63 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
         results = results.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())).filter((media) => (media.type === 'image' || media.type === 'video'));
         setMediaItems(results);
         })();
-    }, [media]);
+    }, [mediaLibraryVersion]);
+
+    const handleUpload = async () => {
+        try {
+            const filters = [
+                { name: 'Image/Video Files', extensions: VIDEO_EXTS.concat(IMAGE_EXTS) },
+                { name: 'Video Files', extensions: VIDEO_EXTS },
+                { name: 'Image Files', extensions: IMAGE_EXTS },
+            ];
+            const picked = await pickMediaPaths({ directory: false, filters, title: 'Choose image/video file(s) to import' });
+            const paths = (picked ?? []).filter((p) => {
+                const ext = getLowercaseExtension(p);
+                return VIDEO_EXTS.includes(ext) || IMAGE_EXTS.includes(ext);
+            });
+            if (paths.length === 0) return;
+            const existingNames = new Set(mediaItems.map(it => it.name));
+            await importMediaPaths(paths);
+            const list = await listConvertedMedia();
+            const infoPromises = list.map(it => getMediaInfo(it.assetUrl));
+            const infos = await Promise.all(infoPromises);
+            let results: MediaItem[] = list.map((it, idx) => ({
+              name: it.name,
+              type: it.type,
+              absPath: it.absPath,
+              assetUrl: it.assetUrl,
+              dateAddedMs: it.dateAddedMs,
+              mediaInfo: infos[idx],
+              hasProxy: it.hasProxy
+            }));
+            results = results.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())).filter((media) => (media.type === 'image' || media.type === 'video'));
+            setMediaItems(results);
+            const newlyAdded = results.filter(it => !existingNames.has(it.name));
+            if (newlyAdded.length > 0) {
+                const first = newlyAdded[0];
+                clearSelectedAsset();
+                onChange({ kind: 'media', assetUrl: first.assetUrl });
+            }
+            bumpMediaLibraryVersion();
+        } catch (e) {
+            // swallow errors here; MediaMenu handles toasts, but we keep silent in this compact picker
+        }
+    };
 
     const numEligibleTimelineAssets = useMemo(() => {
         return clips.filter((clip) => (clip.type !== 'filter' && clip.type !== 'audio' && clip.clipId !== clipId)).length;
     }, [clips])
 
-    // When a timeline asset is selected from the TimelineSearch view, set selection to the clip id
-    useEffect(() => {
-        if (!selectedAssetClipId) return;
-        const selectedClip = getClipById(selectedAssetClipId);
+    // Direct change handler so timeline selection/deselection can update this input
+    const assetSelectionHandler = React.useCallback((clipId: string | null) => {
+        if (!clipId) {
+            onChange(null);
+            return;
+        }
+        const selectedClip = getClipById(clipId);
         if (!selectedClip) return;
-        const next = { kind: 'clip', clipId: selectedClip.clipId } as const;
-        const same = value && value.kind === 'clip' && value.clipId === selectedAssetClipId;
-        if (!same) onChange(next);
-    }, [selectedAssetClipId, getClipById, value, onChange]);
+        onChange({ kind: 'clip', clipId: selectedClip.clipId });
+    }, [getClipById, onChange]);
 
     return (
         <PopoverContent 
@@ -92,7 +137,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
             align='start'
             sideOffset={20} 
             className={cn('p-2 z-[90] dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-150', selectedTab === 'timeline' ? 'w-[600px]' : 'w-96')}
-            onOpenAutoFocus={() => { isUserInteractingRef.current = true; }} onCloseAutoFocus={() => { isUserInteractingRef.current = false; }}>
+            onOpenAutoFocus={() => { isUserInteractingRef.current = true; setSelectedAssetChangeHandler(assetSelectionHandler); }} onCloseAutoFocus={() => { isUserInteractingRef.current = false; setSelectedAssetChangeHandler(null); }}>
                 <Tabs className='' value={selectedTab} onValueChange={(value) => setSelectedTab(value as 'timeline' | 'library')}>
                     <div className={cn('w-full flex flex-row items-center gap-x-2 justify-between')}>
                 <TabsList className={cn('w-full  text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row shadow overflow-hidden',
@@ -108,7 +153,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
                         Timeline Assets
                     </TabsTrigger>
                 </TabsList>
-                <button className={cn('w-fit h-full mr-2 flex flex-row items-center justify-center gap-x-1.5 bg-brand-background-light hover:bg-brand-light/10 transition-all duration-200 cursor-pointer rounded py-1.5', 
+                <button onClick={handleUpload} className={cn('w-fit h-full mr-2 flex flex-row items-center justify-center gap-x-1.5 bg-brand-background-light hover:bg-brand-light/10 transition-all duration-200 cursor-pointer rounded py-1.5', 
                     numEligibleTimelineAssets === 0 ? 'px-5' : 'px-3'
 
                 )}>
@@ -156,14 +201,15 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
 }
 
 
-
 const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onChange, clipId, panelSize }) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const stageContainerRef = useRef<HTMLDivElement | null>(null);
     const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
     const [mediaClip, setMediaClip] = useState<AnyClipProps | null>(null);
     const [isOverDropZone, setIsOverDropZone] = useState(false);
+    const externalDragCounterRef = useRef(0);
     const getClipById = useClipStore((s) => s.getClipById);
+    const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
     const aspectRatio = useViewportStore((s) => s.aspectRatio);
     const viewportRatio = useMemo(() => {
         const r = aspectRatio.width / aspectRatio.height;
@@ -283,10 +329,64 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
     }, [value, getClipById]);
 
 
+    const handleExternalDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        externalDragCounterRef.current++;
+        setIsOverDropZone(true);
+    };
+
+    const handleExternalDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+    };
+
+    const handleExternalDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        externalDragCounterRef.current--;
+        if (externalDragCounterRef.current <= 0) {
+            externalDragCounterRef.current = 0;
+            setIsOverDropZone(false);
+        }
+    };
+
+    const handleExternalDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsOverDropZone(false);
+        externalDragCounterRef.current = 0;
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length !== 1) return;
+        let path: string | undefined;
+        try {
+            path = getPathForFile(files[0]);
+        } catch {}
+        if (!path) return;
+        const ext = getLowercaseExtension(path);
+        const isAllowed = VIDEO_EXTS.includes(ext) || IMAGE_EXTS.includes(ext);
+        if (!isAllowed) return;
+        try {
+            const before = await listConvertedMedia();
+            const existingNames = new Set(before.map(it => it.name));
+            await importMediaPaths([path]);
+            const after = await listConvertedMedia();
+            const newlyAdded = after
+                .filter(it => !existingNames.has(it.name))
+                .filter(it => it.type === 'image' || it.type === 'video');
+            const first = newlyAdded[0] ?? null;
+            if (first) {
+                clearSelectedAsset();
+                onChange({ kind: 'media', assetUrl: first.assetUrl });
+            }
+            bumpMediaLibraryVersion();
+        } catch {}
+    };
+
   return (
     <Droppable className="w-full h-full" id="image-input" accepts={['media']}>
         
-    <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand-background/50 rounded-[7px] border border-brand-light/10 h-auto shadow  ">
+    <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-auto   ">
     <div className="w-full h-full flex flex-col items-start justify-start p-3">
     <div className="w-full flex flex-col items-start justify-start mb-3">
         {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
@@ -294,7 +394,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
     </div>
     <Popover>
         <PopoverTrigger className="w-full">
-        <div ref={stageContainerRef} style={{ height: stageSize.h }} className={cn("w-full flex flex-col items-center justify-center gap-y-3  shadow-accent  hover:opacity-70 transition-all duration-200 cursor-pointer relative overflow-hidden", 
+        <div ref={stageContainerRef} onDragEnter={handleExternalDragEnter} onDragOver={handleExternalDragOver} onDragLeave={handleExternalDragLeave} onDrop={handleExternalDrop} style={{ height: stageSize.h }} className={cn("w-full flex flex-col items-center justify-center gap-y-3  shadow-accent  hover:opacity-70  cursor-pointer relative overflow-hidden", 
             value ? '': 'border-dashed',
             value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50'
             )}>

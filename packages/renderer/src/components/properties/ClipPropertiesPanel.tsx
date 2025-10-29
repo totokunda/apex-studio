@@ -261,7 +261,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
   return (
     <div className="h-full w-full min-w-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden' }}>
-      <div className="overflow-hidden" style={{ height: hasValidPreprocessor ? 'calc(100% - 90px)' : '100%' }}>
+      <div className="overflow-hidden" style={{ height: (hasValidPreprocessor || hasModel) ? 'calc(100% - 80px)' : '100%' }}>
         <Tabs value={selectedTab} onValueChange={setSelectedTab} className="min-w-0 relative flex flex-col h-full">
         <div className="relative flex-shrink-0 ">
           <LuChevronLeft onClick={() => {

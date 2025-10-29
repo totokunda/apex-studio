@@ -84,14 +84,14 @@ const NumberInput: React.FC<NumberInputProps<string>> = ({ value, onChange, labe
 
     <div className="relative w-full flex flex-row items-center min-w-0">
             {startLogo && <span className="text-brand-light/50 font-medium text-[11px] absolute left-2 top-1/2 -translate-y-1/2">{startLogo}</span>}
-            <input className={cn(`w-full h-7 px-2 text-brand-light text-[11px] outline-none rounded-l font-normal items-center border border-brand-light/5  bg-brand-background/50 ${className}`, {
+            <input className={cn(`w-full h-7 px-2 text-brand-light text-[11px] outline-none rounded-l font-normal items-center border border-brand-light/5  bg-brand ${className}`, {
                 'pl-6': startLogo,
             })} 
             value={tempValue} 
             onChange={(e) => setTempValue(e.target.value)}
             onBlur={handleBlur}
             onKeyDown={handleKeyDown} />
-        {<div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand-background/50  h-6 cursor-pointer rounded-r">
+        {<div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand  h-6 cursor-pointer rounded-r">
             <button className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center" 
             onClick={() => {
               const numValue = Number(value);

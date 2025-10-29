@@ -22,28 +22,35 @@ export class WebGLHaldClut extends WebGLFilterBase {
   private clutWidths: Map<string, number> = new Map();
   private loadedClutPaths: Set<string> = new Set();
   private contextLost = false;
-  private onContextLost = (event: Event) => {
-    event.preventDefault();
+
+  constructor() {
+    // Request dedicated WebGL2 context from base class
+    super('webgl2', 'preview-webgl-filter-hald');
+    this.initShaders();
+  }
+
+  protected onContextLost(): void {
+    super.onContextLost();
     this.contextLost = true;
     this.program = null;
     console.warn('[HaldClut] WebGL context lost');
-  };
-  private onContextRestored = () => {
+  }
+
+  protected onContextRestored(): void {
+    super.onContextRestored();
     this.contextLost = false;
     console.info('[HaldClut] WebGL context restored, reinitializing resources');
     void this.reinitializeResources();
-  };
-
-  constructor() {
-    // Request WebGL2 context from base class
-    super('webgl2');
-    this.initShaders();
-    this.canvas.addEventListener('webglcontextlost', this.onContextLost as EventListener, false);
-    this.canvas.addEventListener('webglcontextrestored', this.onContextRestored as EventListener, false);
   }
 
   private initShaders() {
-    if (!this.gl) return;
+    const gl = this.ensureContext();
+    if (!gl) return;
+    if (!(gl instanceof WebGL2RenderingContext)) {
+      console.error('WebGLHaldClut requires a WebGL2 context');
+      this.program = null;
+      return;
+    }
 
     const vertexShaderSource = `#version 300 es
       in vec2 a_position;
@@ -136,7 +143,8 @@ export class WebGLHaldClut extends WebGLFilterBase {
     `;
 
     try {
-      this.program = twgl.createProgramFromSources(this.gl, [vertexShaderSource, fragmentShaderSource]);
+      this.program = null;
+      this.program = twgl.createProgramFromSources(gl, [vertexShaderSource, fragmentShaderSource]);
       if (!this.program) {
         console.error('Failed to create shader program');
       } else {
@@ -148,7 +156,8 @@ export class WebGLHaldClut extends WebGLFilterBase {
   }
 
   private async reinitializeResources(): Promise<void> {
-    if (!this.gl) return;
+    const gl = this.ensureContext();
+    if (!gl) return;
     this.initBuffers();
     this.initShaders();
     const paths = Array.from(this.loadedClutPaths);
@@ -215,9 +224,13 @@ export class WebGLHaldClut extends WebGLFilterBase {
    * Supports preloading multiple CLUTs - each is stored in a map by path.
    */
   public async preloadClut(clutImagePath: string): Promise<void> {
-    if (!this.gl) return;
+    const gl = this.ensureContext();
+    if (!gl) return;
     this.loadedClutPaths.add(clutImagePath);
-    if (this.contextLost || ((this.gl as WebGLRenderingContext).isContextLost && (this.gl as WebGLRenderingContext).isContextLost())) {
+    if (
+      this.contextLost ||
+      ((gl as WebGLRenderingContext).isContextLost && (gl as WebGLRenderingContext).isContextLost())
+    ) {
       return;
     }
 
@@ -226,7 +239,10 @@ export class WebGLHaldClut extends WebGLFilterBase {
       return;
     }
 
-    const gl = this.gl as WebGL2RenderingContext;
+    if (!(gl instanceof WebGL2RenderingContext)) {
+      console.error('WebGLHaldClut requires WebGL2 to preload CLUT textures');
+      return;
+    }
     const clutImage = await this.loadClutImage(clutImagePath);
     
     // Calculate Hald CLUT level from image dimensions
@@ -266,10 +282,17 @@ export class WebGLHaldClut extends WebGLFilterBase {
     clutImagePath: string,
     intensity: number = 1.0
   ): HTMLCanvasElement {
-    
-    if (!this.gl || !this.program) return sourceCanvas;
-    if (((this.gl as WebGLRenderingContext).isContextLost && (this.gl as WebGLRenderingContext).isContextLost())) {
+    const gl = this.ensureContext();
+    if (!gl || !this.program) return sourceCanvas;
+    if (
+      ((gl as WebGLRenderingContext).isContextLost && (gl as WebGLRenderingContext).isContextLost())
+    ) {
       this.contextLost = true;
+      return sourceCanvas;
+    }
+
+    if (!(gl instanceof WebGL2RenderingContext)) {
+      console.error('WebGLHaldClut requires WebGL2 to apply CLUT textures');
       return sourceCanvas;
     }
 
@@ -283,25 +306,17 @@ export class WebGLHaldClut extends WebGLFilterBase {
       return sourceCanvas;
     }
 
-    const gl = this.gl;
-
     // Create source texture from canvas
-    const gl2 = gl as WebGL2RenderingContext;
     const sourceTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, sourceTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl2.texImage2D(gl.TEXTURE_2D, 0, gl2.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
 
     // Use the existing GL context's canvas for output
-    this.canvas = this.gl.canvas as HTMLCanvasElement;
-    this.canvas.width = sourceCanvas.width;
-    this.canvas.height = sourceCanvas.height;
-
-    // Set viewport
-    gl.viewport(0, 0, sourceCanvas.width, sourceCanvas.height);
+    this.resizeCanvas(sourceCanvas.width, sourceCanvas.height);
     
     // Clear the canvas
     gl.clearColor(0, 0, 0, 0);
@@ -386,22 +401,20 @@ export class WebGLHaldClut extends WebGLFilterBase {
   }
 
   public dispose() {
-    if (this.gl) {
+    const gl = this.gl;
+    if (gl) {
       // Delete all CLUT textures
       for (const texture of this.clutTextures.values()) {
-        this.gl.deleteTexture(texture);
+        gl.deleteTexture(texture);
       }
-      this.clutTextures.clear();
-      this.clutLevels.clear();
-      this.clutWidths.clear();
-      
       if (this.program) {
-        this.gl.deleteProgram(this.program);
+        gl.deleteProgram(this.program);
         this.program = null;
       }
     }
-    this.canvas.removeEventListener('webglcontextlost', this.onContextLost as EventListener, false);
-    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored as EventListener, false);
+    this.clutTextures.clear();
+    this.clutLevels.clear();
+    this.clutWidths.clear();
     this.loadedClutPaths.clear();
     super.dispose();
   }

@@ -1317,9 +1317,9 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                             })()}
                                 <Text
                                     x={groupCardWidth + 28}
-                                    y={16}
+                                    y={assetMode ? 12 : 16}
                                     text={'Group'}
-                                    fontSize={10.5}
+                                    fontSize={assetMode ? 9.5 : 10.5}
                                     fontFamily="Poppins"
                                     fontStyle="500"
                                     fill="white"
@@ -1339,7 +1339,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                                 ].filter(i => i.count > 0);
 
                                 const startX = groupCardWidth + 28;
-                                const startY = 16 + 18; // below label
+                                const startY = assetMode ? 9 + 18 : 16 + 18; // below label
                                 let curX = startX;
                                 return items.map((it, idx) => {
                                     const Ico = it.Icon;
@@ -1349,8 +1349,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                                             <Image
                                                 x={curX}
                                                 y={startY - 1}
-                                                width={12}
-                                                height={12}
+                                                width={assetMode ? 10 : 12}
+                                                height={assetMode ? 10 : 12}
                                                 image={(() => {
                                                     const svg = renderToStaticMarkup(React.createElement(Ico, { size: 12, color: '#FFFFFF' }));
                                                     const img = new (window as any).Image();
@@ -1361,10 +1361,10 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                                                 opacity={0.85}
                                             />
                                             {/* count */}
-                                            <Text x={curX + 16} y={startY - 1} text={`${it.count}`} fontSize={11} fontFamily="Poppins" fill="rgba(255,255,255,0.82)" />
+                                            <Text x={curX + (assetMode ? 14 : 16)} y={startY - 1} text={`${it.count}`} fontSize={assetMode ? 9.5 : 11} fontFamily="Poppins" fill="rgba(255,255,255,0.82)" />
                                         </Group>
                                     );
-                                    curX += 28; // spacing between icon+count pairs
+                                    curX += assetMode ? 24 : 28; // spacing between icon+count pairs
                                     return group;
                                 });
                             })()}
@@ -1651,7 +1651,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             
             {/* Per-clip menu component retained (optional); global menu now handles rendering */}
             {hasPreprocessors && (currentClip?.type === 'video' || currentClip?.type === 'image') && (
-                <>
+                <Group clipX={clipPosition.x} clipY={clipPosition.y} clipWidth={clipWidth} clipHeight={timelineHeight}>
                     {(currentClip as VideoClipProps | ImageClipProps).preprocessors.map((preprocessor) => {
                         return <PreprocessorClip 
                         assetMode={assetMode}
@@ -1667,7 +1667,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                         cornerRadius={cornerRadius} 
                         timelinePadding={timelinePadding} />
                     })}
-                </>
+                </Group>
             )}
             {showMaskKeyframes && currentClip?.type === 'video' && !assetMode && (
                 <MaskKeyframes

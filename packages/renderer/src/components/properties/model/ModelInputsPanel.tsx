@@ -93,8 +93,8 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
     }, [panel.icon]);
 
   return (
-    <div className=" bg-brand shadow   rounded-[6px] border border-brand-light/5">
-      <div onClick={() => setCollapsed((v) => !v)} className={cn("flex items-center justify-between bg-brand rounded-[6px]  py-2.5 px-3", {
+    <div className="">
+      <div onClick={() => setCollapsed((v) => !v)} className={cn("flex items-center justify-between  py-2.5 px-3", {
         'rounded-b': collapsed,
         'rounded-b-none ': !collapsed || !collapsible,
         'cursor-pointer': collapsible,
@@ -120,14 +120,14 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
         style={{
           display: 'flex',
           flexDirection: panel.layout.flow as 'row' | 'column',
-          gap: '10px',
+          gap: '12px',
         }}>
         {panel.layout.rows.map((row) => {
           return (
             <div key={row.join('-')} style={{
               display: 'flex',
               flexDirection: 'row',
-              gap: '10px',
+              gap: '12px',
             }}>
               {row.map((inputId) => {
                 const input = getInputById(inputId);

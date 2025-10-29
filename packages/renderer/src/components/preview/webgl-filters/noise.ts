@@ -49,13 +49,26 @@ export class WebGLNoise extends WebGLFilterBase {
 
   constructor() {
     super();
-    if (this.gl) {
-      this.program = this.createProgram(vertexShader, fragmentShader);
-    }
+    this.initProgram();
+  }
+
+  private initProgram() {
+    this.program = this.createProgram(vertexShader, fragmentShader);
+  }
+
+  protected onContextLost(): void {
+    super.onContextLost();
+    this.program = null;
+  }
+
+  protected onContextRestored(): void {
+    super.onContextRestored();
+    this.initProgram();
   }
 
   public apply(sourceCanvas: HTMLCanvasElement, amount: number): HTMLCanvasElement {
-    if (!this.gl || !this.program || amount <= 0) {
+    const gl = this.ensureContext();
+    if (!gl || !this.program || amount <= 0) {
       return sourceCanvas;
     }
 
@@ -67,7 +80,7 @@ export class WebGLNoise extends WebGLFilterBase {
     if (!texture) return sourceCanvas;
 
     // Use program
-    this.gl.useProgram(this.program);
+    gl.useProgram(this.program);
 
     // Set up attributes
     this.setupAttributes(this.program);
@@ -76,25 +89,27 @@ export class WebGLNoise extends WebGLFilterBase {
     this.seed = Math.random() * 1000;
 
     // Set uniforms
-    this.gl.activeTexture(this.gl.TEXTURE0);
-    this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_image'), 0);
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_noise'), amount / 100); // Normalize to 0..1
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_seed'), this.seed);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(gl.getUniformLocation(this.program, 'u_image'), 0);
+    gl.uniform1f(gl.getUniformLocation(this.program, 'u_noise'), amount / 100); // Normalize to 0..1
+    gl.uniform1f(gl.getUniformLocation(this.program, 'u_seed'), this.seed);
 
     // Draw
-    this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     // Cleanup
-    this.gl.deleteTexture(texture);
+    gl.deleteTexture(texture);
 
     return this.canvas;
   }
 
   public dispose() {
-    super.dispose();
-    if (this.gl && this.program) {
-      this.gl.deleteProgram(this.program);
+    const gl = this.gl;
+    if (gl && this.program) {
+      gl.deleteProgram(this.program);
     }
+    this.program = null;
+    super.dispose();
   }
 }

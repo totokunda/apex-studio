@@ -87,37 +87,70 @@ export class WebGLBlur extends WebGLFilterBase {
   constructor() {
     super();
 
-    if (this.gl) {
-      this.horizontalProgram = this.createProgram(vertexShader, horizontalBlurShader);
-      this.verticalProgram = this.createProgram(vertexShader, verticalBlurShader);
-      this.frameBuffer = this.gl.createFramebuffer();
+    this.initResources();
+  }
+
+  private initResources() {
+    const gl = this.ensureContext();
+    if (!gl) {
+      this.horizontalProgram = null;
+      this.verticalProgram = null;
+      this.frameBuffer = null;
+      this.tempTexture = null;
+      return;
     }
+
+    this.horizontalProgram = this.createProgram(vertexShader, horizontalBlurShader);
+    this.verticalProgram = this.createProgram(vertexShader, verticalBlurShader);
+    this.frameBuffer = gl.createFramebuffer();
+    if (!this.frameBuffer) {
+      console.error('Failed to create framebuffer for blur filter');
+    }
+    this.tempTexture = null;
+  }
+
+  protected onContextLost(): void {
+    super.onContextLost();
+    this.horizontalProgram = null;
+    this.verticalProgram = null;
+    this.tempTexture = null;
+    this.frameBuffer = null;
+  }
+
+  protected onContextRestored(): void {
+    super.onContextRestored();
+    this.initResources();
   }
 
   private applyPass(program: WebGLProgram, texture: WebGLTexture, radius: number, outputToScreen: boolean) {
-    if (!this.gl) return;
+    const gl = this.ensureContext();
+    if (!gl) return;
 
-    this.gl.useProgram(program);
+    gl.useProgram(program);
 
     // Bind framebuffer for intermediate pass, null for final pass
-    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, outputToScreen ? null : this.frameBuffer);
+    if (!outputToScreen && !this.frameBuffer) {
+      return;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, outputToScreen ? null : this.frameBuffer);
 
     // Set up attributes using base class method
     this.setupAttributes(program);
 
     // Set uniforms
-    this.gl.activeTexture(this.gl.TEXTURE0);
-    this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-    this.gl.uniform1i(this.gl.getUniformLocation(program, 'u_image'), 0);
-    this.gl.uniform2f(this.gl.getUniformLocation(program, 'u_resolution'), this.canvas.width, this.canvas.height);
-    this.gl.uniform1f(this.gl.getUniformLocation(program, 'u_radius'), radius);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(gl.getUniformLocation(program, 'u_image'), 0);
+    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), this.canvas.width, this.canvas.height);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_radius'), radius);
 
     // Draw
-    this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
   public apply(sourceCanvas: HTMLCanvasElement, radius: number): HTMLCanvasElement {
-    if (!this.gl || !this.horizontalProgram || !this.verticalProgram || radius <= 0) {
+    const gl = this.ensureContext();
+    if (!gl || !this.horizontalProgram || !this.verticalProgram || radius <= 0) {
       return sourceCanvas;
     }
 
@@ -125,21 +158,25 @@ export class WebGLBlur extends WebGLFilterBase {
     this.resizeCanvas(sourceCanvas.width, sourceCanvas.height);
 
     // Resize temp texture if needed
+    if (!this.frameBuffer) {
+      return sourceCanvas;
+    }
+
     if (!this.tempTexture || this.canvas.width !== sourceCanvas.width || this.canvas.height !== sourceCanvas.height) {
       if (this.tempTexture) {
-        this.gl.deleteTexture(this.tempTexture);
+        gl.deleteTexture(this.tempTexture);
       }
-      this.tempTexture = this.gl.createTexture();
-      this.gl.bindTexture(this.gl.TEXTURE_2D, this.tempTexture);
-      this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-      this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
-      this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
-      this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
-      this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.canvas.width, this.canvas.height, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, null);
+      this.tempTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.tempTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.canvas.width, this.canvas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
 
       // Attach to framebuffer
-      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.frameBuffer);
-      this.gl.framebufferTexture2D(this.gl.FRAMEBUFFER, this.gl.COLOR_ATTACHMENT0, this.gl.TEXTURE_2D, this.tempTexture, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.tempTexture, 0);
     }
 
     // Create texture from source
@@ -150,21 +187,28 @@ export class WebGLBlur extends WebGLFilterBase {
     this.applyPass(this.horizontalProgram, sourceTexture, radius, false);
 
     // Pass 2: Vertical blur (render to screen)
-    this.applyPass(this.verticalProgram, this.tempTexture!, radius, true);
+    if (this.tempTexture) {
+      this.applyPass(this.verticalProgram, this.tempTexture, radius, true);
+    }
 
     // Cleanup source texture
-    this.gl.deleteTexture(sourceTexture);
+    gl.deleteTexture(sourceTexture);
 
     return this.canvas;
   }
 
   public dispose() {
-    super.dispose();
-    if (this.gl) {
-      if (this.horizontalProgram) this.gl.deleteProgram(this.horizontalProgram);
-      if (this.verticalProgram) this.gl.deleteProgram(this.verticalProgram);
-      if (this.tempTexture) this.gl.deleteTexture(this.tempTexture);
-      if (this.frameBuffer) this.gl.deleteFramebuffer(this.frameBuffer);
+    const gl = this.gl;
+    if (gl) {
+      if (this.horizontalProgram) gl.deleteProgram(this.horizontalProgram);
+      if (this.verticalProgram) gl.deleteProgram(this.verticalProgram);
+      if (this.tempTexture) gl.deleteTexture(this.tempTexture);
+      if (this.frameBuffer) gl.deleteFramebuffer(this.frameBuffer);
     }
+    this.horizontalProgram = null;
+    this.verticalProgram = null;
+    this.tempTexture = null;
+    this.frameBuffer = null;
+    super.dispose();
   }
 }
