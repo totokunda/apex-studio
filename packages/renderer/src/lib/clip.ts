@@ -1505,3 +1505,10 @@ export const getGlobalFrame = (focusFrame: number, clip: AnyClipProps) => {
     const realStartFrame = startFrame + trimStart;
     return focusFrame + realStartFrame;
 }
+
+
+export const convertFrameToProjectSeconds = (frame: number) => {
+    // get fps from controls store
+    const fps = useControlsStore((s) => s.fps);
+    return frame / fps;
+}

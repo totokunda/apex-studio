@@ -507,6 +507,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!canvasRef.current) return;
         if (!mediaInfo) return;
         if (!displayWidth || !displayHeight) return;
+        // If playback has started, do not run paused seek rendering to avoid cancelling live decode
+        if (useControlsStore.getState().isPlaying) return;
         const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || 0;
         const projectFps = fps || 0;
         if (!Number.isFinite(clipFps) || clipFps <= 0) return;
@@ -523,7 +525,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         // Skip if we already rendered this frame
         if (lastRenderedFrameRef.current === targetFrame) return;
         
-        // Cancel any ongoing operations
+        // Cancel any ongoing paused seek operations (do not interfere with live decode token)
         const myToken = ++drawTokenRef.current;
         
         try {
@@ -738,6 +740,13 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             void seekAndDrawRef.current();
         }, 16, { leading: true, trailing: true }); // ~60fps throttle
     }, []);
+
+    // If playback starts, cancel any pending throttled seek callbacks to avoid cancelling live decode
+    useEffect(() => {
+        if (isPlaying) {
+            throttledSeekAndDraw.cancel();
+        }
+    }, [isPlaying, throttledSeekAndDraw]);
 
     // While paused, redraw on scrubs/jumps with throttling
     useEffect(() => {

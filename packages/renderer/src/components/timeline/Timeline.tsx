@@ -7,14 +7,33 @@ import GhostTimeline from "./clips/GhostTimeline";
 import { useControlsStore } from "@/lib/control";
 import { useContextMenuStore } from "@/lib/context-menu";
 import { calculateFrameFromX } from "@/lib/preprocessorHelpers";
+import { useAssetControlsStore, updateAssetZoomLevel } from "@/lib/assetControl";
 
-const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({timelineWidth, timelineY, timelineHeight = 54, timelinePadding = 24, timelineId, index, scrollY, type, muted, hidden}) => {
+const Timeline:React.FC<TimelineProps & {index: number, scrollY: number, cornerRadius?: number, assetMode?: boolean, excludeClipId?: string | null}> = ({timelineWidth, timelineY, timelineHeight = 54, timelinePadding = 24, timelineId, index, scrollY, type, muted, hidden, cornerRadius = 1, assetMode = false, excludeClipId = null}) => {
     const {hoveredTimelineId, getClipsForTimeline} = useClipStore();
 
-    const clips = getClipsForTimeline(timelineId);
+    const clipsAll = getClipsForTimeline(timelineId);
+    const clips = useMemo(() => {
+        if (!excludeClipId) return clipsAll;
+        return clipsAll.filter((c) => c.clipId !== excludeClipId);
+    }, [clipsAll, excludeClipId]);
+    // Stable signature to detect only meaningful clip-set changes (global across all timelines)
+    const allClips = useClipStore((s) => s.clips);
+    const allVisibleClips = useMemo(() => allClips.filter((c) => !c.hidden), [allClips]);
+    const allClipsSignature = useMemo(() => {
+        if (!allVisibleClips || allVisibleClips.length === 0) return '0:0';
+        let longest = 0;
+        for (let i = 0; i < allVisibleClips.length; i++) {
+            const end = Math.max(0, (allVisibleClips[i].endFrame || 0));
+            if (end > longest) longest = end;
+        }
+        return `${allVisibleClips.length}:${longest}`;
+    }, [allVisibleClips]);
+    const clipDuration = useClipStore((s) => s.clipDuration);
 
-    const {timelineDuration} = useControlsStore();
-
+    const ctrl = useControlsStore();
+    const asset = useAssetControlsStore();
+    const timelineDuration = assetMode ? asset.timelineDuration : ctrl.timelineDuration;
 
     const timelineHasPreprocessors = useMemo(() => {
         if (type !== 'media') return false;
@@ -39,6 +58,12 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
     const bottomDashGroupY = timelineBottomY + gapBetweenTimelines / 2 - underGroupHeight / 2;
 
     const timelineX = useMemo(() => getTimelineX(timelineWidth!, timelinePadding, timelineDuration), [timelineWidth, timelinePadding, timelineDuration]);
+
+    // When viewing in assetMode, calibrate baseline/zoom from ALL visible clips once (top row only)
+    React.useEffect(() => {
+        if (!assetMode || index !== 0) return;
+        updateAssetZoomLevel(allVisibleClips, clipDuration);
+    }, [assetMode, index, allClipsSignature]);
     
     return (
         <>
@@ -70,8 +95,13 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
                 const innerWidth = timelineWidth!; // stage width used in calculateFrameFromX expects total stage width
                 const frame = calculateFrameFromX(pos.x, timelinePadding, innerWidth, [startFrame, endFrame]);
                 const progress = Math.max(0, Math.min(1, (pos.x - timelinePadding) / Math.max(1, innerWidth)));
-                useControlsStore.getState().setFocusAnchorRatio(progress);
-                useControlsStore.getState().setFocusFrame(frame, false);
+                if (assetMode) {
+                    useAssetControlsStore.getState().setFocusAnchorRatio(progress);
+                    useAssetControlsStore.getState().setFocusFrame(frame);
+                } else {
+                    useControlsStore.getState().setFocusAnchorRatio(progress);
+                    useControlsStore.getState().setFocusFrame(frame, false);
+                }
                 useContextMenuStore.getState().openMenu({
                     position: { x: e.evt.clientX, y: e.evt.clientY },
                     target: { type: 'timeline', timelineId },
@@ -86,6 +116,7 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
                             key={clip.clipId} 
                             muted={muted}
                             hidden={hidden}
+                            cornerRadius={cornerRadius}
                             timelineId={timelineId}
                             clipId={clip.clipId}
                             timelinePadding={timelinePadding}
@@ -95,6 +126,7 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number}> = ({ti
                             clipType={clip.type}
                             type={type}
                             scrollY={scrollY}
+                            assetMode={assetMode}
                         />
                     )
                 )}

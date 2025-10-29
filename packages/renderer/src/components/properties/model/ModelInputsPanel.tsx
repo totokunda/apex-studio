@@ -202,7 +202,7 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                   }
 
                   case 'image': {
-                    return <ImageInput key={inputId} label={input?.label} description={input?.description} value={input?.value || ''} onChange={(value) => updateModelInput(clipId, inputId, { value })} />
+                    return <ImageInput clipId={clipId} key={inputId} label={input?.label} description={input?.description} value={input?.value || ''} onChange={(value) => updateModelInput(clipId, inputId, { value })} />
                   }
                   default:
                     return null;
