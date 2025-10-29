@@ -7,6 +7,7 @@ import {fetchCanvasSample} from '@/lib/media/canvas'
 import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
+import { DEFAULT_FPS } from '@/lib/settings';
 import { useClipStore, getLocalFrame } from '@/lib/clip';
 import { WrappedCanvas } from 'mediabunny';
 import { useWebGLFilters } from '@/components/preview/webgl-filters';
@@ -16,7 +17,7 @@ import { useWebGLMask } from '../mask/useWebGLMask'
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
-const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, trimStart, speed: _speed, applicators, overlap}) => {
+const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: VideoClipProps}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, trimStart, speed: _speed, applicators, overlap, overrideClip}) => {
     const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
     const focusFrame = useControlsStore((state) => state.focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -45,7 +46,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const lastSelectedSrcRef = useRef<string | null>(null); 
     const cachedPreprocessorRangeRef = useRef<{startFrame: number, endFrame: number, selectedSrc: string, frameOffset: number} | null>(null);
     const addedTimestampRef = useRef<number | undefined>(undefined); // last timestamp rendered
-    const clip = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps;
+    const clipFromStore = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps;
+    const clip = (overrideClip as VideoClipProps) || clipFromStore;
 
     const { applyMask } = useWebGLMask({
         focusFrame: focusFrame,
@@ -133,6 +135,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
       const originalHeight = mediaInfo.current?.video?.displayHeight || 0;
       if (!originalWidth || !originalHeight) return 16/9;
       const aspectRatio = originalWidth / originalHeight;
+   
       return aspectRatio;
     }, [mediaInfo.current?.video?.displayWidth, mediaInfo.current?.video?.displayHeight]);
 
@@ -403,6 +406,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         }
         const ox = (rectWidth - dw) / 2;
         const oy = (rectHeight - dh) / 2;
+
+
         return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
     }, [mediaInfo.current?.video?.displayWidth, mediaInfo.current?.video?.displayHeight, rectWidth, rectHeight]);
 
@@ -509,8 +514,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!displayWidth || !displayHeight) return;
         // If playback has started, do not run paused seek rendering to avoid cancelling live decode
         if (useControlsStore.getState().isPlaying) return;
-        const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || 0;
-        const projectFps = fps || 0;
+        const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
+        const projectFps = fps || DEFAULT_FPS;
         if (!Number.isFinite(clipFps) || clipFps <= 0) return;
         if (!Number.isFinite(projectFps) || projectFps <= 0) return;
         
@@ -548,8 +553,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!canvasRef.current) return;
         if (!mediaInfo.current) return;
         if (!displayWidth || !displayHeight) return;
-        const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || 0;
-        const projectFps = fps || 0;
+        const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
+        const projectFps = fps || DEFAULT_FPS;
         if (!Number.isFinite(clipFps) || clipFps <= 0) return;
         if (!Number.isFinite(projectFps) || projectFps <= 0) return;
         
@@ -730,6 +735,15 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         return () => { cancelled = true };
     }, [applicators, applicators.length, isPlaying]);
 
+    // Force update when override clip's duration changes (e.g., synthetic media clip set with full endFrame)
+    useEffect(() => {
+        // Only apply when paused; playing loop will handle updates
+        if (!overrideClip) return;
+        if (useControlsStore.getState().isPlaying) return;
+        lastRenderedFrameRef.current = -1;
+        try { void seekAndDrawRef.current(); } catch {}
+    }, [overrideClip?.endFrame, overrideClip?.src]);
+
     // Use ref to store the latest seekAndDraw to avoid throttle recreation
     const seekAndDrawRef = useRef(seekAndDraw);
     seekAndDrawRef.current = seekAndDraw;
@@ -753,6 +767,20 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (isPlaying) return;
         throttledSeekAndDraw();
     }, [currentFrame, isPlaying, throttledSeekAndDraw]);
+
+  // Force re-init when the selected clip changes (clipId) or overrideClip identity changes
+  useEffect(() => {
+      // reset caches to guarantee re-render of first frame for new selection
+      lastSelectedSrcRef.current = null;
+      lastRenderedFrameRef.current = -1;
+      originalFrameRef.current = null;
+      // @ts-ignore
+      iteratorRef.current?.return?.();
+      iteratorRef.current = null;
+      if (!isPlaying) {
+          try { void seekAndDrawRef.current(); } catch {}
+      }
+  }, [clipId, overrideClip]);
 
     // Cleanup throttled function on unmount
     useEffect(() => {

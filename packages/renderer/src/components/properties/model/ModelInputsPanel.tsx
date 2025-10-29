@@ -12,7 +12,7 @@ import RandomInput from './inputs/RandomInput';
 import BooleanInput from './inputs/BooleanInput';
 import ImageInput from './inputs/ImageInput';
 
-export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], clipId: string }> = ({ panel, inputs, clipId }) => {
+export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], clipId: string, panelSize:number }> = ({ panel, inputs, clipId, panelSize }) => {
 
     const updateModelInput = useClipStore((s) => s.updateModelInput);
     const [iconEl, setIconEl] = useState<React.ReactNode>(null);
@@ -202,7 +202,30 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                   }
 
                   case 'image': {
-                    return <ImageInput clipId={clipId} key={inputId} label={input?.label} description={input?.description} value={input?.value || ''} onChange={(value) => updateModelInput(clipId, inputId, { value })} />
+                    const parseImageValue = (v: any) => {
+                      if (!v) return null;
+                      if (typeof v === 'object' && v !== null && (v.kind === 'media' || v.kind === 'clip')) return v;
+                      if (typeof v === 'string') {
+                        try {
+                          const obj = JSON.parse(v);
+                          if (obj && (obj.kind === 'media' || obj.kind === 'clip')) return obj;
+                        } catch {}
+                        return { kind: 'media', assetUrl: v } as any;
+                      }
+                      return null;
+                    };
+                    const currentVal: any = parseImageValue(input?.value);
+                    return (
+                      <ImageInput
+                        clipId={clipId}
+                        key={inputId}
+                        label={input?.label}
+                        description={input?.description}
+                        value={currentVal}
+                        panelSize={panelSize - 64}
+                        onChange={(v: any) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
+                      />
+                    );
                   }
                   default:
                     return null;

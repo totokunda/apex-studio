@@ -2187,8 +2187,6 @@ const Preview:React.FC<PreviewProps> = () => {
         >
           <Layer
              ref={layerRef}
-             width={size.width}
-             height={size.height}
           >
            <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale} width={rectWidth} height={rectHeight} >
             <Rect x={0} y={0}  width={rectWidth} height={rectHeight} fill={'#000000'} />

@@ -100,7 +100,7 @@ const TimelineSearch: React.FC<TimelineSearchProps> = ({ types, width = 580, hei
 
   return (
     <>
-     <div className='bg-brand rounded-t py-2.5 px-3 flex items-center justify-between gap-x-2 mt-3 border border-x border-brand-light/10'>
+     <div className='bg-brand rounded-t py-2.5 px-3 flex items-center justify-between gap-x-2 mt-2 border border-x border-brand-light/10'>
      <div className='text-brand-light/70 text-[10px] font-medium'>
        Timeline
      </div>

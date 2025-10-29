@@ -263,7 +263,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     <div className="h-full w-full min-w-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden' }}>
       <div className="overflow-hidden" style={{ height: hasValidPreprocessor ? 'calc(100% - 90px)' : '100%' }}>
         <Tabs value={selectedTab} onValueChange={setSelectedTab} className="min-w-0 relative flex flex-col h-full">
-        <div className="relative flex-shrink-0 border-b border-brand-light/5 ">
+        <div className="relative flex-shrink-0 ">
           <LuChevronLeft onClick={() => {
             if (tabRef.current) {
               tabRef.current.scrollBy({ left: -96, behavior: 'smooth' });
@@ -322,7 +322,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             <AppearanceProperties clipId={clipId} />
           </TabsContent>}
           {(hasModel) && <TabsContent value="model-inputs" className="min-w-0 m-0">
-            <ModelInputsProperties clipId={clipId} />
+            <ModelInputsProperties clipId={clipId} panelSize={panelSize} />
           </TabsContent>}
           {(hasModel) && <TabsContent value="model-history" className="min-w-0 m-0">
             <ModelHistoryProperties clipId={clipId} />

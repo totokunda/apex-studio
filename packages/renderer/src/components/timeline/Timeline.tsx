@@ -15,7 +15,7 @@ const Timeline:React.FC<TimelineProps & {index: number, scrollY: number, cornerR
     const clipsAll = getClipsForTimeline(timelineId);
     const clips = useMemo(() => {
         if (!excludeClipId) return clipsAll;
-        return clipsAll.filter((c) => c.clipId !== excludeClipId);
+        return clipsAll.filter((c) => c.clipId !== excludeClipId).filter(c => assetMode ? (c.type === 'model' && !c.src ?  false : true) : true);
     }, [clipsAll, excludeClipId]);
     // Stable signature to detect only meaningful clip-set changes (global across all timelines)
     const allClips = useClipStore((s) => s.clips);

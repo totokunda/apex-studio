@@ -5,9 +5,10 @@ import { ModelInputsPanel } from './ModelInputsPanel';
 
 interface ModelInputsPropertiesProps {
   clipId: string;
+  panelSize: number;
 }
 
-export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({ clipId }) => {
+export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({ clipId, panelSize }) => {
   const clip = useClipStore((s) => s.getClipById(clipId)) as ModelClipProps;
 
   return (
@@ -15,7 +16,7 @@ export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({ cl
         <div className="text-brand-light text-[10px] flex flex-col gap-y-2.5 p-2.5">
           {clip.manifest?.spec?.ui?.panels?.map((panel) => {
             return (
-              <ModelInputsPanel key={panel.name} panel={panel} inputs={clip.manifest?.spec?.ui?.inputs || []} clipId={clipId} />
+              <ModelInputsPanel key={panel.name} panel={panel} inputs={clip.manifest?.spec?.ui?.inputs || []} clipId={clipId} panelSize={panelSize} />
             )
           })}
         </div>

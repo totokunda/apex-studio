@@ -9,6 +9,7 @@ import { FaPlay, FaStop } from 'react-icons/fa6'
 import { FaRegSquare, FaCheckSquare } from 'react-icons/fa'
 import { LuTrash} from 'react-icons/lu'
 import { useControlsStore } from '@/lib/control'
+import { useAssetControlsStore } from '@/lib/assetControl'
 import Konva from 'konva'
 import { calculateFrameFromX as calcFrameFromX, getOtherPreprocessors as getOthers, detectCollisions as detectColls, findGapAfterBlock as findGap } from '@/lib/preprocessorHelpers'
 import { runPreprocessor, usePreprocessorJob, usePreprocessorJobActions, getPreprocessorResult } from '@/lib/preprocessor/api'
@@ -34,12 +35,17 @@ interface PropsPreprocessorClip {
     isDragging: boolean
     clipId: string
     cornerRadius: number
+    assetMode: boolean
     timelinePadding: number
 }
 
-export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging}) => {
+export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging, assetMode}) => {
     
-    const {timelineDuration, setSelectedClipIds} = useControlsStore()
+    const ctrlTimelineDuration = useControlsStore((s) => s.timelineDuration)
+    const ctrlSetSelectedClipIds = useControlsStore((s) => s.setSelectedClipIds)
+    const assetTimelineDuration = useAssetControlsStore((s) => s.timelineDuration)
+    const setSelectedAssetClipId = useAssetControlsStore((s) => s.setSelectedAssetClipId)
+    const timelineDuration = assetMode ? assetTimelineDuration : ctrlTimelineDuration
     const removePreprocessorFromClip = useClipStore((s) => s.removePreprocessorFromClip);
     const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
     const getClipFromPreprocessorId = useClipStore((s) => s.getClipFromPreprocessorId);
@@ -92,7 +98,12 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
     
     
-    const { fps, focusFrame } = useControlsStore();
+    const ctrlFps = useControlsStore((s) => s.fps)
+    const ctrlFocusFrame = useControlsStore((s) => s.focusFrame)
+    const assetFps = useAssetControlsStore((s) => s.fps)
+    const assetFocusFrame = useAssetControlsStore((s) => s.focusFrame)
+    const fps = assetMode ? assetFps : ctrlFps
+    const focusFrame = assetMode ? assetFocusFrame : ctrlFocusFrame
     const { tool } = useViewportStore();
 
 
@@ -629,7 +640,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     }, [resizingPreprocessor, currentStartFrame, currentEndFrame, calculateFrameFromX, clipId, updatePreprocessor, preprocessor.id, preprocessorStartFrame, preprocessorEndFrame, getOtherPreprocessors, canResize]);
 
     // Preprocessor is interactive only when Alt is pressed OR when hovering/interacting with header
-    const isListening = !isCtrlPressed;
+    const isListening = !isCtrlPressed && !assetMode;
 
     
 
@@ -747,7 +758,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     
             frameIndices = frameIndices.filter((frameIndex) => isNaN(frameIndex) === false && isFinite(frameIndex));
 
-            const projectFps = useControlsStore.getState().fps || 30;
+            const projectFps = (assetMode ? useAssetControlsStore.getState().fps : useControlsStore.getState().fps) || 30;
             const fpsAdjustment = projectFps / clipFps;
 
                 // frameIndices are in clip-relative coordinates, so shift by preprocessor start to get preprocessor-relative frames
@@ -991,7 +1002,11 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                     width={preprocessorWidth}
                     onClick={() => {
                         setSelectedPreprocessorId(preprocessor.id);
-                        setSelectedClipIds([]);
+                        if (assetMode) {
+                            setSelectedAssetClipId(null);
+                        } else {
+                            ctrlSetSelectedClipIds([]);
+                        }
                     }}
                     height={timelineHeight}
                     fill={showProgress ? 'rgb(34, 33, 36)' : (selectedPreprocessorId === preprocessor.id ? 'rgba(0, 0, 85, 0.85)' : 'rgba(0, 0, 85, 0.7)')}
@@ -1136,7 +1151,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         </Group>
         
         {/* External control icons for completed preprocessors */}
-        {preprocessor.status === 'complete' && preprocessorWidth >= 50 && !isDraggingGlobal && (
+        {preprocessor.status === 'complete' && preprocessorWidth >= 50 && !isDraggingGlobal && !assetMode && (
             <Html>
                 <div 
                     style={{
@@ -1167,7 +1182,11 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
                             onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedPreprocessorId(selectedPreprocessorId === preprocessor.id ? null : preprocessor.id);
-                                setSelectedClipIds([]);
+                                if (assetMode) {
+                                    setSelectedAssetClipId(null);
+                                } else {
+                                    ctrlSetSelectedClipIds([]);
+                                }
                             }}
                             className={cn(
                                 "flex items-center justify-center p-1 rounded cursor-pointer transition-all shadow-lg",

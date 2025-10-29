@@ -132,8 +132,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const [isDragging, setIsDragging] = useState(false);
     const rectRefLeft = useRef<Konva.Rect>(null);
     const rectRefRight = useRef<Konva.Rect>(null);
-    const selectionLabelWidth = 64;
-    const selectionIconRadius = 8;
     // global context menu used instead of local state
     const { applyFilters } = useWebGLFilters();
     const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
@@ -1656,6 +1654,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 <>
                     {(currentClip as VideoClipProps | ImageClipProps).preprocessors.map((preprocessor) => {
                         return <PreprocessorClip 
+                        assetMode={assetMode}
                         key={preprocessor.id} 
                         preprocessor={preprocessor} 
                         currentStartFrame={currentStartFrame} 

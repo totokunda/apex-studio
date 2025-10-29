@@ -1,31 +1,40 @@
 import React, { useEffect, useMemo, useRef, useState     } from 'react'
+import { useDndMonitor } from '@dnd-kit/core'
 import Droppable from '@/components/dnd/Droppable';
 import { IoImageOutline } from "react-icons/io5";
 import { cn } from '@/lib/utils';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@radix-ui/react-tabs';
-import { LuCheck, LuSearch, LuUpload } from 'react-icons/lu';
+import { LuSearch, LuUpload } from 'react-icons/lu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { MediaCache, useMediaCache } from '@/lib/media/cache';
+import { useMediaCache } from '@/lib/media/cache';
 import { MediaItem, MediaThumb } from '@/components/media/Item';
 import { getMediaInfo } from '@/lib/media/utils';
 import { listConvertedMedia } from '@app/preload';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import TimelineSearch from './timeline/TimelineSearch';
+import { useClipStore } from '@/lib/clip';
+import { useAssetControlsStore } from '@/lib/assetControl';
+import TimelineClipPosterPreview from './TimelineClipPosterPreview';
+import { AnyClipProps, ImageClipProps, VideoClipProps } from '@/lib/types';
+import { VIDEO_EXTS, DEFAULT_FPS } from '@/lib/settings';
+import { getLowercaseExtension } from '@app/preload';
+import { useViewportStore } from '@/lib/viewport';
 
+
+export type ImageSelection = { kind: 'media', assetUrl: string } | { kind: 'clip', clipId: string } | null;
 
 interface ImageInputProps {
   label?: string;
   description?: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  defaultValue?: string;
+  value: ImageSelection;
+  onChange: (value: ImageSelection) => void;
   clipId: string;
+  panelSize: number;
 }
 
 interface PopoverImageProps {
-    value: string;
-    onChange: (value: string) => void;
+    value: ImageSelection;
+    onChange: (value: ImageSelection) => void;
     clipId: string | null;
 }
 
@@ -36,7 +45,10 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
     const [searchQuery, setSearchQuery] = useState('');
     const [filteredMediaItems, setFilteredMediaItems] = useState<MediaItem[]>([]);
     const {media} = useMediaCache();
-    const  [selectedMediaItem, setSelectedMediaItem] = useState<MediaItem | null>(null);
+    const {clips} = useClipStore();
+    const getClipById = useClipStore((s) => s.getClipById);
+    const selectedAssetClipId = useAssetControlsStore((s) => s.selectedAssetClipId);
+    const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
     useEffect(() => {
         setFilteredMediaItems(mediaItems.filter((media) => media.name.toLowerCase().includes(searchQuery.toLowerCase())));
     }, [searchQuery, mediaItems]);
@@ -60,52 +72,71 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
         })();
     }, [media]);
 
+    const numEligibleTimelineAssets = useMemo(() => {
+        return clips.filter((clip) => (clip.type !== 'filter' && clip.type !== 'audio' && clip.clipId !== clipId)).length;
+    }, [clips])
+
+    // When a timeline asset is selected from the TimelineSearch view, set selection to the clip id
+    useEffect(() => {
+        if (!selectedAssetClipId) return;
+        const selectedClip = getClipById(selectedAssetClipId);
+        if (!selectedClip) return;
+        const next = { kind: 'clip', clipId: selectedClip.clipId } as const;
+        const same = value && value.kind === 'clip' && value.clipId === selectedAssetClipId;
+        if (!same) onChange(next);
+    }, [selectedAssetClipId, getClipById, value, onChange]);
+
     return (
         <PopoverContent 
             side='left' 
             align='start'
             sideOffset={20} 
-            className={cn('p-2 z-[90] dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-250', selectedTab === 'timeline' ? 'w-[600px]' : 'w-96')}
+            className={cn('p-2 z-[90] dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-150', selectedTab === 'timeline' ? 'w-[600px]' : 'w-96')}
             onOpenAutoFocus={() => { isUserInteractingRef.current = true; }} onCloseAutoFocus={() => { isUserInteractingRef.current = false; }}>
                 <Tabs className='' value={selectedTab} onValueChange={(value) => setSelectedTab(value as 'timeline' | 'library')}>
-                    <div className='w-full flex flex-row items-center justify-between gap-x-2'>
-                <TabsList className='w-full border cursor-pointer border-brand-light/5 bg-brand  text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row divide-x divide-brand-light/5 overflow-hidden'>
-                    <TabsTrigger value="library" className={cn('px-4 w-full py-1.5 cursor-pointer flex items-center justify-center', selectedTab === 'library' ? 'bg-brand-light/10' : '')}>
+                    <div className={cn('w-full flex flex-row items-center gap-x-2 justify-between')}>
+                <TabsList className={cn('w-full  text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row shadow overflow-hidden',
+                    numEligibleTimelineAssets === 0 ? 'justify-start' : 'justify-between  cursor-pointer  bg-brand-background-light'
+                )}>
+                    <TabsTrigger  value="library" className={cn(' w-full py-1.5 flex items-center', selectedTab === 'library' && numEligibleTimelineAssets > 0 ? 'bg-brand-accent-shade' : '',
+                    numEligibleTimelineAssets === 0 ? 'cursor-default justify-start px-2.5' : 'cursor-pointer   justify-center px-4' ,
+
+                    )}>
                         Media Library
                     </TabsTrigger>
-                    <TabsTrigger value="timeline" className={cn('px-4 w-full py-1.5 cursor-pointer flex items-center justify-center', selectedTab === 'timeline' ? 'bg-brand-light/10' : '')}>
+                    <TabsTrigger hidden={numEligibleTimelineAssets === 0}  value="timeline" className={cn('px-4 w-full py-1.5 cursor-pointer flex items-center justify-center', selectedTab === 'timeline' ? 'bg-brand-accent-shade' : '')}>
                         Timeline Assets
                     </TabsTrigger>
                 </TabsList>
-                <button className='w-fit px-3 h-full flex flex-row items-center justify-center gap-x-1.5 bg-brand-background-light hover:bg-brand-light/5 transition-all duration-200 cursor-pointer rounded border border-brand-light/10 py-1.5'>
+                <button className={cn('w-fit h-full mr-2 flex flex-row items-center justify-center gap-x-1.5 bg-brand-background-light hover:bg-brand-light/10 transition-all duration-200 cursor-pointer rounded py-1.5', 
+                    numEligibleTimelineAssets === 0 ? 'px-5' : 'px-3'
+
+                )}>
                         <LuUpload className='w-3.5 h-3.5 text-brand-light' />
                         <span className='text-brand-light text-[10.5px] font-medium'>Upload</span>
                     </button>
                 </div>
-                <TabsContent value="library" className='w-full h-full flex flex-col py-2 gap-y-4'>
+                <TabsContent value="library" className='w-full h-full flex flex-col py-2 gap-y-2 outline-none'>
                     <div className='w-full flex flex-row items-center justify-between gap-x-2'>
                     <span className='relative w-full'>
                     <LuSearch className='w-3.5 h-3.5 text-brand-light/50 absolute left-2 top-1/2 -translate-y-1/2' />
                     <input type="text" placeholder='Search for media' className="w-full h-full pl-8 text-brand-light text-[10.5px] font-normal bg-brand rounded-[7px] border border-brand-light/10 p-2 outline-none" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
                     </span>
                     </div>
-                    <ScrollArea  className='w-full h-96 px-3'>
+                    <ScrollArea  className='w-full h-96'>
                         <div className='w-full h-full grid grid-cols-2 gap-3'>
                             {filteredMediaItems.map((media) => (
                                 <div key={media.name} onClick={() => {
-                                    if (selectedMediaItem?.name === media.name) {
-                                        setSelectedMediaItem(null);
-                                    } else {
-                                        setSelectedMediaItem(media);
-                                    }
-                                }} className={cn('w-full flex flex-col items-center justify-center gap-y-1.5 cursor-pointer group relative',
-                                    selectedMediaItem?.name === media.name ? '' : ''
-
-                                )}>
+                                    // Selecting a library item should clear timeline selection
+                                    clearSelectedAsset();
+                                    const next = { kind: 'media', assetUrl: media.assetUrl } as const;
+                                    const isSame = value && value.kind === 'media' && value.assetUrl === media.assetUrl;
+                                    onChange(isSame ? null : next);
+                                }} className={cn('w-full flex flex-col items-center justify-center gap-y-1.5 cursor-pointer group relative')}>
                                     <div className='relative'>
-                                    <div className={cn('absolute top-0 left-0 w-full h-full bg-brand-background-light/50 backdrop-blur-sm rounded-md z-20 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center', selectedMediaItem?.name === media.name ? 'opacity-100' : 'opacity-0')}>
-                                      <div className={cn('rounded-full py-1 px-3  bg-brand-light/10 flex items-center justify-center font-medium text-[10.5px] w-fit', selectedMediaItem?.name === media.name ? 'bg-brand-light/20' : '')}>
-                                        {selectedMediaItem?.name === media.name ? 'Selected' : 'Use as Input'}
+                                    <div className={cn('absolute top-0 left-0 w-full h-full bg-brand-background-light/50 backdrop-blur-sm rounded-md z-20 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center', (value && value.kind === 'media' && value.assetUrl === media.assetUrl) ? 'opacity-100' : 'opacity-0')}>
+                                      <div className={cn('rounded-full py-1 px-3  bg-brand-light/10 flex items-center justify-center font-medium text-[10.5px] w-fit', (value && value.kind === 'media' && value.assetUrl === media.assetUrl) ? 'bg-brand-light/20' : '')}>
+                                        {(value && value.kind === 'media' && value.assetUrl === media.assetUrl) ? 'Selected' : 'Use as Input'}
                                       </div>
                                     </div>
                                      <MediaThumb key={media.name} item={media} />
@@ -116,8 +147,8 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
                         </div>
                     </ScrollArea>
                 </TabsContent>
-                <TabsContent value="timeline">
-                    <TimelineSearch types={['image', 'video']} excludeClipId={clipId} />
+                <TabsContent value="timeline" className='outline-none'>
+                    <TimelineSearch types={['image', 'video', 'group', 'text', 'shape', 'draw']} excludeClipId={clipId} />
                 </TabsContent>
              </Tabs>
         </PopoverContent>
@@ -126,22 +157,192 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
 
 
 
-const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onChange, placeholder, defaultValue, clipId }) => {
-    const isUserInteractingRef = useRef(false);
+const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onChange, clipId, panelSize }) => {
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const stageContainerRef = useRef<HTMLDivElement | null>(null);
+    const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+    const [mediaClip, setMediaClip] = useState<AnyClipProps | null>(null);
+    const [isOverDropZone, setIsOverDropZone] = useState(false);
+    const getClipById = useClipStore((s) => s.getClipById);
+    const aspectRatio = useViewportStore((s) => s.aspectRatio);
+    const viewportRatio = useMemo(() => {
+        const r = aspectRatio.width / aspectRatio.height;
+        return Number.isFinite(r) && r > 0 ? r : 1;
+    }, [aspectRatio.width, aspectRatio.height]);
+    // Determine stage rendering dynamically in render branch
+
+    // Keep stage size exactly equal to the trigger box area
+    useEffect(() => {
+        const el = stageContainerRef.current;
+        if (!el) return;
+        const obs = new ResizeObserver((entries) => {
+            const rect = entries[0]?.contentRect;
+            if (!rect) return;
+            const w = Math.max(1, panelSize);
+            const h = Math.max(1, w / viewportRatio);
+            setStageSize({ w, h });
+        });
+        obs.observe(el);
+        return () => obs.disconnect();
+    }, [panelSize, viewportRatio]);
+
+    // Ensure width updates immediately when panelSize changes, even if height is unchanged
+    useEffect(() => {
+        setStageSize((prev) => ({ w: Math.max(1, panelSize), h: Math.max(1, panelSize / viewportRatio || prev.h) }));
+    }, [panelSize, viewportRatio]);
+
+
+
+    // DnD monitor: track hover-over state and handle drop selection
+    useDndMonitor({
+        onDragStart: () => {
+            setIsOverDropZone(false);
+        },
+        onDragMove: (event) => {
+            const data = event.active?.data?.current as MediaItem | undefined;
+            const overId = event.over?.id as string | undefined;
+            const isValid = !!data && (data.type === 'image' || data.type === 'video');
+            setIsOverDropZone(isValid && overId === 'image-input');
+        },
+        onDragCancel: () => {
+            setIsOverDropZone(false);
+        },
+        onDragEnd: (event) => {
+            const overId = event.over?.id as string | undefined;
+            const data = event.active?.data?.current as MediaItem | undefined;
+            const isValid = !!data && (data.type === 'image' || data.type === 'video');
+            if (isValid && overId === 'image-input') {
+                const next = { kind: 'media', assetUrl: (data as MediaItem).assetUrl } as const;
+                const isSame = value && value.kind === 'media' && value.assetUrl === (data as MediaItem).assetUrl;
+                onChange(isSame ? null : next);
+            }
+            setIsOverDropZone(false);
+        }
+    });
+
+
+    // Render poster preview into the trigger area whenever the value changes
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const canvasEl = canvasRef.current;
+                if (!value) {
+                    if (canvasEl) {
+                        const ctx = canvasEl.getContext('2d');
+                        if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+                    }
+                    setStageSize({ w: 0, h: 0 });
+                    return;
+                }
+                if (value.kind === 'media') {
+
+                    // Build synthetic clip for media items
+                    try {
+                        const ext = getLowercaseExtension(value.assetUrl);
+                        const isVideo = VIDEO_EXTS.includes(ext);
+                        if (isVideo) {
+                            // Preliminary clip with placeholder endFrame; update after mediaInfo
+                            const prelim: VideoClipProps = {
+                                type: 'video',
+                                clipId: `media:${value.assetUrl}`,
+                                src: value.assetUrl,
+                                startFrame: 0,
+                                endFrame: 1,
+                                preprocessors: [],
+                                masks: [],
+                            } as any;
+                            setMediaClip(prelim as AnyClipProps);
+                            // Fetch duration to compute full frame range
+                            const info = await getMediaInfo(value.assetUrl);
+                            const fps = Math.max(1, Math.floor(info?.stats?.video?.averagePacketRate || DEFAULT_FPS));
+                            const duration = Math.max(0, Math.floor((info?.duration || 0) * fps));
+                            const finalEnd = Math.max(1, duration);
+                            if (!cancelled) {
+                                setMediaClip({ ...prelim, endFrame: finalEnd } as AnyClipProps);
+                            }
+                        } else {
+                            const imgClip: ImageClipProps = {
+                                type: 'image',
+                                clipId: `media:${value.assetUrl}`,
+                                src: value.assetUrl,
+                                startFrame: 0,
+                                endFrame: 1,
+                                preprocessors: [],
+                                masks: [],
+                            } as any;
+                            setMediaClip(imgClip as AnyClipProps);
+                        }
+                    } catch {}
+                } else if (value.kind === 'clip') {
+                    
+                }
+            } catch {}
+        })();
+        return () => { cancelled = true };
+    }, [value, getClipById]);
+
+
   return (
     <Droppable className="w-full h-full" id="image-input" accepts={['media']}>
         
-    <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand-background/50 rounded-[7px] border border-brand-light/10 h-64 shadow  ">
+    <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand-background/50 rounded-[7px] border border-brand-light/10 h-auto shadow  ">
     <div className="w-full h-full flex flex-col items-start justify-start p-3">
     <div className="w-full flex flex-col items-start justify-start mb-3">
         {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
         {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start">{description}</span>}
     </div>
     <Popover>
-        <PopoverTrigger className="w-full h-full">
-        <div className="w-full h-full flex flex-col items-center justify-center gap-y-3 border-dashed border-brand-light/10 border bg-brand-background-light/50 shadow-accent rounded-md p-4 hover:bg-brand-light/5 transition-all duration-200 cursor-pointer">
-            <IoImageOutline className="w-10 h-10 text-brand-light" />
-            <span className="text-brand-light text-[11px] w-full text-center font-medium">Click or drag and drop an image here.</span>
+        <PopoverTrigger className="w-full">
+        <div ref={stageContainerRef} style={{ height: stageSize.h }} className={cn("w-full flex flex-col items-center justify-center gap-y-3  shadow-accent  hover:opacity-70 transition-all duration-200 cursor-pointer relative overflow-hidden", 
+            value ? '': 'border-dashed',
+            value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50'
+            )}>
+            {isOverDropZone && (
+                <div className="absolute inset-0 z-30 bg-brand-background-light/40 backdrop-blur-sm pointer-events-none transition-opacity duration-150" />
+            )}
+            {value ? (
+                (stageSize.w > 0 && stageSize.h > 0) ? (
+                    (() => {
+                        if (value.kind === 'media') {
+                            const ext = getLowercaseExtension(value.assetUrl);
+                            const isVideo = VIDEO_EXTS.includes(ext);
+                            const fallbackClip: AnyClipProps = isVideo ? ({
+                                type: 'video',
+                                clipId: `media:${value.assetUrl}`,
+                                src: value.assetUrl,
+                                startFrame: 0,
+                                endFrame: 1,
+                                preprocessors: [],
+                                masks: [],
+                            } as unknown as VideoClipProps) : ({
+                                type: 'image',
+                                clipId: `media:${value.assetUrl}`,
+                                src: value.assetUrl,
+                                startFrame: 0,
+                                endFrame: 1,
+                                preprocessors: [],
+                                masks: [],
+                            } as unknown as ImageClipProps);
+                            const clipToRender = mediaClip || fallbackClip;
+                            return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} />
+                        } else {
+                            const clip = getClipById(value.clipId) as AnyClipProps | undefined;
+                            if (clip && clip.type !== 'audio') {
+                                return <TimelineClipPosterPreview key={value.clipId} clipId={value.clipId} width={stageSize.w} height={stageSize.h} />
+                            }
+                            return null;
+                        }
+                    })()
+                ) : (
+                    <canvas ref={canvasRef} className="w-full h-auto rounded-[6px]" />
+                )
+            ) : (
+                <>
+                    <IoImageOutline className="w-10 h-10 text-brand-light" />
+                    <span className="text-brand-light text-[11px] w-full text-center font-medium">Click or drag and drop an image here.</span>
+                </>
+            )}
         </div>
         </PopoverTrigger>
         <PopoverImage value={value} onChange={onChange} clipId={clipId} />
