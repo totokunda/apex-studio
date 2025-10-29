@@ -69,7 +69,7 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
 
   return (
     <div className="w-full h-auto rounded-[6px] flex flex-col items-center justify-start">
-    <Stage key={`${width}x${height}`} width={width} height={height} className="">
+    <Stage key={`${width}x${height}`} width={width} height={height}>
       <Layer >
         <Group x={view.x} y={view.y} scaleX={view.scale} scaleY={view.scale} listening={false} >
           <Rect x={0} y={0} width={rectWidth} height={rectHeight} fill={'#000000'} />
@@ -78,15 +78,15 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
             const applicators = getApplicators(clip.clipId);
             switch (clip.type) {
               case 'video':
-                return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={clipOverride ? (clip as any) : undefined} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} />
+                return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={clipOverride ? (clip) : undefined} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} />
               case 'image':
-                return <ImagePreview key={clip.clipId} {...(clip as any)} overrideClip={clipOverride ? (clip as any) : undefined} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} />
+                return <ImagePreview key={clip.clipId} {...(clip as any)} overrideClip={clipOverride ? (clip) : undefined} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} />
               case 'shape':
-                return <ShapePreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />
+                return <ShapePreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} assetMode={true} />
               case 'text':
-                return <TextPreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />
+                return <TextPreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} assetMode={true} />
               case 'draw':
-                return <DrawingPreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} />
+                return <DrawingPreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} assetMode={true} />
               default:
                 return null;
             }

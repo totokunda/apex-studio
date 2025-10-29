@@ -1,0 +1,918 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { getClipWidth, getClipX, useClipStore} from "@/lib/clip";
+import { generatePosterCanvas } from "@/lib/media/timeline";
+import { Image, Group, Rect, Text} from 'react-konva';
+import Konva from 'konva';
+import { MediaInfo, ShapeClipProps, TextClipProps, TimelineProps, VideoClipProps, ImageClipProps,  FilterClipProps, MaskClipProps, PreprocessorClipType,  GroupClipProps, ModelClipProps, AnyClipProps } from "@/lib/types";
+import { generateAudioWaveformCanvas, getMediaInfoCached } from "@/lib/media/utils";
+import { useWebGLFilters } from "@/components/preview/webgl-filters";
+import {useWebGLMask} from "@/components/preview/mask/useWebGLMask"
+import { PreprocessorClip } from "@/components/timeline/clips/PreprocessorClip";
+import { useViewportStore } from "@/lib/viewport";
+import { renderToStaticMarkup } from 'react-dom/server';
+import { RxText as RxTextIcon } from 'react-icons/rx';
+import { MdOutlineDraw as MdOutlineDrawIcon, MdMovie as MdMovieIcon, MdImage as MdImageIcon, MdAudiotrack as MdAudiotrackIcon } from 'react-icons/md';
+import { LuShapes as LuShapeIcon, LuBox as LuBoxIcon} from "react-icons/lu";
+import { FaRegFileImage as FaRegFileImageIcon, FaRegFileVideo as FaRegFileVideoIcon, FaRegFileAudio as FaRegFileAudioIcon} from 'react-icons/fa6';
+import { TbMask as TbMaskIcon } from 'react-icons/tb';
+import { RiImageAiLine as RiImageAiLineIcon, RiVideoAiLine as RiVideoAiLineIcon } from 'react-icons/ri';
+import { LuImages as LuImagesIcon } from 'react-icons/lu';
+import { BiSolidVideos as BiSolidVideosIcon } from 'react-icons/bi';
+import { useManifestStore } from "@/lib/manifest/store";
+import { MdPhotoFilter as MdFilterIcon } from "react-icons/md";
+import RotatingCube from "@/components/common/RotatingCube";
+import { ManifestDocument } from "@/lib/manifest/api";
+import { TbFileTextSpark } from "react-icons/tb";
+import { 
+    generateTimelineThumbnailAudio,
+    generateTimelineThumbnailImage,
+    generateTimelineThumbnailVideo,
+    generateTimelineThumbnailShape,
+    generateTimelineThumbnailText,
+    generateTimelineThumbnailFilter,
+    generateTimelineThumbnailDrawing
+} from "@/components/timeline/clips/thumbnails";
+import { useInputControlsStore } from "@/lib/inputControl";
+
+
+/**
+ * text rx/RxText
+ * image fa6/FaRegFileImage
+ * video fa6/FaRegFileVideo
+ * audio fa/FaRegFileAudio
+ * image+mask fa6/FaRegFileImage + tb/TbMask
+ * video+mask fa6/FaRegFileVideo2 + tb/TbMask
+ * image+preprocessor ri/RiImageAiLine
+ * video+preprocessor ri/RiVideoAiLine
+ * image_list lu/LuImages
+ * video_list bi/BiSolidVideos
+ */
+
+const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: number, selectionMode?: 'frame' | 'range', mode?: 'frame' | 'range'}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 54, timelinePadding = 24, clip, cornerRadius = 1, selectionMode, mode}) => {
+    const effectiveSelectionMode = (selectionMode ?? mode ?? 'range');
+    // Select only what we need to avoid unnecessary rerenders
+    const timelineDuration = useInputControlsStore((s) => s.timelineDuration);
+    const zoomLevel = useInputControlsStore((s) => s.zoomLevel);
+    const tool = useViewportStore((s) => s.tool);
+    const getClipById = useClipStore((s) => s.getClipById);
+    const [groupedCanvases, setGroupedCanvases] = useState<HTMLCanvasElement[]>([]);
+    const [ groupCounts, setGroupCounts] = useState<{video:number,image:number,audio:number,text:number,draw:number,filter:number,shape:number,model:number}>({ video: 0, image: 0, audio: 0, text: 0, draw: 0, filter: 0, shape: 0, model: 0 });
+    // Subscribe directly to this clip's data
+    const currentClip = clip;
+
+    const clipType = useMemo(() => currentClip?.type, [currentClip]);
+
+    const focusFrame = useInputControlsStore((s) => s.focusFrame);
+    const setFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
+    const setFocusAnchorRatio = useInputControlsStore((s) => s.setFocusAnchorRatio);
+    const { applyMask } = useWebGLMask({
+        focusFrame: focusFrame,   
+        masks: (currentClip as PreprocessorClipType & {masks: MaskClipProps[]})?.masks || [],
+        disabled: tool === 'mask' || (currentClip?.type !== 'video' && currentClip?.type !== 'image') ,
+        clip: currentClip,
+    });
+
+    
+    // Check if clip has preprocessors (only for video/image clips)
+    const hasPreprocessors = useMemo(() => {
+        if (currentClip?.type !== 'video' && currentClip?.type !== 'image') return false;
+        const preprocessors = (currentClip as VideoClipProps | ImageClipProps)?.preprocessors;
+        return preprocessors && preprocessors.length > 0;
+    }, [currentClip]);
+
+    // Total height including preprocessor bar if needed
+    const totalClipHeight = useMemo(() => {
+        return timelineHeight;
+    }, [hasPreprocessors, timelineHeight]);
+    
+    const currentStartFrame = currentClip?.startFrame ?? 0;
+    const currentEndFrame = currentClip?.endFrame ?? 0;
+
+    const clipWidth = useMemo(() => Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration]);
+    const clipX  = useMemo(() => getClipX(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration]);
+
+    // Frame selection overlay (only in frame mode)
+    const frameWidthPx = useMemo(() => {
+        const span = Math.max(1, (timelineDuration[1] - timelineDuration[0]));
+        return timelineWidth / span;
+    }, [timelineWidth, timelineDuration]);
+
+    const constrainedFocusFrame = useMemo(() => {
+        // Keep focus within this clip bounds for overlay purposes
+        const minF = Math.max(0, currentStartFrame);
+        const maxF = Math.max(minF, (currentEndFrame - 1));
+        return Math.max(minF, Math.min(maxF, Math.round(focusFrame)));
+    }, [focusFrame, currentStartFrame, currentEndFrame]);
+
+    const focusXLocal = useMemo(() => {
+        // Local x within the clip group for the left edge of the focus frame
+        return (constrainedFocusFrame - currentStartFrame) * frameWidthPx;
+    }, [constrainedFocusFrame, currentStartFrame, frameWidthPx]);
+
+    // No vertical movement: selector uses full timeline height at y=0
+    const clipRef = useRef<Konva.Line>(null);
+    const [resizeSide, setResizeSide] = useState<'left' | 'right' | null>(null);
+    const [imageCanvas] = useState<HTMLCanvasElement>(() => document.createElement('canvas'));
+    const mediaInfoRef = useRef<MediaInfo | undefined>(getMediaInfoCached(currentClip?.src!));
+    useEffect(() => {
+        if (!currentClip?.src) {
+            mediaInfoRef.current = undefined;
+            return;
+        }
+        mediaInfoRef.current = getMediaInfoCached(currentClip.src);
+    }, [currentClip?.src]);
+    const thumbnailClipWidth = useRef<number>(0);
+    const maxTimelineWidth = useMemo(() => (timelineWidth), [timelineWidth, timelinePadding]);
+    const groupRef = useRef<Konva.Group>(null);
+    const exactVideoUpdateTimerRef = useRef<number | null>(null);
+    const exactVideoUpdateSeqRef = useRef(0);
+    const lastExactRequestKeyRef = useRef<string | null>(null);
+    const textRef = useRef<Konva.Text>(null);
+    const [textWidth, setTextWidth] = useState(0);
+    const modelNameRef = useRef<Konva.Text>(null);
+    const [modelNameWidth, setModelNameWidth] = useState(0);
+    // global context menu used instead of local state
+    const { applyFilters } = useWebGLFilters();
+    const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
+    // Manifest data for model clips
+    const loadManifest = useManifestStore((s) => s.loadManifest);
+    const getLoadedManifest = useManifestStore((s) => s.getLoadedManifest);
+    const [modelUiCounts, setModelUiCounts] = useState<Record<string, number> | null>(null);
+    
+    // Sizing for stacked canvases inside group clips
+    const groupCardHeight = useMemo(() => Math.max(1, timelineHeight - 24), [timelineHeight]);
+    const groupCardWidth = useMemo(() => Math.max(1, Math.min(clipWidth - 24, Math.round((timelineHeight - 24) * 1.35))), [timelineHeight, clipWidth]);
+
+    const moveClipToEnd = () => {}
+    
+    // (moved) image positioning is computed after clipPosition is defined
+
+    useEffect(() => {
+        imageCanvas.width = timelineWidth;
+        imageCanvas.height = timelineHeight;
+    }, [zoomLevel, timelineHeight, timelineWidth, timelinePadding, clipType, imageCanvas]);
+
+    useEffect(() => {
+        return () => {
+            if (exactVideoUpdateTimerRef.current != null) {
+                window.clearTimeout(exactVideoUpdateTimerRef.current);
+                exactVideoUpdateTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    // Load manifest UI schema for model clip and compute input type counts
+    useEffect(() => {
+        if (!currentClip || currentClip.type !== 'model') {
+            setModelUiCounts(null);
+            return;
+        }
+        const manifestId = (currentClip as ModelClipProps)?.manifest?.metadata?.id;
+        if (!manifestId) {
+            setModelUiCounts(null);
+            return;
+        }
+        const computeCounts = (doc:ManifestDocument) => {
+            const ui = doc?.ui || doc?.spec?.ui;
+            if (!ui || !Array.isArray(ui.inputs)) { setModelUiCounts(null); return; }
+            const counts: Record<string, number> = {};
+            for (const inp of ui.inputs) {
+                const t = String(inp?.type || '').toLowerCase();
+                counts[t] = (counts[t] || 0) + 1;
+            }
+            setModelUiCounts(counts);
+        };
+        
+        computeCounts((currentClip as ModelClipProps)?.manifest);
+    }, [currentClip, loadManifest, getLoadedManifest]);
+
+
+
+    const [clipPosition, setClipPosition] = useState<{x:number, y:number}>({
+        x: clipX + timelinePadding,
+        y: timelineY - totalClipHeight
+    });
+    const [tempClipPosition, setTempClipPosition] = useState<{x:number, y:number}>({
+        x: clipX + timelinePadding,
+        y: timelineY - totalClipHeight
+    });
+    const fixedYRef = useRef(timelineY - totalClipHeight);
+    
+    // Width used for the thumbnail image we render inside the clip group.
+    const imageWidth = useMemo(() => Math.min(clipWidth, maxTimelineWidth), [clipWidth, maxTimelineWidth]);
+
+    // Compute image x so that the image stays centered over the portion of the
+    // group that is currently visible inside the stage viewport. This allows us
+    // to "virtually" pan across long clips without rendering an infinitely wide image.
+    const overHang = useMemo(() => {
+        let overhang = 0;
+        const positionX = clipPosition.x == 24 || clipWidth <= imageWidth? 0:  (-clipPosition.x);
+        
+        if (clipWidth - positionX <= timelineWidth && positionX > 0) {
+            overhang = timelineWidth - (clipWidth - positionX);
+        }
+        return overhang;
+    }, [clipPosition.x, clipWidth, timelineWidth]);
+
+    const imageX = useMemo(() => {
+        let overhang = 0;
+        // Default behavior for clips that fit within timeline or are at the start
+        const positionX = clipPosition.x == 24 || clipWidth <= imageWidth? 0:  (-clipPosition.x);
+        if (clipWidth - positionX <= timelineWidth && positionX > 0) {
+            overhang = timelineWidth - (clipWidth - positionX);
+        }
+
+        const imageX = positionX - overhang;        
+        return Math.max(0, imageX);
+    }, [clipPosition.x, clipWidth, timelinePadding, timelineWidth, imageWidth]);
+
+
+    useEffect(() => {
+        thumbnailClipWidth.current = timelineWidth; //Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3);
+    }, [zoomLevel, timelineWidth, clipType]);
+
+    useEffect(() => {
+        const newY = timelineY - totalClipHeight;
+        setClipPosition({x: clipX + timelinePadding, y: newY});
+        fixedYRef.current = newY;
+    }, [timelinePadding, timelineY, clipX, totalClipHeight]);
+
+    useEffect(() => {
+        if (textRef.current) {
+            setTextWidth(textRef.current.width());
+        }
+    }, [(currentClip as ShapeClipProps)?.shapeType]);
+
+    useEffect(() => {
+        if (modelNameRef.current) {
+            setModelNameWidth(modelNameRef.current.width());
+        }
+    }, [clipWidth, timelineHeight, (currentClip as ModelClipProps)?.manifest?.metadata?.name]);
+
+	useEffect(() => {
+		if (!currentClip) return;
+
+        if (clipType === 'audio') {
+            generateTimelineThumbnailAudio(
+                clipType,
+                currentClip,
+                currentClip.clipId,
+                mediaInfoRef.current ?? null,
+                imageCanvas,
+                timelineHeight,
+                currentStartFrame,
+                currentEndFrame,
+                timelineDuration,
+                timelineWidth,
+                timelinePadding,
+                groupRef
+            )
+        } else if (clipType === 'image') {
+            generateTimelineThumbnailImage(
+                clipType,
+                currentClip,
+                currentClip.clipId,
+                mediaInfoRef.current ?? null,
+                imageCanvas,
+                        timelineHeight,
+                thumbnailClipWidth.current,
+                maxTimelineWidth,
+                applyMask,
+                applyFilters,
+                groupRef,
+                moveClipToEnd,
+                resizeSide
+            )
+        } else if (clipType === 'video') {
+            generateTimelineThumbnailVideo(
+                clipType,
+                currentClip as VideoClipProps,
+                currentClip.clipId,
+                mediaInfoRef.current ?? null,
+                imageCanvas,
+                timelineHeight,
+                thumbnailClipWidth.current,
+                maxTimelineWidth,
+                timelineWidth,
+                timelineDuration,
+                currentStartFrame,
+                currentEndFrame,
+                overHang,
+                applyMask,
+                applyFilters,
+                groupRef,
+                resizeSide,
+                exactVideoUpdateTimerRef,
+                exactVideoUpdateSeqRef,
+                lastExactRequestKeyRef,
+                setForceRerenderCounter
+            )
+        } else if (clipType === 'shape') {
+            generateTimelineThumbnailShape(
+                clipType,
+                imageCanvas,
+                groupRef
+            )
+        } else if (clipType === 'text') {
+            generateTimelineThumbnailText(
+                clipType,
+                imageCanvas,
+                groupRef
+            )
+        } else if (clipType === 'filter') {
+            generateTimelineThumbnailFilter(
+                clipType,
+                imageCanvas,
+                groupRef
+            )
+        } else if (clipType === 'draw') {
+            generateTimelineThumbnailDrawing(
+                clipType,
+                imageCanvas,
+                clipRef
+            )
+        } 
+    
+    }, [zoomLevel, clipWidth, clipType, currentClip, applyMask, tool, mediaInfoRef.current, resizeSide, thumbnailClipWidth,  maxTimelineWidth, timelineDuration, overHang, resizeSide, forceRerenderCounter]);
+    
+
+    useEffect(() => {
+        const newY = timelineY - totalClipHeight;
+        setClipPosition({x: clipX + timelinePadding, y: newY});
+        fixedYRef.current = newY;
+    }, [clipX, timelinePadding, timelineY, totalClipHeight]);
+
+
+
+    useEffect(() => {
+        (async () => {
+        if (clipType === 'group' ) {
+            // get the children of the group
+            const childIds = (currentClip as GroupClipProps).children.flat();
+            const children = childIds.map((childId) => getClipById(childId));
+            // Compute per-type counts for badge row
+            const counts = { video: 0, image: 0, audio: 0, text: 0, draw: 0, filter: 0, shape: 0, model: 0 } as {video:number,image:number,audio:number,text:number,draw:number,filter:number,shape:number,model:number};
+            for (const ch of children) {
+                if (!ch) continue;
+                if (ch.type === 'video') counts.video++;
+                else if (ch.type === 'image') counts.image++;
+                else if (ch.type === 'audio') counts.audio++;
+                else if (ch.type === 'text') counts.text++;
+                else if (ch.type === 'draw') counts.draw++;
+                else if (ch.type === 'filter') counts.filter++;
+                else if (ch.type === 'shape') counts.shape++;
+                else if (ch.type === 'model') counts.model++;
+            }
+            setGroupCounts(counts);
+            const canvases = await Promise.all(children.reverse().slice(0, 3).map(async (child) => {
+                if (child?.type === 'video' || child?.type === 'image' && child?.src) {
+                    const mediaInfo = getMediaInfoCached(child.src);
+                    if (!mediaInfo) return null;
+                    const masks = (child as VideoClipProps | ImageClipProps).masks || [];
+                    const preprocessors = (child as VideoClipProps | ImageClipProps).preprocessors || [];
+                    const poster = await generatePosterCanvas(child.src, undefined, undefined, { mediaInfo, masks, preprocessors });
+                    if (!poster) return null;
+                    return poster;
+                } else if (child?.type === 'audio' && child?.src) {
+                    const mediaInfo = getMediaInfoCached(child.src);
+                    if (!mediaInfo) return null;
+                    const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+                    const cssWidth = 64;
+                    const cssHeight = Math.round(cssWidth * 9 / 16);
+                    const width = cssWidth * dpr;
+                    const height = cssHeight * dpr;
+                    // make the height and width small like max and use that ratio to scale the width and height
+                    const waveform = await generateAudioWaveformCanvas(child.src, width, height, { color: '#7791C4', mediaInfo: mediaInfo });
+                    if (!waveform) return null;
+                    return waveform;
+                      } else if (child?.type === 'text' || child?.type === 'draw' || child?.type === 'filter' || child?.type === 'shape' || child?.type === 'model') {
+                    const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+                    const cssWidth = timelineWidth || 240;
+                    const cssHeight = Math.round(cssWidth * 9 / 16);
+                    const width = cssWidth * dpr;
+                    const height = cssHeight * dpr;
+                    const canvas = document.createElement('canvas');
+                    canvas.width = Math.max(1, width);
+                    canvas.height = Math.max(1, height);
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) return null;
+                    // Set background color based on clip type (matching timeline thumbnails)
+                    let bg = '#E3E3E3';
+                    if (child.type === 'draw') bg = '#9B59B6';
+                    if (child.type === 'filter') bg = '#00BFFF';
+                    if (child.type === 'shape') bg = '#894c30';
+                    if (child.type === 'model') bg = '#6247aa';
+                    ctx.fillStyle = bg;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    // Prepare the icon SVG
+                    const iconSize = Math.floor(Math.min(canvas.width, canvas.height) * 0.35);
+                    let iconSvg = '';
+                    if (child.type === 'text') {
+                        iconSvg = renderToStaticMarkup(React.createElement(RxTextIcon, { size: iconSize, color: '#222124' }));
+                    } else if (child.type === 'draw') {
+                        iconSvg = renderToStaticMarkup(React.createElement(MdOutlineDrawIcon, { size: iconSize, color: '#FFFFFF' }));
+                    } else if (child.type === 'filter') {
+                        iconSvg = renderToStaticMarkup(React.createElement(MdFilterIcon, { size: iconSize, color: '#FFFFFF' }));
+                    } else if (child.type === 'shape') {
+                        iconSvg = renderToStaticMarkup(React.createElement(LuShapeIcon, { size: iconSize, color: '#FFFFFF' }));
+                    } else if (child.type === 'model') {
+                        iconSvg = renderToStaticMarkup(React.createElement(LuBoxIcon, { size: iconSize, color: '#FFFFFF' }));
+                    }
+                    if (iconSvg) {
+                        const img = new (window as any).Image() as HTMLImageElement;
+                        img.crossOrigin = 'anonymous';
+                        // Ensure an SVG wrapper if not present
+                        const svgWrapped = iconSvg.startsWith('<svg') ? iconSvg : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${iconSize} ${iconSize}">${iconSvg}</svg>`;
+                        img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgWrapped)}`;
+                        await new Promise<void>((resolve) => {
+                            img.onload = () => {
+                                const x = Math.floor((canvas.width - iconSize) / 2);
+                                const y = Math.floor((canvas.height - iconSize) / 2);
+                                ctx.drawImage(img, x, y, iconSize, iconSize);
+                                resolve();
+                            };
+                            img.onerror = () => resolve();
+                        });
+                    }
+                    return canvas;
+                }
+                return null;
+            }));
+            setGroupedCanvases(canvases.filter((c) => c !== null) as HTMLCanvasElement[]);
+        }
+    })();
+    }, [currentClip, getClipById, clipType]);
+
+    // (removed) shimmer animation for model clip background gradient
+
+
+    return (
+        <>
+            <Group  
+                x={clipPosition.x } 
+                y={clipPosition.y} 
+                width={clipWidth}
+                height={timelineHeight}
+                clipX={0}
+                clipY={0}
+                clipWidth={clipWidth}
+                clipHeight={timelineHeight}
+                clipFunc={(ctx) => {
+                    const w = Math.max(1, clipWidth);
+                    const h = Math.max(1, timelineHeight);
+                    const rRaw = Number(cornerRadius || 0);
+                    const r = Math.max(0, Math.min(rRaw, Math.min(w, h) / 2));
+                    ctx.beginPath();
+                    ctx.moveTo(r, 0);
+                    ctx.lineTo(w - r, 0);
+                    ctx.quadraticCurveTo(w, 0, w, r);
+                    ctx.lineTo(w, h - r);
+                    ctx.quadraticCurveTo(w, h, w - r, h);
+                    ctx.lineTo(r, h);
+                    ctx.quadraticCurveTo(0, h, 0, h - r);
+                    ctx.lineTo(0, r);
+                    ctx.quadraticCurveTo(0, 0, r, 0);
+                    ctx.closePath();
+                }}
+            >
+                <Group ref={groupRef} width={clipWidth} height={timelineHeight}>
+                
+                {clipType === 'group' ? (
+                    <Group>
+                    <Rect
+                        x={0}
+                        y={0}
+                        width={clipWidth}
+                        height={timelineHeight}
+                        cornerRadius={cornerRadius}
+                        fillLinearGradientStartPoint={{ x: 0, y: 0 }}
+                        fillLinearGradientEndPoint={{ x: clipWidth, y: 0 }}
+                        fillLinearGradientColorStops={[0, '#AE81CE', 1, '#6A5ACD']}
+                        opacity={0.9}
+                    />
+                    {/* Stacked preview cards */}
+                    {groupedCanvases && groupedCanvases.length > 0 && (
+                        <Group>
+                            {(() => {
+                                const configs = [
+                                    { rotation: 16, dx: 12, dy: 6, opacity: 0.75, scale: 0.8 }, // back
+                                    { rotation: 8, dx: 6, dy: 3, opacity: 0.9, scale: 0.90 },   // middle
+                                    { rotation: 0, dx: 0, dy: 0, opacity: 1, scale: 1.0 },      // front
+                                ];
+                                const count = Math.min(3, groupedCanvases.length);
+                                const startIdx = configs.length - count;
+                                const used = configs.slice(startIdx);
+                                const baseX = 10 + (groupCardWidth / 2);
+                                const baseY = timelineHeight / 2;
+                                // Render back-to-front with object-fit: cover
+                                return used.map((cfg, i) => {
+                                    const canvas = groupedCanvases[i];
+                                    const iw = Math.max(1, (canvas as any).width || (canvas as any).naturalWidth || 1);
+                                    const ih = Math.max(1, (canvas as any).height || (canvas as any).naturalHeight || 1);
+                                    const cardW = Math.max(1, Math.round(groupCardWidth * (cfg as any).scale));
+                                    const cardH = Math.max(1, Math.round(groupCardHeight * (cfg as any).scale));
+                                    const targetRatio = Math.max(0.0001, cardW / Math.max(1, cardH));
+                                    const sourceRatio = iw / ih;
+                                    let cropX = 0, cropY = 0, cropW = iw, cropH = ih;
+                                    if (sourceRatio > targetRatio) {
+                                        // source is wider: crop left/right
+                                        cropW = Math.max(1, Math.round(ih * targetRatio));
+                                        cropX = Math.max(0, Math.round((iw - cropW) / 2));
+                                        cropY = 0; cropH = ih;
+                                    } else {
+                                        // source is taller: crop top/bottom
+                                        cropH = Math.max(1, Math.round(iw / targetRatio));
+                                        cropY = Math.max(0, Math.round((ih - cropH) / 2));
+                                        cropX = 0; cropW = iw;
+                                    }
+                                    return (
+                                        <Image
+                                            key={`group-card-${i}`}
+                                            image={canvas}
+                                            x={baseX + cfg.dx}
+                                            y={baseY + cfg.dy}
+                                            width={cardW}
+                                            height={cardH}
+                                            fill={'#1A2138'}
+                                            crop={{ x: cropX, y: cropY, width: cropW, height: cropH }}
+                                            offsetX={cardW / 2}
+                                            offsetY={cardH / 2}
+                                            rotation={cfg.rotation}
+                                            opacity={cfg.opacity}
+                                            cornerRadius={1}
+                                            shadowColor={'#000000'}
+                                            shadowBlur={8}
+                                            shadowOpacity={0.18}
+                                        />
+                                    );
+                                });
+                            })()}
+                                <Text
+                                    x={groupCardWidth + 28}
+                                    y={12}
+                                    text={'Group'}
+                                    fontSize={9.5}
+                                    fontFamily="Poppins"
+                                    fontStyle="500"
+                                    fill="white"
+                                    align="left"
+                                />
+                            
+                            {(() => {
+                                const items: { Icon: any; count:number }[] = [
+                                    { Icon: MdMovieIcon, count: groupCounts.video },
+                                    { Icon: MdImageIcon, count: groupCounts.image },
+                                    { Icon: MdAudiotrackIcon, count: groupCounts.audio },
+                                    { Icon: RxTextIcon, count: groupCounts.text },
+                                    { Icon: MdOutlineDrawIcon, count: groupCounts.draw },
+                                    { Icon: MdFilterIcon, count: groupCounts.filter },
+                                    { Icon: LuShapeIcon, count: groupCounts.shape },
+                                    { Icon: LuBoxIcon, count: groupCounts.model },
+                                ].filter(i => i.count > 0);
+
+                                const startX = groupCardWidth + 28;
+                                const startY = 9 + 18; // below label
+                                let curX = startX;
+                                return items.map((it, idx) => {
+                                    const Ico = it.Icon;
+                                    const group = (
+                                        <Group key={`gstat-${idx}`}>
+                                            {/* icon */}
+                                            <Image
+                                                x={curX}
+                                                y={startY - 1}
+                                                width={10}
+                                                height={10}
+                                                image={(() => {
+                                                    const svg = renderToStaticMarkup(React.createElement(Ico, { size: 12, color: '#FFFFFF' }));
+                                                    const img = new (window as any).Image();
+                                                    img.crossOrigin = 'anonymous';
+                                                    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+                                                    return img as any;
+                                                })()}
+                                                opacity={0.85}
+                                            />
+                                            {/* count */}
+                                            <Text x={curX + 14} y={startY - 1} text={`${it.count}`} fontSize={9.5} fontFamily="Poppins" fill="rgba(255,255,255,0.82)" />
+                                        </Group>
+                                    );
+                                    curX += 24; // spacing between icon+count pairs
+                                    return group;
+                                });
+                            })()}
+                        </Group>
+                    )}
+                    
+                    </Group>
+                ) : (
+                    <>
+                        {clipType === 'model' ? (
+                            <>
+                                <Rect
+                                    x={0}
+                                    y={0}
+                                    width={clipWidth}
+                                    height={timelineHeight}
+                                    cornerRadius={cornerRadius}
+                                    fillLinearGradientStartPoint={{ x: 0, y: 0 }}
+                                    fillLinearGradientEndPoint={{ x: 0, y: timelineHeight }}
+                                    fillLinearGradientColorStops={[
+                                        0, '#6F56C6',
+                                        0.08, '#6A50C0',
+                                        0.5, '#5A40B2',
+                                        1, '#4A329E'
+                                    ]}
+                                    shadowColor={'#000000'}
+                                    shadowBlur={8}
+                                    shadowOffsetY={2}
+                                    shadowOpacity={0.22}
+                                />
+
+                          
+                                {(() => {
+                                    const size = Math.max(10, Math.min(18, Math.floor(timelineHeight * 0.55)));
+                                    const cx = Math.floor(size / 2) + 4
+                                    const cy = timelineHeight - 14
+                                    return (
+                                        <>
+                                        <RotatingCube
+                                            baseColors={['#ffffff', '#6247AA', '#6247AA', '#6247AA', '#6247AA', '#ffffff']}
+                                            x={cx}
+                                            y={cy}
+                                            size={8}
+                                            opacity={1}
+                                            stroke="#ffffff"
+                                            strokeWidth={1}
+                                            phaseKey={`${timelineDuration[0]}-${timelineDuration[1]}`}
+                                            listening={false}
+                                        />
+                                        <Text
+                                            ref={modelNameRef}
+                                            x={size + 7}
+                                            y={timelineHeight - 19}
+                                            text={((currentClip as ModelClipProps)?.manifest?.metadata?.name ?? '')}
+                                            fontSize={10}
+                                            fontFamily="Poppins"
+                                            fontStyle="500"
+                                            fill="white"
+                                            align="left"
+                                        />
+                                        {(() => {
+                                            const counts = modelUiCounts || {};
+                                            const ordered: { Icon: any; count: number }[] = [
+                                                { Icon: FaRegFileImageIcon, count: counts['image'] || 0 },
+                                                { Icon: FaRegFileVideoIcon, count: counts['video'] || 0 },
+                                                { Icon: FaRegFileAudioIcon, count: counts['audio'] || 0 },
+                                                { Icon: TbFileTextSpark, count: counts['text'] || 0 },
+                                                { Icon: TbMaskIcon, count: (counts['image+mask'] || 0) + (counts['video+mask'] || 0) },
+                                                { Icon: RiImageAiLineIcon, count: counts['image+preprocessor'] || 0 },
+                                                { Icon: RiVideoAiLineIcon, count: counts['video+preprocessor'] || 0 },
+                                                { Icon: LuImagesIcon, count: counts['image_list'] || 0 },
+                                                { Icon: BiSolidVideosIcon, count: counts['video_list'] || 0 },
+                                            ].filter(i => i.count > 0);
+                                            if (ordered.length === 0) return null;
+                                            const iconSlotWidth = 28;
+                                            const totalIconsWidth = ordered.length * iconSlotWidth;
+                                            const rightPadding = 0;
+                                            const modelName = ((currentClip as ModelClipProps)?.manifest?.metadata?.name ?? '');
+                                            if (modelName && modelNameWidth === 0) return null;
+                                            // hide counts if there isn't enough space to the right of the model name text
+                                            const leftOccupied = (size + 7) + modelNameWidth + 6; // cube + gap + text + small gap
+                                            const availableRightWidth = Math.max(0, clipWidth - leftOccupied);
+                                            if (availableRightWidth < totalIconsWidth) return null;
+                                            const startX = Math.max(6, clipWidth - totalIconsWidth - rightPadding);
+                                            const startY = timelineHeight - 19;
+                                            let curX = startX;
+                                            return ordered.map((it, idx) => {
+                                                const Ico = it.Icon;
+                                                const group = (
+                                                    <Group key={`mstat-${idx}`}>
+                                                        <Image
+                                                            x={curX}
+                                                            y={startY - 1}
+                                                            width={12}
+                                                            height={12}
+                                                            image={(() => {
+                                                                const svg = renderToStaticMarkup(React.createElement(Ico, { size: 11, color: '#FFFFFF' }));
+                                                                const img = new (window as any).Image();
+                                                                img.crossOrigin = 'anonymous';
+                                                                img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+                                                                return img as any;
+                                                            })()}
+                                                            opacity={1}
+                                                        />
+                                                        <Text x={curX + 16} y={startY - 1} text={`${it.count}`} fontSize={11} fontStyle="500" fontFamily="Poppins" fill="rgba(255,255,255,0.82)" />
+                                                    </Group>
+                                                );
+                                                curX += iconSlotWidth;
+                                                return group;
+                                            });
+                                        })()}
+                                        </>
+                                    );
+                                })()}
+                                
+                            </>
+                        ) : (
+                            <Image 
+                                x={imageX}
+                                y={0}
+                                image={imageCanvas} 
+                                width={imageWidth}
+                                height={timelineHeight}
+                                cornerRadius={cornerRadius}
+                                fill={clipType === 'audio' ? '#1A2138' : '#FFFFFF'} 
+                            />
+                        )}
+                    </>
+                )}
+               
+                {clipType === 'shape' && (currentClip  as ShapeClipProps)?.shapeType && (
+                    <Group>
+                    <Rect
+                        x={12 - 4}
+                        y={timelineHeight / 2}
+                        width={textWidth + 8}
+                        height={14}
+                        cornerRadius={2}
+                        fill="rgba(255, 255, 255, 0.0)"
+                        offsetY={7.5}
+                    />
+                    <Text
+                        ref={textRef}
+                        x={9}
+                        y={timelineHeight / 2}
+                        text={((currentClip as ShapeClipProps)?.shapeType?.charAt(0).toUpperCase() ?? '')  + ((currentClip as ShapeClipProps)?.shapeType?.slice(1 ) ?? '')}
+                        fontSize={9.5}
+                        fontFamily="Poppins"
+                        fontStyle="500"
+                        fill="white"
+                        align="left"
+                        verticalAlign="middle"
+                        offsetY={5}
+                    />
+                    </Group>
+                )}
+                {clipType === 'text' && (currentClip  as TextClipProps)?.text && (
+                    <Group>
+                    <Rect
+                        x={12 - 4}
+                        y={timelineHeight / 2}
+                        width={textWidth + 8}
+                        height={14}
+                        cornerRadius={2}
+                        fill="rgba(0, 0, 0, 0.0)"
+                        offsetY={7.5}
+                    />
+                    <Text
+                        ref={textRef}
+                        x={9}
+                        y={timelineHeight / 2}
+                        text={((currentClip as TextClipProps)?.text?.replace('\n', ' ') ?? '')}
+                        fontSize={10}
+                        fontFamily={(currentClip as TextClipProps)?.fontFamily ?? 'Poppins'}
+                        fontStyle="500"
+                        fill="#151517"
+                        align="left"
+                        verticalAlign="middle"
+                        offsetY={5}
+                    />
+                    </Group>
+                )}
+                {clipType === 'filter' && (currentClip  as FilterClipProps)?.name && (
+                    <Group>
+                    <Rect
+                        x={12 - 4}
+                        y={timelineHeight / 2}
+                        width={textWidth + 8}
+                        height={14}
+                        cornerRadius={2}
+                        fill="rgba(0, 0, 0, 0.0)"
+                        offsetY={7.5}
+                    />
+                    <Text
+                        ref={textRef}
+                        x={9}
+                        y={timelineHeight / 2}
+                        text={((currentClip as FilterClipProps)?.name ?? '')}
+                        fontSize={9.5}
+                        fontFamily={'Poppins'}
+                        fontStyle="500"
+                        fill="#ffffff"
+                        align="left"
+                        verticalAlign="middle"
+                        offsetY={5}
+                    />
+                    </Group>
+                )}
+                {clipType === 'draw' && (
+                    <Group>
+                    <Rect
+                        x={12 - 4}
+                        y={timelineHeight / 2}
+                        width={textWidth + 8}
+                        height={14}
+                        cornerRadius={2}
+                        fill="rgba(255, 255, 255, 0.0)"
+                        offsetY={7.5}
+                    />
+                    <Text
+                        ref={textRef}
+                        x={9}
+                        y={timelineHeight / 2}
+                        text="Drawing"
+                        fontSize={9.5}
+                        fontFamily="Poppins"
+                        fontStyle="500"
+                        fill="white"
+                        align="left"
+                        verticalAlign="middle"
+                        offsetY={5}
+                    />
+                    </Group>
+                )}
+                
+                </Group>
+            </Group>            
+            
+            {/* Per-clip menu component retained (optional); global menu now handles rendering */}
+            {hasPreprocessors && (currentClip?.type === 'video' || currentClip?.type === 'image') && (
+                <Group clipX={clipPosition.x} clipY={clipPosition.y} clipWidth={clipWidth} clipHeight={timelineHeight}>
+                    {(currentClip as VideoClipProps | ImageClipProps).preprocessors.map((preprocessor) => {
+                        return <PreprocessorClip 
+                        inputMode
+                        key={preprocessor.id} 
+                        preprocessor={preprocessor} 
+                        currentStartFrame={currentStartFrame} 
+                        currentEndFrame={currentEndFrame} 
+                        timelineWidth={timelineWidth} 
+                        clipPosition={clipPosition} 
+                        timelineHeight={timelineHeight} 
+                        isDragging={false}
+                        clipId={currentClip.clipId} 
+                        cornerRadius={cornerRadius} 
+                        timelinePadding={timelinePadding} />
+                    })}
+                </Group>
+            )}
+
+            {effectiveSelectionMode === 'frame' && (
+                    <Group
+                        x={clipPosition.x}
+                        y={clipPosition.y}
+                        width={clipWidth}
+                        height={timelineHeight}
+                        clipX={0}
+                        clipY={0}
+                        clipWidth={clipWidth}
+                        clipHeight={timelineHeight}
+                    >
+                        {/* Draggable frame selector overlay */}
+                        <Rect
+                            x={Math.max(0, Math.min(clipWidth - Math.max(12, frameWidthPx), focusXLocal))}
+                            y={0}
+                            width={Math.max(12, frameWidthPx)}
+                            height={Math.max(1, timelineHeight)}
+                            fill={'rgba(43, 127, 255, 0.9)'}
+                            stroke={'rgba(255, 255, 255, 1)'}
+                            strokeWidth={1}
+                            draggable
+                            cornerRadius={2}
+                            shadowBlur={4}
+                            shadowColor={'#6247AA'}
+                            shadowOpacity={0.35}
+                            dragBoundFunc={(pos) => {
+                                const rectWidth = Math.max(8, frameWidthPx);
+                                const minX = 0;
+                                const maxX = Math.max(0, clipWidth - rectWidth);
+                                const snapped = Math.round(pos.x / Math.max(1e-6, frameWidthPx)) * frameWidthPx;
+                                return {
+                                    x: Math.max(minX, Math.min(maxX, snapped)),
+                                    y: 0,
+                                };
+                            }}
+                            onDragStart={(e) => {
+                                e.target.y(0);
+                                e.target.height(Math.max(1, timelineHeight));
+                            }}
+                            onDragMove={(e) => {
+                                e.target.y(0);
+                                const rectWidth = Math.max(8, frameWidthPx);
+                                const localX = Math.max(0, Math.min(clipWidth - rectWidth, e.target.x()));
+                                const frameOffset = Math.round(localX / Math.max(1e-6, frameWidthPx));
+                                const newFocus = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, currentStartFrame + frameOffset));
+                                setFocusFrame(newFocus);
+                                const [winStart, winEnd] = timelineDuration;
+                                const winSpan = Math.max(1, winEnd - winStart);
+                                const anchor = (newFocus - winStart) / winSpan;
+                                setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)));
+                            }}
+                        />
+                    </Group>
+                    )}
+            </>
+    )
+}
+
+export default TimelineClip;
+

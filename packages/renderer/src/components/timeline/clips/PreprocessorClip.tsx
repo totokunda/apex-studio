@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {  MediaInfo, PreprocessorClipProps } from '@/lib/types'
+import {  MediaInfo, PreprocessorClipProps, PreprocessorClipType } from '@/lib/types'
 import { getClipWidth, useClipStore } from '@/lib/clip'
 import { Rect, Image } from 'react-konva'
 import { Text } from 'react-konva'
@@ -10,6 +10,7 @@ import { FaRegSquare, FaCheckSquare } from 'react-icons/fa'
 import { LuTrash} from 'react-icons/lu'
 import { useControlsStore } from '@/lib/control'
 import { useAssetControlsStore } from '@/lib/assetControl'
+import { useInputControlsStore } from '@/lib/inputControl'
 import Konva from 'konva'
 import { calculateFrameFromX as calcFrameFromX, getOtherPreprocessors as getOthers, detectCollisions as detectColls, findGapAfterBlock as findGap } from '@/lib/preprocessorHelpers'
 import { runPreprocessor, usePreprocessorJob, usePreprocessorJobActions, getPreprocessorResult } from '@/lib/preprocessor/api'
@@ -35,33 +36,40 @@ interface PropsPreprocessorClip {
     isDragging: boolean
     clipId: string
     cornerRadius: number
-    assetMode: boolean
-    timelinePadding: number
+    assetMode?: boolean
+    inputMode?: boolean
+    timelinePadding: number;
+    clipOverride?: PreprocessorClipType;
+    clipWidthOverride?: number;
+
 }
 
-export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging, assetMode}) => {
+export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging, assetMode, inputMode = false, clipOverride,clipWidthOverride}) => {
     
     const ctrlTimelineDuration = useControlsStore((s) => s.timelineDuration)
     const ctrlSetSelectedClipIds = useControlsStore((s) => s.setSelectedClipIds)
     const assetTimelineDuration = useAssetControlsStore((s) => s.timelineDuration)
+    const inputTimelineDuration = useInputControlsStore((s) => s.timelineDuration)
     const setSelectedAssetClipId = useAssetControlsStore((s) => s.setSelectedAssetClipId)
-    const timelineDuration = assetMode ? assetTimelineDuration : ctrlTimelineDuration
+    let timelineDuration = useMemo(() => {
+        let duration = inputMode ? inputTimelineDuration : (assetMode ? assetTimelineDuration : ctrlTimelineDuration);
+        return duration;
+    }, [inputMode, assetMode, inputTimelineDuration, assetTimelineDuration, ctrlTimelineDuration, clipOverride, currentStartFrame, currentEndFrame]);
     const removePreprocessorFromClip = useClipStore((s) => s.removePreprocessorFromClip);
     const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
     const getClipFromPreprocessorId = useClipStore((s) => s.getClipFromPreprocessorId);
     const getPreprocessorById = useClipStore((s) => s.getPreprocessorById);
     const isDraggingGlobal = useClipStore((s) => s.isDragging);
     const preprocessor = useMemo(() => getPreprocessorById(inputPreprocessor.id) ?? inputPreprocessor, [inputPreprocessor.id, getPreprocessorById, inputPreprocessor]);
-    const clip = getClipFromPreprocessorId(preprocessor.id);
+    const clip = clipOverride ?? getClipFromPreprocessorId(preprocessor.id);
     // Preprocessor frames are stored relative to the parent clip (0 = clip start)
     const preprocessorStartFrame = preprocessor.startFrame ?? 0;
     const preprocessorEndFrame = preprocessor.endFrame ?? (currentEndFrame - currentStartFrame);
     const textRef = useRef<Konva.Text>(null);
 
-
     // Calculate parent clip dimensions
     const clipDuration = currentEndFrame - currentStartFrame;
-    const clipWidth = Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3);
+    const clipWidth = clipWidthOverride ?? Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3);
     
     // Calculate preprocessor position and size as proportion of parent clip
     const preprocessorDuration = useMemo(() => {
@@ -102,8 +110,10 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const ctrlFocusFrame = useControlsStore((s) => s.focusFrame)
     const assetFps = useAssetControlsStore((s) => s.fps)
     const assetFocusFrame = useAssetControlsStore((s) => s.focusFrame)
-    const fps = assetMode ? assetFps : ctrlFps
-    const focusFrame = assetMode ? assetFocusFrame : ctrlFocusFrame
+    const inputFps = useInputControlsStore((s) => s.fps)
+    const inputFocusFrame = useInputControlsStore((s) => s.focusFrame)
+    const fps = inputMode ? inputFps : (assetMode ? assetFps : ctrlFps)
+    const focusFrame = inputMode ? inputFocusFrame : (assetMode ? assetFocusFrame : ctrlFocusFrame)
     const { tool } = useViewportStore();
 
 
@@ -645,7 +655,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     }, [resizingPreprocessor, currentStartFrame, currentEndFrame, calculateFrameFromX, clipId, updatePreprocessor, preprocessor.id, preprocessorStartFrame, preprocessorEndFrame, getOtherPreprocessors, canResize]);
 
     // Preprocessor is interactive only when Alt is pressed OR when hovering/interacting with header
-    const isListening = !isCtrlPressed && !assetMode;
+    const isListening = !isCtrlPressed && !assetMode && !inputMode;
 
     
 
@@ -731,8 +741,8 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             
             const mediaStartFrame = mediaInfoRef.current.startFrame ? Math.round((mediaInfoRef.current.startFrame ?? 0) / fps * clipFps) : 0;
             const mediaEndFrame = mediaInfoRef.current.endFrame ? Math.round((mediaInfoRef.current.endFrame ?? 0) / fps * clipFps) : undefined;
-            const timelineStartFrame = timelineDuration[0]
-            const timelineEndFrame = timelineDuration[1]
+            const timelineStartFrame =  timelineDuration[0]
+            const timelineEndFrame =  timelineDuration[1]
             const timelineSpan = timelineEndFrame - timelineStartFrame;
             const speed = Math.max(0.1, Math.min(5, Number(((clip as any)?.speed ?? 1))));
 
@@ -742,7 +752,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             const pxPerFrame = timelineWidth / timelineSpan;
             const renderWidth = renderSpan * pxPerFrame;
             const numColumns = Math.ceil(renderWidth / thumbnailWidth) + 1
-    
+
             let frameIndices: number[] = [];
             if (renderSpan >= numColumns && numColumns > 1) {
                 frameIndices = Array.from({ length: numColumns }, (_, i) => {
@@ -763,7 +773,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     
             frameIndices = frameIndices.filter((frameIndex) => isNaN(frameIndex) === false && isFinite(frameIndex));
 
-            const projectFps = (assetMode ? useAssetControlsStore.getState().fps : useControlsStore.getState().fps) || 30;
+            const projectFps = (inputMode ? useInputControlsStore.getState().fps : (assetMode ? useAssetControlsStore.getState().fps : useControlsStore.getState().fps)) || 30;
             const fpsAdjustment = projectFps / clipFps;
 
                 // frameIndices are in clip-relative coordinates, so shift by preprocessor start to get preprocessor-relative frames
@@ -977,6 +987,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
     }, [preprocessor.status, preprocessor.id, preprocessor.preprocessor.name, stopTracking, clearJob, updatePreprocessor, clipId]);
 
+    if (preprocessor.status !== 'complete' && assetMode) return null;
 
     return (
         <>
@@ -990,7 +1001,9 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             listening={preprocessor.status === 'complete' ? false : isListening}
             key={preprocessor.id} 
             onDragStart={handleDragStart} 
-            onDragMove={handleDragMove} onDragEnd={handleDragEnd} dragBoundFunc={dragBoundFunc}
+            onDragMove={handleDragMove} 
+            onDragEnd={handleDragEnd} 
+            dragBoundFunc={dragBoundFunc}
             clipWidth={preprocessorWidth}
             ref={preprocessorRef}
             clipFunc={(ctx) => {
@@ -1156,7 +1169,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         </Group>
         
         {/* External control icons for completed preprocessors */}
-        {preprocessor.status === 'complete' && preprocessorWidth >= 50 && !isDraggingGlobal && !assetMode && (
+        {preprocessor.status === 'complete' && preprocessorWidth >= 50 && !isDraggingGlobal && !assetMode && !inputMode && (
             <Html>
                 <div 
                     style={{

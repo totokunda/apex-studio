@@ -1,15 +1,16 @@
-import React, { useEffect, useMemo } from 'react';
-import { useControlsStore } from '@/lib/control';
+import React, { useMemo } from 'react';
 import { useAssetControlsStore } from '@/lib/assetControl';
 import { getZoomLevelConfig } from '@/lib/zoom';
 import { Line, Rect, Text } from 'react-konva';
+import { useInputControlsStore } from '@/lib/inputControl';
 
 interface TimelineMomentsProps {
     stageWidth:number;
     startPadding:number;
     maxScroll:number;
     thumbY: () => number;
-    assetMode?: boolean;
+    mode?: 'asset' | 'input';
+    topLine?: boolean;
 }
 
 interface TickMark {
@@ -33,15 +34,14 @@ const getMajorZoomConfigFormat = (zoomConfig:{
     }
 }
 
-const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, startPadding, maxScroll, thumbY}) => {
-    const asset = useAssetControlsStore();
-    const timelineDuration = asset.timelineDuration
-    const fps = asset.fps;
-    const zoomLevel = asset.zoomLevel;
-    const maxZoomLevel = asset.maxZoomLevel;
-    const minZoomLevel = asset.minZoomLevel;
+const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, startPadding, maxScroll, thumbY, mode = 'asset', topLine = false}) => {
+    const store = mode === 'asset' ? useAssetControlsStore() : useInputControlsStore();
+    const timelineDuration = store.timelineDuration 
+    const fps = store.fps;
+    const zoomLevel = store.zoomLevel;
+    const maxZoomLevel = store.maxZoomLevel;
+    const minZoomLevel = store.minZoomLevel;
     const [startFrame, endFrame] = timelineDuration;
-
 
     // Convert duration to milliseconds if needed for consistent calculations
     const tickMark:TickMark[] = useMemo(() => {
@@ -98,6 +98,7 @@ const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, 
   
     return (
         <>
+       
         <Rect x={0} y={0} width={stageWidth} height={28} fill={maxScroll > 0 && thumbY() > 24 ? "#222124" : undefined} listening={false} />
             {tickMark.map((tick, index) => {
                 // Calculate x position based on timeline progress
@@ -118,7 +119,7 @@ const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, 
                         {/* Tick line */}
                         <Line
                             points={[xPosition + startPadding, tickY, xPosition + startPadding, tickY + tickHeight]}
-                            stroke={isMajor ? "rgba(227, 227, 227, 0.1)" : "rgba(227, 227, 227, 0.1)"}
+                            stroke={"rgba(227, 227, 227, 0.5)"}
                             strokeWidth={1}
                             listening={false}
                         />
@@ -130,7 +131,7 @@ const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, 
                                 y={tickY + tickHeight - 8}
                                 text={formatTickLabel(tick.x, tick.format)}
                                 fontSize={7.5}
-                                fill="rgba(227, 227, 227, 0.4)"
+                                fill="rgba(227, 227, 227, 0.7)"
                                 fontFamily="Poppins, system-ui, sans-serif"
                                 listening={false}
                             />
@@ -138,6 +139,9 @@ const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, 
                     </React.Fragment>
                 );
             })}
+             {topLine && <Line
+            points={[startPadding, 0, stageWidth, 0]}
+         x={0} y={0} width={stageWidth} height={28} stroke={"rgba(150, 150, 150, 1)"} strokeWidth={2} listening={false} />}
         </>
     )
 });

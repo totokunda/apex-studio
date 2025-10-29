@@ -31,7 +31,7 @@ const applyTextTransform = (text: string, textTransform: string) => {
     
 
 
-const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[]}> = ({ clipId, rectWidth, rectHeight, applicators}) => {
+const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], assetMode?: boolean}> = ({ clipId, rectWidth, rectHeight, applicators}) => {
     const textRef = useRef<Konva.Text>(null);
     const backgroundRef = useRef<Konva.Rect>(null);
     const transformerRef = useRef<Konva.Transformer>(null);

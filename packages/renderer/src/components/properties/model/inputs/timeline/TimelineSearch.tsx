@@ -1,14 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {  useClipStore, getTimelineTypeForClip } from '@/lib/clip'
-import { useControlsStore } from '@/lib/control'
 import { ClipType } from '@/lib/types';
 import { Stage, Layer, Line, Rect} from 'react-konva';
 import Timeline from '@/components/timeline/Timeline';
 import Konva from 'konva';
-import TimelineMoments from './TimelineMoments';
+import TimelineMoments from './InputTimelineMoments';
 import Scrollbar from '@/components/properties/model/inputs/timeline/Scrollbar';
-import AssetScrubControl from '@/components/properties/model/inputs/timeline/Scrubber';
-import TimelineZoom from './TimelineZoom';
+import AssetScrubControl from '@/components/properties/model/inputs/timeline/InputScrubber';
+import TimelineZoom from './InputTimelineZoom';
 import { useAssetControlsStore } from '@/lib/assetControl';
 // import { getZoomLevelConfig } from '@/lib/zoom';
 
@@ -20,7 +19,6 @@ interface TimelineSearchProps {
 }
 
 const SCROLLBAR_HW = 8;
-
 
 const TimelineSearch: React.FC<TimelineSearchProps> = ({ types, width = 580, height = 300, excludeClipId = null }) => {
     const timelinesLayerRef = useRef<Konva.Layer>(null);
@@ -100,7 +98,7 @@ const TimelineSearch: React.FC<TimelineSearchProps> = ({ types, width = 580, hei
 
   return (
     <>
-     <div className='bg-brand rounded-t py-2.5 px-3 flex items-center justify-between gap-x-2 mt-2 border border-x border-brand-light/10'>
+     <div className='bg-brand rounded-t py-2.5 px-3 flex items-center justify-between gap-x-2 mt-2 border border-x border-b-brand-light/50 border-x-brand-light/10'>
      <div className='text-brand-light/70 text-[10px] font-medium'>
        Timeline
      </div>

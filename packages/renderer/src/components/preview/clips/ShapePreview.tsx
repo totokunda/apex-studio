@@ -17,6 +17,7 @@ interface ShapePreviewProps extends ShapeClipProps {
   rectWidth: number;
   rectHeight: number;
   applicators: BaseClipApplicator[];
+  assetMode?: boolean;
 }
 
 const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidth, rectHeight, applicators }) => {

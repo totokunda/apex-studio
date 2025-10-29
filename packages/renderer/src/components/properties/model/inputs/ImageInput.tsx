@@ -19,9 +19,11 @@ import { VIDEO_EXTS, IMAGE_EXTS, DEFAULT_FPS } from '@/lib/settings';
 import { getLowercaseExtension, pickMediaPaths, importMediaPaths, getPathForFile } from '@app/preload';
 import { useViewportStore } from '@/lib/viewport';
 import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/library';
+import TimelineSelector from './timeline/TimelineSelector';
+import { useInputControlsStore } from '@/lib/inputControl';
 
 
-export type ImageSelection = { kind: 'media', assetUrl: string } | { kind: 'clip', clipId: string } | null;
+export type ImageSelection = { kind: 'media', assetUrl: string, frame?:number } | { kind: 'clip', clipId: string, frame?:number } | null;
 
 interface ImageInputProps {
   label?: string;
@@ -49,7 +51,6 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
     const getClipById = useClipStore((s) => s.getClipById);
     const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
   const setSelectedAssetChangeHandler = useAssetControlsStore((s) => s.setSelectedAssetChangeHandler);
-
     useEffect(() => {
         setFilteredMediaItems(mediaItems.filter((media) => media.name.toLowerCase().includes(searchQuery.toLowerCase())));
     }, [searchQuery, mediaItems]);
@@ -108,7 +109,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
             if (newlyAdded.length > 0) {
                 const first = newlyAdded[0];
                 clearSelectedAsset();
-                onChange({ kind: 'media', assetUrl: first.assetUrl });
+                onChange({ kind: 'media', assetUrl: first.assetUrl, frame: 0 });
             }
             bumpMediaLibraryVersion();
         } catch (e) {
@@ -128,7 +129,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
         }
         const selectedClip = getClipById(clipId);
         if (!selectedClip) return;
-        onChange({ kind: 'clip', clipId: selectedClip.clipId });
+        onChange({ kind: 'clip', clipId: selectedClip.clipId, frame: 0 });
     }, [getClipById, onChange]);
 
     return (
@@ -176,7 +177,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
                                     clearSelectedAsset();
                                     const next = { kind: 'media', assetUrl: media.assetUrl } as const;
                                     const isSame = value && value.kind === 'media' && value.assetUrl === media.assetUrl;
-                                    onChange(isSame ? null : next);
+                                    onChange(isSame ? null : { ...next, frame: 0 });
                                 }} className={cn('w-full flex flex-col items-center justify-center gap-y-1.5 cursor-pointer group relative')}>
                                     <div className='relative'>
                                     <div className={cn('absolute top-0 left-0 w-full h-full bg-brand-background-light/50 backdrop-blur-sm rounded-md z-20 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center', (value && value.kind === 'media' && value.assetUrl === media.assetUrl) ? 'opacity-100' : 'opacity-0')}>
@@ -211,6 +212,11 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
     const getClipById = useClipStore((s) => s.getClipById);
     const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
     const aspectRatio = useViewportStore((s) => s.aspectRatio);
+
+    const {
+        setTimelineDuration:setInputTimelineDuration,
+        setFocusFrame:setInputFocusFrame
+    } = useInputControlsStore();
     const viewportRatio = useMemo(() => {
         const r = aspectRatio.width / aspectRatio.height;
         return Number.isFinite(r) && r > 0 ? r : 1;
@@ -260,7 +266,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
             if (isValid && overId === 'image-input') {
                 const next = { kind: 'media', assetUrl: (data as MediaItem).assetUrl } as const;
                 const isSame = value && value.kind === 'media' && value.assetUrl === (data as MediaItem).assetUrl;
-                onChange(isSame ? null : next);
+                onChange(isSame ? null : { ...next, frame: 0 });
             }
             setIsOverDropZone(false);
         }
@@ -306,6 +312,8 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
                             const finalEnd = Math.max(1, duration);
                             if (!cancelled) {
                                 setMediaClip({ ...prelim, endFrame: finalEnd } as AnyClipProps);
+                                setInputTimelineDuration(prelim.startFrame ?? 0, finalEnd);
+                                setInputFocusFrame(0)
                             }
                         } else {
                             const imgClip: ImageClipProps = {
@@ -318,10 +326,22 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
                                 masks: [],
                             } as any;
                             setMediaClip(imgClip as AnyClipProps);
+                            setInputTimelineDuration(imgClip.startFrame ?? 0, imgClip.endFrame ?? 0);
+                            setInputFocusFrame(0)
                         }
                     } catch {}
                 } else if (value.kind === 'clip') {
-                    
+                    const clip = getClipById(value.clipId) as AnyClipProps | undefined;
+                    if (clip && clip.type !== 'audio') {
+                        const duration = (clip.endFrame ?? 0) - (clip.startFrame ?? 0);
+                        setMediaClip({
+                            ...clip,
+                            startFrame:0,
+                            endFrame: duration
+                        } as AnyClipProps);
+                        setInputTimelineDuration(0, duration);
+                        setInputFocusFrame(0)
+                    }
                 }
             } catch {}
         })();
@@ -386,7 +406,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
   return (
     <Droppable className="w-full h-full" id="image-input" accepts={['media']}>
         
-    <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-auto   ">
+    <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-auto">
     <div className="w-full h-full flex flex-col items-start justify-start p-3">
     <div className="w-full flex flex-col items-start justify-start mb-3">
         {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
@@ -446,9 +466,16 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
         </div>
         </PopoverTrigger>
         <PopoverImage value={value} onChange={onChange} clipId={clipId} />
-    </Popover>
+    </Popover> 
+    {mediaClip && (mediaClip.type === 'video' || mediaClip.type === 'group') && value && <TimelineSelector
+     clip={mediaClip} 
+     width={stageSize.w} 
+     height={44} 
+     mode="frame" />
+    }
     </div>
     </div>
+    
     </Droppable>
     )
 }

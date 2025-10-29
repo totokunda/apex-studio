@@ -12,6 +12,7 @@ import DrawingLineComponent from './custom/DrawingLine';
 interface DrawingPreviewProps extends DrawingClipProps {
   rectWidth: number;
   rectHeight: number;
+  assetMode?: boolean;
 }
 
 const DrawingPreview: React.FC<DrawingPreviewProps> = ({

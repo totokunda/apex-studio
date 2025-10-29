@@ -8,7 +8,7 @@ const THUMBNAIL_TILE_SIZE = 36;
 
 export const generateTimelineThumbnailVideo = async (
     clipType: string,
-    currentClip: any,
+    currentClip: VideoClipProps,
     currentClipId: string,
     mediaInfoRef: MediaInfo | null,
     imageCanvas: HTMLCanvasElement,
@@ -137,7 +137,6 @@ export const generateTimelineThumbnailVideo = async (
     }
 
     // 1) Immediate draw using nearest cached frames (synchronous)
-
     
 
     const nearest = getNearestCachedCanvasSamples(

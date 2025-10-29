@@ -3,7 +3,7 @@ import { useClipStore, getClipWidth, getClipX, isValidTimelineForClip, getTimeli
 import { generatePosterCanvas } from "@/lib/media/timeline";
 import { useControlsStore } from "@/lib/control";
 import { useAssetControlsStore } from "@/lib/assetControl";
-import { Image, Group, Rect, Text, Line, Circle } from 'react-konva';
+import { Image, Group, Rect, Text, Line } from 'react-konva';
 import Konva from 'konva';
 import { MediaInfo, ShapeClipProps, TextClipProps, TimelineProps, VideoClipProps, ImageClipProps, ClipType, FilterClipProps, MaskClipProps, PreprocessorClipType,  GroupClipProps, ModelClipProps } from "@/lib/types";
 import { v4 as uuidv4 } from 'uuid';
@@ -18,7 +18,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { RxText as RxTextIcon } from 'react-icons/rx';
 import { MdOutlineDraw as MdOutlineDrawIcon, MdMovie as MdMovieIcon, MdImage as MdImageIcon, MdAudiotrack as MdAudiotrackIcon } from 'react-icons/md';
 import { LuShapes as LuShapeIcon, LuBox as LuBoxIcon, LuCheck as LuCheckIcon, LuPointer } from "react-icons/lu";
-import { FaRegFileImage as FaRegFileImageIcon, FaRegFileVideo as FaRegFileVideoIcon, FaRegFileAudio as FaRegFileAudioIcon, FaCheck } from 'react-icons/fa6';
+import { FaRegFileImage as FaRegFileImageIcon, FaRegFileVideo as FaRegFileVideoIcon, FaRegFileAudio as FaRegFileAudioIcon} from 'react-icons/fa6';
 import { TbMask as TbMaskIcon } from 'react-icons/tb';
 import { RiImageAiLine as RiImageAiLineIcon, RiVideoAiLine as RiVideoAiLineIcon } from 'react-icons/ri';
 import { LuImages as LuImagesIcon } from 'react-icons/lu';
@@ -145,6 +145,14 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const groupCardWidth = useMemo(() => Math.max(1, Math.min(clipWidth - 24, Math.round((timelineHeight - 24) * 1.35))), [timelineHeight, clipWidth]);
     
     // (moved) image positioning is computed after clipPosition is defined
+
+    useEffect(() => {
+        if (!currentClip?.src) {
+            mediaInfoRef.current = undefined;
+            return;
+        }
+        mediaInfoRef.current = getMediaInfoCached(currentClip.src);
+    }, [currentClip?.src]);
 
     useEffect(() => {
         imageCanvas.width = Math.min(clipWidth, maxTimelineWidth);
@@ -327,7 +335,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         } else if (clipType === 'video') {
             generateTimelineThumbnailVideo(
                 clipType,
-                currentClip,
+                currentClip as VideoClipProps,
                 currentClipId,
                 mediaInfoRef.current ?? null,
                 imageCanvas,

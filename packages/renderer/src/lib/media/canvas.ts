@@ -316,6 +316,7 @@ export const getNearestCachedCanvasSamples = (
         const fi = frameIndices[i]!;
         // Try exact match first
         let found = getCachedSample(path, fi, targetW, targetH, true) as WrappedCanvas | null;
+
         if (found && (found as any).canvas) {
             results[i] = found as WrappedCanvas;
             continue;
