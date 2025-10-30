@@ -953,7 +953,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         y={0}
                         width={rangeWidthPx}
                         height={Math.max(1, timelineHeight)}
-                        fill={'rgba(43, 127, 255, 0.5)'}
+                        fill={'rgba(43, 127, 255, 0.60)'}
                         stroke={'rgba(43, 127, 255, 0.9)'}
                         strokeWidth={3}
                         cornerRadius={2}
@@ -1154,7 +1154,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             y={0}
                             width={Math.max(12, frameWidthPx)}
                             height={Math.max(1, timelineHeight)}
-                            fill={'rgba(43, 127, 255, 0.5)'}
+                            fill={'rgba(43, 127, 255, 0.6)'}
                             stroke={'rgba(43, 127, 255, 0.9)'}
                             strokeWidth={1.5}
                             draggable
