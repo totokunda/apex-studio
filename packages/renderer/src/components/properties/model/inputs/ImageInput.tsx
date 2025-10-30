@@ -283,6 +283,13 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
     useEffect(() => {
         let cancelled = false;
         const requestedFocusFrame = Math.max(0, Math.round(value?.frame ?? 0));
+
+        if (value?.kind === 'media' && mediaClip?.clipId === `media:${value.assetUrl}`) {
+            return;
+        }
+        if (value?.kind === 'clip' && mediaClip?.clipId === value.clipId) {
+            return;
+        }
         (async () => {
             try {
                 const canvasEl = canvasRef.current;
