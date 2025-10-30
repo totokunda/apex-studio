@@ -11,6 +11,7 @@ import TextPreview from '@/components/preview/clips/TextPreview';
 import DrawingPreview from '@/components/preview/clips/DrawingPreview';
 import { getApplicatorsForClip } from '@/lib/applicator-utils';
 import { useWebGLHaldClut } from '@/components/preview/webgl-filters';
+import { useInputControlsStore } from '@/lib/inputControl';
 
 const sortGroupChildren = (groupClip: AnyClipProps, allClips: AnyClipProps[]) => {
   const nested = ((groupClip as any).children as string[][] | undefined) ?? [];
@@ -27,7 +28,9 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const getClipById = useClipStore((s) => s.getClipById);
   const clips = useClipStore((s) => s.clips);
+  const clipWithinFrame = useClipStore((s) => s.clipWithinFrame);
   const haldClutInstance = useWebGLHaldClut();
+  const focusFrame = useInputControlsStore((s) => s.getFocusFrame(inputId));
 
   const rectDims = useMemo(() => {
     const ratio = aspectRatio.width / aspectRatio.height;
@@ -75,6 +78,10 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
           <Rect x={0} y={0} width={rectWidth} height={rectHeight} fill={'#000000'} />
           {toRender.map((clip) => {
             if (clip.type === 'group') return null;
+            const startFrame = clip.startFrame || 0;
+            const hasOverlap = (clip.type === 'video' || clip.type === 'image') && (startFrame > 0) ? true : false;
+            const clipAtFrame = clipWithinFrame(clip, focusFrame, hasOverlap, 1);
+              if (!clipAtFrame) return null;
             const applicators = getApplicators(clip.clipId);
             switch (clip.type) {
               case 'video':
