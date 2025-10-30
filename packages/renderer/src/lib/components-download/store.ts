@@ -346,7 +346,8 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
     if (!state?.entries) return;
     
     const entries = state.entries;
-    const store = useComponentsDownloadStore.getState();
+    // check if it exists yet useComponentsDownloadStore.getState() is defined
+    
     
     // Check each entry that was downloading
     for (const [path, entry] of Object.entries(entries)) {
@@ -366,37 +367,37 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
             if (latest) {
               const pct = extractPercent(latest);
               if (pct != null) {
-                store.setEntry(path, { progress: pct });
+                state.setEntry(path, { progress: pct });
               }
             }
             setTimeout(() => {
               try {
-                store.connectJob(entry.jobId, path);
+                state.connectJob(entry.jobId, path);
               } catch {}
             }, 100);
           } else if (status === 'complete' || status === 'completed') {
             // Job completed while we were away
-            store.setEntry(path, { status: 'completed', progress: 100 });
+            state.setEntry(path, { status: 'completed', progress: 100 });
             setTimeout(() => {
-              try { store.removeEntry(path); } catch {}
+              try { state.removeEntry(path); } catch {}
             }, 2000);
           } else if (status === 'error' || status === 'failed') {
             // Job failed
-            store.setEntry(path, { status: 'error' });
+            state.setEntry(path, { status: 'error' });
           } else if (status === 'canceled' || status === 'cancelled') {
             // Job was canceled
-            store.setEntry(path, { status: 'canceled' });
+            state.setEntry(path, { status: 'canceled' });
           } else {
             // Unknown status, clean up
-            store.removeEntry(path);
+            state.removeEntry(path);
           }
         } else {
           // Job not found on backend, clean up stale entry
-          store.removeEntry(path);
+          state.removeEntry(path);
         }
       } catch (e) {
         // Error checking status, clean up stale entry
-        store.removeEntry(path);
+        state.removeEntry(path);
       }
     }
   }

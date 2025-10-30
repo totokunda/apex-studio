@@ -165,7 +165,13 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const [isRotating, setIsRotating] = useState(false);
     const [isTransforming, setIsTransforming] = useState(false);
     const iteratorRef = useRef<AsyncIterable<WrappedCanvas | null> | null>(null);
-    const isPlaying = useControlsStore((s) => s.isPlaying);
+    const isPlayingFromControls = useControlsStore((s) => s.isPlaying);
+    const isPlayingFromInputs = useInputControlsStore((s) => s.getIsPlaying(inputId));
+    const isPlayingRef = useRef(inputMode ? isPlayingFromInputs : isPlayingFromControls);
+    useEffect(() => {
+        isPlayingRef.current = inputMode ? isPlayingFromInputs : isPlayingFromControls;
+    }, [isPlayingFromInputs, isPlayingFromControls, inputMode]);
+    const isPlaying = isPlayingRef.current;
     const fpsFromControls = useControlsStore((s) => s.fps);
     const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId));
     const fps = inputMode ? fpsFromInputs : fpsFromControls;
@@ -532,7 +538,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!mediaInfo) return;
         if (!displayWidth || !displayHeight) return;
         // If playback has started, do not run paused seek rendering to avoid cancelling live decode
-        if (useControlsStore.getState().isPlaying) return;
+        if (inputMode ? !!useInputControlsStore.getState().getIsPlaying(inputId) : !!useControlsStore.getState().isPlaying) return;
         const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
         const projectFps = fps || DEFAULT_FPS;
         if (!Number.isFinite(clipFps) || clipFps <= 0) return;
@@ -610,6 +616,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         if (!displayWidth || !displayHeight) return;
         const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
         const projectFps = fps || DEFAULT_FPS;
+
         if (!Number.isFinite(clipFps) || clipFps <= 0) return;
         if (!Number.isFinite(projectFps) || projectFps <= 0) return;
         
@@ -631,13 +638,12 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
         iteratorRef.current = await getVideoIterator(selectedSrc, { mediaInfo: mediaInfo.current || undefined, fps: clipFps, startIndex: startIdx, endIndex: targetEndFrame });
 
+
         try {
             for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
                 if (myToken !== drawTokenRef.current) break;
-                if (!useControlsStore.getState().isPlaying) break;
+                if (!isPlaying) break;
                 if (!wc) continue;
-
-                
 
                 // Determine the decoded sample's frame index in native fps
                 const ts: number | undefined = (wc as any)?.timestamp;
@@ -651,8 +657,8 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 const computeLocalFocusMedia = () => {
                     const store = inputMode ? useInputControlsStore.getState() : useControlsStore.getState();
                     const focusFrameValue = inputMode
-                        ? (store.getFocusFrame ? store.getFocusFrame(inputId) : store.focusFrame)
-                        : store.focusFrame;
+                        ? (store as any).getFocusFrame ? (store as any).getFocusFrame(inputId) : (store as any).focusFrame
+                        : (store as any).focusFrame;
                     // Base timeline-local frames relative to clip start (no give-start applied)
                     const baseLocal = Math.max(0, ((focusFrameValue ?? 0) - startFrameUsed));
                     // When using preprocessor src, align to its own frame space by subtracting its start offset.
@@ -674,19 +680,21 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 }
 
                 // If we're ahead of the timeline, wait until the timeline catches up (sync to rAF)
+
+
                 while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
                     if (myToken !== drawTokenRef.current) break;
-                    if (!useControlsStore.getState().isPlaying) break;
+                    if (!isPlaying) break;
                     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
                 }
 
+
                 if (myToken !== drawTokenRef.current)  break;
-                if (!useControlsStore.getState().isPlaying) break;
+                if (!isPlaying) break;
 
                 const storeState = inputMode ? useInputControlsStore.getState() : useControlsStore.getState();
                 const focusFrameForMask = inputMode
-                    ? ((storeState.getFocusFrame ? storeState.getFocusFrame(inputId) : storeState.focusFrame) ?? 0)
-                    : (storeState.focusFrame ?? 0);
+                    ? ((storeState as any).getFocusFrame ? (storeState as any).getFocusFrame(inputId) : (storeState as any).focusFrame) : 0
                 const maskFrameBase = Math.max(0, Math.floor(focusFrameForMask - startFrame + (trimStart || 0)));
                 const maskFrame = clip ? Math.max(0, Math.floor(getLocalFrame(focusFrameForMask, clip))) : maskFrameBase;
 
@@ -696,8 +704,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             // swallow
         }
-    }, [mediaInfo, fps, selectedSrc,  displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, frameOffset, trimStart, clip]);
-
+    }, [mediaInfo, fps, selectedSrc,  displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, frameOffset, trimStart, clip, isPlaying]);
 
     // Start/stop iterator based on play state. Avoid depending on callbacks to prevent restarting every frame.
     useEffect(() => {

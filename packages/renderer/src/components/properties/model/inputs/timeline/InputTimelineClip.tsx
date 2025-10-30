@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getClipWidth, getClipX, useClipStore} from "@/lib/clip";
 import { generatePosterCanvas } from "@/lib/media/timeline";
 import { Image, Group, Rect, Text} from 'react-konva';
@@ -62,9 +62,12 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
 
     const clipType = useMemo(() => currentClip?.type, [currentClip]);
 
-    const focusFrame = useInputControlsStore((s) => s.getFocusFrame(inputId));
+    const {focusFrameByInputId, selectedRangeByInputId} =  useInputControlsStore();
     const setFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
     const setFocusAnchorRatio = useInputControlsStore((s) => s.setFocusAnchorRatio);
+    const selectedRange = selectedRangeByInputId[inputId ?? ''] ?? [0, 1];
+    const focusFrame = focusFrameByInputId[inputId ?? ''] ?? 0;
+    const setSelectedRange = useInputControlsStore((s) => s.setSelectedRange);
     const { applyMask } = useWebGLMask({
         focusFrame: focusFrame,   
         masks: (currentClip as PreprocessorClipType & {masks: MaskClipProps[]})?.masks || [],
@@ -96,6 +99,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
         const span = Math.max(1, (timelineDuration[1] - timelineDuration[0]));
         return timelineWidth / span;
     }, [timelineWidth, timelineDuration]);
+    const frameWidthSafe = useMemo(() => Math.max(1e-6, frameWidthPx), [frameWidthPx]);
 
     const constrainedFocusFrame = useMemo(() => {
         // Keep focus within this clip bounds for overlay purposes
@@ -108,6 +112,85 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
         // Local x within the clip group for the left edge of the focus frame
         return (constrainedFocusFrame - currentStartFrame) * frameWidthPx;
     }, [constrainedFocusFrame, currentStartFrame, frameWidthPx]);
+
+    const [rangeStart, rangeEnd] = useMemo<[number, number]>(() => {
+        const rawStart = Math.round(selectedRange?.[0] ?? currentStartFrame);
+        const rawEnd = Math.round(selectedRange?.[1] ?? (rawStart + 1));
+        const clampedStart = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, rawStart));
+        const minEnd = clampedStart + 1;
+        const clampedEnd = Math.max(minEnd, Math.min(currentEndFrame, rawEnd));
+        return [clampedStart, clampedEnd];
+    }, [selectedRange, currentStartFrame, currentEndFrame]);
+
+    const rangeSpanFrames = useMemo(() => Math.max(1, rangeEnd - rangeStart), [rangeStart, rangeEnd]);
+    const rangeStartLocal = useMemo(() => (rangeStart - currentStartFrame) * frameWidthSafe, [rangeStart, currentStartFrame, frameWidthSafe]);
+    const rangeWidthPx = useMemo(() => Math.max(frameWidthSafe, (rangeEnd - rangeStart) * frameWidthSafe), [frameWidthSafe, rangeEnd, rangeStart]);
+    const rangeEndLocal = useMemo(() => rangeStartLocal + rangeWidthPx, [rangeStartLocal, rangeWidthPx]);
+    const maxRangeStart = useMemo(() => Math.max(currentStartFrame, currentEndFrame - rangeSpanFrames), [currentStartFrame, currentEndFrame, rangeSpanFrames]);
+    const rangeHandleWidth = useMemo(() => Math.max(5, Math.min(8, frameWidthSafe * 0.75)), [frameWidthSafe]);
+
+    const commitRange = useCallback((startFrame: number, endFrame: number) => {
+        const clampedStart = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, Math.round(startFrame)));
+        const minEnd = clampedStart + 1;
+        const clampedEnd = Math.max(minEnd, Math.min(currentEndFrame, Math.round(endFrame)));
+        const [existingStart, existingEnd] = useInputControlsStore.getState().getSelectedRange(inputId);
+        if (existingStart === clampedStart && existingEnd === clampedEnd) return;
+        setSelectedRange(clampedStart, clampedEnd, inputId);
+    }, [currentStartFrame, currentEndFrame, inputId, setSelectedRange]);
+
+    // Smooth drag: directly move Konva nodes and throttle store updates
+    const rangeRectRef = useRef<Konva.Rect>(null);
+    const leftHandleRef = useRef<Konva.Rect>(null);
+    const rightHandleRef = useRef<Konva.Rect>(null);
+    const isDraggingRangeRef = useRef(false);
+    const rafCommitRef = useRef<number | null>(null);
+    const pendingCommitRef = useRef<{ start: number; end: number } | null>(null);
+
+    const updateRangeVisuals = useCallback((startFrame: number, endFrame: number) => {
+        const startLocal = (startFrame - currentStartFrame) * frameWidthSafe;
+        const endLocal = (endFrame - currentStartFrame) * frameWidthSafe;
+        const widthPx = Math.max(frameWidthSafe, endLocal - startLocal);
+        const rect = rangeRectRef.current;
+        const left = leftHandleRef.current;
+        const right = rightHandleRef.current;
+        if (rect) {
+            rect.x(Math.max(0, Math.min(Math.max(0, clipWidth - widthPx), startLocal)));
+            rect.width(widthPx);
+            rect.y(0);
+        }
+        if (left) {
+            left.x(startLocal - rangeHandleWidth / 2);
+            left.y(0);
+        }
+        if (right) {
+            right.x(startLocal + widthPx - rangeHandleWidth / 2);
+            right.y(0);
+        }
+        const layer = rect?.getLayer() || left?.getLayer() || right?.getLayer();
+        if (layer) layer.batchDraw();
+    }, [clipWidth, currentStartFrame, frameWidthSafe, rangeHandleWidth]);
+
+    const commitRangeThrottled = useCallback((startFrame: number, endFrame: number) => {
+        pendingCommitRef.current = { start: startFrame, end: endFrame };
+        if (rafCommitRef.current == null) {
+            rafCommitRef.current = window.requestAnimationFrame(() => {
+                rafCommitRef.current = null;
+                const pending = pendingCommitRef.current;
+                if (pending) {
+                    commitRange(pending.start, pending.end);
+                }
+            });
+        }
+    }, [commitRange]);
+
+    useEffect(() => {
+        return () => {
+            if (rafCommitRef.current != null) {
+                window.cancelAnimationFrame(rafCommitRef.current);
+                rafCommitRef.current = null;
+            }
+        };
+    }, []);
 
     // No vertical movement: selector uses full timeline height at y=0
     const clipRef = useRef<Konva.Line>(null);
@@ -143,7 +226,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     const groupCardHeight = useMemo(() => Math.max(1, timelineHeight - 24), [timelineHeight]);
     const groupCardWidth = useMemo(() => Math.max(1, Math.min(clipWidth - 24, Math.round((timelineHeight - 24) * 1.35))), [timelineHeight, clipWidth]);
 
-    const moveClipToEnd = () => {}
+    const moveClipToEnd = useCallback(() => {}, []);
     
     // (moved) image positioning is computed after clipPosition is defined
 
@@ -192,10 +275,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
         x: clipX + timelinePadding,
         y: timelineY - totalClipHeight
     });
-    const [tempClipPosition, setTempClipPosition] = useState<{x:number, y:number}>({
-        x: clipX + timelinePadding,
-        y: timelineY - totalClipHeight
-    });
+
     const fixedYRef = useRef(timelineY - totalClipHeight);
     
     // Width used for the thumbnail image we render inside the clip group.
@@ -856,6 +936,193 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                 </Group>
             )}
 
+            {effectiveSelectionMode === 'range' && rangeWidthPx > 0 && (
+                <Group
+                    x={clipPosition.x}
+                    y={clipPosition.y}
+                    width={clipWidth}
+                    height={timelineHeight}
+                    clipX={0}
+                    clipY={0}
+                    clipWidth={clipWidth}
+                    clipHeight={timelineHeight}
+                >
+                    <Rect
+                        ref={rangeRectRef}
+                        x={rangeStartLocal}
+                        y={0}
+                        width={rangeWidthPx}
+                        height={Math.max(1, timelineHeight)}
+                        fill={'rgba(43, 127, 255, 0.5)'}
+                        stroke={'rgba(43, 127, 255, 0.9)'}
+                        strokeWidth={3}
+                        cornerRadius={2}
+                        draggable
+                        dragBoundFunc={(pos) => {
+                            const minX = 0;
+                            const maxX = Math.max(0, clipWidth - rangeWidthPx);
+                            const boundedX = Math.max(minX, Math.min(maxX, pos.x));
+                            return { x: boundedX, y: 0 };
+                        }}
+                        onMouseEnter={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'grab';
+                        }}
+                        onMouseLeave={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'default';
+                        }}
+                        onDragStart={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'grabbing';
+                            e.target.y(0);
+                            isDraggingRangeRef.current = true;
+                        }}
+                        onDragMove={(e) => {
+                            e.target.y(0);
+                            const rawX = Math.max(0, Math.min(clipWidth - rangeWidthPx, e.target.x()));
+                            const frameOffset = Math.round(rawX / frameWidthSafe);
+                            const proposedStart = currentStartFrame + frameOffset;
+                            const clampedStart = Math.max(currentStartFrame, Math.min(maxRangeStart, proposedStart));
+                            const nextStartLocal = (clampedStart - currentStartFrame) * frameWidthSafe;
+                            e.target.x(nextStartLocal);
+                            const endFrame = clampedStart + rangeSpanFrames;
+                            updateRangeVisuals(clampedStart, endFrame);
+                            commitRangeThrottled(clampedStart, endFrame);
+                        }}
+                        onDragEnd={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'grab';
+                            e.target.y(0);
+                            const rawX = Math.max(0, Math.min(clipWidth - rangeWidthPx, e.target.x()));
+                            const frameOffset = Math.round(rawX / frameWidthSafe);
+                            const proposedStart = currentStartFrame + frameOffset;
+                            const clampedStart = Math.max(currentStartFrame, Math.min(maxRangeStart, proposedStart));
+                            const finalLocal = (clampedStart - currentStartFrame) * frameWidthSafe;
+                            e.target.x(finalLocal);
+                            const endFrame = clampedStart + rangeSpanFrames;
+                            updateRangeVisuals(clampedStart, endFrame);
+                            commitRange(clampedStart, endFrame);
+                            isDraggingRangeRef.current = false;
+                        }}
+                    />
+
+                    {/* Left handle */}
+                    <Rect
+                        ref={leftHandleRef}
+                        x={rangeStartLocal - rangeHandleWidth / 2}
+                        y={0}
+                        width={rangeHandleWidth}
+                        height={Math.max(1, timelineHeight)}
+                        fill={'rgba(43, 127, 255, 0.9)'}
+                        cornerRadius={[2, 0, 2, 0]}
+                        draggable
+                        stroke={'rgba(43, 127, 255, 0.9)'}
+                        strokeWidth={0}
+                        dragBoundFunc={(pos) => ({ x: pos.x, y: 0 })}
+                        onDragStart={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'ew-resize';
+                            e.target.y(0);
+                            isDraggingRangeRef.current = true;
+                        }}
+                        onMouseEnter={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'ew-resize';
+                        }}
+                        onMouseLeave={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'default';
+                        }}
+                        onDragMove={(e) => {
+                            e.target.y(0);
+                            const maxLocal = rangeEndLocal - Math.max(frameWidthSafe, rangeHandleWidth);
+                            const bounded = Math.max(-rangeHandleWidth / 2, Math.min(maxLocal - rangeHandleWidth / 2, e.target.x()));
+                            const adjustedLocal = bounded + rangeHandleWidth / 2;
+                            const frameOffset = Math.round(adjustedLocal / frameWidthSafe);
+                            const proposedStart = currentStartFrame + frameOffset;
+                            const clampedStart = Math.max(currentStartFrame, Math.min(rangeEnd - 1, proposedStart));
+                            const nextLocal = (clampedStart - currentStartFrame) * frameWidthSafe;
+                            e.target.x(nextLocal - rangeHandleWidth / 2);
+                            const endFrame = Math.max(clampedStart + 1, rangeEnd);
+                            updateRangeVisuals(clampedStart, endFrame);
+                            commitRangeThrottled(clampedStart, endFrame);
+                        }}
+                        onDragEnd={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'ew-resize';
+                            e.target.y(0);
+                            const handleCenter = e.target.x() + rangeHandleWidth / 2;
+                            const frameOffset = Math.round(handleCenter / frameWidthSafe);
+                            const proposedStart = currentStartFrame + frameOffset;
+                            const clampedStart = Math.max(currentStartFrame, Math.min(rangeEnd - 1, proposedStart));
+                            const nextLocal = (clampedStart - currentStartFrame) * frameWidthSafe;
+                            e.target.x(nextLocal - rangeHandleWidth / 2);
+                            const endFrame = Math.max(clampedStart + 1, rangeEnd);
+                            updateRangeVisuals(clampedStart, endFrame);
+                            commitRange(clampedStart, endFrame);
+                            isDraggingRangeRef.current = false;
+                        }}
+                    />
+
+                    {/* Right handle */}
+                    <Rect
+                        ref={rightHandleRef}
+                        x={rangeEndLocal - rangeHandleWidth / 2}
+                        y={0}
+                        width={rangeHandleWidth}
+                        height={Math.max(1, timelineHeight)}
+                        fill={'rgba(43, 127, 255, 0.9)'}
+                        stroke={'rgba(43, 127, 255, 0.9)'}
+                        strokeWidth={0}
+                        cornerRadius={[0, 2, 0, 2]}
+                        draggable
+                        dragBoundFunc={(pos) => ({ x: pos.x, y: 0 })}
+                        onDragStart={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'ew-resize';
+                            e.target.y(0);
+                            isDraggingRangeRef.current = true;
+                        }}
+                        onMouseEnter={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'ew-resize';
+                        }}
+                        onMouseLeave={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'default';
+                        }}
+                        onDragMove={(e) => {
+                            e.target.y(0);
+                            const minLocal = rangeStartLocal + Math.max(frameWidthSafe, rangeHandleWidth);
+                            const bounded = Math.max(minLocal - rangeHandleWidth / 2, Math.min(clipWidth - rangeHandleWidth / 2, e.target.x()));
+                            const adjustedLocal = bounded + rangeHandleWidth / 2;
+                            const frameOffset = Math.round(adjustedLocal / frameWidthSafe);
+                            const proposedEnd = currentStartFrame + frameOffset;
+                            const clampedEnd = Math.max(rangeStart + 1, Math.min(currentEndFrame, proposedEnd));
+                            const nextLocal = (clampedEnd - currentStartFrame) * frameWidthSafe;
+                            e.target.x(nextLocal - rangeHandleWidth / 2);
+                            updateRangeVisuals(rangeStart, clampedEnd);
+                            commitRangeThrottled(rangeStart, clampedEnd);
+                        }}
+                        onDragEnd={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'ew-resize';
+                            e.target.y(0);
+                            const handleCenter = e.target.x() + rangeHandleWidth / 2;
+                            const frameOffset = Math.round(handleCenter / frameWidthSafe);
+                            const proposedEnd = currentStartFrame + frameOffset;
+                            const clampedEnd = Math.max(rangeStart + 1, Math.min(currentEndFrame, proposedEnd));
+                            const nextLocal = (clampedEnd - currentStartFrame) * frameWidthSafe;
+                            e.target.x(nextLocal - rangeHandleWidth / 2);
+                            updateRangeVisuals(rangeStart, clampedEnd);
+                            commitRange(rangeStart, clampedEnd);
+                            isDraggingRangeRef.current = false;
+                        }}
+                    />
+                </Group>
+            )}
+
             {effectiveSelectionMode === 'frame' && (
                     <Group
                         x={clipPosition.x}
@@ -887,9 +1154,9 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             y={0}
                             width={Math.max(12, frameWidthPx)}
                             height={Math.max(1, timelineHeight)}
-                            fill={'rgba(43, 127, 255, 0.9)'}
-                            stroke={'rgba(255, 255, 255, 1)'}
-                            strokeWidth={1}
+                            fill={'rgba(43, 127, 255, 0.5)'}
+                            stroke={'rgba(43, 127, 255, 0.9)'}
+                            strokeWidth={1.5}
                             draggable
                             cornerRadius={2}
                             shadowBlur={4}

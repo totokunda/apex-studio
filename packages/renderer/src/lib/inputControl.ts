@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { withStackLog } from "./zustandLog";
 import { ZoomLevel, AnyClipProps } from "./types";
 import { DEFAULT_FPS, TIMELINE_DURATION_SECONDS, MIN_DURATION } from "./settings";
 
@@ -42,6 +43,11 @@ interface InputControlStore {
     selectedInputChangeHandler: ((clipId: string | null) => void) | null;
     setSelectedInputChangeHandler: (handler: ((clipId: string | null) => void) | null, inputId?: string) => void;
 
+    // Range selection (for inputs that support ranges)
+    selectedRange: [number, number];
+    setSelectedRange: (startFrame: number, endFrame: number, inputId?: string) => void;
+    getSelectedRange: (inputId?: string) => [number, number];
+
     // Per-input scoped state
     totalTimelineFramesByInputId: Record<string, number>;
     timelineDurationByInputId: Record<string, [number, number]>;
@@ -51,14 +57,24 @@ interface InputControlStore {
     focusAnchorRatioByInputId: Record<string, number>;
     selectedInputClipIdByInputId: Record<string, string | null>;
     selectedInputChangeHandlersByInputId: Record<string, ((clipId: string | null) => void) | null>;
+    selectedRangeByInputId: Record<string, [number, number]>;
     getTotalTimelineFrames: (inputId?: string) => number;
     getZoomLevel: (inputId?: string) => ZoomLevel;
+
+    // Playback state (per-input)
+    isPlayingByInputId: Record<string, boolean>;
+    setIsPlaying: (isPlaying: boolean, inputId?: string) => void;
+    getIsPlaying: (inputId?: string) => boolean;
+
+    // Playback controls (per-input)
+    play: (inputId: string) => void;
+    pause: (inputId: string) => void;
 }
 
 const defaultTotalFrames = TIMELINE_DURATION_SECONDS * DEFAULT_FPS;
 const defaultTimelineDuration: [number, number] = [0, defaultTotalFrames];
 
-export const useInputControlsStore = create<InputControlStore>((set, get) => ({
+export const useInputControlsStore = create<InputControlStore>(withStackLog((set, get) => ({
     // Zoom
     maxZoomLevel: 10,
     setMaxZoomLevel: (level) => set({ maxZoomLevel: level }),
@@ -81,6 +97,29 @@ export const useInputControlsStore = create<InputControlStore>((set, get) => ({
         if (!inputId) return get().zoomLevel;
         return get().zoomLevelByInputId[inputId] ?? 1;
     },
+
+    // Playback state (per-input)
+    isPlayingByInputId: {},
+    setIsPlaying: (isPlaying, inputId) => {
+        if (!inputId) {
+            // no-op for global; inputs should always specify inputId
+            return;
+        }
+        set((state) => ({
+            isPlayingByInputId: {
+                ...state.isPlayingByInputId,
+                [inputId]: !!isPlaying,
+            },
+        }));
+    },
+    getIsPlaying: (inputId) => {
+        if (!inputId) return false;
+        return !!get().isPlayingByInputId[inputId];
+    },
+
+    // playback controls filled in after store definition (see below)
+    play: (_inputId: string) => {},
+    pause: (_inputId: string) => {},
 
     // Timeline duration/window
     totalTimelineFrames: defaultTotalFrames,
@@ -272,6 +311,28 @@ export const useInputControlsStore = create<InputControlStore>((set, get) => ({
         }));
     },
 
+    // Range selection (defaults to a 1-frame span)
+    selectedRange: [0, 1],
+    setSelectedRange: (startFrame, endFrame, inputId) => {
+        const start = Math.max(0, Math.round(startFrame));
+        const end = Math.max(start + 1, Math.round(endFrame));
+        const next: [number, number] = [start, end];
+        if (!inputId) {
+            set({ selectedRange: next });
+            return;
+        }
+        set((state) => ({
+            selectedRangeByInputId: {
+                ...state.selectedRangeByInputId,
+                [inputId]: next,
+            },
+        }));
+    },
+    getSelectedRange: (inputId) => {
+        if (!inputId) return get().selectedRange;
+        return get().selectedRangeByInputId[inputId] ?? [0, 1];
+    },
+
     // Per-input scoped state containers
     totalTimelineFramesByInputId: {},
     timelineDurationByInputId: {},
@@ -281,6 +342,84 @@ export const useInputControlsStore = create<InputControlStore>((set, get) => ({
     focusAnchorRatioByInputId: {},
     selectedInputClipIdByInputId: {},
     selectedInputChangeHandlersByInputId: {},
+    selectedRangeByInputId: {},
+})));
+
+// Playback internals (per-input, module-scoped to avoid causing unnecessary rerenders)
+const __inputPlaybackRafIdByInput: Record<string, number | null> = {};
+const __inputLastTickMsByInput: Record<string, number> = {};
+const __inputFrameAccumulatorByInput: Record<string, number> = {};
+
+function __requestNextInputTick(inputId: string) {
+    __inputPlaybackRafIdByInput[inputId] = requestAnimationFrame((now) => __inputPlaybackTick(inputId, now));
+}
+
+function __inputPlaybackTick(inputId: string, now: number) {
+    const controls = useInputControlsStore.getState();
+    if (!controls.getIsPlaying(inputId)) return;
+
+    const fps = Math.max(1, controls.getFps(inputId) || 1);
+    const totalFrames = Math.max(0, controls.getTotalTimelineFrames(inputId) || 0);
+
+    if (!__inputLastTickMsByInput[inputId]) {
+        __inputLastTickMsByInput[inputId] = now;
+        __requestNextInputTick(inputId);
+        return;
+    }
+
+    const dt = (now - __inputLastTickMsByInput[inputId]) / 1000;
+    __inputFrameAccumulatorByInput[inputId] = (__inputFrameAccumulatorByInput[inputId] || 0) + dt * fps;
+    let steps = Math.floor(__inputFrameAccumulatorByInput[inputId]);
+    if (steps > 0) {
+        __inputFrameAccumulatorByInput[inputId] -= steps;
+        const current = controls.getFocusFrame(inputId) || 0;
+        const next = Math.min(totalFrames, current + steps);
+        controls.setFocusFrame(next, inputId);
+        if (next >= totalFrames) {
+            controls.pause(inputId);
+            __inputLastTickMsByInput[inputId] = 0;
+            __inputFrameAccumulatorByInput[inputId] = 0;
+            return;
+        }
+    }
+
+    __inputLastTickMsByInput[inputId] = now;
+    __requestNextInputTick(inputId);
+}
+
+// Wire up play/pause now that helpers exist
+useInputControlsStore.setState((prev) => ({
+    ...prev,
+    play: (inputId: string) => {
+        const state = useInputControlsStore.getState();
+        if (state.getIsPlaying(inputId)) return;
+        const total = Math.max(0, state.getTotalTimelineFrames(inputId) || 0);
+        if (total <= 0) return;
+        // If we're at or past the end, restart from the beginning
+        if ((state.getFocusFrame(inputId) || 0) >= total) {
+            state.setFocusFrame(0, inputId);
+        }
+        __inputLastTickMsByInput[inputId] = 0;
+        __inputFrameAccumulatorByInput[inputId] = 0;
+        const rafId = __inputPlaybackRafIdByInput[inputId];
+        if (rafId != null) cancelAnimationFrame(rafId);
+        useInputControlsStore.setState((s) => ({
+            isPlayingByInputId: { ...s.isPlayingByInputId, [inputId]: true },
+        }));
+        __requestNextInputTick(inputId);
+    },
+    pause: (inputId: string) => {
+        const rafId = __inputPlaybackRafIdByInput[inputId];
+        if (rafId != null) {
+            cancelAnimationFrame(rafId);
+            __inputPlaybackRafIdByInput[inputId] = null;
+        }
+        __inputLastTickMsByInput[inputId] = 0;
+        __inputFrameAccumulatorByInput[inputId] = 0;
+        useInputControlsStore.setState((s) => ({
+            isPlayingByInputId: { ...s.isPlayingByInputId, [inputId]: false },
+        }));
+    },
 }));
 
 // Baseline zoom recalibration for input/preview timelines

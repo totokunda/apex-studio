@@ -81,7 +81,7 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
             const startFrame = clip.startFrame || 0;
             const hasOverlap = (clip.type === 'video' || clip.type === 'image') && (startFrame > 0) ? true : false;
             const clipAtFrame = clipWithinFrame(clip, focusFrame, hasOverlap, 1);
-              if (!clipAtFrame) return null;
+              if (!clipAtFrame && clip.groupId) return null;
             const applicators = getApplicators(clip.clipId);
             switch (clip.type) {
               case 'video':

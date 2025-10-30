@@ -22,8 +22,9 @@ import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/lib
 import TimelineSelector from './timeline/TimelineSelector';
 import { useInputControlsStore } from '@/lib/inputControl';
 
-
-export type ImageSelection = { kind: 'media', assetUrl: string, frame?:number } | { kind: 'clip', clipId: string, frame?:number } | null;
+type ImageSelectionMedia = { kind: 'media'; assetUrl: string; frame?: number };
+type ImageSelectionClip = { kind: 'clip'; clipId: string; frame?: number };
+export type ImageSelection = ImageSelectionMedia | ImageSelectionClip | null;
 
 interface ImageInputProps {
   label?: string;
@@ -216,7 +217,8 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
 
     const setInputTimelineDuration = useInputControlsStore((s) => s.setTimelineDuration);
     const setInputFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
-    const focusFrameForInput = useInputControlsStore((s) => s.getFocusFrame(inputId));
+    const {focusFrameByInputId} = useInputControlsStore();
+    const focusFrameForInput = focusFrameByInputId[inputId] ?? 0;
     const selectionKey = useMemo(() => {
         if (!value) return 'null';
         if (value.kind === 'media') return `media:${value.assetUrl}`;
@@ -462,6 +464,36 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         } catch {}
     };
 
+    const timelineClip = useMemo<AnyClipProps | null>(() => {
+        if (!value) return null;
+        if (mediaClip) return mediaClip;
+        if (value.kind === 'media') {
+            const ext = getLowercaseExtension(value.assetUrl);
+            const isVideo = VIDEO_EXTS.includes(ext);
+            if (!isVideo) return null;
+            const storeState = useInputControlsStore.getState();
+            const [, persistedEnd] = storeState.getTimelineDuration(inputId);
+            const end = Math.max(1, persistedEnd || 1);
+            return {
+                type: 'video',
+                clipId: `media:${value.assetUrl}`,
+                src: value.assetUrl,
+                startFrame: 0,
+                endFrame: end,
+                preprocessors: [],
+                masks: [],
+            } as AnyClipProps;
+        }
+        if (value.kind === 'clip') {
+            const clip = getClipById(value.clipId) as AnyClipProps | undefined;
+            if (clip && clip.type !== 'audio') {
+                const duration = Math.max(1, (clip.endFrame ?? 0) - (clip.startFrame ?? 0));
+                return { ...clip, startFrame: 0, endFrame: duration } as AnyClipProps;
+            }
+        }
+        return null;
+    }, [value, mediaClip, inputId, getClipById]);
+
   return (
     <Droppable className="w-full h-full" id="image-input" accepts={['media']}>
         
@@ -526,13 +558,15 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         </PopoverTrigger>
         <PopoverImage value={value} onChange={onChange} clipId={clipId} />
     </Popover> 
-    {mediaClip && (mediaClip.type === 'video' || mediaClip.type === 'group') && value && <TimelineSelector
-     inputId={inputId}
-     clip={mediaClip} 
-     width={stageSize.w} 
-     height={44} 
-     mode="frame" />
-    }
+    {timelineClip && (timelineClip.type === 'video' || timelineClip.type === 'group') && value && (
+      <TimelineSelector
+        inputId={inputId}
+        clip={timelineClip}
+        width={stageSize.w}
+        height={44}
+        mode="frame"
+      />
+    )}
     </div>
     </div>
     

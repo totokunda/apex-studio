@@ -91,7 +91,7 @@ const NumberInput: React.FC<NumberInputProps<string>> = ({ value, onChange, labe
             onChange={(e) => setTempValue(e.target.value)}
             onBlur={handleBlur}
             onKeyDown={handleKeyDown} />
-        {<div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand  h-6 cursor-pointer rounded-r">
+        {<div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand  h-8 cursor-pointer rounded-r">
             <button className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center" 
             onClick={() => {
               const numValue = Number(value);

@@ -11,6 +11,7 @@ import NumberInputSlider from './inputs/NumberInputSlider';
 import RandomInput from './inputs/RandomInput';
 import BooleanInput from './inputs/BooleanInput';
 import ImageInput from './inputs/ImageInput';
+import VideoInput from './inputs/VideoInput';
 
 export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], clipId: string, panelSize:number }> = ({ panel, inputs, clipId, panelSize }) => {
 
@@ -225,6 +226,42 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                         value={currentVal}
                         panelSize={panelSize - 64}
                         onChange={(v: any) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
+                      />
+                    );
+                  }
+                  case 'video': {
+                    const parseVideoValue = (v: any) => {
+                      if (!v) return null;
+                      const coerceRange = (obj: any) => {
+                        const start = Math.max(0, Math.round(Number(obj?.startFrame ?? 0)));
+                        const end = Math.max(start + 1, Math.round(Number(obj?.endFrame ?? start + 1)));
+                        return { ...obj, startFrame: start, endFrame: end };
+                      };
+                      if (typeof v === 'object' && v !== null && (v.kind === 'media' || v.kind === 'clip')) {
+                        return coerceRange(v);
+                      }
+                      if (typeof v === 'string') {
+                        try {
+                          const parsed = JSON.parse(v);
+                          if (parsed && (parsed.kind === 'media' || parsed.kind === 'clip')) {
+                            return coerceRange(parsed);
+                          }
+                        } catch {}
+                      }
+                      return null;
+                    };
+                    const currentVal: any = parseVideoValue(input?.value ?? input?.default);
+
+                    return (
+                      <VideoInput
+                        inputId={inputId}
+                        clipId={clipId}
+                        key={inputId}
+                        label={input?.label || 'Video'}
+                        description={input?.description}
+                        value={currentVal}
+                        panelSize={panelSize - 64}
+                        onChange={(v) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
                       />
                     );
                   }

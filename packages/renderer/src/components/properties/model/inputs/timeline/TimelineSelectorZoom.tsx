@@ -8,19 +8,16 @@ import { MIN_DURATION } from '@/lib/settings';
 interface TimelineSelectorZoomProps {
     hasClip?: boolean;
     inputId?: string;
+    mode?: 'frame' | 'range';
 }
 
-const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({ hasClip = true, inputId }) => {
-    const zoomLevel = useInputControlsStore((s) => s.getZoomLevel(inputId));
-    const setZoomLevel = useInputControlsStore((s) => s.setZoomLevel);
-    const setTimelineDuration = useInputControlsStore((s) => s.setTimelineDuration);
-    const focusFrame = useInputControlsStore((s) => s.getFocusFrame(inputId));
-    const setFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
-    const focusAnchorRatio = useInputControlsStore((s) => s.getFocusAnchorRatio(inputId));
-    const setFocusAnchorRatio = useInputControlsStore((s) => s.setFocusAnchorRatio);
-    const totalTimelineFrames = useInputControlsStore((s) => s.getTotalTimelineFrames(inputId));
-    const minZoomLevel = useInputControlsStore((s) => s.minZoomLevel);
-    const maxZoomLevel = useInputControlsStore((s) => s.maxZoomLevel);
+const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({ hasClip = true, inputId, mode }) => {
+    const {zoomLevelByInputId, setZoomLevel, setTimelineDuration, setFocusFrame, setFocusAnchorRatio, focusFrameByInputId, focusAnchorRatioByInputId, totalTimelineFramesByInputId, selectedRangeByInputId, minZoomLevel, maxZoomLevel} = useInputControlsStore();
+    const zoomLevel = zoomLevelByInputId[inputId ?? ''] ?? 1;
+    const focusFrame = focusFrameByInputId[inputId ?? ''] ?? 0;
+    const focusAnchorRatio = focusAnchorRatioByInputId[inputId ?? ''] ?? 0.5;
+    const totalTimelineFrames = totalTimelineFramesByInputId[inputId ?? ''] ?? 1;
+    const selectedRange = selectedRangeByInputId[inputId ?? ''] ?? [0, 1];
     const [isDragging, setIsDragging] = useState(false);
     const [isHovering, setIsHovering] = useState(false);
     const barRef = useRef<HTMLDivElement>(null);
@@ -50,11 +47,24 @@ const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({ hasClip = t
 
         const targetDuration = durations[levelIndex];
 
-        let newStart = Math.round(focusFrame - (focusAnchorRatio * targetDuration));
+        const isRangeMode = mode === 'range';
+        const rangeCenter = (() => {
+            try {
+                const s = Math.max(0, Math.round(selectedRange?.[0] ?? 0));
+                const e = Math.max(s + 1, Math.round(selectedRange?.[1] ?? (s + 1)));
+                return Math.round((s + e) / 2);
+            } catch {
+                return focusFrame;
+            }
+        })();
+        const anchorFocusFrame = isRangeMode ? rangeCenter : focusFrame;
+        const anchorRatio = isRangeMode ? 0.5 : focusAnchorRatio;
+
+        let newStart = Math.round(anchorFocusFrame - (anchorRatio * targetDuration));
         newStart = Math.max(0, Math.min(newStart, Math.max(0, totalTimelineFrames - targetDuration)));
         const newEnd = newStart + targetDuration;
 
-        const newAnchor = targetDuration > 0 ? (focusFrame - newStart) / targetDuration : 0.5;
+        const newAnchor = targetDuration > 0 ? (anchorFocusFrame - newStart) / targetDuration : 0.5;
         setFocusAnchorRatio(Math.max(0, Math.min(1, newAnchor)), inputId);
 
         setTimelineDuration(newStart, newEnd, inputId);
