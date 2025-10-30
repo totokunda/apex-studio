@@ -486,7 +486,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         }
 
 		// Update ghost overlay with validated position while dragging
-		const rectLeft = Math.round(e.target.x() - timelinePadding);
+        const addToPadding = timelineDuration[0] === 0 ? timelinePadding : 0;
+		const rectLeft = Math.round(e.target.x() -  addToPadding);
 		const [visibleStartFrame, visibleEndFrame] = timelineDuration;
 		const clipLen = Math.max(1, (currentEndFrame - currentStartFrame));
 		const ghostWidthPx = getClipWidth(0, clipLen, timelineWidth, [visibleStartFrame, visibleEndFrame]);

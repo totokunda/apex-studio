@@ -156,8 +156,8 @@ export class LassoMask extends WebGLMaskBase {
     private aPositionLoc = -1;
     private aTexCoordLoc = -1;
   
-    constructor() {
-      super();
+  constructor(contextKey?: string) {
+      super(contextKey);
       this.initResources();
     }
     

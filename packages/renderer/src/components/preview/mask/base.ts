@@ -19,8 +19,9 @@ export abstract class WebGLMaskBase {
   private unsubscribeFromContext?: () => void;
   private bufferContext: WebGLRenderingContext | WebGL2RenderingContext | null = null;
 
-  constructor(contextType: 'webgl' | 'webgl2' = 'webgl') {
-    this.contextHandle = WebGLContextManager.acquire('preview-webgl-mask', {
+  constructor(contextKey?: string, contextType: 'webgl' | 'webgl2' = 'webgl') {
+    // Use a shared default key when not provided, or an instance-specific key for isolation
+    this.contextHandle = WebGLContextManager.acquire(contextKey || 'preview-webgl-mask', {
       contextType,
       attributes: {
         premultipliedAlpha: false,

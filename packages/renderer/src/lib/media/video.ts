@@ -7,9 +7,10 @@ import {videoDecoders, pruneStaleDecoders} from "./utils";
 
 
 
-function getOrCreateVideoDecoder(path: string, mediaInfo: MediaInfo, canBeTransparent: boolean): VideoDecoderContext | null {
+function getOrCreateVideoDecoder(path: string, mediaInfo: MediaInfo, canBeTransparent: boolean, isolationKey?: string): VideoDecoderContext | null {
     if (!mediaInfo?.video) return null;
-    const key: VideoDecoderKey = `${path}#video`;
+    // When an isolationKey is provided, create an independent decoder per key to avoid cross-component interference
+    const key: VideoDecoderKey = isolationKey ? `${path}#video#${isolationKey}` : `${path}#video`;
 
     const existing = videoDecoders.get(key);
     const frameRate = mediaInfo.stats.video?.averagePacketRate || 0;
@@ -46,7 +47,7 @@ function getOrCreateVideoDecoder(path: string, mediaInfo: MediaInfo, canBeTransp
     }
 }
 
-export const getVideoIterator = async (path: string, options?: { mediaInfo?: MediaInfo, fps?: number, startIndex: number, endIndex?: number }) => {
+export const getVideoIterator = async (path: string, options?: { mediaInfo?: MediaInfo, fps?: number, startIndex: number, endIndex?: number, isolationKey?: string }) => {
     try {
         const mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
         if (!mediaInfo || !mediaInfo.video) throw new Error('Media info not found');
@@ -55,7 +56,7 @@ export const getVideoIterator = async (path: string, options?: { mediaInfo?: Med
         const startTimestamp = (options?.startIndex || 0) / fps;
         const endTimestamp = options?.endIndex ? (options.endIndex) / fps : undefined;
         const videoCanBeTransparent = await mediaInfo.video.canBeTransparent();
-        const decoder = getOrCreateVideoDecoder(path, mediaInfo, videoCanBeTransparent);
+        const decoder = getOrCreateVideoDecoder(path, mediaInfo, videoCanBeTransparent, options?.isolationKey);
         if (!decoder) throw new Error('Decoder not found');
         decoder.lastAccessTs = nowMs();
 

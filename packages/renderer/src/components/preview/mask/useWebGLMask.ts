@@ -20,6 +20,8 @@ export function useWebGLMask({
     debug,
     clip,
 }: WebGLMaskProps) {
+    // Create an instance-specific WebGL context key so multiple previews don't share the same GL canvas
+    const maskContextKeyRef = useRef<string>(`preview-webgl-mask:${clip?.clipId || 'mask'}:${Math.random().toString(36).slice(2)}`);
     // create a ref of our shape mask 
     const shapeMaskRef = useRef<ShapeMask | null>(null);
     const lassoMaskRef = useRef<LassoMask | null>(null);
@@ -27,13 +29,13 @@ export function useWebGLMask({
     const maskWorkingCanvasRef = useRef<HTMLCanvasElement | null>(null);
     // Lazy initialization of mask to reduce WebGL context count
     if (!shapeMaskRef.current) {
-        shapeMaskRef.current = new ShapeMask();
+        shapeMaskRef.current = new ShapeMask(maskContextKeyRef.current);
     }
     if (!lassoMaskRef.current) {
-        lassoMaskRef.current = new LassoMask();
+        lassoMaskRef.current = new LassoMask(maskContextKeyRef.current);
     }
     if (!touchMaskRef.current) {
-        touchMaskRef.current = new TouchMask();
+        touchMaskRef.current = new TouchMask(maskContextKeyRef.current);
     }
     // Cleanup on unmount
     useEffect(() => {
@@ -55,6 +57,7 @@ export function useWebGLMask({
     }, []);
     
     const applyMask = useCallback((sourceCanvas: HTMLCanvasElement, frame?:number) => {
+
         if (!shapeMaskRef.current) return sourceCanvas;
         if (disabled || masks.length === 0) {
             return sourceCanvas;

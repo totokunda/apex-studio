@@ -12,6 +12,7 @@ import RandomInput from './inputs/RandomInput';
 import BooleanInput from './inputs/BooleanInput';
 import ImageInput from './inputs/ImageInput';
 import VideoInput from './inputs/VideoInput';
+import NumberListInput from './inputs/NumberListInput';
 
 export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], clipId: string, panelSize:number }> = ({ panel, inputs, clipId, panelSize }) => {
 
@@ -93,6 +94,101 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
       }
     }, [panel.icon]);
 
+  // Helpers to support dependent updates (resolution/aspect_ratio -> height/width)
+  const getSelectedOption = useCallback((input: UIInput | undefined, valueOverride?: string) => {
+    const opts: any[] = (input as any)?.options || [];
+    const val = valueOverride ?? String((input as any)?.value ?? (input as any)?.default ?? '');
+    return opts.find((o) => String(o?.value) === String(val));
+  }, []);
+
+  const snapToStep = useCallback((num: number, step?: number, min?: number, max?: number) => {
+    if (!Number.isFinite(num)) return num;
+    let out = num;
+    if (step && step > 0) {
+      out = Math.round(out / step) * step;
+    }
+    if (Number.isFinite(min)) out = Math.max(min as number, out);
+    if (Number.isFinite(max)) out = Math.min(max as number, out);
+    return out;
+  }, []);
+
+  const computeWidthFromAR = useCallback((heightVal: number, aspectOverride?: string) => {
+    const widthInput = getInputById('width') as any;
+    const arInput = getInputById('aspect_ratio') as any;
+    const arOpt: any = getSelectedOption(arInput, aspectOverride);
+    if ((aspectOverride ?? String(arInput?.value)) === 'custom') {
+      const currentWidth = Number((widthInput as any)?.value ?? (widthInput as any)?.default ?? NaN);
+      return Number.isFinite(currentWidth) ? Math.round(currentWidth) : Math.round(heightVal);
+    }
+    const rw = Number(arOpt?.ratio_w ?? 16) || 16;
+    const rh = Number(arOpt?.ratio_h ?? 9) || 9;
+    const rawWidth = heightVal * (rw / rh);
+    const snapped = snapToStep(rawWidth, widthInput?.step, widthInput?.min, widthInput?.max);
+    return Math.max(1, Math.round(snapped));
+  }, [getInputById, getSelectedOption, snapToStep]);
+
+  const handleResolutionChange = useCallback((newVal: string) => {
+    const resInput = getInputById('resolution') as any;
+    const heightInput = getInputById('height') as any;
+    if (!heightInput) return;
+    const selected = getSelectedOption(resInput, newVal) as any;
+    const targetHeight = Number(selected?.height ?? newVal ?? heightInput?.default ?? 1024) || 1024;
+    const heightSnapped = snapToStep(targetHeight, heightInput?.step, heightInput?.min, heightInput?.max);
+    const heightInt = Math.max(1, Math.round(heightSnapped));
+    updateModelInput(clipId, 'height', { value: String(heightInt) });
+    const widthInt = computeWidthFromAR(heightInt);
+    updateModelInput(clipId, 'width', { value: String(widthInt) });
+  }, [clipId, computeWidthFromAR, getInputById, getSelectedOption, snapToStep, updateModelInput]);
+
+  const handleAspectRatioChange = useCallback((newVal: string) => {
+    const heightInput = getInputById('height') as any;
+    const resInput = getInputById('resolution') as any;
+    let heightNow = Number((heightInput?.value ?? heightInput?.default ?? 1024));
+    if (!Number.isFinite(heightNow)) {
+      const resSelected = getSelectedOption(resInput);
+      heightNow = Number((resSelected as any)?.height ?? resInput?.value ?? resInput?.default ?? 1024) || 1024;
+    }
+    const heightSnapped = snapToStep(heightNow, heightInput?.step, heightInput?.min, heightInput?.max);
+    const heightInt = Math.max(1, Math.round(heightSnapped));
+    // Ensure height is updated so the UI reflects recalculation alongside width
+    updateModelInput(clipId, 'height', { value: String(heightInt) });
+    const widthInt = computeWidthFromAR(heightInt, newVal);
+    updateModelInput(clipId, 'width', { value: String(widthInt) });
+  }, [clipId, computeWidthFromAR, getInputById, getSelectedOption, snapToStep, updateModelInput]);
+
+  // Sync effect: ensure height and width reflect selected resolution and aspect ratio
+  useEffect(() => {
+    const resInput = getInputById('resolution') as any;
+    const arInput = getInputById('aspect_ratio') as any;
+    const heightInput = getInputById('height') as any;
+    const widthInput = getInputById('width') as any;
+    if (!heightInput || !widthInput) return;
+
+    const resVal = String(resInput?.value ?? resInput?.default ?? '');
+    const arVal = String(arInput?.value ?? arInput?.default ?? '');
+    // If custom is selected, do not auto-sync; manual overrides are in effect
+    if (resVal === 'custom' || arVal === 'custom') return;
+
+    const resOpt = getSelectedOption(resInput);
+    const desiredHeight = Number((resOpt as any)?.height);
+    const currentHeight = Number(heightInput?.value ?? heightInput?.default ?? NaN);
+    let nextHeight = currentHeight;
+    if (Number.isFinite(desiredHeight)) {
+      const snapped = snapToStep(desiredHeight, heightInput?.step, heightInput?.min, heightInput?.max);
+      const snappedInt = Math.max(1, Math.round(snapped));
+      if (!Number.isFinite(currentHeight) || snappedInt !== currentHeight) {
+        nextHeight = snappedInt;
+        updateModelInput(clipId, 'height', { value: String(snappedInt) });
+      }
+    }
+
+    const widthFromAR = computeWidthFromAR(Number.isFinite(nextHeight) ? nextHeight : currentHeight, arVal);
+    const currentWidth = Number(widthInput?.value ?? widthInput?.default ?? NaN);
+    if (Number.isFinite(widthFromAR) && widthFromAR !== currentWidth) {
+      updateModelInput(clipId, 'width', { value: String(widthFromAR) });
+    }
+  }, [clipId, computeWidthFromAR, getInputById, getSelectedOption, snapToStep, updateModelInput, inputs]);
+
   return (
     <div className="">
       <div onClick={() => setCollapsed((v) => !v)} className={cn("flex items-center justify-between  py-2.5 px-3", {
@@ -134,9 +230,72 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                 const input = getInputById(inputId);
                 switch (input?.type) {
                   case 'text':
+                    
                     return <TextInput key={inputId} label={input?.label} description={input?.description} value={input?.value || ''} defaultValue={input?.default} onChange={(value) => updateModelInput(clipId, inputId, { value })} placeholder={input?.placeholder} />
-                  case 'select':
-                    return <SelectInput key={inputId} label={input?.label} defaultOption={input?.default} description={input?.description} value={input?.value || ''} onChange={(value) => updateModelInput(clipId, inputId, { value })} options={input?.options || []} />
+                case 'image+preprocessor': {
+                    // Value may be either a raw selection or a composite object with selection/apply/preprocessor_ref
+                    const parseComposite = (v: any) => {
+                      if (!v) return { selection: null, apply: undefined } as any;
+                      if (typeof v === 'string') {
+                        try {
+                          const obj = JSON.parse(v);
+                          if (obj && (obj.selection || obj.apply !== undefined || obj.apply_preprocessor !== undefined || obj.preprocessor_ref)) return obj as any;
+                          if (obj && (obj.kind === 'media' || obj.kind === 'clip')) return { selection: obj } as any;
+                        } catch {}
+                        return { selection: { kind: 'media', assetUrl: v } } as any;
+                      }
+                      if (typeof v === 'object') {
+                        if ((v as any).kind === 'media' || (v as any).kind === 'clip') return { selection: v } as any;
+                        return v as any;
+                      }
+                      return { selection: null } as any;
+                    };
+                    const composite = parseComposite((input as any)?.value);
+                    const selectionVal: any = composite?.selection ?? null;
+                    const preprocRef = (input as any)?.preprocessor_ref as string | undefined;
+                    const preprocName = (input as any)?.preprocessor_name as string | undefined;
+                    return (
+                      <ImageInput
+                        inputId={inputId}
+                        clipId={clipId}
+                        key={inputId}
+                        label={input?.label}
+                        description={input?.description}
+                        value={selectionVal}
+                        panelSize={panelSize - 64}
+                        preprocessorRef={preprocRef}
+                        preprocessorName={preprocName}
+                        applyPreprocessorInitial={
+                          typeof composite?.apply === 'boolean' ? composite.apply : (typeof composite?.apply_preprocessor === 'boolean' ? composite.apply_preprocessor : undefined)
+                        }
+                        onChangeComposite={(v: any) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
+                        onChange={(v: any) => {
+                          // Fallback: if child calls onChange (selection-only), wrap into composite
+                          const payload = { selection: v ?? null, preprocessor_ref: preprocRef, preprocessor_name: preprocName, apply_preprocessor: true, apply: true };
+                          updateModelInput(clipId, inputId, { value: JSON.stringify(payload) });
+                        }}
+                      />
+                    );
+                  }
+                case 'select':
+                    return (
+                      <SelectInput
+                        key={inputId}
+                        label={input?.label}
+                        defaultOption={input?.default}
+                        description={input?.description}
+                        value={input?.value || ''}
+                        onChange={(value) => {
+                          updateModelInput(clipId, inputId, { value });
+                          if (inputId === 'resolution') {
+                            handleResolutionChange(value);
+                          } else if (inputId === 'aspect_ratio') {
+                            handleAspectRatioChange(value);
+                          }
+                        }}
+                        options={input?.options || []}
+                      />
+                    )
                   case 'boolean': {
                       const boolVal = String(input?.value ?? input?.default ?? 'false').toLowerCase() === 'true';
                       return (
@@ -174,16 +333,89 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                         <NumberInput
                           startLogo={input?.label ? input?.label.charAt(0).toUpperCase() : ''}
                           key={inputId}
-                          
                           label={input?.label}
                           description={input?.description}
                           value={strVal}
                           min={input?.min}      
                           max={input?.max}
                           step={input?.step}
-                          onChange={(v) => updateModelInput(clipId, inputId, { value: v })}
+                          onChange={(v) => {
+                            updateModelInput(clipId, inputId, { value: v });
+                            if (inputId === 'height' || inputId === 'width') {
+                              // Manual override: set selects to custom to disable auto-sync
+                              updateModelInput(clipId, 'resolution', { value: 'custom' });
+                              updateModelInput(clipId, 'aspect_ratio', { value: 'custom' });
+                            }
+                          }}
                         />
                       );
+                  }
+                  case 'video+preprocessor': {
+                    const parseComposite = (v: any) => {
+                      if (!v) return { selection: null, apply: undefined } as any;
+                      if (typeof v === 'string') {
+                        try {
+                          const obj = JSON.parse(v);
+                          if (obj && (obj.selection || obj.apply !== undefined || obj.apply_preprocessor !== undefined || obj.preprocessor_ref)) return obj as any;
+                        } catch {}
+                      }
+                      return v as any;
+                    };
+                    const composite = parseComposite((input as any)?.value);
+                    const selectionVal: any = (() => {
+                      const raw = composite?.selection ?? (input as any)?.value ?? (input as any)?.default;
+                      if (!raw) return null;
+                      if (typeof raw === 'string') {
+                        try {
+                          const parsed = JSON.parse(raw);
+                          if (parsed && (parsed.kind === 'media' || parsed.kind === 'clip')) return parsed;
+                        } catch {}
+                        return null;
+                      }
+                      return raw;
+                    })();
+                    const preprocRef = (input as any)?.preprocessor_ref as string | undefined;
+                    const preprocName = (input as any)?.preprocessor_name as string | undefined;
+                    return (
+                      <VideoInput
+                        inputId={inputId}
+                        clipId={clipId}
+                        key={inputId}
+                        label={input?.label || 'Video'}
+                        description={input?.description}
+                        value={selectionVal}
+                        panelSize={panelSize - 64}
+                        preprocessorRef={preprocRef}
+                        preprocessorName={preprocName}
+                        applyPreprocessorInitial={
+                          typeof composite?.apply === 'boolean' ? composite.apply : (typeof composite?.apply_preprocessor === 'boolean' ? composite.apply_preprocessor : undefined)
+                        }
+                        onChangeComposite={(v: any) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
+                        onChange={(v) => {
+                          const payload = { selection: v ?? null, preprocessor_ref: preprocRef, preprocessor_name: preprocName, apply_preprocessor: true, apply: true };
+                          updateModelInput(clipId, inputId, { value: JSON.stringify(payload) });
+                        }}
+                      />
+                    );
+                  }
+                  case 'number_list': {
+                    const strVal = String(input?.value ?? input?.default ?? '');
+                    const maxItems = (input as any)?.max_items ?? (input as any)?.maxItems;
+                    return (
+                      <NumberListInput
+                        startLogo={input?.label ? input?.label.charAt(0).toUpperCase() : ''}
+                        key={inputId}
+                        label={input?.label}
+                        description={input?.description}
+                        value={strVal}
+                          min={(input as any)?.min}
+                        max={(input as any)?.max}
+                        step={(input as any)?.step}
+                        valueType={(input as any)?.value_type}
+                        maxItems={typeof maxItems === 'number' ? maxItems : undefined}
+                        onChange={(v) => updateModelInput(clipId, inputId, { value: v })}
+                      />
+                    );
                   }
                   case 'random': {
                       const strVal = String(input?.value ?? input?.default ?? '-1');
@@ -265,6 +497,7 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                       />
                     );
                   }
+                  
                   default:
                     return null;
                 }

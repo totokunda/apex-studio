@@ -22,6 +22,7 @@ import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/lib
 import TimelineSelector from './timeline/TimelineSelector';
 import { useInputControlsStore } from '@/lib/inputControl';
 import { useControlsStore } from '@/lib/control';
+import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store';
 
 type VideoSelectionMedia = { kind: 'media'; assetUrl: string; startFrame: number; endFrame: number };
 type VideoSelectionClip = { kind: 'clip'; clipId: string; startFrame: number; endFrame: number };
@@ -35,6 +36,10 @@ interface VideoInputProps {
   onChange: (value: VideoSelection) => void;
   clipId: string;
   panelSize: number;
+  preprocessorRef?: string;
+  preprocessorName?: string;
+  applyPreprocessorInitial?: boolean;
+  onChangeComposite?: (value: { selection: VideoSelection; preprocessor_ref?: string; preprocessor_name?: string; apply_preprocessor?: boolean }) => void;
 }
 
 interface PopoverVideoProps {
@@ -284,7 +289,7 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) 
   );
 };
 
-const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, value, onChange, clipId, panelSize }) => {
+const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, value, onChange, clipId, panelSize, preprocessorRef, preprocessorName, applyPreprocessorInitial, onChangeComposite }) => {
 
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -293,6 +298,18 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
   const externalDragCounterRef = useRef(0);
   
   const getClipById = useClipStore((s) => s.getClipById);
+  const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
+  const { preprocessors, load } = usePreprocessorsListStore();
+  useEffect(() => {
+    if (preprocessorRef) {
+      void load();
+    }
+  }, [preprocessorRef, load]);
+  const resolvedPreprocessorName = useMemo(() => {
+    if (!preprocessorRef) return preprocessorName;
+    const found = (preprocessors || []).find(p => p.id === preprocessorRef);
+    return found?.name || preprocessorName || preprocessorRef;
+  }, [preprocessors, preprocessorRef, preprocessorName]);
   
   const {
     clearSelectedAsset,
@@ -304,7 +321,6 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   
   
-  const setInputTimelineDuration = useInputControlsStore((s) => s.setTimelineDuration);
   const setInputFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
   const getSelectedRange = useInputControlsStore((s) => s.getSelectedRange);
   const getTimelineDuration = useInputControlsStore((s) => s.getTimelineDuration);
@@ -343,6 +359,45 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     const r = aspectRatio.width / aspectRatio.height;
     return Number.isFinite(r) && r > 0 ? r : 1;
   }, [aspectRatio.width, aspectRatio.height]);
+
+  // Preprocessor toggle state and default
+  const [applyPreprocessor, setApplyPreprocessor] = useState<boolean>(true);
+  useEffect(() => {
+    if (typeof applyPreprocessorInitial === 'boolean') {
+      setApplyPreprocessor(applyPreprocessorInitial);
+      return;
+    }
+    if (!preprocessorRef) {
+      setApplyPreprocessor(true);
+      return;
+    }
+    const sel = value;
+    if (sel && sel.kind === 'clip') {
+      const clip = getClipById(sel.clipId);
+      if (clip && (clip.type === 'video' || clip.type === 'image')) {
+        const exists = (getPreprocessorsForClip(clip.clipId) || []).some(p => (p.preprocessor?.id || '') === preprocessorRef);
+        setApplyPreprocessor(!exists);
+        return;
+      }
+    }
+    setApplyPreprocessor(true);
+  }, [value, preprocessorRef, applyPreprocessorInitial, getClipById, getPreprocessorsForClip]);
+
+  const emitSelection = useCallback((next: VideoSelection) => {
+    if (onChangeComposite) {
+      onChangeComposite({ selection: next, preprocessor_ref: preprocessorRef, preprocessor_name: resolvedPreprocessorName, apply_preprocessor: applyPreprocessor });
+    } else {
+      onChange(next);
+    }
+  }, [onChangeComposite, onChange, preprocessorRef, resolvedPreprocessorName, applyPreprocessor]);
+
+  const handleToggleApply = useCallback(() => {
+    const next = !applyPreprocessor;
+    setApplyPreprocessor(next);
+    if (onChangeComposite) {
+      onChangeComposite({ selection: value ?? null, preprocessor_ref: preprocessorRef, preprocessor_name: resolvedPreprocessorName, apply_preprocessor: next });
+    }
+  }, [applyPreprocessor, onChangeComposite, value, preprocessorRef, resolvedPreprocessorName]);
 
   
 
@@ -426,14 +481,14 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
           try {
             const info = data.mediaInfo ?? await getMediaInfo(data.assetUrl);
             const durationFrames = Math.max(1, Math.floor((info?.duration || 0) * fps));
-            onChange({
+            emitSelection({
               kind: 'media',
               assetUrl: data.assetUrl,
               startFrame: 0,
               endFrame: durationFrames,
             });
           } catch {
-            onChange({
+            emitSelection({
               kind: 'media',
               assetUrl: data?.assetUrl || '',
               startFrame: 0,
@@ -508,7 +563,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
         const first = newlyAdded[0];
         const durationFrames = Math.max(1, Math.floor((first.mediaInfo?.duration || 0) * fps));
         clearSelectedAsset();
-        onChange({
+        emitSelection({
           kind: 'media',
           assetUrl: first.assetUrl,
           startFrame: 0,
@@ -687,7 +742,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
       if (!valueAssetUrl) return;
       if (normalizedStart === requestedStartFrame && normalizedEnd === requestedEndFrame) return;
       lastEmittedRangeRef.current = rangeKey;
-      onChange({
+      emitSelection({
         kind: 'media',
         assetUrl: valueAssetUrl,
         startFrame: normalizedStart,
@@ -697,7 +752,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
       if (!valueClipId) return;
       if (normalizedStart === requestedStartFrame && normalizedEnd === requestedEndFrame) return;
       lastEmittedRangeRef.current = rangeKey;
-      onChange({
+      emitSelection({
         kind: 'clip',
         clipId: valueClipId,
         startFrame: normalizedStart,
@@ -711,7 +766,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     valueKind,
     valueAssetUrl,
     valueClipId,
-    onChange,
+    emitSelection,
     requestedStartFrame,
     requestedEndFrame,
   ]);
@@ -785,8 +840,13 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
       <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-auto">
         <div className="w-full h-full flex flex-col items-start justify-start p-3">
           <div className="w-full flex flex-col items-start justify-start mb-3">
-            {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
-            {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start">{description}</span>}
+            <div className="w-full flex flex-col">
+              <div className="flex flex-col items-start justify-start">
+                {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
+                {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start">{description}</span>}
+              </div>
+
+            </div>
           </div>
           <Popover>
             <PopoverTrigger className="w-full">
@@ -817,7 +877,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                         inputId={inputId}
                       />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center text-brand-light/70 text-[10px]">
+                      <div className="w-full h-full flex items-center justify-center text-brand-light/70 text-[12px]">
                         Unable to preview clip.
                       </div>
                     )
@@ -836,7 +896,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                 )}
               </div>
             </PopoverTrigger>
-            <PopoverVideo value={value} onChange={onChange} clipId={clipId} />
+            <PopoverVideo value={value} onChange={emitSelection} clipId={clipId} />
           </Popover>
           {showTimeline && valueKind && (
             <div className="w-full flex flex-col gap-y-2 mt-3">
@@ -853,7 +913,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                   )}
                 >
                   {isPlaying ? <LuPause className="w-3.5 h-3.5" /> : <LuPlay className="w-3.5 h-3.5" />}
-                  {isPlaying ? 'Pause' : 'Play Range'}
+                  {isPlaying ? 'Pause' : 'Play'}
                 </button>
                 <span className="text-brand-light/70 text-[10px] font-medium">{rangeSummary}</span>
               </div>
@@ -864,6 +924,28 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                 height={44}
                 mode="range"
               />
+            </div>
+          )}
+          {preprocessorRef && (
+            <div className=" flex flex-row-reverse items-center gap-x-3 justify-between">
+              <span className="text-brand-light text-[10px] font-medium">Apply {resolvedPreprocessorName}</span>
+              <button
+                type="button"
+                aria-pressed={applyPreprocessor}
+                aria-label={applyPreprocessor ? 'Disable' : 'Enable'}
+                onClick={handleToggleApply}
+                className={cn(
+                  'relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none',
+                  applyPreprocessor ? 'bg-blue-600' : 'bg-brand-background border border-brand-light/10'
+                )}
+              >
+                <span
+                  className={cn(
+                    'inline-block h-4 w-4 transform rounded-full bg-brand-light shadow transition-transform',
+                    applyPreprocessor ? 'translate-x-4.5' : 'translate-x-0.5'
+                  )}
+                />
+              </button>
             </div>
           )}
         </div>

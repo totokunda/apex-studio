@@ -74,7 +74,7 @@ interface InputControlStore {
 const defaultTotalFrames = TIMELINE_DURATION_SECONDS * DEFAULT_FPS;
 const defaultTimelineDuration: [number, number] = [0, defaultTotalFrames];
 
-export const useInputControlsStore = create<InputControlStore>(withStackLog((set, get) => ({
+export const useInputControlsStore = create<InputControlStore>((set, get) => ({
     // Zoom
     maxZoomLevel: 10,
     setMaxZoomLevel: (level) => set({ maxZoomLevel: level }),
@@ -343,7 +343,7 @@ export const useInputControlsStore = create<InputControlStore>(withStackLog((set
     selectedInputClipIdByInputId: {},
     selectedInputChangeHandlersByInputId: {},
     selectedRangeByInputId: {},
-})));
+}));
 
 // Playback internals (per-input, module-scoped to avoid causing unnecessary rerenders)
 const __inputPlaybackRafIdByInput: Record<string, number | null> = {};
@@ -360,6 +360,10 @@ function __inputPlaybackTick(inputId: string, now: number) {
 
     const fps = Math.max(1, controls.getFps(inputId) || 1);
     const totalFrames = Math.max(0, controls.getTotalTimelineFrames(inputId) || 0);
+    const [rangeStartRaw, rangeEndRaw] = controls.getSelectedRange(inputId) || [0, 1];
+    const rangeStart = Math.max(0, Math.round(rangeStartRaw));
+    const rangeEndExclusive = Math.max(rangeStart + 1, Math.round(rangeEndRaw));
+    const stopFrameExclusive = Math.max(1, Math.min(totalFrames || rangeEndExclusive, rangeEndExclusive));
 
     if (!__inputLastTickMsByInput[inputId]) {
         __inputLastTickMsByInput[inputId] = now;
@@ -373,9 +377,11 @@ function __inputPlaybackTick(inputId: string, now: number) {
     if (steps > 0) {
         __inputFrameAccumulatorByInput[inputId] -= steps;
         const current = controls.getFocusFrame(inputId) || 0;
-        const next = Math.min(totalFrames, current + steps);
+        // Ensure playback occurs within the selected range
+        const clampedCurrent = current < rangeStart ? rangeStart : current;
+        const next = Math.min(stopFrameExclusive, clampedCurrent + steps);
         controls.setFocusFrame(next, inputId);
-        if (next >= totalFrames) {
+        if (next >= stopFrameExclusive) {
             controls.pause(inputId);
             __inputLastTickMsByInput[inputId] = 0;
             __inputFrameAccumulatorByInput[inputId] = 0;
@@ -394,10 +400,15 @@ useInputControlsStore.setState((prev) => ({
         const state = useInputControlsStore.getState();
         if (state.getIsPlaying(inputId)) return;
         const total = Math.max(0, state.getTotalTimelineFrames(inputId) || 0);
-        if (total <= 0) return;
-        // If we're at or past the end, restart from the beginning
-        if ((state.getFocusFrame(inputId) || 0) >= total) {
-            state.setFocusFrame(0, inputId);
+        const [rangeStartRaw, rangeEndRaw] = state.getSelectedRange(inputId) || [0, 1];
+        const rangeStart = Math.max(0, Math.round(rangeStartRaw));
+        const rangeEndExclusive = Math.max(rangeStart + 1, Math.round(rangeEndRaw));
+        const stopFrameExclusive = Math.max(1, Math.min(total || rangeEndExclusive, rangeEndExclusive));
+        if (stopFrameExclusive <= rangeStart) return;
+        // If focus is outside the range or at/past the stop frame, start from range start
+        const currentFocus = state.getFocusFrame(inputId) || 0;
+        if (currentFocus < rangeStart || currentFocus >= stopFrameExclusive) {
+            state.setFocusFrame(rangeStart, inputId);
         }
         __inputLastTickMsByInput[inputId] = 0;
         __inputFrameAccumulatorByInput[inputId] = 0;

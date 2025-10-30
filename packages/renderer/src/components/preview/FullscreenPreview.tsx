@@ -80,11 +80,11 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
   }, [fps]);
   
   const sortClips = useCallback((clips: AnyClipProps[]) => {
-    // Treat each group as a single unit (ordered by group's timelineY/start) and then expand its children
+    // Treat each group as a single sortable unit; then expand children in defined order
     type GroupUnit = { kind: 'group'; id: string; y: number; start: number; children: AnyClipProps[] };
     type SingleUnit = { kind: 'single'; y: number; start: number; clip: AnyClipProps };
 
-    const groups = clips.filter(c => c.type === 'group');
+    const groups = clips.filter(c => c.type === 'group') as AnyClipProps[];
     const childrenSet = new Set<string>(
       groups.flatMap(g => {
         const nested = ((g as any).children as string[][] | undefined) ?? [];
@@ -92,7 +92,8 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
       })
     );
 
-    const groupUnits: GroupUnit[] = groups.map((g: AnyClipProps) => {
+    // Build group units
+    const groupUnits: GroupUnit[] = groups.map((g) => {
       const y = (timelines.find(t => t.timelineId === g.timelineId)?.timelineY) ?? 0;
       const start = g.startFrame ?? 0;
       const nested = ((g as any).children as string[][] | undefined) ?? [];
@@ -103,6 +104,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
       return { kind: 'group', id: g.clipId, y, start, children };
     });
 
+    // Build single units for non-group, non-child clips
     const singleUnits: SingleUnit[] = clips
       .filter(c => c.type !== 'group' && !childrenSet.has(c.clipId))
       .map((c) => {
@@ -111,21 +113,25 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
         return { kind: 'single', y, start, clip: c };
       });
 
+    // Sort units: lower on screen first (higher y), then earlier start
     const units = [...groupUnits, ...singleUnits].sort((a, b) => {
-      if (a.y !== b.y) return b.y - a.y; // lower timelines (bigger y) first
+      if (a.y !== b.y) return b.y - a.y;
       return a.start - b.start;
     });
 
+    // Flatten units back to clip list; for groups, expand children in their defined order
     const result: AnyClipProps[] = [];
     for (const u of units) {
       if (u.kind === 'single') {
         result.push(u.clip);
       } else {
-        result.push(...u.children);
+        // Ensure children are ordered as in group's children list
+        result.push(...u.children.reverse());
       }
     }
+
     return result;
-  }, [timelines]);
+  }, [timelines, clips])
 
   const filterClips = useCallback((clips: AnyClipProps[], audio: boolean = false) => {
     const filteredClips = clips.filter((clip) => {

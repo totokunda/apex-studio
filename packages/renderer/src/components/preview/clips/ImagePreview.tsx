@@ -73,6 +73,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
     const [isInteracting, setIsInteracting] = useState(false);
     const [isRotating, setIsRotating] = useState(false);
     const [isTransforming, setIsTransforming] = useState(false);
+    const [, forceRerenderForMediaInfo] = useState(0);
 
     const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean }) => {
         if (isRotating) return; // disable guides/snapping while rotating
@@ -255,14 +256,18 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         (async () => {
             try {
                 const info = await getMediaInfo(src);
-                if (!cancelled) mediaInfoRef.current = info;
+                if (!cancelled) {
+                    mediaInfoRef.current = info;
+                    // Trigger a safe re-render so dimensions recompute, the draw effect will run then
+                    forceRerenderForMediaInfo((v) => v + 1);
+                }
             } catch (e) {
                 console.error(e);
             }
         })();
         return () => { cancelled = true };
     }, [src]);
-
+ 
     // Compute aspect-fit display size and offsets within the preview rect
     const {displayWidth, displayHeight, offsetX, offsetY} = useMemo(() => {
         const originalWidth = mediaInfoRef.current?.image?.width || 0;

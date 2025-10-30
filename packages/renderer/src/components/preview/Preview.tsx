@@ -2242,7 +2242,6 @@ const Preview:React.FC<PreviewProps> = () => {
         </button>
       </div>
     )}
-    {/* Mount non-visual audio previews OUTSIDE Konva tree so effects run */}
     {<>
         {sortClips(filterClips(clips, true)).map((clip) => {
           const hasOverlap = (clip.type === 'video' && (clip.startFrame || 0) > 0) ? true : false;

@@ -127,7 +127,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     const rangeWidthPx = useMemo(() => Math.max(frameWidthSafe, (rangeEnd - rangeStart) * frameWidthSafe), [frameWidthSafe, rangeEnd, rangeStart]);
     const rangeEndLocal = useMemo(() => rangeStartLocal + rangeWidthPx, [rangeStartLocal, rangeWidthPx]);
     const maxRangeStart = useMemo(() => Math.max(currentStartFrame, currentEndFrame - rangeSpanFrames), [currentStartFrame, currentEndFrame, rangeSpanFrames]);
-    const rangeHandleWidth = useMemo(() => Math.max(5, Math.min(8, frameWidthSafe * 0.75)), [frameWidthSafe]);
+    const rangeHandleWidth = useMemo(() => 3, []);
 
     const commitRange = useCallback((startFrame: number, endFrame: number) => {
         const clampedStart = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, Math.round(startFrame)));
@@ -279,7 +279,8 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     const fixedYRef = useRef(timelineY - totalClipHeight);
     
     // Width used for the thumbnail image we render inside the clip group.
-    const imageWidth = useMemo(() => Math.min(clipWidth, maxTimelineWidth), [clipWidth, maxTimelineWidth]);
+    const imageWidth = useMemo(() => Math.max(3, Math.min(clipWidth, maxTimelineWidth)), [clipWidth, maxTimelineWidth]);
+
 
     // Compute image x so that the image stays centered over the portion of the
     // group that is currently visible inside the stage viewport. This allows us
@@ -938,14 +939,14 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
 
             {effectiveSelectionMode === 'range' && rangeWidthPx > 0 && (
                 <Group
-                    x={clipPosition.x}
+                    x={clipPosition.x + 1}
                     y={clipPosition.y}
                     width={clipWidth}
                     height={timelineHeight}
                     clipX={0}
                     clipY={0}
-                    clipWidth={clipWidth}
-                    clipHeight={timelineHeight}
+                    //clipWidth={clipWidth}
+                    //clipHeight={timelineHeight}
                 >
                     <Rect
                         ref={rangeRectRef}
@@ -956,7 +957,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         fill={'rgba(43, 127, 255, 0.60)'}
                         stroke={'rgba(43, 127, 255, 0.9)'}
                         strokeWidth={3}
-                        cornerRadius={2}
+                        cornerRadius={1}
                         draggable
                         dragBoundFunc={(pos) => {
                             const minX = 0;
@@ -1015,7 +1016,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         width={rangeHandleWidth}
                         height={Math.max(1, timelineHeight)}
                         fill={'rgba(43, 127, 255, 0.9)'}
-                        cornerRadius={[2, 0, 2, 0]}
+                        //cornerRadius={[2, 0, 2, 0]}
                         draggable
                         stroke={'rgba(43, 127, 255, 0.9)'}
                         strokeWidth={0}
@@ -1075,7 +1076,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         fill={'rgba(43, 127, 255, 0.9)'}
                         stroke={'rgba(43, 127, 255, 0.9)'}
                         strokeWidth={0}
-                        cornerRadius={[0, 2, 0, 2]}
+                        //cornerRadius={[0, 2, 0, 2]}
                         draggable
                         dragBoundFunc={(pos) => ({ x: pos.x, y: 0 })}
                         onDragStart={(e) => {
@@ -1129,10 +1130,6 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         y={clipPosition.y}
                         width={clipWidth}
                         height={timelineHeight}
-                        clipX={0}
-                        clipY={0}
-                        clipWidth={clipWidth}
-                        clipHeight={timelineHeight}
                         onMouseOver={(e) => {
                             // set cursor to grab
                             const container = e.target.getStage()?.container();
@@ -1156,9 +1153,9 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             height={Math.max(1, timelineHeight)}
                             fill={'rgba(43, 127, 255, 0.6)'}
                             stroke={'rgba(43, 127, 255, 0.9)'}
-                            strokeWidth={1.5}
+                            strokeWidth={2}
                             draggable
-                            cornerRadius={2}
+                            cornerRadius={1}
                             shadowBlur={4}
                             shadowColor={'#6247AA'}
                             shadowOpacity={0.35}

@@ -18,6 +18,7 @@ import { useControlsStore } from '@/lib/control';
  */
 export abstract class BaseClipApplicator<T extends AnyClipProps = AnyClipProps> {
     protected clip: T;
+    private focusFrameOverride?: number;
 
     constructor(clip: T) {
         this.clip = clip;
@@ -36,7 +37,9 @@ export abstract class BaseClipApplicator<T extends AnyClipProps = AnyClipProps> 
      * @returns boolean - True if the current frame is within the clip's range
      */
     protected isInFrameRange(): boolean {
-        const focusFrame = useControlsStore.getState().focusFrame;
+        const focusFrame = (typeof this.focusFrameOverride === 'number')
+            ? this.focusFrameOverride
+            : useControlsStore.getState().focusFrame;
         const startFrame = this.clip.startFrame ?? 0;
         const endFrame = this.clip.endFrame ?? 0;
         return focusFrame >= startFrame && focusFrame <= endFrame;
@@ -74,6 +77,14 @@ export abstract class BaseClipApplicator<T extends AnyClipProps = AnyClipProps> 
      */
     getEndFrame(): number {
         return this.clip.endFrame ?? 0;
+    }
+
+    /**
+     * Override the focus frame used for in-range checks (e.g., input-mode playback)
+     */
+    setFocusFrameOverride(frame?: number): this {
+        this.focusFrameOverride = frame;
+        return this;
     }
 
     /**

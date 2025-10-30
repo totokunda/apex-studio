@@ -21,6 +21,7 @@ import { useViewportStore } from '@/lib/viewport';
 import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/library';
 import TimelineSelector from './timeline/TimelineSelector';
 import { useInputControlsStore } from '@/lib/inputControl';
+import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store';
 
 type ImageSelectionMedia = { kind: 'media'; assetUrl: string; frame?: number };
 type ImageSelectionClip = { kind: 'clip'; clipId: string; frame?: number };
@@ -34,6 +35,10 @@ interface ImageInputProps {
   onChange: (value: ImageSelection) => void;
   clipId: string;
   panelSize: number;
+  preprocessorRef?: string;
+  preprocessorName?: string;
+  applyPreprocessorInitial?: boolean;
+  onChangeComposite?: (value: { selection: ImageSelection; preprocessor_ref?: string; preprocessor_name?: string; apply_preprocessor?: boolean }) => void;
 }
 
 interface PopoverImageProps {
@@ -204,7 +209,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
 }
 
 
-const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, value, onChange, clipId, panelSize }) => {
+const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, value, onChange, clipId, panelSize, preprocessorRef, preprocessorName, applyPreprocessorInitial, onChangeComposite }) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const stageContainerRef = useRef<HTMLDivElement | null>(null);
     const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -212,6 +217,50 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
     const [isOverDropZone, setIsOverDropZone] = useState(false);
     const externalDragCounterRef = useRef(0);
     const getClipById = useClipStore((s) => s.getClipById);
+    const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
+    const { preprocessors, load } = usePreprocessorsListStore();
+    useEffect(() => {
+        if (preprocessorRef) {
+            void load();
+        }
+    }, [preprocessorRef, load]);
+    const resolvedPreprocessorName = useMemo(() => {
+        if (!preprocessorRef) return preprocessorName;
+        const found = (preprocessors || []).find(p => p.id === preprocessorRef);
+        return found?.name || preprocessorName || preprocessorRef;
+    }, [preprocessors, preprocessorRef, preprocessorName]);
+    // Preprocessor toggle state and defaulting
+    const [applyPreprocessor, setApplyPreprocessor] = useState<boolean>(true);
+
+    useEffect(() => {
+        if (typeof applyPreprocessorInitial === 'boolean') {
+            setApplyPreprocessor(applyPreprocessorInitial);
+            return;
+        }
+        if (!preprocessorRef) {
+            setApplyPreprocessor(true);
+            return;
+        }
+        const sel = value;
+        if (sel && sel.kind === 'clip') {
+            const clip = getClipById(sel.clipId);
+            if (clip && (clip.type === 'video' || clip.type === 'image')) {
+                const exists = (getPreprocessorsForClip(clip.clipId) || []).some(p => (p.preprocessor?.id || '') === preprocessorRef);
+                setApplyPreprocessor(!exists);
+                return;
+            }
+        }
+        setApplyPreprocessor(true);
+    }, [value, preprocessorRef, applyPreprocessorInitial, getClipById, getPreprocessorsForClip]);
+
+    const emitSelection = React.useCallback((next: ImageSelection) => {
+        if (onChangeComposite) {
+            onChangeComposite({ selection: next, preprocessor_ref: preprocessorRef, preprocessor_name: resolvedPreprocessorName, apply_preprocessor: applyPreprocessor });
+        } else {
+            onChange(next);
+        }
+    }, [onChangeComposite, onChange, preprocessorRef, resolvedPreprocessorName, applyPreprocessor]);
+
     const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
     const aspectRatio = useViewportStore((s) => s.aspectRatio);
 
@@ -274,7 +323,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             if (isValid && overId === 'image-input') {
                 const next = { kind: 'media', assetUrl: (data as MediaItem).assetUrl } as const;
                 const isSame = value && value.kind === 'media' && value.assetUrl === (data as MediaItem).assetUrl;
-                onChange(isSame ? null : { ...next, frame: 0 });
+                emitSelection(isSame ? null : { ...next, frame: 0 });
             }
             setIsOverDropZone(false);
         }
@@ -406,8 +455,16 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         const normalizedFocus = Math.max(0, Math.round(focusFrameForInput ?? 0));
         const currentFrame = Math.max(0, Math.round(value?.frame ?? 0));
         if (normalizedFocus === currentFrame) return;
-        onChange({ ...value, frame: normalizedFocus });
-    }, [focusFrameForInput, selectionKey, value, onChange]);
+        emitSelection({ ...value, frame: normalizedFocus });
+    }, [focusFrameForInput, selectionKey, value, emitSelection]);
+
+    const handleToggleApply = React.useCallback(() => {
+        const next = !applyPreprocessor;
+        setApplyPreprocessor(next);
+        if (onChangeComposite) {
+            onChangeComposite({ selection: value ?? null, preprocessor_ref: preprocessorRef, preprocessor_name: resolvedPreprocessorName, apply_preprocessor: next });
+        }
+    }, [applyPreprocessor, onChangeComposite, value, preprocessorRef, resolvedPreprocessorName]);
 
 
     const handleExternalDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
@@ -458,7 +515,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             const first = newlyAdded[0] ?? null;
             if (first) {
                 clearSelectedAsset();
-                onChange({ kind: 'media', assetUrl: first.assetUrl });
+                emitSelection({ kind: 'media', assetUrl: first.assetUrl, frame: 0 });
             }
             bumpMediaLibraryVersion();
         } catch {}
@@ -500,8 +557,13 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
     <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-auto">
     <div className="w-full h-full flex flex-col items-start justify-start p-3">
     <div className="w-full flex flex-col items-start justify-start mb-3">
-        {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
-        {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start">{description}</span>}
+        <div className="w-full flex flex-col">
+          <div className="flex flex-col items-start justify-start">
+            {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
+            {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start">{description}</span>}
+          </div>
+          
+        </div>
     </div>
     <Popover>
         <PopoverTrigger className="w-full">
@@ -542,7 +604,11 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
                             if (clip && clip.type !== 'audio') {
                                 return <TimelineClipPosterPreview key={value.clipId} clipId={value.clipId} width={stageSize.w} height={stageSize.h} inputId={inputId} />
                             }
-                            return null;
+                            return (
+                              <div className="w-full h-full flex items-center justify-center text-brand-light/70 text-[12px]">
+                                Unable to preview clip.
+                              </div>
+                            );
                         }
                     })()
                 ) : (
@@ -556,9 +622,10 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             )}
         </div>
         </PopoverTrigger>
-        <PopoverImage value={value} onChange={onChange} clipId={clipId} />
+        <PopoverImage value={value} onChange={emitSelection} clipId={clipId} />
     </Popover> 
     {timelineClip && (timelineClip.type === 'video' || timelineClip.type === 'group') && value && (
+    <div className="w-full h-full mt-3">
       <TimelineSelector
         inputId={inputId}
         clip={timelineClip}
@@ -566,9 +633,33 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         height={44}
         mode="frame"
       />
+      </div>
     )}
+    {preprocessorRef && (
+            <div className=" flex flex-row-reverse items-center gap-x-3 justify-between">
+              <span className="text-brand-light text-[10px] font-medium">Apply {resolvedPreprocessorName}</span>
+              <button
+                type="button"
+                aria-pressed={applyPreprocessor}
+                aria-label={applyPreprocessor ? 'Disable' : 'Enable'}
+                onClick={handleToggleApply}
+                className={cn(
+                  'relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none',
+                  applyPreprocessor ? 'bg-blue-600' : 'bg-brand-background border border-brand-light/10'
+                )}
+              >
+                <span
+                  className={cn(
+                    'inline-block h-4 w-4 transform rounded-full bg-brand-light shadow transition-transform',
+                    applyPreprocessor ? 'translate-x-4.5' : 'translate-x-0.5'
+                  )}
+                />
+              </button>
+            </div>
+          )}
     </div>
     </div>
+    
     
     </Droppable>
     )

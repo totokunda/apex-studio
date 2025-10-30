@@ -21,7 +21,8 @@ export const APPLICATOR_CLIP_TYPES: ClipType[] = ['filter'];
  */
 export function getApplicableClips(
     clipId: string, 
-    applicatorTypes: ClipType[] = APPLICATOR_CLIP_TYPES
+    applicatorTypes: ClipType[] = APPLICATOR_CLIP_TYPES,
+    focusFrameOverride?: number,
 ): AnyClipProps[] {
     const clipStore = useClipStore.getState();
     const controlStore = useControlsStore.getState();
@@ -29,7 +30,7 @@ export function getApplicableClips(
     const clip = clipStore.getClipById(clipId);
     if (!clip) return [];
     
-    const focusFrame = controlStore.focusFrame;
+    const focusFrame = typeof focusFrameOverride === 'number' ? focusFrameOverride : controlStore.focusFrame;
     const timelines = clipStore.timelines;
     const allClips = clipStore.clips;
     
@@ -101,6 +102,7 @@ export function getApplicableClips(
  */
 export interface ApplicatorFactoryConfig {
     haldClutInstance?: WebGLHaldClut | null;
+    focusFrameOverride?: number;
     // Add more shared resources here as needed (e.g., maskProcessor, etc.)
 }
 
@@ -162,11 +164,16 @@ export function getApplicatorsForClip(
     config: ApplicatorFactoryConfig,
     applicatorTypes?: ClipType[]
 ): BaseClipApplicator[] {
-    const applicableClips = getApplicableClips(clipId, applicatorTypes);
-    
+    const applicableClips = getApplicableClips(clipId, applicatorTypes, config.focusFrameOverride);
     const applicators = applicableClips
         .map(clip => createApplicatorFromClip(clip, config))
-        .filter((applicator): applicator is BaseClipApplicator => applicator !== null);
+        .filter((applicator): applicator is BaseClipApplicator => applicator !== null)
+        .map(app => {
+            if (typeof config.focusFrameOverride === 'number') {
+                (app as BaseClipApplicator).setFocusFrameOverride(config.focusFrameOverride);
+            }
+            return app;
+        });
     
     return applicators;
 }

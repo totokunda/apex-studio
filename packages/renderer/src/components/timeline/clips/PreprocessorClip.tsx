@@ -41,15 +41,17 @@ interface PropsPreprocessorClip {
     timelinePadding: number;
     clipOverride?: PreprocessorClipType;
     clipWidthOverride?: number;
+    inputId?: string;
 
 }
 
-export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging, assetMode, inputMode = false, clipOverride,clipWidthOverride}) => {
+export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging, assetMode, inputMode = false, clipOverride,clipWidthOverride, inputId}) => {
     
     const ctrlTimelineDuration = useControlsStore((s) => s.timelineDuration)
     const ctrlSetSelectedClipIds = useControlsStore((s) => s.setSelectedClipIds)
     const assetTimelineDuration = useAssetControlsStore((s) => s.timelineDuration)
-    const inputTimelineDuration = useInputControlsStore((s) => s.timelineDuration)
+    const {timelineDurationByInputId} = useInputControlsStore();
+    const inputTimelineDuration = timelineDurationByInputId[inputId ?? ''] ?? [0, 10];
     const setSelectedAssetClipId = useAssetControlsStore((s) => s.setSelectedAssetClipId)
     let timelineDuration = useMemo(() => {
         let duration = inputMode ? inputTimelineDuration : (assetMode ? assetTimelineDuration : ctrlTimelineDuration);
@@ -70,7 +72,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     // Calculate parent clip dimensions
     const clipDuration = currentEndFrame - currentStartFrame;
     const clipWidth = clipWidthOverride ?? Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3);
-    
+
     // Calculate preprocessor position and size as proportion of parent clip
     const preprocessorDuration = useMemo(() => {
         if (clip?.type === 'image') {
