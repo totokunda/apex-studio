@@ -11,9 +11,10 @@ interface TimelineSelectorProps {
     height: number;
     width: number;
     mode: 'frame' | 'range';
+    inputId: string;
 }
 
-const TimelineSelector: React.FC<TimelineSelectorProps> = ({ clip, width, height, mode }) => {
+const TimelineSelector: React.FC<TimelineSelectorProps> = ({ clip, width, height, mode, inputId }) => {
     const setTotalTimelineFrames = useInputControlsStore((s) => s.setTotalTimelineFrames);
     const setTimelineDuration = useInputControlsStore((s) => s.setTimelineDuration);
     const setZoomLevel = useInputControlsStore((s) => s.setZoomLevel);
@@ -24,10 +25,10 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({ clip, width, height
         const endRaw = Math.max(start + 1, Math.round((clip as any)?.endFrame ?? (start + 1)));
         const span = Math.max(1, endRaw - start);
         // Ensure max zoom out equals the clip's actual span
-        setTotalTimelineFrames(span);
-        setTimelineDuration(start, start + span);
-        setZoomLevel(1 as any);
-    }, [clip, setTotalTimelineFrames, setTimelineDuration, setZoomLevel]);
+        setTotalTimelineFrames(span, inputId);
+        setTimelineDuration(start, start + span, inputId);
+        setZoomLevel(1 as any, inputId);
+    }, [clip, inputId, setTotalTimelineFrames, setTimelineDuration, setZoomLevel]);
 
     return (
         <div className="relative w-full h-full flex flex-col gap-y-3 mb-4 mt-4 ">
@@ -35,18 +36,19 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({ clip, width, height
                 <div className="text-[10px] font-medium text-brand-light">
                     {mode === 'frame' ? 'Select Frame' : 'Selct FrameRange'}
                 </div>
-                <TimelineSelectorZoom hasClip={!!clip} />
+                <TimelineSelectorZoom hasClip={!!clip} inputId={inputId} />
             </div>
-            <Stage width={width} height={height + 24} className=" shadow">
+            <Stage width={width} height={height + 28} className=" shadow">
                 <Layer>
                     <Group>
                         <InputTimelineClip 
+                            inputId={inputId}
                             timelineId="timeline-selector"
                             clip={clip}
                             cornerRadius={3}
                             timelineWidth={width}
                             timelineHeight={height}
-                            timelineY={height + 24}
+                            timelineY={height + 28}
                             timelinePadding={0}
                             muted={false}
                             mode={mode}
@@ -58,7 +60,7 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({ clip, width, height
                 <Layer listening={false}>
                 <TimelineMoments stageWidth={width}  startPadding={0.5} maxScroll={0} thumbY={() => {
                     return 0;
-                }} mode="input" />
+                }} mode="input" inputId={inputId} />
                 </Layer>
             </Stage>
         </div>

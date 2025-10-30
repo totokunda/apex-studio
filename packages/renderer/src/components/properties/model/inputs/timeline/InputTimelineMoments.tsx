@@ -11,6 +11,7 @@ interface TimelineMomentsProps {
     thumbY: () => number;
     mode?: 'asset' | 'input';
     topLine?: boolean;
+    inputId?: string;
 }
 
 interface TickMark {
@@ -34,13 +35,23 @@ const getMajorZoomConfigFormat = (zoomConfig:{
     }
 }
 
-const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, startPadding, maxScroll, thumbY, mode = 'asset', topLine = false}) => {
-    const store = mode === 'asset' ? useAssetControlsStore() : useInputControlsStore();
-    const timelineDuration = store.timelineDuration 
-    const fps = store.fps;
-    const zoomLevel = store.zoomLevel;
-    const maxZoomLevel = store.maxZoomLevel;
-    const minZoomLevel = store.minZoomLevel;
+const TimelineMoments:React.FC<TimelineMomentsProps> = React.memo(({stageWidth, startPadding, maxScroll, thumbY, mode = 'asset', topLine = false, inputId}) => {
+    const assetTimelineDuration = useAssetControlsStore((s) => s.timelineDuration);
+    const assetFps = useAssetControlsStore((s) => s.fps);
+    const assetZoomLevel = useAssetControlsStore((s) => s.zoomLevel);
+    const assetMaxZoomLevel = useAssetControlsStore((s) => s.maxZoomLevel);
+    const assetMinZoomLevel = useAssetControlsStore((s) => s.minZoomLevel);
+    const inputTimelineDuration = useInputControlsStore((s) => s.getTimelineDuration(inputId));
+    const inputFps = useInputControlsStore((s) => s.getFps(inputId));
+    const inputZoomLevel = useInputControlsStore((s) => s.getZoomLevel(inputId));
+    const inputMaxZoomLevel = useInputControlsStore((s) => s.maxZoomLevel);
+    const inputMinZoomLevel = useInputControlsStore((s) => s.minZoomLevel);
+
+    const timelineDuration = mode === 'asset' ? assetTimelineDuration : inputTimelineDuration;
+    const fps = mode === 'asset' ? assetFps : inputFps;
+    const zoomLevel = mode === 'asset' ? assetZoomLevel : inputZoomLevel;
+    const maxZoomLevel = mode === 'asset' ? assetMaxZoomLevel : inputMaxZoomLevel;
+    const minZoomLevel = mode === 'asset' ? assetMinZoomLevel : inputMinZoomLevel;
     const [startFrame, endFrame] = timelineDuration;
 
     // Convert duration to milliseconds if needed for consistent calculations

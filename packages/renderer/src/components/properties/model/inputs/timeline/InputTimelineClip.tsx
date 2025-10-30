@@ -48,11 +48,11 @@ import { useInputControlsStore } from "@/lib/inputControl";
  * video_list bi/BiSolidVideos
  */
 
-const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: number, selectionMode?: 'frame' | 'range', mode?: 'frame' | 'range'}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 54, timelinePadding = 24, clip, cornerRadius = 1, selectionMode, mode}) => {
+const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: number, selectionMode?: 'frame' | 'range', mode?: 'frame' | 'range', inputId?: string}> = ({timelineWidth = 0, timelineY = 0, timelineHeight = 54, timelinePadding = 24, clip, cornerRadius = 1, selectionMode, mode, inputId}) => {
     const effectiveSelectionMode = (selectionMode ?? mode ?? 'range');
     // Select only what we need to avoid unnecessary rerenders
-    const timelineDuration = useInputControlsStore((s) => s.timelineDuration);
-    const zoomLevel = useInputControlsStore((s) => s.zoomLevel);
+    const timelineDuration = useInputControlsStore((s) => s.getTimelineDuration(inputId));
+    const zoomLevel = useInputControlsStore((s) => s.getZoomLevel(inputId));
     const tool = useViewportStore((s) => s.tool);
     const getClipById = useClipStore((s) => s.getClipById);
     const [groupedCanvases, setGroupedCanvases] = useState<HTMLCanvasElement[]>([]);
@@ -62,7 +62,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
 
     const clipType = useMemo(() => currentClip?.type, [currentClip]);
 
-    const focusFrame = useInputControlsStore((s) => s.focusFrame);
+    const focusFrame = useInputControlsStore((s) => s.getFocusFrame(inputId));
     const setFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
     const setFocusAnchorRatio = useInputControlsStore((s) => s.setFocusAnchorRatio);
     const { applyMask } = useWebGLMask({
@@ -866,6 +866,20 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         clipY={0}
                         clipWidth={clipWidth}
                         clipHeight={timelineHeight}
+                        onMouseOver={(e) => {
+                            // set cursor to grab
+                            const container = e.target.getStage()?.container();
+                            if (container) {
+                                container.style.cursor = 'grab';
+                            }
+                        }}
+                        onMouseOut={(e) => {
+                            // set cursor to default
+                            const container = e.target.getStage()?.container(); 
+                            if (container) {
+                                container.style.cursor = 'default';
+                            }
+                        }}
                     >
                         {/* Draggable frame selector overlay */}
                         <Rect
@@ -901,11 +915,11 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                                 const localX = Math.max(0, Math.min(clipWidth - rectWidth, e.target.x()));
                                 const frameOffset = Math.round(localX / Math.max(1e-6, frameWidthPx));
                                 const newFocus = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, currentStartFrame + frameOffset));
-                                setFocusFrame(newFocus);
+                                setFocusFrame(newFocus, inputId);
                                 const [winStart, winEnd] = timelineDuration;
                                 const winSpan = Math.max(1, winEnd - winStart);
                                 const anchor = (newFocus - winStart) / winSpan;
-                                setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)));
+                                setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId);
                             }}
                         />
                     </Group>
@@ -915,4 +929,3 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
 }
 
 export default TimelineClip;
-

@@ -22,8 +22,8 @@ const sortGroupChildren = (groupClip: AnyClipProps, allClips: AnyClipProps[]) =>
   return children;
 }
 
-const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps, width: number, height: number }>
-  = ({ clipId, clip: clipOverride, width, height }) => {
+const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps, width: number, height: number, inputId?: string }>
+  = ({ clipId, clip: clipOverride, width, height, inputId }) => {
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const getClipById = useClipStore((s) => s.getClipById);
   const clips = useClipStore((s) => s.clips);
@@ -78,9 +78,9 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
             const applicators = getApplicators(clip.clipId);
             switch (clip.type) {
               case 'video':
-                return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={clipOverride ? (clip) : undefined} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} />
+                return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={clipOverride ? (clip) : undefined} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} inputId={inputId} />
               case 'image':
-                return <ImagePreview key={clip.clipId} {...(clip as any)} overrideClip={clipOverride ? (clip) : undefined} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} />
+                return <ImagePreview key={clip.clipId} {...(clip as any)} overrideClip={clipOverride ? (clip) : undefined} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} inputId={inputId} />
               case 'shape':
                 return <ShapePreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} assetMode={true} />
               case 'text':
@@ -99,5 +99,4 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
 }
 
 export default TimelineClipPosterPreview;
-
 

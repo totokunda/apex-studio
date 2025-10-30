@@ -217,6 +217,7 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                     const currentVal: any = parseImageValue(input?.value);
                     return (
                       <ImageInput
+                        inputId={inputId}
                         clipId={clipId}
                         key={inputId}
                         label={input?.label}

@@ -17,10 +17,10 @@ import { useInputControlsStore } from '@/lib/inputControl';
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
-const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: VideoClipProps, inputMode?: boolean}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, trimStart, speed: _speed, applicators, overlap, overrideClip, inputMode = false}) => {
+const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: VideoClipProps, inputMode?: boolean, inputId?: string}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, trimStart, speed: _speed, applicators, overlap, overrideClip, inputMode = false, inputId}) => {
     const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
     const focusFrameFromControls = useControlsStore((state) => state.focusFrame);
-    const focusFrameFromInputs = useInputControlsStore((s) => s.focusFrame);
+    const focusFrameFromInputs = useInputControlsStore((s) => s.getFocusFrame(inputId));
     const focusFrame = inputMode ? focusFrameFromInputs : focusFrameFromControls;
     const [stableFocusFrame, setStableFocusFrame] = useState(focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -167,7 +167,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const iteratorRef = useRef<AsyncIterable<WrappedCanvas | null> | null>(null);
     const isPlaying = useControlsStore((s) => s.isPlaying);
     const fpsFromControls = useControlsStore((s) => s.fps);
-    const fpsFromInputs = useInputControlsStore((s) => s.fps);
+    const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId));
     const fps = inputMode ? fpsFromInputs : fpsFromControls;
     const currentStartFrameRef = useRef<number>(0);
     const lastRenderedFrameRef = useRef<number>(-1);
@@ -649,9 +649,12 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
                 // Compute current timeline-local frame mapped to native fps (clip space)
                 const computeLocalFocusMedia = () => {
-                    const store = inputMode ? useInputControlsStore.getState() as any : useControlsStore.getState();
+                    const store = inputMode ? useInputControlsStore.getState() : useControlsStore.getState();
+                    const focusFrameValue = inputMode
+                        ? (store.getFocusFrame ? store.getFocusFrame(inputId) : store.focusFrame)
+                        : store.focusFrame;
                     // Base timeline-local frames relative to clip start (no give-start applied)
-                    const baseLocal = Math.max(0, ((store.focusFrame || 0) - startFrameUsed));
+                    const baseLocal = Math.max(0, ((focusFrameValue ?? 0) - startFrameUsed));
                     // When using preprocessor src, align to its own frame space by subtracting its start offset.
                     // Otherwise, include trimStart to match the main clip's reference frame.
                     const localProjectFrames = isUsingPreprocessorSrc
@@ -680,8 +683,10 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 if (myToken !== drawTokenRef.current)  break;
                 if (!useControlsStore.getState().isPlaying) break;
 
-                const storeState = inputMode ? (useInputControlsStore.getState() as any) : useControlsStore.getState();
-                const focusFrameForMask = (storeState.focusFrame || 0);
+                const storeState = inputMode ? useInputControlsStore.getState() : useControlsStore.getState();
+                const focusFrameForMask = inputMode
+                    ? ((storeState.getFocusFrame ? storeState.getFocusFrame(inputId) : storeState.focusFrame) ?? 0)
+                    : (storeState.focusFrame ?? 0);
                 const maskFrameBase = Math.max(0, Math.floor(focusFrameForMask - startFrame + (trimStart || 0)));
                 const maskFrame = clip ? Math.max(0, Math.floor(getLocalFrame(focusFrameForMask, clip))) : maskFrameBase;
 

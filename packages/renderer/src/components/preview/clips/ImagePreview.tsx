@@ -12,7 +12,7 @@ import { BaseClipApplicator } from './apply/base';
 import { useWebGLMask } from '../mask/useWebGLMask';
 import { useInputControlsStore } from '@/lib/inputControl';
 
-const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: ImageClipProps, inputMode?: boolean}> = ({ src, clipId, rectWidth, rectHeight, applicators, overlap, overrideClip, inputMode = false}) => {
+const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: ImageClipProps, inputMode?: boolean, inputId?: string}> = ({ src, clipId, rectWidth, rectHeight, applicators, overlap, overrideClip, inputMode = false, inputId}) => {
     const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
@@ -30,7 +30,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
     const {selectedClipIds, isFullscreen} = useControlsStore();
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
     const focusFrameFromControls = useControlsStore((s) => s.focusFrame);
-    const focusFrameFromInputs = useInputControlsStore((s) => s.focusFrame);
+    const focusFrameFromInputs = useInputControlsStore((s) => s.getFocusFrame(inputId));
     const focusFrame = inputMode ? focusFrameFromInputs : focusFrameFromControls;
     
     const clipFromStore = useClipStore((s) => s.getClipById(clipId)) as ImageClipProps;

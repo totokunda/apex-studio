@@ -28,6 +28,7 @@ export type ImageSelection = { kind: 'media', assetUrl: string, frame?:number } 
 interface ImageInputProps {
   label?: string;
   description?: string;
+  inputId: string;
   value: ImageSelection;
   onChange: (value: ImageSelection) => void;
   clipId: string;
@@ -202,7 +203,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
 }
 
 
-const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onChange, clipId, panelSize }) => {
+const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, value, onChange, clipId, panelSize }) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const stageContainerRef = useRef<HTMLDivElement | null>(null);
     const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -213,10 +214,15 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
     const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
     const aspectRatio = useViewportStore((s) => s.aspectRatio);
 
-    const {
-        setTimelineDuration:setInputTimelineDuration,
-        setFocusFrame:setInputFocusFrame
-    } = useInputControlsStore();
+    const setInputTimelineDuration = useInputControlsStore((s) => s.setTimelineDuration);
+    const setInputFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
+    const focusFrameForInput = useInputControlsStore((s) => s.getFocusFrame(inputId));
+    const selectionKey = useMemo(() => {
+        if (!value) return 'null';
+        if (value.kind === 'media') return `media:${value.assetUrl}`;
+        return `clip:${value.clipId}`;
+    }, [value]);
+    const lastSelectionKeyRef = useRef<string | null>(null);
     const viewportRatio = useMemo(() => {
         const r = aspectRatio.width / aspectRatio.height;
         return Number.isFinite(r) && r > 0 ? r : 1;
@@ -276,6 +282,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
     // Render poster preview into the trigger area whenever the value changes
     useEffect(() => {
         let cancelled = false;
+        const requestedFocusFrame = Math.max(0, Math.round(value?.frame ?? 0));
         (async () => {
             try {
                 const canvasEl = canvasRef.current;
@@ -285,16 +292,23 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
                         if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
                     }
                     setStageSize({ w: 0, h: 0 });
+                    setMediaClip(null);
+                    const storeState = useInputControlsStore.getState();
+                    const currentDuration = storeState.getTimelineDuration(inputId);
+                    const currentFocus = storeState.getFocusFrame(inputId);
+                    if (currentDuration[0] !== 0 || currentDuration[1] !== 1) {
+                        setInputTimelineDuration(0, 1, inputId);
+                    }
+                    if ((currentFocus ?? 0) !== 0) {
+                        setInputFocusFrame(0, inputId);
+                    }
                     return;
                 }
                 if (value.kind === 'media') {
-
-                    // Build synthetic clip for media items
                     try {
                         const ext = getLowercaseExtension(value.assetUrl);
                         const isVideo = VIDEO_EXTS.includes(ext);
                         if (isVideo) {
-                            // Preliminary clip with placeholder endFrame; update after mediaInfo
                             const prelim: VideoClipProps = {
                                 type: 'video',
                                 clipId: `media:${value.assetUrl}`,
@@ -305,15 +319,23 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
                                 masks: [],
                             } as any;
                             setMediaClip(prelim as AnyClipProps);
-                            // Fetch duration to compute full frame range
                             const info = await getMediaInfo(value.assetUrl);
                             const fps = Math.max(1, Math.floor(info?.stats?.video?.averagePacketRate || DEFAULT_FPS));
                             const duration = Math.max(0, Math.floor((info?.duration || 0) * fps));
                             const finalEnd = Math.max(1, duration);
                             if (!cancelled) {
-                                setMediaClip({ ...prelim, endFrame: finalEnd } as AnyClipProps);
-                                setInputTimelineDuration(prelim.startFrame ?? 0, finalEnd);
-                                setInputFocusFrame(0)
+                                const clipForTimeline = { ...prelim, endFrame: finalEnd } as AnyClipProps;
+                                setMediaClip(clipForTimeline);
+                                const clampedFocus = Math.max(0, Math.min(finalEnd - 1, requestedFocusFrame));
+                                const storeState = useInputControlsStore.getState();
+                                const currentFocus = storeState.getFocusFrame(inputId);
+                                const currentDuration = storeState.getTimelineDuration(inputId);
+                                if (currentDuration[0] !== (prelim.startFrame ?? 0) || currentDuration[1] !== finalEnd) {
+                                    setInputTimelineDuration(prelim.startFrame ?? 0, finalEnd, inputId);
+                                }
+                                if (currentFocus !== clampedFocus) {
+                                    setInputFocusFrame(clampedFocus, inputId);
+                                }
                             }
                         } else {
                             const imgClip: ImageClipProps = {
@@ -326,27 +348,57 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
                                 masks: [],
                             } as any;
                             setMediaClip(imgClip as AnyClipProps);
-                            setInputTimelineDuration(imgClip.startFrame ?? 0, imgClip.endFrame ?? 0);
-                            setInputFocusFrame(0)
+                            const storeState = useInputControlsStore.getState();
+                            const currentDuration = storeState.getTimelineDuration(inputId);
+                            const currentFocus = storeState.getFocusFrame(inputId);
+                            if (currentDuration[0] !== (imgClip.startFrame ?? 0) || currentDuration[1] !== (imgClip.endFrame ?? 0)) {
+                                setInputTimelineDuration(imgClip.startFrame ?? 0, imgClip.endFrame ?? 0, inputId);
+                            }
+                            if ((currentFocus ?? 0) !== 0) {
+                                setInputFocusFrame(0, inputId);
+                            }
                         }
                     } catch {}
                 } else if (value.kind === 'clip') {
                     const clip = getClipById(value.clipId) as AnyClipProps | undefined;
                     if (clip && clip.type !== 'audio') {
-                        const duration = (clip.endFrame ?? 0) - (clip.startFrame ?? 0);
-                        setMediaClip({
+                        const duration = Math.max(1, (clip.endFrame ?? 0) - (clip.startFrame ?? 0));
+                        const projectedClip = {
                             ...clip,
-                            startFrame:0,
+                            startFrame: 0,
                             endFrame: duration
-                        } as AnyClipProps);
-                        setInputTimelineDuration(0, duration);
-                        setInputFocusFrame(0)
+                        } as AnyClipProps;
+                        setMediaClip(projectedClip);
+                        const storeState = useInputControlsStore.getState();
+                        const currentDuration = storeState.getTimelineDuration(inputId);
+                        const currentFocus = storeState.getFocusFrame(inputId);
+                        if (currentDuration[0] !== 0 || currentDuration[1] !== duration) {
+                            setInputTimelineDuration(0, duration, inputId);
+                        }
+                        const clampedFocus = Math.max(0, Math.min(duration - 1, requestedFocusFrame));
+                        if (currentFocus !== clampedFocus) {
+                            setInputFocusFrame(clampedFocus, inputId);
+                        }
                     }
                 }
             } catch {}
         })();
         return () => { cancelled = true };
-    }, [value, getClipById]);
+    }, [value, getClipById, inputId, setInputFocusFrame, setInputTimelineDuration]);
+
+    useEffect(() => {
+        const prevKey = lastSelectionKeyRef.current;
+        lastSelectionKeyRef.current = selectionKey;
+        if (!value) return;
+        if (prevKey !== selectionKey) {
+            // Selection changed; allow state setters to establish initial values before syncing back
+            return;
+        }
+        const normalizedFocus = Math.max(0, Math.round(focusFrameForInput ?? 0));
+        const currentFrame = Math.max(0, Math.round(value?.frame ?? 0));
+        if (normalizedFocus === currentFrame) return;
+        onChange({ ...value, frame: normalizedFocus });
+    }, [focusFrameForInput, selectionKey, value, onChange]);
 
 
     const handleExternalDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
@@ -445,11 +497,11 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
                                 masks: [],
                             } as unknown as ImageClipProps);
                             const clipToRender = mediaClip || fallbackClip;
-                            return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} />
+                            return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} inputId={inputId} />
                         } else {
                             const clip = getClipById(value.clipId) as AnyClipProps | undefined;
                             if (clip && clip.type !== 'audio') {
-                                return <TimelineClipPosterPreview key={value.clipId} clipId={value.clipId} width={stageSize.w} height={stageSize.h} />
+                                return <TimelineClipPosterPreview key={value.clipId} clipId={value.clipId} width={stageSize.w} height={stageSize.h} inputId={inputId} />
                             }
                             return null;
                         }
@@ -468,6 +520,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, value, onCh
         <PopoverImage value={value} onChange={onChange} clipId={clipId} />
     </Popover> 
     {mediaClip && (mediaClip.type === 'video' || mediaClip.type === 'group') && value && <TimelineSelector
+     inputId={inputId}
      clip={mediaClip} 
      width={stageSize.w} 
      height={44} 
