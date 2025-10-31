@@ -28,7 +28,7 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
         return panel.collapsible === true;
     }, [panel]);
 
-    const [collapsed, setCollapsed] = useState(false);
+    const [collapsed, setCollapsed] = useState(() => (panel.collapsible === true ? panel.default_open === false : false));
 
     useEffect(() => {
       let cancelled = false;

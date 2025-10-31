@@ -780,7 +780,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                 className={cn(
                   'w-full flex flex-col items-center justify-center gap-y-3 shadow-accent hover:opacity-70 cursor-pointer relative overflow-hidden',
                   value ? '' : 'border-dashed',
-                  value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50'
+                  value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50 rounded'
                 )}
               >
                 {isOverDropZone && (

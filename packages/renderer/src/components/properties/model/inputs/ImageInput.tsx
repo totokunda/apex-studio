@@ -108,7 +108,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
               mediaInfo: infos[idx],
               hasProxy: it.hasProxy
             }));
-            
+
             results = results.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())).filter((media) => (media.type === 'image' || media.type === 'video'));
             setMediaItems(results);
             const newlyAdded = results.filter(it => !existingNames.has(it.name));
@@ -574,7 +574,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         <PopoverTrigger className="w-full">
         <div ref={stageContainerRef} onDragEnter={handleExternalDragEnter} onDragOver={handleExternalDragOver} onDragLeave={handleExternalDragLeave} onDrop={handleExternalDrop} style={{ height: stageSize.h }} className={cn("w-full flex flex-col items-center justify-center gap-y-3  shadow-accent  hover:opacity-70  cursor-pointer relative overflow-hidden", 
             value ? '': 'border-dashed',
-            value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50'
+            value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50 rounded'
             )}>
             {isOverDropZone && (
                 <div className="absolute inset-0 z-30 bg-brand-background-light/40 backdrop-blur-sm pointer-events-none transition-opacity duration-150" />

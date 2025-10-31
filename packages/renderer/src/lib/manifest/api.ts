@@ -139,6 +139,7 @@ export type UIPanel = {
   label?: string;
   icon?: string;
   collapsible?: boolean;
+  default_open?: boolean;
   layout: UIPanelLayout;
 };
 

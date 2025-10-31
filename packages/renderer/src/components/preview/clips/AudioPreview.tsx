@@ -74,6 +74,56 @@ const AudioPreview: React.FC<
     return { ctx, gainNode };
   }, []);
 
+  // Prepare analyser node and expose it for visualizers when in input mode
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const announceAnalyser = useCallback(() => {
+    try {
+      const key = inputMode && inputId ? String(inputId) : null;
+      if (!key) return;
+      const store: any = (window as any);
+      store.__apexAudioAnalysers = store.__apexAudioAnalysers || new Map<string, { ctx: AudioContext; analyser: AnalyserNode }>();
+      if (analyserRef.current) {
+        store.__apexAudioAnalysers.set(key, { ctx, analyser: analyserRef.current });
+        window.dispatchEvent(new CustomEvent('apex:audio:analyser-ready', { detail: { inputId: key } }));
+      }
+    } catch {}
+  }, [ctx, inputMode, inputId]);
+
+  useEffect(() => {
+    if (!ctx || !gainNode) return;
+    if (analyserRef.current) {
+      announceAnalyser();
+      return;
+    }
+    try {
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512; // higher resolution for smoother ring
+      analyser.minDecibels = -90;
+      analyser.maxDecibels = -10;
+      analyser.smoothingTimeConstant = 0.85;
+      try { gainNode.disconnect(); } catch {}
+      gainNode.connect(analyser);
+      analyser.connect(ctx.destination);
+      analyserRef.current = analyser;
+      announceAnalyser();
+    } catch {}
+  }, [ctx, gainNode, announceAnalyser]);
+
+  // Cleanup global analyser map entry on unmount
+  useEffect(() => {
+    return () => {
+      try {
+        const key = inputMode && inputId ? String(inputId) : null;
+        if (key) {
+          const store: any = (window as any);
+          if (store.__apexAudioAnalysers && typeof store.__apexAudioAnalysers.delete === 'function') {
+            store.__apexAudioAnalysers.delete(key);
+          }
+        }
+      } catch {}
+    };
+  }, [inputMode, inputId]);
+
   // Convert dB to linear gain (0 dB = 1.0, -60 dB ≈ 0.001, +20 dB = 10.0)
   const dbToGain = (db: number) => Math.pow(10, db / 20);
   const speed = useMemo(() => {
