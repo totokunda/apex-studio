@@ -51,6 +51,7 @@ export class ApexApi implements AppModule {
     this.registerComponentsHandlers();
     this.registerMaskHandlers();
     this.registerManifestHandlers();
+    this.registerSystemHandlers();
   }
 
   private async loadSettings(): Promise<void> {
@@ -450,6 +451,13 @@ export class ApexApi implements AppModule {
     });
 
     // WebSocket handlers migrated to unified ws:* IPC
+  }
+
+  private registerSystemHandlers(): void {
+    // System memory usage
+    ipcMain.handle('system:memory', async () => {
+      return this.makeRequest<any>('GET', '/system/memory');
+    });
   }
 
   private registerJobHandlers(): void {

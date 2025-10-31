@@ -236,8 +236,12 @@ export const generateAudioWaveformCanvas = async (
     path: string,
     width: number,
     height: number,
-    options?: { samples?: number; color?: string; mediaInfo?: MediaInfo; startFrame?: number; endFrame?: number; volume?: number; fadeIn?: number; fadeOut?: number }
+    options?: { samples?: number; color?: string; mediaInfo?: MediaInfo; startFrame?: number; endFrame?: number; volume?: number; fadeIn?: number; fadeOut?: number; style?: 'modern' | 'legacy'; legacy?: boolean }
 ): Promise<HTMLCanvasElement | null> => {
+    // Allow selecting the legacy renderer while keeping the same API
+    if (options?.style === 'legacy' || options?.legacy) {
+        return generateAudioWaveformCanvasLegacy(path, width, height, options);
+    }
 
     const color = options?.color || '#A477C4';
     const volume = options?.volume ?? 0;
@@ -340,13 +344,55 @@ export const generateAudioWaveformCanvas = async (
     if (!ctx) return null;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    const backgroundColor = '#1A2138';
-    ctx.fillStyle = backgroundColor; // The same dark navy blue
+    // --- Background: rich gradient with subtle vignette ---
+    const backgroundGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    backgroundGradient.addColorStop(0, '#121832');
+    backgroundGradient.addColorStop(1, '#0B0F1F');
+    ctx.fillStyle = backgroundGradient;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Subtle vertical vignette
+    const vignette = ctx.createLinearGradient(0, 0, canvas.width, 0);
+    vignette.addColorStop(0, 'rgba(0,0,0,0.35)');
+    vignette.addColorStop(0.5, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // --- Grid and ticks (behind bars) ---
+    ctx.save();
+    // Horizontal grid lines at 25%, 50%, 75%
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 6]);
+    const gridRows = [0.25, 0.5, 0.75];
+    gridRows.forEach((fraction) => {
+        const y = Math.round(canvas.height * fraction) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+    });
+    ctx.setLineDash([]);
+
+    // Vertical ticks: minor every 10px, major every 50px
+    for (let x = 0; x <= canvas.width; x += 10) {
+        const isMajor = x % 50 === 0;
+        const tickHeight = isMajor ? 8 : 4;
+        const alpha = isMajor ? 0.12 : 0.06;
+        ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+        ctx.beginPath();
+        const xAligned = Math.round(x) + 0.5;
+        ctx.moveTo(xAligned, 0);
+        ctx.lineTo(xAligned, tickHeight);
+        ctx.moveTo(xAligned, canvas.height);
+        ctx.lineTo(xAligned, canvas.height - tickHeight);
+        ctx.stroke();
+    }
+    ctx.restore();
     const barColor = color;
     const cornerRadius = barWidth / 2;
     const totalBarSpace = barWidth + gap;
-    ctx.fillStyle = barColor;
 
     // Calculate volume and fade parameters
     const totalDuration = options?.mediaInfo?.duration || 1;
@@ -356,33 +402,88 @@ export const generateAudioWaveformCanvas = async (
     const fadeOutWidth = (fadeOut / totalDuration) * canvas.width;
     const fadeOutStart = canvas.width - fadeOutWidth;
 
+    // --- Color utilities (local, no effect on data) ---
+    const clamp255 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+    const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
+        const m = hex.trim().replace('#', '');
+        if (m.length === 3) {
+            const r = parseInt(m[0] + m[0], 16);
+            const g = parseInt(m[1] + m[1], 16);
+            const b = parseInt(m[2] + m[2], 16);
+            return { r, g, b };
+        }
+        if (m.length === 6) {
+            const r = parseInt(m.slice(0, 2), 16);
+            const g = parseInt(m.slice(2, 4), 16);
+            const b = parseInt(m.slice(4, 6), 16);
+            return { r, g, b };
+        }
+        return null;
+    };
+    const rgba = (hex: string, alpha: number) => {
+        const rgb = hexToRgb(hex);
+        if (!rgb) return hex;
+        return `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+    };
+    const lighten = (hex: string, pct: number) => {
+        const rgb = hexToRgb(hex);
+        if (!rgb) return hex;
+        const r = clamp255(rgb.r + (255 - rgb.r) * (pct / 100));
+        const g = clamp255(rgb.g + (255 - rgb.g) * (pct / 100));
+        const b = clamp255(rgb.b + (255 - rgb.b) * (pct / 100));
+        return `rgb(${r},${g},${b})`;
+    };
+    const darken = (hex: string, pct: number) => {
+        const rgb = hexToRgb(hex);
+        if (!rgb) return hex;
+        const r = clamp255(rgb.r * (1 - pct / 100));
+        const g = clamp255(rgb.g * (1 - pct / 100));
+        const b = clamp255(rgb.b * (1 - pct / 100));
+        return `rgb(${r},${g},${b})`;
+    };
+
+    // Offscreen canvas for bars (for fast compositing and single-pass glow)
+    const barsCanvas = document.createElement('canvas');
+    barsCanvas.width = canvas.width;
+    barsCanvas.height = canvas.height;
+    const bctx = barsCanvas.getContext('2d');
+    if (!bctx) return null;
+    const lightBar = lighten(barColor, 28);
+    const darkBar = darken(barColor, 18);
+    const barFillGradient = bctx.createLinearGradient(0, 0, 0, canvas.height);
+    barFillGradient.addColorStop(0, lightBar);
+    barFillGradient.addColorStop(0.6, barColor);
+    barFillGradient.addColorStop(1, darkBar);
+    bctx.fillStyle = barFillGradient;
+
     visualizerValues.forEach((value, index) => {
         const x: number = index * totalBarSpace;
-        
-        // Start with base bar height
         let heightMultiplier = 1.0;
-        
-        // Apply volume gain to height
         heightMultiplier *= volumeGain;
-        
-        // Apply fade in (progressively increase height from 0 to full)
         if (fadeIn > 0 && x < fadeInWidth) {
-            const fadeInProgress = x / fadeInWidth; // 0 to 1
+            const fadeInProgress = x / fadeInWidth;
             heightMultiplier *= fadeInProgress;
         }
-        
-        // Apply fade out (progressively decrease height to 0)
         if (fadeOut > 0 && x >= fadeOutStart) {
-            const fadeOutProgress = (canvas.width - x) / fadeOutWidth; // 1 to 0
+            const fadeOutProgress = (canvas.width - x) / fadeOutWidth;
             heightMultiplier *= fadeOutProgress;
         }
-        
         const barHeight: number = Math.min((value / 100) * canvas.height * heightMultiplier, canvas.height);
         const y: number = canvas.height - barHeight;
         if (value > 0 && barHeight > 0) {
-            drawRoundedTopBar(ctx, x, y, barWidth, barHeight, cornerRadius);
+            drawRoundedTopBar(bctx as CanvasRenderingContext2D, x, y, barWidth, barHeight, cornerRadius);
         }
     });
+
+    // Draw a single blurred glow of the entire bar field, then the crisp bars
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.filter = 'blur(4px)';
+    ctx.globalAlpha = 0.45;
+    ctx.drawImage(barsCanvas, 0, 0);
+    ctx.restore();
+
+    ctx.drawImage(barsCanvas, 0, 0);
 
     const lineChunkSize = width > 240? 8 : 4; // <-- CONTROL THE SMOOTHNESS HERE
     
@@ -406,15 +507,37 @@ export const generateAudioWaveformCanvas = async (
     
     const linePoints = simplifyDataForLine(barWidth, gap, canvas, adjustedVisualizerValues, lineChunkSize);
 
-    // --- SECOND PASS: Draw the simplified, smooth line ---
+    // --- SECOND PASS: Draw the simplified, smooth line with glow and gradient ---
     if (linePoints.length > 1) {
+        // Glow pass
+        ctx.save();
         ctx.beginPath();
-        ctx.strokeStyle = '#E8E8E8';
-        ctx.lineWidth = 1;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-        
-        // (The smooth curve drawing logic is the same as before)
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = rgba(lighten(barColor, 25), 0.5);
+        ctx.shadowBlur = 10;
+        ctx.strokeStyle = rgba(lighten(barColor, 15), 0.85);
+        ctx.moveTo(linePoints[0].x, linePoints[0].y);
+        for (let i = 1; i < linePoints.length - 1; i++) {
+            const xc = (linePoints[i].x + linePoints[i + 1].x) / 2;
+            const yc = (linePoints[i].y + linePoints[i + 1].y) / 2;
+            ctx.quadraticCurveTo(linePoints[i].x, linePoints[i].y, xc, yc);
+        }
+        const lastGlow = linePoints.length - 1;
+        ctx.lineTo(linePoints[lastGlow].x, linePoints[lastGlow].y);
+        ctx.stroke();
+        ctx.restore();
+
+        // Main line pass
+        ctx.beginPath();
+        const lineGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        lineGradient.addColorStop(0, '#F2F2F2');
+        lineGradient.addColorStop(1, rgba('#E8E8E8', 0.85));
+        ctx.strokeStyle = lineGradient;
+        ctx.lineWidth = 1.6;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
         ctx.moveTo(linePoints[0].x, linePoints[0].y);
         for (let i = 1; i < linePoints.length - 1; i++) {
             const xc = (linePoints[i].x + linePoints[i + 1].x) / 2;
@@ -423,7 +546,182 @@ export const generateAudioWaveformCanvas = async (
         }
         const last = linePoints.length - 1;
         ctx.lineTo(linePoints[last].x, linePoints[last].y);
-        
+        ctx.stroke();
+    }
+
+    // Subtle top highlight overlay
+    const topHighlight = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    topHighlight.addColorStop(0, 'rgba(255,255,255,0.06)');
+    topHighlight.addColorStop(0.15, 'rgba(255,255,255,0.02)');
+    topHighlight.addColorStop(0.5, 'rgba(255,255,255,0)');
+    ctx.fillStyle = topHighlight;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Bottom edge subtle separator
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, Math.floor(canvas.height - 0.5) + 0.5);
+    ctx.lineTo(canvas.width, Math.floor(canvas.height - 0.5) + 0.5);
+    ctx.stroke();
+    ctx.restore();
+
+    return canvas;
+}
+
+/**
+ * Legacy renderer that preserves the original simple look and rendering path.
+ * Same signature so callers can opt-in via options or import directly.
+ */
+export const generateAudioWaveformCanvasLegacy = async (
+    path: string,
+    width: number,
+    height: number,
+    options?: { samples?: number; color?: string; mediaInfo?: MediaInfo; startFrame?: number; endFrame?: number; volume?: number; fadeIn?: number; fadeOut?: number; style?: 'modern' | 'legacy'; legacy?: boolean }
+): Promise<HTMLCanvasElement | null> => {
+    const color = options?.color || '#A477C4';
+    const volume = options?.volume ?? 0;
+    const fadeIn = options?.fadeIn ?? 0;
+    const fadeOut = options?.fadeOut ?? 0;
+
+    const frameCache = FramesCache.getState();
+    const amplitudeKey = createAmplitudeKey(path);
+    let amplitudes: Float32Array;
+    if (frameCache.has(amplitudeKey)) {
+        const cached = frameCache.get(amplitudeKey);
+        if (cached && (cached as any).amplitudes) {
+            amplitudes = (cached as any).amplitudes as Float32Array;
+        } else {
+            amplitudes = await decodeAudioAmplitudes(path);
+            frameCache.put(amplitudeKey, { amplitudes } as WrappedAmplitudes);
+        }
+    } else {
+        amplitudes = await decodeAudioAmplitudes(path);
+        frameCache.put(amplitudeKey, { amplitudes } as WrappedAmplitudes);
+    }
+
+    let startFrame = options?.startFrame;
+    let endFrame = options?.endFrame;
+    const mediaStartOffset = options?.mediaInfo?.startFrame ?? 0;
+    if (startFrame !== undefined) {
+        startFrame = startFrame + mediaStartOffset;
+    } else if (mediaStartOffset > 0) {
+        startFrame = mediaStartOffset;
+    }
+    if (endFrame !== undefined) {
+        endFrame = endFrame + mediaStartOffset;
+    } else if (options?.mediaInfo?.endFrame !== undefined) {
+        endFrame = options?.mediaInfo?.endFrame;
+    }
+
+    const audioSampleRate = options?.mediaInfo?.audio?.sampleRate ?? 48000;
+    const videoFrameRate = options?.mediaInfo?.stats.video?.averagePacketRate ?? 24;
+    const audioClip = getAudioForVideoFrames(
+        amplitudes,
+        startFrame,
+        endFrame,
+        audioSampleRate,
+        videoFrameRate,
+        options?.mediaInfo?.audio?.sampleSize
+    );
+
+    const SOURCE_DB_MIN = -60.0;
+    const SOURCE_DB_MAX = 0.0;
+    const TARGET_VISUAL_MIN = 0.0;
+    const TARGET_VISUAL_MAX = 100.0;
+    const barWidth = 2;
+    const gap = 1;
+    const barCount = Math.max(1, Math.floor((width + gap) / (barWidth + gap)));
+    const chunkSize = Math.max(1, Math.floor(audioClip.length / barCount));
+
+    const visualizerValues: number[] = [];
+    for (let i = 0; i < audioClip.length; i += chunkSize) {
+        const chunk = audioClip.slice(i, i + chunkSize);
+        const rmsValue = calculateRMS(chunk);
+        const dbfsValue = amplitudeToDBFS(rmsValue, SOURCE_DB_MIN);
+        const visualValue = mapRange(
+            dbfsValue,
+            SOURCE_DB_MIN,
+            SOURCE_DB_MAX,
+            TARGET_VISUAL_MIN,
+            TARGET_VISUAL_MAX
+        );
+        visualizerValues.push(visualValue);
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Original flat background
+    ctx.fillStyle = '#1A2138';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const cornerRadius = barWidth / 2;
+    const totalBarSpace = barWidth + gap;
+    ctx.fillStyle = color;
+
+    const totalDuration = options?.mediaInfo?.duration || 1;
+    const dbToGain = (db: number) => Math.pow(10, db / 20);
+    const volumeGain = dbToGain(volume);
+    const fadeInWidth = (fadeIn / totalDuration) * canvas.width;
+    const fadeOutWidth = (fadeOut / totalDuration) * canvas.width;
+    const fadeOutStart = canvas.width - fadeOutWidth;
+
+    // Simple per-bar draw (no gradients, no shadows)
+    visualizerValues.forEach((value, index) => {
+        const x: number = index * totalBarSpace;
+        let heightMultiplier = 1.0;
+        heightMultiplier *= volumeGain;
+        if (fadeIn > 0 && x < fadeInWidth) {
+            const fadeInProgress = x / fadeInWidth;
+            heightMultiplier *= fadeInProgress;
+        }
+        if (fadeOut > 0 && x >= fadeOutStart) {
+            const fadeOutProgress = (canvas.width - x) / fadeOutWidth;
+            heightMultiplier *= fadeOutProgress;
+        }
+        const barHeight: number = Math.min((value / 100) * canvas.height * heightMultiplier, canvas.height);
+        const y: number = canvas.height - barHeight;
+        if (value > 0 && barHeight > 0) {
+            drawRoundedTopBar(ctx, x, y, barWidth, barHeight, cornerRadius);
+        }
+    });
+
+    const lineChunkSize = width > 240 ? 8 : 4;
+    const adjustedVisualizerValues = visualizerValues.map((value, index) => {
+        const x = index * totalBarSpace;
+        let heightMultiplier = 1.0;
+        heightMultiplier *= volumeGain;
+        if (fadeIn > 0 && x < fadeInWidth) {
+            heightMultiplier *= x / fadeInWidth;
+        }
+        if (fadeOut > 0 && x >= fadeOutStart) {
+            heightMultiplier *= (canvas.width - x) / fadeOutWidth;
+        }
+        return Math.min(value * heightMultiplier, 100);
+    });
+    const linePoints = simplifyDataForLine(barWidth, gap, canvas, adjustedVisualizerValues, lineChunkSize);
+
+    if (linePoints.length > 1) {
+        ctx.beginPath();
+        ctx.strokeStyle = '#E8E8E8';
+        ctx.lineWidth = 1;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.moveTo(linePoints[0].x, linePoints[0].y);
+        for (let i = 1; i < linePoints.length - 1; i++) {
+            const xc = (linePoints[i].x + linePoints[i + 1].x) / 2;
+            const yc = (linePoints[i].y + linePoints[i + 1].y) / 2;
+            ctx.quadraticCurveTo(linePoints[i].x, linePoints[i].y, xc, yc);
+        }
+        const last = linePoints.length - 1;
+        ctx.lineTo(linePoints[last].x, linePoints[last].y);
         ctx.stroke();
     }
 

@@ -9,7 +9,7 @@ import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
 import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
 import { ManifestInfoWithType, UIInput } from "./manifest/api";
-
+import { useInputControlsStore } from "./inputControl";
 export const PREPROCESSOR_BAR_HEIGHT = 24;
 
 interface ClipStore {  
@@ -48,6 +48,7 @@ interface ClipStore {
     setGhostGuideLines: (guideLines: [number, number] | null) => void;
     muteTimeline: (timelineId: string) => void;
     unmuteTimeline: (timelineId: string) => void;
+    getModelValues: (clipId: string) => Record<string, any> | null;
     hideTimeline: (timelineId: string) => void;
     unhideTimeline: (timelineId: string) => void;
     isTimelineMuted: (timelineId: string) => boolean;
@@ -825,6 +826,76 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
     }),
+    getModelValues: (clipId: string) => {
+        const clip = get().clips.find((c) => c.clipId === clipId && c.type === 'model') as ModelClipProps | undefined;
+        if (!clip) return null;
+        const manifest = clip.manifest;
+        if (!manifest) return null;
+        const ui = manifest.spec?.ui || manifest.ui;
+        if (!ui || !Array.isArray(ui.inputs)) return null;
+        const output: Record<string, any> = {};
+        ui.inputs.forEach((inp) => {
+            // json unstringify the value if possible
+            let parsedVal: any = inp.value;
+            if (typeof parsedVal === 'string') {
+                try {
+                    parsedVal = JSON.parse(parsedVal);
+                } catch {
+                    // ignore
+                }
+            }
+            let finalVal: any = parsedVal ?? inp.default;
+
+            // For media-like inputs, attach either selected range (video/audio) or selected frame (image)
+            const typeStr = String((inp as any)?.type || '');
+            const isVideoish = typeStr.startsWith('video');
+            const isAudioish = typeStr.startsWith('audio');
+            const isImageish = typeStr.startsWith('image');
+            if (isVideoish || isAudioish || isImageish) {
+                const inputStore = useInputControlsStore.getState();
+                if (isVideoish || isAudioish) {
+                    const [start, end] = inputStore.getSelectedRange(inp.id);
+                    if (finalVal && typeof finalVal === 'object') {
+                        finalVal = { ...(finalVal as any), selected_range: [start, end] };
+                    } else {
+                        finalVal = { selection: finalVal, selected_range: [start, end] };
+                    }
+                } else if (isImageish) {
+                    const focus = inputStore.getFocusFrame(inp.id);
+                    if (finalVal && typeof finalVal === 'object') {
+                        finalVal = { ...(finalVal as any), selected_frame: focus };
+                    } else {
+                        finalVal = { selection: finalVal, selected_frame: focus };
+                    }
+                }
+
+                // snake_case all keys within media objects (do not alter primitive string values like paths)
+                const toSnake = (s: string): string => {
+                    return s
+                        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+                        .replace(/[^A-Za-z0-9_]+/g, '_')
+                        .replace(/^_+|_+$/g, '')
+                        .toLowerCase();
+                };
+                const snakeCaseObject = (val: any): any => {
+                    if (Array.isArray(val)) return val.map(snakeCaseObject);
+                    if (val && typeof val === 'object') {
+                        const out: Record<string, any> = {};
+                        Object.keys(val).forEach((k) => {
+                            const nk = toSnake(k);
+                            out[nk] = snakeCaseObject((val as any)[k]);
+                        });
+                        return out;
+                    }
+                    return val;
+                };
+                finalVal = snakeCaseObject(finalVal);
+            }
+
+            output[inp.id] = finalVal;
+        });
+        return output as Record<string, any>;
+    },
     groupClips: (clipIds: string[]) => set((state) => {
         const newClips = [...state.clips];
         const clips = newClips.filter((c) => clipIds.includes(c.clipId));

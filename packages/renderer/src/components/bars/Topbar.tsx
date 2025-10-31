@@ -15,6 +15,7 @@ import { useViewportStore } from '@/lib/viewport';
 import { PiResize } from 'react-icons/pi';
 import { LayoutIcon } from './LayoutIcon';
 import { TbPackageExport } from 'react-icons/tb';
+import SystemMemoryMenu from '@/components/system/SystemMemoryMenu';
 interface TopBarProps {
 
 }
@@ -52,6 +53,7 @@ const TopBar:React.FC<TopBarProps> = () => {
   return (
     <div className="w-full relative h-8 mt-2 px-6 flex items-center justify-end space-x-2">
       
+          <SystemMemoryMenu />
            <DropdownMenu open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
                 <DropdownMenuTrigger className='text-brand-light/90 dark w-32 h-[34px] relative flex items-center space-x-2 px-2 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer'>
                   <span className='text-[11px] inline-flex items-center space-x-1 w-full'><span className='text-brand-light/50 font-light'>⌘</span> <span>Shortcuts</span> 
@@ -59,8 +61,8 @@ const TopBar:React.FC<TopBarProps> = () => {
                     {shortcutsOpen ? <LuChevronUp className='w-3.5 h-3.5' /> : <LuChevronDown className='w-3.5 h-3.5' />}
                   
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align='end' className='dark w-[400px] font-poppins p-0 overflow-hidden bg-brand z-[100]'>
-                  <div className='bg-brand border-b border-brand-light/10 px-3 py-2'>
+                <DropdownMenuContent align='end' className='dark w-[400px] font-poppins p-0 overflow-hidden bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] z-[100]'>
+                  <div className='border-b border-brand-light/10 px-3 py-2'>
                     <span className='text-[11px] uppercase tracking-wide text-brand-light/70'>Keyboard Shortcuts</span>
                   </div>
                   <div className='divide-y divide-brand-light/10 '>
@@ -123,7 +125,7 @@ const TopBar:React.FC<TopBarProps> = () => {
                 {sizeOpen ? <LuChevronUp className='w-3.5 h-3.5' /> : <LuChevronDown className='w-3.5 h-3.5' />}   
                 </div>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align='end' className='dark w-48 flex flex-col bg-brand-background font-poppins'>
+                <DropdownMenuContent align='end' className='dark w-48 flex flex-col bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] font-poppins'>
                   {[
                     { id: '16:9', name: 'Wide', w: 16, h: 9 },
                     { id: '9:16', name: 'Vertical', w: 9, h: 16 },
@@ -137,7 +139,7 @@ const TopBar:React.FC<TopBarProps> = () => {
                     <DropdownMenuItem
                       key={opt.id}
                       textValue={opt.name}
-                      className='dark text-[12px] font-medium flex flex-row items-center cursor-pointer gap-x-3 w-full'
+                      className='dark text-[12px] font-medium flex flex-row items-center cursor-pointer gap-x-3 w-full bg-transparent'
                       onClick={() => { setAspectRatio({ width: opt.w, height: opt.h, id: opt.id }); setSizeOpen(false); }}
                     >
                       <div
@@ -164,7 +166,7 @@ const TopBar:React.FC<TopBarProps> = () => {
                     {layoutOpen ? <LuChevronUp className='w-4 h-4' /> : <LuChevronDown className='w-4 h-4' />}
                   </div>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align='end' className='dark w-48 font-poppins bg-brand-background'>
+                <DropdownMenuContent align='end' className='dark w-48 font-poppins bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px]'>
                   <DropdownMenuItem className='dark text-[11px] font-medium flex items-center gap-x-2' onClick={() => { setLayout('default'); setLayoutOpen(false); }}>
                     <LayoutIcon type='default' />
                     <span>Default</span>

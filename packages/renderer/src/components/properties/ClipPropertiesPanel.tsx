@@ -16,7 +16,7 @@ import TextProperties from './TextProperties'
 import LineProperties from './LineProperties'
 import PreprocessorDurationPanel from './preprocessor/PreprocessorDurationPanel'
 import PreprocessorParametersPanel from './preprocessor/PreprocessorParametersPanel'
-import { FaPlay, FaStop } from 'react-icons/fa'
+import { FaStop } from 'react-icons/fa'
 import { runPreprocessor } from '@/lib/preprocessor/api'
 import { toast } from 'sonner';
 
@@ -27,7 +27,7 @@ import { useViewportStore } from '@/lib/viewport';
 import MaskPropertiesPanel from './mask/MaskPropertiesPanel';
 import { ModelInputsProperties } from './model/ModelInputsProperties'
 import { RiAiGenerate } from 'react-icons/ri'
-import { ModelHistoryProperties } from './model/ModelHistoryProperties'
+import { ModelGenerationProperties } from './model/ModelGenerationProperties'
 
 interface PropertiesPanelProps {
     panelSize: number;
@@ -49,7 +49,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [selectedTab, setSelectedTab] = useState<string>(clip?.type === 'text' ? "text" : "transform");
   const { clearJob, stopTracking } = usePreprocessorJobActions();
-
+  const getModelValues = useClipStore((s) => s.getModelValues);
   
 
   // check if clip has audio if it is video 
@@ -78,6 +78,32 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (clip?.type === 'model') return true;
     return false;
   }, [clip?.type]);
+
+  const clipSignature = JSON.stringify(getModelValues(clipId));
+
+  // Disable generate when any required model inputs are missing
+  const isGenerateDisabled = useMemo(() => {
+    if (!hasModel || !clip) return false;
+    const manifest: any = (clip as any).manifest;
+    const ui = manifest?.spec?.ui || manifest?.ui;
+    if (!ui || !Array.isArray(ui.inputs)) return false;
+    const values = getModelValues(clipId) || {};
+
+    const isEmpty = (val: any) => {
+      if (val === undefined || val === null) return true;
+      if (typeof val === 'string' && val.trim() === '') return true;
+      if (Array.isArray(val) && val.length === 0) return true;
+      // Media objects may have a selection field
+      if (val && typeof val === 'object' && Object.prototype.hasOwnProperty.call(val, 'selection')) {
+        const sel = (val as any).selection;
+        if (sel === undefined || sel === null) return true;
+        if (Array.isArray(sel) && sel.length === 0) return true;
+      }
+      return false;
+    };
+
+    return ui.inputs.some((inp: any) => inp?.required && isEmpty(values[inp.id]));
+  }, [hasModel, clipId, clipSignature]);
 
   const hasTransform = useMemo(() => {
     if (clip?.type === 'image' || clip?.type === 'video' || clip?.type === 'shape' || clip?.type === 'text') return true;
@@ -259,6 +285,15 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor, preprocessor]);
 
+
+  const handleGenerate = useCallback(() => {
+    // get the clip Id that is of type model 
+    const modelValues = getModelValues(clipId);
+    console.log(modelValues);
+    
+
+  }, [selectedClipIds]);
+
   return (
     <div className="h-full w-full min-w-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden' }}>
       <div className="overflow-hidden" style={{ height: (hasValidPreprocessor || hasModel) ? 'calc(100% - 80px)' : '100%' }}>
@@ -273,7 +308,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
             {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
-            {(hasModel) && <TabsTrigger value="model-history" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">History</TabsTrigger>}
+            {(hasModel) && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Generations</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
             {(hasTransform && !hasMask) && <TabsTrigger value="transform" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
@@ -324,8 +359,8 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasModel) && <TabsContent value="model-inputs" className="min-w-0 m-0">
             <ModelInputsProperties clipId={clipId} panelSize={panelSize} />
           </TabsContent>}
-          {(hasModel) && <TabsContent value="model-history" className="min-w-0 m-0">
-            <ModelHistoryProperties clipId={clipId} />
+          {(hasModel) && <TabsContent value="model-generation" className="min-w-0 m-0">
+            <ModelGenerationProperties clipId={clipId} />
           </TabsContent>}
           </div>
         </ScrollArea>
@@ -368,15 +403,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     {hasModel && (
         <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 50, pointerEvents: 'auto' }}>
           <button
-
-            className="w-full py-2.5 px-6 rounded-lg font-medium text-[12px] flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90"
-            style={{
-              backgroundColor: preprocessor?.status === 'running' ? '#DC2626' : '#A477C4',
-              color: '#FFFFFF'
-            }}
-            onMouseEnter={(e) => {
-              
-            }}
+            onClick={handleGenerate}
+            disabled={isGenerateDisabled}
+            className={cn(
+              "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] text-brand-light bg-brand-accent-two-shade flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50",
+            )}
+            
           >
             <RiAiGenerate size={16} />
             <span>Generate</span>

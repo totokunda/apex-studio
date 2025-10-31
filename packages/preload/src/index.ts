@@ -644,6 +644,11 @@ function pathToFileURLString(path: string): string {
   return fileUrl.href;
 }
 
+// System API functions
+async function getSystemMemory(): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('system:memory');
+}
+
 // Manifest API functions
 async function listManifestModelTypes(): Promise<ConfigResponse<any>> {
   const res = await ipcRenderer.invoke('manifest:types');
@@ -705,6 +710,7 @@ export {
   setTorchDevice,
   getCachePath,
   setCachePath,
+  getSystemMemory,
   listPreprocessors,
   getPreprocessor,
   downloadPreprocessor,
