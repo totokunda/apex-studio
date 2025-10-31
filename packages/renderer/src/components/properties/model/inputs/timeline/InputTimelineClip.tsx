@@ -94,6 +94,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     const clipWidth = useMemo(() => Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration]);
     const clipX  = useMemo(() => getClipX(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration]);
 
+
     // Frame selection overlay (only in frame mode)
     const frameWidthPx = useMemo(() => {
         const span = Math.max(1, (timelineDuration[1] - timelineDuration[0]));

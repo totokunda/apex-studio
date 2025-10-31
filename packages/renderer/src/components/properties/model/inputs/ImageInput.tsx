@@ -23,9 +23,7 @@ import TimelineSelector from './timeline/TimelineSelector';
 import { useInputControlsStore } from '@/lib/inputControl';
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store';
 
-type ImageSelectionMedia = { kind: 'media'; assetUrl: string; frame?: number };
-type ImageSelectionClip = { kind: 'clip'; clipId: string; frame?: number };
-export type ImageSelection = ImageSelectionMedia | ImageSelectionClip | null;
+export type ImageSelection = AnyClipProps | null;
 
 interface ImageInputProps {
   label?: string;
@@ -110,13 +108,40 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
               mediaInfo: infos[idx],
               hasProxy: it.hasProxy
             }));
+            
             results = results.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())).filter((media) => (media.type === 'image' || media.type === 'video'));
             setMediaItems(results);
             const newlyAdded = results.filter(it => !existingNames.has(it.name));
             if (newlyAdded.length > 0) {
                 const first = newlyAdded[0];
                 clearSelectedAsset();
-                onChange({ kind: 'media', assetUrl: first.assetUrl, frame: 0 });
+                const ext = getLowercaseExtension(first.assetUrl);
+                const isVideo = VIDEO_EXTS.includes(ext);
+                if (isVideo) {
+                    const fps = Math.max(1, Math.floor(first.mediaInfo?.stats?.video?.averagePacketRate || DEFAULT_FPS));
+                    const duration = Math.max(1, Math.floor((first.mediaInfo?.duration || 0) * fps));
+                    const clip: VideoClipProps = {
+                        type: 'video',
+                        clipId: `media:${first.assetUrl}`,
+                        src: first.assetUrl,
+                        startFrame: 0,
+                        endFrame: duration,
+                        preprocessors: [],
+                        masks: [],
+                    } as any;
+                    onChange(clip as AnyClipProps);
+                } else {
+                    const clip: ImageClipProps = {
+                        type: 'image',
+                        clipId: `media:${first.assetUrl}`,
+                        src: first.assetUrl,
+                        startFrame: 0,
+                        endFrame: 1,
+                        preprocessors: [],
+                        masks: [],
+                    } as any;
+                    onChange(clip as AnyClipProps);
+                }
             }
             bumpMediaLibraryVersion();
         } catch (e) {
@@ -134,9 +159,11 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
             onChange(null);
             return;
         }
-        const selectedClip = getClipById(clipId);
-        if (!selectedClip) return;
-        onChange({ kind: 'clip', clipId: selectedClip.clipId, frame: 0 });
+        const selectedClip = getClipById(clipId) as AnyClipProps | undefined;
+        if (!selectedClip || selectedClip.type === 'audio') return;
+        const duration = Math.max(1, (selectedClip.endFrame ?? 0) - (selectedClip.startFrame ?? 0));
+        const projected = { ...selectedClip, startFrame: 0, endFrame: duration } as AnyClipProps;
+        onChange(projected);
     }, [getClipById, onChange]);
 
     return (
@@ -182,14 +209,44 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
                                 <div key={media.name} onClick={() => {
                                     // Selecting a library item should clear timeline selection
                                     clearSelectedAsset();
-                                    const next = { kind: 'media', assetUrl: media.assetUrl } as const;
-                                    const isSame = value && value.kind === 'media' && value.assetUrl === media.assetUrl;
-                                    onChange(isSame ? null : { ...next, frame: 0 });
+                                    const targetClipId = `media:${media.assetUrl}`;
+                                    const isSame = value && value.clipId === targetClipId;
+                                    if (isSame) {
+                                        onChange(null);
+                                        return;
+                                    }
+                                    const ext = getLowercaseExtension(media.assetUrl);
+                                    const isVideo = VIDEO_EXTS.includes(ext);
+                                    if (isVideo) {
+                                        const fps = Math.max(1, Math.floor(media.mediaInfo?.stats?.video?.averagePacketRate || DEFAULT_FPS));
+                                        const duration = Math.max(1, Math.floor((media.mediaInfo?.duration || 0) * fps));
+                                        const clip: VideoClipProps = {
+                                            type: 'video',
+                                            clipId: targetClipId,
+                                            src: media.assetUrl,
+                                            startFrame: 0,
+                                            endFrame: duration,
+                                            preprocessors: [],
+                                            masks: [],
+                                        } as any;
+                                        onChange(clip as AnyClipProps);
+                                    } else {
+                                        const clip: ImageClipProps = {
+                                            type: 'image',
+                                            clipId: targetClipId,
+                                            src: media.assetUrl,
+                                            startFrame: 0,
+                                            endFrame: 1,
+                                            preprocessors: [],
+                                            masks: [],
+                                        } as any;
+                                        onChange(clip as AnyClipProps);
+                                    }
                                 }} className={cn('w-full flex flex-col items-center justify-center gap-y-1.5 cursor-pointer group relative')}>
                                     <div className='relative'>
-                                    <div className={cn('absolute top-0 left-0 w-full h-full bg-brand-background-light/50 backdrop-blur-sm rounded-md z-20 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center', (value && value.kind === 'media' && value.assetUrl === media.assetUrl) ? 'opacity-100' : 'opacity-0')}>
-                                      <div className={cn('rounded-full py-1 px-3  bg-brand-light/10 flex items-center justify-center font-medium text-[10.5px] w-fit', (value && value.kind === 'media' && value.assetUrl === media.assetUrl) ? 'bg-brand-light/20' : '')}>
-                                        {(value && value.kind === 'media' && value.assetUrl === media.assetUrl) ? 'Selected' : 'Use as Input'}
+                                    <div className={cn('absolute top-0 left-0 w-full h-full bg-brand-background-light/50 backdrop-blur-sm rounded-md z-20 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center', (value && value.clipId === `media:${media.assetUrl}`) ? 'opacity-100' : 'opacity-0')}>
+                                      <div className={cn('rounded-full py-1 px-3  bg-brand-light/10 flex items-center justify-center font-medium text-[10.5px] w-fit', (value && value.clipId === `media:${media.assetUrl}`) ? 'bg-brand-light/20' : '')}>
+                                        {(value && value.clipId === `media:${media.assetUrl}`) ? 'Selected' : 'Use as Input'}
                                       </div>
                                     </div>
                                      <MediaThumb key={media.name} item={media} />
@@ -241,9 +298,9 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             setApplyPreprocessor(true);
             return;
         }
-        const sel = value;
-        if (sel && sel.kind === 'clip') {
-            const clip = getClipById(sel.clipId);
+        const sel = value as AnyClipProps | null;
+        if (sel) {
+            const clip = sel;
             if (clip && (clip.type === 'video' || clip.type === 'image')) {
                 const exists = (getPreprocessorsForClip(clip.clipId) || []).some(p => (p.preprocessor?.id || '') === preprocessorRef);
                 setApplyPreprocessor(!exists);
@@ -266,12 +323,9 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
 
     const setInputTimelineDuration = useInputControlsStore((s) => s.setTimelineDuration);
     const setInputFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
-    const {focusFrameByInputId} = useInputControlsStore();
-    const focusFrameForInput = focusFrameByInputId[inputId] ?? 0;
     const selectionKey = useMemo(() => {
         if (!value) return 'null';
-        if (value.kind === 'media') return `media:${value.assetUrl}`;
-        return `clip:${value.clipId}`;
+        return value.clipId;
     }, [value]);
     const lastSelectionKeyRef = useRef<string | null>(null);
     const viewportRatio = useMemo(() => {
@@ -321,142 +375,91 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             const data = event.active?.data?.current as MediaItem | undefined;
             const isValid = !!data && (data.type === 'image' || data.type === 'video');
             if (isValid && overId === 'image-input') {
-                const next = { kind: 'media', assetUrl: (data as MediaItem).assetUrl } as const;
-                const isSame = value && value.kind === 'media' && value.assetUrl === (data as MediaItem).assetUrl;
-                emitSelection(isSame ? null : { ...next, frame: 0 });
+                const assetUrl = (data as MediaItem).assetUrl;
+                const targetClipId = `media:${assetUrl}`;
+                const isSame = value && value.clipId === targetClipId;
+                if (isSame) {
+                    emitSelection(null);
+                } else {
+                    const ext = getLowercaseExtension(assetUrl);
+                    const isVideo = VIDEO_EXTS.includes(ext);
+                    if (isVideo) {
+                        const fps = Math.max(1, Math.floor((data.mediaInfo?.stats?.video?.averagePacketRate || DEFAULT_FPS)));
+                        const duration = Math.max(1, Math.floor((data.mediaInfo?.duration || 0) * fps));
+                        const clip: VideoClipProps = {
+                            type: 'video',
+                            clipId: targetClipId,
+                            src: assetUrl,
+                            startFrame: 0,
+                            endFrame: duration,
+                            preprocessors: [],
+                            masks: [],
+                        } as any;
+                        emitSelection(clip as AnyClipProps);
+                    } else {
+                        const clip: ImageClipProps = {
+                            type: 'image',
+                            clipId: targetClipId,
+                            src: assetUrl,
+                            startFrame: 0,
+                            endFrame: 1,
+                            preprocessors: [],
+                            masks: [],
+                        } as any;
+                        emitSelection(clip as AnyClipProps);
+                    }
+                }
             }
             setIsOverDropZone(false);
         }
     });
 
 
-    // Render poster preview into the trigger area whenever the value changes
+    // Use provided clip selection directly for preview and timeline syncing
     useEffect(() => {
-        let cancelled = false;
-        const requestedFocusFrame = Math.max(0, Math.round(value?.frame ?? 0));
-
-        if (value?.kind === 'media' && mediaClip?.clipId === `media:${value.assetUrl}`) {
+        const canvasEl = canvasRef.current;
+        if (!value) {
+            if (canvasEl) {
+                const ctx = canvasEl.getContext('2d');
+                if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+            }
+            setStageSize({ w: 0, h: 0 });
+            setMediaClip(null);
+            const storeState = useInputControlsStore.getState();
+            const currentDuration = storeState.getTimelineDuration(inputId);
+            const currentFocus = storeState.getFocusFrame(inputId);
+            if (currentDuration[0] !== 0 || currentDuration[1] !== 1) {
+                setInputTimelineDuration(0, 1, inputId);
+            }
+            if ((currentFocus ?? 0) !== 0) {
+                setInputFocusFrame(0, inputId);
+            }
             return;
         }
-        if (value?.kind === 'clip' && mediaClip?.clipId === value.clipId) {
-            return;
+        setMediaClip(value as AnyClipProps);
+        const start = Math.max(0, Math.round((value.startFrame ?? 0)));
+        const end = Math.max(start + 1, Math.round((value.endFrame ?? start + 1)));
+        const storeState = useInputControlsStore.getState();
+        const currentDuration = storeState.getTimelineDuration(inputId);
+        const currentFocus = storeState.getFocusFrame(inputId);
+        if (currentDuration[0] !== start || currentDuration[1] !== end) {
+            setInputTimelineDuration(start, end, inputId);
         }
-        (async () => {
-            try {
-                const canvasEl = canvasRef.current;
-                if (!value) {
-                    if (canvasEl) {
-                        const ctx = canvasEl.getContext('2d');
-                        if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-                    }
-                    setStageSize({ w: 0, h: 0 });
-                    setMediaClip(null);
-                    const storeState = useInputControlsStore.getState();
-                    const currentDuration = storeState.getTimelineDuration(inputId);
-                    const currentFocus = storeState.getFocusFrame(inputId);
-                    if (currentDuration[0] !== 0 || currentDuration[1] !== 1) {
-                        setInputTimelineDuration(0, 1, inputId);
-                    }
-                    if ((currentFocus ?? 0) !== 0) {
-                        setInputFocusFrame(0, inputId);
-                    }
-                    return;
-                }
-                if (value.kind === 'media') {
-                    try {
-                        const ext = getLowercaseExtension(value.assetUrl);
-                        const isVideo = VIDEO_EXTS.includes(ext);
-                        if (isVideo) {
-                            const prelim: VideoClipProps = {
-                                type: 'video',
-                                clipId: `media:${value.assetUrl}`,
-                                src: value.assetUrl,
-                                startFrame: 0,
-                                endFrame: 1,
-                                preprocessors: [],
-                                masks: [],
-                            } as any;
-                            setMediaClip(prelim as AnyClipProps);
-                            const info = await getMediaInfo(value.assetUrl);
-                            const fps = Math.max(1, Math.floor(info?.stats?.video?.averagePacketRate || DEFAULT_FPS));
-                            const duration = Math.max(0, Math.floor((info?.duration || 0) * fps));
-                            const finalEnd = Math.max(1, duration);
-                            if (!cancelled) {
-                                const clipForTimeline = { ...prelim, endFrame: finalEnd } as AnyClipProps;
-                                setMediaClip(clipForTimeline);
-                                const clampedFocus = Math.max(0, Math.min(finalEnd - 1, requestedFocusFrame));
-                                const storeState = useInputControlsStore.getState();
-                                const currentFocus = storeState.getFocusFrame(inputId);
-                                const currentDuration = storeState.getTimelineDuration(inputId);
-                                if (currentDuration[0] !== (prelim.startFrame ?? 0) || currentDuration[1] !== finalEnd) {
-                                    setInputTimelineDuration(prelim.startFrame ?? 0, finalEnd, inputId);
-                                }
-                                if (currentFocus !== clampedFocus) {
-                                    setInputFocusFrame(clampedFocus, inputId);
-                                }
-                            }
-                        } else {
-                            const imgClip: ImageClipProps = {
-                                type: 'image',
-                                clipId: `media:${value.assetUrl}`,
-                                src: value.assetUrl,
-                                startFrame: 0,
-                                endFrame: 1,
-                                preprocessors: [],
-                                masks: [],
-                            } as any;
-                            setMediaClip(imgClip as AnyClipProps);
-                            const storeState = useInputControlsStore.getState();
-                            const currentDuration = storeState.getTimelineDuration(inputId);
-                            const currentFocus = storeState.getFocusFrame(inputId);
-                            if (currentDuration[0] !== (imgClip.startFrame ?? 0) || currentDuration[1] !== (imgClip.endFrame ?? 0)) {
-                                setInputTimelineDuration(imgClip.startFrame ?? 0, imgClip.endFrame ?? 0, inputId);
-                            }
-                            if ((currentFocus ?? 0) !== 0) {
-                                setInputFocusFrame(0, inputId);
-                            }
-                        }
-                    } catch {}
-                } else if (value.kind === 'clip') {
-                    const clip = getClipById(value.clipId) as AnyClipProps | undefined;
-                    if (clip && clip.type !== 'audio') {
-                        const duration = Math.max(1, (clip.endFrame ?? 0) - (clip.startFrame ?? 0));
-                        const projectedClip = {
-                            ...clip,
-                            startFrame: 0,
-                            endFrame: duration
-                        } as AnyClipProps;
-                        setMediaClip(projectedClip);
-                        const storeState = useInputControlsStore.getState();
-                        const currentDuration = storeState.getTimelineDuration(inputId);
-                        const currentFocus = storeState.getFocusFrame(inputId);
-                        if (currentDuration[0] !== 0 || currentDuration[1] !== duration) {
-                            setInputTimelineDuration(0, duration, inputId);
-                        }
-                        const clampedFocus = Math.max(0, Math.min(duration - 1, requestedFocusFrame));
-                        if (currentFocus !== clampedFocus) {
-                            setInputFocusFrame(clampedFocus, inputId);
-                        }
-                    }
-                }
-            } catch {}
-        })();
-        return () => { cancelled = true };
-    }, [value, getClipById, inputId, setInputFocusFrame, setInputTimelineDuration]);
+        const clampedFocus = Math.max(start, Math.min(end - 1, currentFocus ?? start));
+        if (currentFocus !== clampedFocus) {
+            setInputFocusFrame(clampedFocus, inputId);
+        }
+    }, [value, inputId, setInputFocusFrame, setInputTimelineDuration]);
 
     useEffect(() => {
         const prevKey = lastSelectionKeyRef.current;
         lastSelectionKeyRef.current = selectionKey;
         if (!value) return;
         if (prevKey !== selectionKey) {
-            // Selection changed; allow state setters to establish initial values before syncing back
             return;
         }
-        const normalizedFocus = Math.max(0, Math.round(focusFrameForInput ?? 0));
-        const currentFrame = Math.max(0, Math.round(value?.frame ?? 0));
-        if (normalizedFocus === currentFrame) return;
-        emitSelection({ ...value, frame: normalizedFocus });
-    }, [focusFrameForInput, selectionKey, value, emitSelection]);
+        // selection is a clip; focus syncing is managed via store
+    }, [selectionKey, value]);
 
     const handleToggleApply = React.useCallback(() => {
         const next = !applyPreprocessor;
@@ -515,7 +518,34 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             const first = newlyAdded[0] ?? null;
             if (first) {
                 clearSelectedAsset();
-                emitSelection({ kind: 'media', assetUrl: first.assetUrl, frame: 0 });
+                if (VIDEO_EXTS.includes(getLowercaseExtension(first.assetUrl))) {
+                    try {
+                        const info = await getMediaInfo(first.assetUrl);
+                        const fps = Math.max(1, Math.floor(info?.stats?.video?.averagePacketRate || DEFAULT_FPS));
+                        const duration = Math.max(1, Math.floor((info?.duration || 0) * fps));
+                        const clip: VideoClipProps = {
+                            type: 'video',
+                            clipId: `media:${first.assetUrl}`,
+                            src: first.assetUrl,
+                            startFrame: 0,
+                            endFrame: duration,
+                            preprocessors: [],
+                            masks: [],
+                        } as any;
+                        emitSelection(clip as AnyClipProps);
+                    } catch {}
+                } else {
+                    const clip: ImageClipProps = {
+                        type: 'image',
+                        clipId: `media:${first.assetUrl}`,
+                        src: first.assetUrl,
+                        startFrame: 0,
+                        endFrame: 1,
+                        preprocessors: [],
+                        masks: [],
+                    } as any;
+                    emitSelection(clip as AnyClipProps);
+                }
             }
             bumpMediaLibraryVersion();
         } catch {}
@@ -523,33 +553,8 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
 
     const timelineClip = useMemo<AnyClipProps | null>(() => {
         if (!value) return null;
-        if (mediaClip) return mediaClip;
-        if (value.kind === 'media') {
-            const ext = getLowercaseExtension(value.assetUrl);
-            const isVideo = VIDEO_EXTS.includes(ext);
-            if (!isVideo) return null;
-            const storeState = useInputControlsStore.getState();
-            const [, persistedEnd] = storeState.getTimelineDuration(inputId);
-            const end = Math.max(1, persistedEnd || 1);
-            return {
-                type: 'video',
-                clipId: `media:${value.assetUrl}`,
-                src: value.assetUrl,
-                startFrame: 0,
-                endFrame: end,
-                preprocessors: [],
-                masks: [],
-            } as AnyClipProps;
-        }
-        if (value.kind === 'clip') {
-            const clip = getClipById(value.clipId) as AnyClipProps | undefined;
-            if (clip && clip.type !== 'audio') {
-                const duration = Math.max(1, (clip.endFrame ?? 0) - (clip.startFrame ?? 0));
-                return { ...clip, startFrame: 0, endFrame: duration } as AnyClipProps;
-            }
-        }
-        return null;
-    }, [value, mediaClip, inputId, getClipById]);
+        return mediaClip ?? (value as AnyClipProps);
+    }, [value, mediaClip]);
 
   return (
     <Droppable className="w-full h-full" id="image-input" accepts={['media']}>
@@ -577,39 +582,9 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             {value ? (
                 (stageSize.w > 0 && stageSize.h > 0) ? (
                     (() => {
-                        if (value.kind === 'media') {
-                            const ext = getLowercaseExtension(value.assetUrl);
-                            const isVideo = VIDEO_EXTS.includes(ext);
-                            const fallbackClip: AnyClipProps = isVideo ? ({
-                                type: 'video',
-                                clipId: `media:${value.assetUrl}`,
-                                src: value.assetUrl,
-                                startFrame: 0,
-                                endFrame: 1,
-                                preprocessors: [],
-                                masks: [],
-                            } as unknown as VideoClipProps) : ({
-                                type: 'image',
-                                clipId: `media:${value.assetUrl}`,
-                                src: value.assetUrl,
-                                startFrame: 0,
-                                endFrame: 1,
-                                preprocessors: [],
-                                masks: [],
-                            } as unknown as ImageClipProps);
-                            const clipToRender = mediaClip || fallbackClip;
-                            return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} inputId={inputId} />
-                        } else {
-                            const clip = getClipById(value.clipId) as AnyClipProps | undefined;
-                            if (clip && clip.type !== 'audio') {
-                                return <TimelineClipPosterPreview key={value.clipId} clipId={value.clipId} width={stageSize.w} height={stageSize.h} inputId={inputId} />
-                            }
-                            return (
-                              <div className="w-full h-full flex items-center justify-center text-brand-light/70 text-[12px]">
-                                Unable to preview clip.
-                              </div>
-                            );
-                        }
+                        if (!mediaClip) return null;
+                        const clipToRender = mediaClip;
+                        return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} inputId={inputId} />
                     })()
                 ) : (
                     <canvas ref={canvasRef} className="w-full h-auto rounded-[6px]" />

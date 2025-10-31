@@ -12,6 +12,7 @@ import DrawingPreview from '@/components/preview/clips/DrawingPreview';
 import { getApplicatorsForClip } from '@/lib/applicator-utils';
 import { useWebGLHaldClut } from '@/components/preview/webgl-filters';
 import { useInputControlsStore } from '@/lib/inputControl';
+import AudioPreview from '@/components/preview/clips/AudioPreview';
 
 // Kept for parity with other components if needed later; not used in poster sorting
 // const getGroupChildren = (groupClip: AnyClipProps, allClips: AnyClipProps[]) => {
@@ -166,6 +167,18 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
               default:
                 return null;
             }
+          })}
+          {toRender.map((clip) => {
+            if (clip.type !== 'video') return null;
+            const startFrame = clip.startFrame || 0;
+            const groupStart = clip.groupId ? (getClipById(clip.groupId)?.startFrame || 0) : 0;
+            const relativeStart = startFrame - groupStart;
+            const hasOverlap = ((clip.groupId ? relativeStart : startFrame) > 0) ? true : false;
+            const effectiveFrame = clip.groupId ? (focusFrame + groupStart) : focusFrame;
+            const clipAtFrame = clipWithinFrame(clip, effectiveFrame, hasOverlap, 0);
+            if (!clipAtFrame && clip.groupId) return null;
+            const overrideToUse = (clipOverride ? (clip) : undefined);
+            return <AudioPreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} overlap={hasOverlap} rectWidth={rectWidth} rectHeight={rectHeight} inputMode={true} inputId={inputId} />
           })}
         </Group>
       </Layer>

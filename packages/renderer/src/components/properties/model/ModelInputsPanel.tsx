@@ -13,6 +13,7 @@ import BooleanInput from './inputs/BooleanInput';
 import ImageInput from './inputs/ImageInput';
 import VideoInput from './inputs/VideoInput';
 import NumberListInput from './inputs/NumberListInput';
+import AudioInput from './inputs/AudioInput';
 
 export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], clipId: string, panelSize:number }> = ({ panel, inputs, clipId, panelSize }) => {
 
@@ -241,11 +242,13 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                           const obj = JSON.parse(v);
                           if (obj && (obj.selection || obj.apply !== undefined || obj.apply_preprocessor !== undefined || obj.preprocessor_ref)) return obj as any;
                           if (obj && (obj.kind === 'media' || obj.kind === 'clip')) return { selection: obj } as any;
+                          if (obj && (obj.clipId || obj.src || obj.type)) return { selection: obj } as any;
                         } catch {}
                         return { selection: { kind: 'media', assetUrl: v } } as any;
                       }
                       if (typeof v === 'object') {
                         if ((v as any).kind === 'media' || (v as any).kind === 'clip') return { selection: v } as any;
+                        if ((v as any).clipId || (v as any).src || (v as any).type) return { selection: v } as any;
                         return v as any;
                       }
                       return { selection: null } as any;
@@ -357,6 +360,7 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                         try {
                           const obj = JSON.parse(v);
                           if (obj && (obj.selection || obj.apply !== undefined || obj.apply_preprocessor !== undefined || obj.preprocessor_ref)) return obj as any;
+                          if (obj && (obj.clipId || obj.src || obj.type)) return { selection: obj } as any;
                         } catch {}
                       }
                       return v as any;
@@ -437,11 +441,15 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                   case 'image': {
                     const parseImageValue = (v: any) => {
                       if (!v) return null;
-                      if (typeof v === 'object' && v !== null && (v.kind === 'media' || v.kind === 'clip')) return v;
+                      if (typeof v === 'object' && v !== null) {
+                        if ((v as any).kind === 'media' || (v as any).kind === 'clip') return v;
+                        if ((v as any).clipId || (v as any).src || (v as any).type) return v;
+                      }
                       if (typeof v === 'string') {
                         try {
                           const obj = JSON.parse(v);
                           if (obj && (obj.kind === 'media' || obj.kind === 'clip')) return obj;
+                          if (obj && (obj.clipId || obj.src || obj.type)) return obj;
                         } catch {}
                         return { kind: 'media', assetUrl: v } as any;
                       }
@@ -469,15 +477,15 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                         const end = Math.max(start + 1, Math.round(Number(obj?.endFrame ?? start + 1)));
                         return { ...obj, startFrame: start, endFrame: end };
                       };
-                      if (typeof v === 'object' && v !== null && (v.kind === 'media' || v.kind === 'clip')) {
-                        return coerceRange(v);
+                      if (typeof v === 'object' && v !== null) {
+                        if ((v as any).kind === 'media' || (v as any).kind === 'clip') return coerceRange(v);
+                        if ((v as any).clipId || (v as any).src || (v as any).type) return coerceRange(v);
                       }
                       if (typeof v === 'string') {
                         try {
                           const parsed = JSON.parse(v);
-                          if (parsed && (parsed.kind === 'media' || parsed.kind === 'clip')) {
-                            return coerceRange(parsed);
-                          }
+                          if (parsed && (parsed.kind === 'media' || parsed.kind === 'clip')) return coerceRange(parsed);
+                          if (parsed && (parsed.clipId || parsed.src || parsed.type)) return coerceRange(parsed);
                         } catch {}
                       }
                       return null;
@@ -497,6 +505,43 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                       />
                     );
                   }
+              case 'audio': {
+                const parseAudioValue = (v: any) => {
+                  if (!v) return null;
+                  const coerceRange = (obj: any) => {
+                    const start = Math.max(0, Math.round(Number(obj?.startFrame ?? 0)));
+                    const end = Math.max(start + 1, Math.round(Number(obj?.endFrame ?? start + 1)));
+                    return { ...obj, startFrame: start, endFrame: end };
+                  };
+                  if (typeof v === 'object' && v !== null) {
+                    if ((v as any).kind === 'media' || (v as any).kind === 'clip') return coerceRange(v);
+                    if ((v as any).clipId || (v as any).src || (v as any).type) return coerceRange(v);
+                  }
+                  if (typeof v === 'string') {
+                    try {
+                      const parsed = JSON.parse(v);
+                      if (parsed && (parsed.kind === 'media' || parsed.kind === 'clip')) return coerceRange(parsed);
+                      if (parsed && (parsed.clipId || parsed.src || parsed.type)) return coerceRange(parsed);
+                    } catch {}
+                    return null;
+                  }
+                  return null;
+                };
+                const currentVal: any = parseAudioValue(input?.value ?? input?.default);
+
+                return (
+                  <AudioInput
+                    inputId={inputId}
+                    clipId={clipId}
+                    key={inputId}
+                    label={input?.label || 'Audio'}
+                    description={input?.description}
+                    value={currentVal}
+                    panelSize={panelSize - 64}
+                    onChange={(v) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
+                  />
+                );
+              }
                   
                   default:
                     return null;

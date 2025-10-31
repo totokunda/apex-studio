@@ -1,52 +1,47 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDndMonitor } from '@dnd-kit/core';
 import Droppable from '@/components/dnd/Droppable';
-import { MdMovie } from 'react-icons/md';
+import { MdAudiotrack } from 'react-icons/md';
 import { cn } from '@/lib/utils';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@radix-ui/react-tabs';
 import { LuPause, LuPlay, LuSearch, LuUpload } from 'react-icons/lu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { MediaItem, MediaThumb } from '@/components/media/Item';
 import { getMediaInfo } from '@/lib/media/utils';
-import { listConvertedMedia } from '@app/preload';
+import { getPathForFile, listConvertedMedia } from '@app/preload';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import TimelineSearch from './timeline/TimelineSearch';
 import { useClipStore } from '@/lib/clip';
 import { useAssetControlsStore } from '@/lib/assetControl';
-import TimelineClipPosterPreview from './TimelineClipPosterPreview';
-import { AnyClipProps, VideoClipProps } from '@/lib/types';
-import { DEFAULT_FPS, VIDEO_EXTS } from '@/lib/settings';
-import { getLowercaseExtension, importMediaPaths, pickMediaPaths, getPathForFile } from '@app/preload';
+import { AnyClipProps, AudioClipProps } from '@/lib/types';
+import { AUDIO_EXTS, DEFAULT_FPS } from '@/lib/settings';
+import { getLowercaseExtension, importMediaPaths, pickMediaPaths } from '@app/preload';
 import { useViewportStore } from '@/lib/viewport';
 import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/library';
 import TimelineSelector from './timeline/TimelineSelector';
 import { useInputControlsStore } from '@/lib/inputControl';
 import { useControlsStore } from '@/lib/control';
-import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store';
+import AudioPreview from '@/components/preview/clips/AudioPreview';
 
-export type VideoSelection = AnyClipProps | null;
+export type AudioSelection = AudioClipProps | null;
 
-interface VideoInputProps {
+interface AudioInputProps {
   label?: string;
   description?: string;
   inputId: string;
-  value: VideoSelection;
-  onChange: (value: VideoSelection) => void;
+  value: AudioSelection;
+  onChange: (value: AudioSelection) => void;
   clipId: string;
   panelSize: number;
-  preprocessorRef?: string;
-  preprocessorName?: string;
-  applyPreprocessorInitial?: boolean;
-  onChangeComposite?: (value: { selection: VideoSelection; preprocessor_ref?: string; preprocessor_name?: string; apply_preprocessor?: boolean }) => void;
 }
 
-interface PopoverVideoProps {
-  value: VideoSelection;
-  onChange: (value: VideoSelection) => void;
+interface PopoverAudioProps {
+  value: AudioSelection;
+  onChange: (value: AudioSelection) => void;
   clipId: string | null;
 }
 
-const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) => {
+const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) => {
   const isUserInteractingRef = useRef(false);
   const [selectedTab, setSelectedTab] = useState<'timeline' | 'library'>('library');
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
@@ -81,7 +76,7 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) 
             mediaInfo: infos[idx],
             hasProxy: it.hasProxy,
           }))
-          .filter((media) => media.type === 'video')
+          .filter((media) => media.type === 'audio')
           .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
         setMediaItems(results);
       } catch {
@@ -97,10 +92,10 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) 
   const handleUpload = useCallback(async () => {
     try {
       const filters = [
-        { name: 'Video Files', extensions: VIDEO_EXTS },
+        { name: 'Audio Files', extensions: AUDIO_EXTS },
       ];
-      const picked = await pickMediaPaths({ directory: false, filters, title: 'Choose video file(s) to import' });
-      const paths = (picked ?? []).filter((p) => VIDEO_EXTS.includes(getLowercaseExtension(p)));
+      const picked = await pickMediaPaths({ directory: false, filters, title: 'Choose audio file(s) to import' });
+      const paths = (picked ?? []).filter((p) => AUDIO_EXTS.includes(getLowercaseExtension(p)));
       if (paths.length === 0) return;
       const before = await listConvertedMedia();
       const existingNames = new Set(before.map((it) => it.name));
@@ -118,7 +113,7 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) 
           mediaInfo: infos[idx],
           hasProxy: it.hasProxy,
         }))
-        .filter((media) => media.type === 'video')
+        .filter((media) => media.type === 'audio')
         .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
       setMediaItems(results);
 
@@ -127,16 +122,14 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) 
         const first = newlyAdded[0];
         const durationFrames = Math.max(1, Math.floor((first.mediaInfo?.duration || 0) * fps));
         clearSelectedAsset();
-        const clip: VideoClipProps = {
-          type: 'video',
+        const clip: AudioClipProps = {
+          type: 'audio',
           clipId: `media:${first.assetUrl}`,
           src: first.assetUrl,
           startFrame: 0,
           endFrame: Math.max(1, durationFrames),
-          preprocessors: [],
-          masks: [],
-        } as any;
-        onChange(clip as AnyClipProps);
+        }
+        onChange(clip);
       }
       bumpMediaLibraryVersion();
     } catch {
@@ -152,7 +145,7 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) 
     const clip = getClipById(selectedClipId) as AnyClipProps | undefined;
     if (!clip || clip.type === 'audio') return;
     const clipDuration = Math.max(1, (clip.endFrame ?? 0) - (clip.startFrame ?? 0));
-    onChange({ ...clip, startFrame: 0, endFrame: clipDuration } as AnyClipProps);
+    onChange({ ...clip, startFrame: 0, endFrame: clipDuration, type:'audio' } as AudioClipProps);
   }, [getClipById, onChange]);
 
   const renderMediaLibrary = () => (
@@ -162,7 +155,7 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) 
           <LuSearch className="w-3.5 h-3.5 text-brand-light/50 absolute left-2 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search for video"
+            placeholder="Search for audio"
             className="w-full h-full pl-8 text-brand-light text-[10.5px] font-normal bg-brand rounded-[7px] border border-brand-light/10 p-2 outline-none"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -182,16 +175,14 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) 
                   if (isSelected) {
                     onChange(null);
                   } else {
-                    const clip: VideoClipProps = {
-                      type: 'video',
+                    const clip: AudioClipProps = {
+                      type: 'audio',
                       clipId: `media:${media.assetUrl}`,
                       src: media.assetUrl,
                       startFrame: 0,
                       endFrame: durationFrames,
-                      preprocessors: [],
-                      masks: [],
-                    }
-                    onChange(clip as AnyClipProps);
+                    } as any;
+                    onChange(clip);
                   }
                 }}
                 className={cn(
@@ -287,14 +278,14 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({ value, onChange, clipId }) 
         </div>
         <TabsContent value="library">{renderMediaLibrary()}</TabsContent>
         <TabsContent value="timeline" className="outline-none">
-          <TimelineSearch types={['image', 'video', 'group', 'text', 'shape', 'draw']} excludeClipId={clipId || undefined} />
+          <TimelineSearch types={['audio']} excludeClipId={clipId || undefined} />
         </TabsContent>
       </Tabs>
     </PopoverContent>
   );
 };
 
-const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, value, onChange, clipId, panelSize, preprocessorRef, preprocessorName, applyPreprocessorInitial, onChangeComposite }) => {
+const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, value, onChange, clipId, panelSize }) => {
 
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -302,26 +293,10 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
   const [isOverDropZone, setIsOverDropZone] = useState(false);
   const externalDragCounterRef = useRef(0);
   
-  const getClipById = useClipStore((s) => s.getClipById);
-  const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
-  const { preprocessors, load } = usePreprocessorsListStore();
-  useEffect(() => {
-    if (preprocessorRef) {
-      void load();
-    }
-  }, [preprocessorRef, load]);
-  const resolvedPreprocessorName = useMemo(() => {
-    if (!preprocessorRef) return preprocessorName;
-    const found = (preprocessors || []).find(p => p.id === preprocessorRef);
-    return found?.name || preprocessorName || preprocessorRef;
-  }, [preprocessors, preprocessorRef, preprocessorName]);
-  
   const {
     clearSelectedAsset,
   } = useAssetControlsStore();
 
-
-  
 
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   
@@ -362,46 +337,10 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     return Number.isFinite(r) && r > 0 ? r : 1;
   }, [aspectRatio.width, aspectRatio.height]);
 
-  // Preprocessor toggle state and default
-  const [applyPreprocessor, setApplyPreprocessor] = useState<boolean>(true);
-  useEffect(() => {
-    if (typeof applyPreprocessorInitial === 'boolean') {
-      setApplyPreprocessor(applyPreprocessorInitial);
-      return;
-    }
-    if (!preprocessorRef) {
-      setApplyPreprocessor(true);
-      return;
-    }
-    const sel = value as AnyClipProps | null;
-    if (sel) {
-      const clip = sel;
-      if (clip && (clip.type === 'video' || clip.type === 'image')) {
-        const exists = (getPreprocessorsForClip(clip.clipId) || []).some(p => (p.preprocessor?.id || '') === preprocessorRef);
-        setApplyPreprocessor(!exists);
-        return;
-      }
-    }
-    setApplyPreprocessor(true);
-  }, [value, preprocessorRef, applyPreprocessorInitial, getClipById, getPreprocessorsForClip]);
+  const emitSelection = useCallback((next: AudioSelection) => {
+    onChange(next);
+  }, [onChange]);
 
-  const emitSelection = useCallback((next: VideoSelection) => {
-    if (onChangeComposite) {
-      onChangeComposite({ selection: next, preprocessor_ref: preprocessorRef, preprocessor_name: resolvedPreprocessorName, apply_preprocessor: applyPreprocessor });
-    } else {
-      onChange(next);
-    }
-  }, [onChangeComposite, onChange, preprocessorRef, resolvedPreprocessorName, applyPreprocessor]);
-
-  const handleToggleApply = useCallback(() => {
-    const next = !applyPreprocessor;
-    setApplyPreprocessor(next);
-    if (onChangeComposite) {
-      onChangeComposite({ selection: value ?? null, preprocessor_ref: preprocessorRef, preprocessor_name: resolvedPreprocessorName, apply_preprocessor: next });
-    }
-  }, [applyPreprocessor, onChangeComposite, value, preprocessorRef, resolvedPreprocessorName]);
-
-  
 
   useEffect(() => {
     const el = stageContainerRef.current;
@@ -415,7 +354,6 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     return () => obs.disconnect();
   }, [panelSize, viewportRatio]);
 
-  
 
   useEffect(() => {
     setStageSize((prev) => ({
@@ -429,8 +367,6 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     const endRaw = Math.max(start + 1, Math.round(selectedRangeTuple?.[1] ?? start + 1));
     return [start, endRaw];
   }, [selectedRangeTuple?.[0], selectedRangeTuple?.[1]]);
-
-  
 
   const rangeSummary = useMemo(() => {
     const start = rangeStartForInput;
@@ -467,8 +403,8 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     onDragMove: (event) => {
       const data = event.active?.data?.current as MediaItem | undefined;
       const overId = event.over?.id as string | undefined;
-      const isValid = !!data && data.type === 'video';
-      setIsOverDropZone(isValid && overId === 'video-input');
+      const isValid = !!data && data.type === 'audio';
+      setIsOverDropZone(isValid && overId === 'audio-input');
     },
     onDragCancel: () => {
       setIsOverDropZone(false);
@@ -476,34 +412,30 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     onDragEnd: (event) => {
       const data = event.active?.data?.current as MediaItem | undefined;
       const overId = event.over?.id as string | undefined;
-      const isValid = !!data && data.type === 'video';
-      if (isValid && overId === 'video-input') {
+      const isValid = !!data && data.type === 'audio';
+      if (isValid && overId === 'audio-input') {
         clearSelectedAsset();
         void (async () => {
           try {
             const info = data.mediaInfo ?? await getMediaInfo(data.assetUrl);
             const durationFrames = Math.max(1, Math.floor((info?.duration || 0) * fps));
-            const clip: VideoClipProps = {
-              type: 'video',
+            const clip: AudioClipProps = {
+              type: 'audio',
               clipId: `media:${data.assetUrl}`,
               src: data.assetUrl,
               startFrame: 0,
               endFrame: durationFrames,
-              preprocessors: [],
-              masks: [],
-            } as any;
-            emitSelection(clip as AnyClipProps);
+            }
+            emitSelection(clip);
           } catch {
-            const clip: VideoClipProps = {
-              type: 'video',
+            const clip: AudioClipProps = {
+              type: 'audio',
               clipId: `media:${data?.assetUrl || ''}`,
               src: data?.assetUrl || '',
               startFrame: 0,
               endFrame: 1,
-              preprocessors: [],
-              masks: [],
-            } as any;
-            emitSelection(clip as AnyClipProps);
+            }
+            emitSelection(clip);
           }
         })();
       }
@@ -544,11 +476,11 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     if (files.length !== 1) return;
     let path: string | undefined;
     try {
-      path = getPathForFile(files[0]);
+      path = getPathForFile(files[0]);  
     } catch {}
     if (!path) return;
     const ext = getLowercaseExtension(path);
-    if (!VIDEO_EXTS.includes(ext)) return;
+    if (!AUDIO_EXTS.includes(ext)) return;
     try {
       const before = await listConvertedMedia();
       const existingNames = new Set(before.map((it) => it.name));
@@ -566,22 +498,22 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
           mediaInfo: infos[idx],
           hasProxy: it.hasProxy,
         }))
-        .filter((media) => media.type === 'video')
+        .filter((media) => media.type === 'audio')
         .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
       const newlyAdded = results.filter((it) => !existingNames.has(it.name));
       if (newlyAdded.length > 0) {
         const first = newlyAdded[0];
+        
         const durationFrames = Math.max(1, Math.floor((first.mediaInfo?.duration || 0) * fps));
+
         clearSelectedAsset();
-        const clip: VideoClipProps = {
-          type: 'video',
+        const clip: AudioClipProps = {
+          type: 'audio',
           clipId: `media:${first.assetUrl}`,
           src: first.assetUrl,
           startFrame: 0,
           endFrame: durationFrames,
-          preprocessors: [],
-          masks: [],
-        } as any;
+        }
         emitSelection(clip);
       }
       bumpMediaLibraryVersion();
@@ -601,7 +533,6 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
       if (currentRangeStart !== desiredStart || currentRangeEnd !== desiredEnd) {
         setInputSelectedRange(desiredStart, desiredEnd, inputId);
       }
-
 
       if (typeof opts?.fps === 'number') {
         const currentFps = store.getFps(inputId);
@@ -635,7 +566,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     lastEmittedRangeRef.current = `${requestedStartFrame}-${requestedEndFrame}:${selectionKey}`;
 
     const clip = value as AnyClipProps;
-    const isMediaVideo = clip.type === 'video' && typeof (clip as any)?.src === 'string' && String(clip.clipId || '').startsWith('media:');
+    const isMediaAudio = clip.type === 'audio' && typeof (clip as any)?.src === 'string' && String(clip.clipId || '').startsWith('media:');
 
     const applyWithDuration = (durationFrames: number, fpsToUse?: number) => {
       const desiredStart = Math.max(0, Math.min(durationFrames - 1, requestedStartFrame));
@@ -659,7 +590,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
       });
     };
 
-    if (isMediaVideo) {
+    if (isMediaAudio) {
       const cachedDur = durationCacheByClipIdRef.current[clip.clipId];
       const cachedFps = fpsCacheByClipIdRef.current[clip.clipId];
       if (typeof cachedDur === 'number' && cachedDur > 0 && typeof cachedFps === 'number' && cachedFps > 0) {
@@ -701,7 +632,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
       ...(value as AnyClipProps),
       startFrame: normalizedStart,
       endFrame: normalizedEnd,
-    } as AnyClipProps);
+    } as AudioClipProps);
   }, [
     rangeStartForInput,
     rangeEndForInput,
@@ -720,14 +651,6 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
       setInputFocusFrame(clampedFocus, inputId);
     }
   }, [selectedRangeTuple, focusFrameForInput, inputId, setInputFocusFrame]);
-
-  
-
-  // Local RAF playback removed; store-managed playback handles focus updates
-
- 
-
-  
 
   const previewClip = useMemo<AnyClipProps | null>(() => {
     if (!value) return null;
@@ -751,12 +674,12 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     store.play(inputId);
   }, [previewClip, isPlaying, rangeStartForInput, rangeEndForInput, inputId, setFocusFrame]);
 
-  const showTimeline = Boolean(previewClip && (previewClip.type === 'video' || previewClip.type === 'group'));
+  const showTimeline = Boolean(previewClip && (previewClip.type === 'audio' || previewClip.type === 'group'));
 
   const playDisabled = !previewClip || rangeEndForInput <= rangeStartForInput;
 
   return (
-    <Droppable className="w-full h-full" id="video-input" accepts={['media']}>
+    <Droppable className="w-full h-full" id="audio-input" accepts={['media']}>
       <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-auto">
         <div className="w-full h-full flex flex-col items-start justify-start p-3">
           <div className="w-full flex flex-col items-start justify-start mb-3">
@@ -776,7 +699,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                 onDragOver={handleExternalDragOver}
                 onDragLeave={handleExternalDragLeave}
                 onDrop={handleExternalDrop}
-                style={{ height: stageSize.h }}
+                
                 className={cn(
                   'w-full flex flex-col items-center justify-center gap-y-3 shadow-accent hover:opacity-70 cursor-pointer relative overflow-hidden',
                   value ? '' : 'border-dashed',
@@ -789,16 +712,10 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                 {value ? (
                   stageSize.w > 0 && stageSize.h > 0 ? (
                     previewClip ? (
-                      <TimelineClipPosterPreview
-                        key={previewClip.clipId}
-                        clip={previewClip}
-                        width={stageSize.w}
-                        height={stageSize.h}
-                        inputId={inputId}
-                      />
+                     <AudioPreview key={previewClip.clipId} {...(previewClip as AudioClipProps)} overrideClip={previewClip as AudioClipProps} inputMode={true} inputId={inputId} overlap={true} rectWidth={stageSize.w} rectHeight={stageSize.h} />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-brand-light/70 text-[12px]">
-                        Unable to preview clip.
+                        Unable to preview audio file.
                       </div>
                     )
                   ) : (
@@ -808,15 +725,15 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                   )
                 ) : (
                   <>
-                    <MdMovie className="w-10 h-10 text-brand-light" />
+                    <MdAudiotrack className="w-10 h-10 text-brand-light" />
                     <span className="text-brand-light text-[11px] w-full text-center font-medium">
-                      Click or drag and drop a video here.
+                      Click or drag and drop a audio file here.
                     </span>
                   </>
                 )}
               </div>
             </PopoverTrigger>
-            <PopoverVideo value={value} onChange={emitSelection} clipId={clipId} />
+            <PopoverAudio value={value} onChange={emitSelection} clipId={clipId} />
           </Popover>
           {showTimeline && value && (
             <div className="w-full flex flex-col gap-y-2 mt-3">
@@ -846,32 +763,10 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
               />
             </div>
           )}
-          {preprocessorRef && (
-            <div className=" flex flex-row-reverse items-center gap-x-3 justify-between">
-              <span className="text-brand-light text-[10px] font-medium">Apply {resolvedPreprocessorName}</span>
-              <button
-                type="button"
-                aria-pressed={applyPreprocessor}
-                aria-label={applyPreprocessor ? 'Disable' : 'Enable'}
-                onClick={handleToggleApply}
-                className={cn(
-                  'relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none',
-                  applyPreprocessor ? 'bg-blue-600' : 'bg-brand-background border border-brand-light/10'
-                )}
-              >
-                <span
-                  className={cn(
-                    'inline-block h-4 w-4 transform rounded-full bg-brand-light shadow transition-transform',
-                    applyPreprocessor ? 'translate-x-4.5' : 'translate-x-0.5'
-                  )}
-                />
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </Droppable>
   );
 };
 
-export default VideoInput;
+export default AudioInput;

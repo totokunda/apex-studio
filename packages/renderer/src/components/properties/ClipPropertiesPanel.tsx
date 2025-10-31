@@ -366,9 +366,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       )}
 
     {hasModel && (
-        <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 80, pointerEvents: 'auto' }}>
+        <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 50, pointerEvents: 'auto' }}>
           <button
-          
+
             className="w-full py-2.5 px-6 rounded-lg font-medium text-[12px] flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90"
             style={{
               backgroundColor: preprocessor?.status === 'running' ? '#DC2626' : '#A477C4',

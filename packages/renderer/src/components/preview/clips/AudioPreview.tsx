@@ -1,20 +1,40 @@
 import React, {  useCallback, useEffect, useMemo, useRef } from 'react';
 import { useControlsStore } from '@/lib/control';
+import { useInputControlsStore } from '@/lib/inputControl';
 import { AnyClipProps, MediaInfo, AudioClipProps } from '@/lib/types';
 import { getMediaInfo, getMediaInfoCached } from '@/lib/media/utils';
 import { getAudioIterator } from '@/lib/media/audio';
 import { WrappedAudioBuffer } from 'mediabunny';
+import type { BaseClipApplicator } from './apply/base';
 
 type ClipWithSrc = Extract<AnyClipProps, { src: string }>;
 
 // Schedules audio playback for a clip in sync with the timeline. Renders nothing.
-const AudioPreview: React.FC<ClipWithSrc & {framesToPrefetch?: number}> = (props) => {
+const AudioPreview: React.FC<
+  ClipWithSrc & {
+    framesToPrefetch?: number,
+    rectWidth?: number,
+    rectHeight?: number,
+    applicators?: BaseClipApplicator[],
+    overlap?: boolean,
+    overrideClip?: AudioClipProps,
+    inputMode?: boolean,
+    inputId?: string,
+  }
+> = (props) => {
   const { src, startFrame = 0, trimStart, volume = 0, fadeIn = 0, fadeOut = 0, speed: _speed } = props as AudioClipProps;
+  const { inputMode = false, inputId } = props as { inputMode?: boolean; inputId?: string };
   const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
-  const fps = useControlsStore((s) => s.fps);
-  const focusFrame = useControlsStore((s) => s.focusFrame);
+  const fpsFromControls = useControlsStore((s) => s.fps);
+  const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId));
+  const fps = inputMode ? fpsFromInputs : fpsFromControls;
+  const focusFrameFromControls = useControlsStore((s) => s.focusFrame);
+  const focusFrameFromInputs = useInputControlsStore((s) => s.getFocusFrame(inputId));
+  const focusFrame = inputMode ? focusFrameFromInputs : focusFrameFromControls;
   const currentFrame = useMemo(() => focusFrame - startFrame + (trimStart || 0), [focusFrame, startFrame, trimStart]);
-  const isPlaying = useControlsStore((s) => s.isPlaying);
+  const isPlayingFromControls = useControlsStore((s) => s.isPlaying);
+  const isPlayingFromInputs = useInputControlsStore((s) => s.getIsPlaying(inputId));
+  const isPlaying = inputMode ? isPlayingFromInputs : isPlayingFromControls;
   const prevIsPlayingRef = useRef<boolean>(isPlaying);
   const startTimeRef = useRef(0);
   const iteratorRef = useRef<AsyncIterable<WrappedAudioBuffer | null> | null>(null);
