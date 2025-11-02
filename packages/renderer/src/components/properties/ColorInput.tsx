@@ -157,7 +157,7 @@ const ColorInput: React.FC<ColorInputProps> = ({ value, onChange, label, percent
 
   return ( 
   <div className="flex flex-col items-start w-full gap-y-1 min-w-0">
-    {label && <label className={cn(`text-brand-light text-[12px] w-full text-start mb-0.5`, labelClass)}>{label}</label>}
+    {label && <label className={cn(`text-brand-light text-[10.5px] font-medium w-full text-start mb-0.5`, labelClass)}>{label}</label>}
     <div className="flex flex-row relative w-full">
       <Popover>
         <PopoverTrigger>

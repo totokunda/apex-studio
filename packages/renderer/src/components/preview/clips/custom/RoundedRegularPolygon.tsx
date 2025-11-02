@@ -1,6 +1,7 @@
 import React from 'react';
 import { RegularPolygon } from 'react-konva';
 import Konva from 'konva';
+import { BaseClipApplicator } from '../apply/base';
 
 interface RoundedRegularPolygonProps {
   x: number;
@@ -19,6 +20,8 @@ interface RoundedRegularPolygonProps {
   onDragMove?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
   onDragEnd?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
   onClick?: () => void;
+  filters?: any[];
+  applicators?: BaseClipApplicator[];
 }
 
 const RoundedRegularPolygon = React.forwardRef<Konva.Shape, RoundedRegularPolygonProps>(
@@ -40,6 +43,8 @@ const RoundedRegularPolygon = React.forwardRef<Konva.Shape, RoundedRegularPolygo
       onDragMove,
       onDragEnd,
       onClick,
+      filters,
+      applicators,
     } = props;
 
     const getPoints = (r: number, s: number) => {
@@ -145,6 +150,10 @@ const RoundedRegularPolygon = React.forwardRef<Konva.Shape, RoundedRegularPolygo
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onClick={onClick}
+        //@ts-ignore
+        filters={filters}
+        //@ts-ignore
+        applicators={applicators}
         
       />
     );

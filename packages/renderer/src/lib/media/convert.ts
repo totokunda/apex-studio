@@ -15,7 +15,6 @@ export const convertMediaTo24Fps = async (mediaInfo: MediaInfo) => {
         format: new Mp4OutputFormat(),
         target: new BufferTarget(),
     });
-    console.log(output, input);
     const conversion = await Conversion.init({
         input: input,
         output,

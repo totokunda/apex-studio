@@ -527,8 +527,8 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                   }
                   return null;
                 };
+                
                 const currentVal: any = parseAudioValue(input?.value ?? input?.default);
-
                 return (
                   <AudioInput
                     inputId={inputId}

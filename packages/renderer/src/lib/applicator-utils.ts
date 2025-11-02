@@ -128,6 +128,11 @@ export function createApplicatorFromClip(
             
             const filterApplicator = new FilterPreview(clip as FilterClipProps);
             filterApplicator.setHaldClutInstance(config.haldClutInstance);
+            const intensity = (clip as FilterClipProps).intensity;
+            if (typeof intensity === 'number' && Number.isFinite(intensity)) {
+                const normalized = Math.max(0, Math.min(1, intensity / 100));
+                filterApplicator.setStrength(normalized);
+            }
             return filterApplicator;
         }
         

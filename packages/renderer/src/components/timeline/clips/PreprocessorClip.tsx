@@ -42,10 +42,10 @@ interface PropsPreprocessorClip {
     clipOverride?: PreprocessorClipType;
     clipWidthOverride?: number;
     inputId?: string;
-
+    timelineDuration?: [number, number];
 }
 
-export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, isDragging, assetMode, inputMode = false, clipOverride,clipWidthOverride, inputId}) => {
+export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:inputPreprocessor, currentStartFrame, currentEndFrame, timelineWidth,  clipPosition, timelineHeight,  cornerRadius, clipId, timelinePadding, timelineDuration:timelineDurationOverride, isDragging, assetMode, inputMode = false, clipOverride,clipWidthOverride, inputId}) => {
     
     const ctrlTimelineDuration = useControlsStore((s) => s.timelineDuration)
     const ctrlSetSelectedClipIds = useControlsStore((s) => s.setSelectedClipIds)
@@ -54,9 +54,12 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const inputTimelineDuration = timelineDurationByInputId[inputId ?? ''] ?? [0, 10];
     const setSelectedAssetClipId = useAssetControlsStore((s) => s.setSelectedAssetClipId)
     let timelineDuration = useMemo(() => {
+        if (timelineDurationOverride) {
+            return timelineDurationOverride;
+        }
         let duration = inputMode ? inputTimelineDuration : (assetMode ? assetTimelineDuration : ctrlTimelineDuration);
         return duration;
-    }, [inputMode, assetMode, inputTimelineDuration, assetTimelineDuration, ctrlTimelineDuration, clipOverride, currentStartFrame, currentEndFrame]);
+    }, [inputMode, assetMode, inputTimelineDuration, assetTimelineDuration, ctrlTimelineDuration, clipOverride, currentStartFrame, currentEndFrame, timelineDurationOverride]);
     const removePreprocessorFromClip = useClipStore((s) => s.removePreprocessorFromClip);
     const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
     const getClipFromPreprocessorId = useClipStore((s) => s.getClipFromPreprocessorId);
@@ -86,6 +89,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             return clipWidth;
         }
         return Math.max((preprocessorDuration / clipDuration) * clipWidth, 3);
+
     }, [preprocessorDuration, clipDuration, clipWidth, clip?.type]);
     const selectedPreprocessorId = useClipStore((s) => s.selectedPreprocessorId);
     const setSelectedPreprocessorId = useClipStore((s) => s.setSelectedPreprocessorId);

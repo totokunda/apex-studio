@@ -18,7 +18,8 @@ export const generateTimelineThumbnailAudio = async (
 ) => {
     if (clipType !== 'audio') return;
     const speed = Math.max(0.1, Math.min(5, Number((currentClip as any)?.speed ?? 1)));
-    
+
+
     const width = mediaInfoRef?.stats.audio?.averagePacketRate ?? 1;
     const height = timelineHeight;
     const timelineShift = currentStartFrame - (currentClip.trimStart ?? 0);

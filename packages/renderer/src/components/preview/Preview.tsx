@@ -1,6 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Group, Rect, Line as KonvaLine, Ellipse as KonvaEllipse, RegularPolygon, Star as KonvaStar, Circle } from 'react-konva';
+import { Stage, Layer, Group, Rect, Line as KonvaLine, Ellipse as KonvaEllipse, RegularPolygon, Star as KonvaStar, Circle, Transformer } from 'react-konva';
 import { useViewportStore } from '@/lib/viewport';
 import { getLocalFrame, useClipStore } from '@/lib/clip';
 import { KonvaEventObject } from 'konva/lib/Node';
@@ -114,6 +114,8 @@ const Preview:React.FC<PreviewProps> = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<any>(null);
   const layerRef = useRef<any>(null);
+  const aspectRectRef = useRef<any>(null);
+  const transformerRef = useRef<any>(null);
   const prevRectRef = useRef<{ w: number; h: number } | null>(null);
   const scale = useViewportStore((s) => s.scale);
   const position = useViewportStore((s) => s.position);
@@ -124,6 +126,8 @@ const Preview:React.FC<PreviewProps> = () => {
   const setViewportSize = useViewportStore((s) => s.setViewportSize);
   const setContentBounds = useViewportStore((s) => s.setContentBounds);
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
+  const isAspectEditing = useViewportStore((s) => s.isAspectEditing);
+  const setAspectRatio = useViewportStore((s) => s.setAspectRatio);
   const {clips, clipWithinFrame, timelines, addClip, addTimeline, updateClip} = useClipStore();
   const getClipTransform = useClipStore((s) => s.getClipTransform);
   // Note: we use imperative store access in the recenter effect to avoid rerender loops
@@ -146,6 +150,17 @@ const Preview:React.FC<PreviewProps> = () => {
   const eraserPointsRef = useRef<Array<{ x: number; y: number }>>([]);
   const lastEraserPosRef = useRef<{ x: number; y: number } | null>(null);
   const [cursorPreview, setCursorPreview] = useState<{ x: number; y: number } | null>(null);
+  // Temp buffered drawing (brush/highlighter) before committing on mouse up
+  const [tempDrawingPoints, setTempDrawingPoints] = useState<number[] | null>(null);
+  const tempDrawingStyleRef = useRef<{
+    tool: 'brush' | 'highlighter';
+    stroke: string;
+    strokeWidth: number;
+    opacity: number;
+    smoothing: any;
+  } | null>(null);
+  // Temp erased lines preview for eraser (immediate visual, persist on mouse up)
+  const [tempErased, setTempErased] = useState<{ clipId: string; lines: DrawingLine[] } | null>(null);
   
   // Mask tool state
   const maskTool = useMaskStore((s) => s.tool);
@@ -362,6 +377,17 @@ const Preview:React.FC<PreviewProps> = () => {
     useViewportStore.getState().centerOnWorldPoint(rectWorld, { width: size.width, height: size.height });
   }, [size.width, size.height, rectWidth, rectHeight, isFullscreen]);
 
+  // Attach transformer to aspect rect when editing
+  useEffect(() => {
+    if (!isAspectEditing) return;
+    const tr = transformerRef.current;
+    const node = aspectRectRef.current;
+    if (tr && node) {
+      tr.nodes([node]);
+      tr.getLayer()?.batchDraw();
+    }
+  }, [isAspectEditing, rectWidth, rectHeight]);
+
   // Recenter all clips when rect size changes (but not on initial render)
   useEffect(() => {
     if (!rectWidth || !rectHeight || isFullscreen) return;
@@ -410,7 +436,7 @@ const Preview:React.FC<PreviewProps> = () => {
   const isPanning = useRef(false);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const currentDrawingClipId = useRef<string | null>(null);
-
+  const activeDrawingToolRef = useRef<'brush' | 'highlighter' | 'eraser' | null>(null);
 
 
   const onMouseDown = useCallback((e: any) => {
@@ -650,18 +676,20 @@ const Preview:React.FC<PreviewProps> = () => {
       const worldY = (pointerPos.y - position.y) / scale;
       
       isDrawingRef.current = true;
+      activeDrawingToolRef.current = drawingTool;
       
       // Check if there's already a drawing clip at the current frame
       const existingDrawingClip = clips.find(
         (c) => c.type === 'draw' && clipWithinFrame(c, focusFrame)
       ) as DrawingClipProps | undefined;
       
-      // Handle eraser tool separately - no line creation, just collect points
+      // Handle eraser tool separately - live erasing, no buffering
       if (drawingTool === 'eraser') {
         if (!existingDrawingClip) {
           // Eraser needs existing clip to work with
           isDrawingRef.current = false;
           currentDrawingClipId.current = null;
+          activeDrawingToolRef.current = null;
           return;
         }
         
@@ -671,102 +699,18 @@ const Preview:React.FC<PreviewProps> = () => {
         return;
       }
       
+      // Buffer brush/highlighter points and style; commit on mouse up
+      setTempErased(null);
       const lineId = uuidv4();
       setCurrentLineId(lineId);
-      
-      if (existingDrawingClip) {
-        currentDrawingClipId.current = existingDrawingClip.clipId;
-        
-        // Add new line to existing clip
-        const newLine: DrawingLine = {
-          lineId,
-          tool: drawingTool,
-          points: [worldX, worldY],
-          stroke: drawingTool === 'highlighter' ? '#FFFF00' : drawingColor,
-          strokeWidth: getCurrentSize(),
-          opacity: drawingTool === 'highlighter' ? 50 : drawingOpacity,
-          smoothing: drawingSmoothing,
-          transform: {
-            x: 0,
-            y: 0,
-            scaleX: 1,
-            scaleY: 1,
-            rotation: 0,
-            opacity: 100,
-          },
-        };
-        
-        // Append new line to the end so it renders on top of older lines
-        const updatedLines = [...(existingDrawingClip.lines || []), newLine];
-        useClipStore.getState().updateClip(existingDrawingClip.clipId, { lines: updatedLines });
-      } else {
-        
-        // Create new drawing clip
-        let drawingTimeline = timelines.find((t) => t.type === 'draw');
-        
-        if (!drawingTimeline) {
-          drawingTimeline = {
-            timelineId: uuidv4(),
-            type: 'draw' as const,
-            timelineY: 0,
-            timelineHeight: 40,
-            timelineWidth: 0,
-            timelinePadding: 24,
-            muted: false,
-            hidden: false,
-          };
-          addTimeline(drawingTimeline, -1);
-        }
-        
-        const clipDuration = 3 * DEFAULT_FPS;
-        let proposedEndFrame = Math.min(focusFrame + clipDuration, totalTimelineFrames - 1);
-        
-        // Check for existing clips on the drawing timeline that would collide
-        const clipsOnDrawingTimeline = clips.filter((c) => c.timelineId === drawingTimeline!.timelineId);
-        for (const existingClip of clipsOnDrawingTimeline) {
-          const existingStart = existingClip.startFrame ?? 0;
-          // If an existing clip starts after our current frame but before our proposed end frame
-          if (existingStart > focusFrame && existingStart < proposedEndFrame) {
-            // Adjust our end frame to stop at the existing clip's start
-            proposedEndFrame = existingStart;
-          }
-        }
-        
-        const newClipId = uuidv4();
-        const newClip: DrawingClipProps = {
-          src: null,
-          clipId: newClipId,
-          type: 'draw' as const,
-          timelineId: drawingTimeline.timelineId,
-          startFrame: focusFrame,
-          endFrame: proposedEndFrame,
-          trimEnd: -Infinity,
-          trimStart: Infinity,
-          lines: [
-            {
-              lineId,
-              tool: drawingTool,
-              points: [worldX, worldY],
-              stroke: drawingTool === 'highlighter' ? '#FFFF00' : drawingColor,
-              strokeWidth: getCurrentSize(),
-              opacity: drawingTool === 'highlighter' ? 50 : drawingOpacity,
-              smoothing: drawingSmoothing,
-              transform: {
-                x: 0,
-                y: 0,
-                scaleX: 1,
-                scaleY: 1,
-                rotation: 0,
-                opacity: 100,
-              },
-            },
-          ],
-        };
-        
-        currentDrawingClipId.current = newClipId;
-        addClip(newClip);
-      }
-      
+      tempDrawingStyleRef.current = {
+        tool: drawingTool === 'highlighter' ? 'highlighter' : 'brush',
+        stroke: drawingTool === 'highlighter' ? '#FFFF00' : drawingColor,
+        strokeWidth: getCurrentSize(),
+        opacity: drawingTool === 'highlighter' ? 50 : drawingOpacity,
+        smoothing: drawingSmoothing,
+      };
+      setTempDrawingPoints([worldX, worldY]);
       return;
     }
 
@@ -1033,31 +977,19 @@ const Preview:React.FC<PreviewProps> = () => {
       const worldX = (pointerPos.x - position.x) / scale;
       const worldY = (pointerPos.y - position.y) / scale;
       
-      // Find the drawing clip that we're currently drawing on
-      const drawingClipId = currentDrawingClipId.current;
-      if (!drawingClipId) return;
-      
-      const drawingClip = useClipStore.getState().getClipById(drawingClipId) as DrawingClipProps | undefined;
-      if (!drawingClip || !drawingClip.lines) return;
-      
-      // Handle eraser tool - apply real-time erasing
-      if (drawingTool === 'eraser') {
+      // Handle eraser tool - compute immediate visual preview only; persist on mouse up
+      if (activeDrawingToolRef.current === 'eraser') {
         // Interpolate points between last position and current position to avoid gaps
         const lastPos = lastEraserPosRef.current;
         if (lastPos) {
           const dx = worldX - lastPos.x;
           const dy = worldY - lastPos.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          
-          // Add interpolated points if distance is significant (more than 2 pixels)
           if (dist > 2) {
-            const steps = Math.ceil(dist / 2); // Sample every ~2 pixels
+            const steps = Math.ceil(dist / 2);
             for (let i = 1; i <= steps; i++) {
               const t = i / steps;
-              eraserPointsRef.current.push({
-                x: lastPos.x + dx * t,
-                y: lastPos.y + dy * t,
-              });
+              eraserPointsRef.current.push({ x: lastPos.x + dx * t, y: lastPos.y + dy * t });
             }
           } else {
             eraserPointsRef.current.push({ x: worldX, y: worldY });
@@ -1065,67 +997,50 @@ const Preview:React.FC<PreviewProps> = () => {
         } else {
           eraserPointsRef.current.push({ x: worldX, y: worldY });
         }
-        
         lastEraserPosRef.current = { x: worldX, y: worldY };
-        
-        const eraserBaseRadius = getCurrentSize() / 2;
-        const worldEraserPts = eraserPointsRef.current;
-        
-        // Process all brush/highlighter lines
-        const updatedLines: DrawingLine[] = [];
-        
-        for (const line of drawingClip.lines) {
-          // Only erase brush and highlighter lines
-          if (line.tool !== 'brush' && line.tool !== 'highlighter') {
-            updatedLines.push(line);
-            continue;
-          }
-          
-          // Add the line's stroke width to the eraser radius for better coverage
-          const effectiveEraserRadius = eraserBaseRadius + (line.strokeWidth / 2);
-          
-          // Transform eraser points from world space to line's local space
-          const { localPts, localRadius } = transformEraserToLocal(
-            worldEraserPts,
-            line.transform,
-            effectiveEraserRadius
-          );
-          
-          // Apply erasing algorithm in local space
-          const splitPolylines = erasePolylineByEraser(line.points, localPts, localRadius);
-          
-          // Create new lines for each split segment (points are already in local space)
-          for (const polyline of splitPolylines) {
-            // Filter out segments with less than 2 points (less than 4 values in flat array)
-            if (polyline.length >= 4) {
-              updatedLines.push({
-                ...line,
-                lineId: uuidv4(), // New ID for split segment
-                points: polyline,
-              });
+
+        // Compute temporary erased result for visual feedback without persisting
+        const drawingClipId = currentDrawingClipId.current;
+        if (drawingClipId) {
+          const drawingClip = useClipStore.getState().getClipById(drawingClipId) as DrawingClipProps | undefined;
+          if (drawingClip && drawingClip.lines) {
+            const baseLines: DrawingLine[] = (tempErased && tempErased.clipId === drawingClip.clipId)
+              ? tempErased.lines
+              : drawingClip.lines;
+            const eraserBaseRadius = getCurrentSize() / 2;
+            const worldEraserPts = eraserPointsRef.current;
+            const updatedLines: DrawingLine[] = [];
+            for (const line of baseLines) {
+              if (line.tool !== 'brush' && line.tool !== 'highlighter') {
+                updatedLines.push(line);
+                continue;
+              }
+              const effectiveEraserRadius = eraserBaseRadius + (line.strokeWidth / 2);
+              const { localPts, localRadius } = transformEraserToLocal(
+                worldEraserPts,
+                line.transform,
+                effectiveEraserRadius
+              );
+              const splitPolylines = erasePolylineByEraser(line.points, localPts, localRadius);
+              for (const polyline of splitPolylines) {
+                if (polyline.length >= 4) {
+                  updatedLines.push({
+                    ...line,
+                    lineId: uuidv4(),
+                    points: polyline,
+                  });
+                }
+              }
             }
+            const mergedLines = mergeConnectedLines(updatedLines, false);
+            setTempErased({ clipId: drawingClip.clipId, lines: mergedLines });
           }
         }
-        
-        // Apply lightweight merging to reduce fragmentation (single pass)
-        const mergedLines = mergeConnectedLines(updatedLines, false);
-        
-        useClipStore.getState().updateClip(drawingClip.clipId, { lines: mergedLines });
         return;
       }
       
-      // Find the current line being drawn (brush/highlighter)
-      const currentLine = drawingClip.lines[drawingClip.lines.length - 1];
-      if (!currentLine) return;
-      
-      // Add point to the current line
-      const updatedLines = [...drawingClip.lines];
-      updatedLines[updatedLines.length - 1] = {
-        ...currentLine,
-        points: [...currentLine.points, worldX, worldY],
-      };
-      
-      useClipStore.getState().updateClip(drawingClip.clipId, { lines: updatedLines });
+      // Buffer brush/highlighter: just extend temp points
+      setTempDrawingPoints((prev) => (prev ? [...prev, worldX, worldY] : [worldX, worldY]));
     }
   }, [panBy, tool, isDrawingShape, shapeStart, position, scale, isDrawingText, textStart, drawingTool, getCurrentSize, cursorPreview, maskTool, isDrawingLasso, isDrawingMaskRect, maskRectStart, isDrawingMaskBrush, touchDrawMode, isDrawingTouchLasso]);
 
@@ -1487,20 +1402,129 @@ const Preview:React.FC<PreviewProps> = () => {
       isDrawingRef.current = false;
       currentDrawingClipId.current = null;
       
-      // Clean up eraser state and perform final aggressive merge
-      if (drawingTool === 'eraser' && clipId) {
+      // Apply buffered erasing once on mouse up
+      if (activeDrawingToolRef.current === 'eraser' && clipId) {
+        const worldEraserPts = eraserPointsRef.current.slice();
         eraserPointsRef.current = [];
         lastEraserPosRef.current = null;
-        
-        // Perform aggressive merging on mouse up to consolidate all fragments
         const drawingClip = useClipStore.getState().getClipById(clipId) as DrawingClipProps | undefined;
         if (drawingClip && drawingClip.lines) {
-          const fullyMergedLines = mergeConnectedLines(drawingClip.lines, true);
-          useClipStore.getState().updateClip(clipId, { lines: fullyMergedLines });
+          if (tempErased && tempErased.clipId === clipId) {
+            const finalLines = mergeConnectedLines(tempErased.lines, true);
+            useClipStore.getState().updateClip(clipId, { lines: finalLines });
+          } else if (worldEraserPts.length > 0) {
+            const eraserBaseRadius = getCurrentSize() / 2;
+            const updatedLines: DrawingLine[] = [];
+            for (const line of drawingClip.lines) {
+              if (line.tool !== 'brush' && line.tool !== 'highlighter') {
+                updatedLines.push(line);
+                continue;
+              }
+              const effectiveEraserRadius = eraserBaseRadius + (line.strokeWidth / 2);
+              const { localPts, localRadius } = transformEraserToLocal(
+                worldEraserPts,
+                line.transform,
+                effectiveEraserRadius
+              );
+              const splitPolylines = erasePolylineByEraser(line.points, localPts, localRadius);
+              for (const polyline of splitPolylines) {
+                if (polyline.length >= 4) {
+                  updatedLines.push({
+                    ...line,
+                    lineId: uuidv4(),
+                    points: polyline,
+                  });
+                }
+              }
+            }
+            const fullyMergedLines = mergeConnectedLines(updatedLines, true);
+            useClipStore.getState().updateClip(clipId, { lines: fullyMergedLines });
+          }
         }
-      } else {
-        setCurrentLineId(null);
+        setTempErased(null);
+        activeDrawingToolRef.current = null;
+        return;
       }
+      
+      // Commit buffered brush/highlighter line
+      const completedPoints = tempDrawingPoints;
+      const style = tempDrawingStyleRef.current;
+      setTempDrawingPoints(null);
+      tempDrawingStyleRef.current = null;
+      setCurrentLineId(null);
+      if (!completedPoints || completedPoints.length < 2 || !style) {
+        activeDrawingToolRef.current = null;
+        return;
+      }
+      
+      // Try to append to an existing draw clip at this frame
+      const existingDrawingClip = clips.find(
+        (c) => c.type === 'draw' && clipWithinFrame(c, focusFrame)
+      ) as DrawingClipProps | undefined;
+      
+      const newLine: DrawingLine = {
+        lineId: uuidv4(),
+        tool: style.tool,
+        points: completedPoints,
+        stroke: style.stroke,
+        strokeWidth: style.strokeWidth,
+        opacity: style.opacity,
+        smoothing: style.smoothing,
+        transform: {
+          x: 0,
+          y: 0,
+          scaleX: 1,
+          scaleY: 1,
+          rotation: 0,
+          opacity: 100,
+        },
+      };
+      
+      if (existingDrawingClip) {
+        const updatedLines = [...(existingDrawingClip.lines || []), newLine];
+        useClipStore.getState().updateClip(existingDrawingClip.clipId, { lines: updatedLines });
+        activeDrawingToolRef.current = null;
+        return;
+      }
+      
+      // Otherwise create a new drawing clip and timeline if needed
+      let drawingTimeline = timelines.find((t) => t.type === 'draw');
+      if (!drawingTimeline) {
+        drawingTimeline = {
+          timelineId: uuidv4(),
+          type: 'draw' as const,
+          timelineY: 0,
+          timelineHeight: 40,
+          timelineWidth: 0,
+          timelinePadding: 24,
+          muted: false,
+          hidden: false,
+        };
+        addTimeline(drawingTimeline, -1);
+      }
+      const clipDuration = 3 * DEFAULT_FPS;
+      let proposedEndFrame = Math.min(focusFrame + clipDuration, totalTimelineFrames - 1);
+      const clipsOnDrawingTimeline = clips.filter((c) => c.timelineId === drawingTimeline!.timelineId);
+      for (const existingClip of clipsOnDrawingTimeline) {
+        const existingStart = existingClip.startFrame ?? 0;
+        if (existingStart > focusFrame && existingStart < proposedEndFrame) {
+          proposedEndFrame = existingStart;
+        }
+      }
+      const newClipId = uuidv4();
+      const newClip: DrawingClipProps = {
+        src: null,
+        clipId: newClipId,
+        type: 'draw' as const,
+        timelineId: drawingTimeline.timelineId,
+        startFrame: focusFrame,
+        endFrame: Math.max(focusFrame + 1, proposedEndFrame),
+        trimEnd: -Infinity,
+        trimStart: Infinity,
+        lines: [newLine],
+      };
+      addClip(newClip);
+      activeDrawingToolRef.current = null;
       return;
     }
 
@@ -1680,7 +1704,7 @@ const Preview:React.FC<PreviewProps> = () => {
       setShapeStart(null);
       setShapeCurrent(null);
     }
-  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline, isDrawingText, textStart, textCurrent, setCurrentLineId, maskTool, isDrawingLasso, lassoPoints, featherAmount, focusFrame, isMaskDragging,  getTopmostClipAtFrame, isDrawingMaskRect, maskRectStart, maskRectCurrent, isDrawingMaskBrush, maskBrushPoints, maskBrushSize, maskShape, touchDrawMode, isDrawingTouchLasso, touchLassoPoints, resetMaskShapeDrawingRefs]);
+  }, [tool, isDrawingShape, shapeStart, shapeCurrent, shape, position, scale, addClip, addTimeline, isDrawingText, textStart, textCurrent, setCurrentLineId, maskTool, isDrawingLasso, lassoPoints, featherAmount, focusFrame, isMaskDragging,  getTopmostClipAtFrame, isDrawingMaskRect, maskRectStart, maskRectCurrent, isDrawingMaskBrush, maskBrushPoints, maskBrushSize, maskShape, touchDrawMode, isDrawingTouchLasso, touchLassoPoints, resetMaskShapeDrawingRefs, tempDrawingPoints]);
 
   const onMouseLeave = useCallback((e:KonvaEventObject<MouseEvent>) => {
      // set pointer to default 
@@ -1751,6 +1775,15 @@ const Preview:React.FC<PreviewProps> = () => {
       }
     }
   }, [tool, drawingTool, maskTool, isOverMask]);
+
+  // Clear temporary eraser preview when leaving eraser/draw mode and not actively drawing
+  useEffect(() => {
+    if (!isDrawingRef.current) {
+      if (tool !== 'draw' || drawingTool !== 'eraser') {
+        setTempErased(null);
+      }
+    }
+  }, [tool, drawingTool]);
   
   // Render preview shape while drawing
   const renderDrawingShape = useCallback(() => {
@@ -1917,6 +1950,26 @@ const Preview:React.FC<PreviewProps> = () => {
       />
     );
   }, [isDrawingMaskBrush, maskBrushPoints, maskBrushSize]);
+  
+  const renderTempDrawingLine = useCallback(() => {
+    if (!tempDrawingPoints || tempDrawingPoints.length < 4) return null;
+    const style = tempDrawingStyleRef.current;
+    if (!style) return null;
+    const opacity = (style.opacity ?? 100) / 100;
+    const tension = typeof style.smoothing === 'number' ? style.smoothing : (style.smoothing ? 0.5 : 0);
+    return (
+      <KonvaLine
+        points={tempDrawingPoints}
+        stroke={style.stroke}
+        strokeWidth={style.strokeWidth}
+        opacity={opacity}
+        lineCap="round"
+        lineJoin="round"
+        tension={tension}
+        listening={false}
+      />
+    );
+  }, [tempDrawingPoints]);
   
   const renderLassoPath = useCallback(() => {
     if (lassoPoints.length < 2) return null;
@@ -2167,6 +2220,21 @@ const Preview:React.FC<PreviewProps> = () => {
     }
   }, [isDrawingMaskRect, maskRectStart, maskRectCurrent, maskShape]);
 
+const redrawCount = useRef(0);
+useEffect(() => {
+  const layer = layerRef.current;
+  if (!layer) return;
+  const handler = () => {
+    // runs any time this layer does a scene draw
+    redrawCount.current++;
+    console.log('redrawCount', redrawCount.current);
+    // dev log, metrics, etc.
+  };
+  layer.on('draw', handler);
+  return () => layer.off('draw', handler);
+}, []);
+
+
   return (
     <>
     {isFullscreen ? (
@@ -2189,7 +2257,31 @@ const Preview:React.FC<PreviewProps> = () => {
              ref={layerRef}
           >
            <Group x={position.x} y={position.y} scaleX={scale} scaleY={scale} width={rectWidth} height={rectHeight} >
-            <Rect x={0} y={0}  width={rectWidth} height={rectHeight} fill={'#000000'} />
+            <Rect
+              ref={aspectRectRef}
+              x={0}
+              y={0}
+              width={rectWidth}
+              height={rectHeight}
+              fill={'#000000'}
+              onTransformEnd={() => {
+                const node = aspectRectRef.current;
+                if (!node) return;
+                const newW = Math.max(1, node.width() * node.scaleX());
+                const newH = Math.max(1, node.height() * node.scaleY());
+                node.scaleX(1);
+                node.scaleY(1);
+                const ratio = newW / newH;
+                const base = 1000;
+                let w = Math.max(1, Math.round(ratio * base));
+                let h = base;
+                const gcd = (a:number,b:number):number => b === 0 ? a : gcd(b, a % b);
+                const g = gcd(w, h) || 1;
+                w = Math.round(w / g);
+                h = Math.round(h / g);
+                setAspectRatio({ width: w, height: h, id: 'custom' });
+              }}
+            />
                {sortClips(filterClips(clips)).map((clip) => {
 
                 const startFrame = clip.startFrame || 0;
@@ -2200,6 +2292,7 @@ const Preview:React.FC<PreviewProps> = () => {
                 if (!clipAtFrame) return null;
                 
                 // Get applicators for clips that support effects (video, image, etc.)
+                
                 const applicators = getClipApplicators(clip.clipId);
 
                  if (clipAtFrame) {
@@ -2213,7 +2306,16 @@ const Preview:React.FC<PreviewProps> = () => {
                     case 'text':
                       return <TextPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators}  />
                     case 'draw':
-                      return <DrawingPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} />
+                      return (
+                        <DrawingPreview
+                          key={clip.clipId}
+                          {...clip}
+                          rectWidth={rectWidth}
+                          rectHeight={rectHeight}
+                          tempLinesOverride={tempErased && tempErased.clipId === clip.clipId ? tempErased.lines : undefined}
+                          applicators={applicators}
+                        />
+                      )
                     default:
                       return null
                    }
@@ -2228,10 +2330,47 @@ const Preview:React.FC<PreviewProps> = () => {
                {renderTouchLassoPath()}
                {renderMaskRectPreview()}
                {renderMaskBrushDrawing()}
+               {renderTempDrawingLine()}
                {renderCursorPreview()}
                {renderMaskCursorPreview()}
+               {/* Aspect editing edge bars */}
+               {isAspectEditing && (
+                 <>
+                   <Rect x={0} y={0} width={rectWidth} height={2} fill={'#FFFFFF'} opacity={0.9} listening={false} />
+                   <Rect x={0} y={rectHeight - 2} width={rectWidth} height={2} fill={'#FFFFFF'} opacity={0.9} listening={false} />
+                   <Rect x={0} y={0} width={2} height={rectHeight} fill={'#FFFFFF'} opacity={0.9} listening={false} />
+                   <Rect x={rectWidth - 2} y={0} width={2} height={rectHeight} fill={'#FFFFFF'} opacity={0.9} listening={false} />
+                 </>
+               )}
            </Group>
           </Layer>
+          {/* Transformer overlay for aspect editing */}
+          {isAspectEditing && (
+            <Layer>
+              <Transformer
+                ref={transformerRef}
+                rotateEnabled={false}
+                enabledAnchors={['middle-left','middle-right']}
+                anchorStroke={'#FFFFFF'}
+                anchorFill={'#FFFFFF'}
+                anchorCornerRadius={12}
+                anchorSize={18}
+                borderStroke={'rgba(255,255,255,0.2)'}
+                borderDash={[4, 4]}
+                ignoreStroke={true}
+                anchorStyleFunc={(anchor: any) => {
+                  anchor.cornerRadius(12);
+                  if (anchor.hasName('middle-left') || anchor.hasName('middle-right')) {
+                    const h = Math.min(120, rectHeight * 0.3);
+                    anchor.width(8);
+                    anchor.height(h);
+                    anchor.offsetX(4);
+                    anchor.offsetY(h / 2);
+                  }
+                }}
+              />
+            </Layer>
+          )}
         </Stage>
         {/* Fullscreen button */}
         <button

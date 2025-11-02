@@ -70,8 +70,8 @@ const TextShadowSection: React.FC<TextShadowSectionProps> = ({ clipId }) => {
                         toFixed={0}
                     />
                     <div className="flex flex-col gap-y-2 ">
-                        <div className="flex flex-row items-center gap-x-2 w-full">
-                            <h4 className="text-brand-light text-[10.5px] flex-1 text-start">Offset</h4>
+                        <div className="flex flex-row items-center gap-x-2 w-full -mb-1.5">
+                            <h4 className="text-brand-light text-[10.5px] font-medium flex-1 text-start ">Offset</h4>
                             <button
                                 onClick={() => updateClip(clipId, { shadowOffsetLocked: !shadowOffsetLocked })}
                                 className={cn(

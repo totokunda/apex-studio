@@ -39,6 +39,16 @@ const getUrlWithoutSearchParams = (path: string): string => {
     pathUrl.search = '';
     return pathUrl.toString();
 }
+    
+export const convertUserDataPath = (path: string): string => {
+    const filePath = fileURLToPath(path);
+    return `app://user-data/${filePath}`;
+}
+
+export const convertApexCachePath = (path: string): string => {
+    const filePath = fileURLToPath(path);
+    return `app://apex-cache/${filePath}`;
+}
 
 export const getMediaInfo = async (path: string, options?: { fullStats?: boolean, sourceDir?: 'user-data' | 'apex-cache' }): Promise<MediaInfo> => {
 

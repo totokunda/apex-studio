@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import { withStackLog } from "./zustandLog";
 import { ZoomLevel, AnyClipProps } from "./types";
 import { DEFAULT_FPS, TIMELINE_DURATION_SECONDS, MIN_DURATION } from "./settings";
+import { useClipStore } from "./clip";
 
 interface InputControlStore {
     // Zoom state (independent from other controls)
@@ -86,12 +86,27 @@ export const useInputControlsStore = create<InputControlStore>((set, get) => ({
             set({ zoomLevel: level });
             return;
         }
-        set((state) => ({
-            zoomLevelByInputId: {
-                ...state.zoomLevelByInputId,
-                [inputId]: level,
-            },
-        }));
+        set((state) => {
+            const prevLevel = state.zoomLevelByInputId[inputId] ?? 1;
+            const next: any = {
+                zoomLevelByInputId: {
+                    ...state.zoomLevelByInputId,
+                    [inputId]: level,
+                },
+            };
+            // When zooming in, temporarily center focus within current selected range
+            if (level > prevLevel) {
+                const range = state.selectedRangeByInputId[inputId] ?? state.selectedRange ?? [0, 1];
+                const start = Math.max(0, Math.round(range[0] ?? 0));
+                const endExclusive = Math.max(start + 1, Math.round(range[1] ?? start + 1));
+                const center = Math.floor((start + (endExclusive - 1)) / 2);
+                next.focusFrameByInputId = {
+                    ...state.focusFrameByInputId,
+                    [inputId]: center,
+                };
+            }
+            return next;
+        });
     },
     getZoomLevel: (inputId) => {
         if (!inputId) return get().zoomLevel;
@@ -318,13 +333,17 @@ export const useInputControlsStore = create<InputControlStore>((set, get) => ({
         const end = Math.max(start + 1, Math.round(endFrame));
         const next: [number, number] = [start, end];
         if (!inputId) {
-            set({ selectedRange: next });
+            set({ selectedRange: next, focusFrame: start });
             return;
         }
         set((state) => ({
             selectedRangeByInputId: {
                 ...state.selectedRangeByInputId,
                 [inputId]: next,
+            },
+            focusFrameByInputId: {
+                ...state.focusFrameByInputId,
+                [inputId]: start,
             },
         }));
     },

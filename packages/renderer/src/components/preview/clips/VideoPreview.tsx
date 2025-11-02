@@ -7,7 +7,7 @@ import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
 import { DEFAULT_FPS } from '@/lib/settings';
-import { useClipStore, getLocalFrame } from '@/lib/clip';
+import { useClipStore } from '@/lib/clip';
 import { WrappedCanvas } from 'mediabunny';
 import { useWebGLFilters } from '@/components/preview/webgl-filters';
 import { BaseClipApplicator } from './apply/base'
@@ -17,13 +17,16 @@ import { useInputControlsStore } from '@/lib/inputControl';
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
-const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: VideoClipProps, inputMode?: boolean, inputId?: string}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, trimStart, speed: _speed, applicators, overlap, overrideClip, inputMode = false, inputId}) => {
+const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: VideoClipProps, inputMode?: boolean, inputId?: string, focusFrameOverride?: number, currentLocalFrameOverride?: number, offscreenFast?: boolean}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, trimStart, speed: _speed, applicators, overlap, overrideClip, inputMode = false, inputId, focusFrameOverride, currentLocalFrameOverride, offscreenFast = false}) => {
     const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
     const focusFrameFromControls = useControlsStore((state) => state.focusFrame);
     const focusFrameFromInputs = useInputControlsStore((s) => s.getFocusFrame(inputId));
-    const focusFrame = inputMode ? focusFrameFromInputs : focusFrameFromControls;
+    const focusFrame = (typeof focusFrameOverride === 'number')
+        ? focusFrameOverride
+        : (inputMode ? focusFrameFromInputs : focusFrameFromControls);
     const [stableFocusFrame, setStableFocusFrame] = useState(focusFrame);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const [imageSource, setImageSource] = useState<HTMLCanvasElement | null>(null);
     const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
     const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
@@ -64,7 +67,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const scale = useViewportStore((s) => s.scale);
     const position = useViewportStore((s) => s.position);
     const setClipTransform = useClipStore((s) => s.setClipTransform);
-    const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
+    const clipTransform = overrideClip ? overrideClip.transform : useClipStore((s) => s.getClipTransform(clipId));
     const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
     const addClipSelection = useControlsStore((s) => s.addClipSelection);
     const clearSelection = useControlsStore((s) => s.clearSelection);
@@ -77,7 +80,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     const { applyMask } = useWebGLMask({
         focusFrame: focusFrame,
         masks: clip?.masks || [],
-        disabled: tool === 'mask',
+        disabled: tool === 'mask' && !inputMode,
         clip: clip,
     });
 
@@ -88,7 +91,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         // Check if we can use the cached result
 
         // Cache miss - recalculate
-        if (!clip.preprocessors || clip.preprocessors.length === 0) {
+        if (!Object.prototype.hasOwnProperty.call(clip, 'preprocessors') || !clip.preprocessors || clip.preprocessors.length === 0) {
             cachedPreprocessorRangeRef.current = null;
             addedTimestampRef.current = 0;
             return {selectedSrc: src, frameOffset: 0};
@@ -150,15 +153,21 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
 
     const maskFrameForCurrentFocus = useMemo(() => {
+        const speedFactor = Math.max(0.1, speed);
         if (clip) {
             if (inputMode) {
-                // In input mode, treat clip as starting at 0 for scrubbing
-                return Math.max(0, Math.floor((focusFrame + (trimStart || 0))));
+                const local = Math.max(0, (focusFrame + (trimStart || 0)));
+                return Math.max(0, Math.floor(local * speedFactor));
             }
-            return Math.max(0, Math.floor(getLocalFrame(focusFrame, clip)));
+            const isUsingPreprocessorSrc = selectedSrc !== src;
+            const baseLocal = Math.max(0, focusFrame - startFrameUsed);
+            const derivedLocal = isUsingPreprocessorSrc
+                ? Math.max(0, baseLocal - Math.max(0, frameOffset))
+                : Math.max(0, baseLocal + (trimStart || 0));
+            return Math.max(0, Math.floor(derivedLocal * speedFactor));
         }
-        return Math.max(0, Math.floor(currentFrame));
-    }, [clip, focusFrame, currentFrame, inputMode, trimStart]);
+        return Math.max(0, Math.floor(Math.max(0, currentFrame) * speedFactor));
+    }, [clip, focusFrame, currentFrame, inputMode, trimStart, speed, selectedSrc, src, frameOffset, startFrameUsed]);
 
     const aspectRatio = useMemo(() => {
       const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
@@ -195,7 +204,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     useEffect(() => {
         isPlayingRef.current = inputMode ? isPlayingFromInputs : isPlayingFromControls;
     }, [isPlayingFromInputs, isPlayingFromControls, inputMode]);
-    const isPlaying = isPlayingRef.current;
+    const isPlaying = offscreenFast ? true : isPlayingRef.current;
     const focusFrameRef = useRef(focusFrame);
     useEffect(() => {
         focusFrameRef.current = focusFrame;
@@ -380,15 +389,19 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         return adjusted;
     }, [rectWidth, rectHeight, scale, position.x, position.y, isRotating, aspectRatio]);
 
-    // Create canvas once
+    // Create canvas once and expose to Konva Image via state so initial render receives it
     useEffect(() => {
         if (!canvasRef.current) {
             canvasRef.current = document.createElement('canvas');
+            setImageSource(canvasRef.current);
+        } else {
+            setImageSource(canvasRef.current);
         }
         return () => {
             canvasRef.current = null;
             originalFrameRef.current = null;
             processingCanvasRef.current = null;
+            setImageSource(null);
         };
     }, []);
 
@@ -465,10 +478,10 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
     // Initialize default transform if missing
     useEffect(() => {
-        if (!clipTransform && displayWidth && displayHeight) {
+        if (!clipTransform && displayWidth && displayHeight && !overrideClip) {
             setClipTransform(clipId, { x: offsetX, y: offsetY, width: displayWidth, height: displayHeight, scaleX: 1, scaleY: 1, rotation: 0 });
         }
-    }, [clipTransform, displayWidth, displayHeight, offsetX, offsetY, clipId, setClipTransform]);
+    }, [clipTransform, displayWidth, displayHeight, offsetX, offsetY, clipId, setClipTransform, overrideClip]);
 
     // Ensure canvas matches display size for crisp rendering
     useEffect(() => {
@@ -557,7 +570,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         // Always draw the final processed result back to display canvas
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
-        
         imageRef.current?.getLayer()?.batchDraw?.();
     }, [applyFilters, applyMask, ensureProcessingCanvas, applicatorsRef.current]);
 
@@ -571,7 +583,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const projectFps = fps || DEFAULT_FPS;
         if (!Number.isFinite(clipFps) || clipFps <= 0) return;
         if (!Number.isFinite(projectFps) || projectFps <= 0) return;
-        
+
         // Map from project fps space to native clip fps space based on a debounced/stable focus frame
         const isUsingPreprocessorSrc = selectedSrc !== src;
         const currentFrameForSeek = (stableFocusFrame - startFrameUsed + (trimStart || 0));
@@ -599,14 +611,26 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                 isolationKey: instanceIsolationKeyRef.current,
             });
 
-            // Compute mask frame using the stable focus to match the intended moment
+            // Compute mask frame using the stable focus and adjust by speed
             const focusFrameForMask = stableFocusFrame;
-            const maskFrameBase = Math.max(0, Math.floor(focusFrameForMask - startFrameUsed + (trimStart || 0)));
-            const pausedMaskFrame = clip
-                ? (inputMode
-                    ? Math.max(0, Math.floor((focusFrameForMask + (trimStart || 0))))
-                    : Math.max(0, Math.floor(getLocalFrame(focusFrameForMask, clip))))
-                : maskFrameBase;
+            const speedFactor = Math.max(0.1, speed);
+            let pausedMaskFrame: number;
+            if (clip) {
+                if (inputMode) {
+                    const local = Math.max(0, (focusFrameForMask + (trimStart || 0)));
+                    pausedMaskFrame = Math.max(0, Math.floor(local * speedFactor));
+                } else {
+                    const isUsingPreprocessorSrc = (selectedSrc !== src);
+                    const baseLocal = Math.max(0, (focusFrameForMask - startFrameUsed));
+                    const derivedLocal = isUsingPreprocessorSrc
+                        ? Math.max(0, baseLocal - Math.max(0, frameOffset))
+                        : Math.max(0, baseLocal + (trimStart || 0));
+                    pausedMaskFrame = Math.max(0, Math.floor(derivedLocal * speedFactor));
+                }
+            } else {
+                const local = Math.max(0, (focusFrameForMask - startFrameUsed + (trimStart || 0)));
+                pausedMaskFrame = Math.max(0, Math.floor(local * speedFactor));
+            }
 
             let bestCanvas: WrappedCanvas | null = null;
             let bestIdx: number | null = null;
@@ -637,7 +661,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         } catch (e) {
             console.warn('[video] seek draw failed', e);
         }
-    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, stableFocusFrame, drawWrappedCanvas, speed, frameOffset, trimStart, clip?.masks, clip?.preprocessors, applicators.length, inputMode, startFrame, inputId]);
+    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, stableFocusFrame, drawWrappedCanvas, speed, frameOffset, trimStart, clip?.masks, clip?.preprocessors, applicators.length, inputMode, startFrame, startFrameUsed, inputId]);
 
     const startRendering = useCallback(async () => {
         if (!canvasRef.current) return;
@@ -670,13 +694,12 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
         try {
             for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
-                if (myToken !== drawTokenRef.current) break;
+                if (myToken !== drawTokenRef.current && !offscreenFast) break;
                 if (!isPlaying) break;
                 if (!wc) continue;
 
                 // Determine the decoded sample's frame index in native fps
                 const ts: number | undefined = (wc as any)?.timestamp;
-
                 // Use floor with a tiny epsilon to avoid boundary flip-flop
                 let sampleIdx = Number.isFinite(ts as number)
                     ? Math.floor(((ts as number) * clipFps) + 1e-4)
@@ -689,47 +712,66 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
                     const baseLocal = Math.max(0, ((focusFrameValue ?? 0) - startFrameUsed));
                     // When using preprocessor src, align to its own frame space by subtracting its start offset.
                     // Otherwise, include trimStart to match the main clip's reference frame.
-                    const localProjectFrames = isUsingPreprocessorSrc
+                    const derivedLocal = isUsingPreprocessorSrc
                         ? Math.max(0, baseLocal - Math.max(0, frameOffset))
                         : Math.max(0, baseLocal + (trimStart || 0));
+                    const localProjectFrames = (typeof currentLocalFrameOverride === 'number')
+                        ? Math.max(0, currentLocalFrameOverride)
+                        : derivedLocal;
                     const speedAdjusted = Math.max(0, localProjectFrames * Math.max(0.1, speed));
                     // Map from project fps to native fps using floor to reduce jitter
                     const actualFrameIdx = Math.floor(((speedAdjusted / projectFps) * clipFps) + 1e-4);
                     return actualFrameIdx + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
                 };
 
-                // Skip stale frames that are behind the timeline by more than 1 frame
-                let localFocus = computeLocalFocusMedia();
-                if (sampleIdx < localFocus - 1) {
-                    lastRenderedFrameRef.current = sampleIdx;
-                    continue;
+                if (!offscreenFast) {
+                    // Skip stale frames that are behind the timeline by more than 1 frame
+                    let localFocus = computeLocalFocusMedia();
+                    if (sampleIdx < localFocus - 1) {
+                        lastRenderedFrameRef.current = sampleIdx;
+                        continue;
+                    }
+                    // If we're ahead of the timeline, wait until the timeline catches up (sync to rAF)
+                    while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
+                        if (myToken !== drawTokenRef.current) break;
+                        if (!isPlaying) break;
+                        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+                    }
                 }
 
-                // If we're ahead of the timeline, wait until the timeline catches up (sync to rAF)
 
-                while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
-                    if (myToken !== drawTokenRef.current) break;
-                    if (!isPlaying) break;
-                    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-                }
-
-
-                if (myToken !== drawTokenRef.current)  break;
+                if (myToken !== drawTokenRef.current && !offscreenFast) break;
                 if (!isPlaying) break;
                 const focusFrameForMask = focusFrameRef.current;
-                const maskFrameBase = Math.max(0, Math.floor(focusFrameForMask - startFrame + (trimStart || 0)));
-                const maskFrame = clip ? Math.max(0, Math.floor(getLocalFrame(focusFrameForMask, clip))) : maskFrameBase;
+                const speedFactor = Math.max(0.1, speed);
+                let maskFrame: number;
+                if (clip) {
+                    if (inputMode) {
+                        const local = Math.max(0, (focusFrameForMask + (trimStart || 0)));
+                        maskFrame = Math.max(0, Math.floor(local * speedFactor));
+                    } else {
+                        const isUsingPreprocessorSrc = (selectedSrc !== src);
+                        const baseLocal = Math.max(0, (focusFrameForMask - startFrameUsed));
+                        const derivedLocal = isUsingPreprocessorSrc
+                            ? Math.max(0, baseLocal - Math.max(0, frameOffset))
+                            : Math.max(0, baseLocal + (trimStart || 0));
+                        maskFrame = Math.max(0, Math.floor(derivedLocal * speedFactor));
+                    }
+                } else {
+                    const local = Math.max(0, (focusFrameForMask - startFrameUsed + (trimStart || 0)));
+                    maskFrame = Math.max(0, Math.floor(local * speedFactor));
+                }
                 drawWrappedCanvas(wc as WrappedCanvas, maskFrame);
                 lastRenderedFrameRef.current = sampleIdx;
             }
         } catch (e) {
             // swallow
         }
-    }, [mediaInfo, fps, selectedSrc,  displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrame, frameOffset, trimStart, clip, isPlaying, inputMode]);
+    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrameUsed, frameOffset, trimStart, clip, isPlaying, inputMode]);
 
     // Start/stop iterator based on play state. Avoid depending on callbacks to prevent restarting every frame.
     useEffect(() => {
-        if (isPlaying) {
+        if (isPlaying || offscreenFast) {
             void startRendering();
         } else {
             void seekAndDraw();
@@ -739,7 +781,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             // @ts-ignore
             iteratorRef.current?.return?.();
         };
-    }, [isPlaying, selectedSrc, mediaInfo, displayWidth, displayHeight, fps, speed, frameOffset, applicators.length, inputId, inputMode]);
+    }, [isPlaying, offscreenFast, selectedSrc, mediaInfo, displayWidth, displayHeight, fps, speed, frameOffset, applicators.length, inputId, inputMode]);
 
     // If video is paused, reapply filters and applicators when they change
     useEffect(() => {
@@ -859,6 +901,16 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
             throttledSeekAndDraw();
         }
     }, [stableFocusFrame, isPlaying, throttledSeekAndDraw, inputMode]);
+
+    // In offscreen/single-frame scenarios, ensure immediate seek when explicit overrides change (no debounce)
+    useEffect(() => {
+        if (isPlaying) return;
+        // Force a draw whenever caller overrides the exact frame to display
+        if (typeof focusFrameOverride === 'number' || typeof currentLocalFrameOverride === 'number') {
+            lastRenderedFrameRef.current = -1;
+            void seekAndDrawRef.current();
+        }
+    }, [focusFrameOverride, currentLocalFrameOverride, isPlaying]);
 
   // Force re-init when the selected clip changes (clipId) or overrideClip identity changes
   useEffect(() => {
@@ -1015,7 +1067,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
       <Image 
       draggable={tool === 'pointer' && !isTransforming } 
       ref={imageRef}  
-      image={canvasRef.current || undefined}
+      image={imageSource || undefined}
        x={clipTransform?.x ?? offsetX} 
        y={clipTransform?.y ?? offsetY} 
        width={clipTransform?.width ?? displayWidth} 

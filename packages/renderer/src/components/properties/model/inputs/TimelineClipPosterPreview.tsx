@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import { Stage, Layer, Group, Rect } from 'react-konva';
 import { useClipStore } from '@/lib/clip';
 import { useViewportStore } from '@/lib/viewport';
@@ -13,6 +13,7 @@ import { getApplicatorsForClip } from '@/lib/applicator-utils';
 import { useWebGLHaldClut } from '@/components/preview/webgl-filters';
 import { useInputControlsStore } from '@/lib/inputControl';
 import AudioPreview from '@/components/preview/clips/AudioPreview';
+import { getMediaInfo } from '@/lib/media/utils';
 
 // Kept for parity with other components if needed later; not used in poster sorting
 // const getGroupChildren = (groupClip: AnyClipProps, allClips: AnyClipProps[]) => {
@@ -24,8 +25,8 @@ import AudioPreview from '@/components/preview/clips/AudioPreview';
 //   return children;
 // }
 
-const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps, width: number, height: number, inputId?: string }>
-  = ({ clipId, clip: clipOverride, width, height, inputId }) => {
+const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps, width: number, height: number, inputId?: string, ratioOverride?: number, audioOnly?: boolean }>
+  = ({ clipId, clip: clipOverride, width, height, inputId, ratioOverride, audioOnly = false }) => {
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const getClipById = useClipStore((s) => s.getClipById);
   const clips = useClipStore((s) => s.clips);
@@ -34,6 +35,55 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
   const focusFrame = useInputControlsStore((s) => s.getFocusFrame(inputId) ?? 0);
 
   const timelines = useClipStore((s) => s.timelines);
+
+  const ratioCacheByClipIdRef = useRef<Record<string, number>>({});
+  const [contentRatio, setContentRatio] = useState<number | null>(null);
+
+  const rootClip = useMemo<AnyClipProps | null>(() => {
+    if (clipOverride) return clipOverride as AnyClipProps;
+    if (!clipId) return null;
+    return getClipById(clipId) as AnyClipProps | null;
+  }, [clipOverride, clipId, getClipById]);
+
+  useEffect(() => {
+    const clip = rootClip;
+    if (!clip) {
+      setContentRatio(null);
+      return;
+    }
+    if (clip.type === 'group') {
+      setContentRatio(null);
+      return;
+    }
+    const cached = ratioCacheByClipIdRef.current[clip.clipId];
+    if (typeof cached === 'number' && cached > 0) {
+      setContentRatio(cached);
+      return;
+    }
+    const src = (clip as any)?.src as string | undefined;
+    if (!src) {
+      setContentRatio(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const info = await getMediaInfo(src);
+        const w = (info as any)?.stats?.video?.width ?? (info as any)?.stats?.image?.width ?? (info as any)?.width ?? (info as any)?.streams?.[0]?.width;
+        const h = (info as any)?.stats?.video?.height ?? (info as any)?.stats?.image?.height ?? (info as any)?.height ?? (info as any)?.streams?.[0]?.height;
+        const r = Number(w) / Number(h);
+        if (!cancelled && Number.isFinite(r) && r > 0) {
+          ratioCacheByClipIdRef.current[clip.clipId] = r;
+          setContentRatio(r);
+        }
+      } catch {
+        if (!cancelled) setContentRatio(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rootClip]);
 
 
   const sortClips = useCallback((clipsToSort: AnyClipProps[]) => {
@@ -92,19 +142,25 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
   }, [timelines, clips])
 
   const rectDims = useMemo(() => {
-    const ratio = aspectRatio.width / aspectRatio.height;
+    const editorRatio = aspectRatio.width / aspectRatio.height;
+    const ratio = typeof ratioOverride === 'number' && ratioOverride > 0
+      ? ratioOverride
+      : (rootClip && rootClip.type !== 'group' && typeof contentRatio === 'number' && contentRatio > 0)
+        ? contentRatio
+        : editorRatio;
     if (!Number.isFinite(ratio) || ratio <= 0) {
       return { rectWidth: 0, rectHeight: 0 };
     }
     return { rectWidth: BASE_LONG_SIDE * ratio, rectHeight: BASE_LONG_SIDE };
-  }, [aspectRatio.width, aspectRatio.height]);
+  }, [aspectRatio.width, aspectRatio.height, rootClip, contentRatio, ratioOverride]);
 
   const view = useMemo(() => {
     const { rectWidth, rectHeight } = rectDims;
     if (!rectWidth || !rectHeight || !width || !height) return { scale: 1, x: 0, y: 0 };
     const scaleX = width / rectWidth;
     const scaleY = height / rectHeight;
-    const scale = Math.min(scaleX, scaleY);
+    // Use cover scaling so posters fill the container
+    const scale = Math.max(scaleX, scaleY);
     const x = (width - rectWidth * scale) / 2;
     const y = (height - rectHeight * scale) / 2;
     return { scale, x, y };
@@ -135,47 +191,48 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
 
   return (
     <div className="w-full h-auto rounded-[6px] flex flex-col items-center justify-start">
-    <Stage key={`${width}x${height}:${clipOverride?.clipId || clipId || 'none'}`} width={width} height={height}>
+    <Stage key={`${width}x${height}:${clipOverride?.clipId || clipId || 'none'}${audioOnly ? ':audio' : ''}`} width={audioOnly? 1:width} height={audioOnly? 1:height}>
       <Layer >
         <Group x={view.x} y={view.y} scaleX={view.scale} scaleY={view.scale} listening={false} >
           <Rect x={0} y={0} width={rectWidth} height={rectHeight} fill={'#000000'} />
-          {toRender.map((clip) => {
+          {audioOnly ? null : toRender.map((clip) => {
             if (clip.type === 'group') return null;
             const startFrame = clip.startFrame || 0;
             const groupStart = clip.groupId ? (getClipById(clip.groupId)?.startFrame || 0) : 0;
             const relativeStart = startFrame - groupStart;
             const hasOverlap = (clip.type === 'video' || clip.type === 'image') && ((clip.groupId ? relativeStart : startFrame) > 0) ? true : false;
-            const effectiveFrame = clip.groupId ? (focusFrame + groupStart) : focusFrame;
-            const clipAtFrame = clipWithinFrame(clip, effectiveFrame, hasOverlap, 0);
+            // Use global frame for bounds/effects, but keep local focus for child playback math
+            const effectiveGlobalFrame = clip.groupId ? (focusFrame + groupStart) : focusFrame;
+            const clipAtFrame = clipWithinFrame(clip, effectiveGlobalFrame, hasOverlap, 0);
             if (!clipAtFrame && clip.groupId) return null;
 
-            const applicators = getApplicators(clip.clipId, effectiveFrame);
+            const applicators = getApplicators(clip.clipId, effectiveGlobalFrame);
             // Use clipOverride only when an explicit override group is provided
             const overrideToUse = (clipOverride ? (clip) : undefined);
 
             switch (clip.type) {
               case 'video':
-                return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} inputId={inputId} />
+                return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} inputId={inputId} focusFrameOverride={focusFrame} />
               case 'image':
-                return <ImagePreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} inputId={inputId} />
+                return <ImagePreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} inputId={inputId} focusFrameOverride={focusFrame} />
               case 'shape':
                 return <ShapePreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} assetMode={true} />
               case 'text':
                 return <TextPreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} assetMode={true} />
               case 'draw':
-                return <DrawingPreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} assetMode={true} />
+                return <DrawingPreview key={clip.clipId} {...(clip as any)} rectWidth={rectWidth} rectHeight={rectHeight} assetMode={true} applicators={applicators} />
               default:
                 return null;
             }
           })}
           {toRender.map((clip) => {
-            if (clip.type !== 'video') return null;
+            if (clip.type !== 'video' && clip.type !== 'audio') return null;
             const startFrame = clip.startFrame || 0;
             const groupStart = clip.groupId ? (getClipById(clip.groupId)?.startFrame || 0) : 0;
             const relativeStart = startFrame - groupStart;
             const hasOverlap = ((clip.groupId ? relativeStart : startFrame) > 0) ? true : false;
-            const effectiveFrame = clip.groupId ? (focusFrame + groupStart) : focusFrame;
-            const clipAtFrame = clipWithinFrame(clip, effectiveFrame, hasOverlap, 0);
+            const effectiveGlobalFrame = clip.groupId ? (focusFrame + groupStart) : focusFrame;
+            const clipAtFrame = clipWithinFrame(clip, effectiveGlobalFrame, hasOverlap, 0);
             if (!clipAtFrame && clip.groupId) return null;
             const overrideToUse = (clipOverride ? (clip) : undefined);
             return <AudioPreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} overlap={hasOverlap} rectWidth={rectWidth} rectHeight={rectHeight} inputMode={true} inputId={inputId} />

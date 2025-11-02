@@ -2,7 +2,7 @@ import { useClipStore } from '@/lib/clip'
 import { useControlsStore } from '@/lib/control'
 import AudioProperties from './AudioProperties'
 import { useMemo, useRef, useEffect, useState, useCallback } from 'react'
-import {  getMediaInfoCached } from '@/lib/media/utils'
+import {  convertApexCachePath, convertUserDataPath, getMediaInfoCached } from '@/lib/media/utils'
 import DurationProperties from './DurationProperties'
 import PositionProperties from './PositionProperties'
 import LayoutProperties from './LayoutProperties'
@@ -28,20 +28,32 @@ import MaskPropertiesPanel from './mask/MaskPropertiesPanel';
 import { ModelInputsProperties } from './model/ModelInputsProperties'
 import { RiAiGenerate } from 'react-icons/ri'
 import { ModelGenerationProperties } from './model/ModelGenerationProperties'
-
+import FilterProperties from './FilterProperties'
+import { savePreviewImage, getPreviewPath} from '@app/preload'
+import { AnyClipProps, ModelClipProps } from '@/lib/types'
+import {ExportClip, exportSequence, exportClip} from '@app/export-renderer'
+import _ from 'lodash';
+import { BASE_LONG_SIDE } from '@/lib/settings';
 interface PropertiesPanelProps {
     panelSize: number;
 }
 
 const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const {selectedClipIds, selectedMaskId} = useControlsStore();
-  const {selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, updatePreprocessor} = useClipStore();
+  const {selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, updatePreprocessor, getClipsForGroup} = useClipStore();
+  // const updateModelInput = useClipStore((s) => s.updateModelInput);
   const { fps } = useControlsStore();
   const selectedLineId = useDrawingStore((s) => s.selectedLineId);
   const tool = useViewportStore((s) => s.tool);
+  const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const clipId = useMemo(() => selectedClipIds[selectedClipIds.length - 1], [selectedClipIds]);
+  const getClipPositionScore = useClipStore((s) => s.getClipPositionScore);
+  const getClipsByType = useClipStore((s) => s.getClipsByType);
+  const getClipById = useClipStore((s) => s.getClipById);
 
   const clip = useClipStore((s) => s.getClipById(clipId))
+  // const getClipsByType = useClipStore((s) => s.getClipsByType);
+
   const preprocessor = selectedPreprocessorId ? getPreprocessorById(selectedPreprocessorId) : null
   const clipType = clip?.type;
   const tabRef = useRef<HTMLDivElement>(null);  
@@ -50,8 +62,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const [selectedTab, setSelectedTab] = useState<string>(clip?.type === 'text' ? "text" : "transform");
   const { clearJob, stopTracking } = usePreprocessorJobActions();
   const getModelValues = useClipStore((s) => s.getModelValues);
-  
-
   // check if clip has audio if it is video 
   const hasDuration = useMemo(() => {
    if (!selectedPreprocessorId) {
@@ -59,6 +69,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
    }
    return false;
   }, [selectedPreprocessorId]);
+
+  const hasFilter = useMemo(() => {
+    return clip?.type === 'filter';
+  }, [clip?.type]);
 
   const hasAudio = useMemo(() => {
     if (clip?.type === 'audio') return true;
@@ -138,14 +152,13 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (hasMask) tabTotal++;
     if (hasTransform) tabTotal++;
     if (hasAudio) tabTotal++;
-    if (hasDuration) tabTotal++;
+    if (hasDuration || hasFilter) tabTotal++;
     if (hasAppearance) tabTotal++;
     if (hasAdjust) tabTotal++;
     return tabTotal;
-  }, [hasLine, hasMask, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust]);
+  }, [hasLine, hasMask, hasTransform, hasAudio, hasDuration, hasFilter, hasAppearance, hasAdjust]);
 
   
-
   useEffect(() => {
     // Automatically switch to line tab when a line is selected
     if (hasLine && selectedLineId) {
@@ -207,7 +220,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (currentTab === "text" && hasText) return "text";
     if (currentTab === "transform" && hasTransform) return "transform";
     if (currentTab === "audio" && hasAudio) return "audio";
-    if (currentTab === "duration" && hasDuration) return "duration";
+    if (currentTab === "duration" && (hasDuration || hasFilter)) return "duration";
     if (currentTab === "appearance" && hasAppearance) return "appearance";
     if (currentTab === "adjust" && hasAdjust) return "adjust";
     if (currentTab === "preprocessor-parameters" && hasValidPreprocessor) return "preprocessor-parameters";
@@ -285,14 +298,243 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor, preprocessor]);
 
-
-  const handleGenerate = useCallback(() => {
+  const handleGenerate = useCallback(async () => {
     // get the clip Id that is of type model 
     const modelValues = getModelValues(clipId);
-    console.log(modelValues);
+    if (!modelValues) return;
+    const inputs = (clip as ModelClipProps)?.manifest?.spec.ui?.inputs || []; 
+
+    // loop through modelValues to get inputs of type image. 
+    for (const input of inputs) {
+       if (input.type === 'image' || input.type === 'video') {
+        const value = modelValues[input.id] as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]; selection?:string};
+        if (!value || value.selection === '') continue;
+        // we need to check clip type
+        
+        let width = 0;
+        let height = 0;
+        if (value.type === 'image') {
+          const mediaInfo = getMediaInfoCached(value.src);
+          const filePath = convertUserDataPath(value.src);  
+          value.src = filePath;
+          let transform = value.originalTransform;
+          width = transform?.width ?? mediaInfo?.image?.width ?? 0;
+          height = transform?.height ?? mediaInfo?.image?.height ?? 0;
+          value.preprocessors.forEach((p) => {
+            if (p.status === 'complete' && p.src) {
+              p.src = convertApexCachePath(p.src);
+            }
+          });
+          if (!mediaInfo) continue;
+        } else if (value.type === 'video') {
+          const mediaInfo = getMediaInfoCached(value.src);
+          let transform = value.originalTransform;
+          width = transform?.width ?? mediaInfo?.video?.displayWidth ?? 0;
+          height = transform?.height ?? mediaInfo?.video?.displayHeight ?? 0;
+          if (!mediaInfo) continue;
+        } else {
+          const ratio = aspectRatio.width / aspectRatio.height;
+          const baseShortSide = BASE_LONG_SIDE;
+          if (Number.isFinite(ratio) && ratio > 0) {
+            width = baseShortSide * ratio;
+            height = baseShortSide;
+          } else {
+            width = 0;
+            height = 0;
+          }
+        }
+        let clips: AnyClipProps[] = [value as any];
+        let offsetStart = 0;
+        if (value.type === 'group') {
+          const groupedClips = getClipsForGroup(value.children);
+          // offset all clips by the group start frame moving it to 0 
+          const groupStart = value.startFrame ?? 0;
+          offsetStart = groupStart;
+          clips = groupedClips.map((c) => {
+            // we need to offset our aplicators and preprocessors too. 
+            const newClip = { ...c };
+            newClip.startFrame = (c.startFrame ?? 0) - groupStart;
+            newClip.endFrame = (c.endFrame ?? 0) - groupStart;
+            if (newClip.type === 'image') {
+              const mediaInfo = getMediaInfoCached(newClip.src);
+              if (!mediaInfo) return newClip;
+              const filePath = convertUserDataPath(newClip.src);  
+              newClip.src = filePath;
+              newClip.preprocessors.forEach((p) => {
+                if (p.status === 'complete' && p.src) {
+                  p.src = convertApexCachePath(p.src);
+                }
+              });
+            }
+            if (Object.prototype.hasOwnProperty.call(newClip, 'preprocessors')) {
+              (newClip as any).preprocessors = (c as any).preprocessors?.map((p: any) => ({ ...p, startFrame: (p.startFrame ?? 0) - groupStart, endFrame: (p.endFrame ?? 0) - groupStart })) ?? [];
+            }
+            return newClip;
+          });
+        } else {
+          offsetStart = value.startFrame ?? 0;
+          clips = [value];
+        }
+
+        // sort clips by position score
+        const filterClips = getClipsByType('filter');
+        clips = clips.filter((c) => c.type !== 'filter').sort((a, b) => getClipPositionScore(a.clipId) - getClipPositionScore(b.clipId));
+
+        filterClips.map((c) => {
+          if (c.type === 'filter') {
+            (c as any).score = getClipPositionScore(c.clipId);
+          }
+        });
+
+        // for every filter clip that has a lower score than a clip we add the filter as an applicator to the clip
+        const exportClips: ExportClip[] = [];
+        for (const clip of clips as ExportClip[]) {
+          const newClip = { ...clip };
+          for (const filter of [...filterClips]) {
+            if (getClipPositionScore(filter.clipId) < getClipPositionScore(newClip.clipId)) {
+              if (!newClip.applicators) {
+                newClip.applicators = [];
+              }
+              const newFilter = { ...filter };
+              newFilter.startFrame = (newFilter.startFrame ?? 0) - offsetStart;
+              newFilter.endFrame = (newFilter.endFrame ?? 0) - offsetStart;
+              newClip.applicators?.push(newFilter as any);
+            }
+          }
+          // add to beginning of exportClips
+          newClip.applicators = _.uniqBy(newClip.applicators ?? [], 'clipId');
+          exportClips.unshift(newClip);
+        }
+
+        let absolutePath: string | null = null;
+
+        if (input.type === 'video') {
+          
+          const frameRange = value.selectedRange ? value.selectedRange : [0, 1];
+          const filePath = await getPreviewPath(`${clipId}_${input.id}_${frameRange[0]}_${frameRange[1]}`);
+          if (exportClips.length === 1) {
+            const result = await exportClip({
+              mode: 'video',
+              width: width,
+              height: height,
+              range: { start: frameRange[0], end: frameRange[1]},
+              clip: exportClips[0],
+              fps: fps,
+              filename: filePath,
+              encoderOptions: {
+                format: 'webm',
+                codec: 'vp9',
+                preset: 'ultrafast',
+                crf: 23,
+                bitrate: '1000k',
+                resolution: { width: width, height: height },
+                alpha: true,
+              },
+            });
+            if (typeof result === 'string') {
+              absolutePath = result;
+            }
+          } else {
+            const result = await exportSequence({
+              mode: 'video',
+              width: width,
+              height: height,
+              range: { start: frameRange[0], end: frameRange[1]},
+              clips: exportClips,
+              fps: fps,
+              filename: filePath,
+              encoderOptions: {
+                format: 'webm',
+                codec: 'vp9',
+                preset: 'ultrafast',
+                crf: 23,
+                bitrate: '1000k',
+                resolution: { width: width, height: height },
+                alpha: true,
+              },
+            });
+            if (typeof result === 'string') {
+              absolutePath = result;
+            }
+          }
+        
+        }
+        
+        else if (input.type === 'image') {
+          const frame = value.type === 'video' || value.type === 'group' ? value.selectedFrame : 0;
+          if (exportClips.length === 1) {
+            const result = await exportClip({
+              mode: 'image',
+              width: width,
+              height: height,
+              imageFrame: frame,
+              clip: exportClips[0],
+              fps: fps,
+            });
+            // save the result to the file system
+            if (result instanceof Blob) {
+              const buf = new Uint8Array(await result.arrayBuffer());
+              absolutePath = await savePreviewImage(buf, { fileNameHint: `${clipId}_${input.id}_${frame}` });
+            }
+          }
+          else {
+            const result = await exportSequence({
+              mode: 'image',
+              width: width,
+              height: height,
+              imageFrame: frame,
+              clips: exportClips,
+              fps: fps,
+            });
+
+            if (result instanceof Blob) {
+              const buf = new Uint8Array(await result.arrayBuffer());
+              absolutePath = await savePreviewImage(buf, { fileNameHint: `${clipId}_${input.id}_${frame}` });
+            }
+          }
+        }
+
+        modelValues[input.id] = {
+          type: input.type,
+          src: absolutePath,
+        };
+
+       } else if (input.type === 'audio') {
+          const value = modelValues[input.id] as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]};
+          if (!value) continue;
+          // we need to check clip type
+          if (value.type === 'audio') {
+            const mediaInfo = getMediaInfoCached(value.src);
+            if (!mediaInfo) continue;
+
+            const filePath = await getPreviewPath(`${clipId}_${input.id}`, { ext: 'mp3' });
+            const frameRange = value.selectedRange ? value.selectedRange : [0, 1];
+            value.startFrame = frameRange[0];
+            value.endFrame = frameRange[1];
+            const result = await exportClip({
+              mode: 'audio',
+              clip: value as any,
+              range: { start: frameRange[0], end: frameRange[1] },
+              fps: fps,
+              filename: filePath,
+            });
+
+            if (typeof result === 'string') {
+              modelValues[input.id] = {
+                type: input.type,
+                src: result,
+              };
+            }
+          }
+
+       }
+
+    }
+    
+    // loop through model values and get if name starts with image. 
     
 
-  }, [selectedClipIds]);
+  }, [selectedClipIds, getModelValues]);
 
   return (
     <div className="h-full w-full min-w-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden' }}>
@@ -314,7 +556,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasTransform && !hasMask) && <TabsTrigger value="transform" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
             {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Mask</TabsTrigger>}
             {(hasAudio && !hasMask) && <TabsTrigger value="audio" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
-            {(hasDuration && !hasMask) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            {((hasDuration || hasFilter) && !hasMask) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">
+              {hasFilter ? 'Filter' : 'Duration'}
+              </TabsTrigger>}
             {(hasAdjust && !hasMask) && <TabsTrigger value="adjust" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Adjust</TabsTrigger>}
             {(hasAppearance && !hasMask) && <TabsTrigger value="appearance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
           </TabsList>
@@ -347,7 +591,8 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasAudio && !hasMask) && <TabsContent value="audio" className="min-w-0 m-0">
             <AudioProperties clipId={clipId} />
           </TabsContent>}
-          {(hasDuration && !hasMask) && <TabsContent value="duration" className="min-w-0 m-0">
+          {((hasDuration || hasFilter) && !hasMask) && <TabsContent value="duration" className="min-w-0 m-0">
+            {hasFilter && <FilterProperties clipId={clipId} />}
             <DurationProperties clipId={clipId} />
           </TabsContent>}
           {(hasAdjust && !hasMask) && <TabsContent value="adjust" className="min-w-0 m-0">

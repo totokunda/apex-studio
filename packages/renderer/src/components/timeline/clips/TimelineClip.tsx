@@ -71,6 +71,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const setGhostX = useClipStore((s) => s.setGhostX);
     const setGhostTimelineId = useClipStore((s) => s.setGhostTimelineId);
     const setGhostStartEndFrame = useClipStore((s) => s.setGhostStartEndFrame);
+    const getClipsForGroup = useClipStore((s) => s.getClipsForGroup);
     const setGhostInStage = useClipStore((s) => s.setGhostInStage);
     const setDraggingClipId = useClipStore((s) => s.setDraggingClipId);
     const getClipsForTimeline = useClipStore((s) => s.getClipsForTimeline);
@@ -122,6 +123,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     const thumbnailClipWidth = useRef<number>(0);
     const maxTimelineWidth = useMemo(() => (timelineWidth), [timelineWidth, timelinePadding]);
     const groupRef = useRef<Konva.Group>(null);
+    const rootGroupRef = useRef<Konva.Group>(null);
     const exactVideoUpdateTimerRef = useRef<number | null>(null);
     const exactVideoUpdateSeqRef = useRef(0);
     const lastExactRequestKeyRef = useRef<string | null>(null);
@@ -382,7 +384,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             )
         } 
     
-    }, [zoomLevel, clipWidth, clipType, currentClip, applyMask, tool, mediaInfoRef.current, resizeSide, thumbnailClipWidth,  maxTimelineWidth, timelineDuration, overHang, resizeSide, forceRerenderCounter]);
+    }, [zoomLevel, clipWidth, clipType, currentClip, tool, resizeSide, thumbnailClipWidth,  maxTimelineWidth, timelineDuration[0], timelineDuration[1], overHang, resizeSide, forceRerenderCounter]);
     
     const calculateFrameFromX = useCallback((xPosition: number) => {
         // Remove padding to get actual timeline position
@@ -395,6 +397,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 
     const handleDragMove = useCallback((e:Konva.KonvaEventObject<MouseEvent>) => {
         if (assetMode) return;
+        rootGroupRef.current?.moveToTop();
         const halfStroke = isSelected ? 1.5 : 0;
         // For preprocessor clips, only update X position to prevent vertical drift
         setClipPosition({x: e.target.x() - halfStroke, y: e.target.y() - halfStroke});
@@ -694,15 +697,10 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             
             addTimeline(newTimeline, hoveredIdx);
             dropTimelineId = newTimelineId;
-            // When creating a new timeline via dashed hover, place based on current pointer X
-            const stage = _e.target.getStage();
-            const pos = stage?.getPointerPosition();
-            if (pos) {
-                const innerX = Math.max(0, Math.min(stageWidth, pos.x - timelinePadding));
-                gX = Math.round(innerX);
-            } else {
-                gX = 0;
-            }
+            // When creating a new timeline via dashed hover, place based on the clip's left edge
+            // Use the dragged group's X position rather than the pointer position
+            const groupLeftX = Math.max(0, Math.min(stageWidth, _e.target.x() - timelinePadding));
+            gX = Math.round(groupLeftX);
         }
         
         setHoveredTimelineId(null);
@@ -1065,6 +1063,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 
     const handleDragStart = useCallback((e:Konva.KonvaEventObject<MouseEvent>) => {
         if (assetMode) return;
+        rootGroupRef.current?.moveToTop();
         groupRef.current?.moveToTop();
         
         setSelectedPreprocessorId(null);
@@ -1118,8 +1117,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         (async () => {
         if (clipType === 'group' ) {
             // get the children of the group
-            const childIds = (currentClip as GroupClipProps).children.flat();
-            const children = childIds.map((childId) => getClipById(childId));
+            const children = getClipsForGroup((currentClip as GroupClipProps).children).reverse();
             // Compute per-type counts for badge row
             const counts = { video: 0, image: 0, audio: 0, text: 0, draw: 0, filter: 0, shape: 0, model: 0 } as {video:number,image:number,audio:number,text:number,draw:number,filter:number,shape:number,model:number};
             for (const ch of children) {
@@ -1134,7 +1132,8 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 else if (ch.type === 'model') counts.model++;
             }
             setGroupCounts(counts);
-            const canvases = await Promise.all(children.reverse().slice(0, 3).map(async (child) => {
+            const childrenToUse = [...children].slice(0, 3);
+            const canvases = await Promise.all(childrenToUse.map(async (child) => {
                 if (child?.type === 'video' || child?.type === 'image' && child?.src) {
                     const mediaInfo = getMediaInfoCached(child.src);
                     if (!mediaInfo) return null;
@@ -1208,7 +1207,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 }
                 return null;
             }));
-            setGroupedCanvases(canvases.filter((c) => c !== null) as HTMLCanvasElement[]);
+            setGroupedCanvases(canvases.reverse().filter((c) => c !== null) as HTMLCanvasElement[]);
         }
     })();
     }, [currentClip, getClipById, clipType]);
@@ -1219,6 +1218,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     return (
         <>
             <Group  
+                ref={rootGroupRef}
                 onClick={handleClick} 
                 draggable={!assetMode && resizeSide === null} 
                 onDragEnd={handleDragEnd} 

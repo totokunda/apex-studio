@@ -14,14 +14,15 @@ import TimelineSearch from './timeline/TimelineSearch';
 import { useClipStore } from '@/lib/clip';
 import { useAssetControlsStore } from '@/lib/assetControl';
 import TimelineClipPosterPreview from './TimelineClipPosterPreview';
-import { AnyClipProps, ImageClipProps, VideoClipProps } from '@/lib/types';
-import { VIDEO_EXTS, IMAGE_EXTS, DEFAULT_FPS } from '@/lib/settings';
+import { AnyClipProps, clipSignature, ImageClipProps, VideoClipProps } from '@/lib/types';
+import { VIDEO_EXTS, IMAGE_EXTS} from '@/lib/settings';
 import { getLowercaseExtension, pickMediaPaths, importMediaPaths, getPathForFile } from '@app/preload';
 import { useViewportStore } from '@/lib/viewport';
 import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/library';
 import TimelineSelector from './timeline/TimelineSelector';
 import { useInputControlsStore } from '@/lib/inputControl';
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store';
+import { useControlsStore } from '@/lib/control';
 
 export type ImageSelection = AnyClipProps | null;
 
@@ -51,6 +52,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [filteredMediaItems, setFilteredMediaItems] = useState<MediaItem[]>([]);
+    const {fps} = useControlsStore();
     // media cache not needed for list sync here; we subscribe to library version instead
     const {clips} = useClipStore();
     const getClipById = useClipStore((s) => s.getClipById);
@@ -118,7 +120,9 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
                 const ext = getLowercaseExtension(first.assetUrl);
                 const isVideo = VIDEO_EXTS.includes(ext);
                 if (isVideo) {
-                    const fps = Math.max(1, Math.floor(first.mediaInfo?.stats?.video?.averagePacketRate || DEFAULT_FPS));
+                    const mw = first.mediaInfo?.video?.displayWidth ?? (first.mediaInfo as any)?.video?.width ?? 0;
+                    const mh = first.mediaInfo?.video?.displayHeight ?? (first.mediaInfo as any)?.video?.height ?? 0;
+                    const mar = mw && mh ? mw / mh : undefined;
                     const duration = Math.max(1, Math.floor((first.mediaInfo?.duration || 0) * fps));
                     const clip: VideoClipProps = {
                         type: 'video',
@@ -126,17 +130,26 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
                         src: first.assetUrl,
                         startFrame: 0,
                         endFrame: duration,
+                        mediaWidth: mw || undefined,
+                        mediaHeight: mh || undefined,
+                        mediaAspectRatio: typeof mar === 'number' && isFinite(mar) && mar > 0 ? mar : undefined,
                         preprocessors: [],
                         masks: [],
                     } as any;
                     onChange(clip as AnyClipProps);
                 } else {
+                    const iw = first.mediaInfo?.image?.width ?? 0;
+                    const ih = first.mediaInfo?.image?.height ?? 0;
+                    const iar = iw && ih ? iw / ih : undefined;
                     const clip: ImageClipProps = {
                         type: 'image',
                         clipId: `media:${first.assetUrl}`,
                         src: first.assetUrl,
                         startFrame: 0,
                         endFrame: 1,
+                        mediaWidth: iw || undefined,
+                        mediaHeight: ih || undefined,
+                        mediaAspectRatio: typeof iar === 'number' && isFinite(iar) && iar > 0 ? iar : undefined,
                         preprocessors: [],
                         masks: [],
                     } as any;
@@ -218,25 +231,36 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
                                     const ext = getLowercaseExtension(media.assetUrl);
                                     const isVideo = VIDEO_EXTS.includes(ext);
                                     if (isVideo) {
-                                        const fps = Math.max(1, Math.floor(media.mediaInfo?.stats?.video?.averagePacketRate || DEFAULT_FPS));
                                         const duration = Math.max(1, Math.floor((media.mediaInfo?.duration || 0) * fps));
+                                        const mw = media.mediaInfo?.video?.displayWidth ?? (media.mediaInfo as any)?.video?.width ?? 0;
+                                        const mh = media.mediaInfo?.video?.displayHeight ?? (media.mediaInfo as any)?.video?.height ?? 0;
+                                        const mar = mw && mh ? mw / mh : undefined;
                                         const clip: VideoClipProps = {
                                             type: 'video',
                                             clipId: targetClipId,
                                             src: media.assetUrl,
                                             startFrame: 0,
                                             endFrame: duration,
+                                            mediaWidth: mw || undefined,
+                                            mediaHeight: mh || undefined,
+                                            mediaAspectRatio: typeof mar === 'number' && isFinite(mar) && mar > 0 ? mar : undefined,
                                             preprocessors: [],
                                             masks: [],
                                         } as any;
                                         onChange(clip as AnyClipProps);
                                     } else {
+                                        const iw = media.mediaInfo?.image?.width ?? 0;
+                                        const ih = media.mediaInfo?.image?.height ?? 0;
+                                        const iar = iw && ih ? iw / ih : undefined;
                                         const clip: ImageClipProps = {
                                             type: 'image',
                                             clipId: targetClipId,
                                             src: media.assetUrl,
                                             startFrame: 0,
                                             endFrame: 1,
+                                            mediaWidth: iw || undefined,
+                                            mediaHeight: ih || undefined,
+                                            mediaAspectRatio: typeof iar === 'number' && isFinite(iar) && iar > 0 ? iar : undefined,
                                             preprocessors: [],
                                             masks: [],
                                         } as any;
@@ -288,6 +312,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
     }, [preprocessors, preprocessorRef, preprocessorName]);
     // Preprocessor toggle state and defaulting
     const [applyPreprocessor, setApplyPreprocessor] = useState<boolean>(true);
+    const {fps} = useControlsStore();
 
     useEffect(() => {
         if (typeof applyPreprocessorInitial === 'boolean') {
@@ -328,10 +353,66 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         return value.clipId;
     }, [value]);
     const lastSelectionKeyRef = useRef<string | null>(null);
-    const viewportRatio = useMemo(() => {
+  const viewportRatio = useMemo(() => {
         const r = aspectRatio.width / aspectRatio.height;
         return Number.isFinite(r) && r > 0 ? r : 1;
     }, [aspectRatio.width, aspectRatio.height]);
+  const ratioCacheByClipIdRef = useRef<Record<string, number>>({});
+  const [contentRatio, setContentRatio] = useState<number | null>(null);
+  const selectedClipForRatio = useMemo<AnyClipProps | null>(() => {
+      if (!value) return null;
+      return (mediaClip ?? (value as AnyClipProps)) || null;
+  }, [value, mediaClip]);
+
+  const selectedClipRatioSignature = clipSignature(selectedClipForRatio as AnyClipProps);
+
+  const displayRatio = useMemo(() => {
+      const clip = selectedClipForRatio;
+      if (!clip) return viewportRatio;
+      if (clip.type === 'group') return viewportRatio;
+      if (typeof contentRatio === 'number' && Number.isFinite(contentRatio) && contentRatio > 0) return contentRatio;
+      return viewportRatio;
+  }, [selectedClipRatioSignature, contentRatio, viewportRatio]);
+  
+  useEffect(() => {
+      const clip = selectedClipForRatio;
+      if (!clip) {
+          setContentRatio(null);
+          return;
+      }
+      if (clip.type !== 'video' && clip.type !== 'image') {
+          setContentRatio(null);
+          return;
+      }
+      const cached = ratioCacheByClipIdRef.current[clip.clipId];
+      if (typeof cached === 'number' && cached > 0) {
+          setContentRatio(cached);
+          return;
+      }
+      const src = (clip as any)?.src as string | undefined;
+      if (!src) {
+          setContentRatio(null);
+          return;
+      }
+      let cancelled = false;
+      (async () => {
+          try {
+            const info = await getMediaInfo(src);
+            const w = info?.video?.displayWidth ?? info?.image?.width ?? 0;
+            const h = info?.video?.displayHeight ?? info?.image?.height ?? 0;
+            const r = w / h;
+            if (!cancelled && Number.isFinite(r) && r > 0) {
+              ratioCacheByClipIdRef.current[clip.clipId] = r;
+              setContentRatio(r);
+            }
+          } catch {
+              if (!cancelled) setContentRatio(null);
+          }
+      })();
+      return () => {
+          cancelled = true;
+      };
+  }, [selectedClipRatioSignature]);
     // Determine stage rendering dynamically in render branch
 
     // Keep stage size exactly equal to the trigger box area
@@ -342,17 +423,17 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             const rect = entries[0]?.contentRect;
             if (!rect) return;
             const w = Math.max(1, panelSize);
-            const h = Math.max(1, w / viewportRatio);
+          const h = Math.max(1, w / displayRatio);
             setStageSize({ w, h });
         });
         obs.observe(el);
         return () => obs.disconnect();
-    }, [panelSize, viewportRatio]);
+  }, [panelSize, displayRatio]);
 
     // Ensure width updates immediately when panelSize changes, even if height is unchanged
     useEffect(() => {
-        setStageSize((prev) => ({ w: Math.max(1, panelSize), h: Math.max(1, panelSize / viewportRatio || prev.h) }));
-    }, [panelSize, viewportRatio]);
+      setStageSize((prev) => ({ w: Math.max(1, panelSize), h: Math.max(1, panelSize / displayRatio || prev.h) }));
+  }, [panelSize, displayRatio]);
 
 
 
@@ -384,25 +465,36 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
                     const ext = getLowercaseExtension(assetUrl);
                     const isVideo = VIDEO_EXTS.includes(ext);
                     if (isVideo) {
-                        const fps = Math.max(1, Math.floor((data.mediaInfo?.stats?.video?.averagePacketRate || DEFAULT_FPS)));
                         const duration = Math.max(1, Math.floor((data.mediaInfo?.duration || 0) * fps));
+                        const mw = data.mediaInfo?.video?.displayWidth ?? (data.mediaInfo as any)?.video?.width ?? 0;
+                        const mh = data.mediaInfo?.video?.displayHeight ?? (data.mediaInfo as any)?.video?.height ?? 0;
+                        const mar = mw && mh ? mw / mh : undefined;
                         const clip: VideoClipProps = {
                             type: 'video',
                             clipId: targetClipId,
                             src: assetUrl,
                             startFrame: 0,
                             endFrame: duration,
+                            mediaWidth: mw || undefined,
+                            mediaHeight: mh || undefined,
+                            mediaAspectRatio: typeof mar === 'number' && isFinite(mar) && mar > 0 ? mar : undefined,
                             preprocessors: [],
                             masks: [],
                         } as any;
                         emitSelection(clip as AnyClipProps);
                     } else {
+                        const iw = data.mediaInfo?.image?.width ?? 0;
+                        const ih = data.mediaInfo?.image?.height ?? 0;
+                        const iar = iw && ih ? iw / ih : undefined;
                         const clip: ImageClipProps = {
                             type: 'image',
                             clipId: targetClipId,
                             src: assetUrl,
                             startFrame: 0,
                             endFrame: 1,
+                            mediaWidth: iw || undefined,
+                            mediaHeight: ih || undefined,
+                            mediaAspectRatio: typeof iar === 'number' && isFinite(iar) && iar > 0 ? iar : undefined,
                             preprocessors: [],
                             masks: [],
                         } as any;
@@ -439,13 +531,14 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         setMediaClip(value as AnyClipProps);
         const start = Math.max(0, Math.round((value.startFrame ?? 0)));
         const end = Math.max(start + 1, Math.round((value.endFrame ?? start + 1)));
+        const span = Math.max(1, end - start);
         const storeState = useInputControlsStore.getState();
         const currentDuration = storeState.getTimelineDuration(inputId);
         const currentFocus = storeState.getFocusFrame(inputId);
-        if (currentDuration[0] !== start || currentDuration[1] !== end) {
-            setInputTimelineDuration(start, end, inputId);
+        if (currentDuration[0] !== 0 || currentDuration[1] !== span) {
+            setInputTimelineDuration(0, span, inputId);
         }
-        const clampedFocus = Math.max(start, Math.min(end - 1, currentFocus ?? start));
+        const clampedFocus = Math.max(0, Math.min(span - 1, currentFocus ?? 0));
         if (currentFocus !== clampedFocus) {
             setInputFocusFrame(clampedFocus, inputId);
         }
@@ -521,26 +614,37 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
                 if (VIDEO_EXTS.includes(getLowercaseExtension(first.assetUrl))) {
                     try {
                         const info = await getMediaInfo(first.assetUrl);
-                        const fps = Math.max(1, Math.floor(info?.stats?.video?.averagePacketRate || DEFAULT_FPS));
                         const duration = Math.max(1, Math.floor((info?.duration || 0) * fps));
+                        const mw = info?.video?.displayWidth ?? (info as any)?.video?.width ?? 0;
+                        const mh = info?.video?.displayHeight ?? (info as any)?.video?.height ?? 0;
+                        const mar = mw && mh ? mw / mh : undefined;
                         const clip: VideoClipProps = {
                             type: 'video',
                             clipId: `media:${first.assetUrl}`,
                             src: first.assetUrl,
                             startFrame: 0,
                             endFrame: duration,
+                            mediaWidth: mw || undefined,
+                            mediaHeight: mh || undefined,
+                            mediaAspectRatio: typeof mar === 'number' && isFinite(mar) && mar > 0 ? mar : undefined,
                             preprocessors: [],
                             masks: [],
                         } as any;
                         emitSelection(clip as AnyClipProps);
                     } catch {}
                 } else {
+                    const iw = (await getMediaInfo(first.assetUrl))?.image?.width ?? 0; // best effort
+                    const ih = (await getMediaInfo(first.assetUrl))?.image?.height ?? 0;
+                    const iar = iw && ih ? iw / ih : undefined;
                     const clip: ImageClipProps = {
                         type: 'image',
                         clipId: `media:${first.assetUrl}`,
                         src: first.assetUrl,
                         startFrame: 0,
                         endFrame: 1,
+                        mediaWidth: iw || undefined,
+                        mediaHeight: ih || undefined,
+                        mediaAspectRatio: typeof iar === 'number' && isFinite(iar) && iar > 0 ? iar : undefined,
                         preprocessors: [],
                         masks: [],
                     } as any;
@@ -555,6 +659,41 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         if (!value) return null;
         return mediaClip ?? (value as AnyClipProps);
     }, [value, mediaClip]);
+
+  // Keep preview/input in sync with timeline clip updates/deletions when selection references timeline
+  const liveTimelineClip = useClipStore((s) => {
+      if (!value) return null;
+      const cid = String(value.clipId || '');
+      if (cid.startsWith('media:')) return null;
+      return (s.getClipById(cid) as AnyClipProps | undefined) ?? null;
+  });
+
+
+
+  useEffect(() => {
+      if (!value) return;
+      const cid = String(value.clipId || '');
+      if (cid.startsWith('media:')) return; // media assets managed via media info
+      if (!liveTimelineClip) {
+          // clip removed from timeline → clear input
+          emitSelection(null);
+          return;
+      }
+      // Ignore audio-only timeline clips for image input
+      if ((liveTimelineClip as AnyClipProps).type === 'audio') {
+          emitSelection(null);
+          return;
+      }
+      if ((liveTimelineClip as AnyClipProps).hidden) {
+          emitSelection(null);
+          return;
+      }
+      const sigCurrent = clipSignature(value as AnyClipProps);
+      const sigLive = clipSignature(liveTimelineClip as AnyClipProps);
+      if (sigCurrent !== sigLive) {
+          emitSelection({ ...(liveTimelineClip as AnyClipProps) });
+      }
+  }, [value, liveTimelineClip, emitSelection]);
 
   return (
     <Droppable className="w-full h-full" id="image-input" accepts={['media']}>
@@ -584,7 +723,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
                     (() => {
                         if (!mediaClip) return null;
                         const clipToRender = mediaClip;
-                        return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} inputId={inputId} />
+                        return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} inputId={inputId} ratioOverride={displayRatio} />
                     })()
                 ) : (
                     <canvas ref={canvasRef} className="w-full h-auto rounded-[6px]" />

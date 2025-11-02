@@ -70,6 +70,10 @@ export type PreprocessorClipType = VideoClipProps | ImageClipProps;
 export type VideoClipProps = ClipProps & MediaAdjustments & {
     src: string;
     type: 'video';
+    // Intrinsic media dimensions for consistent aspect ratio
+    mediaWidth?: number;
+    mediaHeight?: number;
+    mediaAspectRatio?: number; // width / height
     volume?: number;
     fadeIn?: number;
     fadeOut?: number;
@@ -81,6 +85,10 @@ export type VideoClipProps = ClipProps & MediaAdjustments & {
 export type ImageClipProps = ClipProps & MediaAdjustments & {
     src: string;
     type: 'image';
+    // Intrinsic media dimensions for consistent aspect ratio
+    mediaWidth?: number;
+    mediaHeight?: number;
+    mediaAspectRatio?: number; // width / height
     preprocessors: PreprocessorClipProps[];
     masks: MaskClipProps[];
 }
@@ -158,6 +166,7 @@ export type FilterClipProps = ClipProps & {
     category?: string;
     examplePath?: string;
     exampleAssetUrl?: string;
+    intensity?: number;
 }
 
 export interface DrawingLineTransform {
@@ -335,4 +344,301 @@ export interface Filter {
 
 export type FilterWithType = Filter & {
     type: 'filter';
+}
+
+// Fast, compact signature generator for AnyClipProps to use in React deps
+// Focuses on stable, lightweight fields and summarizes large arrays
+export function clipSignature(clip: AnyClipProps): string {
+    try {
+        const parts: string[] = [];
+
+        // Common/base fields
+        parts.push(
+            clip.type,
+            clip.clipId,
+            clip.timelineId ?? '',
+            n(clip.startFrame),
+            n(clip.endFrame),
+            n(clip.trimStart),
+            n(clip.trimEnd),
+            n(clip.clipPadding),
+            n(clip.width),
+            n(clip.height),
+            clip.hidden ? '1' : '0',
+            clip.groupId ?? '',
+            encodeTransform(clip.transform),
+            encodeTransform(clip.originalTransform)
+        );
+
+        // Per-type specific fields (keep minimal for speed)
+        switch (clip.type) {
+            case 'video': {
+                parts.push(
+                    (clip as any)?.src ?? '',
+                    n(clip.mediaWidth),
+                    n(clip.mediaHeight),
+                    n(clip.mediaAspectRatio),
+                    n(clip.volume),
+                    n(clip.fadeIn),
+                    n(clip.fadeOut),
+                    n(clip.speed),
+                    preprocessorsSignature((clip as any)?.preprocessors),
+                    masksSignature((clip as any)?.masks)
+                );
+                break;
+            }
+            case 'image': {
+                parts.push(
+                    (clip as any)?.src ?? '',
+                    n(clip.mediaWidth),
+                    n(clip.mediaHeight),
+                    n(clip.mediaAspectRatio),
+                    preprocessorsSignature((clip as any)?.preprocessors),
+                    masksSignature((clip as any)?.masks)
+                );
+                break;
+            }
+            case 'audio': {
+                const a = clip as any;
+                parts.push(
+                    a?.src ?? '',
+                    n(a?.volume),
+                    n(a?.fadeIn),
+                    n(a?.fadeOut),
+                    n(a?.speed)
+                );
+                break;
+            }
+            case 'shape': {
+                const s = clip as any;
+                parts.push(
+                    s.shapeType ?? '',
+                    s.fill ?? '',
+                    n(s.fillOpacity),
+                    s.stroke ?? '',
+                    n(s.strokeOpacity),
+                    n(s.strokeWidth)
+                );
+                break;
+            }
+            case 'text': {
+                const t = clip as any;
+                const text = t.text ?? '';
+                const textPrefix = text.length > 32 ? (text.slice(0, 32) + '\u2026') : text;
+                parts.push(
+                    String(text.length),
+                    textPrefix,
+                    n(t.fontSize),
+                    n(t.fontWeight),
+                    t.fontStyle ?? '',
+                    t.fontFamily ?? '',
+                    t.color ?? '',
+                    n(t.colorOpacity),
+                    t.textAlign ?? '',
+                    t.verticalAlign ?? '',
+                    t.textTransform ?? '',
+                    t.textDecoration ?? '',
+                    t.strokeEnabled ? '1' : '0',
+                    t.stroke ?? '',
+                    n(t.strokeWidth),
+                    n(t.strokeOpacity),
+                    t.shadowEnabled ? '1' : '0',
+                    t.shadowColor ?? '',
+                    n(t.shadowOpacity),
+                    n(t.shadowBlur),
+                    n(t.shadowOffsetX),
+                    n(t.shadowOffsetY),
+                    t.shadowOffsetLocked ? '1' : '0',
+                    t.backgroundEnabled ? '1' : '0',
+                    t.backgroundColor ?? '',
+                    n(t.backgroundOpacity),
+                    n(t.backgroundCornerRadius)
+                );
+                break;
+            }
+            case 'filter': {
+                const f = clip as any;
+                parts.push(
+                    f.name ?? '',
+                    f.smallPath ?? '',
+                    f.fullPath ?? '',
+                    f.category ?? '',
+                    f.examplePath ?? '',
+                    f.exampleAssetUrl ?? '',
+                    n(f.intensity)
+                );
+                break;
+            }
+            case 'draw': {
+                parts.push(linesSignature((clip as any)?.lines));
+                break;
+            }
+            case 'group': {
+                parts.push(groupChildrenSignature((clip as any)?.children));
+                break;
+            }
+            case 'model': {
+                const m = clip as any;
+                parts.push(
+                    m.src ?? '',
+                    m.category ?? '',
+                    manifestIdSignature(m.manifest)
+                );
+                break;
+            }
+            default: {
+                break;
+            }
+        }
+
+        return parts.join('|');
+    } catch (_err) {
+        return fallbackSignature(clip);
+    }
+}
+
+function fallbackSignature(clip: AnyClipProps): string {
+    try {
+        const t = (clip as any)?.type ?? '';
+        const id = (clip as any)?.clipId ?? '';
+        const tl = (clip as any)?.timelineId ?? '';
+        const src = typeof (clip as any)?.src === 'string' ? (clip as any).src : '';
+        return [t, id, tl, src, 'ERR'].join('|');
+    } catch {
+        return 'CLIP|ERR';
+    }
+}
+
+function n(value: number | undefined | null): string {
+    if (value === null || value === undefined) return '';
+    if (typeof value !== 'number') return '';
+    if (!Number.isFinite(value)) return '';
+    return Number.isInteger(value) ? String(value) : value.toFixed(4);
+}
+
+function encodeTransform(t: ClipTransform | undefined): string {
+    if (!t) return '';
+    return [
+        n(t.x), n(t.y), n(t.width), n(t.height),
+        n(t.scaleX), n(t.scaleY), n(t.rotation), n(t.cornerRadius), n(t.opacity)
+    ].join(',');
+}
+
+function encodeLineTransform(t: DrawingLineTransform | undefined): string {
+    if (!t) return '';
+    return [n(t.x), n(t.y), n(t.scaleX), n(t.scaleY), n(t.rotation), n(t.opacity)].join(',');
+}
+
+function preprocessorsSignature(arr: PreprocessorClipProps[] | undefined): string {
+    if (!arr || arr.length === 0) return '';
+    const parts: string[] = new Array(arr.length);
+    for (let i = 0; i < arr.length; i++) {
+        const p = arr[i];
+        const values = p.values ? fastValuesSignature(p.values) : '';
+        parts[i] = [
+            p.id,
+            String(p.preprocessor),
+            n(p.startFrame),
+            n(p.endFrame),
+            p.status ?? '',
+            values
+        ].join('^');
+    }
+    return parts.join('~');
+}
+
+function fastValuesSignature(values: Record<string, any>): string {
+    const keys = Object.keys(values).sort();
+    if (keys.length === 0) return '';
+    const out: string[] = new Array(keys.length);
+    for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        const v = (values as any)[k];
+        const t = typeof v;
+        let s: string;
+        if (t === 'number') s = n(v as number);
+        else if (t === 'string' || t === 'boolean') s = String(v);
+        else if (v == null) s = '';
+        else s = 'o'; // object/array - avoid heavy stringify
+        out[i] = k + ':' + s;
+    }
+    return out.join(',');
+}
+
+function masksSignature(arr: MaskClipProps[] | undefined): string {
+    if (!arr || arr.length === 0) return '';
+    const parts: string[] = new Array(arr.length);
+    for (let i = 0; i < arr.length; i++) {
+        const m = arr[i];
+        const kf: any = m.keyframes as any;
+        let kfCount = 0;
+        if (kf) {
+            if (typeof Map !== 'undefined' && kf instanceof Map) kfCount = (kf as Map<any, any>).size;
+            else if (typeof kf === 'object') kfCount = Object.keys(kf).length;
+        }
+        parts[i] = [
+            m.id,
+            m.tool,
+            n(m.featherAmount),
+            n(m.brushSize),
+            m.isTracked ? '1' : '0',
+            m.inverted ? '1' : '0',
+            kfCount.toString()
+        ].join(',');
+    }
+    return parts.join('|');
+}
+
+function linesSignature(lines: DrawingLine[] | undefined): string {
+    if (!lines || lines.length === 0) return '';
+    const count = lines.length;
+    let totalPoints = 0;
+    let rolling = 0;
+    for (let i = 0; i < lines.length; i++) {
+        const ln = lines[i];
+        const len = ln.points ? ln.points.length : 0;
+        totalPoints += len;
+        // fast rolling hash from lengths and widths
+        rolling = ((rolling << 5) - rolling) ^ (len & 0xffff) ^ ((ln.strokeWidth | 0) & 0xffff);
+    }
+    const first = lines[0];
+    const last = lines[count - 1];
+    return [
+        count.toString(),
+        totalPoints.toString(),
+        (rolling >>> 0).toString(36), // compact
+        lineKey(first),
+        lineKey(last)
+    ].join('|');
+}
+
+function lineKey(l: DrawingLine | undefined): string {
+    if (!l) return '';
+    return [
+        l.lineId,
+        l.tool,
+        (l.points ? l.points.length : 0).toString(),
+        l.stroke,
+        n(l.strokeWidth),
+        n(l.opacity),
+        n(l.smoothing),
+        encodeLineTransform(l.transform)
+    ].join(',');
+}
+
+function groupChildrenSignature(children: string[][]): string {
+    if (!children || children.length === 0) return '';
+    const groups = children.length;
+    let total = 0;
+    for (let i = 0; i < children.length; i++) total += (children[i]?.length ?? 0);
+    const first = children[0]?.[0] ?? '';
+    const lastGroup = children[children.length - 1];
+    const last = lastGroup && lastGroup.length > 0 ? lastGroup[lastGroup.length - 1] : '';
+    return [groups.toString(), total.toString(), first, last].join(',');
+}
+
+function manifestIdSignature(manifest: ManifestDocument): string {
+    const m: any = manifest as any;
+    const id = m?.id ?? m?.name ?? m?.slug ?? '';
+    return typeof id === 'string' || typeof id === 'number' ? String(id) : '';
 }

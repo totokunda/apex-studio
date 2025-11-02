@@ -1,6 +1,6 @@
 import { MediaInfo } from "../types";
 import { AudioDecoderContext, AudioDecoderKey } from "./types";
-import {  AudioBufferSink} from "mediabunny";
+import {  AudioBufferSink, WrappedAudioBuffer, WrappedCanvas} from "mediabunny";
 import { nowMs, audioDecoders, pruneStaleDecoders} from "./utils";
 import { MediaCache} from "./cache";
 
@@ -18,7 +18,7 @@ function getOrCreateAudioDecoder(path: string, mediaInfo: MediaInfo): AudioDecod
     }
     try {
         const sink = new AudioBufferSink(mediaInfo.audio);
-    
+
         const ctx: AudioDecoderContext = {
             sink,
             inFlight: new Set<number>(),
@@ -64,7 +64,13 @@ export const getAudioIterator = async (path: string, options?: { mediaInfo?: Med
         const decoder = getOrCreateAudioDecoder(path, mediaInfo);
         if (!decoder) throw new Error('Decoder not found');
         decoder.lastAccessTs = nowMs();
-        return decoder.sink.buffers(startTimestamp, endTimestamp);
+        const stream = await decoder.sink.buffers(startTimestamp, endTimestamp);
+        async function* iterate(): AsyncGenerator<WrappedAudioBuffer | null> {
+            for await (const buf of stream) {
+                yield buf;
+            }
+        }
+        return iterate();
     } 
     finally {
         pruneStaleDecoders();

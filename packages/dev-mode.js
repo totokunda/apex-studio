@@ -54,6 +54,7 @@ const rendererWatchServerProvider = {
 const packagesToStart = [
   'packages/preload',
   'packages/main',
+  'packages/export-renderer',
 ];
 
 for (const pkg of packagesToStart) {

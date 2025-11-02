@@ -1,6 +1,5 @@
 import React, { useState } from 'react'
 import { LuChevronDown, LuChevronUp, LuCheck} from "react-icons/lu";
-import { SiShortcut } from "react-icons/si";
 
 import {
     DropdownMenu,
@@ -47,12 +46,29 @@ const TopBar:React.FC<TopBarProps> = () => {
     const aspectRatio = useViewportStore((s) => s.aspectRatio);
     const setAspectRatio = useViewportStore((s) => s.setAspectRatio);
     const [sizeOpen, setSizeOpen] = useState(false);
+    const setIsAspectEditing = useViewportStore((s) => s.setAspectEditing);
+    const isAspectEditing = useViewportStore((s) => s.isAspectEditing);
     const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const layoutLabel = layout === 'default' ? 'Default' : layout === 'media' ? 'Media' : 'Properties';
 
   return (
     <div className="w-full relative h-8 mt-2 px-6 flex items-center justify-end space-x-2">
       
+          
+          
+          {/* Exit Custom button when in aspect editing mode */}
+          {isAspectEditing && (
+            <button 
+              onClick={() => setIsAspectEditing(false)}
+              className='text-brand-light/90 dark h-[34px] px-4 flex items-center gap-x-2 font-medium border border-red-500/30 hover:border-red-500/50 bg-red-500/10 hover:bg-red-500/20 rounded-[6px] transition-all duration-300 cursor-pointer'
+            >
+              <span className='text-[11px]'>Exit Aspect Editing</span>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          )}
           <SystemMemoryMenu />
            <DropdownMenu open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
                 <DropdownMenuTrigger className='text-brand-light/90 dark w-32 h-[34px] relative flex items-center space-x-2 px-2 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer'>
@@ -140,7 +156,7 @@ const TopBar:React.FC<TopBarProps> = () => {
                       key={opt.id}
                       textValue={opt.name}
                       className='dark text-[12px] font-medium flex flex-row items-center cursor-pointer gap-x-3 w-full bg-transparent'
-                      onClick={() => { setAspectRatio({ width: opt.w, height: opt.h, id: opt.id }); setSizeOpen(false); }}
+                      onClick={() => { setAspectRatio({ width: opt.w, height: opt.h, id: opt.id }); setIsAspectEditing(false); setSizeOpen(false); }}
                     >
                       <div
                         className='w-[24px] border-[1.5px] border-brand-light rounded-xs'
@@ -155,6 +171,45 @@ const TopBar:React.FC<TopBarProps> = () => {
                      {index !== 6 && <DropdownMenuSeparator />}
                      </>
                   ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    key={'custom'}
+                    textValue={'Custom'}
+                    className='dark text-[12px] font-medium flex flex-row items-center cursor-pointer gap-x-3 w-full bg-transparent'
+                    onClick={(e) => {
+                      // Only prevent default if clicking on the edit button
+                      if ((e.target as HTMLElement).closest('button')) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                      }
+                      // If not custom already, set to custom mode
+                      if (aspectRatio.id !== 'custom') {
+                        setAspectRatio({ width: aspectRatio.width, height: aspectRatio.height, id: 'custom' });
+                        setIsAspectEditing(true);
+                      }
+                      setSizeOpen(false);
+                    }}
+                  >
+                    <div className='w-[24px] h-[24px] border-[1.5px] border-dashed border-brand-light rounded-xs' />
+                    <div className='flex flex-col items-start gap-y-0.5 flex-1'>
+                      <span>Custom</span>
+                      <span className='text-brand-light/50 text-xs font-light'>{aspectRatio.id === 'custom' ? `${aspectRatio.width}:${aspectRatio.height}` : 'Set W:H'}</span>
+                    </div>
+                    {aspectRatio.id === 'custom' && (
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setIsAspectEditing(!isAspectEditing);
+                          setSizeOpen(false);
+                        }}
+                        className='px-3 py-1 text-[10px] bg-brand-light/10 hover:bg-brand-light/20 rounded-[4px] transition-colors'
+                      >
+                        {isAspectEditing ? 'Done' : 'Edit'}
+                      </button>
+                    )}
+                  </DropdownMenuItem>
                  
                 </DropdownMenuContent>
            </DropdownMenu> 

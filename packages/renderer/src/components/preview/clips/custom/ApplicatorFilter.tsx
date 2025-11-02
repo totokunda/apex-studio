@@ -8,7 +8,6 @@ interface ApplicatorFilterNode extends Konva.Node {
 function ApplicatorFilter(this: ApplicatorFilterNode, imageData: ImageData) {
     //@ts-ignore
     const applicators = this.attrs.applicators as BaseClipApplicator[];
-
     if (!applicators || applicators.length === 0) {
         return;
     }

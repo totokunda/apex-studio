@@ -244,7 +244,7 @@ export class WebGLHaldClut extends WebGLFilterBase {
       return;
     }
     const clutImage = await this.loadClutImage(clutImagePath);
-    
+
     // Calculate Hald CLUT level from image dimensions
     const length = Math.min(clutImage.width, clutImage.height);
     let level = 2;
@@ -364,6 +364,8 @@ export class WebGLHaldClut extends WebGLFilterBase {
     const clutSizeLoc = gl.getUniformLocation(this.program, 'u_clutSize');
     const clutWidthLoc = gl.getUniformLocation(this.program, 'u_clutWidth');
     const intensityLoc = gl.getUniformLocation(this.program, 'u_intensity');
+
+    console.log('intensity', intensity, clutImagePath);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, sourceTexture);

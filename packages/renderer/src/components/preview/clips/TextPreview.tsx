@@ -8,6 +8,7 @@ import { useViewportStore } from '@/lib/viewport';
 import { useClipStore } from '@/lib/clip';
 import { BaseClipApplicator } from './apply/base';
 import ApplicatorFilter from './custom/ApplicatorFilter';
+// (duplicate removed)
 
 //@ts-ignore
 Konva.Filters.Applicator = ApplicatorFilter; 
@@ -296,9 +297,24 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
         updateGuidesAndMaybeSnap({ snap: true });
         const node = textRef.current;
         if (node) {
+            // Immediately move background rect to avoid visual lag
+            if (backgroundRef.current) {
+                backgroundRef.current.x(node.x());
+                backgroundRef.current.y(node.y());
+                //@ts-ignore
+                backgroundRef.current.getLayer()?.batchDraw?.();
+            }
             setClipTransform(clipId, { x: node.x(), y: node.y() });
         } else {
-            setClipTransform(clipId, { x: e.target.x(), y: e.target.y() });
+            const nx = e.target.x();
+            const ny = e.target.y();
+            if (backgroundRef.current) {
+                backgroundRef.current.x(nx);
+                backgroundRef.current.y(ny);
+                //@ts-ignore
+                backgroundRef.current.getLayer()?.batchDraw?.();
+            }
+            setClipTransform(clipId, { x: nx, y: ny });
         }
     }, [setClipTransform, clipId, updateGuidesAndMaybeSnap]);
 
@@ -1222,25 +1238,117 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
     }, []);
 
 
-    useEffect(() => {
-        if (textRef.current) {
-            textRef.current.cache({
-                pixelRatio: 2,
-            })
-            //@ts-ignore
-            textRef.current.getLayer()?.batchDraw?.();
-        }
-    }, [textRef.current, applicators]);
+    // Stable filters array
+    const filtersArray = useMemo(() => [
+        //@ts-ignore
+        Konva.Filters.Applicator,
+    ], []);
 
-    useEffect(() => {
-        if (backgroundRef.current) {
-            backgroundRef.current.cache({
-                pixelRatio: 2,
-            })
-            //@ts-ignore
-            backgroundRef.current.getLayer()?.batchDraw?.();
+    // Timeline-aware applicator signature (type + clipId + start-end)
+    const applicatorsSignature = useMemo(() => {
+        if (!applicators || applicators.length === 0) return 'none';
+        try {
+            return applicators.map((a) => {
+                const type = a?.constructor?.name || 'Unknown';
+                const start = (a as any)?.getStartFrame?.() ?? 'u';
+                const end = (a as any)?.getEndFrame?.() ?? 'u';
+                const owner = (a as any)?.getClip?.()?.clipId ?? 'u';
+                return `${type}#${owner}@${start}-${end}`;
+            }).join('|');
+        } catch {
+            return `len:${applicators.length}`;
         }
-    }, [backgroundRef.current, applicators]);
+    }, [applicators]);
+
+    // Store-driven active flag
+    const focusFrameControls = useControlsStore((s) => s.focusFrame);
+    const clipsState = useClipStore((s) => s.clips);
+    const applicatorsActiveStore = useMemo(() => {
+        const apps = applicators || [];
+        if (!apps.length) return false;
+        const getClipById = useClipStore.getState().getClipById;
+        const frame = typeof focusFrameControls === 'number' ? focusFrameControls : 0;
+        return apps.some((a) => {
+            const owned = (a as any)?.getClip?.();
+            const id = owned?.clipId;
+            if (!id) return false;
+            const sc = getClipById(id) as any;
+            if (!sc) return false;
+            const start = sc.startFrame ?? 0;
+            const end = sc.endFrame ?? 0;
+            return frame >= start && frame <= end;
+        });
+    }, [clipsState, focusFrameControls, applicatorsSignature]);
+
+    // Cache text node bitmap when visual attributes or active-range change and not interacting/editing
+    useEffect(() => {
+        const node = textRef.current;
+        if (!node) return;
+        if (isInteracting || isEditing) return;
+        // Recompute cache only on material visual changes
+        node.clearCache();
+        node.cache({ pixelRatio: 2 });
+        //@ts-ignore
+        node.getLayer()?.batchDraw?.();
+    }, [
+        // Interaction guards
+        isInteracting,
+        isEditing,
+        // Visual attributes affecting raster content
+        applicatorsSignature,
+        applicatorsActiveStore,
+        text,
+        temporaryText,
+        textTransform,
+        fontSize,
+        fontFamily,
+        fontStyle,
+        fontWeight,
+        textDecoration,
+        color,
+        colorOpacity,
+        strokeEnabled,
+        stroke,
+        strokeWidth,
+        shadowEnabled,
+        shadowColor,
+        shadowOpacity,
+        shadowBlur,
+        shadowOffsetX,
+        shadowOffsetY,
+        textAlign,
+        verticalAlign,
+        // Geometry
+        clipTransform?.width,
+        clipTransform?.height,
+        clipTransform?.rotation,
+    ]);
+
+    // Cache background rect bitmap when its visual attributes or active-range change and not interacting/editing
+    useEffect(() => {
+        const bg = backgroundRef.current;
+        if (!bg) return;
+        if (isInteracting || isEditing) return;
+        if (!backgroundEnabled) return;
+        bg.clearCache();
+        bg.cache({ pixelRatio: 2 });
+        //@ts-ignore
+        bg.getLayer()?.batchDraw?.();
+    }, [
+        isInteracting,
+        isEditing,
+        backgroundEnabled,
+        backgroundColor,
+        backgroundOpacity,
+        backgroundCornerRadius,
+        applicatorsSignature,
+        applicatorsActiveStore,
+        clipTransform?.width,
+        clipTransform?.height,
+        clipTransform?.rotation,
+        clipTransform?.x,
+        clipTransform?.y,
+    ]);
     
     useEffect(() => {
         const transformer = transformerRef.current;
@@ -1279,6 +1387,18 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
             node.scaleX(1);
             node.scaleY(1);
             
+            // Keep background rect perfectly in sync while transforming
+            const bg = backgroundRef.current;
+            if (bg) {
+                bg.x(node.x());
+                bg.y(node.y());
+                bg.width(newWidth);
+                bg.height(newHeight);
+                bg.rotation(node.rotation());
+                //@ts-ignore
+                bg.getLayer()?.batchDraw?.();
+            }
+
             setClipTransform(clipId, {
                 x: node.x(),
                 y: node.y(),
@@ -1303,6 +1423,18 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
                 node.height(newHeight);
                 node.scaleX(1);
                 node.scaleY(1);
+
+                // Final sync for background rect at transform end
+                const bg = backgroundRef.current;
+                if (bg) {
+                    bg.x(node.x());
+                    bg.y(node.y());
+                    bg.width(newWidth);
+                    bg.height(newHeight);
+                    bg.rotation(node.rotation());
+                    //@ts-ignore
+                    bg.getLayer()?.batchDraw?.();
+                }
                 setClipTransform(clipId, {
                     x: node.x(),
                     y: node.y(),
@@ -1424,7 +1556,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
 
     // Listen for global mouse up to end dragging
     useEffect(() => {
-        const handleGlobalMouseUp = (e: MouseEvent) => {
+        const handleGlobalMouseUp = () => {
             if (isDragging) {
                 // Create a fake Konva event for the handler
                 const stage = textRef.current?.getStage();
@@ -1601,7 +1733,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
         return { x: caretX, y: getAlignedY(), height: fontSize };
     }, [isEditing, caretPosition, characterBoundingBoxes, clipTransform, offsetX, offsetY, temporaryText, text, textTransform, fontSize, textAlign, defaultWidth, verticalAlign, defaultHeight]);
 
-    const handleMouseOver = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    const handleMouseOver = useCallback(() => {
         if (!textRef.current) return;
         if (isEditing) {
             textRef.current.getStage()!.container().style.cursor = 'text';
@@ -1611,7 +1743,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
         
     }, [isEditing]);
 
-    const handleMouseOut = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    const handleMouseOut = useCallback(() => {
         if (!textRef.current) return;
         textRef.current.getStage()!.container().style.cursor = 'default';
     }, []);
@@ -1626,7 +1758,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
           width={clipTransform?.width ?? defaultWidth}
           applicators={applicators}
           //@ts-ignore
-          filters={[Konva.Filters.Applicator]}
+          filters={filtersArray}
           height={clipTransform?.height ?? defaultHeight}
           ref={backgroundRef}
           fill={backgroundColor}
@@ -1682,7 +1814,7 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
        onMouseOver={handleMouseOver}
        onMouseOut={handleMouseOut}
        //@ts-ignore
-       filters={[Konva.Filters.Applicator]}
+       filters={filtersArray}
        onTransform={(e) => {
          const node = e.target as Konva.Text;
          const newWidth = node.width() * node.scaleX();
@@ -1693,6 +1825,15 @@ const TextPreview: React.FC<TextClipProps & {rectWidth: number, rectHeight: numb
            scaleX: 1,
            scaleY: 1,
          });
+         // Also keep background rect in sync during resize
+         if (backgroundRef.current) {
+           backgroundRef.current.x(node.x());
+           backgroundRef.current.y(node.y());
+           backgroundRef.current.width(newWidth);
+           backgroundRef.current.height(newHeight);
+           //@ts-ignore
+           backgroundRef.current.getLayer()?.batchDraw?.();
+         }
        }}
        />
 

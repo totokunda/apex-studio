@@ -21,6 +21,7 @@ interface TimelineSearchProps {
 const SCROLLBAR_HW = 8;
 
 const TimelineSearch: React.FC<TimelineSearchProps> = ({ types, width = 580, height = 300, excludeClipId = null }) => {
+
     const timelinesLayerRef = useRef<Konva.Layer>(null);
     const [clampedScroll, setClampedScroll] = useState<number>(0);
     const [verticalScroll, setVerticalScroll] = useState<number>(0);
@@ -37,7 +38,7 @@ const TimelineSearch: React.FC<TimelineSearchProps> = ({ types, width = 580, hei
 
 
     const timelines = useMemo(() => {
-      const SCALE = 0.75; // shrink timelines for search view
+      const SCALE = 0.8; // shrink timelines for search view
       if (!originalTimelines || originalTimelines.length === 0) return [] as typeof originalTimelines;
 
       // Filter timelines to only include those matching allowed types (if any provided)
@@ -61,7 +62,7 @@ const TimelineSearch: React.FC<TimelineSearchProps> = ({ types, width = 580, hei
       for (let i = 0; i < filtered.length; i++) {
         const current = filtered[i];
         const prev = result[i - 1];
-        const newHeight = Math.max(20, Math.round((current.timelineHeight || 0) * SCALE));
+        const newHeight = Math.max(36, Math.round((current.timelineHeight || 0) * SCALE));
         const newY = i === 0 ? 0 : ((prev?.timelineY || 0) + (prev?.timelineHeight || 0));
         result.push({
           ...current,

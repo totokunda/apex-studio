@@ -6,24 +6,26 @@ import {getMediaInfo, getMediaInfoCached} from '@/lib/media/utils'
 import { useControlsStore } from '@/lib/control';
 import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
-import { useClipStore } from '@/lib/clip';
+// (useClipStore already imported above)
 import { useWebGLFilters } from '@/components/preview/webgl-filters';
 import { BaseClipApplicator } from './apply/base';
+import { useClipStore } from '@/lib/clip';
 import { useWebGLMask } from '../mask/useWebGLMask';
 import { useInputControlsStore } from '@/lib/inputControl';
 
-const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: ImageClipProps, inputMode?: boolean, inputId?: string}> = ({ src, clipId, rectWidth, rectHeight, applicators, overlap, overrideClip, inputMode = false, inputId}) => {
+const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: ImageClipProps, inputMode?: boolean, inputId?: string, focusFrameOverride?: number, currentLocalFrameOverride?: number}> = ({ src, clipId, rectWidth, rectHeight, applicators, overlap, overrideClip, inputMode = false, inputId, focusFrameOverride, currentLocalFrameOverride}) => {
     const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
     const transformerRef = useRef<Konva.Transformer>(null);
     const suppressUntilRef = useRef<number>(0);
     const { applyFilters } = useWebGLFilters();
+    const clipsState = useClipStore((s) => s.clips);
     const tool = useViewportStore((s) => s.tool);
     const scale = useViewportStore((s) => s.scale);
     const position = useViewportStore((s) => s.position);
     const setClipTransform = useClipStore((s) => s.setClipTransform);
-    const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
+    const clipTransform = overrideClip ? overrideClip.transform : useClipStore((s) => s.getClipTransform(clipId));
     const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
     const clearSelection = useControlsStore((s) => s.clearSelection);
     const addClipSelection = useControlsStore((s) => s.addClipSelection);
@@ -31,7 +33,33 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
     const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
     const focusFrameFromControls = useControlsStore((s) => s.focusFrame);
     const focusFrameFromInputs = useInputControlsStore((s) => s.getFocusFrame(inputId));
-    const focusFrame = inputMode ? focusFrameFromInputs : focusFrameFromControls;
+    const clipInfo = useMemo(() => {
+      try {
+        const overrideAny = overrideClip as any | undefined;
+        const base = overrideAny ?? (useClipStore.getState().getClipById(clipId) as any);
+        return { groupId: base?.groupId as string | undefined, startFrame: base?.startFrame ?? 0 };
+      } catch {
+        return { groupId: undefined, startFrame: 0 };
+      }
+    }, [overrideClip, clipId]);
+    const groupStartForClip = useMemo(() => {
+      const grpId = clipInfo.groupId;
+      if (!grpId) return 0;
+      try {
+        const groupClip = useClipStore.getState().getClipById(grpId) as any;
+        return groupClip?.startFrame ?? 0;
+      } catch {
+        return 0;
+      }
+    }, [clipInfo.groupId]);
+    const syntheticGlobalFromLocal = (typeof currentLocalFrameOverride === 'number')
+      ? Math.max(0, clipInfo.startFrame + groupStartForClip + Math.max(0, currentLocalFrameOverride))
+      : undefined;
+    const focusFrame = (typeof focusFrameOverride === 'number')
+        ? focusFrameOverride
+        : (typeof syntheticGlobalFromLocal === 'number'
+            ? syntheticGlobalFromLocal
+            : (inputMode ? focusFrameFromInputs : focusFrameFromControls));
     
     const clipFromStore = useClipStore((s) => s.getClipById(clipId)) as ImageClipProps;
     const clip = (overrideClip as ImageClipProps) || clipFromStore;
@@ -39,7 +67,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
     const { applyMask } = useWebGLMask({
         focusFrame: focusFrame,
         masks: clip?.masks || [],
-        disabled: tool === 'mask',
+        disabled: tool === 'mask' && !inputMode,
         clip: clip,
     });
 
@@ -290,10 +318,10 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
     // Initialize default transform if missing
     useEffect(() => {
-        if (!clipTransform && displayWidth && displayHeight) {
+        if (!clipTransform && displayWidth && displayHeight && !overrideClip) {
             setClipTransform(clipId, { x: offsetX, y: offsetY, width: displayWidth, height: displayHeight, scaleX: 1, scaleY: 1, rotation: 0 });
         }
-    }, [clipTransform, displayWidth, displayHeight, offsetX, offsetY, clipId, setClipTransform]);
+    }, [clipTransform, displayWidth, displayHeight, offsetX, offsetY, clipId, setClipTransform, overrideClip]);
 
     // Ensure canvas matches display size for crisp rendering
     useEffect(() => {
@@ -308,6 +336,52 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         }
     }, [displayWidth, displayHeight]);
 
+    // Stable applicators ref to avoid recreating draw on array ref changes
+    const applicatorsRef = useRef<BaseClipApplicator[]>(applicators);
+    useEffect(() => {
+        applicatorsRef.current = applicators;
+    }, [applicators]);
+
+    // Timeline-aware applicator signature (type + clipId + start-end)
+    const applicatorsSignature = useMemo(() => {
+        if (!applicators || applicators.length === 0) return 'none';
+        try {
+            return applicators.map((a) => {
+                const type = a?.constructor?.name || 'Unknown';
+                const start = (a as any)?.getStartFrame?.() ?? 'u';
+                const end = (a as any)?.getEndFrame?.() ?? 'u';
+                const owner = (a as any)?.getClip?.()?.clipId ?? 'u';
+                return `${type}#${owner}@${start}-${end}`;
+            }).join('|');
+        } catch {
+            return `len:${applicators.length}`;
+        }
+    }, [applicators]);
+
+    // Store-driven active flag for current focus frame
+    const applicatorsActiveStore = useMemo(() => {
+        const apps = applicators || [];
+        if (!apps.length) return false;
+        const getClipById = useClipStore.getState().getClipById;
+        const frame = typeof focusFrame === 'number' ? focusFrame : 0;
+        return apps.some((a) => {
+            const owned = (a as any)?.getClip?.();
+            const id = owned?.clipId;
+            if (!id) return false;
+            const sc = getClipById(id) as any;
+            if (!sc) return false;
+            const start = sc.startFrame ?? 0;
+            const end = sc.endFrame ?? 0;
+            return frame >= start && frame <= end;
+        });
+    }, [clipsState, focusFrame, applicatorsSignature]);
+
+    // Stabilize applyMask across focusFrame changes; we'll pass frame explicitly when drawing
+    const applyMaskRef = useRef<typeof applyMask | null>(applyMask);
+    useEffect(() => {
+        applyMaskRef.current = applyMask;
+    }, [applyMask]);
+
     const draw = useCallback(async () => {
 
         if (!canvasRef.current) return;
@@ -317,7 +391,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         try {
             
             const height = mediaInfoRef.current.image?.height;
-            const width = mediaInfoRef.current.image?.width
+            const width = mediaInfoRef.current.image?.width;
             const image = await fetchImage(selectedSrc, height, width, {mediaInfo: mediaInfoRef.current});
             
             if (!image) return;
@@ -346,7 +420,8 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             workingCtx.drawImage(image.canvas as HTMLCanvasElement, 0, 0, canvas.width, canvas.height);
 
             // Apply mask to working canvas (may return same or different canvas)
-            let processedCanvas = applyMask(workingCanvas);
+            // Pass the current focusFrame explicitly; do not depend on applyMask identity
+            let processedCanvas = applyMaskRef.current ? applyMaskRef.current(workingCanvas, focusFrame as number) : workingCanvas;
             
             // If mask returned a different canvas, copy it back to working canvas to maintain single reference
             if (processedCanvas !== workingCanvas) {
@@ -369,7 +444,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
             // Ensure resources (e.g., CLUTs) are preloaded for applicators before applying
             const preloadTasks: Promise<void>[] = [];
-            for (const app of applicators) {
+            for (const app of applicatorsRef.current || []) {
                 const ensure = (app as any)?.ensureResources as (() => Promise<void>) | undefined;
                 if (typeof ensure === 'function') {
                     preloadTasks.push(ensure());
@@ -381,7 +456,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
             // Apply applicators to canvas
             let finalCanvas = processedCanvas;
-            for (const applicator of applicators) {
+            for (const applicator of applicatorsRef.current || []) {
                 const result = applicator.apply(finalCanvas);
                 if (result !== finalCanvas) {
                     workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
@@ -397,11 +472,14 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         } catch (e) {
             console.error(e);
         }
-    }, [mediaInfoRef, selectedSrc, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applyFilters, applyMask]);
+    }, [mediaInfoRef, selectedSrc, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicatorsSignature, applicatorsActiveStore, applyFilters, tool]);
 
     useEffect(() => {
         draw();
     }, [draw]);
+
+
+
 
     const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
         updateGuidesAndMaybeSnap({ snap: true });

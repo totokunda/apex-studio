@@ -21,7 +21,9 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@app/export-renderer": ["../export-renderer/src/index.ts"],
+      "@app/*": ["../*"]
     }
   },
   "include": ["src"],

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps, ImageClipProps, PreprocessorClipType, MaskClipProps, MaskData, GroupClipProps, ModelClipProps } from "./types";
+import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProps, AudioClipProps, PreprocessorClipProps, ImageClipProps, PreprocessorClipType, MaskClipProps, MaskData, GroupClipProps, ModelClipProps, ClipType } from "./types";
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 import { MediaItem } from "@/components/media/Item";
@@ -18,6 +18,7 @@ interface ClipStore {
     _setClipDuration: (duration: number) => void;
     clips: AnyClipProps[];
     getClipById: (clipId: string, timelineId?: string) => AnyClipProps | undefined;
+    getClipsByType: (type: ClipType) => AnyClipProps[]; 
     getClipTransform: (clipId: string) => ClipTransform | undefined;
     setClipTransform: (clipId: string, transform: Partial<ClipTransform>) => void;
     setClips: (clips: AnyClipProps[]) => void;
@@ -37,6 +38,7 @@ interface ClipStore {
     pasteClips: (atFrame?: number, targetTimelineId?: string) => void;
     groupClips: (clipIds: string[]) => void;
     ungroupClips: (groupId: string) => void;
+    getClipsForGroup: (children: string[][]) => AnyClipProps[];
     getClipAtFrame: (frame: number) => [AnyClipProps, number] | null;
     activeMediaItem: MediaItem | null;
     setActiveMediaItem: (mediaItem: MediaItem | null) => void;
@@ -76,6 +78,10 @@ interface ClipStore {
     _updateZoomLevel: (clips:AnyClipProps[], clipDuration: number) => void;
     getTimelinePosition: (timelineId: string, scrollY?: number) => {top: number, bottom: number, left: number, right: number};
     getClipPosition: (clipId: string, scrollY?: number) => {top: number, bottom: number, left: number, right: number};
+    // Computes a numeric score for a clip combining timeline order, group layering, and endFrame.
+    // Higher score means visually "above" in stacking: lower timelines outrank above ones; within a timeline,
+    // later layers (grouped upwards) outrank earlier ones; endFrame acts as final tiebreaker.
+    getClipPositionScore: (clipId: string) => number;
     // Timelines
     timelines: TimelineProps[];
     getClipsForTimeline: (timelineId: string) => AnyClipProps[];
@@ -128,7 +134,7 @@ export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string
 
 
 // Helper function to resolve overlaps by shifting clips to maintain frame gaps
-const resolveOverlaps = (clips: AnyClipProps[]): AnyClipProps[] => {
+export const resolveOverlaps = (clips: AnyClipProps[]): AnyClipProps[] => {
     if (clips.length === 0) return clips;
     
     // Sort clips by start frame
@@ -845,51 +851,37 @@ export const useClipStore = create<ClipStore>((set, get) => ({
                 }
             }
             let finalVal: any = parsedVal ?? inp.default;
-
             // For media-like inputs, attach either selected range (video/audio) or selected frame (image)
             const typeStr = String((inp as any)?.type || '');
             const isVideoish = typeStr.startsWith('video');
             const isAudioish = typeStr.startsWith('audio');
             const isImageish = typeStr.startsWith('image');
             if (isVideoish || isAudioish || isImageish) {
+                // check if input is in the clip store and if so, use the value from the clip store
+
+                if (finalVal && typeof finalVal === 'object' && 'clipId' in finalVal && clip) {
+                    const clip = get().getClipById(finalVal.clipId);
+                    if (clip) {
+                        finalVal = clip;
+                    }
+                }
+
                 const inputStore = useInputControlsStore.getState();
                 if (isVideoish || isAudioish) {
                     const [start, end] = inputStore.getSelectedRange(inp.id);
                     if (finalVal && typeof finalVal === 'object') {
-                        finalVal = { ...(finalVal as any), selected_range: [start, end] };
+                        finalVal = { ...(finalVal as any), selectedRange: [start, end] };
                     } else {
-                        finalVal = { selection: finalVal, selected_range: [start, end] };
+                        finalVal = { selection: finalVal, selectedRange: [start, end]  };
                     }
                 } else if (isImageish) {
                     const focus = inputStore.getFocusFrame(inp.id);
                     if (finalVal && typeof finalVal === 'object') {
-                        finalVal = { ...(finalVal as any), selected_frame: focus };
+                        finalVal = { ...(finalVal as any), selectedFrame: focus };
                     } else {
-                        finalVal = { selection: finalVal, selected_frame: focus };
+                        finalVal = { selection: finalVal, selectedFrame: focus };
                     }
                 }
-
-                // snake_case all keys within media objects (do not alter primitive string values like paths)
-                const toSnake = (s: string): string => {
-                    return s
-                        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-                        .replace(/[^A-Za-z0-9_]+/g, '_')
-                        .replace(/^_+|_+$/g, '')
-                        .toLowerCase();
-                };
-                const snakeCaseObject = (val: any): any => {
-                    if (Array.isArray(val)) return val.map(snakeCaseObject);
-                    if (val && typeof val === 'object') {
-                        const out: Record<string, any> = {};
-                        Object.keys(val).forEach((k) => {
-                            const nk = toSnake(k);
-                            out[nk] = snakeCaseObject((val as any)[k]);
-                        });
-                        return out;
-                    }
-                    return val;
-                };
-                finalVal = snakeCaseObject(finalVal);
             }
 
             output[inp.id] = finalVal;
@@ -1164,6 +1156,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
         return { clips: resolvedClips, clipDuration, timelines: resolvedTimelines };
     }),
+
     // Create two new clips from the original clip at the cut frame
     splitClip: (cutFrame: number, clipId: string) => set((state) => {
         // Find the clip that contains the cut frame
@@ -1435,6 +1428,29 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             .filter(Boolean) as AnyClipProps[];
         return { clipboard: toCopy.map(c => ({ ...c })) };
     }),
+    getClipsByType: (type: ClipType) => get().clips.filter(c => c.type === type),   
+    getClipsForGroup: (children: string[][]) => {
+        const state = get();
+        const clipsById = new Map(state.clips.map((c) => [c.clipId, c] as const));
+        const getY = (timelineId?: string) => state.timelines.find(t => t.timelineId === timelineId)?.timelineY ?? 0;
+
+        // Map each child id to its clip, filter missing, then sort by render order:
+        // bottom-to-top (higher timelineY first). Use startFrame as a stable tie-breaker.
+        const flat: AnyClipProps[] = (children || [])
+            .flat()
+            .map((id) => clipsById.get(id))
+            .filter((c): c is AnyClipProps => Boolean(c))
+            .sort((a, b) => {
+                const ya = getY(a.timelineId);
+                const yb = getY(b.timelineId);
+                if (ya !== yb) return yb - ya; // larger y first (drawn earlier)
+                const sa = a.startFrame ?? 0;
+                const sb = b.startFrame ?? 0;
+                return sa - sb;
+            }).reverse();
+
+        return flat;
+    },
     cutClips: (clipIds: string[]) => set((state) => {
         if (!clipIds || clipIds.length === 0) return { clips: state.clips, clipboard: state.clipboard };
         const toCut = clipIds
@@ -1540,6 +1556,61 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const right = left + clipWidth;
         
         return {top, bottom, left, right};
+    },
+    getClipPositionScore: (clipId: string) => {
+        const state = get();
+        const clip = state.clips.find((c) => c.clipId === clipId);
+        if (!clip) return 0;
+
+        // Timeline order: sort by Y (top->bottom). Lower (greater Y) timelines get higher base score.
+        const timelinesSorted = [...state.timelines].sort((a, b) => (a.timelineY ?? 0) - (b.timelineY ?? 0));
+        const timelineIndex = Math.max(0, timelinesSorted.findIndex((t) => t.timelineId === clip.timelineId));
+
+        // Weights: ensure timeline separation dominates layer, which dominates endFrame
+        const TIMELINE_WEIGHT = 1e9; // enough to dominate any layer/endFrame additions
+        const LAYER_WEIGHT = 1e6;    // enough to dominate endFrame within same timeline
+
+        // Compute layer rank within a timeline considering groups (we group upwards)
+        let layerRank: number = 0;
+
+        // If clip is part of a group, rank by the child's subarray index; last children array ranks highest
+        const parentGroup: GroupClipProps | undefined = typeof (clip as any).groupId === 'string'
+            ? (state.clips.find((c) => c.clipId === (clip as any).groupId && c.type === 'group') as GroupClipProps | undefined)
+            : undefined;
+
+        if (parentGroup && Array.isArray(parentGroup.children)) {
+            const childrenNested = parentGroup.children as string[][];
+            const idx = childrenNested.findIndex((arr) => arr.includes(clip.clipId));
+            layerRank = Math.max(0, idx);
+        } else if (clip.type === 'group') {
+            // Place the group container just above its highest child layer
+            const childrenNested = ((clip as GroupClipProps).children || []) as string[][];
+            const lastIdx = Math.max(0, childrenNested.length - 1);
+            layerRank = lastIdx + 0.75;
+        } else {
+            // Non-group clip: compare against any groups on the same timeline
+            const groupsOnTimeline = state.clips.filter(
+                (c) => c.type === 'group' && c.timelineId === clip.timelineId
+            ) as GroupClipProps[];
+            if (groupsOnTimeline.length > 0) {
+                const clipEnd = Math.max(0, clip.endFrame ?? 0);
+                let best = 0;
+                for (const g of groupsOnTimeline) {
+                    const lastIdx = Math.max(0, (g.children?.length ?? 1) - 1);
+                    const gEnd = Math.max(0, g.endFrame ?? 0);
+                    // If this clip ends before the group's end, it should be below only the last children array
+                    // Otherwise, it should be above all clips in the group
+                    const candidate = clipEnd <= gEnd ? (lastIdx - 0.5) : (lastIdx + 1);
+                    if (candidate > best) best = candidate;
+                }
+                layerRank = best;
+            } else {
+                layerRank = 0;
+            }
+        }
+
+        const end = Math.max(0, clip.endFrame ?? 0);
+        return (timelineIndex * TIMELINE_WEIGHT) + (layerRank * LAYER_WEIGHT) + end;
     },
 }));
 

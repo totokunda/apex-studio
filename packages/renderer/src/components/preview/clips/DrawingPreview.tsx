@@ -1,6 +1,6 @@
 import React, { useCallback, useRef } from 'react';
 import { Group } from 'react-konva';
-import { DrawingClipProps } from '@/lib/types';
+import { DrawingClipProps, DrawingLine } from '@/lib/types';
 import { useClipStore } from '@/lib/clip';
 import { useViewportStore } from '@/lib/viewport';
 import { useControlsStore } from '@/lib/control';
@@ -8,11 +8,14 @@ import { useDrawingStore } from '@/lib/drawing';
 import { KonvaEventObject } from 'konva/lib/Node';
 import Konva from 'konva';
 import DrawingLineComponent from './custom/DrawingLine';
+import { BaseClipApplicator } from './apply/base';
 
 interface DrawingPreviewProps extends DrawingClipProps {
   rectWidth: number;
   rectHeight: number;
   assetMode?: boolean;
+  tempLinesOverride?: DrawingLine[];
+  applicators: BaseClipApplicator[];
 }
 
 const DrawingPreview: React.FC<DrawingPreviewProps> = ({
@@ -20,6 +23,8 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
   lines = [],
   rectWidth,
   rectHeight,
+  tempLinesOverride,
+  applicators,
 }) => {
   const { updateClip } = useClipStore();
   const removeClip = useClipStore((s) => s.removeClip);
@@ -47,7 +52,8 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
     }
 
     setSelectedLineId(lineId);
-  }, [tool, isSelected, clearSelection, addClipSelection, clipId]);
+
+  }, [tool, isSelected, clearSelection, addClipSelection, clipId, setSelectedLineId]);
 
   const handleTransformEnd = useCallback((lineId: string) => {
     const line = lineRefs.current[lineId];
@@ -108,14 +114,6 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
     suppressUntilRef.current = now + 100;
   }, [clipId, updateClip]);
 
-  // Cache the group so composite operations work correctly
-  React.useEffect(() => {
-    if (groupRef.current) {
-      //groupRef.current.cache();
-      //groupRef.current.getLayer()?.batchDraw();
-    }
-  }, [lines, tool]);
-
   const setLineRef = useCallback((lineId: string, ref: Konva.Line | null) => {
     if (ref) {
       lineRefs.current[lineId] = ref;
@@ -135,6 +133,8 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
   React.useEffect(() => {
     const handleWindowClick = (e: MouseEvent) => {
       if (!selectedLineId) return;
+      // Only this clip (that owns the selected line) should handle deselection
+      if (!(lines || []).some((l) => l.lineId === selectedLineId)) return;
       
       // Check suppression timestamp
       const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -159,7 +159,7 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
     return () => {
       window.removeEventListener('click', handleWindowClick);
     };
-  }, [selectedLineId, setSelectedLineId]);
+  }, [selectedLineId, setSelectedLineId, lines]);
 
   // Auto-delete empty drawing clips
   React.useEffect(() => {
@@ -169,6 +169,8 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
       setSelectedLineId(null);
     }
   }, [lines, clipId, removeClip, removeClipSelection, setSelectedLineId]);
+
+  const renderLines = tempLinesOverride ?? lines;
 
   return (
     <Group 
@@ -180,10 +182,11 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
       onClick={handleGroupClick}
       onTap={handleGroupClick}
     >
-      {lines.map((line) => {
+      {renderLines.map((line) => {
         return (
           <DrawingLineComponent
             key={line.lineId}
+            applicators={applicators}
             line={line}
             lineOpacity={line.opacity / 100}
             selectedLineId={selectedLineId ?? ''}

@@ -1,13 +1,22 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Line as KonvaLine, Rect, Line, Group } from 'react-konva';
 import { DrawingLine } from '@/lib/types';
 import Konva from 'konva';
 import { Transformer } from 'react-konva';
 import { useViewportStore } from '@/lib/viewport';
+import { useDrawingStore } from '@/lib/drawing';
+import { useControlsStore } from '@/lib/control';
+import { useClipStore } from '@/lib/clip';
+import ApplicatorFilter from '../custom/ApplicatorFilter';
+import { BaseClipApplicator } from '../apply/base';
+
+//@ts-ignore
+Konva.Filters.Applicator = ApplicatorFilter; 
 
 const SNAP_THRESHOLD_PX = 5;
 
 interface DrawingLineProps {
+    applicators: BaseClipApplicator[];
     line: DrawingLine;
     lineOpacity: number;
     isLineSelected: boolean;
@@ -46,7 +55,7 @@ const getToolConfig = (tool: string, smoothing: number = 0.5) => {
     }
   };
 
-const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClick, handleDragEnd, handleTransformEnd, isLineSelected, selectedLineId, setLineRef, rectWidth, rectHeight}) => {
+const DrawingLineComponent: React.FC<DrawingLineProps> = ({ applicators, line, handleLineClick, handleDragEnd, handleTransformEnd, isLineSelected, selectedLineId, setLineRef, rectWidth, rectHeight}) => {
     const toolConfig = getToolConfig(line.tool, line.smoothing);
     const lineOpacity = line.tool === 'eraser' ? 1 : line.opacity / 100;
     const ref = useRef<Konva.Line>(null);
@@ -80,6 +89,71 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClic
             rectRef.current.getLayer()?.batchDraw();
         }
     }, [tool]);
+
+    const isDrawing = useDrawingStore((s) => s.isDrawing);
+    const focusFrame = useControlsStore((s) => s.focusFrame);
+    const clipsState = useClipStore((s) => s.clips);
+
+    // Stable filters array
+    const filtersArray = useMemo(() => [
+      //@ts-ignore
+      Konva.Filters.Applicator,
+    ], []);
+
+    // Timeline-aware applicator signature (type + clipId + start-end)
+    const applicatorsSignature = useMemo(() => {
+      if (!applicators || applicators.length === 0) return 'none';
+      try {
+        return applicators.map((a) => {
+          const type = a?.constructor?.name || 'Unknown';
+          const start = (a as any)?.getStartFrame?.() ?? 'u';
+          const end = (a as any)?.getEndFrame?.() ?? 'u';
+          const owner = (a as any)?.getClip?.()?.clipId ?? 'u';
+          return `${type}#${owner}@${start}-${end}`;
+        }).join('|');
+      } catch {
+        return `len:${applicators.length}`;
+      }
+    }, [applicators]);
+
+    // Store-driven active flag for current focusFrame
+    const applicatorsActiveStore = useMemo(() => {
+      const apps = applicators || [];
+      if (!apps.length) return false;
+      const getClipById = useClipStore.getState().getClipById;
+      const frame = typeof focusFrame === 'number' ? focusFrame : 0;
+      return apps.some((a) => {
+        const owned = (a as any)?.getClip?.();
+        const id = owned?.clipId;
+        if (!id) return false;
+        const sc = getClipById(id) as any;
+        if (!sc) return false;
+        const start = sc.startFrame ?? 0;
+        const end = sc.endFrame ?? 0;
+        return frame >= start && frame <= end;
+      });
+    }, [clipsState, focusFrame, applicatorsSignature]);
+
+    // Cache line bitmap only when appearance or active-range changes and not during drawing/transforming
+    useEffect(() => {
+      const node = ref.current;
+      if (!node) return;
+      if (isDrawing || isTransformingRef.current) return;
+      node.clearCache();
+      node.cache({ pixelRatio: 2 });
+      node.getLayer()?.batchDraw?.();
+    }, [
+      isDrawing,
+      applicatorsSignature,
+      applicatorsActiveStore,
+      line.stroke,
+      line.strokeWidth,
+      line.opacity,
+      line.tool,
+      line.smoothing,
+      // Points define geometry of the stroke; stringify length and a hash-y join to avoid huge deps
+      line.points.length,
+    ]);
 
     useEffect(() => {
         if (transformerRef.current && rectRef.current && isLineSelected && tool === 'pointer') {
@@ -410,6 +484,13 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClic
         return adjustedBox;
     }, [rectWidth, rectHeight]);
 
+    const applicatorProps = useMemo(() => ({
+      applicators,
+      //@ts-ignore
+      filters: filtersArray,
+    }), [applicators, filtersArray]);
+
+
     return (
         <>
         <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight}>
@@ -432,6 +513,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClic
           lineJoin={toolConfig.lineJoin}
           tension={toolConfig.tension}
           ref={ref}
+          {...applicatorProps}
         />
         <Rect
             ref={rectRef}
@@ -454,7 +536,9 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({ line, handleLineClic
             onTransformStart={handleRectTransformStart}
             onTransform={handleRectTransform}
             onTransformEnd={handleRectTransformEnd}
-            onClick={(e) => handleLineClick(e, line.lineId)}
+            onClick={(e) => {
+              handleLineClick(e, line.lineId)
+            }}
             onTap={(e) => handleLineClick(e, line.lineId)}
          />
         

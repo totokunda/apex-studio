@@ -11,7 +11,7 @@ import Droppable from '../dnd/Droppable';
 import {DragEndEvent, useDndMonitor} from '@dnd-kit/core';
 import { MediaItem } from '../media/Item';
 import {v4 as uuidv4} from 'uuid';
-import { AnyClipProps, Filter, FilterClipProps, ImageClipProps, ModelClipProps, PreprocessorClipProps, TimelineProps, TimelineType, VideoClipProps } from '@/lib/types';
+import { AnyClipProps, Filter, FilterClipProps, ImageClipProps, ModelClipProps, PreprocessorClipProps, TimelineProps, VideoClipProps } from '@/lib/types';
 import TimelineSidebar from './TimelineSidebar';
 import Scrollbar from './Scrollbar';
 import { useWebGLHaldClut } from '../preview/webgl-filters';
@@ -21,6 +21,7 @@ import { calculateFrameFromX, getOtherPreprocessors } from '@/lib/preprocessorHe
 import {convertFrameRange} from '@/lib/media/fps';
 
 import { getManifest, ManifestInfoWithType } from '@/lib/manifest/api';
+import { useViewportStore } from '@/lib/viewport';
 
 interface TimelineEditorProps {
 
@@ -609,6 +610,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       width = 540; // Does not matter
     }
 
+    
+
     // Use validated ghost position to compute frames
     const state = useClipStore.getState();
     const ghostTimelineId = state.ghostTimelineId;
@@ -633,6 +636,25 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       setGhostX(0);
       return;
     }
+
+
+
+    // If this is the first media (image/video) clip being added, set the preview aspect ratio
+    try {
+      const existingClips = useClipStore.getState().clips;
+      const hasMediaAlready = existingClips.some((c) => c.type === 'video' || c.type === 'image');
+      const isMediaIncoming = data.type === 'video' || data.type === 'image';
+      if (!hasMediaAlready && isMediaIncoming) {
+        const w = Number(width);
+        const h = Number(height);
+        if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+          const gcd = (a:number,b:number):number => b === 0 ? a : gcd(b, a % b);
+          const g = gcd(Math.round(w), Math.round(h)) || 1;
+          const id = `${Math.round(w / g)}:${Math.round(h / g)}`;
+          useViewportStore.getState().setAspectRatio({ width: Math.round(w), height: Math.round(h), id });
+        }
+      }
+    } catch {}
 
     let [tStart, tEnd] = controlStore.timelineDuration;
     const stageWidth = dimensions.stageWidth;
@@ -696,6 +718,17 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       width: width,
       speed: 1.0
     };
+
+    // Ensure intrinsic media dimensions are captured for image/video clips
+    if (data.type === 'image' || data.type === 'video') {
+      const mw = Number(width);
+      const mh = Number(height);
+      if (Number.isFinite(mw) && Number.isFinite(mh) && mw > 0 && mh > 0) {
+        (newClip as VideoClipProps | ImageClipProps).mediaWidth = mw;
+        (newClip as VideoClipProps | ImageClipProps).mediaHeight = mh;
+        (newClip as VideoClipProps | ImageClipProps).mediaAspectRatio = mw / mh;
+      }
+    }
 
     if (data.type === 'filter') {
       (newClip as FilterClipProps).name = (data as unknown as Filter).name;

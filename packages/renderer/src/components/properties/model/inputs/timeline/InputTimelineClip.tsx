@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getClipWidth, getClipX, useClipStore} from "@/lib/clip";
+import { useClipStore} from "@/lib/clip";
 import { generatePosterCanvas } from "@/lib/media/timeline";
 import { Image, Group, Rect, Text} from 'react-konva';
 import Konva from 'konva';
@@ -55,6 +55,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     const zoomLevel = useInputControlsStore((s) => s.getZoomLevel(inputId));
     const tool = useViewportStore((s) => s.tool);
     const getClipById = useClipStore((s) => s.getClipById);
+    const getClipsForGroup = useClipStore((s) => s.getClipsForGroup);
     const [groupedCanvases, setGroupedCanvases] = useState<HTMLCanvasElement[]>([]);
     const [ groupCounts, setGroupCounts] = useState<{video:number,image:number,audio:number,text:number,draw:number,filter:number,shape:number,model:number}>({ video: 0, image: 0, audio: 0, text: 0, draw: 0, filter: 0, shape: 0, model: 0 });
     // Subscribe directly to this clip's data
@@ -91,8 +92,10 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     const currentStartFrame = currentClip?.startFrame ?? 0;
     const currentEndFrame = currentClip?.endFrame ?? 0;
 
-    const clipWidth = useMemo(() => Math.max(getClipWidth(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), 3), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration]);
-    const clipX  = useMemo(() => getClipX(currentStartFrame, currentEndFrame, timelineWidth, timelineDuration), [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration]);
+    const clipSpan = useMemo(() => Math.max(1, (currentEndFrame - currentStartFrame)), [currentStartFrame, currentEndFrame]);
+    const visibleSpan = useMemo(() => Math.max(1, (timelineDuration[1] - timelineDuration[0])), [timelineDuration]);
+    const clipWidth = useMemo(() => Math.max(3, Math.round((clipSpan / visibleSpan) * timelineWidth)), [clipSpan, visibleSpan, timelineWidth]);
+    const clipX  = useMemo(() => 0, []);
 
 
     // Frame selection overlay (only in frame mode)
@@ -103,10 +106,11 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     const frameWidthSafe = useMemo(() => Math.max(1e-6, frameWidthPx), [frameWidthPx]);
 
     const constrainedFocusFrame = useMemo(() => {
-        // Keep focus within this clip bounds for overlay purposes
+        // Focus frame in store is clip-local; convert to absolute for overlay
+        const absFocus = currentStartFrame + Math.max(0, Math.round(focusFrame));
         const minF = Math.max(0, currentStartFrame);
         const maxF = Math.max(minF, (currentEndFrame - 1));
-        return Math.max(minF, Math.min(maxF, Math.round(focusFrame)));
+        return Math.max(minF, Math.min(maxF, absFocus));
     }, [focusFrame, currentStartFrame, currentEndFrame]);
 
     const focusXLocal = useMemo(() => {
@@ -115,8 +119,11 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     }, [constrainedFocusFrame, currentStartFrame, frameWidthPx]);
 
     const [rangeStart, rangeEnd] = useMemo<[number, number]>(() => {
-        const rawStart = Math.round(selectedRange?.[0] ?? currentStartFrame);
-        const rawEnd = Math.round(selectedRange?.[1] ?? (rawStart + 1));
+        // selectedRange is stored clip-local; convert to absolute for rendering
+        const rawStartLocal = Math.round(selectedRange?.[0] ?? 0);
+        const rawEndLocal = Math.round(selectedRange?.[1] ?? (rawStartLocal + 1));
+        const rawStart = currentStartFrame + rawStartLocal;
+        const rawEnd = currentStartFrame + rawEndLocal;
         const clampedStart = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, rawStart));
         const minEnd = clampedStart + 1;
         const clampedEnd = Math.max(minEnd, Math.min(currentEndFrame, rawEnd));
@@ -134,9 +141,12 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
         const clampedStart = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, Math.round(startFrame)));
         const minEnd = clampedStart + 1;
         const clampedEnd = Math.max(minEnd, Math.min(currentEndFrame, Math.round(endFrame)));
+        // Store selection as clip-local
+        const localStart = clampedStart - currentStartFrame;
+        const localEnd = clampedEnd - currentStartFrame;
         const [existingStart, existingEnd] = useInputControlsStore.getState().getSelectedRange(inputId);
-        if (existingStart === clampedStart && existingEnd === clampedEnd) return;
-        setSelectedRange(clampedStart, clampedEnd, inputId);
+        if (existingStart === localStart && existingEnd === localEnd) return;
+        setSelectedRange(localStart, localEnd, inputId);
     }, [currentStartFrame, currentEndFrame, inputId, setSelectedRange]);
 
     // Smooth drag: directly move Konva nodes and throttle store updates
@@ -144,8 +154,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     const leftHandleRef = useRef<Konva.Rect>(null);
     const rightHandleRef = useRef<Konva.Rect>(null);
     const isDraggingRangeRef = useRef(false);
-    const rafCommitRef = useRef<number | null>(null);
-    const pendingCommitRef = useRef<{ start: number; end: number } | null>(null);
+    
 
     const updateRangeVisuals = useCallback((startFrame: number, endFrame: number) => {
         const startLocal = (startFrame - currentStartFrame) * frameWidthSafe;
@@ -171,31 +180,11 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
         if (layer) layer.batchDraw();
     }, [clipWidth, currentStartFrame, frameWidthSafe, rangeHandleWidth]);
 
-    const commitRangeThrottled = useCallback((startFrame: number, endFrame: number) => {
-        pendingCommitRef.current = { start: startFrame, end: endFrame };
-        if (rafCommitRef.current == null) {
-            rafCommitRef.current = window.requestAnimationFrame(() => {
-                rafCommitRef.current = null;
-                const pending = pendingCommitRef.current;
-                if (pending) {
-                    commitRange(pending.start, pending.end);
-                }
-            });
-        }
-    }, [commitRange]);
-
-    useEffect(() => {
-        return () => {
-            if (rafCommitRef.current != null) {
-                window.cancelAnimationFrame(rafCommitRef.current);
-                rafCommitRef.current = null;
-            }
-        };
-    }, []);
+    
 
     // No vertical movement: selector uses full timeline height at y=0
     const clipRef = useRef<Konva.Line>(null);
-    const [resizeSide, setResizeSide] = useState<'left' | 'right' | null>(null);
+    const [resizeSide] = useState<'left' | 'right' | null>(null);
     const [imageCanvas] = useState<HTMLCanvasElement>(() => document.createElement('canvas'));
     const mediaInfoRef = useRef<MediaInfo | undefined>(getMediaInfoCached(currentClip?.src!));
     useEffect(() => {
@@ -334,6 +323,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
 	useEffect(() => {
 		if (!currentClip) return;
 
+        
         if (clipType === 'audio') {
             generateTimelineThumbnailAudio(
                 clipType,
@@ -415,7 +405,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
             )
         } 
     
-    }, [zoomLevel, clipWidth, clipType, currentClip, applyMask, tool, mediaInfoRef.current, resizeSide, thumbnailClipWidth,  maxTimelineWidth, timelineDuration, overHang, resizeSide, forceRerenderCounter]);
+    }, [zoomLevel, clipWidth, clipType, currentClip, tool, resizeSide, thumbnailClipWidth, mediaInfoRef.current,  maxTimelineWidth, timelineDuration[0], timelineDuration[1], overHang, resizeSide, forceRerenderCounter]);
     
 
     useEffect(() => {
@@ -425,13 +415,11 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     }, [clipX, timelinePadding, timelineY, totalClipHeight]);
 
 
-
     useEffect(() => {
         (async () => {
         if (clipType === 'group' ) {
             // get the children of the group
-            const childIds = (currentClip as GroupClipProps).children.flat();
-            const children = childIds.map((childId) => getClipById(childId));
+            const children = getClipsForGroup((currentClip as GroupClipProps).children).reverse();
             // Compute per-type counts for badge row
             const counts = { video: 0, image: 0, audio: 0, text: 0, draw: 0, filter: 0, shape: 0, model: 0 } as {video:number,image:number,audio:number,text:number,draw:number,filter:number,shape:number,model:number};
             for (const ch of children) {
@@ -446,7 +434,8 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                 else if (ch.type === 'model') counts.model++;
             }
             setGroupCounts(counts);
-            const canvases = await Promise.all(children.reverse().slice(0, 3).map(async (child) => {
+            const childrenToUse = [...children].slice(0, 3);
+            const canvases = await Promise.all(childrenToUse.map(async (child) => {
                 if (child?.type === 'video' || child?.type === 'image' && child?.src) {
                     const mediaInfo = getMediaInfoCached(child.src);
                     if (!mediaInfo) return null;
@@ -520,7 +509,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                 }
                 return null;
             }));
-            setGroupedCanvases(canvases.filter((c) => c !== null) as HTMLCanvasElement[]);
+            setGroupedCanvases(canvases.reverse().filter((c) => c !== null) as HTMLCanvasElement[]);
         }
     })();
     }, [currentClip, getClipById, clipType]);
@@ -930,6 +919,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         timelineWidth={timelineWidth} 
                         clipPosition={clipPosition} 
                         timelineHeight={timelineHeight} 
+                        timelineDuration={timelineDuration}
                         isDragging={false}
                         clipId={currentClip.clipId} 
                         cornerRadius={cornerRadius} 
@@ -990,7 +980,6 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             e.target.x(nextStartLocal);
                             const endFrame = clampedStart + rangeSpanFrames;
                             updateRangeVisuals(clampedStart, endFrame);
-                            commitRangeThrottled(clampedStart, endFrame);
                         }}
                         onDragEnd={(e) => {
                             const container = e.target.getStage()?.container();
@@ -1048,7 +1037,6 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             e.target.x(nextLocal - rangeHandleWidth / 2);
                             const endFrame = Math.max(clampedStart + 1, rangeEnd);
                             updateRangeVisuals(clampedStart, endFrame);
-                            commitRangeThrottled(clampedStart, endFrame);
                         }}
                         onDragEnd={(e) => {
                             const container = e.target.getStage()?.container();
@@ -1105,7 +1093,6 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             const nextLocal = (clampedEnd - currentStartFrame) * frameWidthSafe;
                             e.target.x(nextLocal - rangeHandleWidth / 2);
                             updateRangeVisuals(rangeStart, clampedEnd);
-                            commitRangeThrottled(rangeStart, clampedEnd);
                         }}
                         onDragEnd={(e) => {
                             const container = e.target.getStage()?.container();
@@ -1180,10 +1167,12 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                                 const localX = Math.max(0, Math.min(clipWidth - rectWidth, e.target.x()));
                                 const frameOffset = Math.round(localX / Math.max(1e-6, frameWidthPx));
                                 const newFocus = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, currentStartFrame + frameOffset));
-                                setFocusFrame(newFocus, inputId);
+                                // Store focus as clip-local
+                                setFocusFrame(newFocus - currentStartFrame, inputId);
                                 const [winStart, winEnd] = timelineDuration;
                                 const winSpan = Math.max(1, winEnd - winStart);
-                                const anchor = (newFocus - winStart) / winSpan;
+                                const newLocalFocus = newFocus - currentStartFrame;
+                                const anchor = (newLocalFocus - winStart) / winSpan;
                                 setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId);
                             }}
                         />

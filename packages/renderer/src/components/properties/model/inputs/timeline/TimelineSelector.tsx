@@ -26,7 +26,8 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({ clip, width, height
         const span = Math.max(1, endRaw - start);
         // Ensure max zoom out equals the clip's actual span
         setTotalTimelineFrames(span, inputId);
-        setTimelineDuration(start, start + span, inputId);
+        // Keep the input timeline local to the clip [0, span]
+        setTimelineDuration(0, span, inputId);
         setZoomLevel(1 as any, inputId);
     }, [clip, inputId]);
 

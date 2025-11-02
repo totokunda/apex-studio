@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Rect, Ellipse, Line, Star, Transformer, Group } from 'react-konva';
 import type Konva from 'konva';
 import { PolygonClipProps, ShapeClipProps,  ShapeTool, StarClipProps } from '@/lib/types';
@@ -21,7 +21,7 @@ interface ShapePreviewProps extends ShapeClipProps {
 }
 
 const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidth, rectHeight, applicators }) => {
-  const shapeRef = useRef<any>(null);
+  const shapeRef = useRef<Konva.Shape>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const groupRef = useRef<Konva.Group>(null);
   const suppressUntilRef = useRef<number>(0);
@@ -38,6 +38,18 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
   const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
   const clearSelection = useControlsStore((s) => s.clearSelection);
   const isFullscreen = useControlsStore((s) => s.isFullscreen);
+  const getClipById = useClipStore((s) => s.getClipById);
+
+  const applicatorClips = useMemo(() => {
+    return applicators.map((a) => getClipById(a.getClip().clipId));
+  }, [applicators, getClipById]);
+
+
+  const applicatorClipsSignature = useMemo(() => {
+     // make it a combination of clipId, startFrame, endFrame
+     if (!applicatorClips || applicatorClips.length === 0) return 'none';
+     return applicatorClips.map((c) => `${c?.clipId ?? 'u'}:${c?.startFrame ?? 0}-${c?.endFrame ?? 0}`).join('|');
+  }, [applicatorClips]);
 
 
   const SNAP_THRESHOLD_PX = 4;
@@ -83,6 +95,18 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     stroke = '#1e40af',
     strokeWidth = 2,
   } = clip as ShapeClipProps;
+
+  // Opacity values used in caching dependencies
+  const fillOpacity = (clip as ShapeClipProps)?.fillOpacity ?? 100;
+  const strokeOpacity = (clip as ShapeClipProps)?.strokeOpacity ?? 100;
+
+
+  // Stable filters array so react-konva doesn't set a new filters prop each render
+  const filtersArray = useMemo(() => [
+    //@ts-ignore
+    Konva.Filters.Applicator,
+  ], []);
+
 
   const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean; commit?: boolean }) => {
     if (isRotating) return;
@@ -275,14 +299,32 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     return () => cancelAnimationFrame(raf);
   }, [isSelected]);
 
+  // Cache node bitmap when visual attributes change and we are not interacting.
+  // This allows Konva to reuse a bitmap for static frames and only recache
+  // when something actually changes (e.g., style, geometry, filters).
   useEffect(() => {
-    if (shapeRef.current) {
-      shapeRef.current.cache({
-        pixelRatio: 2,
-      })
-      shapeRef.current.getLayer()?.batchDraw?.();
-    }
-  }, [applicators]);
+    const node = shapeRef.current;
+    if (!node) return;
+    if (isInteracting) return;
+    // Refresh cache to reflect latest visual attributes
+    node.clearCache();
+    node.cache({ pixelRatio: 2 });
+    node.getLayer()?.batchDraw?.();
+  }, [
+    // Avoid recache on pure transforms (x, y, rotation, scale) — cached bitmap will be transformed.
+    // Recache on changes that affect raster content
+    isInteracting,
+    shapeType,
+    fill,
+    stroke,
+    strokeWidth,
+    fillOpacity,
+    strokeOpacity,
+    clipTransform?.cornerRadius,
+    width,
+    height,
+    applicatorClipsSignature,
+  ]);
 
   const handleClick = useCallback(() => {
     if (isFullscreen) return;
@@ -386,11 +428,14 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
           node.width(actualWidth);
           node.height(actualHeight);
         } else if (shapeType === 'ellipse') {
+          //@ts-ignore
           node.radiusX(actualWidth / 2);
+          //@ts-ignore
           node.radiusY(actualHeight / 2);
         }
         node.scaleX(1);
         node.scaleY(1);
+        node.getLayer()?.batchDraw?.();
       } else {
         setClipTransform(clipId, {
           x: saveX,
@@ -403,6 +448,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
         });
       }
     };
+
     const onTransform = () => {
       bumpSuppress();
       if (!isRotating) {
@@ -412,11 +458,15 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
     };
     const onTransformEnd = () => {
       bumpSuppress();
-      setIsTransforming(false);
-      setIsInteracting(false);
-      setIsRotating(false);
-      setGuides({ vCenter: false, hCenter: false, v25: false, v75: false, h25: false, h75: false, left: false, right: false, top: false, bottom: false });
+      // Persist final geometry first to eliminate end-of-resize snap
       persistTransform();
+      // Defer UI state updates to next frame so render uses updated store values
+      requestAnimationFrame(() => {
+        setIsTransforming(false);
+        setIsInteracting(false);
+        setIsRotating(false);
+        setGuides({ vCenter: false, hCenter: false, v25: false, v75: false, h25: false, h75: false, left: false, right: false, top: false, bottom: false });
+      });
     };
     transformer.on('transformstart', onTransformStart);
     transformer.on('transform', onTransform);
@@ -501,35 +551,35 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({ clipId, transform, rectWidt
       y: y + actualHeight / 2,
     };
 
-    const applicatorProps = {
-      applicators,
-      //@ts-ignore
-      filters: [Konva.Filters.Applicator],
-    }
-
+    // Use stable references to avoid invalidating cached filter output
 
     switch (shapeType) {
       case 'rectangle':
-        return <Rect {...cornerProps}  width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0}  {...applicatorProps} />;
+        //@ts-ignore
+        return <Rect {...cornerProps}  width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0}  applicators={applicators} filters={filtersArray} />;
       
       case 'ellipse':
-        return <Ellipse {...centerProps} radiusX={width / 2} radiusY={height / 2} {...applicatorProps} />;
+        //@ts-ignore
+        return <Ellipse {...centerProps} radiusX={width / 2} radiusY={height / 2} applicators={applicators} filters={filtersArray} />;
       
       case 'polygon': {
         // Match dashed preview geometry: fit equilateral triangle inside width/height
         // For RegularPolygon/triangle: width = R*sqrt(3), height = 1.5*R
         const radius = Math.min(width / Math.sqrt(3), height / 1.5);
-        return <RoundedRegularPolygon {...centerProps} sides={sides} radius={radius} cornerRadius={clipTransform?.cornerRadius ?? 0} {...applicatorProps} />;
+        return <RoundedRegularPolygon {...centerProps} sides={sides} radius={radius} cornerRadius={clipTransform?.cornerRadius ?? 0} applicators={applicators} filters={filtersArray} />;
       }
       
       case 'line':
-        return <Line {...cornerProps} points={[0, 0, width, 0]} {...applicatorProps} />;
+        //@ts-ignore
+        return <Line {...cornerProps} points={[0, 0, width, 0]} applicators={applicators} filters={filtersArray} />;
       
       case 'star':
-        return <Star {...centerProps} numPoints={(clip as StarClipProps)?.points ?? 5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} {...applicatorProps} />;
+        //@ts-ignore
+        return <Star {...centerProps} numPoints={(clip as StarClipProps)?.points ?? 5} innerRadius={Math.min(width, height) / 4} outerRadius={Math.min(width, height) / 2} applicators={applicators} filters={filtersArray} />;
       
       default:
-        return <Rect {...cornerProps} width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0} {...applicatorProps} />;
+        //@ts-ignore
+        return <Rect {...cornerProps} width={width} height={height} cornerRadius={clipTransform?.cornerRadius ?? 0} applicators={applicators} filters={filtersArray} />;
     }
   };
 

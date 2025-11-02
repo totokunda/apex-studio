@@ -19,6 +19,8 @@ interface ViewportState {
   setContentBounds: (bounds: { x: number; y: number; width: number; height: number }) => void;
   aspectRatio: { width: number; height: number; id: string };
   setAspectRatio: (ratio: { width: number; height: number; id: string }) => void;
+  isAspectEditing: boolean;
+  setAspectEditing: (editing: boolean) => void;
   setTool: (tool: ViewTool) => void;
   setShape: (shape: ShapeTool) => void;
   setScalePercent: (percent: number) => void;
@@ -50,6 +52,8 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
   setContentBounds: (bounds) => set({ contentBounds: bounds }),
   aspectRatio: { width: 16, height: 9, id: '16:9' },
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
+  isAspectEditing: false,
+  setAspectEditing: (editing) => set({ isAspectEditing: editing }),
   setTool: (tool) => {
     set({ tool });
   },
