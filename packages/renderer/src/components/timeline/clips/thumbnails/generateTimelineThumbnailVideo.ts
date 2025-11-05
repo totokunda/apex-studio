@@ -249,6 +249,7 @@ export const generateTimelineThumbnailVideo = async (
                 }
             );
 
+
             if (mySeq !== exactVideoUpdateSeqRef.current) {
                 return;
             }

@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import inspector from 'node:inspector';
+import { fileURLToPath } from 'node:url';
 import { WebSocketManager } from './WebSocketManager.js';
 
 const session = new inspector.Session();
@@ -28,6 +29,8 @@ export class ApexApi implements AppModule {
   private backendUrl: string = DEFAULT_BACKEND_URL;
   private wsManager: WebSocketManager | null = null;
   private activeMaskStreams: Map<string, { controller: AbortController; reader: ReadableStreamDefaultReader<Uint8Array> | null; id: string } > = new Map();
+  private uploadCache: Map<string, string> = new Map(); // localAbsPath -> remoteAbsPath
+  private remoteCachePath: string | null = null; // backend-reported cache path
 
   constructor(backendUrl: string = DEFAULT_BACKEND_URL) {
     this.backendUrl = backendUrl;
@@ -371,7 +374,8 @@ export class ApexApi implements AppModule {
       start_frame?: number;
       end_frame?: number;
     }) => {
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/preprocessor/run', request);
+      const payload = await this.#preparePreprocessorRunRequest(request);
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/preprocessor/run', payload);
     });
 
     // Cancel preprocessor
@@ -406,7 +410,8 @@ export class ApexApi implements AppModule {
       selected_components?: Record<string, any>;
       job_id?: string;
     }) => {
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/engine/run', request);
+      const payload = await this.#prepareEngineRunRequest(request);
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/engine/run', payload);
     });
 
     // Cancel engine job
@@ -546,8 +551,7 @@ export class ApexApi implements AppModule {
       return { success: true, data: { key, connected } };
     });
   }
-
-
+  
   private async makeRequest<T>(method: 'GET' | 'POST' | 'DELETE', endpoint: string, body?: any): Promise<ConfigResponse<T>> {
     try {
       const options: RequestInit = {
@@ -583,6 +587,195 @@ export class ApexApi implements AppModule {
         error: error instanceof Error ? error.message : 'Unknown error occurred',
       };
     }
+  }
+
+  // ===== Helpers for remote file handling =====
+  #isRemoteBackend(): boolean {
+    try {
+      const u = new URL(this.backendUrl);
+      const host = (u.hostname || '').toLowerCase();
+      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async #ensureRemoteCachePath(): Promise<string | null> {
+    if (!this.#isRemoteBackend()) return null;
+    if (this.remoteCachePath) return this.remoteCachePath;
+    const res = await this.makeRequest<{cache_path: string}>('GET', '/config/cache-path');
+    if (res.success && res.data?.cache_path) {
+      this.remoteCachePath = res.data.cache_path;
+      return this.remoteCachePath;
+    }
+    return null;
+  }
+
+  #looksLikeHttp(urlOrPath: string): boolean {
+    return /^https?:\/\//i.test(urlOrPath);
+  }
+
+  #looksLikeAppUrl(urlOrPath: string): boolean {
+    return /^app:\/\//i.test(urlOrPath);
+  }
+
+  #looksLikeFileUrl(urlOrPath: string): boolean {
+    return /^file:\/\//i.test(urlOrPath);
+  }
+
+  #resolveLocalPath(maybePath: string): string | null {
+    try {
+      if (!maybePath || typeof maybePath !== 'string') return null;
+      if (this.#looksLikeHttp(maybePath)) return null;
+      if (this.#looksLikeFileUrl(maybePath)) {
+        const p = fileURLToPath(maybePath);
+        return fs.existsSync(p) ? p : null;
+      }
+      if (this.#looksLikeAppUrl(maybePath)) {
+        // Support app://user-data/... and app://apex-cache/...
+        const u = new URL(maybePath);
+        const pathname = decodeURIComponent(u.pathname || '');
+        const norm = pathname.startsWith('/') ? pathname.slice(1) : pathname;
+        if (u.hostname === 'user-data' && this.app) {
+          const base = this.app.getPath('userData');
+          const candidate = norm.startsWith(base) ? norm : path.join(base, norm);
+          return fs.existsSync(candidate) ? candidate : null;
+        }
+        // For apex-cache, we do not know the local cache root reliably in remote mode; skip
+        return null;
+      }
+      // Absolute/relative paths
+      if (fs.existsSync(maybePath)) return maybePath;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async #uploadLocalFileIfNeeded(localPathOrUrl: string): Promise<string | null> {
+    if (!this.#isRemoteBackend()) return null;
+    const abs = this.#resolveLocalPath(localPathOrUrl);
+    if (!abs) return null;
+    const cached = this.uploadCache.get(abs);
+    if (cached) return cached;
+
+    const remoteCacheBase = await this.#ensureRemoteCachePath();
+    if (!remoteCacheBase) throw new Error('Remote cache path unavailable');
+
+    const fileName = path.basename(abs);
+    const destRel = `uploads/${crypto.randomUUID()}-${fileName}`;
+
+    const buf = await fs.promises.readFile(abs);
+    // Use query params for scope/dest to avoid multipart field name disagreements
+    const url = `${this.backendUrl}/files/ingest?scope=apex-cache&dest=${encodeURIComponent(destRel)}`;
+    const form = new FormData();
+    // @ts-ignore - Node FormData supports Blob
+    form.append('file', new Blob([buf]), fileName);
+
+    const resp = await fetch(url, { method: 'POST', body: form as any });
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => '');
+      throw new Error(`Upload failed (${resp.status}): ${t || resp.statusText}`);
+    }
+    // Expect { path: string } relative to cache
+    let relReturned: string = destRel;
+    try {
+      const j = await resp.json();
+      relReturned = (j && typeof j.path === 'string') ? j.path : destRel;
+    } catch {
+      relReturned = destRel;
+    }
+    const remoteAbs = this.#joinRemote(remoteCacheBase as string, relReturned as string);
+    this.uploadCache.set(abs, remoteAbs);
+    return remoteAbs;
+  }
+
+  #joinRemote(base: string, rel: string): string {
+    const b = base.replace(/\\/g, '/').replace(/\/$/, '');
+    const r = rel.replace(/\\/g, '/').replace(/^\//, '');
+    return `${b}/${r}`;
+  }
+
+  async #preparePreprocessorRunRequest(request: {
+    preprocessor_name: string;
+    input_path: string;
+    job_id?: string;
+    download_if_needed?: boolean;
+    params?: Record<string, any>;
+    start_frame?: number;
+    end_frame?: number;
+  }): Promise<{
+    preprocessor_name: string;
+    input_path: string;
+    job_id?: string;
+    download_if_needed?: boolean;
+    params?: Record<string, any>;
+    start_frame?: number;
+    end_frame?: number;
+  }> {
+    if (!this.#isRemoteBackend()) return request;
+    const uploaded = await this.#uploadLocalFileIfNeeded(request.input_path);
+    if (uploaded) {
+      return { ...request, input_path: uploaded };
+    }
+    return request;
+  }
+
+  async #prepareEngineRunRequest(request: {
+    manifest_id?: string;
+    yaml_path?: string;
+    inputs: Record<string, any>;
+    selected_components?: Record<string, any>;
+    job_id?: string;
+  }): Promise<{
+    manifest_id?: string;
+    yaml_path?: string;
+    inputs: Record<string, any>;
+    selected_components?: Record<string, any>;
+    job_id?: string;
+  }> {
+    if (!this.#isRemoteBackend()) return request;
+    const transformed: Record<string, any> = {};
+    for (const [k, v] of Object.entries(request.inputs || {})) {
+      transformed[k] = await this.#transformValueForUpload(v);
+    }
+    return { ...request, inputs: transformed };
+  }
+
+  async #transformValueForUpload(value: any): Promise<any> {
+    if (value == null) return value;
+    if (typeof value === 'string') {
+      const uploaded = await this.#uploadLocalFileIfNeeded(value);
+      return uploaded || value;
+    }
+    if (Array.isArray(value)) {
+      const out = [] as any[];
+      for (const item of value) {
+        // Only map strings or one-level nested arrays of strings
+        if (typeof item === 'string') {
+          out.push((await this.#uploadLocalFileIfNeeded(item)) || item);
+        } else if (Array.isArray(item)) {
+          const inner: any[] = [];
+          for (const s of item) {
+            inner.push(typeof s === 'string' ? ((await this.#uploadLocalFileIfNeeded(s)) || s) : s);
+          }
+          out.push(inner);
+        } else {
+          out.push(item);
+        }
+      }
+      return out;
+    }
+    if (typeof value === 'object') {
+      // If object has a 'src' that looks like a local file, upload and replace with the string path
+      if (typeof value.src === 'string') {
+        const uploaded = await this.#uploadLocalFileIfNeeded(value.src);
+        return uploaded || value.src;
+      }
+      return value;
+    }
+    return value;
   }
 
 }

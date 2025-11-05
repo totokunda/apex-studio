@@ -280,6 +280,7 @@ export type ModelClipProps = ClipProps & {
     type: 'model';
     manifest: ManifestDocument;
     category: string;
+    speed?: number;
     modelStatus?: 'pending' | 'running' | 'complete' | 'failed';
     // Persist user selections for model components (e.g., scheduler, transformer, vae, text_encoder)
     // Keyed by component type (e.g., 'scheduler', 'transformer'), value is a small descriptor object

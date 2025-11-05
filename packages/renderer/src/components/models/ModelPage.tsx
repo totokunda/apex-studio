@@ -40,11 +40,25 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   const [componentDownloading, setComponentDownloading] = useState(false);
   const [deletingByPath, setDeletingByPath] = useState<Record<string, boolean>>({});
   const { loadManifest } = useManifestStore.getState();
-  const relevantPaths = React.useMemo(() => (
-    (Array.isArray(component.model_path) ? component.model_path : component.model_path ? [{ path: component.model_path }] : [])
-      .map((it: any) => (typeof it === 'string' ? it : it?.path))
-      .filter(Boolean) as string[]
-  ), [component]);
+  const relevantPaths = React.useMemo(() => {
+    const paths: string[] = [];
+    const modelPathsRaw = Array.isArray(component.model_path)
+      ? component.model_path
+      : component.model_path
+        ? [{ path: component.model_path }]
+        : [];
+    for (const it of modelPathsRaw) {
+      const p = typeof it === 'string' ? it : (it as any)?.path;
+      if (p) paths.push(p);
+    }
+    const baseConfig = (component as any)?.config_path;
+    if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
+    const optionConfigs = Array.isArray((component as any)?.scheduler_options)
+      ? (component as any).scheduler_options.map((o: any) => o?.config_path).filter(Boolean)
+      : [];
+    for (const p of optionConfigs) if (typeof p === 'string') paths.push(p);
+    return Array.from(new Set(paths));
+  }, [component]);
 
   const downloads = useComponentsDownloadStore(useShallow((s) => {
     const out: Record<string, any> = {};
@@ -55,25 +69,59 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   const cancelPath = useComponentsDownloadStore((s) => s.cancelPath);
   const modelPaths = Array.isArray(component.model_path) ? component.model_path : component.model_path ? [{ path: component.model_path }] : [];
 
+  const schedulerConfigPaths = React.useMemo(() => {
+    const paths: string[] = [];
+    const baseConfig = (component as any)?.config_path;
+    if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
+    if (Array.isArray((component as any)?.scheduler_options)) {
+      for (const opt of (component as any).scheduler_options as any[]) {
+        const cp = opt?.config_path;
+        if (typeof cp === 'string' && cp) paths.push(cp);
+      }
+    }
+    return Array.from(new Set(paths));
+  }, [component]);
+
+  const schedulerAnyActive = useMemo(() => (
+    schedulerConfigPaths.some((p) => {
+      const s = downloads[p]?.status;
+      return s === 'downloading' || s === 'pending';
+    })
+  ), [downloads, schedulerConfigPaths]);
+
+  const schedulerAnyCompleted = useMemo(() => (
+    schedulerConfigPaths.some((p) => downloads[p]?.status === 'completed')
+  ), [downloads, schedulerConfigPaths]);
+
+  const schedulerAnyError = useMemo(() => (
+    schedulerConfigPaths.some((p) => downloads[p]?.status === 'error')
+  ), [downloads, schedulerConfigPaths]);
+
   // progress extraction handled by store; no local parser needed
 
   React.useEffect(() => {
-    const relevant = (Array.isArray(modelPaths) ? modelPaths : []).map((it: any) => (typeof it === 'string' ? it : it?.path)).filter(Boolean) as string[];
-    const anyActive = relevant.some((p) => {
+    const anyActive = relevantPaths.some((p) => {
       const e = downloads[p];
       return e && (e.status === 'downloading' || e.status === 'pending');
     });
     setComponentDownloading(anyActive);
-  }, [downloads, component]);
+  }, [downloads, component, relevantPaths]);
+
+  const completedRelevantPaths = React.useMemo(() => (
+    relevantPaths.filter((p) => downloads[p]?.status === 'completed')
+  ), [downloads, relevantPaths]);
+
+  const prevCompletedRef = React.useRef<string[]>([]);
 
   React.useEffect(() => {
-    // If any relevant path completes, refetch manifest to update is_downloaded flags
-    const relevant = (Array.isArray(modelPaths) ? modelPaths : []).map((it: any) => (typeof it === 'string' ? it : it?.path)).filter(Boolean) as string[];
-    const anyCompleted = relevant.some((p) => downloads[p]?.status === 'completed');
-    if (anyCompleted) {
+    // Only refetch when new paths transition into 'completed'
+    const prev = prevCompletedRef.current;
+    const hasNewCompletion = completedRelevantPaths.some((p) => !prev.includes(p));
+    if (hasNewCompletion) {
       try { loadManifest(manifestId, true); } catch {}
     }
-  }, [downloads, manifestId]);
+    prevCompletedRef.current = completedRelevantPaths;
+  }, [completedRelevantPaths, manifestId]);
 
   React.useEffect(() => {
     // Reconcile store state with manifest: if manifest shows is_downloaded, remove the completed entry from store
@@ -93,6 +141,20 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
         }, 1000);
       }
     });
+
+    // For scheduler configs, manifest does not flag per-config, but if the component
+    // is marked downloaded, we can safely clear any completed config download entries
+    // related to this component to keep UI tidy.
+    if ((component as any)?.type === 'scheduler' && (component as any)?.is_downloaded) {
+      for (const p of schedulerConfigPaths) {
+        const entry = downloads[p];
+        if (entry?.status === 'completed') {
+          setTimeout(() => {
+            try { removeEntry(p); } catch {}
+          }, 1000);
+        }
+      }
+    }
   }, [modelPaths, downloads]);
 
   const handleDownload = async (path: string) => {
@@ -144,9 +206,71 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
 
   // Check if component is downloaded (placeholder logic - replace with actual check)
   const isDownloaded = useMemo(() => component.is_downloaded || (Array.isArray(modelPaths) ? modelPaths.some((item: ManifestComponentModelPathItem) => (item as any).is_downloaded) : false), [component, modelPaths]);
-
   const typeLabel = getComponentTypeLabel(component.type);
   const displayName = component.label || (component.name ? formatComponentName(component.name) : component.base ? formatComponentName(component.base) : typeLabel);
+
+  const [configCompletionGraceOver, setConfigCompletionGraceOver] = useState(false);
+  React.useEffect(() => {
+    // When a config completes but the component isn't marked downloaded yet,
+    // wait briefly to allow the manifest to refresh; then allow retry.
+    if (!isDownloaded && schedulerAnyCompleted && !schedulerAnyActive) {
+      setConfigCompletionGraceOver(false);
+      const t = setTimeout(() => setConfigCompletionGraceOver(true), 2000);
+      return () => { try { clearTimeout(t); } catch {} };
+    }
+    // Reset when active again, error, or confirmed
+    setConfigCompletionGraceOver(false);
+  }, [isDownloaded, schedulerAnyCompleted, schedulerAnyActive]);
+
+  // Track model-path-specific grace after completion while waiting for manifest confirmation
+  const [modelCompletionGrace, setModelCompletionGrace] = useState<Record<string, boolean>>({});
+  const modelPathDownloadedMap = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    const arr = Array.isArray(modelPaths) ? modelPaths : [];
+    for (const it of arr as any[]) {
+      if (typeof it === 'string') {
+        map[it] = false;
+      } else if (it && typeof it === 'object') {
+        const p = (it as any).path;
+        if (p) map[p] = !!(it as any).is_downloaded;
+      }
+    }
+    return map;
+  }, [modelPaths]);
+
+  const modelGraceTimersRef = React.useRef<Record<string, any>>({});
+  React.useEffect(() => {
+    const paths = Object.keys(modelPathDownloadedMap || {});
+    for (const p of paths) {
+      const status = downloads[p]?.status;
+      const isPathDownloaded = !!modelPathDownloadedMap[p];
+      const existingTimer = modelGraceTimersRef.current[p];
+      if (status === 'completed' && !isPathDownloaded) {
+        // Start a short grace timer if not already running
+        if (!existingTimer) {
+          modelGraceTimersRef.current[p] = setTimeout(() => {
+            setModelCompletionGrace((s) => ({ ...s, [p]: true }));
+            try { clearTimeout(modelGraceTimersRef.current[p]); } catch {}
+            delete modelGraceTimersRef.current[p];
+          }, 2000);
+        }
+      } else {
+        // Clear timer and reset grace when status changes or manifest confirms
+        if (existingTimer) {
+          try { clearTimeout(existingTimer); } catch {}
+          delete modelGraceTimersRef.current[p];
+        }
+        setModelCompletionGrace((s) => (s[p] ? { ...s, [p]: false } : s));
+      }
+    }
+    // Cleanup timers for paths that no longer exist
+    for (const key of Object.keys(modelGraceTimersRef.current)) {
+      if (!paths.includes(key)) {
+        try { clearTimeout(modelGraceTimersRef.current[key]); } catch {}
+        delete modelGraceTimersRef.current[key];
+      }
+    }
+  }, [downloads, modelPathDownloadedMap]);
 
   // Check if there's any content to show when expanded
   const hasModelPaths = modelPaths.length > 0;
@@ -335,14 +459,44 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                             </button>
                           </div>
                         </div>
+                      ) : downloads[pathItem.path]?.status === 'pending' ? (
+                        <div className="w-full mt-3 flex items-center justify-between gap-x-2">
+                          <div className="flex-1 min-w-0">
+                            <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{pathItem.path}</div>
+                          </div>
+                          <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
+                            <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
+                            <span>Preparing...</span>
+                          </div>
+                        </div>
+                      ) : downloads[pathItem.path]?.status === 'completed' ? (
+                        modelCompletionGrace[pathItem.path] ? (
+                          <button
+                            onClick={() => handleDownload(pathItem.path)}
+                            className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
+                          >
+                            <LuDownload className="w-3.5 h-3.5" />
+                            <span>Download Model</span>
+                          </button>
+                        ) : (
+                          <div className="w-full mt-3" />
+                        )
+                      ) : downloads[pathItem.path]?.status === 'error' || downloads[pathItem.path]?.status === 'canceled' ? (
+                        <button
+                          onClick={() => handleDownload(pathItem.path)}
+                          className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
+                        >
+                          <LuDownload className="w-3.5 h-3.5" />
+                          <span>Retry Download</span>
+                        </button>
                       ) : (
                         <button
-                      onClick={() => handleDownload(pathItem.path)}
-                      className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
-                    >
-                      <LuDownload className="w-3.5 h-3.5" />
-                      <span>Download Model</span>
-                    </button>
+                          onClick={() => handleDownload(pathItem.path)}
+                          className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
+                        >
+                          <LuDownload className="w-3.5 h-3.5" />
+                          <span>Download Model</span>
+                        </button>
                       )
                     ) : (
                     <div className="flex flex-row items-center justify-between gap-x-2">
@@ -385,9 +539,76 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                   </div>
                 ))}
               </div>
-              {!isDownloaded && component.config_path && (
+              {schedulerConfigPaths.length > 0 && (
+                <div className="mt-3">
+                  {schedulerConfigPaths.map((p) => {
+                    const entry = downloads[p];
+                    const status = entry?.status;
+                    if (!(status === 'downloading' || status === 'pending')) return null;
+                    const files = entry?.files ? (Object.values(entry.files) as any[]) : [];
+                    return (
+                      <div key={p} className="w-full">
+                        <div className="text-brand-light text-[10.5px] font-medium mb-1">Config Download</div>
+                        {files.length > 0 && status === 'downloading' ? (
+                          <div className="flex flex-col gap-y-2">
+                            {files.map((f: any) => (
+                              <div key={f.filename} className="flex flex-col gap-y-1">
+                                <div className="flex items-center justify-between gap-x-2 w-full">
+                                  <div className="flex-1 min-w-0">
+                                    <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{f.filename}</div>
+                                  </div>
+                                  <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
+                                    <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
+                                    <span>Preparing...</span>
+                                  </div>
+                                </div>
+                                <div className="w-full h-2 bg-brand-background rounded overflow-hidden border border-brand-light/10">
+                                  <div className="h-full bg-brand/90 transition-all" style={{ width: `${(f.downloadedBytes / f.totalBytes) * 100}%` }} />
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
+                                    <div className="text-[10px] text-brand-light/90">
+                                      {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
+                                    </div>
+                                  ) : <div />}
+                                  {f.status === 'completed' ? (
+                                    <div className="text-[10px] text-green-400">Completed</div>
+                                  ) : (
+                                    f.downloadSpeed != null && f.downloadSpeed > 0 ? (
+                                      <div className="text-[9px] text-brand-light/50">{formatSpeed(f.downloadSpeed)}</div>
+                                    ) : <div />
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between gap-x-2 w-full">
+                            <div className="flex-1 min-w-0">
+                              <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{p}</div>
+                            </div>
+                            <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
+                              <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
+                              <span>Preparing...</span>
+                            </div>
+                          </div>
+                        )}
+                        <div className="flex flex-col items-center justify-between mt-2 w-full">
+                          <button
+                            onClick={() => handleCancel(p)}
+                            className="text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {!isDownloaded && !schedulerAnyActive && (schedulerAnyError || !schedulerAnyCompleted || configCompletionGraceOver) && (component.config_path || component.scheduler_options?.some((option) => option.config_path)) && (
               <button
-                onClick={() => handleDownload(component.config_path as string)}
+                onClick={() => handleDownload(component.config_path || component.scheduler_options?.find((option) => option.config_path)?.config_path as string)}
               className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded-md px-3 py-2.5 transition-all">
                 <LuDownload className="w-3.5 h-3.5" />
                 <span>Download Config</span>

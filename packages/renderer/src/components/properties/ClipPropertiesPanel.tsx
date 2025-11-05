@@ -151,6 +151,30 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     }
   }, [hasModel, clipId, manifestData, buildSelectedComponentDefaults, updateClip, clip]);
 
+  // Check whether required model assets for this manifest are downloaded
+  const isModelDownloaded = useMemo(() => {
+    if (!hasModel) return true;
+    const manifest: any = manifestData || (clip as any)?.manifest;
+    if (!manifest) return false;
+    const components: ManifestComponent[] = (manifest?.spec?.components || []) as ManifestComponent[];
+    const normalizeModelPaths = (c: ManifestComponent): Array<any> => {
+      const raw = Array.isArray(c.model_path) ? c.model_path : (c.model_path ? [{ path: c.model_path }] : []);
+      return (raw as any[]).map((it) => (typeof it === 'string' ? { path: it } : it)).filter((it) => it && it.path);
+    };
+    const isItemDownloaded = (item: any): boolean => !!(item && item.is_downloaded === true);
+
+    // Consider a component satisfied if either:
+    // - It has model_path and at least one item is downloaded
+    // - Or it has no model_path (e.g., scheduler/helper without downloadable assets)
+    // - Or the component itself is flagged as downloaded
+    return components.every((comp) => {
+      const items = normalizeModelPaths(comp);
+      if (items.length > 0) return items.some((it) => isItemDownloaded(it));
+      if (typeof (comp as any).is_downloaded === 'boolean') return !!(comp as any).is_downloaded;
+      return true;
+    });
+  }, [hasModel, manifestData, clip]);
+
   // Disable generate when any required model inputs are missing
   const isGenerateDisabled = useMemo(() => {
     if (!hasModel || !clip) return false;
@@ -649,6 +673,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         }
       }
 
+      // add duration to engine inputs
+      let duration = (clip?.endFrame ?? 0) - (clip?.startFrame ?? 0);
+      duration = Math.max(1, duration);
+      duration = Math.min(duration, ((clip as ModelClipProps)?.manifest?.spec?.max_duration_secs ?? Infinity) * fps);
+      const durationSeconds = duration / fps;
+      engineInputs['duration'] = `${durationSeconds}s`;
       const manifestId = (clip as ModelClipProps)?.manifest?.metadata?.id;
       const selectedExisting = (clip as ModelClipProps)?.selectedComponents || {};
       const manifestForDefaults = manifestData || (clip as ModelClipProps)?.manifest;
@@ -695,9 +725,19 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     try { if (clipId) updateClip(clipId, { modelStatus: undefined }); } catch {}
   }, [clipId, engineJobId, stopEngineTracking, clearEngineJob]);
 
+  const height = useMemo(() => {
+    if (hasValidPreprocessor || hasModel) {
+      if (hasModel && !isModelDownloaded) {
+        return 'calc(100% - 40px)';
+      }
+      return 'calc(100% - 80px)';
+    }
+    return '100%';
+  }, [hasValidPreprocessor, hasModel, isModelDownloaded]);
+
   return (
     <div className="h-full w-full min-w-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden' }}>
-      <div className="overflow-hidden" style={{ height: (hasValidPreprocessor || hasModel) ? 'calc(100% - 80px)' : '100%' }}>
+      <div className="overflow-hidden" style={{ height:height }}>
         <Tabs value={selectedTab} onValueChange={setSelectedTab} className="min-w-0 relative flex flex-col h-full">
         <div className="relative flex-shrink-0 ">
           <LuChevronLeft onClick={() => {
@@ -813,7 +853,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       )}
 
       {hasModel && (
-        <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 50, pointerEvents: 'auto' }}>
+        <div className={cn("absolute bottom-0 left-0 right-0  border-brand-light/5",
+           isModelDownloaded ? "bg-brand  p-5 border-t" : "py-3 px-3 "
+        )} style={{ zIndex: 50, pointerEvents: 'auto' }}>
           {((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') ? (
             <button
               onClick={handleStopGeneration}
@@ -828,16 +870,22 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               <span>Stop Generating</span>
             </button>
           ) : (
-            <button
-              onClick={handleGenerate}
-              disabled={isGenerateDisabled || isPreparingGeneration}
-              className={cn(
-                "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] text-brand-light bg-brand-accent-two-shade flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50",
-              )}
-            >
-              <RiAiGenerate size={16} />
-              <span>{isPreparingGeneration ? 'Preparing…' : 'Generate'}</span>
-            </button>
+            isModelDownloaded ? (
+              <button
+                onClick={handleGenerate}
+                disabled={isGenerateDisabled || isPreparingGeneration}
+                className={cn(
+                  "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] text-brand-light bg-brand-accent-two-shade flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50",
+                )}
+              >
+                <RiAiGenerate size={16} />
+                <span>{isPreparingGeneration ? 'Preparing…' : 'Generate'}</span>
+              </button>
+            ) : (
+              <div className="w-full rounded-lg font-medium text-[11px] flex items-center justify-start gap-x-2  h-full transition-all duration-200 opacity-50 text-brand-light ">
+                <span>Download Model To Generate</span>
+              </div>
+            )
           )}
         </div>
       )}

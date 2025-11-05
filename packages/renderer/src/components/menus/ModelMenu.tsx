@@ -59,16 +59,8 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
   }, [perComponentModelItems, downloads]);
 
   const allDownloaded = useMemo(() => {
-    if (perComponentModelItems.length === 0) return !!manifest.downloaded;
-    return perComponentModelItems.every((items) => {
-      if (items.length === 0) return true;
-      return items.some(({ path, isDownloaded }) => {
-        const e = downloads[path];
-        if (e?.status === 'completed') return true;
-        return !!isDownloaded;
-      });
-    });
-  }, [perComponentModelItems, downloads, manifest.downloaded]);
+    return manifest.downloaded;
+  }, [manifest.downloaded]);
 
   // Compute how many tags fit on a single line
   useEffect(() => {

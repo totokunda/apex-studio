@@ -263,6 +263,8 @@ export type ManifestSpec = {
   model_type?: string | string[];
   model_types?: string[];
   engine_type?: 'torch' | 'mlx' | string;
+  fps?: number;
+  max_duration_secs?: number;
   denoise_type?: string;
   shared?: string[];
   components?: ManifestComponent[];

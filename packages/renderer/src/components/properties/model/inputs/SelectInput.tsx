@@ -61,7 +61,7 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] font-poppins bg-brand-background border-brand-light/10">
-                <DropdownMenuRadioGroup value={String(value)} onValueChange={onChange}>
+                <DropdownMenuRadioGroup value={String(selectedOption?.value)} onValueChange={onChange}>
                   {normalizedOptions.map((option) => (
                     <DropdownMenuRadioItem 
                       key={option.value} 
@@ -83,7 +83,7 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
       <div className="flex flex-row items-center w-full gap-x-2 min-w-0 relative mt-1">
         <label className="text-brand-light text-[10.5px] w-1/4 text-start font-medium">{label}</label>
         <div className="flex-1">
-          <DropdownMenu>
+          <DropdownMenu >
             <DropdownMenuTrigger asChild>
               <button className="w-full py-1.5 px-3.5 rounded-[5px] font-medium bg-brand border border-brand-light/5 text-brand-light text-[10.5px] focus:outline-none focus:ring-2 focus:ring-brand-light/20 flex items-center justify-between hover:bg-brand-light/5 transition-all duration-200">
                 <span>{selectedOption?.name || 'Select option'}</span>
@@ -91,9 +91,10 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] font-poppins bg-brand-background border-brand-light/10">
-              <DropdownMenuRadioGroup value={String(value)} onValueChange={onChange}>
+              <DropdownMenuRadioGroup value={String(selectedOption?.value)} onValueChange={onChange}>
                 {normalizedOptions.map((option) => (
                   <DropdownMenuRadioItem 
+                    
                     key={option.value} 
                     value={String(option.value)}
                     className="text-brand-light text-[10.5px] focus:bg-brand-light/10 font-medium focus:text-brand-lighter cursor-pointer"

@@ -348,7 +348,6 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
     const entries = state.entries;
     // check if it exists yet useComponentsDownloadStore.getState() is defined
     
-    
     // Check each entry that was downloading
     for (const [path, entry] of Object.entries(entries)) {
       if (!entry || !entry.jobId) continue;

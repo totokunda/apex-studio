@@ -1,5 +1,5 @@
 import { useClipStore } from '@/lib/clip';
-import { AudioClipProps, VideoClipProps } from '@/lib/types';
+import { AudioClipProps, VideoClipProps, ModelClipProps } from '@/lib/types';
 import { useMemo } from 'react';
 import { useState } from 'react';
 import React from 'react'
@@ -14,7 +14,7 @@ interface DurationPropertiesProps {
 }
 
 const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
-    const clip = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps | AudioClipProps;
+    const clip = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps | AudioClipProps | ModelClipProps;
     const { updateClip } = useClipStore();
     const speed = useMemo(() => clip?.speed ?? 1.0, [clip?.speed]);
     const [spinning, setSpinning] = useState(false);
@@ -54,13 +54,26 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
         resizeClip(clipId, 'right', value);
     }
 
-    const startFrameMin = Math.max(0, startFrame - Math.abs(clip?.trimStart ?? 0));
+    // Model max duration (in frames) if available
+    const modelMaxFrames = useMemo(() => {
+      if (clip?.type !== 'model') return Infinity;
+      const secs = Number(((clip as ModelClipProps)?.manifest?.spec?.max_duration_secs));
+      if (!Number.isFinite(secs) || secs <= 0) return Infinity;
+      return Math.max(1, Math.floor(secs * fps));
+    }, [clip?.type, (clip as any)?.manifest, fps]);
+
+    const startFrameMin = Math.max(
+      0,
+      startFrame - Math.abs(clip?.trimStart ?? 0),
+      Number.isFinite(modelMaxFrames) ? Math.max(0, (endFrame) - (modelMaxFrames as number)) : 0
+    );
     const startFrameMax = endFrame - 1;
     const endFrameMin = startFrame + 1;
-    const rawTotalFrames = Math.max(0, Math.floor(((getMediaInfoCached(clip?.src)?.duration ?? 0) * fps)));
+    const rawTotalFrames = Math.max(0, Math.floor(((getMediaInfoCached(clip?.src as string)?.duration ?? 0) * fps)));
     const effectiveSpeed = Math.max(0.1, Math.min(5, Number(clip?.speed ?? 1)));
     const maxByMedia = Math.max(0, Math.floor(rawTotalFrames / effectiveSpeed));
-    const endFrameMax = Math.min(maxByMedia, endFrame + Math.abs(clip?.trimEnd ?? 0));
+    const modelEndLimit = (clip?.type === 'model' && Number.isFinite(modelMaxFrames)) ? (startFrame + (modelMaxFrames as number)) : Infinity;
+    const endFrameMax = Math.min(maxByMedia, endFrame + Math.abs(clip?.trimEnd ?? 0), modelEndLimit);
 
     const canRefresh = useMemo(() => {
         return isFinite(clip?.trimEnd ?? 0) && isFinite(clip?.trimStart ?? 0);
