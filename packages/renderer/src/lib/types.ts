@@ -280,6 +280,10 @@ export type ModelClipProps = ClipProps & {
     type: 'model';
     manifest: ManifestDocument;
     category: string;
+    modelStatus?: 'pending' | 'running' | 'complete' | 'failed';
+    // Persist user selections for model components (e.g., scheduler, transformer, vae, text_encoder)
+    // Keyed by component type (e.g., 'scheduler', 'transformer'), value is a small descriptor object
+    selectedComponents?: Record<string, any>;
 }
 
 export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps | DrawingClipProps | GroupClipProps | ModelClipProps;

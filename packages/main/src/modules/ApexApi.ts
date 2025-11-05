@@ -48,6 +48,7 @@ export class ApexApi implements AppModule {
     this.registerWebSocketHandlers();
     this.registerJobHandlers();
     this.registerPreprocessorHandlers();
+    this.registerEngineHandlers();
     this.registerComponentsHandlers();
     this.registerMaskHandlers();
     this.registerManifestHandlers();
@@ -394,6 +395,34 @@ export class ApexApi implements AppModule {
     });
 
     // WebSocket handlers migrated to unified ws:* IPC
+  }
+
+  private registerEngineHandlers(): void {
+    // Run engine manifest
+    ipcMain.handle('engine:run', async (_event, request: {
+      manifest_id?: string;
+      yaml_path?: string;
+      inputs: Record<string, any>;
+      selected_components?: Record<string, any>;
+      job_id?: string;
+    }) => {
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/engine/run', request);
+    });
+
+    // Cancel engine job
+    ipcMain.handle('engine:cancel', async (_event, jobId: string) => {
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/engine/cancel/${encodeURIComponent(jobId)}`);
+    });
+
+    // Engine job status
+    ipcMain.handle('engine:status', async (_event, jobId: string) => {
+      return this.makeRequest<any>('GET', `/engine/status/${encodeURIComponent(jobId)}`);
+    });
+
+    // Engine job result
+    ipcMain.handle('engine:result', async (_event, jobId: string) => {
+      return this.makeRequest<any>('GET', `/engine/result/${encodeURIComponent(jobId)}`);
+    });
   }
 
   private registerManifestHandlers(): void {

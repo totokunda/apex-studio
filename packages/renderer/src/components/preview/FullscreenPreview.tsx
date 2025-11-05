@@ -14,6 +14,7 @@ import { FaCirclePause, FaCirclePlay } from 'react-icons/fa6';
 import { getApplicatorsForClip } from '@/lib/applicator-utils';
 import { useWebGLHaldClut } from './webgl-filters';
 import DrawingPreview from './clips/DrawingPreview';
+import DynamicModelPreview from './clips/DynamicModelPreview';
 
 interface FullscreenPreviewProps {
   onExit: () => void;
@@ -306,6 +307,17 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
                   return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={clipAtFrameNoOverlap} />;
                 case 'image':
                   return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={clipAtFrameNoOverlap} />;
+                case 'model':
+                  return (
+                    <DynamicModelPreview
+                      key={clip.clipId}
+                      clip={clip as any}
+                      rectWidth={rectWidth}
+                      rectHeight={rectHeight}
+                      applicators={applicators}
+                      overlap={clipAtFrameNoOverlap}
+                    />
+                  );
                 case 'shape':
                   return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} />;
                 case 'text':

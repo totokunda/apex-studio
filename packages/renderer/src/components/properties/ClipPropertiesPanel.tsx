@@ -28,12 +28,17 @@ import MaskPropertiesPanel from './mask/MaskPropertiesPanel';
 import { ModelInputsProperties } from './model/ModelInputsProperties'
 import { RiAiGenerate } from 'react-icons/ri'
 import { ModelGenerationProperties } from './model/ModelGenerationProperties'
+import ProgressPanel from './model/ProgressPanel'
 import FilterProperties from './FilterProperties'
 import { savePreviewImage, getPreviewPath} from '@app/preload'
 import { AnyClipProps, ModelClipProps } from '@/lib/types'
 import {ExportClip, exportSequence, exportClip} from '@app/export-renderer'
 import _ from 'lodash';
 import { BASE_LONG_SIDE } from '@/lib/settings';
+import { runEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/lib/engine/api';
+import { useManifest } from '@/lib/manifest/hooks';
+import { ManifestComponent } from '@/lib/manifest/api';
+import ModelComponentsProperties from './model/ModelComponentsProperties'
 interface PropertiesPanelProps {
     panelSize: number;
 }
@@ -41,6 +46,7 @@ interface PropertiesPanelProps {
 const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const {selectedClipIds, selectedMaskId} = useControlsStore();
   const {selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, updatePreprocessor, getClipsForGroup} = useClipStore();
+  const updateClip = useClipStore((s) => s.updateClip);
   // const updateModelInput = useClipStore((s) => s.updateModelInput);
   const { fps } = useControlsStore();
   const selectedLineId = useDrawingStore((s) => s.selectedLineId);
@@ -49,7 +55,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const clipId = useMemo(() => selectedClipIds[selectedClipIds.length - 1], [selectedClipIds]);
   const getClipPositionScore = useClipStore((s) => s.getClipPositionScore);
   const getClipsByType = useClipStore((s) => s.getClipsByType);
-  const getClipById = useClipStore((s) => s.getClipById);
 
   const clip = useClipStore((s) => s.getClipById(clipId))
   // const getClipsByType = useClipStore((s) => s.getClipsByType);
@@ -61,6 +66,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [selectedTab, setSelectedTab] = useState<string>(clip?.type === 'text' ? "text" : "transform");
   const { clearJob, stopTracking } = usePreprocessorJobActions();
+  const { startTracking: startEngineTracking, stopTracking: stopEngineTracking, clearJob: clearEngineJob } = useEngineJobActions();
+  const [isPreparingGeneration, setIsPreparingGeneration] = useState(false);
+  const [engineJobId, setEngineJobId] = useState<string | null>(null);
   const getModelValues = useClipStore((s) => s.getModelValues);
   // check if clip has audio if it is video 
   const hasDuration = useMemo(() => {
@@ -93,7 +101,55 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     return false;
   }, [clip?.type]);
 
+  // Engine job tracking is started explicitly when a run begins
+  const effectiveJobId = engineJobId || (hasModel ? (clipId ?? null) : null);
+  const { isProcessing: isEngineProcessing, isComplete: isEngineComplete, isFailed: isEngineFailed } = useEngineJob(effectiveJobId, false);
+
   const clipSignature = JSON.stringify(getModelValues(clipId));
+
+  // Ensure we have the latest manifest with download flags for components and paths
+  const manifestId = (clip as ModelClipProps)?.manifest?.metadata?.id || null;
+  const { data: manifestData } = useManifest(manifestId);
+
+  const buildSelectedComponentDefaults = useCallback((manifest: any): Record<string, any> => {
+    const defaults: Record<string, any> = {};
+    if (!manifest) return defaults;
+    const components: ManifestComponent[] = (manifest?.spec?.components || []) as ManifestComponent[];
+
+    const normalizeModelPaths = (c: ManifestComponent): Array<any> => {
+      const raw = Array.isArray(c.model_path) ? c.model_path : (c.model_path ? [{ path: c.model_path }] : []);
+      return (raw as any[]).map((it) => (typeof it === 'string' ? { path: it } : it)).filter((it) => it && it.path);
+    };
+    const isItemDownloaded = (item: any): boolean => !!(item && item.is_downloaded === true);
+
+    components.forEach((comp) => {
+      const key = comp.type || 'component';
+      if (comp.type === 'scheduler' && Array.isArray(comp.scheduler_options) && comp.scheduler_options.length > 0) {
+        const first = comp.scheduler_options[0];
+        defaults['scheduler'] = { name: first.name, base: (first as any).base, config_path: (first as any).config_path };
+      } else if (comp.model_path) {
+        const items = normalizeModelPaths(comp).filter((it) => isItemDownloaded(it));
+        if (items.length > 0) {
+          const first = items[0];
+          defaults[key] = { path: first.path, variant: first.variant, precision: first.precision, type: first.type };
+        }
+      }
+    });
+    return defaults;
+  }, []);
+
+  // Automatically populate/refresh default selectedComponents when downloads complete
+  useEffect(() => {
+    if (!hasModel || !clipId) return;
+    const manifest: any = manifestData || (clip as any)?.manifest;
+    if (!manifest) return;
+    const defaults = buildSelectedComponentDefaults(manifest);
+    const existing = (clip as ModelClipProps | undefined)?.selectedComponents || {};
+    const merged = { ...defaults, ...existing };
+    if (!_.isEqual(merged, existing)) {
+      try { updateClip(clipId, { selectedComponents: merged } as any); } catch {}
+    }
+  }, [hasModel, clipId, manifestData, buildSelectedComponentDefaults, updateClip, clip]);
 
   // Disable generate when any required model inputs are missing
   const isGenerateDisabled = useMemo(() => {
@@ -191,6 +247,14 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     }
   }, [panelSize, numVisibleTabs]);
 
+  useEffect(() => {
+    // Reset mapping and status when switching selected clip
+    setEngineJobId(null);
+    if (clipId) {
+      try { updateClip(clipId, { modelStatus: undefined }); } catch {}
+    }
+  }, [clipId, updateClip]);
+
   const hasValidPreprocessor = useMemo(() => {
     if (selectedPreprocessorId) {
       const clip = getClipFromPreprocessorId(selectedPreprocessorId);
@@ -226,6 +290,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (currentTab === "preprocessor-parameters" && hasValidPreprocessor) return "preprocessor-parameters";
     if (currentTab === "preprocessor-duration" && hasValidPreprocessor && hasPreprocessorDuration) return "preprocessor-duration";
     if (currentTab === "model-inputs" && hasModel) return "model-inputs";
+    if (currentTab === "model-progress" && hasModel && ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending')) return "model-progress";
     // If current tab is invalid, return first available tab
     if (hasValidPreprocessor) return "preprocessor-parameters";
     if (hasLine) return "line";
@@ -242,7 +307,19 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (validTab !== selectedTab) {
       setSelectedTab(validTab);
     }
-  }, [clipId, hasLine, hasMask, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust, hasPreprocessorDuration, tool]);
+  }, [clipId, hasLine, hasMask, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust, hasPreprocessorDuration, tool, (clip as ModelClipProps | undefined)?.modelStatus]);
+
+  // Reflect engine job lifecycle into clip.modelStatus for internal gating
+  useEffect(() => {
+    if (!clipId) return;
+    if (isEngineProcessing) {
+      updateClip(clipId, { modelStatus: 'running' });
+    } else if (isEngineComplete) {
+      updateClip(clipId, { modelStatus: 'complete' });
+    } else if (isEngineFailed) {
+      updateClip(clipId, { modelStatus: 'failed' });
+    }
+  }, [clipId, isEngineProcessing, isEngineComplete, isEngineFailed, updateClip]);
 
   const handleRunPreprocessor = useCallback(async () => {
     // get the preprocessor 
@@ -299,14 +376,16 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor, preprocessor]);
 
   const handleGenerate = useCallback(async () => {
+    setIsPreparingGeneration(true);
+    toast.info('Preparing inputs and starting generation...');
     // get the clip Id that is of type model 
     const modelValues = getModelValues(clipId);
     if (!modelValues) return;
     const inputs = (clip as ModelClipProps)?.manifest?.spec.ui?.inputs || []; 
 
-    // loop through modelValues to get inputs of type image. 
+    // loop through modelValues to pre-export media inputs
     for (const input of inputs) {
-       if (input.type === 'image' || input.type === 'video') {
+       if (String(input.type).startsWith('image')) {
         const value = modelValues[input.id] as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]; selection?:string};
         if (!value || value.selection === '') continue;
         // we need to check clip type
@@ -408,7 +487,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
         let absolutePath: string | null = null;
 
-        if (input.type === 'video') {
+        if (String(input.type).startsWith('video')) {
           
           const frameRange = value.selectedRange ? value.selectedRange : [0, 1];
           const filePath = await getPreviewPath(`${clipId}_${input.id}_${frameRange[0]}_${frameRange[1]}`);
@@ -460,7 +539,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         
         }
         
-        else if (input.type === 'image') {
+        else {
           const frame = value.type === 'video' || value.type === 'group' ? value.selectedFrame : 0;
           if (exportClips.length === 1) {
             const result = await exportClip({
@@ -495,11 +574,11 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         }
 
         modelValues[input.id] = {
-          type: input.type,
+          type: 'image',
           src: absolutePath,
         };
 
-       } else if (input.type === 'audio') {
+       } else if (String(input.type).startsWith('audio')) {
           const value = modelValues[input.id] as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]};
           if (!value) continue;
           // we need to check clip type
@@ -527,14 +606,94 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             }
           }
 
+       } 
+
+       else if (input.type === 'random') {
+          const value = modelValues[input.id] 
+          if (value === -1 || value === '-1') {
+            const min = input.min ?? 0;
+            const max = input.max ?? Number.MAX_SAFE_INTEGER;
+            const randomValue = Math.floor(Math.random() * (max - min + 1)) + min;
+            modelValues[input.id] = randomValue;
+          }
        }
 
     }
     
-    // loop through model values and get if name starts with image. 
-    
+    // Build engine inputs and trigger generation with job_id = clipId
+    try {
+      const engineInputs: Record<string, any> = {};
+      for (const input of inputs) {
+        const raw = (modelValues as any)[input.id];
+        const t = String(input.type);
+        if (raw == null) continue;
+        if (t.startsWith('image') || t.startsWith('video') || t.startsWith('audio')) {
+          if (typeof raw === 'string') {
+            engineInputs[input.id] = raw;
+          } else if (raw && typeof raw === 'object' && raw.src) {
+            engineInputs[input.id] = raw.src;
+          }
+        } else if (t === 'boolean') {
+          const v = (raw as any)?.value ?? raw;
+          engineInputs[input.id] = (String(v).toLowerCase() === 'true');
+        } else if (t === 'number' || t === 'number+slider' || t === 'random') {
+          const v = (raw as any)?.value ?? raw;
+          const parsed = Number(v);
+          engineInputs[input.id] = Number.isFinite(parsed) ? parsed : v;
+        } else if (t === 'number_list') {
+          const v = (raw as any)?.value ?? raw;
+          const arr = String(v).split(/[\s,]+/).map((s) => Number(s)).filter((n) => Number.isFinite(n));
+          engineInputs[input.id] = arr;
+        } else {
+          engineInputs[input.id] = (raw as any)?.value ?? raw;
+        }
+      }
+
+      const manifestId = (clip as ModelClipProps)?.manifest?.metadata?.id;
+      const selectedExisting = (clip as ModelClipProps)?.selectedComponents || {};
+      const manifestForDefaults = manifestData || (clip as ModelClipProps)?.manifest;
+      const selectedDefaults = buildSelectedComponentDefaults(manifestForDefaults);
+      const selectedComponents = { ...selectedDefaults, ...selectedExisting };
+      const res = await runEngine({ manifest_id: manifestId, inputs: engineInputs, selected_components: selectedComponents, job_id: clipId });
+      if (res.success) {
+        toast.success(`Generation started for ${(clip as ModelClipProps)?.manifest?.metadata?.name}`);
+        const returnedJobId = (res.data as any)?.job_id || clipId;
+        setEngineJobId(returnedJobId);
+        if (returnedJobId) {
+          try { clearEngineJob(returnedJobId); } catch {}
+          try { await startEngineTracking(returnedJobId); } catch {}
+        }
+        try { updateClip(clipId, { modelStatus: 'pending' }); } catch {}
+        // Switch to Progress tab for visibility
+        try { setSelectedTab('model-progress'); } catch {}
+      } else {
+        toast.error(res.error || 'Failed to start generation');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to start generation');
+    } finally {
+      setIsPreparingGeneration(false);
+    }
 
   }, [selectedClipIds, getModelValues]);
+
+  const handleStopGeneration = useCallback(async () => {
+    const targetJobId = engineJobId || clipId;
+    if (!targetJobId) return;
+    try {
+      const res = await cancelEngine(targetJobId);
+      if (!res.success) {
+        toast.error(res.error || 'Failed to stop generation');
+      } else {
+        toast.info('Generation stopped');
+      }
+    } catch (e: any) {
+      // fallthrough
+    }
+    try { await stopEngineTracking(targetJobId); } catch {}
+    try { clearEngineJob(targetJobId); } catch {}
+    try { if (clipId) updateClip(clipId, { modelStatus: undefined }); } catch {}
+  }, [clipId, engineJobId, stopEngineTracking, clearEngineJob]);
 
   return (
     <div className="h-full w-full min-w-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden' }}>
@@ -550,6 +709,8 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
             {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
+            {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Progress</TabsTrigger>}
+            {(hasModel) && <TabsTrigger value="model-architecture" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Architecture</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Generations</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
@@ -607,6 +768,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasModel) && <TabsContent value="model-generation" className="min-w-0 m-0">
             <ModelGenerationProperties clipId={clipId} />
           </TabsContent>}
+          {(hasModel) && <TabsContent value="model-progress" className="min-w-0 m-0"> 
+            <ProgressPanel clipId={effectiveJobId || clipId} />
+          </TabsContent>}
+          {(hasModel) && <TabsContent value="model-architecture" className="min-w-0 m-0"> 
+            <ModelComponentsProperties clipId={clipId} />
+          </TabsContent>}
           </div>
         </ScrollArea>
       </Tabs>
@@ -645,19 +812,33 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         </div>
       )}
 
-    {hasModel && (
+      {hasModel && (
         <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 50, pointerEvents: 'auto' }}>
-          <button
-            onClick={handleGenerate}
-            disabled={isGenerateDisabled}
-            className={cn(
-              "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] text-brand-light bg-brand-accent-two-shade flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50",
-            )}
-            
-          >
-            <RiAiGenerate size={16} />
-            <span>Generate</span>
-          </button>
+          {((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') ? (
+            <button
+              onClick={handleStopGeneration}
+              className={cn(
+                "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg",
+              )}
+              style={{ backgroundColor: '#DC2626', color: '#FFFFFF' }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#B91C1C' }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#DC2626' }}
+            >
+              <FaStop size={16} />
+              <span>Stop Generating</span>
+            </button>
+          ) : (
+            <button
+              onClick={handleGenerate}
+              disabled={isGenerateDisabled || isPreparingGeneration}
+              className={cn(
+                "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] text-brand-light bg-brand-accent-two-shade flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50",
+              )}
+            >
+              <RiAiGenerate size={16} />
+              <span>{isPreparingGeneration ? 'Preparing…' : 'Generate'}</span>
+            </button>
+          )}
         </div>
       )}
     </div>

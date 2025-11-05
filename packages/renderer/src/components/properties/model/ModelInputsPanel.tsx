@@ -14,10 +14,13 @@ import ImageInput from './inputs/ImageInput';
 import VideoInput from './inputs/VideoInput';
 import NumberListInput from './inputs/NumberListInput';
 import AudioInput from './inputs/AudioInput';
+import SchedulerPanel from './SchedulerPanel';
 
 export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], clipId: string, panelSize:number }> = ({ panel, inputs, clipId, panelSize }) => {
 
     const updateModelInput = useClipStore((s) => s.updateModelInput);
+    const getClipById = useClipStore((s) => s.getClipById);
+    const updateClip = useClipStore((s) => s.updateClip);
     const [iconEl, setIconEl] = useState<React.ReactNode>(null);
 
     const getInputById = useCallback((id: string) => {
@@ -190,6 +193,47 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
     }
   }, [clipId, computeWidthFromAR, getInputById, getSelectedOption, snapToStep, updateModelInput, inputs]);
 
+  // Scheduler dropdown (from manifest spec.components -> scheduler_options)
+  const clip: any = getClipById(clipId);
+  const schedulerOptions = useMemo(() => {
+    const comps = clip?.manifest?.spec?.components || [];
+    const all = comps
+      .filter((c: any) => String(c?.type) === 'scheduler')
+      .flatMap((c: any) => Array.isArray(c?.scheduler_options) ? c.scheduler_options : []);
+    const seen = new Set<string>();
+    const unique = all.filter((opt: any) => {
+      const key = String(opt?.name || '');
+      if (!key) return false;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return unique;
+  }, [clip]);
+
+  const selectedSchedulerName: string | undefined = useMemo(() => {
+    return String(clip?.selectedComponents?.scheduler?.name ?? '') || undefined;
+  }, [clip?.selectedComponents]);
+
+  // Ensure a default scheduler selection if options exist and none selected
+  useEffect(() => {
+    if (!clip || !schedulerOptions || schedulerOptions.length === 0) return;
+    const names = schedulerOptions.map((o: any) => String(o?.name));
+    const curr = selectedSchedulerName;
+    if (!curr || !names.includes(String(curr))) {
+      const first = schedulerOptions[0];
+      const next = { name: first?.name, base: first?.base, config_path: first?.config_path };
+      const nextSelected = { ...(clip.selectedComponents || {}), scheduler: next };
+      updateClip(clipId, { selectedComponents: nextSelected } as any);
+    }
+  }, [clip, clipId, schedulerOptions, selectedSchedulerName, updateClip]);
+
+  // Only render scheduler selector when this panel is named 'scheduler'
+  const shouldShowScheduler = useMemo(() => {
+    if (!schedulerOptions || schedulerOptions.length === 0) return false;
+    return String(panel.name || '').toLowerCase() === 'scheduler';
+  }, [panel.name, schedulerOptions]);
+
   return (
     <div className="">
       <div onClick={() => setCollapsed((v) => !v)} className={cn("flex items-center justify-between  py-2.5 px-3", {
@@ -218,8 +262,13 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
         style={{
           display: 'flex',
           flexDirection: panel.layout.flow as 'row' | 'column',
-          gap: '12px',
+          gap: '16px',
         }}>
+        {shouldShowScheduler && (
+          <div style={{ display: 'flex', flexDirection: 'row', gap: '12px', width: '100%', minWidth: 0 }}>
+            <SchedulerPanel clipId={clipId} />
+          </div>
+        )}
         {panel.layout.rows.map((row) => {
           return (
             <div key={row.join('-')} style={{

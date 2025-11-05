@@ -22,11 +22,12 @@ interface SelectInputProps {
   onChange: (value: string) => void;
   defaultOption?: string;
   options: SelectOption[];
+  useDropdown?: boolean;
 }
 
-const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, onChange, defaultOption, options }) => {
+const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, onChange, defaultOption, options, useDropdown: useDropdownProp }) => {
   const normalizedOptions = options;
-  const useDropdown = normalizedOptions.length >= 4;
+  const useDropdown = useDropdownProp || normalizedOptions.length >= 4;
   const hasDescription = Boolean(description);
 
   const selectedOption = useMemo(() => normalizedOptions.find(opt => String(opt.value) === String(value)) || normalizedOptions.find(opt => String(opt.value) === String(defaultOption)), [normalizedOptions, value, defaultOption]);

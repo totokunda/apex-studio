@@ -32,44 +32,43 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
     }
   }, [manifest.demo_path]);
 
-  const defaultVariantItems = useMemo(() => {
-    const out: Array<{ path: string; savePath?: string; isDownloaded?: boolean; isConfig?: boolean }> = [];
+  const perComponentModelItems = useMemo(() => {
+    const out: Array<Array<{ path: string; isDownloaded?: boolean }>> = [];
     const doc = fullManifest as any;
     const components = doc?.spec?.components || [];
     for (const comp of components) {
       const modelPaths = Array.isArray(comp.model_path) ? comp.model_path : comp.model_path ? [{ path: comp.model_path }] : [];
+      const items: Array<{ path: string; isDownloaded?: boolean }> = [];
       for (const item of modelPaths) {
         if (typeof item === 'string') {
-          out.push({ path: item, savePath: comp.save_path, isDownloaded: false, isConfig: false });
-        } else {
-          const v = (item?.variant ?? '').toLowerCase();
-          if (v === '' || v === 'default') {
-            if (item?.path) out.push({ path: item.path, savePath: comp.save_path, isDownloaded: !!item.is_downloaded, isConfig: false });
-          }
+          items.push({ path: item, isDownloaded: false });
+        } else if (item?.path) {
+          items.push({ path: item.path, isDownloaded: !!item.is_downloaded });
         }
       }
-      if (comp?.config_path) {
-        out.push({ path: comp.config_path, savePath: comp.save_path, isDownloaded: false, isConfig: true });
-      }
+      out.push(items.filter((it) => !!it.path));
     }
-    return out.filter((it) => !!it.path);
+    return out;
   }, [fullManifest]);
 
   const isDownloading = useMemo(() => {
-    return defaultVariantItems.some(({ path }) => {
+    return perComponentModelItems.flat().some(({ path }) => {
       const e = downloads[path];
       return e && (e.status === 'downloading' || e.status === 'pending');
     });
-  }, [defaultVariantItems, downloads]);
+  }, [perComponentModelItems, downloads]);
 
   const allDownloaded = useMemo(() => {
-    if (defaultVariantItems.length === 0) return !!manifest.downloaded;
-    return defaultVariantItems.filter((x) => !x.isConfig).every(({ path, isDownloaded }) => {
-      const e = downloads[path];
-      if (e?.status === 'completed') return true;
-      return !!isDownloaded;
+    if (perComponentModelItems.length === 0) return !!manifest.downloaded;
+    return perComponentModelItems.every((items) => {
+      if (items.length === 0) return true;
+      return items.some(({ path, isDownloaded }) => {
+        const e = downloads[path];
+        if (e?.status === 'completed') return true;
+        return !!isDownloaded;
+      });
     });
-  }, [defaultVariantItems, downloads, manifest.downloaded]);
+  }, [perComponentModelItems, downloads, manifest.downloaded]);
 
   // Compute how many tags fit on a single line
   useEffect(() => {

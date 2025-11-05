@@ -1,8 +1,6 @@
 import { blitDrawing, blitImage, blitShape, blitText, blitVideo, cleanupVideoDecoders, type ImageClipProps as BlitImageClipProps, type VideoClipProps as BlitVideoClipProps, type TextClipProps as BlitTextClipProps, type ShapeClipProps as BlitShapeClipProps, type DrawingClipProps as BlitDrawingClipProps } from './blit';
 import { getVideoFrameIterator } from '../../../packages/renderer/src/lib/media/video';
-import { getAudioIterator } from '../../../packages/renderer/src/lib/media/audio';
-import { getMediaInfo } from '../../../packages/renderer/src/lib/media/utils';
-import { savePreviewAudio, exportAudioMp3FromWav, renderAudioMixWithFfmpeg } from '@app/preload';
+import { renderAudioMixWithFfmpeg } from '@app/preload';
 import type { WrappedCanvas } from 'mediabunny';
 import { acquireHaldClut, releaseHaldClut } from './webgl-filters/hald-clut-singleton';
 import { createApplicatorFromClip, FfmpegEncoderOptionsNoFilename, FfmpegFrameEncoder} from './index';

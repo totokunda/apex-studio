@@ -162,7 +162,7 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
           onKeyDown={handleKeyDown}
           readOnly={isAuto}
         />
-        <div className="flex items-center w-6 justify-center bg-brand h-6 cursor-pointer rounded-r">
+        <div className="flex items-center w-6 justify-center bg-brand h-7 cursor-pointer rounded-r">
           <button
             type="button"
             className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center"

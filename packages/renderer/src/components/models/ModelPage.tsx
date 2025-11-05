@@ -170,7 +170,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                 e.stopPropagation();
                 await handleDownloadAll();
               }} className={cn(
-                "flex items-center justify-center w-5 h-5 rounded-full border",
+                "flex items-center justify-center w-4.5 h-4.5 rounded-full border",
                 isDownloaded 
                   ? "bg-green-500/20 border-green-500/40" 
                   : componentDownloading
@@ -194,9 +194,9 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
       ) : (
         <div className="w-full flex items-center justify-between p-3">
           <div className="flex items-center gap-x-2 justify-between w-full">
-            <div className="flex items-center gap-x-2">
+            <div className="flex items-center gap-x-2.5">
               <div className={cn(
-                "flex items-center justify-center w-5 h-5 rounded-full border",
+                "flex items-center justify-center w-4.5 h-4.5 rounded-full border",
                 isDownloaded 
                   ? "bg-green-500/20 border-green-500/40" 
                   : "bg-brand-background border-brand-light/20"

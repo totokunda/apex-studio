@@ -21,6 +21,7 @@ import { SlSizeFullscreen } from 'react-icons/sl';
 import FullscreenPreview from './FullscreenPreview';
 import { getApplicatorsForClip } from '@/lib/applicator-utils';
 import { useWebGLHaldClut } from './webgl-filters';
+import DynamicModelPreview from './clips/DynamicModelPreview';
 import { useDrawingStore } from '@/lib/drawing';
 import { useMaskStore } from '@/lib/mask';
 import { erasePolylineByEraser, transformEraserToLocal, mergeConnectedLines } from '@/lib/eraser-utils';
@@ -2301,6 +2302,17 @@ useEffect(() => {
                       return <VideoPreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={clipAtFrameNoOverlap}  />
                     case 'image':
                       return <ImagePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={clipAtFrameNoOverlap} />
+                   case 'model':
+                      return (
+                        <DynamicModelPreview
+                          key={clip.clipId}
+                          clip={clip as any}
+                          rectWidth={rectWidth}
+                          rectHeight={rectHeight}
+                          applicators={applicators}
+                          overlap={clipAtFrameNoOverlap}
+                        />
+                      );
                     case 'shape':
                       return <ShapePreview key={clip.clipId} {...clip} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators}/>
                     case 'text':

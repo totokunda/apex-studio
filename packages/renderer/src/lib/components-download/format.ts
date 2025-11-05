@@ -2,7 +2,7 @@ export function formatBytes(bytes: number | null | undefined, decimals = 1): str
   if (bytes == null || bytes === 0) return '0 B';
   if (bytes < 0) return '0 B';
 
-  const k = 1024;
+  const k = 1000;
   const dm = decimals < 0 ? 0 : decimals;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
 
