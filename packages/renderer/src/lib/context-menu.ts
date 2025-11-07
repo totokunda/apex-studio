@@ -7,6 +7,7 @@ export type ContextMenuAction =
   | 'delete'
   | 'split'
   | 'separateAudio'
+  | 'convertToMedia'
   | 'export'
   | 'group'
   | 'ungroup'

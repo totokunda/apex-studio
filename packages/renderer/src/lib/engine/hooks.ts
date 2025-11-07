@@ -40,7 +40,7 @@ export function useEngineJob(jobId: string | null, autoStart = true) {
 
   return {
     job,
-    isProcessing: job?.status === 'running' || job?.status === 'pending' || job?.status === 'queued',
+    isProcessing: (job?.status === 'running' || job?.status === 'pending' || job?.status === 'queued') && (job?.progress ?? 0) > 0,
     isComplete: job?.status === 'complete',
     isFailed: job?.status === 'failed',
     progress: job?.progress ?? 0,

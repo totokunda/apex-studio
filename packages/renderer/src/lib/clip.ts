@@ -3,7 +3,7 @@ import { AnyClipProps, TimelineProps, ClipTransform, TimelineType, VideoClipProp
 import { v4 as uuidv4 } from 'uuid';
 import { useControlsStore } from "./control";
 import { MediaItem } from "@/components/media/Item";
-import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS } from "./settings";
+import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS, IMAGE_EXTS } from "./settings";
 import { getMediaInfo } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
@@ -17,6 +17,7 @@ interface ClipStore {
     clipDuration: number;
     _setClipDuration: (duration: number) => void;
     clips: AnyClipProps[];
+    convertToMedia: (clipId: string) => void;
     getClipById: (clipId: string, timelineId?: string) => AnyClipProps | undefined;
     getClipsByType: (type: ClipType) => AnyClipProps[]; 
     getClipTransform: (clipId: string) => ClipTransform | undefined;
@@ -211,6 +212,85 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     _setClipDuration: (duration) => set({ clipDuration: duration }),
     clips: [],  
     timelines: [],
+    convertToMedia: (clipId: string) => set((state) => {
+        const idx = state.clips.findIndex((c) => c.clipId === clipId);
+        if (idx === -1) return { clips: state.clips };
+        const clip = state.clips[idx];
+        if (!clip || clip.type !== 'model') return { clips: state.clips };
+        const modelClip = clip as ModelClipProps;
+
+        // Choose source: prefer selected src; fallback to active job; else last completed/running generation
+        let chosenSrc: string | null = (modelClip.src as any) || null;
+        if (!chosenSrc && Array.isArray(modelClip.generations) && modelClip.generations.length > 0) {
+            const byActive = modelClip.activeJobId
+                ? modelClip.generations.find((g) => g.jobId === modelClip.activeJobId && g.src)
+                : undefined;
+            const byStatus = [...modelClip.generations].reverse().find((g) => (g.modelStatus === 'complete' || g.modelStatus === 'running') && g.src);
+            chosenSrc = (byActive?.src || byStatus?.src || null) as any;
+        }
+        if (!chosenSrc) return { clips: state.clips };
+
+        // Infer media type from extension; if unknown, we'll asynchronously refine via getMediaInfo
+        const ext = getLowercaseExtension(chosenSrc);
+        const isVid = VIDEO_EXTS.includes(ext);
+        const isImg = IMAGE_EXTS.includes(ext);
+
+        const common = {
+            clipId: modelClip.clipId,
+            timelineId: modelClip.timelineId,
+            startFrame: modelClip.startFrame,
+            endFrame: modelClip.endFrame,
+            trimStart: modelClip.trimStart,
+            trimEnd: modelClip.trimEnd,
+            clipPadding: modelClip.clipPadding,
+            width: modelClip.width,
+            height: modelClip.height,
+            transform: modelClip.transform,
+            originalTransform: modelClip.originalTransform,
+            groupId: modelClip.groupId,
+            hidden: modelClip.hidden,
+        } as Partial<AnyClipProps>;
+
+        let converted: AnyClipProps | null = null;
+        if (isVid || (!isVid && !isImg)) {
+            converted = {
+                ...(common as any),
+                type: 'video',
+                src: chosenSrc,
+                mediaWidth: undefined,
+                mediaHeight: undefined,
+                mediaAspectRatio: undefined,
+                volume: 1,
+                fadeIn: 0,
+                fadeOut: 0,
+                speed: (typeof modelClip.speed === 'number' && Number.isFinite(modelClip.speed)) ? (modelClip.speed as any) : 1,
+                preprocessors: [],
+                masks: [],
+            } as VideoClipProps as AnyClipProps;
+        } else if (isImg) {
+            converted = {
+                ...(common as any),
+                type: 'image',
+                src: chosenSrc,
+                mediaWidth: undefined,
+                mediaHeight: undefined,
+                mediaAspectRatio: undefined,
+                preprocessors: [],
+                masks: [],
+            } as ImageClipProps as AnyClipProps;
+        }
+        if (!converted) return { clips: state.clips };
+
+        const newClips = [...state.clips];
+        newClips[idx] = converted;
+        const resolvedClips = resolveOverlaps(newClips);
+        const clipDuration = calculateTotalClipDuration(resolvedClips);
+
+
+
+        get()._updateZoomLevel(resolvedClips, clipDuration);
+        return { clips: resolvedClips, clipDuration };
+    }),
     isTimelineMuted: (timelineId) => get().timelines.find((timeline) => timeline.timelineId === timelineId)?.muted || false,
     isTimelineHidden: (timelineId) => get().timelines.find((timeline) => timeline.timelineId === timelineId)?.hidden || false,
     muteTimeline: (timelineId) => set((state) => {

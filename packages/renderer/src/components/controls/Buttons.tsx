@@ -157,6 +157,7 @@ const SplitButton = () => {
         const clip = getClipById(clipId);
         // check if clip has running preprocessors
         let runningPreprocessors = false;
+        if (clip?.type === 'model') return true;
         if (clip && (clip.type === 'video' || clip.type === 'image') && clip.preprocessors && clip.preprocessors.length > 0) {
             runningPreprocessors = clip.preprocessors.some((preprocessor) => preprocessor.status === 'running');
         }

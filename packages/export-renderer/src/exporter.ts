@@ -449,7 +449,13 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
         ctxIter = { key: iterKey, iter: asyncIterable[Symbol.asyncIterator](), currentProjectIndex: rangeStartLocal };
         videoIters.set(clip.clipId, ctxIter);
       }
-
+      if (mode === 'image') {
+        // go to the target frame
+        while ((ctxIter as IterCtx).currentProjectIndex < frame) {
+          await (ctxIter as IterCtx).iter.next();
+          (ctxIter as IterCtx).currentProjectIndex++;
+        }
+      }
       await blitVideo(temp, clip as unknown as BlitVideoClipProps, applicators, (ctxIter as IterCtx).iter, frame);
       (ctxIter as IterCtx).currentProjectIndex++;
     } else if (clip.type === 'text') {

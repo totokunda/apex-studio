@@ -99,8 +99,16 @@ export const getMediaInfo = async (path: string, options?: { fullStats?: boolean
 
     if (IMAGE_EXTS.includes(ext)) {
 
+        // Route image reads through app protocol to handle remote cache mirroring
+        let imageReadUrl = path;
+        try {
+            const fsPath = fileURLToPath(hasHashSuffix ? originalPath : path);
+            const url = new URL(`app://${options?.sourceDir ?? 'user-data'}/${fsPath}`);
+            imageReadUrl = url.toString();
+        } catch {}
+
         // get height and width from the file    
-        const metadata = await readImageMetadataFast(path);
+        const metadata = await readImageMetadataFast(imageReadUrl);
 
         const mediaInfo = {
             path,

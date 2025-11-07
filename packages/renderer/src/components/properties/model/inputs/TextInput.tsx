@@ -25,7 +25,8 @@ const TextInput: React.FC<TextInputProps> = ({ label, description, value, onChan
       {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start mb-0.5 absolute bottom-3 left-3">{description}</span>}
       <textarea
         ref={textareaRef}
-        value={value || defaultValue || ''}
+        defaultValue={value === undefined || value === '' ? defaultValue : value}
+        value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={4}

@@ -140,9 +140,9 @@ const PreprocessorParametersPanel: React.FC<PreprocessorParametersPanelProps> = 
 
   return (
     <div className="p-6 flex flex-col gap-y-4 ">
-      <div className="flex flex-col gap-y-4 ">
+      <div className="flex flex-col gap-y-5  rounded-md">
         {preprocessor.preprocessor.parameters!.map((param, index) => (
-          <div key={index} className="flex flex-col gap-y-2 p-4 rounded-lg bg-brand-light/5 border border-brand-light/10">
+          <div key={index} className="flex flex-col gap-y-3 ">
             <div className="flex flex-col gap-y-1">
               <div className="flex flex-row items-center gap-x-2 justify-between">
                 <span className="text-brand-lighter text-[11px] font-semibold">{param.display_name || formatParameterName(param.name)}</span>

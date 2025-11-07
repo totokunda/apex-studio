@@ -114,9 +114,12 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     }, [focusFrame, currentStartFrame, currentEndFrame]);
 
     const focusXLocal = useMemo(() => {
-        // Local x within the clip group for the left edge of the focus frame
-        return (constrainedFocusFrame - currentStartFrame) * frameWidthPx;
-    }, [constrainedFocusFrame, currentStartFrame, frameWidthPx]);
+        // Position the focus frame relative to the currently visible window
+        // Convert absolute constrained focus to clip-local, then subtract visible window start
+        const localFocus = (constrainedFocusFrame - currentStartFrame);
+        const windowStartLocal = Math.max(0, Math.round(timelineDuration[0] ?? 0));
+        return (localFocus - windowStartLocal) * frameWidthPx;
+    }, [constrainedFocusFrame, currentStartFrame, frameWidthPx, timelineDuration]);
 
     const [rangeStart, rangeEnd] = useMemo<[number, number]>(() => {
         // selectedRange is stored clip-local; convert to absolute for rendering

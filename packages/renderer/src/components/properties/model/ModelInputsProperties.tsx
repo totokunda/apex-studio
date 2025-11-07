@@ -23,9 +23,17 @@ export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({ cl
               .flatMap((c: any) => Array.isArray(c?.scheduler_options) ? c.scheduler_options : []);
             const hasSchedulerOptions = schedulerOptions && schedulerOptions.length > 0;
             const alreadyHasSchedulerPanel = basePanels.some((p) => String(p?.name || '').toLowerCase() === 'scheduler');
-            const panelsToRender = hasSchedulerOptions && !alreadyHasSchedulerPanel
+            let panelsToRender = hasSchedulerOptions && !alreadyHasSchedulerPanel
               ? [...basePanels, { name: 'scheduler', label: 'Scheduler', collapsible: true, default_open: false, layout: { flow: 'column', rows: [] } } as UIPanel]
               : basePanels;
+
+            // Append Attention panel at the very end if options exist and panel not present
+            const attentionOptions = (clip.manifest?.spec?.attention_types_detail || []) as any[];
+            const hasAttentionOptions = Array.isArray(attentionOptions) && attentionOptions.length > 0;
+            const alreadyHasAttentionPanel = panelsToRender.some((p) => String(p?.name || '').toLowerCase() === 'attention');
+            if (hasAttentionOptions && !alreadyHasAttentionPanel) {
+              panelsToRender = [...panelsToRender, { name: 'attention', label: 'Attention', collapsible: true, default_open: false, layout: { flow: 'column', rows: [] } } as UIPanel];
+            }
             return panelsToRender.map((panel) => {
             return (
               <ModelInputsPanel key={panel.name} panel={panel} inputs={clip.manifest?.spec?.ui?.inputs || []} clipId={clipId} panelSize={panelSize} />

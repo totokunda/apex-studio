@@ -39,12 +39,45 @@ async function pickMediaPaths(options: { directory?: boolean, filters?: { name: 
 }
 
 const readFileBuffer = async (path: string) => {
-  // check if path is a file url
-  if (path.startsWith('file://')) {
-    path = fileURLToPath(path);
+  const original = path;
+  // Handle app:// scheme directly (served by main via AppDirProtocol)
+  if (typeof path === 'string' && path.startsWith('app://')) {
+    const res = await fetch(path);
+    if (!res.ok) throw new Error(`Failed to fetch ${path}: ${res.status} ${res.statusText}`);
+    const ab = await res.arrayBuffer();
+    return Buffer.from(ab);
   }
-  const buffer = await fsp.readFile(path);
-  return buffer;
+  // Remote HTTP(S)
+  if (typeof path === 'string' && (/^https?:\/\//i).test(path)) {
+    const res = await fetch(path);
+    if (!res.ok) throw new Error(`Failed to fetch ${path}: ${res.status} ${res.statusText}`);
+    const ab = await res.arrayBuffer();
+    return Buffer.from(ab);
+  }
+  // file:// URL → local fs
+  if (typeof path === 'string' && path.startsWith('file://')) {
+    try { path = fileURLToPath(path); } catch {}
+  }
+
+  try {
+    const buffer = await fsp.readFile(path);
+    return buffer;
+  } catch (err) {
+    // If local read failed, attempt to fetch via app://apex-cache assuming 'original' may be a remote absolute path
+    try {
+      const encodedPath = (() => {
+        const p = path.startsWith('/') ? path : `/${path}`;
+        return encodeURI(p);
+      })();
+      const appUrl = new URL(`app://apex-cache${encodedPath}`);
+      const res = await fetch(appUrl);
+      if (!res.ok) throw new Error(`Failed to fetch ${appUrl}: ${res.status} ${res.statusText}`);
+      const ab = await res.arrayBuffer();
+      return Buffer.from(ab);
+    } catch (e) {
+      throw err instanceof Error ? err : new Error('readFileBuffer: failed to read file');
+    }
+  }
 }
 
 const readFileStream = async (path: string) => {
@@ -981,6 +1014,18 @@ async function setBackendUrl(url: string): Promise<ConfigResponse<{url: string}>
   return await ipcRenderer.invoke('backend:set-url', url);
 }
 
+async function getBackendIsRemote(): Promise<ConfigResponse<{isRemote: boolean}>> {
+  return await ipcRenderer.invoke('backend:is-remote');
+}
+
+async function getFileShouldUpload(inputPath: string): Promise<ConfigResponse<{shouldUpload: boolean}>> {
+  return await ipcRenderer.invoke('files:should-upload', inputPath);
+}
+
+async function getFileIsUploaded(inputPath: string): Promise<ConfigResponse<{isUploaded: boolean}>> {
+  return await ipcRenderer.invoke('files:is-uploaded', inputPath);
+}
+
 async function getHomeDir(): Promise<ConfigResponse<{home_dir: string}>> {
   return await ipcRenderer.invoke('config:get-home-dir');
 }
@@ -1465,6 +1510,9 @@ export {
   onWsError,
   getBackendUrl,
   setBackendUrl,
+  getBackendIsRemote,
+  getFileShouldUpload,
+  getFileIsUploaded,
   getHomeDir,
   setHomeDir,
   getTorchDevice,

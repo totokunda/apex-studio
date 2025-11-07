@@ -1,6 +1,10 @@
-import React from 'react'
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useClipStore } from '@/lib/clip';
 import { ModelClipProps } from '@/lib/types';
+import { cn } from '@/lib/utils';
+import { generatePosterCanvas } from '@/lib/media/timeline';
+import { getMediaInfo } from '@/lib/media/utils';
+import { pathToFileURLString } from '@app/preload';
 
 interface ModelGenerationPropertiesProps {
   clipId: string;
@@ -8,11 +12,219 @@ interface ModelGenerationPropertiesProps {
 
 export const ModelGenerationProperties: React.FC<ModelGenerationPropertiesProps> = ({ clipId }) => {
   const clip = useClipStore((s) => s.getClipById(clipId)) as ModelClipProps;
+  const updateClip = useClipStore((s) => s.updateClip);
+  const updateModelInput = useClipStore((s) => s.updateModelInput);
+
+  const generations = useMemo(() => (clip?.generations ?? []), [clip?.generations]);
+  const visibleGenerations = useMemo(() => {
+    return (generations || []).filter(
+      (g) => (g?.modelStatus === 'complete' || g?.modelStatus === 'running') && !!g?.src
+    ).sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0));
+  }, [generations]);
+
+  const normalizeToFileUrl = useCallback((maybePath: string | undefined | null): string | null => {
+    if (!maybePath) return null;
+    try {
+      // If it already looks like a file URL, return as-is
+      if (maybePath.startsWith('file://')) return maybePath;
+      return pathToFileURLString(maybePath);
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const selectedFileUrl = String(clip?.src || '');
+
+  const selectedIndex = useMemo(() => {
+    if (!visibleGenerations || visibleGenerations.length === 0) return -1;
+    const idx = visibleGenerations.findIndex((g) => {
+      const url = normalizeToFileUrl(g?.src);
+      return url && url === selectedFileUrl;
+    });
+    return idx;
+  }, [visibleGenerations, normalizeToFileUrl, selectedFileUrl]);
+
+  const onSelectGeneration = useCallback(async (index: number) => {
+    const gen = visibleGenerations[index];
+    if (!gen) return;
+    const fileUrl = normalizeToFileUrl(gen.src);
+    if (!fileUrl) return;
+    try {
+      const updates: any = { src: fileUrl };
+      if (gen.selectedComponents) {
+        updates.selectedComponents = gen.selectedComponents;
+      }
+      updateClip(clipId, updates);
+    } catch {}
+    try {
+      const vals = gen.values || {};
+      for (const [inputId, v] of Object.entries(vals)) {
+        let valueToSet: any = v as any;
+        if (typeof valueToSet === 'object') {
+          // Store objects/arrays as JSON strings to match UI expectations
+          valueToSet = JSON.stringify(valueToSet);
+        } else if (typeof valueToSet === 'boolean' || typeof valueToSet === 'number') {
+          valueToSet = String(valueToSet);
+        } else if (valueToSet == null) {
+          valueToSet = '';
+        }
+        updateModelInput(clipId, inputId, { value: valueToSet } as any);
+      }
+    } catch {}
+  }, [clipId, visibleGenerations, normalizeToFileUrl, updateClip, updateModelInput]);
+
+  if (!visibleGenerations || visibleGenerations.length === 0) {
+    return (
+      <div className="flex flex-col gap-y-2.5 p-4">
+          <span className="text-brand-light text-[12px] font-medium text-start">Generations</span>
+        <div className="text-[11.5px] text-start text-brand-light/70">
+          No generations created.
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-y-2">
+    <div className="flex flex-col gap-y-4 p-5">
       <div className="flex flex-row items-center justify-between">
-        <span className="text-brand-light text-[10px]">Generations</span>
+        <span className="text-brand-light text-[12px] font-medium">Generations</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {visibleGenerations.map((g, idx) => {
+          return (
+            <GenerationCard
+              key={`${g.jobId || idx}`}
+              generation={g}
+              isSelected={idx === selectedIndex}
+              onSelect={() => onSelectGeneration(idx)}
+            />
+          );
+        })}
       </div>
     </div>
-  )
+  );
 }
+
+const formatTime = (ts: number | undefined) => {
+  if (!ts || !Number.isFinite(ts)) return '';
+  try {
+    const d = new Date(ts);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const sec = Math.max(0, Math.floor(diffMs / 1000));
+    const min = Math.floor(sec / 60);
+    const hr = Math.floor(min / 60);
+    const day = Math.floor(hr / 24);
+
+    if (sec < 30) return 'just now';
+    if (sec < 60) return `${sec}s ago`;
+    if (min < 60) return `${min}m ago`;
+    if (hr < 24) return `${hr}h ago`;
+
+    const sameDay = (a: Date, b: Date) =>
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate();
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+
+    const timePart = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (sameDay(d, yesterday)) return `Yesterday ${timePart}`;
+
+    const sameYear = d.getFullYear() === now.getFullYear();
+    const dateOptsSameYear: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+    const dateOptsWithYear: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' };
+    return d.toLocaleString([], sameYear ? dateOptsSameYear : dateOptsWithYear);
+  } catch {
+    return '';
+  }
+};
+
+const GenerationCard: React.FC<{
+  generation: NonNullable<ModelClipProps['generations']>[number];
+  isSelected: boolean;
+  onSelect: () => void;
+}> = ({ generation, isSelected, onSelect }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [meta, setMeta] = useState<{ duration?: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const el = canvasRef.current;
+      const src = generation?.src;
+      if (!el || !src) {
+        return;
+      }
+      setLoading(true);
+      try {
+        const url = src.startsWith('file://') ? src : pathToFileURLString(src);
+        const info = await getMediaInfo(url, { sourceDir: 'apex-cache' });
+        if (!cancelled) setMeta({ duration: info?.duration });
+        const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+        const cssWidth = el.clientWidth || 240;
+        const cssHeight = Math.round(cssWidth * 9 / 16);
+        el.width = cssWidth * dpr;
+        el.height = cssHeight * dpr;
+        const poster = await generatePosterCanvas(url, el.width, el.height, { mediaInfo: info });
+        if (!poster || cancelled) return;
+        const ctx = el.getContext('2d');
+        if (!ctx || cancelled) return;
+        ctx.clearRect(0, 0, el.width, el.height);
+        ctx.drawImage(poster as CanvasImageSource, 0, 0);
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [generation?.src]);
+
+  const durationText = useMemo(() => {
+    const dur = meta?.duration;
+    if (!dur || !Number.isFinite(dur)) return null;
+    const total = Math.floor(dur);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }, [meta?.duration]);
+
+  return (
+    <button
+      onClick={onSelect}
+      className={cn(
+        'w-full flex flex-col items-stretch justify-start rounded-[7px] transition-all duration-150 shadow border border-t-0 border-brand-light/15 bg-brand',
+        isSelected ? '' : ''
+      )}
+      style={{ textAlign: 'left' }}
+    >
+      <div className="relative w-full rounded-t-md overflow-hidden" style={{ aspectRatio: '16 / 9' }}>
+      
+        <canvas ref={canvasRef} className="w-full h-full block" />
+        {loading && (
+          <div className="absolute inset-0 flex items-center justify-center text-[11px] text-brand-light/70 bg-brand-background/40">
+            Loading…
+          </div>
+        )}
+        
+        {durationText && (
+          <div className="absolute bottom-1 left-1 text-[10px] px-1.5 py-0.5 rounded bg-brand-background-dark/70 text-brand-light/90">
+            {durationText}
+          </div>
+        )}
+      </div>
+      <div className=" py-1.5 flex flex-row items-center justify-between gap-y-1 relative px-3">
+        <div className="text-[10.5px] py-0.5 text-brand-light/90">{formatTime(generation.createdAt)}</div>
+        {isSelected && (
+          <div className="w-fit text-[10px] px-2.5 font-medium py-0.5 rounded bg-brand-accent-two-shade text-white">
+            Selected
+          </div>
+        )}
+      </div>
+    </button>
+  );
+};

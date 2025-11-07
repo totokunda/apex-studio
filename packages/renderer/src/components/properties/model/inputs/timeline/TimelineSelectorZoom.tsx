@@ -48,6 +48,7 @@ const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({ hasClip = t
         const targetDuration = durations[levelIndex];
 
         const isRangeMode = mode === 'range';
+        const isFrameMode = mode === 'frame';
         const rangeCenter = (() => {
             try {
                 const s = Math.max(0, Math.round(selectedRange?.[0] ?? 0));
@@ -58,15 +59,15 @@ const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({ hasClip = t
             }
         })();
         const anchorFocusFrame = isRangeMode ? rangeCenter : focusFrame;
-        const anchorRatio = isRangeMode ? 0.5 : focusAnchorRatio;
+        const anchorRatio = (isRangeMode || isFrameMode) ? 0.5 : focusAnchorRatio;
 
         let newStart = Math.round(anchorFocusFrame - (anchorRatio * targetDuration));
         newStart = Math.max(0, Math.min(newStart, Math.max(0, totalTimelineFrames - targetDuration)));
         const newEnd = newStart + targetDuration;
 
         const newAnchor = targetDuration > 0 ? (anchorFocusFrame - newStart) / targetDuration : 0.5;
-        setFocusAnchorRatio(Math.max(0, Math.min(1, newAnchor)), inputId);
-
+        const finalAnchor = (isRangeMode || isFrameMode) ? 0.5 : Math.max(0, Math.min(1, newAnchor));
+        setFocusAnchorRatio(finalAnchor, inputId);
         setTimelineDuration(newStart, newEnd, inputId);
         setZoomLevel(clampedLevel as ZoomLevel, inputId);
     }

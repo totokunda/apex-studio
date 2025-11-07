@@ -39,8 +39,9 @@ const ModelClip: React.FC<Props> = ({
   const updateClip = useClipStore((s) => s.updateClip);
   const getClipById = useClipStore((s) => s.getClipById);
   const isRunState = (currentClip?.modelStatus === 'running' || currentClip?.modelStatus === 'pending');
-  const { progress, isProcessing, isComplete, isFailed } = useEngineJob(clipId, isRunState);
-  const job = useJobProgress(clipId);
+  const clip = getClipById(clipId) as ModelClipProps | undefined;
+  const { progress, isProcessing, isComplete, isFailed } = useEngineJob(clip?.activeJobId ?? null, isRunState);
+  const job = useJobProgress(clip?.activeJobId ?? null);
   const { fetchJobResult } = useEngineJobActions();
   const targetFramesRef = useRef<number | null>(null);
   const initialStartRef = useRef<number | null>(null);
@@ -55,6 +56,7 @@ const ModelClip: React.FC<Props> = ({
   const finalSrcSetRef = useRef(false);
   const [, setForceRerenderCounter] = useState(0);
   const { fps } = useControlsStore();
+
 
   useEffect(() => {
     const clip = getClipById(clipId) as ModelClipProps | undefined;
@@ -262,6 +264,20 @@ const ModelClip: React.FC<Props> = ({
           displayCanvasRef.current = imageCanvas.current;
           setForceRerenderCounter((v) => v + 1);
         }
+        // Update matching generation entry with preview src and running status
+        try {
+          const current = getClipById(clipId) as ModelClipProps | undefined;
+          const gens = (current?.generations ?? []);
+          const activeId = current?.activeJobId ?? '';
+          const idx = gens.findIndex((g: any) => g?.jobId === activeId);
+          if (idx >= 0) {
+            const g = gens[idx] as any;
+            if (g.src !== previewPath || g.modelStatus !== 'running') {
+              const updated = gens.map((it: any, i: number) => i === idx ? { ...g, src: previewPath, modelStatus: 'running' } : it);
+              updateClip(clipId, { generations: updated } as any);
+            }
+          }
+        } catch {}
         try { groupRef.current?.getLayer()?.batchDraw(); } catch {}
       } catch {}
     })();
@@ -272,8 +288,9 @@ const ModelClip: React.FC<Props> = ({
     if (!clipId) return;
     if (!isComplete) return;
     // Kick a fetch to ensure result is populated
-    void fetchJobResult(clipId);
-  }, [isComplete, clipId, fetchJobResult]);
+    if (!clip?.activeJobId) return;
+    void fetchJobResult(clip.activeJobId);
+  }, [isComplete, clipId, fetchJobResult, clip?.activeJobId]);
 
   useEffect(() => {
     if (!isComplete) return;
@@ -282,9 +299,19 @@ const ModelClip: React.FC<Props> = ({
     const fileUrl = pathToFileURLString(resultPath);
     if (!finalSrcSetRef.current || currentClip?.src !== fileUrl) {
       finalSrcSetRef.current = true;
-      updateClip(clipId, { src: fileUrl });
+      const prevGenerations = Array.isArray(clip?.generations) ? (clip?.generations as any[]) : [];
+      const activeId = clip?.activeJobId ?? '';
+      const idx = prevGenerations.findIndex((g: any) => g?.jobId === activeId);
+      let nextGenerations: any[] = prevGenerations;
+      if (idx >= 0) {
+        const g = prevGenerations[idx] as any;
+        nextGenerations = prevGenerations.map((it: any, i: number) => i === idx ? { ...g, src: resultPath, modelStatus: 'complete' } : it);
+      } else {
+        nextGenerations = [...prevGenerations, { jobId: activeId, modelStatus: 'complete', src: resultPath, createdAt: Date.now() }];
+      }
+      updateClip(clipId, { src: fileUrl, modelStatus: 'complete', generations: nextGenerations, activeJobId: undefined } as any);
     }
-  }, [isComplete, job?.result, currentClip?.src, clipId, updateClip]);
+  }, [isComplete, job?.result, currentClip?.src, clipId, updateClip, clip?.generations]);
 
   // When clip src changes (outside of job updates), regenerate the timeline thumbnail
   useEffect(() => {

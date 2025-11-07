@@ -140,7 +140,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
     // Track engine job status for model clip to disable resizing while generating
     const isModelRunning = useEngineJobStore((s) => {
         if (!currentClip || currentClip.type !== 'model') return false;
-        const j = s.jobs[clipId];
+        const j = s.jobs[(currentClip as ModelClipProps)?.activeJobId ?? ''] ?? null;
         return !!j && (j.status === 'running' || j.status === 'pending');
     });
     
@@ -839,24 +839,30 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         })();
         const targetIds = (controls.selectedClipIds || []).includes(currentClipId) ? controls.selectedClipIds : [currentClipId];
         const aiCommands: ContextMenuItem[] = [];
-        /**AI Commands, we will have to implement with our AI system. */
+
+
+        /**AI Commands, we will have to implement with our AI system.
+         * Coming Soon
+         * 
+         */
         if (isVideo && clip.masks && clip.masks.length === 0 && clip.preprocessors && clip.preprocessors.length === 0) {
-            aiCommands.push({ id: 'extend', label: 'Extend', action: 'extend', });
-            aiCommands.push({ id: 'stabilize', label: 'Stabilize', action: 'stabilize', });
-            aiCommands.push({ id: 'editVideo', label: 'Edit Video', action: 'editVideo', });
+            //aiCommands.push({ id: 'extend', label: 'Extend', action: 'extend', });
+            //aiCommands.push({ id: 'stabilize', label: 'Stabilize', action: 'stabilize', });
+            //aiCommands.push({ id: 'editVideo', label: 'Edit Video', action: 'editVideo', });
         } else if (clip?.type === 'image' && clip.masks && clip.masks.length === 0 && clip.preprocessors && clip.preprocessors.length === 0) {
-            aiCommands.push({ id: 'animate', label: 'Animate', action: 'animate', });
-            aiCommands.push({ id: 'editImage', label: 'Edit Image', action: 'editImage', });
+            //aiCommands.push({ id: 'animate', label: 'Animate', action: 'animate', });
+            //aiCommands.push({ id: 'editImage', label: 'Edit Image', action: 'editImage', });
         }
         if ((clip?.type === 'video' || clip?.type === 'image') && clip.masks && clip.masks.length > 0) {
-            aiCommands.push({ id: 'inpaint', label: 'Inpaint', action: 'inpaint', });
-            aiCommands.push({ id: 'outpaint', label: 'Outpaint', action: 'outpaint', });
+            //aiCommands.push({ id: 'inpaint', label: 'Inpaint', action: 'inpaint', });
+            //aiCommands.push({ id: 'outpaint', label: 'Outpaint', action: 'outpaint', });
         }
         if ((clip?.type === 'video' || clip?.type === 'image') && clip.preprocessors && clip.preprocessors.length > 0) {
-            aiCommands.push({ id: 'control', label: 'Use as Control', action: 'control', });
+            //aiCommands.push({ id: 'control', label: 'Use as Control', action: 'control', });
         }
 
         const isGroup = clip?.type === 'group';
+        const isModelWithSrc = clip?.type === 'model' && typeof clip.src === 'string';
 
         const otherCommands: ContextMenuItem[] = [
             { id: 'export', label: 'Export…', action: 'export' },
@@ -871,6 +877,15 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         } else if (!isAnyGroup) {
             otherCommands.push({ id: 'group', label: 'Group…', action: 'group', disabled: (controls.selectedClipIds || []).length < 2, shortcut: '⌘G' });
         }
+
+        const clipActions: ContextMenuItem[] = [];
+        if (clipType === 'model' && isModelWithSrc) {
+            clipActions.push({ id: 'convertToMedia', label: 'Convert to Media', action: 'convertToMedia', disabled: isModelRunning, shortcut: '⌘⇧M' });
+        } else {
+            clipActions.push({ id: 'split', label: 'Split at Playhead', action: 'split', disabled: isGroup || (clipType === 'model') },
+            { id: 'separate', label: 'Detach Audio', action: 'separateAudio', disabled: !isVideo || isSeparated });
+        }
+
 
         useContextMenuStore.getState().openMenu({
             position: { x: e.evt.clientX, y: e.evt.clientY },
@@ -895,8 +910,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                 {
                     id: 'clip-actions',
                     items: [
-                        { id: 'split', label: 'Split at Playhead', action: 'split', disabled: isGroup },
-                        { id: 'separate', label: 'Detach Audio', action: 'separateAudio', disabled: !isVideo || isSeparated },
+                        ...clipActions,
                     ],
                 },
                 {

@@ -24,6 +24,7 @@ export const generateTimelineThumbnailImage = async (
     const height = mediaInfoRef?.image?.height ?? 1;
     const ratio = width / height;
     let thumbnailWidth = Math.max(timelineHeight * ratio, THUMBNAIL_TILE_SIZE);
+    console.log(thumbnailWidth, ratio, width, height);
 
     const samples = await generateTimelineSamples(
         currentClipId,
@@ -33,7 +34,7 @@ export const generateTimelineThumbnailImage = async (
         timelineHeight,
         tClipWidth,
         {
-            mediaInfo: mediaInfoRef,
+            mediaInfo: mediaInfoRef ?? undefined,
         }
     );
 

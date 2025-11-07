@@ -292,6 +292,18 @@ const Controls = () => {
         return;
       }
 
+      // Convert selected model clips to media (Cmd/Ctrl + Shift + M)
+      if (isMod && e.shiftKey && e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        const selected = controls.selectedClipIds || [];
+        if (selected.length > 0) {
+          selected.forEach((id) => {
+            try { clipsStore.convertToMedia(id); } catch {}
+          });
+        }
+        return;
+      }
+
       // Group (Cmd/Ctrl + G) and Ungroup (Cmd/Ctrl + Shift + G)
       if (isMod && e.key.toLowerCase() === 'g') {
         e.preventDefault();

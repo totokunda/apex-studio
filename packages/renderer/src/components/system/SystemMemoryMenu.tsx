@@ -78,7 +78,7 @@ const SystemMemoryMenu: React.FC = () => {
                     <SemiGauge value={data.cpu?.percent ?? 0} label='System RAM' />
                     {data.cpu ? (
                       <div className='mt-1 text-[11px] text-brand-light/60'>
-                        {usageLine(data.cpu.used, data.cpu.total, data.cpu.percent)}
+                        {usageLine(data.cpu.used, data.cpu.total)}
                       </div>
                     ) : null}
                   </div>
@@ -86,7 +86,7 @@ const SystemMemoryMenu: React.FC = () => {
                     <div className='flex-1 flex flex-col items-center'>
                       <SemiGauge value={data.gpu.percent} label='GPU VRAM' />
                       <div className='mt-1 text-[11px] text-brand-light/60'>
-                        {usageLine(data.gpu.used, data.gpu.total, data.gpu.percent)}
+                        {usageLine(data.gpu.used, data.gpu.total)}
                       </div>
                     </div>
                   ) : null}

@@ -20,6 +20,7 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
   const tagsContainerRef = useRef<HTMLDivElement>(null);
   const hiddenMeasureRef = useRef<HTMLDivElement>(null);
   const [visibleTagCount, setVisibleTagCount] = useState<number | null>(null);
+  const [isStartingDownload, setIsStartingDownload] = useState(false);
   const isVideoDemo = React.useMemo(() => {
     const value = (manifest.demo_path || '').toLowerCase();
     try {
@@ -61,6 +62,13 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
   const allDownloaded = useMemo(() => {
     return manifest.downloaded;
   }, [manifest.downloaded]);
+
+  // If store reflects activity or everything is already downloaded, drop the local starting flag
+  useEffect(() => {
+    if (isDownloading || allDownloaded) {
+      setIsStartingDownload(false);
+    }
+  }, [isDownloading, allDownloaded]);
 
   // Compute how many tags fit on a single line
   useEffect(() => {
@@ -107,6 +115,7 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
 
   const handleDownloadAllDefault = async () => {
     try {
+      setIsStartingDownload(true);
       await useManifestStore.getState().loadManifest(manifest.id, true);
       const doc = useManifestStore.getState().manifestById[manifest.id] as any;
       const components = doc?.spec?.components || [];
@@ -124,8 +133,18 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
           if (!p || already) continue;
           await startPath(p, comp?.save_path);
         }
+        // Ensure scheduler configs (base and options) are downloaded too
+        const configPathsSet = new Set<string>();
         if (comp?.config_path) {
-          const cp = comp.config_path as string;
+          configPathsSet.add(comp.config_path as string);
+        }
+        if (comp?.type === 'scheduler' && Array.isArray(comp?.scheduler_options)) {
+          for (const opt of comp.scheduler_options as any[]) {
+            const cp = opt?.config_path as string | undefined;
+            if (cp) configPathsSet.add(cp);
+          }
+        }
+        for (const cp of configPathsSet) {
           const entry = useComponentsDownloadStore.getState().entries[cp];
           if (!entry || entry.status === 'error' || entry.status === 'canceled') {
             await startPath(cp, comp?.save_path);
@@ -133,6 +152,10 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
         }
       }
     } catch {}
+    finally {
+      // Fallback clear in case store entries are delayed
+      setTimeout(() => setIsStartingDownload(false), 1200);
+    }
   };
 
   const card = (
@@ -215,23 +238,23 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
           <button
             onClick={handleDownloadAllDefault}
             type='button'
-            disabled={allDownloaded}
+            disabled={allDownloaded || isStartingDownload || isDownloading}
             className={cn(
               'text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded px-2 py-1 border flex-1',
               allDownloaded
                 ? 'text-brand-light/80 bg-brand-background border-brand-light/10 cursor-default'
                 : 'text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10'
             )}
-            title={allDownloaded ? 'Already downloaded' : (isDownloading ? 'Downloading…' : 'Download default variant')}
+            title={allDownloaded ? 'Already downloaded' : ((isStartingDownload || isDownloading) ? 'Downloading…' : 'Download default variant')}
           >
             {allDownloaded ? (
               <LuCheck className='w-3 h-3' />
-            ) : isDownloading ? (
+            ) : (isStartingDownload || isDownloading) ? (
               <LuLoader className='w-3 h-3 animate-spin' />
             ) : (
               <LuDownload className='w-3 h-3' />
             )}
-            <span>{allDownloaded ? 'Downloaded' : isDownloading ? 'Downloading…' : 'Download'}</span>
+            <span>{allDownloaded ? 'Downloaded' : ((isStartingDownload || isDownloading) ? 'Downloading…' : 'Download')}</span>
           </button>
         </div>
       )}

@@ -39,6 +39,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   const [isExpanded, setIsExpanded] = useState(false);
   const [componentDownloading, setComponentDownloading] = useState(false);
   const [deletingByPath, setDeletingByPath] = useState<Record<string, boolean>>({});
+  const [startingByPath, setStartingByPath] = useState<Record<string, boolean>>({});
   const { loadManifest } = useManifestStore.getState();
   const relevantPaths = React.useMemo(() => {
     const paths: string[] = [];
@@ -158,6 +159,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   }, [modelPaths, downloads]);
 
   const handleDownload = async (path: string) => {
+    setStartingByPath((s) => ({ ...s, [path]: true }));
     await startPath(path, (component as any).save_path);
   };
 
@@ -194,10 +196,14 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
       // Skip already downloaded ones if known
       const item = (Array.isArray(component.model_path) ? component.model_path : []).find((it: any) => (typeof it === 'string' ? it : it?.path) === p) as any;
       const already = !!(item && typeof item === 'object' && item.is_downloaded);
-      if (!already) await handleDownload(p);
+      if (!already) {
+        setComponentDownloading(true);
+        await handleDownload(p);
+      }
     }
     // Download config if it exists
     if (component.config_path) {
+      setComponentDownloading(true);
       await handleDownload(component.config_path as string);
     }
   };
@@ -215,7 +221,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     // wait briefly to allow the manifest to refresh; then allow retry.
     if (!isDownloaded && schedulerAnyCompleted && !schedulerAnyActive) {
       setConfigCompletionGraceOver(false);
-      const t = setTimeout(() => setConfigCompletionGraceOver(true), 2000);
+      const t = setTimeout(() => setConfigCompletionGraceOver(true), 4000);
       return () => { try { clearTimeout(t); } catch {} };
     }
     // Reset when active again, error, or confirmed
@@ -239,6 +245,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   }, [modelPaths]);
 
   const modelGraceTimersRef = React.useRef<Record<string, any>>({});
+  const modelRefreshPollersRef = React.useRef<Record<string, any>>({});
+  const modelRefreshPollerCountsRef = React.useRef<Record<string, number>>({});
   React.useEffect(() => {
     const paths = Object.keys(modelPathDownloadedMap || {});
     for (const p of paths) {
@@ -252,7 +260,20 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
             setModelCompletionGrace((s) => ({ ...s, [p]: true }));
             try { clearTimeout(modelGraceTimersRef.current[p]); } catch {}
             delete modelGraceTimersRef.current[p];
-          }, 2000);
+          }, 4000);
+        }
+        // Start a brief polling loop to refresh manifest until it reflects the new state
+        if (!modelRefreshPollersRef.current[p]) {
+          modelRefreshPollerCountsRef.current[p] = 0;
+          modelRefreshPollersRef.current[p] = setInterval(() => {
+            modelRefreshPollerCountsRef.current[p] = (modelRefreshPollerCountsRef.current[p] || 0) + 1;
+            try { loadManifest(manifestId, true); } catch {}
+            if (modelRefreshPollerCountsRef.current[p] >= 6 /* ~4.8s at 800ms */) {
+              try { clearInterval(modelRefreshPollersRef.current[p]); } catch {}
+              delete modelRefreshPollersRef.current[p];
+              delete modelRefreshPollerCountsRef.current[p];
+            }
+          }, 800);
         }
       } else {
         // Clear timer and reset grace when status changes or manifest confirms
@@ -261,6 +282,12 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
           delete modelGraceTimersRef.current[p];
         }
         setModelCompletionGrace((s) => (s[p] ? { ...s, [p]: false } : s));
+        // Stop any active poller once confirmed or status moved away from completed
+        if (modelRefreshPollersRef.current[p]) {
+          try { clearInterval(modelRefreshPollersRef.current[p]); } catch {}
+          delete modelRefreshPollersRef.current[p];
+          delete modelRefreshPollerCountsRef.current[p];
+        }
       }
     }
     // Cleanup timers for paths that no longer exist
@@ -270,7 +297,32 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
         delete modelGraceTimersRef.current[key];
       }
     }
-  }, [downloads, modelPathDownloadedMap]);
+    // Cleanup pollers for paths that no longer exist
+    for (const key of Object.keys(modelRefreshPollersRef.current)) {
+      if (!paths.includes(key)) {
+        try { clearInterval(modelRefreshPollersRef.current[key]); } catch {}
+        delete modelRefreshPollersRef.current[key];
+        delete modelRefreshPollerCountsRef.current[key];
+      }
+    }
+  }, [downloads, modelPathDownloadedMap, manifestId]);
+
+  // Clear optimistic starting flags once the store reflects activity for a path
+  React.useEffect(() => {
+    setStartingByPath((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [path, starting] of Object.entries(prev)) {
+        if (!starting) continue;
+        const status = downloads[path]?.status;
+        if (status === 'pending' || status === 'downloading') {
+          next[path] = false;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [downloads]);
 
   // Check if there's any content to show when expanded
   const hasModelPaths = modelPaths.length > 0;
@@ -292,6 +344,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                 if (isDownloaded || componentDownloading) return;
                 e.preventDefault();
                 e.stopPropagation();
+                setComponentDownloading(true);
                 await handleDownloadAll();
               }} className={cn(
                 "flex items-center justify-center w-4.5 h-4.5 rounded-full border",
@@ -412,7 +465,17 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                     )}
                     
                     {!(pathItem.is_downloaded || (pathItem as any).is_downloaded) ? (
-                      downloads[pathItem.path]?.status === 'downloading' ? (
+                      startingByPath[pathItem.path] && !downloads[pathItem.path]?.status ? (
+                        <div className="w-full mt-3 flex items-center justify-between gap-x-2">
+                          <div className="flex-1 min-w-0">
+                            <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{pathItem.path}</div>
+                          </div>
+                          <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
+                            <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
+                            <span>Preparing...</span>
+                          </div>
+                        </div>
+                      ) : downloads[pathItem.path]?.status === 'downloading' ? (
                         <div className="w-full mt-3">
                           {(() => {
                             const entry = downloads[pathItem.path];
@@ -479,7 +542,10 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                             <span>Download Model</span>
                           </button>
                         ) : (
-                          <div className="w-full mt-3" />
+                          <div className="w-full mt-3 flex items-center justify-start gap-x-1">
+                            <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
+                            <span className="text-[10px] text-brand-light/80 text-start">Finalizing…</span>
+                          </div>
                         )
                       ) : downloads[pathItem.path]?.status === 'error' || downloads[pathItem.path]?.status === 'canceled' ? (
                         <button
@@ -494,8 +560,17 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                           onClick={() => handleDownload(pathItem.path)}
                           className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
                         >
-                          <LuDownload className="w-3.5 h-3.5" />
-                          <span>Download Model</span>
+                          {startingByPath[pathItem.path] ? (
+                            <>
+                              <LuLoader className="w-3.5 h-3.5 animate-spin" />
+                              <span>Preparing...</span>
+                            </>
+                          ) : (
+                            <>
+                              <LuDownload className="w-3.5 h-3.5" />
+                              <span>Download Model</span>
+                            </>
+                          )}
                         </button>
                       )
                     ) : (

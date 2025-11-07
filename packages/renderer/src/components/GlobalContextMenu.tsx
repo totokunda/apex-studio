@@ -62,6 +62,7 @@ const GlobalContextMenu: React.FC = () => {
       else if (action === 'export') { try { console.info('Export placeholder', ids); } catch {} }
       else if (action === 'group') {  clipsStore.groupClips(ids);}
       else if (action === 'ungroup') { clipsStore.ungroupClips(target.primaryClipId); }
+      else if (action === 'convertToMedia') { clipsStore.convertToMedia(target.primaryClipId); }
     } else if (target?.type === 'timeline') {
       if (action === 'paste') {
         const frame = useControlsStore.getState().focusFrame;

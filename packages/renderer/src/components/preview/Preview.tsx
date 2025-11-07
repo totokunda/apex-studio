@@ -2228,7 +2228,6 @@ useEffect(() => {
   const handler = () => {
     // runs any time this layer does a scene draw
     redrawCount.current++;
-    console.log('redrawCount', redrawCount.current);
     // dev log, metrics, etc.
   };
   layer.on('draw', handler);

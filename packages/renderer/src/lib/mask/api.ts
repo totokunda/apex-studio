@@ -10,6 +10,7 @@ import {
   onMaskTrackShapesError,
   onMaskTrackShapesEnd,
 } from '@app/preload';
+import { toast } from 'sonner';
 import {useEffect, useRef, useState, useCallback} from 'react';
 import type {MediaInfo} from '../types';
 
@@ -747,6 +748,18 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
 
 // Legacy function for backward compatibility
 export async function createMask(request: MaskRequest): Promise<ConfigResponse<MaskResponse>> {
+  try {
+    const { getBackendIsRemote, getFileShouldUpload } = await import('@app/preload');
+    const remoteRes = await getBackendIsRemote();
+    const isRemote = !!(remoteRes && remoteRes.success && remoteRes.data?.isRemote);
+    if (isRemote) {
+      const su = await getFileShouldUpload(String(request.input_path || ''));
+      const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
+      if (shouldUpload) {
+        toast.info('Uploading source media for mask…');
+      }
+    }
+  } catch {}
   return await createMaskPreload(request);
 }
 
@@ -839,6 +852,19 @@ export async function trackMask(
   }
 ): Promise<void> {
   const { signal, onProgress, onFrame } = options || {};
+  // Inform user about potential upload delay
+  try {
+    const { getBackendIsRemote, getFileShouldUpload } = await import('@app/preload');
+    const remoteRes = await getBackendIsRemote();
+    const isRemote = !!(remoteRes && remoteRes.success && remoteRes.data?.isRemote);
+    if (isRemote) {
+      const su = await getFileShouldUpload(String(request.input_path || ''));
+      const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
+      if (shouldUpload) {
+        toast.info('Uploading source media for mask tracking…');
+      }
+    }
+  } catch {}
   
   const { streamId } = await startMaskTrack(request as any);
   const anchor = request.anchor_frame ?? request.frame_start;
@@ -1029,6 +1055,19 @@ export async function trackShapes(
   }
 ): Promise<void> {
   const { signal, onProgress, onFrame } = options || {};
+  // Inform user about potential upload delay
+  try {
+    const { getBackendIsRemote, getFileShouldUpload } = await import('@app/preload');
+    const remoteRes = await getBackendIsRemote();
+    const isRemote = !!(remoteRes && remoteRes.success && remoteRes.data?.isRemote);
+    if (isRemote) {
+      const su = await getFileShouldUpload(String(request.input_path || ''));
+      const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
+      if (shouldUpload) {
+        toast.info('Uploading source media for mask tracking…');
+      }
+    }
+  } catch {}
 
   const { streamId } = await startMaskTrackShapes(request);
   const anchor = request.anchor_frame ?? request.frame_start;

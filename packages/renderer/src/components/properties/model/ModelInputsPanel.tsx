@@ -15,6 +15,7 @@ import VideoInput from './inputs/VideoInput';
 import NumberListInput from './inputs/NumberListInput';
 import AudioInput from './inputs/AudioInput';
 import SchedulerPanel from './SchedulerPanel';
+import AttentionPanel from './AttentionPanel';
 
 export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], clipId: string, panelSize:number }> = ({ panel, inputs, clipId, panelSize }) => {
 
@@ -234,6 +235,13 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
     return String(panel.name || '').toLowerCase() === 'scheduler';
   }, [panel.name, schedulerOptions]);
 
+  // Only render attention selector when this panel is named 'attention' and options exist
+  const shouldShowAttention = useMemo(() => {
+    const attentionOptions = (clip?.manifest?.spec?.attention_types_detail || []) as any[];
+    if (!attentionOptions || attentionOptions.length === 0) return false;
+    return String(panel.name || '').toLowerCase() === 'attention';
+  }, [panel.name, clip?.manifest?.spec?.attention_types_detail]);
+
   return (
     <div className="">
       <div onClick={() => setCollapsed((v) => !v)} className={cn("flex items-center justify-between  py-2.5 px-3", {
@@ -267,6 +275,11 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
         {shouldShowScheduler && (
           <div style={{ display: 'flex', flexDirection: 'row', gap: '12px', width: '100%', minWidth: 0 }}>
             <SchedulerPanel clipId={clipId} />
+          </div>
+        )}
+        {shouldShowAttention && (
+          <div style={{ display: 'flex', flexDirection: 'row', gap: '12px', width: '100%', minWidth: 0 }}>
+            <AttentionPanel clipId={clipId} />
           </div>
         )}
         {panel.layout.rows.map((row) => {

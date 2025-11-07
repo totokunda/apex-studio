@@ -65,7 +65,7 @@ export interface TimelineProps {
 }
 
 
-export type PreprocessorClipType = VideoClipProps | ImageClipProps;
+export type PreprocessorClipType = VideoClipProps | ImageClipProps
 
 export type VideoClipProps = ClipProps & MediaAdjustments & {
     src: string;
@@ -267,6 +267,8 @@ export type PreprocessorClipProps = {
     endFrame?:number;
     values: Record<string, any>;
     status?: 'running' | 'complete' | 'failed';
+    activeJobId?: string;
+    jobIds?: string[];
 }
 
 export type GroupClipProps = ClipProps & {
@@ -285,6 +287,15 @@ export type ModelClipProps = ClipProps & {
     // Persist user selections for model components (e.g., scheduler, transformer, vae, text_encoder)
     // Keyed by component type (e.g., 'scheduler', 'transformer'), value is a small descriptor object
     selectedComponents?: Record<string, any>;
+    generations?: {
+        jobId:string;
+        modelStatus: 'pending' | 'running' | 'complete' | 'failed';
+        src: string;
+        createdAt: number;
+        selectedComponents?: Record<string, any>;
+        values?: Record<string, any>;
+    }[];
+    activeJobId?: string;
 }
 
 export type AnyClipProps = VideoClipProps | ImageClipProps | AudioClipProps | ShapeClipProps | PolygonClipProps | TextClipProps | FilterClipProps | DrawingClipProps | GroupClipProps | ModelClipProps;

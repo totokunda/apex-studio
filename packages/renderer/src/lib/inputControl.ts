@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { ZoomLevel, AnyClipProps } from "./types";
 import { DEFAULT_FPS, TIMELINE_DURATION_SECONDS, MIN_DURATION } from "./settings";
-import { useClipStore } from "./clip";
 
 interface InputControlStore {
     // Zoom state (independent from other controls)
@@ -86,27 +85,12 @@ export const useInputControlsStore = create<InputControlStore>((set, get) => ({
             set({ zoomLevel: level });
             return;
         }
-        set((state) => {
-            const prevLevel = state.zoomLevelByInputId[inputId] ?? 1;
-            const next: any = {
-                zoomLevelByInputId: {
-                    ...state.zoomLevelByInputId,
-                    [inputId]: level,
-                },
-            };
-            // When zooming in, temporarily center focus within current selected range
-            if (level > prevLevel) {
-                const range = state.selectedRangeByInputId[inputId] ?? state.selectedRange ?? [0, 1];
-                const start = Math.max(0, Math.round(range[0] ?? 0));
-                const endExclusive = Math.max(start + 1, Math.round(range[1] ?? start + 1));
-                const center = Math.floor((start + (endExclusive - 1)) / 2);
-                next.focusFrameByInputId = {
-                    ...state.focusFrameByInputId,
-                    [inputId]: center,
-                };
-            }
-            return next;
-        });
+        set((state) => ({
+            zoomLevelByInputId: {
+                ...state.zoomLevelByInputId,
+                [inputId]: level,
+            },
+        }));
     },
     getZoomLevel: (inputId) => {
         if (!inputId) return get().zoomLevel;

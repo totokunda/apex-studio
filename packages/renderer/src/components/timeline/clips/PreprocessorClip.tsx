@@ -24,6 +24,7 @@ import {  toFrameRange } from '@/lib/media/fps'
 import { cn } from '@/lib/utils'
 import { useWebGLMask } from '@/components/preview/mask/useWebGLMask'
 import { useViewportStore } from '@/lib/viewport'
+import { v4 as uuidv4 } from 'uuid'
 const THUMBNAIL_TILE_SIZE = 36;
 
 interface PropsPreprocessorClip {
@@ -100,7 +101,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
     const [isCtrlPressed, setIsCtrlPressed] = useState(false);
     const previousMouseX = useRef<number | null>(null);
     const dragOffsetX = useRef<number>(0);
-    const preprocessorJobId = useMemo(() => preprocessor.status === 'running' ? preprocessor.id : null, [preprocessor.id, preprocessor.status]);
+    const preprocessorJobId = useMemo(() => preprocessor.status === 'running' ? (preprocessor.activeJobId ?? null) : null, [preprocessor.activeJobId, preprocessor.status]);
     const { isProcessing, progress, result} = usePreprocessorJob(preprocessorJobId);
     const { clearJob, stopTracking } = usePreprocessorJobActions(); 
     const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(preprocessor.src ?? '') ?? null);
@@ -182,7 +183,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             // Check if we still don't have a result after waiting
             if (!result?.result_path && preprocessor.status === 'running') {
                 try {
-                    const response = await getPreprocessorResult(preprocessor.id);
+                    const response = await getPreprocessorResult(preprocessor.activeJobId || preprocessor.id);
                     if (response.success && response.data?.result_path) {
                         const resultPath = response.data.result_path;
                         const fileUrl = pathToFileURLString(resultPath);
@@ -951,9 +952,25 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         const clip = getClipFromPreprocessorId(preprocessor.id);
         if (!clip || !clip.src) return;
         
-        // Clear any existing job data to ensure fresh start with new parameters
-        clearJob(preprocessor.id);
+        // Clear any existing job data for previous active job
+        if (preprocessor.activeJobId) {
+            clearJob(preprocessor.activeJobId);
+        }
         
+        // If backend is remote and src is local-like, inform user about upload delay
+        try {
+            const { getBackendIsRemote, getFileShouldUpload } = await import('@app/preload');
+            const remoteRes = await getBackendIsRemote();
+            const isRemote = !!(remoteRes && remoteRes.success && remoteRes.data?.isRemote);
+            if (isRemote) {
+                const su = await getFileShouldUpload(String(clip.src || ''));
+                const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
+                if (shouldUpload) {
+                    toast.info('Uploading source media to server…');
+                }
+            }
+        } catch {}
+
         // need to convert our startFrame and endFrame back to where it would be with real FPS
         const clipMediaInfo = getMediaInfoCached(clip.src);
         const clipFps = clipMediaInfo?.stats.video?.averagePacketRate ?? 24;
@@ -961,13 +978,21 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         if (preprocessor.startFrame === undefined || preprocessor.endFrame === undefined) return;
         
         const { start: startFrameReal, end: endFrameReal } = toFrameRange(preprocessor.startFrame, preprocessor.endFrame, fps, clipFps, clipMediaInfo?.duration ?? 0);
-
+        
+        // Generate a unique job id for this run and store on the preprocessor
+        const newJobId = uuidv4();
+        updatePreprocessor(clipId, preprocessor.id, {
+            status: 'running',
+            activeJobId: newJobId,
+            jobIds: [...(preprocessor.jobIds || []), newJobId],
+        });
+        
         const response = await runPreprocessor({
             preprocessor_name: preprocessor.preprocessor.id,
             input_path: clip.src,
             start_frame: startFrameReal,
             end_frame: endFrameReal,
-            job_id: preprocessor.id,
+            job_id: newJobId,
             download_if_needed: true,
             params: preprocessor.values,
         });
@@ -982,16 +1007,17 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
 
     const handleStopPreprocessor = useCallback(async () => {
         if (preprocessor.status !== 'running') return;
+        const jobId = preprocessor.activeJobId || preprocessor.id;
         
         // Stop tracking the job and clear it
-        await stopTracking(preprocessor.id);
-        clearJob(preprocessor.id);
+        await stopTracking(jobId);
+        clearJob(jobId);
         
-        // Update preprocessor status to idle
-        updatePreprocessor(clipId, preprocessor.id, { status: undefined });
+        // Update preprocessor status to idle and clear active job id
+        updatePreprocessor(clipId, preprocessor.id, { status: undefined, activeJobId: undefined });
         
         toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
-    }, [preprocessor.status, preprocessor.id, preprocessor.preprocessor.name, stopTracking, clearJob, updatePreprocessor, clipId]);
+    }, [preprocessor.status, preprocessor.activeJobId, preprocessor.id, preprocessor.preprocessor.name, stopTracking, clearJob, updatePreprocessor, clipId]);
 
     if (preprocessor.status !== 'complete' && assetMode) return null;
 

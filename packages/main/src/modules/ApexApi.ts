@@ -7,11 +7,17 @@ import path from 'node:path';
 import inspector from 'node:inspector';
 import { fileURLToPath } from 'node:url';
 import { WebSocketManager } from './WebSocketManager.js';
+import os from 'node:os';
+import { FormData as NodeFormData } from 'formdata-node';
+import { fileFromPath } from 'formdata-node/file-from-path';
+import { FormDataEncoder } from 'form-data-encoder';
+import { Readable } from 'node:stream';
 
 const session = new inspector.Session();
 session.connect();
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8765';
+const MAX_UPLOAD_BYTES = Number(process.env.APEX_MAX_UPLOAD_BYTES || 1_073_741_824); // 1 GiB default
 
 interface ConfigResponse<T> {
   success: boolean;
@@ -31,6 +37,7 @@ export class ApexApi implements AppModule {
   private activeMaskStreams: Map<string, { controller: AbortController; reader: ReadableStreamDefaultReader<Uint8Array> | null; id: string } > = new Map();
   private uploadCache: Map<string, string> = new Map(); // localAbsPath -> remoteAbsPath
   private remoteCachePath: string | null = null; // backend-reported cache path
+  private loopbackAppearsRemote: boolean = false; // true when localhost is actually a tunnel to a remote backend
 
   constructor(backendUrl: string = DEFAULT_BACKEND_URL) {
     this.backendUrl = backendUrl;
@@ -45,6 +52,7 @@ export class ApexApi implements AppModule {
     this.settingsPath = path.join(this.app.getPath('userData'), 'apex-settings.json');
     await this.loadSettings();
     this.wsManager?.setBaseUrl(this.backendUrl);
+    await this.#probeBackendLocality();
     
     this.registerConfigHandlers();
     this.registerBackendUrlHandlers();
@@ -97,6 +105,7 @@ export class ApexApi implements AppModule {
         new URL(url);
         this.backendUrl = url;
         this.wsManager?.setBaseUrl(url);
+        await this.#probeBackendLocality();
         await this.saveSettings();
         return {
           success: true,
@@ -107,6 +116,42 @@ export class ApexApi implements AppModule {
           success: false,
           error: error instanceof Error ? error.message : 'Invalid URL format',
         };
+      }
+    });
+
+    // Expose a definitive remote/loopback-tunneled status computed in main
+    ipcMain.handle('backend:is-remote', async () => {
+      try { await this.#probeBackendLocality(); } catch {}
+      try {
+        const isRemote = this.#isRemoteBackend();
+        return { success: true, data: { isRemote } };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to determine remote status' };
+      }
+    });
+
+    // Determine if a given input path would trigger an upload when sent to backend
+    ipcMain.handle('files:should-upload', async (_event, inputPath: string) => {
+      try {
+        if (!this.#isRemoteBackend()) return { success: true, data: { shouldUpload: false } };
+        const abs = this.#resolveLocalPath(String(inputPath || ''));
+        if (!abs) return { success: true, data: { shouldUpload: false } };
+        const cached = this.uploadCache.get(abs);
+        return { success: true, data: { shouldUpload: !cached } };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to check upload necessity' };
+      }
+    });
+
+    // Check if the given local file has already been uploaded this session (cache hit)
+    ipcMain.handle('files:is-uploaded', async (_event, inputPath: string) => {
+      try {
+        const abs = this.#resolveLocalPath(String(inputPath || ''));
+        if (!abs) return { success: true, data: { isUploaded: false } };
+        const cached = this.uploadCache.get(abs);
+        return { success: true, data: { isUploaded: !!cached } };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to check upload cache' };
       }
     });
   }
@@ -161,7 +206,8 @@ export class ApexApi implements AppModule {
       simplify_tolerance?: number;
       model_type?: string;
     }) => {
-      return this.makeRequest<{status: string; contours?: Array<Array<number>>; message?: string}>('POST', '/mask/create', request);
+      const payload = await this.#prepareMaskRequest(request);
+      return this.makeRequest<{status: string; contours?: Array<Array<number>>; message?: string}>('POST', '/mask/create', payload);
     });
 
     ipcMain.handle('mask:track', async (event, request: {
@@ -176,13 +222,14 @@ export class ApexApi implements AppModule {
       const streamId = crypto.randomUUID();
 
       const controller = new AbortController();
+      const payload = await this.#prepareMaskRequest(request);
       const response = await fetch(`${this.backendUrl}/mask/track`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/x-ndjson',
         },
-        body: JSON.stringify(request),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
 
@@ -192,7 +239,7 @@ export class ApexApi implements AppModule {
       }
 
       const reader = response.body.getReader();
-      this.activeMaskStreams.set(streamId, { controller, reader, id: request.id });
+      this.activeMaskStreams.set(streamId, { controller, reader, id: (payload as any).id });
 
       const decoder = new TextDecoder();
       let buffered = '';
@@ -273,13 +320,14 @@ export class ApexApi implements AppModule {
       const streamId = crypto.randomUUID();
 
       const controller = new AbortController();
+      const payload = await this.#prepareMaskRequest(request);
       const response = await fetch(`${this.backendUrl}/mask/track/shapes`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/x-ndjson',
         },
-        body: JSON.stringify(request),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
 
@@ -289,7 +337,7 @@ export class ApexApi implements AppModule {
       }
 
       const reader = response.body.getReader();
-      this.activeMaskStreams.set(streamId, { controller, reader, id: request.id });
+      this.activeMaskStreams.set(streamId, { controller, reader, id: (payload as any).id });
 
       const decoder = new TextDecoder();
       let buffered = '';
@@ -590,11 +638,36 @@ export class ApexApi implements AppModule {
   }
 
   // ===== Helpers for remote file handling =====
+  async #probeBackendLocality(): Promise<void> {
+    try {
+      const u = new URL(this.backendUrl);
+      const host = (u.hostname || '').toLowerCase();
+      // If not loopback, it's definitely remote
+      if (!(host === 'localhost' || host === '127.0.0.1' || host === '::1')) {
+        this.loopbackAppearsRemote = true;
+        return;
+      }
+      // Attempt to detect if loopback is tunneling to a different machine
+      const resp = await fetch(`${this.backendUrl}/config/home-dir`, { method: 'GET', headers: { 'Content-Type': 'application/json' } });
+      if (!resp.ok) {
+        this.loopbackAppearsRemote = false;
+        return;
+      }
+      const data = await resp.json().catch(() => ({} as any));
+      const remoteHome = typeof data?.home_dir === 'string' ? data.home_dir : '';
+      const localHome = os.homedir();
+      const norm = (p: string) => p.replace(/\\/g, '/');
+      this.loopbackAppearsRemote = !!remoteHome && norm(remoteHome) !== norm(localHome);
+    } catch {
+      // On failure to probe, keep previous value (default false)
+    }
+  }
+
   #isRemoteBackend(): boolean {
     try {
       const u = new URL(this.backendUrl);
       const host = (u.hostname || '').toLowerCase();
-      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
+      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return this.loopbackAppearsRemote;
       return true;
     } catch {
       return false;
@@ -666,14 +739,28 @@ export class ApexApi implements AppModule {
     const fileName = path.basename(abs);
     const destRel = `uploads/${crypto.randomUUID()}-${fileName}`;
 
-    const buf = await fs.promises.readFile(abs);
+    const { size } = await fs.promises.stat(abs);
+    if (size > MAX_UPLOAD_BYTES) {
+      const fileGiB = (size / (1024 ** 3)).toFixed(2);
+      const limitGiB = (MAX_UPLOAD_BYTES / (1024 ** 3)).toFixed(2);
+      throw new Error(`File is too large to upload automatically (${fileGiB} GiB > ${limitGiB} GiB). Place the file on the backend or raise APEX_MAX_UPLOAD_BYTES.`);
+    }
+
     // Use query params for scope/dest to avoid multipart field name disagreements
     const url = `${this.backendUrl}/files/ingest?scope=apex-cache&dest=${encodeURIComponent(destRel)}`;
-    const form = new FormData();
-    // @ts-ignore - Node FormData supports Blob
-    form.append('file', new Blob([buf]), fileName);
+    const form = new NodeFormData();
+    form.set('file', await fileFromPath(abs, fileName));
+    const encoder = new FormDataEncoder(form);
 
-    const resp = await fetch(url, { method: 'POST', body: form as any });
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: encoder.headers as any,
+      body: Readable.from(encoder) as any,
+      // Required by Node's fetch for streaming request bodies
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      duplex: 'half',
+    });
     if (!resp.ok) {
       const t = await resp.text().catch(() => '');
       throw new Error(`Upload failed (${resp.status}): ${t || resp.statusText}`);
@@ -695,6 +782,15 @@ export class ApexApi implements AppModule {
     const b = base.replace(/\\/g, '/').replace(/\/$/, '');
     const r = rel.replace(/\\/g, '/').replace(/^\//, '');
     return `${b}/${r}`;
+  }
+
+  async #prepareMaskRequest<T extends { input_path: string }>(request: T): Promise<T> {
+    if (!this.#isRemoteBackend()) return request;
+    const uploaded = await this.#uploadLocalFileIfNeeded(request.input_path);
+    if (uploaded) {
+      return { ...request, input_path: uploaded };
+    }
+    return request;
   }
 
   async #preparePreprocessorRunRequest(request: {

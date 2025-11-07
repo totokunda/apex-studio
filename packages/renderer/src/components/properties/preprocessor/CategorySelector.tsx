@@ -30,7 +30,7 @@ const CategorySelector: React.FC<CategorySelectorProps> = ({ value, onChange, op
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button className="w-full py-2 px-3 rounded-lg bg-brand border border-brand-light/10 text-brand-light text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/20 flex items-center justify-between hover:bg-brand-light/5 transition-all duration-200">
+          <button className="w-full py-2 px-3 rounded-[6px] bg-brand-background-light border font-medium border-brand-light/10 text-brand-light text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/20 flex items-center justify-between hover:bg-brand-light/5 transition-all duration-200">
             <span>{selectedOption?.name || 'Select option'}</span>
             <LuChevronDown className="w-3.5 h-3.5 text-brand-light/60" />
           </button>
@@ -41,7 +41,7 @@ const CategorySelector: React.FC<CategorySelectorProps> = ({ value, onChange, op
               <DropdownMenuRadioItem 
                 key={option.value} 
                 value={String(option.value)}
-                className="text-brand-light text-[11px] focus:bg-brand-light/10 focus:text-brand-lighter cursor-pointer"
+                className="text-brand-light text-[10.5px] font-medium focus:bg-brand-light/10 focus:text-brand-lighter cursor-pointer"
               >
                 {option.name}
               </DropdownMenuRadioItem>
@@ -53,15 +53,15 @@ const CategorySelector: React.FC<CategorySelectorProps> = ({ value, onChange, op
   }
 
   return (
-    <div className="flex flex-row w-full border border-brand-light/10 rounded-lg overflow-hidden">
+    <div className="flex flex-row w-full border border-brand-light/10 rounded-[6px] overflow-hidden">
       {normalizedOptions.map((option, index) => (
         <button
           key={option.value}
           onClick={() => onChange(String(option.value))}
           className={cn(
-            "flex-1 py-2 px-3 text-[11px] font-medium transition-all duration-200",
+            "flex-1 py-1.5 px-3 text-[10.5px] font-medium transition-all duration-200",
             String(value) === String(option.value)
-              ? "bg-brand-light/10 text-brand-lighter"
+              ? "bg-brand-background-light text-brand-lighter"
               : "bg-brand text-brand-light/60 hover:bg-brand-light/5",
             index !== 0 && "border-l border-brand-light/10"
           )}

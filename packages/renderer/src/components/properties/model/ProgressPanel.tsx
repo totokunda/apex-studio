@@ -1,16 +1,19 @@
 import { useJobProgress, useEngineJobActions } from '../../../lib/engine/hooks'
 import { useClipStore } from '@/lib/clip'
 import { ModelClipProps } from '@/lib/types'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import { IoRefreshOutline } from 'react-icons/io5'
 
 interface ProgressPanelProps {
   clipId: string | null
 }
 
 const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
-  const job = useJobProgress(clipId)
-  const clip = useClipStore((s) => s.getClipById(clipId ?? '')) as ModelClipProps | undefined;
-  const { startTracking } = useEngineJobActions();
+  const {getClipById} = useClipStore();
+  const clip = getClipById(clipId ?? '') as ModelClipProps | undefined;
+  const job = useJobProgress(clip?.activeJobId ?? null);
+  const { startTracking, stopTracking, fetchJobResult } = useEngineJobActions();
+  const [spinning, setSpinning] = useState(false);
 
   // Ensure tracking stays active even if this panel unmounts
   useEffect(() => {
@@ -25,6 +28,7 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
     .filter((u) => {
       const pct = typeof u.progress === 'number' ? Math.round(u.progress) : undefined
       const msg = (u.message || job?.currentStep || 'Working...').toString().trim().replace(/\s+/g, ' ')
+      if (msg.includes('Preview frame')) return false;
       const status = (u as any)?.status || ''
       const key = `${msg}|${pct ?? ''}|${status}`
       if (seenUpdateKeys.has(key)) return false
@@ -33,9 +37,29 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
     })
 
 
+  const handleRefresh = async () => {
+    const id = (job?.jobId || clip?.activeJobId || clipId || '').toString();
+    if (!id) return;
+    try {
+      setSpinning(true);
+      await stopTracking(id);
+      // brief delay to ensure socket cleanup
+      await new Promise((r) => setTimeout(r, 50));
+      await startTracking(id);
+      await fetchJobResult(id);
+    } finally {
+      setTimeout(() => setSpinning(false), 500);
+    }
+  };
+
   return (
     <div className="p-4">
-      <div className="text-brand-light text-[11px] uppercase tracking-wide mb-3 text-start font-medium"> {clip?.manifest?.metadata?.name} Progress</div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-brand-light text-[11px] uppercase tracking-wide text-start font-medium"> {clip?.manifest?.metadata?.name} Progress</div>
+        <span className="text-brand-light text-sm cursor-pointer" onClick={handleRefresh}>
+          <IoRefreshOutline className={spinning ? 'animate-spin duration-500' : ''} />
+        </span>
+      </div>
       {displayUpdates.length > 0 && <ul className="space-y-3">
         {displayUpdates.map((u, idx) => {
           const pct = typeof u.progress === 'number' ? Math.round(u.progress) : undefined

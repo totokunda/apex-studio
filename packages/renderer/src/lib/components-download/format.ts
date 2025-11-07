@@ -12,10 +12,10 @@ export function formatBytes(bytes: number | null | undefined, decimals = 1): str
   return `${size} ${sizes[i]}`;
 }
 
-export function formatSpeed(bytesPerSecond: number | null | undefined): string {
-  if (bytesPerSecond == null || bytesPerSecond <= 0) return '0 B/s';
-  
+export function formatSpeed(bytesPerSecond: number | null | undefined): string | null {
+  if (bytesPerSecond == null || bytesPerSecond <= 0) return null;
   const formatted = formatBytes(bytesPerSecond, 1);
+  if (formatted.includes('undefined')) return null;
   return `${formatted}/s`;
 }
 

@@ -39,6 +39,7 @@ import { runEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/li
 import { useManifest } from '@/lib/manifest/hooks';
 import { ManifestComponent } from '@/lib/manifest/api';
 import ModelComponentsProperties from './model/ModelComponentsProperties'
+import { v4 as uuidv4 } from 'uuid';
 interface PropertiesPanelProps {
     panelSize: number;
 }
@@ -336,7 +337,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   // Reflect engine job lifecycle into clip.modelStatus for internal gating
   useEffect(() => {
     if (!clipId) return;
-    if (isEngineProcessing) {
+    if (isEngineProcessing) { 
       updateClip(clipId, { modelStatus: 'running' });
     } else if (isEngineComplete) {
       updateClip(clipId, { modelStatus: 'complete' });
@@ -345,14 +346,35 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     }
   }, [clipId, isEngineProcessing, isEngineComplete, isEngineFailed, updateClip]);
 
+  const [isPreparingPreprocessor, setIsPreparingPreprocessor] = useState(false);
+
   const handleRunPreprocessor = useCallback(async () => {
     // get the preprocessor 
     if (!selectedPreprocessorId) return;
-    clearJob(selectedPreprocessorId);
+    // Clear any previous job data if present
+    if (preprocessor?.activeJobId) {
+      clearJob(preprocessor.activeJobId);
+    }
     const clip = getClipFromPreprocessorId(selectedPreprocessorId);
     if (!preprocessor) return;
     if (!clip) return;
     if (!clip.src) return;
+
+    // If backend is remote and src is local-like, inform user and show preparing state
+    // Always show preparing state for preprocessors; toast only if an upload will actually occur
+    setIsPreparingPreprocessor(true);
+    try {
+      const { getBackendIsRemote, getFileShouldUpload } = await import('@app/preload');
+      const remoteRes = await getBackendIsRemote();
+      const isRemote = !!(remoteRes && remoteRes.success && remoteRes.data?.isRemote);
+      if (isRemote) {
+        const su = await getFileShouldUpload(String(clip.src || ''));
+        const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
+        if (shouldUpload) {
+          toast.info('Uploading source media to server…');
+        }
+      }
+    } catch {}
 
     // need to convert our startFrame and endFrame back to where it would be with real FPS
     const clipMediaInfo = getMediaInfoCached(clip.src);
@@ -366,15 +388,20 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     startFrameReal += clipMediaStartFrame;
     endFrameReal += clipMediaStartFrame;
     
+    // Generate a unique job id for this preprocessor run and persist on the preprocessor
+    const activeJobId = uuidv4();
+    try { updatePreprocessor(clip.clipId, preprocessor.id, { status: 'running', activeJobId, jobIds: [...(preprocessor.jobIds || []), activeJobId] }); } catch {}
+
     const response = await runPreprocessor({
       start_frame: startFrameReal,
       end_frame: endFrameReal,
       preprocessor_name: preprocessor.preprocessor.id,
       input_path: clip.src,
-      job_id: preprocessor.id,
+      job_id: activeJobId,
       download_if_needed: true,
       params: preprocessor.values,
     });
+    setIsPreparingPreprocessor(false);
     if (response.success) {
       toast.success(`Preprocessor ${preprocessor.preprocessor.name} run started successfully`);
       updatePreprocessor(clip.clipId, preprocessor.id, { status: 'running' });
@@ -390,11 +417,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (preprocessor.status !== 'running') return;
     
     // Stop tracking the job and clear it
-    stopTracking(selectedPreprocessorId);
-    clearJob(selectedPreprocessorId);
+    const jobId = preprocessor.activeJobId || selectedPreprocessorId;
+    stopTracking(jobId);
+    clearJob(jobId);
     
     // Update preprocessor status to idle
-    updatePreprocessor(clip.clipId, preprocessor.id, { status: undefined });
+    updatePreprocessor(clip.clipId, preprocessor.id, { status: undefined, activeJobId: undefined });
     
     toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor, preprocessor]);
@@ -407,10 +435,13 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (!modelValues) return;
     const inputs = (clip as ModelClipProps)?.manifest?.spec.ui?.inputs || []; 
 
+    const clipValues: Record<string, AnyClipProps> = {};
+
     // loop through modelValues to pre-export media inputs
     for (const input of inputs) {
        if (String(input.type).startsWith('image')) {
         const value = modelValues[input.id] as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]; selection?:string};
+        clipValues[input.id] = value;
         if (!value || value.selection === '') continue;
         // we need to check clip type
         
@@ -562,10 +593,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           }
         
         }
-        
         else {
           const frame = value.type === 'video' || value.type === 'group' ? value.selectedFrame : 0;
           if (exportClips.length === 1) {
+            
             const result = await exportClip({
               mode: 'image',
               width: width,
@@ -574,11 +605,13 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               clip: exportClips[0],
               fps: fps,
             });
+            
             // save the result to the file system
             if (result instanceof Blob) {
               const buf = new Uint8Array(await result.arrayBuffer());
               absolutePath = await savePreviewImage(buf, { fileNameHint: `${clipId}_${input.id}_${frame}` });
             }
+
           }
           else {
             const result = await exportSequence({
@@ -601,6 +634,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           type: 'image',
           src: absolutePath,
         };
+
 
        } else if (String(input.type).startsWith('audio')) {
           const value = modelValues[input.id] as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]};
@@ -684,7 +718,15 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       const manifestForDefaults = manifestData || (clip as ModelClipProps)?.manifest;
       const selectedDefaults = buildSelectedComponentDefaults(manifestForDefaults);
       const selectedComponents = { ...selectedDefaults, ...selectedExisting };
-      const res = await runEngine({ manifest_id: manifestId, inputs: engineInputs, selected_components: selectedComponents, job_id: clipId });
+
+      if (!selectedComponents.attention) {
+        selectedComponents.attention = { name: 'sdpa' };
+      }
+      
+      const activeJobId = uuidv4();
+
+
+      const res = await runEngine({ manifest_id: manifestId, inputs: engineInputs, selected_components: selectedComponents, job_id: activeJobId });
       if (res.success) {
         toast.success(`Generation started for ${(clip as ModelClipProps)?.manifest?.metadata?.name}`);
         const returnedJobId = (res.data as any)?.job_id || clipId;
@@ -693,7 +735,28 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           try { clearEngineJob(returnedJobId); } catch {}
           try { await startEngineTracking(returnedJobId); } catch {}
         }
-        try { updateClip(clipId, { modelStatus: 'pending' }); } catch {}
+        try {
+
+          // we need to replace engineInputs with clipValues
+          const updatedEngineInputs = { ...engineInputs };
+          for (const [key, value] of Object.entries(clipValues)) {
+            updatedEngineInputs[key] = value;
+          }
+          const existingGenerations = ((clip as ModelClipProps)?.generations ?? []);
+          const newGeneration = {
+            jobId: activeJobId,
+            modelStatus: 'pending' as const,
+            src: '',
+            createdAt: Date.now(),
+            selectedComponents: selectedComponents,
+            values: updatedEngineInputs,
+          };
+          updateClip(clipId, {
+            activeJobId: activeJobId,
+            modelStatus: 'pending',
+            generations: [...existingGenerations, newGeneration],
+          } as any);
+        } catch {}
         // Switch to Progress tab for visibility
         try { setSelectedTab('model-progress'); } catch {}
       } else {
@@ -705,10 +768,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       setIsPreparingGeneration(false);
     }
 
-  }, [selectedClipIds, getModelValues]);
+  }, [selectedClipIds, getModelValues, clip]);
 
   const handleStopGeneration = useCallback(async () => {
-    const targetJobId = engineJobId || clipId;
+    const targetJobId = engineJobId || (clip as ModelClipProps)?.activeJobId;
     if (!targetJobId) return;
     try {
       const res = await cancelEngine(targetJobId);
@@ -723,7 +786,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     try { await stopEngineTracking(targetJobId); } catch {}
     try { clearEngineJob(targetJobId); } catch {}
     try { if (clipId) updateClip(clipId, { modelStatus: undefined }); } catch {}
-  }, [clipId, engineJobId, stopEngineTracking, clearEngineJob]);
+  }, [clipId, engineJobId, stopEngineTracking, clearEngineJob, (clip as ModelClipProps)?.activeJobId]);
 
   const height = useMemo(() => {
     if (hasValidPreprocessor || hasModel) {
@@ -734,6 +797,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     }
     return '100%';
   }, [hasValidPreprocessor, hasModel, isModelDownloaded]);
+
 
   return (
     <div className="h-full w-full min-w-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden' }}>
@@ -809,7 +873,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             <ModelGenerationProperties clipId={clipId} />
           </TabsContent>}
           {(hasModel) && <TabsContent value="model-progress" className="min-w-0 m-0"> 
-            <ProgressPanel clipId={effectiveJobId || clipId} />
+            <ProgressPanel clipId={clipId} />
           </TabsContent>}
           {(hasModel) && <TabsContent value="model-architecture" className="min-w-0 m-0"> 
             <ModelComponentsProperties clipId={clipId} />
@@ -821,12 +885,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       {hasValidPreprocessor && (
         <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 100, pointerEvents: 'auto' }}>
           <button
+            disabled={isPreparingPreprocessor}
             onClick={preprocessor?.status === 'running' ? handleStopPreprocessor : handleRunPreprocessor}
-            className="w-full py-2.5 px-6 rounded-lg font-medium text-[12px] flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90"
-            style={{
-              backgroundColor: preprocessor?.status === 'running' ? '#DC2626' : '#A477C4',
-              color: '#FFFFFF'
-            }}
+            className={cn("w-full py-2.5 px-6 rounded-lg font-medium text-[12px] flex items-center disabled:opacity-60 text-brand-lighter disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50 justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90", 
+              preprocessor?.status === 'running' ? 'bg-red-500' : 'bg-brand-accent-two-shade ',
+              isPreparingPreprocessor ? 'bg-brand-light/10! text-brand-light/60!' : ''
+            )}
             onMouseEnter={(e) => {
               if (preprocessor?.status === 'running') {
                 e.currentTarget.style.backgroundColor = '#B91C1C';
@@ -847,7 +911,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             ) : (
               <LuMonitorCog size={16} />
             )}
-            <span>{preprocessor?.status === 'running' ? 'Stop' : 'Preprocess'}</span>
+            <span>{preprocessor?.status === 'running' ? 'Stop' : (isPreparingPreprocessor ? 'Preparing…' : 'Preprocess')}</span>
           </button>
         </div>
       )}
