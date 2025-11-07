@@ -136,6 +136,7 @@ class AppDirProtocol implements AppModule {
 
           const nodeStream = fs.createReadStream(filePath, { start, end });
           const webStream = nodeStreamToWebStream(nodeStream);
+          console.log(webStream, "webStream");
           
           return new Response(webStream, {
             status: 206,
