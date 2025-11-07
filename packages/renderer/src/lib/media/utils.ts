@@ -101,14 +101,28 @@ export const getMediaInfo = async (path: string, options?: { fullStats?: boolean
 
         // Route image reads through app protocol to handle remote cache mirroring
         let imageReadUrl = path;
+        let fsPathForImage: string | null = null;
+        const primarySourceDir = options?.sourceDir ?? 'user-data';
+        const secondarySourceDir = primarySourceDir === 'user-data' ? 'apex-cache' : 'user-data';
         try {
-            const fsPath = fileURLToPath(hasHashSuffix ? originalPath : path);
-            const url = new URL(`app://${options?.sourceDir ?? 'user-data'}/${fsPath}`);
+            fsPathForImage = fileURLToPath(hasHashSuffix ? originalPath : path);
+            const url = new URL(`app://${primarySourceDir}/${fsPathForImage}`);
             imageReadUrl = url.toString();
         } catch {}
 
         // get height and width from the file    
-        const metadata = await readImageMetadataFast(imageReadUrl);
+        let metadata;
+        try {
+            metadata = await readImageMetadataFast(imageReadUrl);
+        } catch (e) {
+            // If reading via primary sourceDir fails (e.g., 404), try apex-cache as backup
+            if (fsPathForImage) {
+                const fallbackUrl = new URL(`app://${secondarySourceDir}/${fsPathForImage}`);
+                metadata = await readImageMetadataFast(fallbackUrl.toString());
+            } else {
+                throw e;
+            }
+        }
 
         const mediaInfo = {
             path,
@@ -147,10 +161,12 @@ export const getMediaInfo = async (path: string, options?: { fullStats?: boolean
 
     // Prefer streaming via UrlSource, but fall back to BlobSource if the server truncates streams or range reads fail
     let input: Input | null = null;
+    let filePath: string | null = null;
+    const primarySourceDir = options?.sourceDir ?? 'user-data';
+    const secondarySourceDir = primarySourceDir === 'user-data' ? 'apex-cache' : 'user-data';
     try {
-        const filePath = fileURLToPath(hasHashSuffix ? originalPath : path);  
-        // replace userDatab path 
-        const url = new URL(`app://${options?.sourceDir ?? 'user-data'}/${filePath}`);
+        filePath = fileURLToPath(hasHashSuffix ? originalPath : path);  
+        const url = new URL(`app://${primarySourceDir}/${filePath}`);
         input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
     } catch (e) {
         input = null;
@@ -182,18 +198,49 @@ export const getMediaInfo = async (path: string, options?: { fullStats?: boolean
     }
 
     let infoBundle: any | null = null;
+    // Attempt with primary sourceDir
     try {
         if (!input) throw new Error('UrlSource init failed');
         infoBundle = await gatherInfo(input, quickLoad);
     } catch (e) {
-        // Fallback: fetch the entire resource as a Blob and use BlobSource to avoid streaming issues
+        // Try secondary sourceDir via UrlSource
         try {
-            const buffer = await readFileBuffer(hasHashSuffix ? originalPath : path);
-            const blob = new Blob([buffer as unknown as ArrayBuffer]);
-            const blobInput = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });
-            infoBundle = await gatherInfo(blobInput, quickLoad);
-        } catch (fallbackErr) {
-            throw fallbackErr;
+            if (!filePath) throw new Error('Missing filePath');
+            const fallbackUrl = new URL(`app://${secondarySourceDir}/${filePath}`);
+            const input2 = new Input({ formats: ALL_FORMATS, source: new UrlSource(fallbackUrl) });
+            infoBundle = await gatherInfo(input2, quickLoad);
+            input = input2; // use the working input as originalInput
+        } catch (e2) {
+            // Fallback: fetch the entire resource as a Blob and use BlobSource to avoid streaming issues
+            try {
+                if (!filePath) throw new Error('Missing filePath');
+                // Try primary app protocol first
+                const primaryUrlStr = new URL(`app://${primarySourceDir}/${filePath}`).toString();
+                const bufferPrimary = await readFileBuffer(primaryUrlStr);
+                const blobP = new Blob([bufferPrimary as unknown as ArrayBuffer]);
+                const blobInputP = new Input({ formats: ALL_FORMATS, source: new BlobSource(blobP) });
+                infoBundle = await gatherInfo(blobInputP, quickLoad);
+            } catch (e3) {
+                try {
+                    if (!filePath) throw new Error('Missing filePath');
+                    // Try secondary app protocol next
+                    const secondaryUrlStr = new URL(`app://${secondarySourceDir}/${filePath}`).toString();
+                    const bufferSecondary = await readFileBuffer(secondaryUrlStr);
+                    const blobS = new Blob([bufferSecondary as unknown as ArrayBuffer]);
+                    const blobInputS = new Input({ formats: ALL_FORMATS, source: new BlobSource(blobS) });
+                    infoBundle = await gatherInfo(blobInputS, quickLoad);
+                } catch (e4) {
+                    // Last resort: original path provided
+                    try {
+                        const buffer = await readFileBuffer(hasHashSuffix ? originalPath : path);
+                        const blob = new Blob([buffer as unknown as ArrayBuffer]);
+                        const blobInput = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });
+                        infoBundle = await gatherInfo(blobInput, quickLoad);
+                    } catch (fallbackErr) {
+                        throw fallbackErr;
+                    }
+                }
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 import { useJobProgress, useEngineJobActions } from '../../../lib/engine/hooks'
 import { useClipStore } from '@/lib/clip'
 import { ModelClipProps } from '@/lib/types'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { IoRefreshOutline } from 'react-icons/io5'
 
 interface ProgressPanelProps {
@@ -21,20 +21,30 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
     try { startTracking(clipId); } catch {}
   }, [clipId, startTracking]);
 
-  const seenUpdateKeys = new Set<string>()
-  const displayUpdates = ((job?.updates || []))
-    .slice()
-    .reverse()
-    .filter((u) => {
-      const pct = typeof u.progress === 'number' ? Math.round(u.progress) : undefined
-      const msg = (u.message || job?.currentStep || 'Working...').toString().trim().replace(/\s+/g, ' ')
-      if (msg.includes('Preview frame')) return false;
-      const status = (u as any)?.status || ''
-      const key = `${msg}|${pct ?? ''}|${status}`
-      if (seenUpdateKeys.has(key)) return false
-      seenUpdateKeys.add(key)
-      return true
-    })
+  // Build chronological (oldest -> newest) updates,
+  // skipping preview frames and deduping while keeping the most recent duplicate
+  const rawUpdates = (job?.updates || []) as Array<any>
+  const dedupeKeys = new Set<string>()
+  const filteredFromEnd: Array<any> = []
+  for (let i = rawUpdates.length - 1; i >= 0; i--) {
+    const u = rawUpdates[i]
+    const pct = typeof u.progress === 'number' ? Math.round(u.progress) : undefined
+    const msg = (u.message || job?.currentStep || 'Working...').toString().trim().replace(/\s+/g, ' ')
+    if (msg.includes('Preview frame')) continue
+    const status = (u as any)?.status || ''
+    const key = `${msg}|${pct ?? ''}|${status}`
+    if (dedupeKeys.has(key)) continue
+    dedupeKeys.add(key)
+    filteredFromEnd.push(u)
+  }
+  const displayUpdates = filteredFromEnd.reverse()
+
+  // Auto-scroll to bottom as updates change
+  const listRef = useRef<HTMLUListElement | null>(null)
+  useEffect(() => {
+    if (!listRef.current) return
+    listRef.current.scrollTop = listRef.current.scrollHeight
+  }, [displayUpdates.length])
 
 
   const handleRefresh = async () => {
@@ -60,7 +70,7 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
           <IoRefreshOutline className={spinning ? 'animate-spin duration-500' : ''} />
         </span>
       </div>
-      {displayUpdates.length > 0 && <ul className="space-y-3">
+      {displayUpdates.length > 0 && <ul ref={listRef} className="space-y-3 max-h-64 overflow-y-auto">
         {displayUpdates.map((u, idx) => {
           const pct = typeof u.progress === 'number' ? Math.round(u.progress) : undefined
           const d = u.time ? new Date(u.time) : null

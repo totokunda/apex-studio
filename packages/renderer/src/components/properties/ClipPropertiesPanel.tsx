@@ -40,6 +40,7 @@ import { useManifest } from '@/lib/manifest/hooks';
 import { ManifestComponent } from '@/lib/manifest/api';
 import ModelComponentsProperties from './model/ModelComponentsProperties'
 import { v4 as uuidv4 } from 'uuid';
+import FrameInterpolateProperties from './FrameInterpolateProperties'
 interface PropertiesPanelProps {
     panelSize: number;
 }
@@ -71,6 +72,11 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const [isPreparingGeneration, setIsPreparingGeneration] = useState(false);
   const [engineJobId, setEngineJobId] = useState<string | null>(null);
   const getModelValues = useClipStore((s) => s.getModelValues);
+  const hasFrameInterpolate = useMemo(() => {
+    if (clip?.type === 'video') return true;
+    return false;
+  }, [clip?.type]);
+
   // check if clip has audio if it is video 
   const hasDuration = useMemo(() => {
    if (!selectedPreprocessorId) {
@@ -312,6 +318,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (currentTab === "duration" && (hasDuration || hasFilter)) return "duration";
     if (currentTab === "appearance" && hasAppearance) return "appearance";
     if (currentTab === "adjust" && hasAdjust) return "adjust";
+    if (currentTab === "enhance" && hasFrameInterpolate) return "enhance"; 
     if (currentTab === "preprocessor-parameters" && hasValidPreprocessor) return "preprocessor-parameters";
     if (currentTab === "preprocessor-duration" && hasValidPreprocessor && hasPreprocessorDuration) return "preprocessor-duration";
     if (currentTab === "model-inputs" && hasModel) return "model-inputs";
@@ -324,6 +331,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (hasAudio) return "audio";
     if (hasAppearance) return "appearance";
     if (hasAdjust) return "adjust";
+    if (hasFrameInterpolate) return "enhance";
     return "duration"; // fallback
   };
 
@@ -332,7 +340,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (validTab !== selectedTab) {
       setSelectedTab(validTab);
     }
-  }, [clipId, hasLine, hasMask, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust, hasPreprocessorDuration, tool, (clip as ModelClipProps | undefined)?.modelStatus]);
+  }, [clipId, hasLine, hasMask, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust, hasPreprocessorDuration, tool, (clip as ModelClipProps | undefined)?.modelStatus, hasFrameInterpolate]);
 
   // Reflect engine job lifecycle into clip.modelStatus for internal gating
   useEffect(() => {
@@ -718,6 +726,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       const manifestForDefaults = manifestData || (clip as ModelClipProps)?.manifest;
       const selectedDefaults = buildSelectedComponentDefaults(manifestForDefaults);
       const selectedComponents = { ...selectedDefaults, ...selectedExisting };
+  
 
       if (!selectedComponents.attention) {
         selectedComponents.attention = { name: 'sdpa' };
@@ -826,6 +835,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               </TabsTrigger>}
             {(hasAdjust && !hasMask) && <TabsTrigger value="adjust" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Adjust</TabsTrigger>}
             {(hasAppearance && !hasMask) && <TabsTrigger value="appearance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
+            {(hasFrameInterpolate) && <TabsTrigger value="enhance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Enhance</TabsTrigger>}
           </TabsList>
           <LuChevronRight onClick={() => {
             if (tabRef.current) {
@@ -844,7 +854,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasLine) && <TabsContent value="line" className="min-w-0 m-0">
             <LineProperties clipId={clipId} />
           </TabsContent>}
-          
           {(hasText) && <TabsContent value="text" className="min-w-0 m-0">  <TextProperties clipId={clipId} /> </TabsContent>}
           {(hasTransform && !hasMask) && <TabsContent  value="transform" className="min-w-0 divide-y divide-brand-light/10 m-0">
             <PositionProperties clipId={clipId}  />
@@ -877,6 +886,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           </TabsContent>}
           {(hasModel) && <TabsContent value="model-architecture" className="min-w-0 m-0"> 
             <ModelComponentsProperties clipId={clipId} />
+          </TabsContent>}
+            {(hasFrameInterpolate) && <TabsContent value="enhance" className="min-w-0 m-0">
+            <FrameInterpolateProperties clipId={clipId} />
           </TabsContent>}
           </div>
         </ScrollArea>

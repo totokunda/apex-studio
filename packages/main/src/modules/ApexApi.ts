@@ -59,6 +59,7 @@ export class ApexApi implements AppModule {
     this.registerWebSocketHandlers();
     this.registerJobHandlers();
     this.registerPreprocessorHandlers();
+    this.registerPostprocessorHandlers();
     this.registerEngineHandlers();
     this.registerComponentsHandlers();
     this.registerMaskHandlers();
@@ -447,6 +448,52 @@ export class ApexApi implements AppModule {
     });
 
     // WebSocket handlers migrated to unified ws:* IPC
+  }
+
+  async #preparePostprocessorRequest<T extends { input_path: string }>(request: T): Promise<T> {
+    if (!this.#isRemoteBackend()) return request;
+    const uploaded = await this.#uploadLocalFileIfNeeded(request.input_path);
+    if (uploaded) {
+      return { ...request, input_path: uploaded };
+    }
+    return request;
+  }
+
+  private registerPostprocessorHandlers(): void {
+    // Generic postprocessor runner based on method/task
+    ipcMain.handle('postprocessor:run', async (_event, request: any) => {
+      try {
+        const { method } = request || {};
+        if (!method || typeof method !== 'string') {
+          return { success: false, error: 'Missing method' };
+        }
+
+        // Normalize file URL for local requests; remote upload handled in prepare step
+        if (request?.input_path?.startsWith?.('file://')) {
+          try { request.input_path = fileURLToPath(request.input_path); } catch {}
+        }
+
+        // Map based on method
+        if (method === 'frame-interpolate') {
+          const payload = await this.#preparePostprocessorRequest({
+            input_path: String(request.input_path || ''),
+            target_fps: Number(request.target_fps || 0),
+            job_id: request.job_id,
+            exp: request.exp,
+            scale: request.scale,
+          });
+          return this.makeRequest<{job_id: string; status: string; message?: string}>(
+            'POST',
+            '/postprocessor/frame-interpolate',
+            payload,
+          );
+        }
+
+        return { success: false, error: `Unknown postprocessor method: ${method}` };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to run postprocessor' };
+      }
+    });
   }
 
   private registerEngineHandlers(): void {

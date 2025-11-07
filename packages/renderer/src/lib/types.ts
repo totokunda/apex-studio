@@ -69,6 +69,7 @@ export type PreprocessorClipType = VideoClipProps | ImageClipProps
 
 export type VideoClipProps = ClipProps & MediaAdjustments & {
     src: string;
+    originalSrc?: string;
     type: 'video';
     // Intrinsic media dimensions for consistent aspect ratio
     mediaWidth?: number;
@@ -84,6 +85,7 @@ export type VideoClipProps = ClipProps & MediaAdjustments & {
 
 export type ImageClipProps = ClipProps & MediaAdjustments & {
     src: string;
+    originalSrc?: string;
     type: 'image';
     // Intrinsic media dimensions for consistent aspect ratio
     mediaWidth?: number;
