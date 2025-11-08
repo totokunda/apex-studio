@@ -5,12 +5,15 @@ import { getMediaInfo, getMediaInfoCached } from '@/lib/media/utils';
 import PropertiesSlider from './PropertiesSlider';
 import { LuInfo, LuPlay, LuX } from 'react-icons/lu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { runPostprocessor, getPostprocessorStatus, cancelPostprocessor } from '@/lib/postprocessor/api';
 import { usePostprocessorJob } from '@/lib/postprocessor/hooks';
 import { useControlsStore } from '@/lib/control';
 import { pathToFileURLString } from '@app/preload';
 import { getPreviewPath } from '@app/preload';
 import { exportClip } from '@app/export-renderer';
+import { v4 as uuidv4 } from 'uuid';
+import { cn } from '@/lib/utils';
 
 interface FrameInterpolatePropertiesProps {
   clipId: string;
@@ -29,7 +32,8 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
   const { progress, isComplete, isFailed, error } = usePostprocessorJob(jobId);
   const updateClip = useClipStore((s) => s.updateClip);
   const fps = useControlsStore((s) => s.fps);
-  const [targetFps, setTargetFps] = useState<number>(sourceFps * 2);
+  const [multiplier, setMultiplier] = useState<number>(2);
+  const targetFps = useMemo(() => Math.round(sourceFps * multiplier), [sourceFps, multiplier]);
   const originalSrc = (clip as any)?.originalSrc as string | undefined;
   const hasInterpolated = Boolean(originalSrc && clip?.src && clip.src !== originalSrc);
   const [scale, setScale] = useState<number>(1);
@@ -67,14 +71,23 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
           ?? (clip as any)?.transform?.height
           ?? 0;
 
-        const filename = await getPreviewPath(`${clip.clipId}_frame_interp_src_${start}_${end}`);
-        const result = await exportClip({
+        const filename = await getPreviewPath(`${clip.clipId}_frame_interp_src_${start}_${end}_${uuidv4()}`);
+        const clipToExport = { ...clip } as any;
+        clipToExport.speed = 1;
+        // Map project frame indices to source frame indices for accurate export at source FPS
+        const startSource = Math.max(0, Math.floor((Number(start) || 0) * Math.max(1, sourceFps) / Math.max(1, fps)));
+        const endSourceRaw = Math.max(0, Math.floor((Number(end) || 0) * Math.max(1, sourceFps) / Math.max(1, fps)));
+        const endSource = Math.max(startSource + 1, endSourceRaw);    
+        clipToExport.startFrame = startSource;
+        clipToExport.endFrame = endSource;
+       const result = await exportClip({
           mode: 'video',
           width: exportWidth || 0,
           height: exportHeight || 0,
-          range: { start, end },
-          clip: (clip as any),
-          fps: fps,
+          range: { start: startSource, end: endSource },
+          clip: clipToExport,
+          fps: sourceFps,
+          includeAudio: true,
           filename,
           encoderOptions: {
             format: 'webm',
@@ -117,11 +130,10 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
           const resultPath = (status?.data as any)?.result?.result_path || (status?.data as any)?.result_path;
           if (status.success && typeof resultPath === 'string' && resultPath) {
             const fileUrl = pathToFileURLString(resultPath);
-            // we need to fetch the media info to get the fps
-            const mediaInfo = await getMediaInfo(fileUrl, {
+            // we need to fetch the media info to get the fps (warm cache)
+            await getMediaInfo(fileUrl, {
               sourceDir: 'apex-cache',
             });
-            console.log(mediaInfo.stats.video?.averagePacketRate);
             if (clip.src !== fileUrl) {
               updateClip(clip.clipId, { src: fileUrl, originalSrc: (clip as any).originalSrc ?? clip.src } as any);
             }
@@ -152,24 +164,38 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
             </div>
         </div>
         <div className='flex flex-col gap-y-3'>
-          <div className="flex items-center justify-between w-full min-w-0">
+          <div className={cn("flex items-center justify-between w-full min-w-0", !hasInterpolated && 'hidden')}>
             <label className="text-brand-light text-[10.5px] font-medium">{hasInterpolated ? 'Interpolated FPS' : 'Source FPS'}</label>
-            <div className="rounded-full py-1 px-3 bg-brand-light/10 text-brand-light text-[10.5px] font-medium border border-brand-light/10">
+            <div className="rounded py-1 px-3 bg-brand-light/10 text-brand-light text-[10.5px] font-medium border border-brand-light/10">
               {sourceFps.toFixed(2)} fps
             </div>
           </div>
           {!hasInterpolated && (
-            <PropertiesSlider
-              label="Target FPS"
-              labelClass='mb-1'
-              value={targetFps}
-              onChange={(v) => setTargetFps(Math.min(240, Math.max(sourceFps, v)))}
-              suffix=" fps"
-              min={sourceFps + 1}
-              max={fps*10}
-              step={1}
-              toFixed={0}
-            />
+            <div className="flex flex-col gap-y-2 w-full min-w-0">
+              
+              <div className="flex items-center w-full min-w-0 gap-x-8 justify-between">
+                <label className="text-brand-light text-[10.5px] font-medium whitespace-nowrap">Target FPS</label>
+                <div className="flex items-center w-full">
+                <div className="flex items-center justify-between min-w-0 w-full gap-x-6">
+                <Select value={String(multiplier)} onValueChange={(v) => setMultiplier(parseInt(v, 10))}>
+                  <SelectTrigger className="!h-7 w-full rounded-l rounded-r-none text-[11px] bg-brand-light/10 border text-brand-light border-brand-light/10 font-medium" size='sm'>
+                    <SelectValue placeholder="2x" />
+                  </SelectTrigger>
+                  <SelectContent className='dark font-poppins'>
+                    {Array.from({ length: 15 }, (_, i) => i + 2).map((m) => (
+                      <SelectItem className="text-[11px]" key={m} value={String(m)}>
+                        {m}x
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+                <div className="rounded-r flex items-center justify-center w-24 px-3 h-7 border-l-0 bg-brand-light/10 text-brand-light text-[10.5px] font-medium border border-brand-light/10">
+                  {targetFps.toFixed(0)} fps
+                </div>
+              </div>
+              </div>
+            </div>
           )}
 
           {!hasInterpolated && (

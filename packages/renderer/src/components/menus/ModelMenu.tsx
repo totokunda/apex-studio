@@ -3,6 +3,7 @@ import { useManifestTypes, useManifests, type ManifestInfo } from '@/lib/manifes
 import { cn } from '@/lib/utils';
 import { ScrollArea } from '../ui/scroll-area';
 import { LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuInfo, LuDownload, LuCheck, LuLoader } from "react-icons/lu";
+import { TbWorldDownload } from 'react-icons/tb';
 import Draggable from '../dnd/Draggable';
 import { useManifestStore } from '@/lib/manifest/store';
 import { useManifest } from '@/lib/manifest/hooks';
@@ -10,6 +11,7 @@ import { useComponentsDownloadStore } from '@/lib/components-download/store';
 import { useShallow } from 'zustand/react/shallow';
 import ModelPage from '../models/ModelPage';
 // check 
+import CategorySidebar from './CategorySidebar';
 
 
 export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, category?: string }> = ({ manifest, isDragging, category }) => {
@@ -311,7 +313,7 @@ const ModelCategory:React.FC<{ category: string, manifests: ManifestInfo[], widt
 
   return (
     <div className="flex flex-col gap-y-1 w-full px-4">
-      <div className="flex items-center justify-between py-2" style={{ maxWidth: width }}>
+      <div className="flex items-center justify-between py-2" style={{ maxWidth: width}}>
         <span className="text-brand-light text-[13px] font-medium">{category}</span>
         <button onClick={onViewAll} className="flex items-center gap-x-1.5 text-brand-light hover:text-brand-light/70 text-[12px] font-medium cursor-pointer transition-colors rounded-md flex-shrink-0">
           <span>View all</span>
@@ -379,6 +381,7 @@ const ModelMenu:React.FC = () => {
   const [scrollWidth, setScrollWidth] = useState(0);
   const categorySectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const DOWNLOADED_CATEGORY = 'Downloaded';
 
   const manifestTypeKeyToLabel = useMemo(() => {
     const map = new Map<string, string>();
@@ -414,8 +417,16 @@ const ModelMenu:React.FC = () => {
     return Array.from(set);
   }, [filteredManifests, manifestTypeKeyToLabel]);
 
+  const hasDownloaded = useMemo(() => {
+    return filteredManifests.some((m) => !!m.downloaded);
+  }, [filteredManifests]);
+
   const handleCategoryClick = (category: string) => {
     setActiveCategory(category);
+    if (category === DOWNLOADED_CATEGORY) {
+      setSelectedCategory(category);
+      return;
+    }
     const section = categorySectionRefs.current[category];
     const viewport = viewportRef.current;
     if (section && viewport) {
@@ -452,6 +463,16 @@ const ModelMenu:React.FC = () => {
       window.removeEventListener('resize', updateWidth);
     };
   }, [selectedCategory, selectedManifestId]);
+
+  // If Downloaded is selected but none exist (e.g., after search), exit that view
+  useEffect(() => {
+    if (selectedCategory === DOWNLOADED_CATEGORY && !hasDownloaded) {
+      setSelectedCategory(null);
+      if (activeCategory === DOWNLOADED_CATEGORY) {
+        setActiveCategory(categories[0] ?? null);
+      }
+    }
+  }, [selectedCategory, hasDownloaded, activeCategory, categories]);
 
   // Sync active category to manual scroll position
   useEffect(() => {
@@ -500,22 +521,37 @@ const ModelMenu:React.FC = () => {
   }
 
   if (selectedCategory) {
-    return (
-      <>
-        <style>{`
-          .carousel-container::-webkit-scrollbar { display: none; }
-        `}</style>
-        <CategoryDetailView
-          category={selectedCategory}
-          manifests={filteredManifests.filter((m) => {
-            const keys = Array.isArray(m.model_type) ? m.model_type : [m.model_type];
-            const labels = keys.map((k) => manifestTypeKeyToLabel.get(k) || k);
-            return labels.includes(selectedCategory);
-          })}
-          onBack={() => setSelectedCategory(null)}
-        />
-      </>
-    );
+    if (selectedCategory === DOWNLOADED_CATEGORY) {
+      return (
+        <>
+          <style>{`
+            .carousel-container::-webkit-scrollbar { display: none; }
+          `}</style>
+          <CategoryDetailView
+            category={DOWNLOADED_CATEGORY}
+            manifests={filteredManifests.filter((m) => m.downloaded)}
+            onBack={() => setSelectedCategory(null)}
+          />
+        </>
+      );
+    } else {
+      return (
+        <>
+          <style>{`
+            .carousel-container::-webkit-scrollbar { display: none; }
+          `}</style>
+          <CategoryDetailView
+            category={selectedCategory}
+            manifests={filteredManifests.filter((m) => {
+              const keys = Array.isArray(m.model_type) ? m.model_type : [m.model_type];
+              const labels = keys.map((k) => manifestTypeKeyToLabel.get(k) || k);
+              return labels.includes(selectedCategory);
+            })}
+            onBack={() => setSelectedCategory(null)}
+          />
+        </>
+      );
+    }
   }
 
   return (
@@ -525,24 +561,14 @@ const ModelMenu:React.FC = () => {
       `}</style>
       <div className="flex flex-col h-full w-full border-t border-brand-light/5 mt-2">
         <div className="flex flex-1 min-h-0 w-full">
-          <div className="flex flex-col border-r border-brand-light/5 min-w-36 w-36 gap-y-1 bg-brand-background">
-            <span className="text-[8.5px] px-2 pt-2.5 mb-1 text-brand-light/60 text-start font-medium">CATEGORIES</span>
-            <div className="flex flex-col gap-y-1 px-1">
-              {categories.map((category) => (
-                <button
-                  key={category}
-                  onClick={() => handleCategoryClick(category)}
-                  className={cn(
-                    "text-start w-full p-[5.5px] px-2 rounded text-[10.5px] font-medium text-brand-light/80 hover:text-brand-light hover:bg-brand/60 transition-colors truncate",
-                    { 'bg-brand/60 text-brand-light': activeCategory === category }
-                  )}
-                  title={category}
-                >
-                  {category}
-                </button>
-              ))}
-            </div>
-          </div>
+          <CategorySidebar
+            categories={categories}
+            activeCategory={activeCategory}
+            onCategoryClick={handleCategoryClick}
+            title="MODELS"
+            persistenceKey="sidebar:model"
+            downloadedItem={hasDownloaded ? { key: DOWNLOADED_CATEGORY, label: 'Downloaded', icon: <TbWorldDownload className="w-3 h-3" /> } : undefined}
+          />
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="w-full p-3 flex-shrink-0">
               <div className="relative bg-brand text-brand-light rounded-md placeholder:text-brand-light/50 items-center flex w-full p-3 space-x-2 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all">

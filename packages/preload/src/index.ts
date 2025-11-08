@@ -20,6 +20,20 @@ function send(channel: string, message: string) {
   return ipcRenderer.invoke(channel, message);
 }
 
+// Safely delete a file from disk. Accepts absolute paths or file:// URLs.
+async function deleteFile(pathOrUrl: string): Promise<void> {
+  try {
+    let p = String(pathOrUrl || '');
+    if (!p) return;
+    if (p.startsWith('file://')) {
+      try { p = fileURLToPath(p); } catch {}
+    }
+    await fsp.rm(p, { force: true });
+  } catch {
+    // swallow
+  }
+}
+
 async function renameMediaPair(convertedOldName: string, convertedNewName: string) {
   return renameMediaPairInRoot(getMediaRootAbsolute(), convertedOldName, convertedNewName);
 }
@@ -1565,6 +1579,7 @@ export {
   getCachePath,
   setCachePath,
   getSystemMemory,
+  deleteFile,
   listPreprocessors,
   getPreprocessor,
   downloadPreprocessor,

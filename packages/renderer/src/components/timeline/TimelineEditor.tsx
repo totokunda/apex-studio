@@ -968,8 +968,6 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
         return;
       }
     }
-
-
     // only look at clips on the target timeline
     if (!targetTimeline) {
       return;

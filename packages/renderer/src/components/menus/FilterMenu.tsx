@@ -4,6 +4,7 @@ import Draggable from '@/components/dnd/Draggable';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { LuSearch, LuChevronLeft, LuChevronRight, LuArrowRight } from "react-icons/lu";
 import { useFiltersStore } from '@/lib/filters/store';
+import CategorySidebar from './CategorySidebar';
 
 
 const FilterItem = ({ filter }: { filter: Filter }) => {
@@ -294,21 +295,13 @@ const FilterMenu = () => {
         }
       `}</style>
       <div className="flex flex-row h-full w-full border-t border-brand-light/5 mt-2 bg-brand-background">
-        <div className="flex flex-col border-r border-brand-light/5 min-w-36 w-36 gap-y-1 bg-brand-background">
-          <span className="text-[8.5px] px-2 pt-2.5 mb-1 text-brand-light/60 text-start font-medium">CATEGORIES</span>
-          <div className="flex flex-col gap-y-1 px-1">
-            {categories.map((category) => (
-              <button
-                key={category}
-                onClick={() => handleCategoryClick(category)}
-                className={"text-start w-full p-[5.5px] px-2 font-medium rounded text-[10.5px]  hover:text-brand-light hover:bg-brand/60 transition-colors truncate " + (activeCategory === category ? "bg-brand/60 text-brand-light" : "text-brand-light/80")}
-                title={category}
-              >
-                {category}
-              </button>
-            ))}
-          </div>
-        </div>
+        <CategorySidebar
+          categories={categories}
+          activeCategory={activeCategory}
+          onCategoryClick={handleCategoryClick}
+          title="FILTERS"
+          persistenceKey="sidebar:filter"
+        />
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="w-full p-3 rounded flex-shrink-0">
             <div className="relative bg-brand text-brand-light rounded-md placeholder:text-brand-light/50 items-center flex w-full p-3 space-x-2 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all">

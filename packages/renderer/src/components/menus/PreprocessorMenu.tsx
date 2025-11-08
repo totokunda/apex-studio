@@ -3,10 +3,12 @@ import { Preprocessor } from '@/lib/preprocessor/api'
 import Draggable from '../dnd/Draggable'
 import { ScrollArea } from '../ui/scroll-area'
 import { LuInfo, LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuDownload, LuImage, LuVideo, LuLoader } from "react-icons/lu";
+import { TbWorldDownload } from 'react-icons/tb';
 import { cn } from '@/lib/utils'
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store'
 import PreprocessorPage from '../preprocessors/PreprocessorPage'
 import { downloadPreprocessor as downloadPreprocessorApi, usePreprocessorJob, useJobProgress, getPreprocessorStatus, usePreprocessorJobStore } from '@/lib/preprocessor/api'
+import CategorySidebar from './CategorySidebar'
 
 export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?: boolean, onMoreInfo?: (id: string) => void}> = ({preprocessor, isDragging, onMoreInfo}) => {
     const isDownloaded = !!preprocessor.is_downloaded;
@@ -318,8 +320,13 @@ const PreprocessorMenu:React.FC = () => {
     const [scrollWidth, setScrollWidth] = useState(0);
     const categorySectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
     const [activeCategory, setActiveCategory] = useState<string | null>(null);
+    const DOWNLOADED_CATEGORY = 'Downloaded';
     const handleCategoryClick = (category: string) => {
         setActiveCategory(category);
+        if (category === DOWNLOADED_CATEGORY) {
+            setSelectedCategory(category);
+            return;
+        }
         const section = categorySectionRefs.current[category];
         const viewport = viewportRef.current;
         
@@ -345,6 +352,10 @@ const PreprocessorMenu:React.FC = () => {
             preprocessor.category.toLowerCase().includes(query)
         );
     }, [preprocessors, searchQuery]);
+
+    const hasDownloaded = useMemo(() => {
+        return filteredPreprocessors.some((p) => !!p.is_downloaded);
+    }, [filteredPreprocessors]);
 
     const categories = useMemo(() => {
         setActiveCategory(preprocessors?.[0]?.category || null);
@@ -432,6 +443,16 @@ const PreprocessorMenu:React.FC = () => {
         };
     }, [categories, selectedCategory, selectedPreprocessorId, activeCategory]);
 
+    // If Downloaded is selected but none exist (e.g., after search), exit that view
+    useEffect(() => {
+        if (selectedCategory === DOWNLOADED_CATEGORY && !hasDownloaded) {
+            setSelectedCategory(null);
+            if (activeCategory === DOWNLOADED_CATEGORY) {
+                setActiveCategory(categories[0] ?? null);
+            }
+        }
+    }, [selectedCategory, hasDownloaded, activeCategory, categories]);
+
     if (selectedPreprocessorId) {
         return (
             <PreprocessorPage preprocessorId={selectedPreprocessorId} onBack={() => setSelectedPreprocessorId(null)} />
@@ -439,6 +460,23 @@ const PreprocessorMenu:React.FC = () => {
     }
 
     if (selectedCategory) {
+        if (selectedCategory === DOWNLOADED_CATEGORY) {
+            return (
+                <>
+                    <style>{`
+                        .carousel-container::-webkit-scrollbar {
+                            display: none;
+                        }
+                    `}</style>
+                    <CategoryDetailView 
+                        category={DOWNLOADED_CATEGORY}
+                        preprocessors={filteredPreprocessors.filter(p => !!p.is_downloaded)}
+                        onBack={() => setSelectedCategory(null)}
+                        onMoreInfo={(id) => setSelectedPreprocessorId(id)}
+                    />
+                </>
+            );
+        }
         return (
             <>
                 <style>{`
@@ -466,24 +504,14 @@ const PreprocessorMenu:React.FC = () => {
         <div className="flex flex-col h-full w-full border-t border-brand-light/5 mt-2">
 
             <div className="flex flex-1 min-h-0 w-full">
-                <div className="flex flex-col border-r border-brand-light/5 min-w-36 w-36 gap-y-1 bg-brand-background">
-                    <span className="text-[8.5px] px-2 pt-2.5 mb-1 text-brand-light/60 text-start font-medium">CATEGORIES</span>
-                    <div className="flex flex-col gap-y-1 px-1">
-                        {categories.map((category) => (
-                            <button
-                                key={category}
-                                onClick={() => handleCategoryClick(category)}
-                                className={cn(
-                                    "text-start w-full p-[5.5px] px-2 rounded text-[10.5px] font-medium text-brand-light/80 hover:text-brand-light hover:bg-brand/60 transition-colors truncate",
-                                    { 'bg-brand/60 text-brand-light': activeCategory === category }
-                                )}
-                                title={category}
-                            >
-                                {category}
-                            </button>
-                        ))}
-                    </div>
-                </div>
+                <CategorySidebar
+                    categories={categories}
+                    activeCategory={activeCategory}
+                    onCategoryClick={handleCategoryClick}
+                    title="PREPROCESSORS"
+                    persistenceKey="sidebar:preprocessor"
+                    downloadedItem={hasDownloaded ? { key: DOWNLOADED_CATEGORY, label: 'Downloaded', icon: <TbWorldDownload className="w-3 h-3" /> } : undefined}
+                />
                 <div className="flex-1 flex flex-col overflow-hidden">
                     <div className="w-full p-3 flex-shrink-0">
                         <div className="relative bg-brand text-brand-light rounded-md placeholder:text-brand-light/50 items-center flex w-full p-3 space-x-2 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all">

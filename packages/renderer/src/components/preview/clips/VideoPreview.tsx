@@ -691,7 +691,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
         iteratorRef.current = await getVideoIterator(selectedSrc, { mediaInfo: mediaInfo.current || undefined, fps: clipFps, startIndex: startIdx, endIndex: targetEndFrame, isolationKey: instanceIsolationKeyRef.current });
 
-
         try {
             for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
                 if (myToken !== drawTokenRef.current && !offscreenFast) break;

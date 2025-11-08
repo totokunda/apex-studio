@@ -1,6 +1,6 @@
 import { blitDrawing, blitImage, blitShape, blitText, blitVideo, cleanupVideoDecoders, type ImageClipProps as BlitImageClipProps, type VideoClipProps as BlitVideoClipProps, type TextClipProps as BlitTextClipProps, type ShapeClipProps as BlitShapeClipProps, type DrawingClipProps as BlitDrawingClipProps } from './blit';
 import { getVideoFrameIterator } from '../../../packages/renderer/src/lib/media/video';
-import { renderAudioMixWithFfmpeg } from '@app/preload';
+import { renderAudioMixWithFfmpeg, deleteFile } from '@app/preload';
 import type { WrappedCanvas } from 'mediabunny';
 import { acquireHaldClut, releaseHaldClut } from './webgl-filters/hald-clut-singleton';
 import { createApplicatorFromClip, FfmpegEncoderOptionsNoFilename, FfmpegFrameEncoder} from './index';
@@ -321,6 +321,7 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
     }
   };
 
+  let audioPath: string | undefined = undefined;
   try {
     if (mode === 'image') {
       const frame = typeof imageFrame === 'number' ? imageFrame : startFrame;
@@ -333,7 +334,7 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
     // Determine audio usage
     const audioClips = (clips.filter(c => (c as any).type === 'audio') as unknown[]) as ExportAudioClip[];
     const videoAudioClips = includeAudio
-      ? (clips.filter(c => (c as any).type === 'video' && typeof (c as any)?.audioSrc === 'string' && !!(c as any)?.audioSrc) as unknown[]) as ExportVideoClip[]
+      ? (clips.filter(c => (c as any).type === 'video') as unknown[]) as ExportVideoClip[]
       : ([] as ExportVideoClip[]);
     const allAudio = clips.length > 0 && clips.every(c => (c as any).type === 'audio');
 
@@ -354,7 +355,6 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
       return outPath || undefined;
     }
 
-    let audioPath: string | undefined = undefined;
     if (includeAudio) {
       const specs = [
         ...audioClips.map((c) => ({
@@ -368,7 +368,7 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
           speed: (() => { const s = Number((c as any)?.speed ?? 1); return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1; })(),
         })),
         ...videoAudioClips.map((c) => ({
-          src: String((c as any).audioSrc || ''),
+          src: String((c as any).src || ''),
           startFrame: Number(c.startFrame) || 0,
           endFrame: typeof c.endFrame === 'number' ? Number(c.endFrame) : endFrame,
           trimStart: Math.max(0, Number((c as any)?.trimStart) || 0),
@@ -376,7 +376,7 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
           fadeInSec: 0,
           fadeOutSec: 0,
           speed: (() => { const s = Number((c as any)?.speed ?? 1); return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1; })(),
-        })).filter(s => !!s.src),
+        })),
       ];
       if (specs.length > 0) {
         const outPath = await renderAudioMixToFile(specs, startFrame, endFrame, fps, 'wav', (filename ?? 'temp_audio') + '.wav');
@@ -397,6 +397,9 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
     const result = await encoder.finalize();
     return result;
   } finally {
+    try {
+      if (audioPath) await deleteFile(audioPath);
+    } catch {}
     try { cleanupVideoDecoders(); } catch {}
     releaseHaldClut();
   }
@@ -543,6 +546,7 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
     }
   };
 
+  let audioPath: string | undefined = undefined;
   try {
     if (mode === 'image') {
       const frame = typeof imageFrame === 'number' ? imageFrame : startFrame;
@@ -557,10 +561,9 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
     } 
     
     // Optional: include audio when exporting a single video clip if an audio source is attached
-    let audioPath: string | undefined = undefined;
-    if (includeAudio && clip.type === 'video' && typeof (clip as any)?.audioSrc === 'string' && !!(clip as any)?.audioSrc) {
+    if (includeAudio && clip.type === 'video') {
       const spec = [{
-        src: String((clip as any).audioSrc),
+        src: String((clip as any).src),
         startFrame: Number(clip.startFrame) || 0,
         endFrame: typeof clip.endFrame === 'number' ? Number(clip.endFrame) : endFrame,
         trimStart: Math.max(0, Number((clip as any)?.trimStart) || 0),
@@ -587,6 +590,9 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
     const result = await encoder.finalize();
     return result;
   } finally {
+    try {
+      if (audioPath) await deleteFile(audioPath);
+    } catch {}
     try { cleanupVideoDecoders(); } catch {}
     releaseHaldClut();
   }
