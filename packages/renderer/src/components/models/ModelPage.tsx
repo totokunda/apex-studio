@@ -6,7 +6,7 @@ import type { ManifestComponent, ManifestComponentModelPathItem } from '@/lib/ma
 import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { deleteComponent as deleteComponentApi } from '@/lib/components-download/api';
-import { useComponentsDownloadStore } from '@/lib/components-download/store';
+import { useComponentsDownloadStore, requestManifestSync } from '@/lib/components-download/store';
 import { useShallow } from 'zustand/react/shallow';
 import { formatDownloadProgress, formatSpeed, formatBytes } from '@/lib/components-download/format';
 
@@ -40,7 +40,6 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   const [componentDownloading, setComponentDownloading] = useState(false);
   const [deletingByPath, setDeletingByPath] = useState<Record<string, boolean>>({});
   const [startingByPath, setStartingByPath] = useState<Record<string, boolean>>({});
-  const { loadManifest, loadManifests } = useManifestStore.getState();
   const relevantPaths = React.useMemo(() => {
     const paths: string[] = [];
     const modelPathsRaw = Array.isArray(component.model_path)
@@ -68,6 +67,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   }));
   const startPath = useComponentsDownloadStore((s) => s.startPath);
   const cancelPath = useComponentsDownloadStore((s) => s.cancelPath);
+  const markPendingDeletion = useComponentsDownloadStore((s) => s.markPendingDeletion);
+  const pendingDeletions = useComponentsDownloadStore(useShallow((s) => s.pendingDeletions[manifestId] || {}));
   const modelPaths = Array.isArray(component.model_path) ? component.model_path : component.model_path ? [{ path: component.model_path }] : [];
 
   const schedulerConfigPaths = React.useMemo(() => {
@@ -98,8 +99,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   }, []);
 
   const schedulerAnyCompleted = useMemo(() => (
-    schedulerConfigPaths.some((p) => isEntryEffectivelyCompleted(downloads[p]))
-  ), [downloads, schedulerConfigPaths, isEntryEffectivelyCompleted]);
+    schedulerConfigPaths.some((p) => !pendingDeletions[p] && isEntryEffectivelyCompleted(downloads[p]))
+  ), [downloads, schedulerConfigPaths, isEntryEffectivelyCompleted, pendingDeletions]);
 
   const schedulerAnyError = useMemo(() => (
     schedulerConfigPaths.some((p) => downloads[p]?.status === 'error')
@@ -115,81 +116,29 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     setComponentDownloading(anyActive);
   }, [downloads, component, relevantPaths]);
 
-  const completedRelevantPaths = React.useMemo(() => (
-    relevantPaths.filter((p) => isEntryEffectivelyCompleted(downloads[p]))
-  ), [downloads, relevantPaths, isEntryEffectivelyCompleted]);
-
-  const prevCompletedRef = React.useRef<string[]>([]);
-
-  React.useEffect(() => {
-    // Only refetch when new paths transition into 'completed'
-    const prev = prevCompletedRef.current;
-    const hasNewCompletion = completedRelevantPaths.some((p) => !prev.includes(p));
-    if (hasNewCompletion) {
-      try { loadManifest(manifestId, true); } catch {}
-      // Also refresh the manifests list so ModelMenu reflects the updated downloaded status
-      try { loadManifests(true); } catch {}
-    }
-    prevCompletedRef.current = completedRelevantPaths;
-  }, [completedRelevantPaths, manifestId]);
-
-  React.useEffect(() => {
-    // Reconcile store state with manifest: if manifest shows is_downloaded, remove the completed entry from store
-    const removeEntry = useComponentsDownloadStore.getState().removeEntry;
-    const paths = (Array.isArray(modelPaths) ? modelPaths : []).map((it: any) => {
-      const p = typeof it === 'string' ? it : it?.path;
-      const downloaded = typeof it === 'object' && (it as any)?.is_downloaded;
-      return { path: p, isDownloaded: downloaded };
-    }).filter((x) => x.path);
-    
-    paths.forEach(({ path, isDownloaded }) => {
-      const entry = downloads[path];
-      // If manifest says downloaded and store has a completed entry, remove it to avoid confusion
-      if (isDownloaded && entry?.status === 'completed') {
-        setTimeout(() => {
-          try { removeEntry(path); } catch {}
-        }, 1000);
-      }
-    });
-
-    // For scheduler configs, manifest does not flag per-config, but if the component
-    // is marked downloaded, we can safely clear any completed config download entries
-    // related to this component to keep UI tidy.
-    if ((component as any)?.type === 'scheduler' && (component as any)?.is_downloaded) {
-      for (const p of schedulerConfigPaths) {
-        const entry = downloads[p];
-        if (entry?.status === 'completed') {
-          setTimeout(() => {
-            try { removeEntry(p); } catch {}
-          }, 1000);
-        }
-      }
-    }
-  }, [modelPaths, downloads]);
-
-  const handleDownload = async (path: string) => {
+  const handleDownload = async (path: string, kind: 'model' | 'config' | 'asset' = 'model', label?: string) => {
+    if (!path) return;
     setStartingByPath((s) => ({ ...s, [path]: true }));
-    await startPath(path, (component as any).save_path);
+    await startPath(path, {
+      savePath: (component as any).save_path,
+      manifestId,
+      componentType: component.type,
+      label,
+      kind,
+    });
   };
 
   const handleCancel = async (path: string) => {
-    await cancelPath(path, () => {
-      // Refetch manifest after cancel to ensure UI reflects actual file state
-      try { loadManifest(manifestId, true); } catch {}
-      // Keep ModelMenu in sync
-      try { loadManifests(true); } catch {}
-    });
+    await cancelPath(path);
   };
 
   const handleDelete = async (path: string) => {
     setDeletingByPath((s) => ({ ...s, [path]: true }));
     try {
       await deleteComponentApi(path);
-      await loadManifest(manifestId, true);
-      // Clear any stale completed download entry for this path so UI re-enables Download
+      markPendingDeletion(manifestId, path);
+      requestManifestSync(manifestId, { includeList: true, immediate: true });
       try { useComponentsDownloadStore.getState().removeEntry(path); } catch {}
-      // Ensure the global manifests list reflects deletion/downloaded changes
-      try { await loadManifests(true); } catch {}
     } catch {}
     finally {
       setDeletingByPath((s) => ({ ...s, [path]: false }));
@@ -213,25 +162,30 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
       const already = !!(item && typeof item === 'object' && item.is_downloaded);
       if (!already) {
         setComponentDownloading(true);
-        await handleDownload(p);
+        await handleDownload(p, 'model', typeof item === 'object' ? item?.variant : undefined);
       }
     }
     // Download config if it exists
     if (component.config_path) {
       setComponentDownloading(true);
-      await handleDownload(component.config_path as string);
+      await handleDownload(component.config_path as string, 'config');
     }
-    // Ensure manifests list reflects the new state (forced)
-    try { await loadManifests(true); } catch {}
   };
 
   // Persistent store handles cleanup; no-op on unmount here
 
   // Component downloaded indicator: consider manifest flags OR any relevant download entries completed
+  const hasPendingDeletion = useMemo(() => relevantPaths.some((p) => !!pendingDeletions[p]), [pendingDeletions, relevantPaths]);
+
   const isDownloaded = useMemo(() => {
+    if (hasPendingDeletion) return false;
     if ((component as any)?.is_downloaded) return true;
     // Any model path marked as downloaded in manifest
-    const manifestPathDownloaded = (Array.isArray(modelPaths) ? modelPaths : []).some((item: any) => !!(item && typeof item === 'object' && item.is_downloaded));
+    const manifestPathDownloaded = (Array.isArray(modelPaths) ? modelPaths : []).some((item: any) => {
+      const p = typeof item === 'string' ? item : item?.path;
+      if (p && pendingDeletions[p]) return false;
+      return !!(item && typeof item === 'object' && item.is_downloaded);
+    });
     if (manifestPathDownloaded) return true;
     // Any model-path download entry completed (ignore configs here)
     const modelPathsOnly = (Array.isArray(modelPaths) ? modelPaths : []).map((it: any) => (typeof it === 'string' ? it : it?.path)).filter(Boolean) as string[];
@@ -240,7 +194,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     // For schedulers, a completed config download also implies effective readiness
     if ((component as any)?.type === 'scheduler' && schedulerAnyCompleted) return true;
     return false;
-  }, [component, modelPaths, downloads, relevantPaths, schedulerAnyCompleted, isEntryEffectivelyCompleted]);
+  }, [component, modelPaths, downloads, relevantPaths, schedulerAnyCompleted, isEntryEffectivelyCompleted, pendingDeletions, hasPendingDeletion]);
   const typeLabel = getComponentTypeLabel(component.type);
   const displayName = component.label || (component.name ? formatComponentName(component.name) : component.base ? formatComponentName(component.base) : typeLabel);
 
@@ -350,7 +304,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
               {modelPaths.map((item, idx) => {
                 const pathItem = typeof item === 'string' ? { path: item } : item as ManifestComponentModelPathItem;
                 const entry = downloads[pathItem.path];
-                const pathIsEffectivelyDownloaded = !!((pathItem as any).is_downloaded) || isEntryEffectivelyCompleted(entry);
+                const pendingDeletion = !!pendingDeletions[pathItem.path];
+                const pathIsEffectivelyDownloaded = !pendingDeletion && ( !!((pathItem as any).is_downloaded) || isEntryEffectivelyCompleted(entry) );
                 return (
                   <div key={idx} className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full">
                       {pathItem.variant && (
@@ -488,7 +443,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                         </div>
                       ) : downloads[pathItem.path]?.status === 'error' || downloads[pathItem.path]?.status === 'canceled' ? (
                         <button
-                          onClick={() => handleDownload(pathItem.path)}
+                          onClick={() => handleDownload(pathItem.path, 'model', pathItem.variant)}
                           className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
                         >
                           <LuDownload className="w-3.5 h-3.5" />
@@ -496,7 +451,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                         </button>
                       ) : (
                         <button
-                          onClick={() => handleDownload(pathItem.path)}
+                          onClick={() => handleDownload(pathItem.path, 'model', pathItem.variant)}
                           className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
                         >
                           {startingByPath[pathItem.path] ? (
@@ -562,7 +517,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                     const files = entry?.files ? (Object.values(entry.files) as any[]) : [];
                     return (
                       <div key={p} className="w-full">
-                        <div className="text-brand-light text-[10.5px] font-medium mb-1">Config Download</div>
+                        <div className="text-brand-light text-[10.5px] font-medium mb-2.5">Config Download</div>
                         {files.length > 0 && status === 'downloading' ? (
                           <div className="flex flex-col gap-y-2">
                             {files.map((f: any) => (
@@ -597,11 +552,11 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                             ))}
                           </div>
                         ) : (
-                          <div className="flex items-center justify-between gap-x-2 w-full">
+                          <div className="flex flex-col items-start justify-start gap-y-2 w-full">
                             <div className="flex-1 min-w-0">
-                              <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{p}</div>
+                              <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 40}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{p}</div>
                             </div>
-                            <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
+                            <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1 justify-start">
                               <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
                               <span>Preparing...</span>
                             </div>
@@ -622,7 +577,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
               )}
               {!isDownloaded && !schedulerAnyActive && (schedulerAnyError || !schedulerAnyCompleted || configCompletionGraceOver) && (component.config_path || component.scheduler_options?.some((option) => option.config_path)) && (
               <button
-                onClick={() => handleDownload(component.config_path || component.scheduler_options?.find((option) => option.config_path)?.config_path as string)}
+                onClick={() => handleDownload(component.config_path || component.scheduler_options?.find((option) => option.config_path)?.config_path as string, 'config')}
               className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded-md px-3 py-2.5 transition-all">
                 <LuDownload className="w-3.5 h-3.5" />
                 <span>Download Config</span>

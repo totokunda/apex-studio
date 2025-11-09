@@ -65,13 +65,10 @@ class AppDirProtocol implements AppModule {
         }
       }]);
     await app.whenReady();
-    
-    // Initialize backend URL and locality
-    await this.initBackendUrl(app);
-    await this.probeBackendLocality();
-    // Fetch cache path from backend and set local serving base accordingly
-    await this.fetchCachePath(app);
-    
+
+    // Kick off non-blocking initialization (backend locality, remote cache path, etc.)
+    await this.initializeAsync(app);
+
     protocol.handle('app', async (request) => {
         const u = new URL(request.url);
         
@@ -162,6 +159,18 @@ class AppDirProtocol implements AppModule {
           }
         });
       });
+  }
+
+  private async initializeAsync(app: Electron.App): Promise<void> {
+    try {
+      await this.initBackendUrl(app);
+    } catch {}
+    try {
+      await this.probeBackendLocality();
+    } catch {}
+    try {
+      await this.fetchCachePath(app);
+    } catch {}
   }
 
   private async fetchCachePath(app: Electron.App): Promise<void> {

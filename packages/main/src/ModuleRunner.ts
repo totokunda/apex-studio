@@ -14,11 +14,9 @@ class ModuleRunner implements PromiseLike<void> {
     }
 
   init(module: AppModule) {
-    const p = module.enable(this.#createModuleContext());
-
-    if (p instanceof Promise) {
-      this.#promise = this.#promise.then(() => p);
-    }
+    // Ensure modules are initialized strictly in order.
+    // Defer calling enable() until previous initialization completes.
+    this.#promise = this.#promise.then(() => module.enable(this.#createModuleContext()));
 
     return this;
   }

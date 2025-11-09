@@ -750,7 +750,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
       </div>
     )}
     {preprocessorRef && (
-            <div className=" flex flex-row-reverse items-center gap-x-3 justify-between">
+            <div className=" flex flex-row-reverse items-center gap-x-3 justify-between mt-3">
               <span className="text-brand-light text-[10px] font-medium">Apply {resolvedPreprocessorName}</span>
               <button
                 type="button"

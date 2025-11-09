@@ -130,15 +130,23 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     const isItemDownloaded = (item: any): boolean => !!(item && item.is_downloaded === true);
 
     components.forEach((comp) => {
-      const key = comp.type || 'component';
+      const key = String((comp as any).name || comp.type || 'component');
       if (comp.type === 'scheduler' && Array.isArray(comp.scheduler_options) && comp.scheduler_options.length > 0) {
         const first = comp.scheduler_options[0];
-        defaults['scheduler'] = { name: first.name, base: (first as any).base, config_path: (first as any).config_path };
+        defaults[key] = { name: first.name, base: (first as any).base, config_path: (first as any).config_path };
       } else if (comp.model_path) {
         const items = normalizeModelPaths(comp).filter((it) => isItemDownloaded(it));
         if (items.length > 0) {
-          const first = items[0];
-          defaults[key] = { path: first.path, variant: first.variant, precision: first.precision, type: first.type };
+          // Prefer item associated to this component's name when present, else fall back to first
+          const nameKey = String((comp as any).name || '');
+          const matched = nameKey
+            ? items.find((it: any) => {
+                const itemName = String(it?.name || it?.component_name || it?.id || '');
+                return itemName && itemName === nameKey;
+              })
+            : undefined;
+          const chosen = matched || items[0];
+          defaults[key] = { path: chosen.path, variant: chosen.variant, precision: chosen.precision, type: chosen.type };
         }
       }
     });
@@ -734,6 +742,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       
       const activeJobId = uuidv4();
 
+
+      console.log(selectedComponents);
+      console.log(engineInputs);
+      console.log(manifestId);
+      console.log(activeJobId);
+      return;
 
       const res = await runEngine({ manifest_id: manifestId, inputs: engineInputs, selected_components: selectedComponents, job_id: activeJobId });
       if (res.success) {

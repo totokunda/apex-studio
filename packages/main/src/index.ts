@@ -14,6 +14,9 @@ import {appDirProtocol} from './modules/AppDirProtocol.js';
 
 export async function initApp(initConfig: AppInitConfig) {
   let moduleRunner = createModuleRunner()
+    // Register 'app://' protocol before app is ready and before creating the window
+    .init(appDirProtocol())
+    .init(apexApi())
     .init(createWindowManagerModule({initConfig, openDevTools: import.meta.env.DEV}))
     .init(disallowMultipleAppInstance())
     .init(terminateAppOnLastWindowClose())
@@ -40,9 +43,7 @@ export async function initApp(initConfig: AppInitConfig) {
           ]
           : [],
       )),
-    )
-    .init(apexApi())
-    .init(appDirProtocol());
+    );
   // Native file dialog for renderer via preload
   moduleRunner = moduleRunner.init(createNativeFileDialogModule());
 

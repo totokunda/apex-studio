@@ -19,6 +19,7 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
   const { data: fullManifest } = useManifest(manifest.id);
   const downloads = useComponentsDownloadStore(useShallow((s) => s.entries));
   const startPath = useComponentsDownloadStore((s) => s.startPath);
+  const pendingDeletions = useComponentsDownloadStore(useShallow((s) => s.pendingDeletions[manifest.id] || {}));
   const tagsContainerRef = useRef<HTMLDivElement>(null);
   const hiddenMeasureRef = useRef<HTMLDivElement>(null);
   const [visibleTagCount, setVisibleTagCount] = useState<number | null>(null);
@@ -62,8 +63,9 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
   }, [perComponentModelItems, downloads]);
 
   const allDownloaded = useMemo(() => {
+    if (Object.keys(pendingDeletions).length > 0) return false;
     return manifest.downloaded;
-  }, [manifest.downloaded]);
+  }, [manifest.downloaded, pendingDeletions]);
 
   // If store reflects activity or everything is already downloaded, drop the local starting flag
   useEffect(() => {
@@ -131,9 +133,16 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
         });
         for (const item of filtered) {
           const p = typeof item === 'string' ? item : item?.path;
-          const already = typeof item === 'object' && !!item?.is_downloaded;
+          const pendingDelete = p ? !!pendingDeletions[p] : false;
+          const already = !pendingDelete && typeof item === 'object' && !!item?.is_downloaded;
           if (!p || already) continue;
-          await startPath(p, comp?.save_path);
+          await startPath(p, {
+            savePath: comp?.save_path,
+            manifestId: manifest.id,
+            componentType: comp?.type,
+            label: typeof item === 'object' ? item?.variant : undefined,
+            kind: 'model',
+          });
         }
         // Ensure scheduler configs (base and options) are downloaded too
         const configPathsSet = new Set<string>();
@@ -148,8 +157,14 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
         }
         for (const cp of configPathsSet) {
           const entry = useComponentsDownloadStore.getState().entries[cp];
-          if (!entry || entry.status === 'error' || entry.status === 'canceled') {
-            await startPath(cp, comp?.save_path);
+          const pendingDelete = !!pendingDeletions[cp];
+          if (pendingDelete || !entry || entry.status === 'error' || entry.status === 'canceled') {
+            await startPath(cp, {
+              savePath: comp?.save_path,
+              manifestId: manifest.id,
+              componentType: comp?.type,
+              kind: 'config',
+            });
           }
         }
       }

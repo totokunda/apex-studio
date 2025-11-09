@@ -47,13 +47,7 @@ export class ApexApi implements AppModule {
 
   async enable(_context: ModuleContext): Promise<void> {
     this.app = _context.app;
-    await this.app.whenReady();
-    
-    this.settingsPath = path.join(this.app.getPath('userData'), 'apex-settings.json');
-    await this.loadSettings();
-    this.wsManager?.setBaseUrl(this.backendUrl);
-    await this.#probeBackendLocality();
-    
+    // Register IPC handlers immediately so renderer can invoke them as soon as it loads
     this.registerConfigHandlers();
     this.registerBackendUrlHandlers();
     this.registerWebSocketHandlers();
@@ -65,6 +59,13 @@ export class ApexApi implements AppModule {
     this.registerMaskHandlers();
     this.registerManifestHandlers();
     this.registerSystemHandlers();
+
+    // Defer app-dependent initialization until the app is ready
+    await this.app.whenReady();
+    this.settingsPath = path.join(this.app.getPath('userData'), 'apex-settings.json');
+    await this.loadSettings();
+    this.wsManager?.setBaseUrl(this.backendUrl);
+    await this.#probeBackendLocality();
   }
 
   private async loadSettings(): Promise<void> {

@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { useManifestStore } from '@/lib/manifest/store';
+import type { ManifestComponent, ManifestDocument, ManifestSchedulerOption } from '@/lib/manifest/api';
 import {
   downloadComponents,
   cancelComponents,
@@ -15,6 +17,11 @@ export type DownloadEntry = {
   path: string;
   progress: number;
   status: DownloadState;
+  manifestIds?: string[];
+  componentType?: string;
+  label?: string;
+  kind?: DownloadTargetKind;
+  awaitingManifest?: boolean;
   error?: string;
   downloadedBytes?: number;
   totalBytes?: number;
@@ -34,6 +41,17 @@ type FileDownloadEntry = {
   error?: string;
 };
 
+export type DownloadTargetKind = 'model' | 'config' | 'asset' | 'unknown';
+
+export type StartDownloadOptions = {
+  savePath?: string;
+  jobId?: string;
+  manifestId?: string;
+  manifestIds?: string[];
+  componentType?: string;
+  label?: string;
+  kind?: DownloadTargetKind;
+};
 
 interface ComponentsDownloadPayload {
   message?: string;
@@ -52,12 +70,15 @@ type Unsubscriber = () => void;
 type ComponentsDownloadStore = {
   entries: Record<string, DownloadEntry>; // key by path
   jobIndex: Record<string, string[]>; // jobId -> paths
+  pendingDeletions: Record<string, Record<string, true>>;
   connectJob: (jobId: string, path: string) => Promise<void>;
-  startPath: (path: string, savePath?: string, jobId?: string) => Promise<string>; // returns jobId
+  startPath: (path: string, options?: StartDownloadOptions) => Promise<string>; // returns jobId
   cancelPath: (path: string, onCanceled?: () => void) => Promise<void>;
   clearJob: (jobId: string) => void;
   setEntry: (path: string, entry: Partial<DownloadEntry>) => void;
   removeEntry: (path: string) => void;
+  markPendingDeletion: (manifestId: string, path: string) => void;
+  clearPendingDeletion: (manifestId: string, path: string) => void;
 };
 
 const unsubRegistry: Record<string, Unsubscriber[]> = {};
@@ -66,11 +87,22 @@ const jobsRegistry: Record<string, ComponentsDownloadJob> = {};
 export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(persist((set, get) => ({
   entries: {},
   jobIndex: {},
+  pendingDeletions: {},
 
   setEntry: (path, entry) => set((s) => ({
     entries: {
       ...s.entries,
-      [path]: { ...(s.entries[path] || { path, jobId: '', progress: 0, status: 'pending' as const }), ...entry },
+      [path]: {
+        ...(s.entries[path] || {
+          path,
+          jobId: '',
+          progress: 0,
+          status: 'pending' as const,
+          manifestIds: [],
+          kind: 'unknown',
+        }),
+        ...entry,
+      },
     },
   })),
 
@@ -192,12 +224,16 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
 
     const handlePayload = (payload: ComponentsDownloadPayload, finalizeOn?: DownloadState) => {
       const status = extractStatus(payload);
+      const entrySnapshot = get().entries[path];
       const filename = (payload?.metadata?.filename || payload?.metadata?.label || '').toString();
       
       if (['canceled', 'cancelled'].includes(status)) {
         // flush any pending progress before final status
         flushPending();
-        get().setEntry(path, { status: 'canceled' });
+        get().setEntry(path, { status: 'canceled', awaitingManifest: false });
+        if (entrySnapshot?.manifestIds?.length) {
+          requestManifestSync(entrySnapshot.manifestIds, { includeList: true });
+        }
         try { get().clearJob(jobId); } catch {}
         return true;
       }
@@ -220,7 +256,10 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
           };
           get().setEntry(path, { files });
         } else {
-          get().setEntry(path, { status: 'error' });
+          get().setEntry(path, { status: 'error', awaitingManifest: false });
+          if (entrySnapshot?.manifestIds?.length) {
+            requestManifestSync(entrySnapshot.manifestIds, { includeList: false });
+          }
           try { get().clearJob(jobId); } catch {}
           return true;
         }
@@ -248,7 +287,21 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
           get().setEntry(path, { files });
         } else {
           // No filename => this is likely the final job-level completion signal
-          get().setEntry(path, { status: 'completed', progress: 100 });
+          const isModelKind = (entrySnapshot?.kind || 'unknown') === 'model';
+          get().setEntry(path, { status: 'completed', progress: 100, awaitingManifest: isModelKind });
+          if (entrySnapshot?.manifestIds?.length) {
+            requestManifestSync(entrySnapshot.manifestIds, { includeList: true });
+          }
+          if (!isModelKind) {
+            setTimeout(() => {
+              try {
+                const entryNow = get().entries[path];
+                if (entryNow && entryNow.jobId === (entrySnapshot?.jobId || jobId)) {
+                  get().removeEntry(path);
+                }
+              } catch {}
+            }, 1000);
+          }
           try { get().clearJob(jobId); } catch {}
           return true;
         }
@@ -287,15 +340,51 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
 
   },
 
-  startPath: async (path: string, savePath?: string, jobId?: string) => {
+  startPath: async (path: string, options?: StartDownloadOptions) => {
+    const {
+      savePath,
+      jobId,
+      manifestId,
+      manifestIds,
+      componentType,
+      label,
+      kind,
+    } = options || {};
     const id = jobId || (globalThis.crypto && 'randomUUID' in globalThis.crypto ? globalThis.crypto.randomUUID() : `job_${Date.now()}_${Math.random().toString(36).slice(2,8)}`);
-    set((s) => ({ entries: { ...s.entries, [path]: { jobId: id, path, progress: 0, status: 'downloading' } } }));
+    const manifestIdList = (manifestIds && manifestIds.length ? manifestIds : (manifestId ? [manifestId] : [])).filter((v): v is string => !!v);
+    const baseEntry: DownloadEntry = {
+      jobId: id,
+      path,
+      progress: 0,
+      status: 'downloading',
+      manifestIds: manifestIdList,
+      componentType,
+      label,
+      kind: kind || 'unknown',
+      awaitingManifest: false,
+    };
+    manifestIdList.forEach((id) => {
+      try { get().clearPendingDeletion(id, path); } catch {}
+    });
+    set((s) => ({ entries: { ...s.entries, [path]: { ...(s.entries[path] || baseEntry), ...baseEntry } } }));
     await get().connectJob(id, path);
     try {
       await downloadComponents([path], savePath, id);
     } catch (e) {
-      set((s) => ({ entries: { ...s.entries, [path]: { ...(s.entries[path] || { jobId: id, path, progress: 0, status: 'error' }), status: 'error', error: (e as any)?.message || 'Failed to start download' } } }));
+      set((s) => ({
+        entries: {
+          ...s.entries,
+          [path]: {
+            ...(s.entries[path] || baseEntry),
+            status: 'error',
+            error: (e as any)?.message || 'Failed to start download',
+          },
+        },
+      }));
       try { get().clearJob(id); } catch {}
+      if (baseEntry.manifestIds?.length) {
+        requestManifestSync(baseEntry.manifestIds, { includeList: true });
+      }
     }
     return id;
   },
@@ -304,8 +393,11 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
     const entry = get().entries[path];
     if (!entry) return;
     try { await cancelComponents(entry.jobId); } catch {}
-    set((s) => ({ entries: { ...s.entries, [path]: { ...(s.entries[path] as DownloadEntry), status: 'canceled' } } }));
+    set((s) => ({ entries: { ...s.entries, [path]: { ...(s.entries[path] as DownloadEntry), status: 'canceled', awaitingManifest: false } } }));
     try { get().clearJob(entry.jobId); } catch {}
+    if (entry.manifestIds?.length) {
+      requestManifestSync(entry.manifestIds, { includeList: true });
+    }
     
     // Trigger callback after cleanup (e.g., to refetch manifest)
     if (onCanceled) {
@@ -331,13 +423,50 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
       return { entries: next };
     });
   },
+  markPendingDeletion: (manifestId: string, path: string) => {
+    if (!manifestId || !path) return;
+    set((s) => {
+      const manifestMap = s.pendingDeletions[manifestId] || {};
+      if (manifestMap[path]) return s;
+      return {
+        pendingDeletions: {
+          ...s.pendingDeletions,
+          [manifestId]: { ...manifestMap, [path]: true },
+        },
+      };
+    });
+  },
+  clearPendingDeletion: (manifestId: string, path: string) => {
+    if (!manifestId || !path) return;
+    set((s) => {
+      const manifestMap = s.pendingDeletions[manifestId];
+      if (!manifestMap || !manifestMap[path]) return s;
+      const nextManifestMap = { ...manifestMap };
+      delete nextManifestMap[path];
+      const nextPending = { ...s.pendingDeletions };
+      if (Object.keys(nextManifestMap).length > 0) nextPending[manifestId] = nextManifestMap;
+      else delete nextPending[manifestId];
+      return { pendingDeletions: nextPending };
+    });
+  },
 }), {
   name: 'components-download-store',
   // Persist only lightweight fields to avoid heavy, frequent writes
   partialize: (state) => {
-    const minimalEntries: Record<string, Pick<DownloadEntry, 'jobId' | 'path' | 'progress' | 'status' | 'error'>> = {};
+    const minimalEntries: Record<string, Pick<DownloadEntry, 'jobId' | 'path' | 'progress' | 'status' | 'error' | 'manifestIds' | 'componentType' | 'label' | 'kind' | 'awaitingManifest'>> = {};
     for (const [k, v] of Object.entries(state.entries)) {
-      minimalEntries[k] = { jobId: v.jobId, path: v.path, progress: v.progress, status: v.status, error: v.error };
+      minimalEntries[k] = {
+        jobId: v.jobId,
+        path: v.path,
+        progress: v.progress,
+        status: v.status,
+        error: v.error,
+        manifestIds: v.manifestIds,
+        componentType: v.componentType,
+        label: v.label,
+        kind: v.kind,
+        awaitingManifest: v.awaitingManifest,
+      };
     }
     return { entries: minimalEntries } as Partial<typeof state>;
   },
@@ -351,7 +480,11 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
     // Check each entry that was downloading
     for (const [path, entry] of Object.entries(entries)) {
       if (!entry || !entry.jobId) continue;
+      if (entry.manifestIds?.length && (entry.awaitingManifest || entry.status === 'completed')) {
+        requestManifestSync(entry.manifestIds, { includeList: true });
+      }
       if (entry.status !== 'downloading' && entry.status !== 'pending') continue;
+      const isModelKind = (entry.kind || 'unknown') === 'model';
       
       try {
         // Check if the job is still active on the backend
@@ -376,10 +509,15 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
             }, 100);
           } else if (status === 'complete' || status === 'completed') {
             // Job completed while we were away
-            state.setEntry(path, { status: 'completed', progress: 100 });
-            setTimeout(() => {
-              try { state.removeEntry(path); } catch {}
-            }, 2000);
+            state.setEntry(path, { status: 'completed', progress: 100, awaitingManifest: isModelKind });
+            if (entry.manifestIds?.length) {
+              requestManifestSync(entry.manifestIds, { includeList: true });
+            }
+            if (!isModelKind) {
+              setTimeout(() => {
+                try { state.removeEntry(path); } catch {}
+              }, 2000);
+            }
           } else if (status === 'error' || status === 'failed') {
             // Job failed
             state.setEntry(path, { status: 'error' });
@@ -401,3 +539,164 @@ export const useComponentsDownloadStore = create<ComponentsDownloadStore>()(pers
     }
   }
 }));
+
+type ManifestSyncOptions = {
+  includeList?: boolean;
+  immediate?: boolean;
+};
+
+const manifestSyncQueue = new Set<string>();
+let manifestListRefreshRequested = false;
+let manifestSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let manifestSyncInFlight: Promise<void> | null = null;
+
+export function requestManifestSync(manifestIds?: string | string[], options?: ManifestSyncOptions) {
+  const ids = (Array.isArray(manifestIds) ? manifestIds : manifestIds ? [manifestIds] : []).filter((id): id is string => !!id);
+  ids.forEach((id) => manifestSyncQueue.add(id));
+  if (options?.includeList) {
+    manifestListRefreshRequested = true;
+  }
+  const trigger = () => {
+    if (manifestSyncTimer) {
+      clearTimeout(manifestSyncTimer);
+      manifestSyncTimer = null;
+    }
+    void flushManifestSyncQueue();
+  };
+  if (options?.immediate) {
+    trigger();
+    return;
+  }
+  if (!manifestSyncTimer) {
+    manifestSyncTimer = setTimeout(() => {
+      manifestSyncTimer = null;
+      void flushManifestSyncQueue();
+    }, 600);
+  }
+}
+
+async function flushManifestSyncQueue() {
+  if (manifestSyncInFlight) {
+    await manifestSyncInFlight;
+  }
+  if (manifestSyncQueue.size === 0 && !manifestListRefreshRequested) return;
+
+  manifestSyncInFlight = (async () => {
+    const { loadManifest, loadManifests } = useManifestStore.getState();
+    while (manifestSyncQueue.size > 0 || manifestListRefreshRequested) {
+      const ids = Array.from(manifestSyncQueue);
+      const refreshList = manifestListRefreshRequested;
+      manifestSyncQueue.clear();
+      manifestListRefreshRequested = false;
+      if (ids.length > 0) {
+        await Promise.all(ids.map((id) => loadManifest(id, true).catch(() => {})));
+      }
+      if (refreshList) {
+        try { await loadManifests(true); } catch {}
+      }
+      ids.forEach((id) => {
+        try {
+          reconcileManifestDownloads(id);
+        } catch {
+          // swallow reconciliation errors to keep sync loop alive
+        }
+      });
+    }
+  })();
+
+  try {
+    await manifestSyncInFlight;
+  } finally {
+    manifestSyncInFlight = null;
+  }
+}
+
+type NormalizedPath = { path: string; downloaded?: boolean };
+
+function normalizeModelPaths(component: ManifestComponent | Record<string, any>): NormalizedPath[] {
+  const raw = Array.isArray(component?.model_path) ? component.model_path : component?.model_path ? [component.model_path] : [];
+  const entries: NormalizedPath[] = [];
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      entries.push({ path: item });
+    } else if (item && typeof item === 'object' && item.path) {
+      entries.push({ path: item.path, downloaded: typeof item.is_downloaded === 'boolean' ? !!item.is_downloaded : undefined });
+    }
+  }
+  return entries;
+}
+
+function normalizeSchedulerConfigs(component: ManifestComponent | Record<string, any>): NormalizedPath[] {
+  const opts = Array.isArray(component?.scheduler_options) ? component.scheduler_options : [];
+  const entries: NormalizedPath[] = [];
+  for (const opt of opts as Array<ManifestSchedulerOption & { is_downloaded?: boolean }>) {
+    if (!opt || !opt.config_path) continue;
+    entries.push({ path: String(opt.config_path), downloaded: typeof opt.is_downloaded === 'boolean' ? !!opt.is_downloaded : undefined });
+  }
+  return entries;
+}
+
+function buildManifestPathStatus(manifest: ManifestDocument): Map<string, boolean> {
+  const map = new Map<string, boolean>();
+  const components = Array.isArray(manifest?.spec?.components) ? manifest.spec.components : [];
+  for (const component of components as Array<ManifestComponent & { extra_model_paths?: string[]; converted_model_path?: string; gguf_files?: { path?: string }[] }>) {
+    const componentDownloaded = !!(component as any)?.is_downloaded;
+    const mark = (path: string | undefined, overridden?: boolean) => {
+      if (!path) return;
+      const flag = typeof overridden === 'boolean' ? overridden : componentDownloaded;
+      map.set(String(path), flag);
+    };
+    normalizeModelPaths(component).forEach((item) => mark(item.path, item.downloaded));
+    if (component?.config_path) mark(String(component.config_path));
+    normalizeSchedulerConfigs(component).forEach((item) => mark(item.path, item.downloaded));
+    if (Array.isArray((component as any)?.extra_model_paths)) {
+      for (const extra of (component as any).extra_model_paths) {
+        if (typeof extra === 'string') mark(extra);
+      }
+    }
+    if ((component as any)?.converted_model_path) {
+      mark(String((component as any).converted_model_path));
+    }
+    if (Array.isArray((component as any)?.gguf_files)) {
+      for (const file of (component as any).gguf_files) {
+        if (file?.path) mark(String(file.path));
+      }
+    }
+  }
+  return map;
+}
+
+function reconcileManifestDownloads(manifestId: string) {
+  const manifest = useManifestStore.getState().manifestById[manifestId];
+  if (!manifest) return;
+  const downloadedMap = buildManifestPathStatus(manifest);
+  if (downloadedMap.size === 0) return;
+  const store = useComponentsDownloadStore.getState();
+  const latestEntries = store.entries;
+  for (const [path, entry] of Object.entries(latestEntries)) {
+    if (!entry) continue;
+    if (!(entry.manifestIds || []).includes(manifestId)) continue;
+    const resolved = downloadedMap.get(path);
+    if (resolved === true) {
+      store.setEntry(path, { progress: 100, status: 'completed', awaitingManifest: false, lastUpdateTime: Date.now() });
+      setTimeout(() => {
+        const current = useComponentsDownloadStore.getState().entries[path];
+        if (!current) return;
+        if ((current.manifestIds || []).includes(manifestId)) {
+          try {
+            useComponentsDownloadStore.getState().removeEntry(path);
+          } catch {}
+        }
+      }, 900);
+    }
+  }
+  const pending = store.pendingDeletions[manifestId];
+  if (pending) {
+    for (const pendingPath of Object.keys(pending)) {
+      const status = downloadedMap.get(pendingPath);
+      if (status === false || status == null) {
+        try { store.clearPendingDeletion(manifestId, pendingPath); } catch {}
+      }
+    }
+  }
+}
