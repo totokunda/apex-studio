@@ -90,9 +90,16 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     })
   ), [downloads, schedulerConfigPaths]);
 
+  const isEntryEffectivelyCompleted = React.useCallback((entry: any | undefined) => {
+    if (!entry) return false;
+    if (entry.status === 'completed') return true;
+    const files = entry.files ? (Object.values(entry.files) as any[]) : [];
+    return files.length > 0 && files.every((f: any) => f?.status === 'completed');
+  }, []);
+
   const schedulerAnyCompleted = useMemo(() => (
-    schedulerConfigPaths.some((p) => downloads[p]?.status === 'completed')
-  ), [downloads, schedulerConfigPaths]);
+    schedulerConfigPaths.some((p) => isEntryEffectivelyCompleted(downloads[p]))
+  ), [downloads, schedulerConfigPaths, isEntryEffectivelyCompleted]);
 
   const schedulerAnyError = useMemo(() => (
     schedulerConfigPaths.some((p) => downloads[p]?.status === 'error')
@@ -109,8 +116,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   }, [downloads, component, relevantPaths]);
 
   const completedRelevantPaths = React.useMemo(() => (
-    relevantPaths.filter((p) => downloads[p]?.status === 'completed')
-  ), [downloads, relevantPaths]);
+    relevantPaths.filter((p) => isEntryEffectivelyCompleted(downloads[p]))
+  ), [downloads, relevantPaths, isEntryEffectivelyCompleted]);
 
   const prevCompletedRef = React.useRef<string[]>([]);
 
@@ -179,6 +186,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     try {
       await deleteComponentApi(path);
       await loadManifest(manifestId, true);
+      // Clear any stale completed download entry for this path so UI re-enables Download
+      try { useComponentsDownloadStore.getState().removeEntry(path); } catch {}
       // Ensure the global manifests list reflects deletion/downloaded changes
       try { await loadManifests(true); } catch {}
     } catch {}
@@ -224,13 +233,14 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     // Any model path marked as downloaded in manifest
     const manifestPathDownloaded = (Array.isArray(modelPaths) ? modelPaths : []).some((item: any) => !!(item && typeof item === 'object' && item.is_downloaded));
     if (manifestPathDownloaded) return true;
-    // Any relevant download entry completed (model paths or configs)
-    const anyCompletedInStore = (relevantPaths || []).some((p) => downloads[p]?.status === 'completed');
-    if (anyCompletedInStore) return true;
+    // Any model-path download entry completed (ignore configs here)
+    const modelPathsOnly = (Array.isArray(modelPaths) ? modelPaths : []).map((it: any) => (typeof it === 'string' ? it : it?.path)).filter(Boolean) as string[];
+    const anyModelCompletedInStore = modelPathsOnly.some((p) => isEntryEffectivelyCompleted(downloads[p]));
+    if (anyModelCompletedInStore) return true;
     // For schedulers, a completed config download also implies effective readiness
     if ((component as any)?.type === 'scheduler' && schedulerAnyCompleted) return true;
     return false;
-  }, [component, modelPaths, downloads, relevantPaths, schedulerAnyCompleted]);
+  }, [component, modelPaths, downloads, relevantPaths, schedulerAnyCompleted, isEntryEffectivelyCompleted]);
   const typeLabel = getComponentTypeLabel(component.type);
   const displayName = component.label || (component.name ? formatComponentName(component.name) : component.base ? formatComponentName(component.base) : typeLabel);
 
@@ -339,8 +349,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
             <div className="space-y-2 mt-3">
               {modelPaths.map((item, idx) => {
                 const pathItem = typeof item === 'string' ? { path: item } : item as ManifestComponentModelPathItem;
-                const dlStatus = downloads[pathItem.path]?.status;
-                const pathIsEffectivelyDownloaded = !!((pathItem as any).is_downloaded) || dlStatus === 'completed';
+                const entry = downloads[pathItem.path];
+                const pathIsEffectivelyDownloaded = !!((pathItem as any).is_downloaded) || isEntryEffectivelyCompleted(entry);
                 return (
                   <div key={idx} className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full">
                       {pathItem.variant && (
