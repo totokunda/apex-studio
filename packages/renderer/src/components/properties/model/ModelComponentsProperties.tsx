@@ -1,8 +1,8 @@
 import { useClipStore } from '@/lib/clip'
 import { useManifest } from '@/lib/manifest/hooks';
-import { ManifestComponent, ManifestComponentModelPathItem, ManifestSchedulerOption } from '@/lib/manifest/api';
+import { ManifestComponent, ManifestComponentModelPathItem } from '@/lib/manifest/api';
 import { ModelClipProps } from '@/lib/types';
-import { useMemo, useCallback, useEffect, useRef, useState } from 'react'
+import { useMemo, useCallback, useEffect } from 'react'
 import { cn } from '@/lib/utils';
 import { LuCheck } from 'react-icons/lu';
 
@@ -20,45 +20,14 @@ const formatComponentName = (name: string): string => {
       .join(' ');
   };
 
-  const SchedulerOptionDescription: React.FC<{ text?: string }> = ({ text }) => {
-      const [isExpanded, setIsExpanded] = useState(false);
-      const [isTruncated, setIsTruncated] = useState(false);
-      const descRef = useRef<HTMLDivElement>(null);
 
-      useEffect(() => {
-          if (descRef.current && text && !isExpanded) {
-              const checkTruncation = descRef.current.scrollHeight > descRef.current.clientHeight;
-              if (checkTruncation !== isTruncated) {
-                  setIsTruncated(checkTruncation);
-              }
-          }
-      }, [text, isExpanded, isTruncated]);
-
-      if (!text) return null;
-
-      return (
-          <div className="flex flex-col gap-y-0.5 w-full min-w-0">
-              <div
-                  ref={descRef}
-                  className={`text-[10px] text-brand-light/70 mt-0.5 min-w-0 ${!isExpanded ? 'line-clamp-2' : ''}`}
-              >
-                  {text}
-              </div>
-              {isTruncated && (
-                  <button
-                      onClick={() => setIsExpanded((s) => !s)}
-                      className="text-brand-light/50 hover:text-brand-light text-[9px] text-start transition-colors duration-200"
-                  >
-                      {isExpanded ? 'Show less' : 'Show more'}
-                  </button>
-              )}
-          </div>
-      );
-  };
 
 const ModelComponentsProperties = ({ clipId }: ModelComponentsPropertiesProps) => {
+    const getComponentKey = (comp: ManifestComponent): string => {
+        return String((comp as any).name || comp.type || 'component');
+    };
+
     const clip = useClipStore((s) => s.getClipById(clipId)) as ModelClipProps | undefined;
-    const updateClip = useClipStore((s) => s.updateClip);
     if (!clip) return null;
 
     const { data: manifest } = useManifest(String(clip.manifest?.metadata?.id || ''));
@@ -71,9 +40,12 @@ const ModelComponentsProperties = ({ clipId }: ModelComponentsPropertiesProps) =
     const selectedMap = (clip.selectedComponents || {}) as Record<string, any>;
 
     const setSelection = useCallback((key: string, value: any) => {
-        const next = { ...(clip.selectedComponents || {}), [key]: value };
-        updateClip(clipId, { selectedComponents: next } as any);
-    }, [clip.selectedComponents, updateClip, clipId]);
+        const store = useClipStore.getState();
+        const currentClip = store.getClipById(clipId) as ModelClipProps | undefined;
+        const prevSelected = (currentClip?.selectedComponents || {}) as Record<string, any>;
+        const next = { ...prevSelected, [key]: value };
+        store.updateClip(clipId, { selectedComponents: next } as any);
+    }, [clipId]);
 
     const formatCompLabel = (c: ManifestComponent) => formatComponentName(c.label || c.name || c.base || c.type);
 
@@ -96,12 +68,13 @@ const ModelComponentsProperties = ({ clipId }: ModelComponentsPropertiesProps) =
         // Scheduler default
         components.forEach((comp) => {
             if (comp.type === 'scheduler' && comp.scheduler_options && comp.scheduler_options.length > 0) {
-                const curr = selectedMap['scheduler'] as { name?: string } | undefined;
+                const key = getComponentKey(comp);
+                const curr = selectedMap[key] as { name?: string } | undefined;
                 const names = comp.scheduler_options.map((o) => String(o.name));
                 const hasValid = curr && names.includes(String(curr.name));
                 if (!hasValid) {
                     const first = comp.scheduler_options[0];
-                    setSelection('scheduler', { name: first.name, base: first.base, config_path: first.config_path });
+                    setSelection(key, { name: first.name, base: first.base, config_path: first.config_path });
                 }
             }
         });
@@ -111,7 +84,7 @@ const ModelComponentsProperties = ({ clipId }: ModelComponentsPropertiesProps) =
             if (!comp.model_path) return;
             const items = normalizeModelPaths(comp).filter((it) => isItemDownloaded(it));
             if (items.length === 0) return;
-            const key = comp.type || 'component';
+            const key = getComponentKey(comp);
             const curr = selectedMap[key] as { path?: string } | undefined;
             const paths = items.map((i) => String(i.path));
             const hasValid = curr && curr.path && paths.includes(String(curr.path));
@@ -122,12 +95,12 @@ const ModelComponentsProperties = ({ clipId }: ModelComponentsPropertiesProps) =
         });
         // selectedMap intentionally not included to avoid unnecessary loops; setSelection ensures idempotency
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [components, setSelection, clipId]);
+    }, [components, clipId]);
 
     const renderModelPathSection = (comp: ManifestComponent) => {
         const items = normalizeModelPaths(comp);
         const downloaded = items.filter((it) => isItemDownloaded(it));
-        const key = comp.type || 'component';
+        const key = getComponentKey(comp);
         const sel = selectedMap[key] as any;
         const selectedPath = sel?.path || '';
         

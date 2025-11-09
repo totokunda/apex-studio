@@ -10,7 +10,13 @@ interface TextInputProps {
 }
 
 const TextInput: React.FC<TextInputProps> = ({ label, description, value, onChange, placeholder, defaultValue }) => {
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (value === undefined) {
+      onChange(defaultValue || '');
+    }
+  }, [value, defaultValue, onChange]);
 
   useEffect(() => {
     if (textareaRef.current) {

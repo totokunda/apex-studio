@@ -40,7 +40,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   const [componentDownloading, setComponentDownloading] = useState(false);
   const [deletingByPath, setDeletingByPath] = useState<Record<string, boolean>>({});
   const [startingByPath, setStartingByPath] = useState<Record<string, boolean>>({});
-  const { loadManifest } = useManifestStore.getState();
+  const { loadManifest, loadManifests } = useManifestStore.getState();
   const relevantPaths = React.useMemo(() => {
     const paths: string[] = [];
     const modelPathsRaw = Array.isArray(component.model_path)
@@ -120,6 +120,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     const hasNewCompletion = completedRelevantPaths.some((p) => !prev.includes(p));
     if (hasNewCompletion) {
       try { loadManifest(manifestId, true); } catch {}
+      // Also refresh the manifests list so ModelMenu reflects the updated downloaded status
+      try { loadManifests(true); } catch {}
     }
     prevCompletedRef.current = completedRelevantPaths;
   }, [completedRelevantPaths, manifestId]);
@@ -167,6 +169,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     await cancelPath(path, () => {
       // Refetch manifest after cancel to ensure UI reflects actual file state
       try { loadManifest(manifestId, true); } catch {}
+      // Keep ModelMenu in sync
+      try { loadManifests(true); } catch {}
     });
   };
 
@@ -175,6 +179,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     try {
       await deleteComponentApi(path);
       await loadManifest(manifestId, true);
+      // Ensure the global manifests list reflects deletion/downloaded changes
+      try { await loadManifests(true); } catch {}
     } catch {}
     finally {
       setDeletingByPath((s) => ({ ...s, [path]: false }));
@@ -206,12 +212,25 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
       setComponentDownloading(true);
       await handleDownload(component.config_path as string);
     }
+    // Ensure manifests list reflects the new state (forced)
+    try { await loadManifests(true); } catch {}
   };
 
   // Persistent store handles cleanup; no-op on unmount here
 
-  // Check if component is downloaded (placeholder logic - replace with actual check)
-  const isDownloaded = useMemo(() => component.is_downloaded || (Array.isArray(modelPaths) ? modelPaths.some((item: ManifestComponentModelPathItem) => (item as any).is_downloaded) : false), [component, modelPaths]);
+  // Component downloaded indicator: consider manifest flags OR any relevant download entries completed
+  const isDownloaded = useMemo(() => {
+    if ((component as any)?.is_downloaded) return true;
+    // Any model path marked as downloaded in manifest
+    const manifestPathDownloaded = (Array.isArray(modelPaths) ? modelPaths : []).some((item: any) => !!(item && typeof item === 'object' && item.is_downloaded));
+    if (manifestPathDownloaded) return true;
+    // Any relevant download entry completed (model paths or configs)
+    const anyCompletedInStore = (relevantPaths || []).some((p) => downloads[p]?.status === 'completed');
+    if (anyCompletedInStore) return true;
+    // For schedulers, a completed config download also implies effective readiness
+    if ((component as any)?.type === 'scheduler' && schedulerAnyCompleted) return true;
+    return false;
+  }, [component, modelPaths, downloads, relevantPaths, schedulerAnyCompleted]);
   const typeLabel = getComponentTypeLabel(component.type);
   const displayName = component.label || (component.name ? formatComponentName(component.name) : component.base ? formatComponentName(component.base) : typeLabel);
 
@@ -228,84 +247,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     setConfigCompletionGraceOver(false);
   }, [isDownloaded, schedulerAnyCompleted, schedulerAnyActive]);
 
-  // Track model-path-specific grace after completion while waiting for manifest confirmation
-  const [modelCompletionGrace, setModelCompletionGrace] = useState<Record<string, boolean>>({});
-  const modelPathDownloadedMap = useMemo(() => {
-    const map: Record<string, boolean> = {};
-    const arr = Array.isArray(modelPaths) ? modelPaths : [];
-    for (const it of arr as any[]) {
-      if (typeof it === 'string') {
-        map[it] = false;
-      } else if (it && typeof it === 'object') {
-        const p = (it as any).path;
-        if (p) map[p] = !!(it as any).is_downloaded;
-      }
-    }
-    return map;
-  }, [modelPaths]);
-
-  const modelGraceTimersRef = React.useRef<Record<string, any>>({});
-  const modelRefreshPollersRef = React.useRef<Record<string, any>>({});
-  const modelRefreshPollerCountsRef = React.useRef<Record<string, number>>({});
-  React.useEffect(() => {
-    const paths = Object.keys(modelPathDownloadedMap || {});
-    for (const p of paths) {
-      const status = downloads[p]?.status;
-      const isPathDownloaded = !!modelPathDownloadedMap[p];
-      const existingTimer = modelGraceTimersRef.current[p];
-      if (status === 'completed' && !isPathDownloaded) {
-        // Start a short grace timer if not already running
-        if (!existingTimer) {
-          modelGraceTimersRef.current[p] = setTimeout(() => {
-            setModelCompletionGrace((s) => ({ ...s, [p]: true }));
-            try { clearTimeout(modelGraceTimersRef.current[p]); } catch {}
-            delete modelGraceTimersRef.current[p];
-          }, 4000);
-        }
-        // Start a brief polling loop to refresh manifest until it reflects the new state
-        if (!modelRefreshPollersRef.current[p]) {
-          modelRefreshPollerCountsRef.current[p] = 0;
-          modelRefreshPollersRef.current[p] = setInterval(() => {
-            modelRefreshPollerCountsRef.current[p] = (modelRefreshPollerCountsRef.current[p] || 0) + 1;
-            try { loadManifest(manifestId, true); } catch {}
-            if (modelRefreshPollerCountsRef.current[p] >= 6 /* ~4.8s at 800ms */) {
-              try { clearInterval(modelRefreshPollersRef.current[p]); } catch {}
-              delete modelRefreshPollersRef.current[p];
-              delete modelRefreshPollerCountsRef.current[p];
-            }
-          }, 800);
-        }
-      } else {
-        // Clear timer and reset grace when status changes or manifest confirms
-        if (existingTimer) {
-          try { clearTimeout(existingTimer); } catch {}
-          delete modelGraceTimersRef.current[p];
-        }
-        setModelCompletionGrace((s) => (s[p] ? { ...s, [p]: false } : s));
-        // Stop any active poller once confirmed or status moved away from completed
-        if (modelRefreshPollersRef.current[p]) {
-          try { clearInterval(modelRefreshPollersRef.current[p]); } catch {}
-          delete modelRefreshPollersRef.current[p];
-          delete modelRefreshPollerCountsRef.current[p];
-        }
-      }
-    }
-    // Cleanup timers for paths that no longer exist
-    for (const key of Object.keys(modelGraceTimersRef.current)) {
-      if (!paths.includes(key)) {
-        try { clearTimeout(modelGraceTimersRef.current[key]); } catch {}
-        delete modelGraceTimersRef.current[key];
-      }
-    }
-    // Cleanup pollers for paths that no longer exist
-    for (const key of Object.keys(modelRefreshPollersRef.current)) {
-      if (!paths.includes(key)) {
-        try { clearInterval(modelRefreshPollersRef.current[key]); } catch {}
-        delete modelRefreshPollersRef.current[key];
-        delete modelRefreshPollerCountsRef.current[key];
-      }
-    }
-  }, [downloads, modelPathDownloadedMap, manifestId]);
+  // We keep UI in 'Finalizing…' until the manifest reflects downloaded; no retry button.
 
   // Clear optimistic starting flags once the store reflects activity for a path
   React.useEffect(() => {
@@ -397,6 +339,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
             <div className="space-y-2 mt-3">
               {modelPaths.map((item, idx) => {
                 const pathItem = typeof item === 'string' ? { path: item } : item as ManifestComponentModelPathItem;
+                const dlStatus = downloads[pathItem.path]?.status;
+                const pathIsEffectivelyDownloaded = !!((pathItem as any).is_downloaded) || dlStatus === 'completed';
                 return (
                   <div key={idx} className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full">
                       {pathItem.variant && (
@@ -464,7 +408,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                       </div>
                     )}
                     
-                    {!(pathItem.is_downloaded || (pathItem as any).is_downloaded) ? (
+                    {!pathIsEffectivelyDownloaded ? (
                       startingByPath[pathItem.path] && !downloads[pathItem.path]?.status ? (
                         <div className="w-full mt-3 flex items-center justify-between gap-x-2">
                           <div className="flex-1 min-w-0">
@@ -532,21 +476,6 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                             <span>Preparing...</span>
                           </div>
                         </div>
-                      ) : downloads[pathItem.path]?.status === 'completed' ? (
-                        modelCompletionGrace[pathItem.path] ? (
-                          <button
-                            onClick={() => handleDownload(pathItem.path)}
-                            className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
-                          >
-                            <LuDownload className="w-3.5 h-3.5" />
-                            <span>Download Model</span>
-                          </button>
-                        ) : (
-                          <div className="w-full mt-3 flex items-center justify-start gap-x-1">
-                            <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
-                            <span className="text-[10px] text-brand-light/80 text-start">Finalizing…</span>
-                          </div>
-                        )
                       ) : downloads[pathItem.path]?.status === 'error' || downloads[pathItem.path]?.status === 'canceled' ? (
                         <button
                           onClick={() => handleDownload(pathItem.path)}
@@ -628,7 +557,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                           <div className="flex flex-col gap-y-2">
                             {files.map((f: any) => (
                               <div key={f.filename} className="flex flex-col gap-y-1">
-                                <div className="flex items-center justify-between gap-x-2 w-full">
+                                <div className="flex flex-col justify-start gap-y-2 w-full">
                                   <div className="flex-1 min-w-0">
                                     <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{f.filename}</div>
                                   </div>
@@ -699,6 +628,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
 
 const ModelPage:React.FC<ModelPageProps> = ({ manifestId }) => {
   const { clearSelectedManifestId, getLoadedManifest } = useManifestStore();
+  const loadManifests = useManifestStore.getState().loadManifests;
   const simpleManifest = getLoadedManifest(manifestId);
   const { data: manifest } = useManifest(manifestId);
 
@@ -724,7 +654,7 @@ const ModelPage:React.FC<ModelPageProps> = ({ manifestId }) => {
       <ScrollArea className="flex-1">
         <div className="p-7 pt-3 pb-28">
           <div className="flex items-center gap-x-3">
-            <button onClick={clearSelectedManifestId} className="text-brand-light hover:text-brand-light/70 p-1 flex items-center justify-center bg-brand border border-brand-light/10 rounded transition-colors cursor-pointer">
+            <button onClick={async () => { try { await loadManifests(true); } catch {}; try { clearSelectedManifestId(); } catch {} }} className="text-brand-light hover:text-brand-light/70 p-1 flex items-center justify-center bg-brand border border-brand-light/10 rounded transition-colors cursor-pointer">
               <LuChevronLeft className="w-3 h-3" />
             </button>
             <span className="text-brand-light/90 text-[11px] font-medium">Back</span>
