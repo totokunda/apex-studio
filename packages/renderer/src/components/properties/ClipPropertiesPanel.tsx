@@ -35,12 +35,16 @@ import { AnyClipProps, ModelClipProps } from '@/lib/types'
 import {ExportClip, exportSequence, exportClip} from '@app/export-renderer'
 import _ from 'lodash';
 import { BASE_LONG_SIDE } from '@/lib/settings';
+import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store';
+import type { Preprocessor } from '@/lib/preprocessor/api';
+import { validatePreprocessorFrames } from '@/lib/preprocessorHelpers';
 import { runEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/lib/engine/api';
 import { useManifest } from '@/lib/manifest/hooks';
 import { ManifestComponent } from '@/lib/manifest/api';
 import ModelComponentsProperties from './model/ModelComponentsProperties'
 import { v4 as uuidv4 } from 'uuid';
 import FrameInterpolateProperties from './FrameInterpolateProperties'
+import PreprocessorProperties from './preprocessor/PreprocessorProperties'
 interface PropertiesPanelProps {
     panelSize: number;
 }
@@ -76,6 +80,164 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (clip?.type === 'video') return true;
     return false;
   }, [clip?.type]);
+
+  const hasPreprocessorBrowser = useMemo(() => {
+    return clip?.type === 'video' || clip?.type === 'image';
+  }, [clip?.type]);
+
+  // Preprocessor browser state
+  const { preprocessors, load: loadPreprocessors } = usePreprocessorsListStore();
+  const [preprocQuery, setPreprocQuery] = useState('');
+  const [preprocDetailId, setPreprocDetailId] = useState<string | null>(null);
+  const focusFrame = useControlsStore((s) => s.focusFrame);
+  const addPreprocessorToClip = useClipStore((s) => s.addPreprocessorToClip);
+  const setSelectedPreprocessorId = useClipStore((s) => s.setSelectedPreprocessorId);
+  const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
+  const currentPreprocessors = getPreprocessorsForClip(clip?.clipId ?? '') || []
+
+  useEffect(() => {
+    if (hasPreprocessorBrowser) {
+      try { loadPreprocessors(); } catch {}
+    }
+  }, [hasPreprocessorBrowser, loadPreprocessors]);
+
+  const compatiblePreprocessors = useMemo(() => {
+    const list = preprocessors ?? [];
+    const q = preprocQuery.trim().toLowerCase();
+    const byType = list.filter((p: Preprocessor) => {
+      if (clip?.type === 'video') return !!p.supports_video;
+      if (clip?.type === 'image') return !!p.supports_image;
+      return false;
+    });
+    if (!q) return byType;
+    return byType.filter((p) =>
+      p.name.toLowerCase().includes(q) ||
+      (p.description || '').toLowerCase().includes(q) ||
+      p.category.toLowerCase().includes(q)
+    );
+  }, [preprocQuery, clip?.type, preprocessors]);
+
+  const getDefaultParamValue = (param: any) => {
+    if (Object.prototype.hasOwnProperty.call(param, 'default') && param.default !== undefined) return param.default;
+    const t = String(param.type);
+    if (t === 'int' || t === 'float') return 0;
+    if (t === 'bool') return false;
+    if (t === 'str') return '';
+    if (t === 'category') {
+      const first = Array.isArray(param.options) ? param.options[0] : undefined;
+      return first ? first.value : '';
+    }
+    return '';
+  };
+
+  const handleAddPreprocessor = useCallback((preproc: Preprocessor) => {
+    if (!clip || !clipId) return;
+    if (clip.type !== 'video' && clip.type !== 'image') return;
+    const clipDuration = Math.max(1, (clip.endFrame ?? 0) - (clip.startFrame ?? 0));
+    const fpsVal = Math.max(1, fps || 1);
+    // Prevent add if timeline fully covered by existing preprocessors
+    const existingAll = getPreprocessorsForClip(clipId) || [];
+    const fullyCovered = (() => {
+      if (clipDuration <= 0) return true;
+      const intervals = existingAll.map((p) => {
+        const s = Math.max(0, p.startFrame ?? 0);
+        const e = Math.max(s + 1, Math.min(clipDuration, p.endFrame ?? clipDuration));
+        return [s, e] as [number, number];
+      }).sort((a, b) => a[0] - b[0]);
+      let coverEnd = 0;
+      for (const [s, e] of intervals) {
+        if (s > coverEnd) {
+          return false; // found a gap
+        }
+        coverEnd = Math.max(coverEnd, e);
+        if (coverEnd >= clipDuration) return true;
+      }
+      return coverEnd >= clipDuration;
+    })();
+    if (fullyCovered) {
+      try { toast.info('No available space for another preprocessor'); } catch {}
+      return;
+    }
+    // Always choose the largest available gap, capped to 5 seconds worth of frames
+    const existing = getPreprocessorsForClip(clipId) || [];
+    const intervals = existing
+      .map((p) => {
+        const s = Math.max(0, p.startFrame ?? 0);
+        const e = Math.max(s + 1, Math.min(clipDuration, p.endFrame ?? clipDuration));
+        return [s, e] as [number, number];
+      })
+      .sort((a, b) => a[0] - b[0]);
+
+    // Merge overlapping intervals
+    const merged: Array<[number, number]> = [];
+    for (const [s, e] of intervals) {
+      if (merged.length === 0 || s > merged[merged.length - 1][1]) {
+        merged.push([s, e]);
+      } else {
+        merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], e);
+      }
+    }
+
+    // Compute gaps
+    const gaps: Array<[number, number]> = [];
+    let prevEnd = 0;
+    for (const [s, e] of merged) {
+      if (s > prevEnd) gaps.push([prevEnd, s]);
+      prevEnd = Math.max(prevEnd, e);
+    }
+    if (prevEnd < clipDuration) gaps.push([prevEnd, clipDuration]);
+    if (merged.length === 0 && gaps.length === 0 && clipDuration > 0) {
+      gaps.push([0, clipDuration]);
+    }
+
+    // Pick the largest gap
+    let chosenGap: [number, number] | null = null;
+    let maxLen = -1;
+    for (const [s, e] of gaps) {
+      const len = Math.max(0, e - s);
+      if (len > maxLen) {
+        maxLen = len;
+        chosenGap = [s, e];
+      }
+    }
+
+    // Fallback (shouldn't happen due to fullyCovered check), but guard anyway
+    if (!chosenGap) {
+      try { toast.info('No available space for another preprocessor'); } catch {}
+      return;
+    }
+
+    const maxFiveSecondsFrames = Math.max(1, Math.round(5 * fpsVal));
+    let start = chosenGap[0];
+    let end = Math.min(chosenGap[1], start + maxFiveSecondsFrames);
+
+    const { isValid } = validatePreprocessorFrames(start, end, 'new', existing, clipDuration);
+    if (!isValid) {
+      // Clamp as last resort
+      start = Math.max(0, Math.min(start, clipDuration - 1));
+      end = Math.max(start + 1, Math.min(end, clipDuration));
+    }
+
+    const values: Record<string, any> = {};
+    if (Array.isArray(preproc.parameters)) {
+      for (const p of preproc.parameters) {
+        values[p.name] = getDefaultParamValue(p);
+      }
+    }
+
+    const id = uuidv4();
+    addPreprocessorToClip(clipId, {
+      id,
+      preprocessor: preproc,
+      startFrame: start,
+      endFrame: end,
+      values,
+      status: undefined,
+      jobIds: [],
+    });
+    try { setSelectedPreprocessorId(id); } catch {}
+    try { toast.success(`Added ${preproc.name}`); } catch {}
+  }, [clip, clipId, fps, focusFrame, getPreprocessorsForClip, addPreprocessorToClip, setSelectedPreprocessorId]);
 
   // check if clip has audio if it is video 
   const hasDuration = useMemo(() => {
@@ -246,6 +408,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (hasLine) tabTotal++;
     if (hasMask) tabTotal++;
     if (hasTransform) tabTotal++;
+    if (hasPreprocessorBrowser) tabTotal++;
     if (hasAudio) tabTotal++;
     if (hasDuration || hasFilter) tabTotal++;
     if (hasAppearance) tabTotal++;
@@ -322,6 +485,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (currentTab === "mask" && hasMask) return "mask";
     if (currentTab === "text" && hasText) return "text";
     if (currentTab === "transform" && hasTransform) return "transform";
+    if (currentTab === "preprocessors" && hasPreprocessorBrowser) return "preprocessors";
     if (currentTab === "audio" && hasAudio) return "audio";
     if (currentTab === "duration" && (hasDuration || hasFilter)) return "duration";
     if (currentTab === "appearance" && hasAppearance) return "appearance";
@@ -883,6 +1047,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           <TabsList ref={tabRef} style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}} className={cn("bg-brand w-full rounded-b-none p-0 min-w-0 flex-shrink overflow-x-auto [&::-webkit-scrollbar]:hidden")}>
             {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
             {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            
             {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
             {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Progress</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-architecture" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Architecture</TabsTrigger>}
@@ -892,12 +1057,16 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasTransform && !hasMask) && <TabsTrigger value="transform" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
             {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Mask</TabsTrigger>}
             {(hasAudio && !hasMask) && <TabsTrigger value="audio" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
+            {(hasPreprocessorBrowser) && <TabsTrigger value="preprocessors" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Preprocessors</TabsTrigger>}
             {((hasDuration || hasFilter) && !hasMask) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">
               {hasFilter ? 'Filter' : 'Duration'}
               </TabsTrigger>}
+              
             {(hasAdjust && !hasMask) && <TabsTrigger value="adjust" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Adjust</TabsTrigger>}
             {(hasAppearance && !hasMask) && <TabsTrigger value="appearance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
             {(hasFrameInterpolate) && <TabsTrigger value="enhance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Enhance</TabsTrigger>}
+            
+
           </TabsList>
           <LuChevronRight onClick={() => {
             if (tabRef.current) {
@@ -907,6 +1076,18 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         </div>
         <ScrollArea className="flex-1 overflow-y-auto">
           <div style={{ paddingBottom: hasValidPreprocessor ? '20px' : '0' }}>
+            {(hasPreprocessorBrowser) && <TabsContent value="preprocessors" className="min-w-0 m-0">
+              <PreprocessorProperties
+                preprocDetailId={preprocDetailId}
+                setPreprocDetailId={setPreprocDetailId}
+                preprocQuery={preprocQuery}
+                setPreprocQuery={setPreprocQuery}
+                compatiblePreprocessors={compatiblePreprocessors}
+                clip={clip}
+                currentPreprocessors={currentPreprocessors as any}
+                onAdd={handleAddPreprocessor}
+              />
+            </TabsContent>}
             {(hasValidPreprocessor && selectedPreprocessorId && preprocessor) && <TabsContent value="preprocessor-parameters" className="min-w-0 m-0">
               <PreprocessorParametersPanel preprocessor={preprocessor}/>
             </TabsContent>}

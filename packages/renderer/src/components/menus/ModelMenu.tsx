@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useManifestTypes, useManifests, type ManifestInfo } from '@/lib/manifest';
 import { cn } from '@/lib/utils';
 import { ScrollArea } from '../ui/scroll-area';
-import { LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuInfo, LuDownload, LuCheck, LuLoader } from "react-icons/lu";
+import { LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuInfo, LuDownload,  LuLoader, LuPlus } from "react-icons/lu";
 import { TbWorldDownload } from 'react-icons/tb';
 import Draggable from '../dnd/Draggable';
 import { useManifestStore } from '@/lib/manifest/store';
@@ -12,6 +12,10 @@ import { useShallow } from 'zustand/react/shallow';
 import ModelPage from '../models/ModelPage';
 // check 
 import CategorySidebar from './CategorySidebar';
+import { useControlsStore } from '@/lib/control';
+import { useClipStore, getTimelineHeightForClip, getTimelineTypeForClip, isValidTimelineForClip } from '@/lib/clip';
+import { getManifest } from '@/lib/manifest/api';
+import { v4 as uuidv4 } from 'uuid';
 
 
 export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, category?: string }> = ({ manifest, isDragging, category }) => {
@@ -253,25 +257,90 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
             <span>Info</span>
           </button>
           <button
-            onClick={handleDownloadAllDefault}
+            onClick={async () => {
+              if (!allDownloaded) {
+                await handleDownloadAllDefault();
+                return;
+              }
+              try {
+                const controls = useControlsStore.getState();
+                const clipStore = useClipStore.getState();
+                const fps = Math.max(1, controls.fps || 1);
+                const focusFrame = Math.max(0, controls.focusFrame || 0);
+                const desiredFrames = Math.max(1, (manifest as any)?.desired_duration ?? 5 * fps);
+                const startFrame = focusFrame;
+                const endFrame = startFrame + desiredFrames;
+
+                // Choose an existing compatible timeline with free space at [startFrame, endFrame)
+                const mediaTimelines = clipStore.timelines.filter((t) => isValidTimelineForClip(t, { type: 'model' } as any));
+                const intervalOverlaps = (loA: number, hiA: number, loB: number, hiB: number) => (loA < hiB) && (hiA > loB);
+                let targetTimelineId: string | undefined;
+                for (const t of mediaTimelines) {
+                  const existing = clipStore.getClipsForTimeline(t.timelineId)
+                    .map((c) => ({ lo: c.startFrame || 0, hi: c.endFrame || 0 }))
+                    .filter((iv) => iv.hi > iv.lo);
+                  const hasConflict = existing.some((iv) => intervalOverlaps(startFrame, endFrame, iv.lo, iv.hi));
+                  if (!hasConflict) {
+                    targetTimelineId = t.timelineId;
+                    break;
+                  }
+                }
+
+                // If no space found, create a new media timeline
+                if (!targetTimelineId) {
+                  const timelineId = uuidv4();
+                  const last = clipStore.timelines[clipStore.timelines.length - 1];
+                  clipStore.addTimeline({
+                    timelineId,
+                    type: getTimelineTypeForClip('model'),
+                    timelineHeight: getTimelineHeightForClip('model'),
+                    timelineWidth: last?.timelineWidth ?? 0,
+                    timelineY: (last?.timelineY ?? 0) + (last?.timelineHeight ?? 54),
+                    timelinePadding: last?.timelinePadding ?? 24,
+                    muted: false,
+                    hidden: false,
+                  });
+                  targetTimelineId = timelineId;
+                }
+
+                // Build the new clip and fetch manifest before adding
+                const newClipId = uuidv4();
+                const clipBase: any = {
+                  timelineId: targetTimelineId,
+                  clipId: newClipId,
+                  startFrame,
+                  endFrame,
+                  // @ts-ignore
+                  type: 'model',
+                  trimEnd: -Infinity,
+                  trimStart: Infinity,
+                  height: 540,
+                  width: 540,
+                  speed: 1.0,
+                  category,
+                };
+                const manifestResp = await getManifest(manifest.id);
+                if (manifestResp?.data) {
+                  clipBase.manifest = manifestResp.data;
+                }
+                useClipStore.getState().addClip(clipBase);
+              } catch {}
+            }}
             type='button'
-            disabled={allDownloaded || isStartingDownload || isDownloading}
+            disabled={isStartingDownload || isDownloading}
             className={cn(
-              'text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded px-2 py-1 border flex-1',
-              allDownloaded
-                ? 'text-brand-light/80 bg-brand-background border-brand-light/10 cursor-default'
-                : 'text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10'
+              'text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded px-2 py-1 border flex-1 text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10'
             )}
-            title={allDownloaded ? 'Already downloaded' : ((isStartingDownload || isDownloading) ? 'Downloading…' : 'Download default variant')}
+            title={allDownloaded ? 'Add clip at playhead' : ((isStartingDownload || isDownloading) ? 'Downloading…' : 'Download default variant')}
           >
             {allDownloaded ? (
-              <LuCheck className='w-3 h-3' />
+              <LuPlus className='w-3 h-3' />
             ) : (isStartingDownload || isDownloading) ? (
               <LuLoader className='w-3 h-3 animate-spin' />
             ) : (
               <LuDownload className='w-3 h-3' />
             )}
-            <span>{allDownloaded ? 'Downloaded' : ((isStartingDownload || isDownloading) ? 'Downloading…' : 'Download')}</span>
+            <span>{allDownloaded ? 'Add Clip' : ((isStartingDownload || isDownloading) ? 'Downloading…' : 'Download')}</span>
           </button>
         </div>
       )}

@@ -399,7 +399,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 
     const handleDragMove = useCallback((e:Konva.KonvaEventObject<MouseEvent>) => {
         if (assetMode) return;
-        rootGroupRef.current?.moveToTop();
+        // rootGroupRef.current?.moveToTop();
         const halfStroke = isSelected ? 1.5 : 0;
         // For preprocessor clips, only update X position to prevent vertical drift
         setClipPosition({x: e.target.x() - halfStroke, y: e.target.y() - halfStroke});
@@ -1079,7 +1079,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 
     const handleDragStart = useCallback((e:Konva.KonvaEventObject<MouseEvent>) => {
         if (assetMode) return;
-        rootGroupRef.current?.moveToTop();
+        //rootGroupRef.current?.moveToTop();
         groupRef.current?.moveToTop();
         
         setSelectedPreprocessorId(null);
@@ -1580,7 +1580,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
             
             {/* Per-clip menu component retained (optional); global menu now handles rendering */}
             {hasPreprocessors && (currentClip?.type === 'video' || currentClip?.type === 'image') && (
-                <Group clipX={clipPosition.x} clipY={clipPosition.y} clipWidth={clipWidth} clipHeight={timelineHeight}>
+                <Group clipX={clipPosition.x} clipY={clipPosition.y} >
                     {(currentClip as VideoClipProps | ImageClipProps).preprocessors.map((preprocessor) => {
                         return <PreprocessorClip 
                         assetMode={assetMode}

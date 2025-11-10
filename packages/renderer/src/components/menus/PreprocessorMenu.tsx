@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Preprocessor } from '@/lib/preprocessor/api'
 import Draggable from '../dnd/Draggable'
 import { ScrollArea } from '../ui/scroll-area'
-import { LuInfo, LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuDownload, LuImage, LuVideo, LuLoader } from "react-icons/lu";
+import { LuInfo, LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuDownload, LuImage, LuVideo, LuLoader, LuPlus } from "react-icons/lu";
 import { TbWorldDownload } from 'react-icons/tb';
 import { cn } from '@/lib/utils'
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store'
@@ -10,7 +10,7 @@ import PreprocessorPage from '../preprocessors/PreprocessorPage'
 import { downloadPreprocessor as downloadPreprocessorApi, usePreprocessorJob, useJobProgress, getPreprocessorStatus, usePreprocessorJobStore } from '@/lib/preprocessor/api'
 import CategorySidebar from './CategorySidebar'
 
-export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?: boolean, onMoreInfo?: (id: string) => void}> = ({preprocessor, isDragging, onMoreInfo}) => {
+export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?: boolean, onMoreInfo?: (id: string) => void, onAdd?: (preprocessor: Preprocessor) => void, addDisabled?: boolean, dimmed?: boolean}> = ({preprocessor, isDragging, onMoreInfo, onAdd, addDisabled, dimmed}) => {
     const isDownloaded = !!preprocessor.is_downloaded;
     const [jobId, setJobId] = useState<string | null>(null);
     const [starting, setStarting] = useState(false);
@@ -105,19 +105,19 @@ export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?:
         return formatSize(bytes);
     }, [preprocessor.files]);
 
-
     return (
-        <div className={cn("flex flex-col cursor-pointer w-28 transition-all duration-200 rounded-md border shadow border-brand-light/10", {
+        <div className={cn("flex flex-col w-28 transition-all duration-200 rounded-md border shadow border-brand-light/10", {
             'w-36': !isDragging,
             'w-32': isDragging
-        })}>
-            <Draggable data={{
-                ...preprocessor,
-                type: 'preprocessor',
-                processor_url: `/preprocessors/${preprocessor.id}.png`,
-            }} id={preprocessor.id}>
+        }, dimmed ? 'opacity-100' : '', addDisabled ? 'cursor-default' : 'cursor-pointer')}>
+            {isDragging ? (
                 <div className="flex flex-col">
-                    <div className="flex items-center gap-x-1 relative">
+                    <div className={cn("flex items-center gap-x-1 relative h-full w-full", {
+                        "opacity-50":addDisabled
+                    })}>
+                        <div className={cn('absolute top-0 left-0 h-full w-full rounded-t-md', {
+                            "backdrop-blur-sm":addDisabled
+                        })} />
                         <img src={`/preprocessors/${preprocessor.id}.png`} alt={preprocessor.name} className={cn(" h-48 aspect-square object-cover rounded-t-md", {
                             'h-48': !isDragging,
                             'h-44': isDragging
@@ -147,37 +147,96 @@ export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?:
                         </div>
                     </div>
                 </div>
-            </Draggable>
+            ) : (
+                <Draggable data={{
+                    ...preprocessor,
+                    type: 'preprocessor',
+                    processor_url: `/preprocessors/${preprocessor.id}.png`,
+                }} id={preprocessor.id} disabled={addDisabled || !isDownloaded}>
+                    <div className="flex flex-col">
+                        <div className={cn("flex items-center gap-x-1 relative h-full w-full", {
+                            "opacity-50":addDisabled
+                        })}>
+                            <div className={cn('absolute top-0 left-0 h-full w-full rounded-t-md', {
+                                "backdrop-blur-sm":addDisabled
+                            })} />
+                            <img src={`/preprocessors/${preprocessor.id}.png`} alt={preprocessor.name} className={cn(" h-48 aspect-square object-cover rounded-t-md", {
+                                'h-48': !isDragging,
+                                'h-44': isDragging
+                            })} />
+                        </div>
+                        <div className="w-full bg-brand p-2 rounded-b-md">
+                            <div className="w-full flex flex-col gap-y-1 ">
+                                <div className="w-full flex flex-col gap-y-1">
+                                    <div className="truncate leading-tight font-medium text-brand-light text-[10px] text-start">{preprocessor.name}</div>
+                                    <div className="w-full flex items-center justify-between">
+                                        {totalDownloadSize && (
+                                            <span className="text-brand-light/50 text-[9px] w-full text-start">{totalDownloadSize}</span>
+                                        )}
+                                        <div className={cn("w-full flex items-center gap-x-1 text-brand-light/50", {
+                                            'justify-end': totalDownloadSize,
+                                            'justify-start': !totalDownloadSize,
+                                        })}>
+                                            {preprocessor.supports_image && (
+                                                <LuImage className="w-3 h-3" />
+                                            )}
+                                            {preprocessor.supports_video && (
+                                                <LuVideo className="w-3 h-3" />
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </Draggable>
+            )}
             {!isDragging && (
-                <div className='flex items-center gap-x-1 w-full p-2 pt-0 bg-brand'>
+                <div className='bg-brand p-2 gap-y-1 flex flex-col'>
+                <div className='flex items-center gap-x-1 w-full pt-0 bg-brand'>
                     <button
                         onClick={() => onMoreInfo?.(preprocessor.id)}
                         type='button'
-                        className='text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1'
+                        className='text-[10px] font-medium whitespace-nowrap flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1'
                         title='Show more info'
                     >
                         <LuInfo className='w-3 h-3' />
-                        <span>More info</span>
+                        <span>Info</span>
                     </button>
+                    {!!onAdd && isDownloaded && (
+                        <button
+                            type="button"
+                            onClick={() => !addDisabled && onAdd?.(preprocessor)}
+                            disabled={addDisabled}
+                            className={cn('text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light bg-brand-background border disabled:!cursor-default disabled:opacity-50 border-brand-light/10 rounded px-2 py-1')}
+                            title='Add to clip'
+                        >
+                            <LuPlus className="w-2.5 h-2.5" />
+                            <span>Add</span>
+                        </button>
+                    )}
                     {isDownloaded ? null : (
                         <button
                             type="button"
                             onClick={handleDownload}
                             disabled={starting || (!!jobId && isProcessing) || isGlobalProcessing}
                             className={cn(
-                                "inline-flex items-center justify-center gap-x-1 text-[9px] bg-brand-background border border-brand-light/10 rounded py-1 px-1 h-[25px] min-w-7",
+                                "inline-flex items-center justify-center gap-x-1 text-[10px] font-medium w-full bg-brand-background border border-brand-light/10 rounded py-1 px-1 h-[25px] min-w-7",
                                 {
                                     'text-brand-light/60 cursor-default! opacity-70': jobId,
-                                    'text-brand-light/80 hover:text-brand-light hover:bg-brand-background/70': !jobId
+                                    'text-brand-light hover:text-brand-light hover:bg-brand-background/70': !jobId
                                 }
                             )}
                             title={starting ? 'Starting…' : 'Download'}
                         >
                             {(jobId)
-                                ? <LuLoader className="w-3 h-3 animate-spin" />
-                                : <LuDownload className="w-3 h-3" />}
+                                ? <LuLoader className="size-2.5 animate-spin" />
+                                : <LuDownload className="size-2.5" />}
+                            {(jobId) ? 'Installing':"Install"}
                         </button>
                     )}
+                </div>
+                
                 </div>
             )}
         </div>
@@ -297,7 +356,7 @@ const CategoryDetailView: React.FC<{category: string, preprocessors: Preprocesso
             </div>
             <ScrollArea className="flex-1 pb-16">
                 <div className="px-7 pt-6">
-                    <div className="grid gap-x-2 gap-y-3" style={{gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))'}}>
+                    <div className="grid gap-x-2 gap-y-3" style={{gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))'}}>
                         {preprocessors.map((preprocessor) => (
                             <div key={preprocessor.name} className="flex justify-center">
                                 <PreprocessorItem preprocessor={preprocessor} onMoreInfo={onMoreInfo} />

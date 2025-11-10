@@ -60,7 +60,7 @@ const PreprocessorPage:React.FC<PreprocessorPageProps> = ({ preprocessorId, onBa
   return (
     <div className="flex flex-col h-full w-full">
       <ScrollArea className="flex-1">
-        <div className="p-7 pt-3 pb-28">
+        <div className="p-4 pt-3 pb-28">
           {onBack && <div className="flex items-center gap-x-3">
             <button onClick={onBack} className="text-brand-light hover:text-brand-light/70 p-1 flex items-center justify-center bg-brand border border-brand-light/10 rounded transition-colors cursor-pointer">
               <LuChevronLeft className="w-3 h-3" />
@@ -68,14 +68,11 @@ const PreprocessorPage:React.FC<PreprocessorPageProps> = ({ preprocessorId, onBa
             <span className="text-brand-light/90 text-[11px] font-medium">Back</span>
           </div>}
 
-          <div className='mt-4 flex flex-row gap-x-4 w-full'>
-            <div className="rounded-md overflow-hidden flex items-center w-44 aspect-square justify-start flex-shrink-0">
-              <img src={`/preprocessors/${data.id}.png`} alt={data.name} className="h-full object-cover rounded-md" />
-            </div>
+          <div className='mt-4 flex flex-col gap-y-4 w-full'>
 
             <div className="flex flex-col gap-y-2 min-w-0">
-              <h2 className="text-brand-light text-[18px] font-semibold text-start truncate">{data.name}</h2>
-              <p className="text-brand-light/90 text-[12px] text-start">{data.description}</p>
+              <h2 className="text-brand-light text-[16px] font-semibold text-start truncate">{data.name}</h2>
+              <p className="text-brand-light/90 text-[11px] text-start">{data.description}</p>
 
               <div className='flex flex-col mt-1 items-start gap-y-0.5'>
                 <span className="text-brand-light text-[12px] font-medium">{data.category}</span>
@@ -101,12 +98,6 @@ const PreprocessorPage:React.FC<PreprocessorPageProps> = ({ preprocessorId, onBa
             </div>
           </div>
 
-          {/* Only the parameters summary section from PreprocessorInfoPanel */}
-          {Array.isArray(data.parameters) && data.parameters.length > 0 && (
-            <div className="mt-6">
-              <InfoParametersSection parameters={data.parameters as InfoParam[]} />
-            </div>
-          )}
 
           {/* If not downloaded yet, show planned files and a Download action */}
           {!data.is_downloaded && Array.isArray(data.files) && (

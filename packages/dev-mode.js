@@ -1,5 +1,7 @@
 import {build, createServer} from 'vite';
 import path from 'path';
+import {spawn} from 'node:child_process';
+import electron from 'electron';
 
 /**
  * This script is designed to run multiple packages of your application in a special development mode.
@@ -23,12 +25,17 @@ process.env.MODE = mode;
  * @type {import('vite').ViteDevServer}
  */
 const rendererWatchServer = await createServer({
+  
   mode,
   root: path.resolve('packages/renderer'),
 });
 
 await rendererWatchServer.listen();
 
+// Derive the renderer dev URL and expose it to Electron via env
+const resolvedUrls = rendererWatchServer.resolvedUrls?.local ?? [];
+const rendererDevUrl = resolvedUrls[0] ?? `http://localhost:${rendererWatchServer.config.server.port}/`;
+process.env.VITE_DEV_SERVER_URL = rendererDevUrl;
 
 /**
  * 3. We are creating a simple provider plugin.
@@ -66,3 +73,28 @@ for (const pkg of packagesToStart) {
     ],
   });
 }
+
+/**
+ * 5. Launch Electron pointing at our entry point, with the renderer dev URL in env.
+ */
+const entryPoint = path.resolve('packages/entry-point.mjs');
+const electronProc = spawn(electron, [entryPoint], {
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    NODE_ENV: mode,
+    MODE: mode,
+    VITE_DEV_SERVER_URL: rendererDevUrl,
+  },
+});
+
+electronProc.on('close', async (code) => {
+  try { await rendererWatchServer.close(); } catch {}
+  process.exit(code ?? 0);
+});
+
+process.on('SIGINT', async () => {
+  try { electronProc.kill('SIGINT'); } catch {}
+  try { await rendererWatchServer.close(); } catch {}
+  process.exit(0);
+});

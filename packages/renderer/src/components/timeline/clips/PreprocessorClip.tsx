@@ -211,8 +211,6 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         mediaInfoRef.current = getMediaInfoCached(preprocessor.src ?? '') ?? null;
     }, [preprocessor.src]);
 
-    
-
     // Set canvas dimensions based on preprocessor width and height
     useEffect(() => {
         imageCanvas.width = Math.min(preprocessorWidth, timelineWidth);
@@ -221,15 +219,13 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
 
     const imageWidth = useMemo(() => Math.min(preprocessorWidth, timelineWidth), [preprocessorWidth, timelineWidth]);
 
-    
-
     useEffect(() => {
         if (isDragging) {
+            setTimeout(() => {
                 preprocessorRef.current?.moveToTop();
+            }, 100);
         }
     }, [isDragging]);
-
-    
 
     const imageX = useMemo(() => {
         let extraDist = 0;
@@ -259,7 +255,6 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
             extraDist += timelinePadding;
         }
 
-
         return positionX + extraDist
     }, [preprocessorXPosition, imageWidth, preprocessorX, currentStartFrame, clip?.trimStart, timelineDuration]);
 
@@ -287,6 +282,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         const handleBlur = () => {
             setIsCtrlPressed(false);
         };
+
         window.addEventListener('blur', handleBlur);
 
         return () => {
@@ -435,7 +431,6 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         }, [preprocessor.id, setSelectedPreprocessorId, preprocessor.status, timelineDuration, preprocessorStartFrame, currentStartFrame, timelinePadding, timelineWidth]);
     
     const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-        
         const stage = e.target.getStage();
         if (!stage) return;
 

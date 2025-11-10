@@ -218,13 +218,15 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestInfoWithType | undefined;
       if (!data) return;
       
-      setIsDragging(true);
+      
       
       if (data.type === 'preprocessor') {
         const clipFrames = controlStore.fps * 5;
         setGhostStartEndFrame(0, clipFrames);
         return;
       }
+
+      setIsDragging(true);
  
       if (data.type === 'model') {
         const clipFrames = (data as ManifestInfoWithType).desired_duration ?? 5 * controlStore.fps;
@@ -259,6 +261,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       let pointerX: number | null = null;
       let pointerY: number | null = null;
       const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestInfoWithType | undefined;
+
       if (clips.length === 0) return;
 
 
@@ -818,13 +821,10 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       setGhostInStage(false);
       preprocessorDragClipRef.current = null;
       preprocessorDragKonvaNodeRef.current = null;
-      if (clip.type === 'image') {
-        setSelectedPreprocessorId(draggedPreprocessor.id);
-      }
+      setSelectedPreprocessorId(draggedPreprocessor.id);
       return;
     }
     
-
     let targetStartFrame: number | null = null;
     const sortedOthers = [...otherPreprocessors].sort((a, b) => (a.startFrame ?? 0) - (b.startFrame ?? 0));
     const gaps: [number, number][] = [];
@@ -972,6 +972,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     if (!targetTimeline) {
       return;
     }
+
     const clips = getClipsForTimeline(targetTimeline.timelineId);
     for (const clip of clips) { 
       const {top, bottom, left, right} = getClipPosition(clip.clipId, verticalScrollRef.current);
@@ -1111,9 +1112,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       }
     }
 
-
     if (preprocessorDragClipRef.current) {
-      setSelectedPreprocessorId(preprocessorDragClipRef.current.id);
       const stage = timelinesLayerRef.current?.getStage();
       if (!stage) return;
         const konvaNode = stage?.findOne(`#${preprocessorDragClipRef.current.id}`);
@@ -1151,7 +1150,8 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
           // Same clip - just update position
           // Calculate the absolute timeline frame from pointer position
           const absoluteFrame = calculateFrameFromX(pointerX, timelinePadding, timelineWidth, [visibleStartFrame, visibleEndFrame]);
-          
+
+
           // Convert to relative frame within the clip
           const rawStart = absoluteFrame - targetClip.startFrame!;
           const clipDuration = targetClip.endFrame! - targetClip.startFrame!;
