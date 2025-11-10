@@ -46,6 +46,9 @@ export const convertUserDataPath = (path: string): string => {
 }
 
 export const convertApexCachePath = (path: string): string => {
+    if (path.startsWith('app://apex-cache/')) {
+        return path;
+    }
     const filePath = fileURLToPath(path);
     return `app://apex-cache/${filePath}`;
 }

@@ -178,6 +178,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   const hasPendingDeletion = useMemo(() => relevantPaths.some((p) => !!pendingDeletions[p]), [pendingDeletions, relevantPaths]);
 
   const isDownloaded = useMemo(() => {
+
     if (hasPendingDeletion) return false;
     if ((component as any)?.is_downloaded) return true;
     // Any model path marked as downloaded in manifest

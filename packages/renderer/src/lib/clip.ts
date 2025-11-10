@@ -987,29 +987,41 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const isAudioish = typeStr.startsWith('audio');
             const isImageish = typeStr.startsWith('image');
             if (isVideoish || isAudioish || isImageish) {
-                // check if input is in the clip store and if so, use the value from the clip store
-
-                if (finalVal && typeof finalVal === 'object' && 'clipId' in finalVal && clip) {
-                    const clip = get().getClipById(finalVal.clipId);
-                    if (clip) {
-                        finalVal = clip;
+                // Resolve composite values (selection + preprocessor flags) and ensure we return AnyClipProps
+                // Prefer: finalVal = <clip object> with selectedRange/selectedFrame and apply_preprocessor (if present)
+                let selectedClip: any = null;
+                let applyFlag: boolean | undefined = undefined;
+                if (finalVal && typeof finalVal === 'object') {
+                    // Composite form: { selection, apply_preprocessor?, apply?, preprocessor_ref?, ... }
+                    const maybeSelection: any = (finalVal as any).selection ?? finalVal;
+                    if (maybeSelection && typeof maybeSelection === 'object' && 'clipId' in maybeSelection) {
+                        const lookedUp = get().getClipById((maybeSelection as any).clipId);
+                        selectedClip = lookedUp || maybeSelection;
+                    } else {
+                        selectedClip = maybeSelection;
                     }
+                    if (Object.prototype.hasOwnProperty.call(finalVal as any, 'apply_preprocessor') && typeof (finalVal as any).apply_preprocessor === 'boolean') {
+                        applyFlag = (finalVal as any).apply_preprocessor as boolean;
+                    } else if (Object.prototype.hasOwnProperty.call(finalVal as any, 'apply') && typeof (finalVal as any).apply === 'boolean') {
+                        applyFlag = (finalVal as any).apply as boolean;
+                    }
+                } else {
+                    selectedClip = finalVal;
                 }
-
                 const inputStore = useInputControlsStore.getState();
                 if (isVideoish || isAudioish) {
                     const [start, end] = inputStore.getSelectedRange(inp.id);
-                    if (finalVal && typeof finalVal === 'object') {
-                        finalVal = { ...(finalVal as any), selectedRange: [start, end] };
+                    if (selectedClip && typeof selectedClip === 'object') {
+                        finalVal = { ...(selectedClip as any), selectedRange: [start, end], ...(typeof applyFlag === 'boolean' ? { apply_preprocessor: applyFlag } : {}) };
                     } else {
-                        finalVal = { selection: finalVal, selectedRange: [start, end]  };
+                        finalVal = { selection: selectedClip, selectedRange: [start, end], ...(typeof applyFlag === 'boolean' ? { apply_preprocessor: applyFlag } : {}) };
                     }
                 } else if (isImageish) {
                     const focus = inputStore.getFocusFrame(inp.id);
-                    if (finalVal && typeof finalVal === 'object') {
-                        finalVal = { ...(finalVal as any), selectedFrame: focus };
+                    if (selectedClip && typeof selectedClip === 'object') {
+                        finalVal = { ...(selectedClip as any), selectedFrame: focus, ...(typeof applyFlag === 'boolean' ? { apply_preprocessor: applyFlag } : {}) };
                     } else {
-                        finalVal = { selection: finalVal, selectedFrame: focus };
+                        finalVal = { selection: selectedClip, selectedFrame: focus, ...(typeof applyFlag === 'boolean' ? { apply_preprocessor: applyFlag } : {}) };
                     }
                 }
             }

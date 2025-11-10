@@ -912,12 +912,32 @@ export class ApexApi implements AppModule {
       return out;
     }
     if (typeof value === 'object') {
-      // If object has a 'src' that looks like a local file, upload and replace with the string path
-      if (typeof value.src === 'string') {
+      const keys = Object.keys(value);
+      const onlySrcKey = keys.length === 1 && keys[0] === 'src';
+      if (onlySrcKey && typeof value.src === 'string') {
         const uploaded = await this.#uploadLocalFileIfNeeded(value.src);
         return uploaded || value.src;
       }
-      return value;
+      let mutated = false;
+      let nextValue: any = value;
+      if (typeof value.input_path === 'string') {
+        const uploaded = await this.#uploadLocalFileIfNeeded(value.input_path);
+        if (uploaded) {
+          nextValue = { ...nextValue, input_path: uploaded };
+          mutated = true;
+        }
+      }
+      if (typeof value.src === 'string') {
+        const uploaded = await this.#uploadLocalFileIfNeeded(value.src);
+        if (uploaded) {
+          if (!mutated) {
+            nextValue = { ...nextValue };
+            mutated = true;
+          }
+          nextValue.src = uploaded;
+        }
+      }
+      return mutated ? nextValue : value;
     }
     return value;
   }

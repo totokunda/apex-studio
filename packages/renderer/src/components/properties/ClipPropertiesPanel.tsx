@@ -455,8 +455,8 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
     // loop through modelValues to pre-export media inputs
     for (const input of inputs) {
-       if (String(input.type).startsWith('image')) {
-        const value = modelValues[input.id] as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]; selection?:string};
+       if (String(input.type).startsWith('image') || String(input.type).startsWith('video')) {
+        const value = {...modelValues[input.id]} as AnyClipProps & { selectedFrame?: number; selectedRange?: [number, number]; selection?: string; apply_preprocessor?: boolean };
         clipValues[input.id] = value;
         if (!value || value.selection === '') continue;
         // we need to check clip type
@@ -470,11 +470,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           let transform = value.originalTransform;
           width = transform?.width ?? mediaInfo?.image?.width ?? 0;
           height = transform?.height ?? mediaInfo?.image?.height ?? 0;
-          value.preprocessors.forEach((p) => {
-            if (p.status === 'complete' && p.src) {
-              p.src = convertApexCachePath(p.src);
-            }
-          });
           if (!mediaInfo) continue;
         } else if (value.type === 'video') {
           const mediaInfo = getMediaInfoCached(value.src);
@@ -510,11 +505,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               if (!mediaInfo) return newClip;
               const filePath = convertUserDataPath(newClip.src);  
               newClip.src = filePath;
-              newClip.preprocessors.forEach((p) => {
-                if (p.status === 'complete' && p.src) {
-                  p.src = convertApexCachePath(p.src);
-                }
-              });
             }
             if (Object.prototype.hasOwnProperty.call(newClip, 'preprocessors')) {
               (newClip as any).preprocessors = (c as any).preprocessors?.map((p: any) => ({ ...p, startFrame: (p.startFrame ?? 0) - groupStart, endFrame: (p.endFrame ?? 0) - groupStart })) ?? [];
@@ -540,6 +530,13 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         const exportClips: ExportClip[] = [];
         for (const clip of clips as ExportClip[]) {
           const newClip = { ...clip };
+          // Convert preprocessor src paths only on the export copy
+          if (Array.isArray((clip as any).preprocessors)) {
+            (newClip as any).preprocessors = (clip as any).preprocessors.map((p: any) => {
+              const convertedSrc = p?.status === 'complete' && p?.src ? convertApexCachePath(p.src) : p?.src;
+              return { ...p, src: convertedSrc };
+            });
+          }
           for (const filter of [...filterClips]) {
             if (getClipPositionScore(filter.clipId) < getClipPositionScore(newClip.clipId)) {
               if (!newClip.applicators) {
@@ -642,6 +639,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             if (result instanceof Blob) {
               const buf = new Uint8Array(await result.arrayBuffer());
               absolutePath = await savePreviewImage(buf, { fileNameHint: `${clipId}_${input.id}_${frame}` });
+              console.log(absolutePath);
             }
           }
         }
@@ -653,7 +651,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
 
        } else if (String(input.type).startsWith('audio')) {
-          const value = modelValues[input.id] as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]};
+          const value = {...modelValues[input.id]} as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]};
           if (!value) continue;
           // we need to check clip type
           if (value.type === 'audio') {
@@ -701,7 +699,41 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         const raw = (modelValues as any)[input.id];
         const t = String(input.type);
         if (raw == null) continue;
-        if (t.startsWith('image') || t.startsWith('video') || t.startsWith('audio')) {
+        if (t.startsWith('image') || t.startsWith('video')) {
+          const hasPreprocessor = Boolean((input as any)?.preprocessor_ref);
+          const clipSource = clipValues[input.id];
+          const resolveApplyPreprocessor = () => {
+            if (clipSource && typeof clipSource === 'object') {
+              if (typeof (clipSource as any).apply_preprocessor === 'boolean') {
+                return (clipSource as any).apply_preprocessor;
+              }
+              if (typeof (clipSource as any).apply === 'boolean') {
+                return (clipSource as any).apply;
+              }
+            }
+            return undefined;
+          };
+          const applyPreprocessor = resolveApplyPreprocessor();
+          let mediaPath: string | undefined;
+          if (typeof raw === 'string') {
+            mediaPath = raw;
+          } else if (raw && typeof raw === 'object') {
+            if (typeof (raw as any).input_path === 'string') {
+              mediaPath = (raw as any).input_path;
+            } else if (typeof (raw as any).src === 'string') {
+              mediaPath = (raw as any).src;
+            }
+          }
+          if (!mediaPath) continue;
+          if (hasPreprocessor) {
+            engineInputs[input.id] = {
+              input_path: mediaPath,
+              apply_preprocessor: typeof applyPreprocessor === 'boolean' ? applyPreprocessor : true,
+            };
+          } else {
+            engineInputs[input.id] = mediaPath;
+          }
+        } else if (t.startsWith('audio')) {
           if (typeof raw === 'string') {
             engineInputs[input.id] = raw;
           } else if (raw && typeof raw === 'object' && raw.src) {
@@ -742,13 +774,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       
       const activeJobId = uuidv4();
 
-
-      console.log(selectedComponents);
-      console.log(engineInputs);
-      console.log(manifestId);
-      console.log(activeJobId);
-      return;
-
       const res = await runEngine({ manifest_id: manifestId, inputs: engineInputs, selected_components: selectedComponents, job_id: activeJobId });
       if (res.success) {
         toast.success(`Generation started for ${(clip as ModelClipProps)?.manifest?.metadata?.name}`);
@@ -760,11 +785,34 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         }
         try {
 
-          // we need to replace engineInputs with clipValues
-          const updatedEngineInputs = { ...engineInputs };
-          for (const [key, value] of Object.entries(clipValues)) {
-            updatedEngineInputs[key] = value;
+          // Persist UI-friendly values so ImageInput/VideoInput can refetch exact composite state
+          const updatedEngineInputs: Record<string, any> = {};
+          for (const input of inputs) {
+            const t = String(input.type);
+            if (t.startsWith('image') || t.startsWith('video')) {
+              const hasPreprocessor = Boolean((input as any)?.preprocessor_ref);
+              const selectionValue = clipValues[input.id]; // enriched AnyClipProps with selectedRange/selectedFrame
+              const preprocRef = (input as any)?.preprocessor_ref as string | undefined;
+              const preprocName = (input as any)?.preprocessor_name as string | undefined;
+              // Determine apply_preprocessor from selectionValue if present; otherwise leave undefined (UI has defaults)
+              const applyFlag =
+                selectionValue && typeof selectionValue === 'object' && typeof (selectionValue as any).apply_preprocessor === 'boolean'
+                  ? (selectionValue as any).apply_preprocessor
+                  : undefined;
+              updatedEngineInputs[input.id] = {
+                selection: selectionValue ?? null,
+                preprocessor_ref: preprocRef,
+                preprocessor_name: preprocName,
+                apply_preprocessor: typeof applyFlag === 'boolean' ? applyFlag : (hasPreprocessor ? true : undefined),
+                apply: typeof applyFlag === 'boolean' ? applyFlag : (hasPreprocessor ? true : undefined),
+              };
+            } else {
+              // Non-media inputs: keep engine-ready scalar values
+              updatedEngineInputs[input.id] = (engineInputs as any)[input.id];
+            }
           }
+          // Preserve duration we added to engineInputs
+          updatedEngineInputs['duration'] = engineInputs['duration'];
           const existingGenerations = ((clip as ModelClipProps)?.generations ?? []);
           const newGeneration = {
             jobId: activeJobId,
@@ -914,23 +962,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             disabled={isPreparingPreprocessor}
             onClick={preprocessor?.status === 'running' ? handleStopPreprocessor : handleRunPreprocessor}
             className={cn("w-full py-2.5 px-6 rounded-lg font-medium text-[12px] flex items-center disabled:opacity-60 text-brand-lighter disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50 justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90", 
-              preprocessor?.status === 'running' ? 'bg-red-500' : 'bg-brand-accent-two-shade ',
-              isPreparingPreprocessor ? 'bg-brand-light/10! text-brand-light/60!' : ''
+              preprocessor?.status === 'running'
+                ? 'bg-red-500'
+                : isPreparingPreprocessor
+                  ? 'bg-brand-light/10 text-brand-light/60'
+                  : 'bg-brand-accent-two-shade'
             )}
-            onMouseEnter={(e) => {
-              if (preprocessor?.status === 'running') {
-                e.currentTarget.style.backgroundColor = '#B91C1C';
-              } else {
-                e.currentTarget.style.backgroundColor = '#8E5FAF';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (preprocessor?.status === 'running') {
-                e.currentTarget.style.backgroundColor = '#DC2626';
-              } else {
-                e.currentTarget.style.backgroundColor = '#A477C4';
-              }
-            }}
           >
             {preprocessor?.status === 'running' ? (
               <FaStop size={16} />  
