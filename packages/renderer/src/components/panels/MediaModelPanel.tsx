@@ -12,6 +12,8 @@ import MediaModelTrigger from '../media/MediaModelTrigger'
 import FilterMenu from '../menus/FilterMenu'
 import ModelMenu from '../menus/ModelMenu'
 import { LuBox } from "react-icons/lu";
+import PreprocessorMenu from '../menus/PreprocessorMenu'
+import { TbWorldDownload } from 'react-icons/tb'
 
 
 interface MediaModelPanelProps { order?: number; defaultSize?: number; minSize?: number; maxSize?: number }
@@ -94,6 +96,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
         <div className="flex flex-row gap-x-2 w-fit">
           <MediaModelTrigger icon={<HiFilm className="h-4 w-4" />} title="Media" section="media" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<LuBox className="h-4 w-4 stroke-2" />} title="Models" section="models" onOpen={resizePanelOpen} onClose={resizePanelClose} />
+          <MediaModelTrigger icon={<TbWorldDownload className="h-4 w-4" />} title="Preprocessors" section="preprocessors" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<MdPhotoFilter className="h-4 w-4 " />} title="Filters" section="filters" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<MdOutlineMovieFilter className="h-4 w-4 " />} title="LoRAs" section="loras" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           {/*<MediaModelTrigger icon={<HiOutlineTemplate className="h-4 w-4 stroke-2" />} title="Templates" section="templates" onOpen={resizePanelOpen} onClose={resizePanelClose} />*/}
@@ -107,7 +110,9 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
     </div>
     {section === 'media' && <MediaMenu />}
     {section === 'filters' && <FilterMenu />}
+    {section === 'preprocessors' && <PreprocessorMenu />}
     {section === 'models' && <ModelMenu />}
+    
   </ResizablePanel>
   )
 }
