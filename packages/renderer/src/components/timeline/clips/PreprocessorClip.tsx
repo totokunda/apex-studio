@@ -13,7 +13,7 @@ import { useAssetControlsStore } from '@/lib/assetControl'
 import { useInputControlsStore } from '@/lib/inputControl'
 import Konva from 'konva'
 import { calculateFrameFromX as calcFrameFromX, getOtherPreprocessors as getOthers, detectCollisions as detectColls, findGapAfterBlock as findGap } from '@/lib/preprocessorHelpers'
-import { runPreprocessor, usePreprocessorJob, usePreprocessorJobActions, getPreprocessorResult } from '@/lib/preprocessor/api'
+import { runPreprocessor, usePreprocessorJob, usePreprocessorJobActions, getPreprocessorResult, cancelPreprocessor } from '@/lib/preprocessor/api'
 import { toast } from 'sonner';
 import {getMediaInfo, getMediaInfoCached} from '@/lib/media/utils'  
 import {pathToFileURLString} from '@app/preload'
@@ -1005,6 +1005,7 @@ export const PreprocessorClip:React.FC<PropsPreprocessorClip> = ({preprocessor:i
         const jobId = preprocessor.activeJobId || preprocessor.id;
         
         // Stop tracking the job and clear it
+        try { await cancelPreprocessor(jobId); } catch {}
         await stopTracking(jobId);
         clearJob(jobId);
         

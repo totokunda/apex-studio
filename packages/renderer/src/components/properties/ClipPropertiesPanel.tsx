@@ -17,7 +17,7 @@ import LineProperties from './LineProperties'
 import PreprocessorDurationPanel from './preprocessor/PreprocessorDurationPanel'
 import PreprocessorParametersPanel from './preprocessor/PreprocessorParametersPanel'
 import { FaStop } from 'react-icons/fa'
-import { runPreprocessor } from '@/lib/preprocessor/api'
+import { runPreprocessor, cancelPreprocessor } from '@/lib/preprocessor/api'
 import { toast } from 'sonner';
 
 import { toFrameRange } from '@/lib/media/fps';
@@ -590,7 +590,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     }
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, preprocessor]);
 
-  const handleStopPreprocessor = useCallback(() => {
+  const handleStopPreprocessor = useCallback(async () => {
     if (!selectedPreprocessorId) return;
     const clip = getClipFromPreprocessorId(selectedPreprocessorId);
     if (!preprocessor || !clip) return;
@@ -598,6 +598,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     
     // Stop tracking the job and clear it
     const jobId = preprocessor.activeJobId || selectedPreprocessorId;
+    try { await cancelPreprocessor(jobId); } catch {}
     stopTracking(jobId);
     clearJob(jobId);
     
@@ -1043,28 +1044,28 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             if (tabRef.current) {
               tabRef.current.scrollBy({ left: -96, behavior: 'smooth' });
             }
-          }} className={cn("text-brand-light h-6 w-6 bg-brand-background/90 border border-brand-light/10 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute left-1 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollLeft ? "block" : "hidden")} />
+          }} className={cn("text-brand-light h-6 w-6 bg-brand-background-dark/90  backdrop-blur-sm border border-brand-light/10 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute left-0 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollLeft ? "block" : "hidden")} />
           <TabsList ref={tabRef} style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}} className={cn("bg-brand w-full rounded-b-none p-0 min-w-0 flex-shrink overflow-x-auto [&::-webkit-scrollbar]:hidden")}>
-            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
-            {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Duration</TabsTrigger>}
+            {(hasValidPreprocessor) && <TabsTrigger value="preprocessor-parameters" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Inputs</TabsTrigger>}
+            {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Duration</TabsTrigger>}
             
-            {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Inputs</TabsTrigger>}
-            {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Progress</TabsTrigger>}
-            {(hasModel) && <TabsTrigger value="model-architecture" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Architecture</TabsTrigger>}
-            {(hasModel) && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Generations</TabsTrigger>}
-            {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Line</TabsTrigger>}
-            {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Text</TabsTrigger>}
-            {(hasTransform && !hasMask) && <TabsTrigger value="transform" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Transform</TabsTrigger>}
-            {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Mask</TabsTrigger>}
-            {(hasAudio && !hasMask) && <TabsTrigger value="audio" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Audio</TabsTrigger>}
-            {(hasPreprocessorBrowser) && <TabsTrigger value="preprocessors" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Preprocessors</TabsTrigger>}
-            {((hasDuration || hasFilter) && !hasMask) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">
+            {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Inputs</TabsTrigger>}
+            {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5  whitespace-nowrap">Progress</TabsTrigger>}
+            {(hasModel) && <TabsTrigger value="model-architecture" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Architecture</TabsTrigger>}
+            {(hasModel) && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Generations</TabsTrigger>}
+            {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Line</TabsTrigger>}
+            {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Text</TabsTrigger>}
+            {(hasTransform && !hasMask) && <TabsTrigger value="transform" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Transform</TabsTrigger>}
+            {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Mask</TabsTrigger>}
+            {(hasAudio && !hasMask) && <TabsTrigger value="audio" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Audio</TabsTrigger>}
+            {(hasPreprocessorBrowser) && <TabsTrigger value="preprocessors" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Preprocessors</TabsTrigger>}
+            {((hasDuration || hasFilter) && !hasMask) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">
               {hasFilter ? 'Filter' : 'Duration'}
               </TabsTrigger>}
               
-            {(hasAdjust && !hasMask) && <TabsTrigger value="adjust" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Adjust</TabsTrigger>}
-            {(hasAppearance && !hasMask) && <TabsTrigger value="appearance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Appearance</TabsTrigger>}
-            {(hasFrameInterpolate) && <TabsTrigger value="enhance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4 whitespace-nowrap">Enhance</TabsTrigger>}
+            {(hasAdjust && !hasMask) && <TabsTrigger value="adjust" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Adjust</TabsTrigger>}
+            {(hasAppearance && !hasMask) && <TabsTrigger value="appearance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Appearance</TabsTrigger>}
+            {(hasFrameInterpolate) && <TabsTrigger value="enhance" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Enhance</TabsTrigger>}
             
 
           </TabsList>
@@ -1072,7 +1073,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             if (tabRef.current) {
               tabRef.current.scrollBy({ left: 96, behavior: 'smooth' });
             }
-          }} className={cn("text-brand-light h-6 w-6 border border-brand-light/10 bg-brand-background/90 hover:bg-brand-background/100 z-10 transition-all duration-200 rounded-full absolute right-1 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollRight ? "block" : "hidden")} />
+          }} className={cn("text-brand-light h-6 w-6 border border-brand-light/10 bg-brand-background-dark/90 backdrop-blur-sm hover:bg-brand-background/100 z-10 transition-all duration-200 rounded-full absolute right-0 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollRight ? "block" : "hidden")} />
         </div>
         <ScrollArea className="flex-1 overflow-y-auto">
           <div style={{ paddingBottom: hasValidPreprocessor ? '20px' : '0' }}>
