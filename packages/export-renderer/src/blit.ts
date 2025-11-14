@@ -899,7 +899,6 @@ export async function blitImage(
             if (p?.status !== 'complete' || !p?.src) return false;
             const s = typeof p.startFrame === 'number' ? p.startFrame + trimStart : undefined;
             const e = typeof p.endFrame === 'number' ? p.endFrame + trimStart : s;
-            console.log(s, e, f);
             if (s === undefined && e === undefined) return false;
             if (s !== undefined && e !== undefined) return f >= s && f <= e;
             if (s !== undefined) return f === s;
@@ -914,8 +913,6 @@ export async function blitImage(
           if (first?.src) effectiveSrc = first.src;
         }
       }
-
-      console.log(effectiveSrc);
       const img = await new Promise<HTMLImageElement>((resolve, reject) => {
         const im = new Image();
         im.crossOrigin = 'anonymous';

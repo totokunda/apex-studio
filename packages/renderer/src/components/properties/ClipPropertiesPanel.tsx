@@ -63,7 +63,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const getClipsByType = useClipStore((s) => s.getClipsByType);
 
   const clip = useClipStore((s) => s.getClipById(clipId))
-  // const getClipsByType = useClipStore((s) => s.getClipsByType);
 
   const preprocessor = selectedPreprocessorId ? getPreprocessorById(selectedPreprocessorId) : null
   const clipType = clip?.type;
@@ -76,6 +75,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const [isPreparingGeneration, setIsPreparingGeneration] = useState(false);
   const [engineJobId, setEngineJobId] = useState<string | null>(null);
   const getModelValues = useClipStore((s) => s.getModelValues);
+  const getRawModelValues = useClipStore((s) => s.getRawModelValues);
   const hasFrameInterpolate = useMemo(() => {
     if (clip?.type === 'video') return true;
     return false;
@@ -613,17 +613,32 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     toast.info('Preparing inputs and starting generation...');
     // get the clip Id that is of type model 
     const modelValues = getModelValues(clipId);
+    const rawModelValues = getRawModelValues(clipId);
     if (!modelValues) return;
     const inputs = (clip as ModelClipProps)?.manifest?.spec.ui?.inputs || []; 
+    // Determine which inputs are map_to targets of image+mask/video+mask so we can export without masks
+    const mapToTargets = new Set<string>();
+    try {
+      for (const uiInput of inputs as any[]) {
+        const t = String(uiInput?.type || '').toLowerCase();
+        if ((t === 'image+mask' || t === 'video+mask') && uiInput?.map_to) {
+          mapToTargets.add(String(uiInput.map_to));
+        }
+      }
+    } catch {}
 
     const clipValues: Record<string, AnyClipProps> = {};
 
     // loop through modelValues to pre-export media inputs
     for (const input of inputs) {
        if (String(input.type).startsWith('image') || String(input.type).startsWith('video')) {
-        const value = {...modelValues[input.id]} as AnyClipProps & { selectedFrame?: number; selectedRange?: [number, number]; selection?: string; apply_preprocessor?: boolean };
+        const isMapTarget = mapToTargets.has(String(input.id));
+        const rawValue = {...modelValues[input.id]} as AnyClipProps & { selectedFrame?: number; selectedRange?: [number, number]; selection?: string; apply_preprocessor?: boolean };
+        // For map_to targets, explicitly strip masks from the selection at the source
+        const value = isMapTarget ? ({ ...rawValue, masks: [] } as typeof rawValue) : rawValue;
         clipValues[input.id] = value;
-        if (!value || value.selection === '') continue;
+        if (!value) continue;
+        if (Object.prototype.hasOwnProperty.call(value, 'selection') && (value.selection === undefined || value.selection === null || value.selection === '')) continue;
         // we need to check clip type
         
         let width = 0;
@@ -665,6 +680,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             const newClip = { ...c };
             newClip.startFrame = (c.startFrame ?? 0) - groupStart;
             newClip.endFrame = (c.endFrame ?? 0) - groupStart;
+            // For map_to targets, ensure masks are not applied on any child clip
+            if (isMapTarget && Object.prototype.hasOwnProperty.call(newClip, 'masks')) {
+              (newClip as any).masks = [];
+            }
             if (newClip.type === 'image') {
               const mediaInfo = getMediaInfoCached(newClip.src);
               if (!mediaInfo) return newClip;
@@ -702,6 +721,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               return { ...p, src: convertedSrc };
             });
           }
+          // For map_to targets, make sure no masks are applied to the exported clip
+          if (isMapTarget && Object.prototype.hasOwnProperty.call(newClip, 'masks')) {
+            (newClip as any).masks = [];
+          }
           for (const filter of [...filterClips]) {
             if (getClipPositionScore(filter.clipId) < getClipPositionScore(newClip.clipId)) {
               if (!newClip.applicators) {
@@ -715,6 +738,39 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           }
           // add to beginning of exportClips
           newClip.applicators = _.uniqBy(newClip.applicators ?? [], 'clipId');
+          // Center non-group image/video clips within the export rect, honoring rotation/scale
+          try {
+            const isRenderable = newClip.type === 'image' || newClip.type === 'video';
+            const isGroupChild = (newClip as any)?.groupId !== undefined && (newClip as any)?.groupId !== null;
+            // IMPORTANT: never mutate the real clip's transform; clone before modifying
+            const originalTransform = ((newClip as any)?.transform ?? {}) as any;
+            const t = { ...originalTransform } as any;
+            if (isRenderable && !isGroupChild && t && typeof width === 'number' && typeof height === 'number') {
+              const rawW = (Number(t.width) || 0) || width;
+              const rawH = (Number(t.height) || 0) || height;
+              const sx = Number.isFinite(t.scaleX) ? Number(t.scaleX) : 1;
+              const sy = Number.isFinite(t.scaleY) ? Number(t.scaleY) : 1;
+              const w = Math.max(0, rawW * sx);
+              const h = Math.max(0, rawH * sy);
+              const deg = Number.isFinite(t.rotation) ? Number(t.rotation) : 0;
+              const rad = deg * Math.PI / 180;
+              const c = Math.cos(rad);
+              const s = Math.sin(rad);
+              // Rotated corners around local origin (0,0)
+              const x1 = w * c;           const y1 = w * s;
+              const x2 = -h * s;          const y2 = h * c;
+              const x3 = w * c - h * s;   const y3 = w * s + h * c;
+              const minX = Math.min(0, x1, x2, x3);
+              const maxX = Math.max(0, x1, x2, x3);
+              const minY = Math.min(0, y1, y2, y3);
+              const maxY = Math.max(0, y1, y2, y3);
+              const aabbW = maxX - minX;
+              const aabbH = maxY - minY;
+              t.x = (width - aabbW) / 2 - minX;
+              t.y = (height - aabbH) / 2 - minY;
+              (newClip as any).transform = t;
+            }
+          } catch {}
           exportClips.unshift(newClip);
         }
 
@@ -732,6 +788,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               range: { start: frameRange[0], end: frameRange[1]},
               clip: exportClips[0],
               fps: fps,
+              backgroundColor: '#000000',
               filename: filePath,
               encoderOptions: {
                 format: 'webm',
@@ -754,6 +811,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               range: { start: frameRange[0], end: frameRange[1]},
               clips: exportClips,
               fps: fps,
+              backgroundColor: '#000000',
               filename: filePath,
               encoderOptions: {
                 format: 'webm',
@@ -782,6 +840,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               imageFrame: frame,
               clip: exportClips[0],
               fps: fps,
+              backgroundColor: '#000000',
             });
             
             // save the result to the file system
@@ -804,7 +863,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             if (result instanceof Blob) {
               const buf = new Uint8Array(await result.arrayBuffer());
               absolutePath = await savePreviewImage(buf, { fileNameHint: `${clipId}_${input.id}_${frame}` });
-              console.log(absolutePath);
             }
           }
         }
@@ -813,7 +871,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           type: 'image',
           src: absolutePath,
         };
-
 
        } else if (String(input.type).startsWith('audio')) {
           const value = {...modelValues[input.id]} as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]};
@@ -932,7 +989,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       const selectedDefaults = buildSelectedComponentDefaults(manifestForDefaults);
       const selectedComponents = { ...selectedDefaults, ...selectedExisting };
   
-
       if (!selectedComponents.attention) {
         selectedComponents.attention = { name: 'sdpa' };
       }
@@ -950,34 +1006,24 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         }
         try {
 
-          // Persist UI-friendly values so ImageInput/VideoInput can refetch exact composite state
-          const updatedEngineInputs: Record<string, any> = {};
+          // Persist values for generations so UI can restore exactly what user had selected.
+          // For media inputs, save the UI value string as-is (selection/composite JSON string).
+          // For other inputs, prefer the engine-ready scalar (or the UI value if not present).
+          const persistedValues: Record<string, any> = {};
           for (const input of inputs) {
             const t = String(input.type);
             if (t.startsWith('image') || t.startsWith('video')) {
-              const hasPreprocessor = Boolean((input as any)?.preprocessor_ref);
-              const selectionValue = clipValues[input.id]; // enriched AnyClipProps with selectedRange/selectedFrame
-              const preprocRef = (input as any)?.preprocessor_ref as string | undefined;
-              const preprocName = (input as any)?.preprocessor_name as string | undefined;
-              // Determine apply_preprocessor from selectionValue if present; otherwise leave undefined (UI has defaults)
-              const applyFlag =
-                selectionValue && typeof selectionValue === 'object' && typeof (selectionValue as any).apply_preprocessor === 'boolean'
-                  ? (selectionValue as any).apply_preprocessor
-                  : undefined;
-              updatedEngineInputs[input.id] = {
-                selection: selectionValue ?? null,
-                preprocessor_ref: preprocRef,
-                preprocessor_name: preprocName,
-                apply_preprocessor: typeof applyFlag === 'boolean' ? applyFlag : (hasPreprocessor ? true : undefined),
-                apply: typeof applyFlag === 'boolean' ? applyFlag : (hasPreprocessor ? true : undefined),
-              };
+              // Use the original UI selection object captured in clipValues so we retain
+              // fields like selectedFrame/selectedRange and composite selections.
+              // If unavailable, fall back to the existing spec value.
+              const uiSelection = (clipValues as any)?.[input.id];
+              persistedValues[input.id] = uiSelection !== undefined ? uiSelection : ((input as any)?.value ?? '');
             } else {
-              // Non-media inputs: keep engine-ready scalar values
-              updatedEngineInputs[input.id] = (engineInputs as any)[input.id];
+              const engineVal = (engineInputs as any)[input.id];
+              persistedValues[input.id] = engineVal !== undefined ? engineVal : (input as any)?.value ?? '';
             }
           }
-          // Preserve duration we added to engineInputs
-          updatedEngineInputs['duration'] = engineInputs['duration'];
+          // Preserve duration we added to engineInputs (used later when re-running)
           const existingGenerations = ((clip as ModelClipProps)?.generations ?? []);
           const newGeneration = {
             jobId: activeJobId,
@@ -985,9 +1031,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             src: '',
             createdAt: Date.now(),
             selectedComponents: selectedComponents,
-            values: updatedEngineInputs,
+            values: rawModelValues,
+            transform: (clip as AnyClipProps)?.transform,
           };
-          updateClip(clipId, {
+          updateClip(clipId, { 
             activeJobId: activeJobId,
             modelStatus: 'pending',
             generations: [...existingGenerations, newGeneration],

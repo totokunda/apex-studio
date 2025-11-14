@@ -2,8 +2,8 @@ import { PacketStats, InputVideoTrack, InputAudioTrack, MetadataTags, InputForma
 import { Preprocessor } from "./preprocessor";
 import { ManifestDocument } from "./manifest/api";
 
-export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'text' | 'lora' | 'shape' | 'draw' | 'filter' | 'group'
-export type TimelineType = 'media' | 'audio' | 'model'  | 'text' | 'lora' | 'shape' | 'draw' | 'filter'
+export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'text' | 'shape' | 'draw' | 'filter' | 'group'
+export type TimelineType = 'media' | 'audio' | 'model'  | 'text' | 'shape' | 'draw' | 'filter'
 export type ViewTool = 'pointer' | 'hand' | 'mask' | 'draw' | 'shape'| 'text'
 export type ShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'line' | 'star'
 
@@ -283,7 +283,6 @@ export type ModelClipProps = ClipProps & {
     src: string |  null | undefined;
     type: 'model';
     manifest: ManifestDocument;
-    category: string;
     speed?: number;
     modelStatus?: 'pending' | 'running' | 'complete' | 'failed';
     // Persist user selections for model components (e.g., scheduler, transformer, vae, text_encoder)
@@ -296,6 +295,8 @@ export type ModelClipProps = ClipProps & {
         createdAt: number;
         selectedComponents?: Record<string, any>;
         values?: Record<string, any>;
+        // Persist the clip transform used when this generation was previewed/applied
+        transform?: ClipTransform;
     }[];
     activeJobId?: string;
 }

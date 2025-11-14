@@ -308,8 +308,6 @@ export function prepareExportClips(input: PrepareExportInput): ExportClip[] {
   // Build ungrouped view (content + applicators), ignoring group containers entirely
   const { content: universeContent, applicators } = buildUngroupedView(universe, timelines, includeHiddenChildrenInGroups);
 
-  console.log('universeContent', universeContent);
-
   // Determine target content set from selection by flattening groups against the universe
   const targetContent = flattenSelection(clips, universe, timelines, includeHiddenChildrenInGroups)
     .filter(c => isRenderableContent(c) && !isTimelineHidden(timelines, c.timelineId));

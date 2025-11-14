@@ -6,7 +6,7 @@ export {
   listManifestsByModelAndType,
   getManifest,
   type ConfigResponse,
-  type ManifestInfo,
+  type ManifestDocument,
   type ModelTypeInfo,
 } from './api';
 

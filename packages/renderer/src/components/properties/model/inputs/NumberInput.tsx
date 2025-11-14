@@ -15,18 +15,26 @@ interface NumberInputProps<T> {
   max?: number;
   min?: number;
   emptyLabel?: boolean;
+  toFixed?: number;
 }
 
-const NumberInput: React.FC<NumberInputProps<string>> = ({ value, onChange, label, description, className, startLogo, step, max, min, emptyLabel }) => {
+function isNumeric(value: unknown): boolean {
+  return !isNaN(Number(value));
+}
+
+const NumberInput: React.FC<NumberInputProps<string>> = ({ value, onChange, label, description, className, startLogo, step, max, min, emptyLabel, toFixed = 0 }) => {
     const [tempValue, setTempValue] = useState(value);
     const lastValueRef = React.useRef(value);
-    
+    const inputRef = React.useRef<HTMLInputElement>(null);    
+    const [isFocused, setIsFocused] = useState(false);
+
     useEffect(() => {
         setTempValue(value);
         lastValueRef.current = value;
     }, [value]);
 
     const handleBlur = () => {
+        setIsFocused(false);
         if (tempValue === value) return; // No change, skip
         const oldValue = lastValueRef.current;
         onChange(tempValue);
@@ -41,6 +49,10 @@ const NumberInput: React.FC<NumberInputProps<string>> = ({ value, onChange, labe
                 }
             });
         });
+    };
+
+    const handleFocus = () => {
+        setIsFocused(true);
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -87,9 +99,11 @@ const NumberInput: React.FC<NumberInputProps<string>> = ({ value, onChange, labe
             <input className={cn(`w-full h-7 px-2 text-brand-light text-[11px] outline-none rounded-l font-normal items-center border border-brand-light/5  bg-brand ${className}`, {
                 'pl-6': startLogo,
             })} 
-            value={tempValue} 
+            ref={inputRef}
+            value={isNumeric(tempValue) && !isFocused ? Number(tempValue).toFixed(toFixed) : tempValue} 
             onChange={(e) => setTempValue(e.target.value)}
             onBlur={handleBlur}
+            onFocus={handleFocus}
             onKeyDown={handleKeyDown} />
         {<div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand  h-7 cursor-pointer rounded-r">
             <button className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center" 

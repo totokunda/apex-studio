@@ -20,10 +20,10 @@ import { useClipStore } from "@/lib/clip";
 import { Preprocessor } from "@/lib/preprocessor/api";
 import { PreprocessorItem } from "./menus/PreprocessorMenu";
 import { ModelItem } from "./menus/ModelMenu";
-import type { ManifestInfo } from "@/lib/manifest";
+import type { ManifestDocument } from "@/lib/manifest";
 import GlobalContextMenu from "@/components/GlobalContextMenu";
 
-type ManifestInfoWithType = ManifestInfo & {
+type ManifestWithType = ManifestDocument & {
   type: 'model';
 };
 
@@ -32,7 +32,7 @@ const App:React.FC = () => {
   const layout = useLayoutConfigStore((s) => s.layout);
   const {ghostInStage, clips} = useClipStore();
 
-  const [activeDragItem, setActiveDragItem] = useState<MediaItem | Preprocessor | ManifestInfoWithType | null>(null);
+  const [activeDragItem, setActiveDragItem] = useState<MediaItem | Preprocessor | ManifestWithType | null>(null);
 
   // Disable scrolling while dragging
   useEffect(() => {
@@ -72,7 +72,7 @@ const App:React.FC = () => {
     <DndContext
       autoScroll={false}
       onDragStart={(event) => {
-        const data = event?.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestInfo | undefined;
+        const data = event?.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestWithType | undefined;
         if (!data) return;
         // Accept media, preprocessor, or model items
         // MediaItem has ClipType in data.type; preprocessors use 'preprocessor'; models use 'model'
@@ -156,7 +156,7 @@ const App:React.FC = () => {
         {(activeDragItem as any)?.type === 'model' && (
           <div className={cn("opacity-100", { "opacity-0": ghostInStage && clips.length > 0 })}>
             {(() => {
-              const m = activeDragItem as ManifestInfo;
+              const m = activeDragItem as ManifestWithType;
               return <ModelItem manifest={m} isDragging={true} />
             })()}
           </div>

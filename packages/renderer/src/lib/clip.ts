@@ -8,7 +8,7 @@ import { getMediaInfo } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
 import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
-import { ManifestInfoWithType, UIInput } from "./manifest/api";
+import { ManifestWithType, UIInput } from "./manifest/api";
 import { useInputControlsStore } from "./inputControl";
 export const PREPROCESSOR_BAR_HEIGHT = 24;
 
@@ -52,6 +52,7 @@ interface ClipStore {
     muteTimeline: (timelineId: string) => void;
     unmuteTimeline: (timelineId: string) => void;
     getModelValues: (clipId: string) => Record<string, any> | null;
+    getRawModelValues: (clipId: string) => Record<string, any> | null;
     hideTimeline: (timelineId: string) => void;
     unhideTimeline: (timelineId: string) => void;
     isTimelineMuted: (timelineId: string) => boolean;
@@ -102,7 +103,7 @@ const calculateTotalClipDuration = (clips: AnyClipProps[]): number => {
     return maxEndFrame;
 };
 
-export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipProps | MediaItem | string | Preprocessor | ManifestInfoWithType) => {
+export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipProps | MediaItem | string | Preprocessor | ManifestWithType) => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
     if (timeline.type === 'media') {
@@ -111,7 +112,7 @@ export const isValidTimelineForClip = (timeline: TimelineProps, clip: AnyClipPro
     return timeline.type === clip.type;
 }
 
-export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string | ManifestInfoWithType):TimelineType => {
+export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string | ManifestWithType):TimelineType => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
     if (clip.type === 'video' || clip.type === 'image' || clip.type === 'group' || clip.type === 'model') {
@@ -120,7 +121,7 @@ export const getTimelineTypeForClip = (clip: AnyClipProps | MediaItem | string |
     return clip.type;
 }
 
-export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string | ManifestInfoWithType):number => {
+export const getTimelineHeightForClip = (clip: AnyClipProps | MediaItem | string | ManifestWithType):number => {
     if (typeof clip === 'string') 
         clip = {type:clip} as AnyClipProps;
 
@@ -962,6 +963,19 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         return { clips: resolvedClips, clipDuration };
     }),
+    getRawModelValues: (clipId: string) => {
+        const clip = get().clips.find((c) => c.clipId === clipId && c.type === 'model') as ModelClipProps | undefined;
+        if (!clip) return null;
+        const manifest = clip.manifest;
+        if (!manifest) return null;
+        const ui = manifest.spec?.ui || manifest.ui;
+        if (!ui || !Array.isArray(ui.inputs)) return null;
+        const output: Record<string, any> = {};
+        ui.inputs.forEach((inp) => {
+            output[inp.id] = inp.value;
+        });
+        return output;
+    },
     getModelValues: (clipId: string) => {
         const clip = get().clips.find((c) => c.clipId === clipId && c.type === 'model') as ModelClipProps | undefined;
         if (!clip) return null;

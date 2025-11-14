@@ -20,7 +20,8 @@ import { Preprocessor } from '@/lib/preprocessor';
 import { calculateFrameFromX, getOtherPreprocessors } from '@/lib/preprocessorHelpers';
 import {convertFrameRange} from '@/lib/media/fps';
 
-import { getManifest, ManifestInfoWithType } from '@/lib/manifest/api';
+import { ManifestWithType } from '@/lib/manifest/api';
+import { useManifestStore } from '@/lib/manifest/store';
 import { useViewportStore } from '@/lib/viewport';
 
 interface TimelineEditorProps {
@@ -215,7 +216,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
 
   useDndMonitor({
     onDragStart: (event) => {
-      const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestInfoWithType | undefined;
+      const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestWithType | undefined;
       if (!data) return;
       
       
@@ -229,12 +230,12 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       setIsDragging(true);
  
       if (data.type === 'model') {
-        const clipFrames = (data as ManifestInfoWithType).desired_duration ?? 5 * controlStore.fps;
+        const clipFrames = (data as ManifestWithType).metadata?.desired_duration ?? 5 * controlStore.fps;
         setGhostStartEndFrame(0, clipFrames);
         return;
       }
 
-      const mediaInfo = data.mediaInfo;
+      const mediaInfo = (data as MediaItem).mediaInfo;
       setActiveMediaItem(data as MediaItem);
       const clipFrames = (() => {
         const fps = controlStore.fps;
@@ -260,7 +261,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       const container = containerRef.current;
       let pointerX: number | null = null;
       let pointerY: number | null = null;
-      const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestInfoWithType | undefined;
+      const data = event.active?.data?.current as unknown as MediaItem | Preprocessor | ManifestWithType | undefined;
 
       if (clips.length === 0) return;
 
@@ -528,7 +529,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     setGhostX,
   ]);
 
-  const handleDrop = useCallback((_event: any, data: MediaItem | ManifestInfoWithType) => {
+  const handleDrop = useCallback((_event: any, data: MediaItem | ManifestWithType) => {
     const timelines = useClipStore.getState().timelines;
     let timelineId: string | undefined = undefined;
     const timelineHeight = getTimelineHeightForClip(data);
@@ -567,6 +568,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     }
 
     const mediaInfo = (data as MediaItem)?.mediaInfo;
+
     if (!mediaInfo && data.type !== 'filter' && data.type !== 'model') {
       setActiveMediaItem(null);
       setGhostTimelineId(null);
@@ -606,7 +608,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       // Start with smallPath 
       void haldClutRef?.preloadClut((data as unknown as Filter).smallPath);
     } else if (data.type === 'model') {
-      numFrames = (data as ManifestInfoWithType).desired_duration ?? 5 * controlStore.fps;
+      numFrames = (data as ManifestWithType).metadata?.desired_duration ?? 5 * controlStore.fps;
       trimEnd = -Infinity;
       trimStart = Infinity;
       height = 540; // Does not matter
@@ -707,6 +709,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
     startFrame = existingClips.length === 0 ? (existingClips.length === 0 ? startFrame : placementStart) : placementStart;
     endFrame = startFrame + clipLen;
 
+    // @ts-ignore
     const newClip: AnyClipProps = {
       timelineId: dropTimelineId,
       clipId: uuidv4(),
@@ -714,7 +717,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       endFrame,
       src: (data as MediaItem)?.assetUrl,
       // @ts-ignore
-      type: data.type, // ignore for now since we don't have all types implemented yet
+      type: data.type,
       trimEnd: trimEnd,
       trimStart: trimStart,
       height: height,
@@ -749,17 +752,18 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
 
     if (data.type === 'model') {
       // We need to get the manifest document from the data
-      getManifest((data as ManifestInfoWithType).id).then((manifest) => {
-        if (manifest.data) {
-          (newClip as ModelClipProps).manifest = manifest.data;
-          (newClip as ModelClipProps).category = (data as ManifestInfoWithType).category;
-          addClip(newClip as AnyClipProps);
-        }
+      const manifest = (data as ManifestWithType);
+      const cleanup = () => {
         setActiveMediaItem(null);
         setGhostTimelineId(null);
         setGhostStartEndFrame(0, 0);
         setGhostX(0);
-      });
+      };
+
+      (newClip as ModelClipProps).manifest = manifest;
+      addClip(newClip as AnyClipProps);
+      cleanup();
+      
     } else{ 
       addClip(newClip as AnyClipProps);
 

@@ -768,7 +768,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         }
     }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrameUsed, frameOffset, trimStart, clip, isPlaying, inputMode]);
 
-    // Start/stop iterator based on play state. Avoid depending on callbacks to prevent restarting every frame.
+
     useEffect(() => {
         if (isPlaying || offscreenFast) {
             void startRendering();

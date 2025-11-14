@@ -113,7 +113,7 @@ const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({ hasClip = t
     }, [isDragging]);
 
     return (
-        <div className="flex items-center gap-x-2 justify-center transition-opacity duration-300"> 
+        <div className="flex items-center gap-x-2 justify-end transition-opacity duration-300 w-3/5"> 
             <FiMinusCircle onClick={() => {
                 if (zoomLevel === 1 || !hasClips) return;
                 setZoom(zoomLevel - 1);
@@ -128,7 +128,7 @@ const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({ hasClip = t
                 onMouseDown={(e) => hasClips && handleMouseDown(e)}
                 onMouseEnter={() => hasClips && setIsHovering(true)}
                 onMouseLeave={() => hasClips && setIsHovering(false)}
-                className={cn("h-1 w-24 rounded-full bg-brand-light/10 transform-gpu cursor-pointer relative", {
+                className={cn("h-1 w-11/12 rounded-full bg-brand-light/10 transform-gpu cursor-pointer relative", {
                     "cursor-grabbing": isDragging,
                 })}
             >

@@ -896,7 +896,7 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
                   )
                 ) : (
                   <div style={{height: Math.max(1, stageSize.h - 40) }} className='flex flex-col items-center justify-center gap-y-2'>
-                    <MdAudiotrack className="w-10 h-10 text-brand-light " />
+                    <MdAudiotrack className="w-1/4 h-1/4 text-brand-light " />
                     <span className="text-brand-light text-[11px] w-full text-center font-medium">
                       Click or drag and drop a audio file here.
                     </span>

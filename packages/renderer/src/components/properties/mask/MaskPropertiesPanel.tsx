@@ -125,8 +125,7 @@ const MaskPropertiesPanel: React.FC<MaskPropertiesPanelProps> = ({ clipId }) => 
       {/* Operations Properties */}
       {mask && <MaskOperationsProperties mask={mask} clipId={clipId} />}
 
-      {/* Tracking Properties */}
-      
+
     </div>
     </div>
   );

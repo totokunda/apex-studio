@@ -13,12 +13,6 @@ const TextInput: React.FC<TextInputProps> = ({ label, description, value, onChan
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (value === undefined) {
-      onChange(defaultValue || '');
-    }
-  }, [value, defaultValue, onChange]);
-
-  useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
@@ -31,7 +25,7 @@ const TextInput: React.FC<TextInputProps> = ({ label, description, value, onChan
       {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start mb-0.5 absolute bottom-3 left-3">{description}</span>}
       <textarea
         ref={textareaRef}
-        defaultValue={value === undefined || value === '' ? defaultValue : value}
+        defaultValue={defaultValue}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}

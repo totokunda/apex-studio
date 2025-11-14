@@ -7,6 +7,18 @@ import mime from 'mime';
 import os from 'node:os';
 import { Readable } from 'node:stream';
 
+// Register 'app://' as a privileged scheme as early as possible (before 'ready')
+protocol.registerSchemesAsPrivileged([{
+    scheme: 'app',
+    privileges: {
+      standard: true,
+      secure: true,
+      stream: true,
+      supportFetchAPI: true, // important for window.fetch
+      corsEnabled: true
+    }
+  }]);
+
 // Helper to convert Node.js stream to Web ReadableStream with proper error handling
 function nodeStreamToWebStream(nodeStream: fs.ReadStream): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -54,22 +66,24 @@ class AppDirProtocol implements AppModule {
   private remoteHomeDir: string | null = null;
 
   async enable({app}: ModuleContext): Promise<void> {
-    protocol.registerSchemesAsPrivileged([{
-        scheme: 'app',
-        privileges: {
-          standard: true,
-          secure: true,
-          stream: true,
-          supportFetchAPI: true, // important for window.fetch
-          corsEnabled: true
-        }
-      }]);
     await app.whenReady();
 
     // Kick off non-blocking initialization (backend locality, remote cache path, etc.)
     await this.initializeAsync(app);
 
     protocol.handle('app', async (request) => {
+        // CORS/preflight handling for renderer -> app:// fetches
+        const origin = request.headers.get('origin') || '*';
+        const baseCors = {
+          'Access-Control-Allow-Origin': origin,
+          'Vary': 'Origin',
+          'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Range',
+          'Cross-Origin-Resource-Policy': 'cross-origin',
+        } as Record<string, string>;
+        if (request.method === 'OPTIONS') {
+          return new Response(null, { status: 204, headers: baseCors });
+        }
         const u = new URL(request.url);
         
         let basePath: string | null = null;
@@ -82,42 +96,47 @@ class AppDirProtocol implements AppModule {
 
 
         if (!basePath) {
-          return new Response(null, { status: 404 });
+          return new Response(null, { status: 404, headers: baseCors });
         }
         
         const decodedPathname = decodeURIComponent(u.pathname);
-        const normalizedPathname = decodedPathname.startsWith('/') ? decodedPathname.slice(1) : decodedPathname;
         let filePath: string;
         if (u.hostname === 'apex-cache' && this.loopbackAppearsRemote) {
-          const rel = this.remoteRelFromNormalized(normalizedPathname);
+          const rel = this.remoteRelFromNormalized(decodedPathname.startsWith('/') ? decodedPathname.slice(1) : decodedPathname);
           const localPath = rel.startsWith(basePath!) ? rel : path.join(basePath!, rel);
           try {
             if (!fs.existsSync(localPath) || !fs.statSync(localPath).isFile()) {
               const ok = await this.ensureLocalFromRemote(rel, localPath);
               if (!ok) {
-                return new Response(null, { status: 404 });
+                return new Response(null, { status: 404, headers: baseCors });
               }
             }
           } catch {
             const ok = await this.ensureLocalFromRemote(rel, localPath).catch(() => false);
             if (!ok) {
-              return new Response(null, { status: 404 });
+              return new Response(null, { status: 404, headers: baseCors });
             }
           }
           // Serve from the mirrored local path we just ensured
           filePath = localPath;
         } else {
-          filePath = normalizedPathname.startsWith(basePath)
-            ? normalizedPathname
-            : path.join(basePath, normalizedPathname);
+          // If an absolute filesystem path is provided, serve it directly
+          if (path.isAbsolute(decodedPathname)) {
+            filePath = decodedPathname;
+          } else {
+            const rel = decodedPathname.startsWith('/') ? decodedPathname.slice(1) : decodedPathname;
+            filePath = rel.startsWith(basePath)
+              ? rel
+              : path.join(basePath, rel);
+          }
         }
         // Check if file exists and is readable
         try {
           if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-            return new Response(null, { status: 404 });
+            return new Response(null, { status: 404, headers: baseCors });
           }
         } catch {
-          return new Response(null, { status: 404 });
+          return new Response(null, { status: 404, headers: baseCors });
         }
         
         const contentType = mime.getType(filePath) || 'application/octet-stream';
@@ -140,7 +159,8 @@ class AppDirProtocol implements AppModule {
               'Content-Type': contentType,
               'Content-Length': chunkSize.toString(),
               'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-              'Accept-Ranges': 'bytes'
+              'Accept-Ranges': 'bytes',
+              ...baseCors,
             }
           });
         }
@@ -154,7 +174,8 @@ class AppDirProtocol implements AppModule {
           headers: {
             'Content-Type': contentType,
             'Content-Length': fileSize.toString(),
-            'Accept-Ranges': 'bytes'
+            'Accept-Ranges': 'bytes',
+            ...baseCors,
           }
         });
       });

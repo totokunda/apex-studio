@@ -110,6 +110,7 @@ export interface ExportOptions {
   filename?: string; // for image download
   width?: number; // when canvas not supplied
   height?: number; // when canvas not supplied
+  backgroundColor?: string; // when canvas not supplied
 }
 
 export interface ExportClipOptions {
@@ -124,6 +125,7 @@ export interface ExportClipOptions {
   filename?: string; // output name hint
   width?: number; // when canvas not supplied
   height?: number; // when canvas not supplied
+  backgroundColor?: string; // when canvas not supplied
 }
 
 export interface ExportAudioClip extends ExportClipBase {
@@ -196,6 +198,7 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
   const temp = document.createElement('canvas');
   temp.width = canvas.width;
   temp.height = canvas.height;
+
   const tctx = temp.getContext('2d');
 
   // Maintain per-clip video iterators across frames (for this export run)
@@ -206,7 +209,10 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
   const drawFrame = async (frame: number) => {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+    if (opts.backgroundColor) {
+      ctx.fillStyle = opts.backgroundColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
     // Active clips at this frame
     const active = clips.filter(c => {
       const s = c.startFrame ?? 0 - (range?.start ? c.startFrame ?? 0 : 0);
@@ -455,10 +461,19 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
   const drawFrame = async (frame: number) => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    if (opts.backgroundColor) {
+      ctx.fillStyle = opts.backgroundColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
     // Clear temp
     if (tctx) {
       tctx.clearRect(0, 0, temp.width, temp.height);
+      if (opts.backgroundColor) {
+        tctx.fillStyle = opts.backgroundColor;
+        tctx.fillRect(0, 0, temp.width, temp.height);
+      }
     }
+   
 
     // Applicators bound to this clip, active at this frame (LOCAL frame indexing)
     const bound = clip.applicators && Array.isArray(clip.applicators) ? (clip.applicators as ExportApplicatorClip[]) : [];

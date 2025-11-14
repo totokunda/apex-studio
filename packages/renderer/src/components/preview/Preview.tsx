@@ -118,6 +118,7 @@ const Preview:React.FC<PreviewProps> = () => {
   const aspectRectRef = useRef<any>(null);
   const transformerRef = useRef<any>(null);
   const prevRectRef = useRef<{ w: number; h: number } | null>(null);
+  const liveAspectUpdateRafRef = useRef<number | null>(null);
   const scale = useViewportStore((s) => s.scale);
   const position = useViewportStore((s) => s.position);
   const zoomAtScreenPoint = useViewportStore((s) => s.zoomAtScreenPoint);
@@ -368,17 +369,30 @@ const Preview:React.FC<PreviewProps> = () => {
     return { rectWidth: baseShortSide * ratio, rectHeight: baseShortSide };
   }, [aspectRatio.width, aspectRatio.height]);
 
+  // Helper: recenter all clips for a given rect size
+  const recenterAllClips = useCallback((targetRectWidth: number, targetRectHeight: number) => {
+    const { clips: currentClips } = useClipStore.getState();
+    currentClips.forEach((clip) => {
+      const t = useClipStore.getState().getClipTransform(clip.clipId);
+      const w = t?.width ?? 0;
+      const h = t?.height ?? 0;
+      const cx = Math.max(0, (targetRectWidth - w) / 2);
+      const cy = Math.max(0, (targetRectHeight - h) / 2);
+      useClipStore.getState().setClipTransform(clip.clipId, { x: cx, y: cy });
+    });
+  }, []);
+
 
   // Center the rect initially and whenever aspect ratio or viewport changes
   useEffect(() => {
-    if (!stageRef.current || isFullscreen) return;
+    if (!stageRef.current || isFullscreen || isAspectEditing) return;
     const rectBounds = { x: 0, y: 0, width: rectWidth, height: rectHeight };
     setContentBounds(rectBounds);
     const rectWorld = { x: rectBounds.x + rectBounds.width / 2, y: rectBounds.y + rectBounds.height / 2 };
     useViewportStore.getState().centerOnWorldPoint(rectWorld, { width: size.width, height: size.height });
-  }, [size.width, size.height, rectWidth, rectHeight, isFullscreen]);
+  }, [size.width, size.height, rectWidth, rectHeight, isFullscreen, isAspectEditing]);
 
-  // Attach transformer to aspect rect when editing
+  // Attach transformer to aspect rect when editing (attach once when toggled)
   useEffect(() => {
     if (!isAspectEditing) return;
     const tr = transformerRef.current;
@@ -387,11 +401,27 @@ const Preview:React.FC<PreviewProps> = () => {
       tr.nodes([node]);
       tr.getLayer()?.batchDraw();
     }
-  }, [isAspectEditing, rectWidth, rectHeight]);
+  }, [isAspectEditing]);
 
-  // Recenter all clips when rect size changes (but not on initial render)
+  // Keep transformer visuals updated when dimensions change without reattaching
   useEffect(() => {
-    if (!rectWidth || !rectHeight || isFullscreen) return;
+    const tr = transformerRef.current;
+    if (tr) {
+      tr.getLayer()?.batchDraw();
+    }
+  }, [rectWidth, rectHeight]);
+  
+  // Cleanup any pending rAF when leaving aspect edit mode
+  useEffect(() => {
+    if (!isAspectEditing && liveAspectUpdateRafRef.current) {
+      cancelAnimationFrame(liveAspectUpdateRafRef.current);
+      liveAspectUpdateRafRef.current = null;
+    }
+  }, [isAspectEditing]);
+
+  // Recenter all clips when rect size changes (but not on initial render), skip while editing to prevent jitter
+  useEffect(() => {
+    if (!rectWidth || !rectHeight || isFullscreen || isAspectEditing) return;
     const prev = prevRectRef.current;
     if (!prev || prev.w === 0 || prev.h === 0) {
       prevRectRef.current = { w: rectWidth, h: rectHeight };
@@ -399,23 +429,10 @@ const Preview:React.FC<PreviewProps> = () => {
     }
     if (prev.w === rectWidth && prev.h === rectHeight) return; // no change
 
-    const { clips: currentClips } = useClipStore.getState();
-    currentClips.forEach((clip) => {
-      const t = useClipStore.getState().getClipTransform(clip.clipId);
-      const w = t?.width;
-      const h = t?.height;
-      if (!w || !h) return;
-      const cx = Math.max(0, (rectWidth - w) / 2);
-      const cy = Math.max(0, (rectHeight - h) / 2);
-      const dx = (t?.x ?? 0) - cx;
-      const dy = (t?.y ?? 0) - cy;
-      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-        useClipStore.getState().setClipTransform(clip.clipId, { x: cx, y: cy });
-      }
-    });
+    recenterAllClips(rectWidth, rectHeight);
 
     prevRectRef.current = { w: rectWidth, h: rectHeight };
-  }, [rectWidth, rectHeight, isFullscreen]);
+  }, [rectWidth, rectHeight, isFullscreen, isAspectEditing, recenterAllClips]);
 
 
   const handleWheel = useCallback((e: any) => {
@@ -607,10 +624,10 @@ const Preview:React.FC<PreviewProps> = () => {
             isTracked: false,
             createdAt: Date.now(),
             lastModified: Date.now(),
-            maskColor: '#000000',
+            maskColor: '#FFFFFF',
             maskOpacity: 100,
             maskColorEnabled: true,
-            backgroundColor: '#FFFFFF',
+            backgroundColor: '#000000',
             backgroundOpacity: 100,
             backgroundColorEnabled: true,
             transform: clipTransform ? { ...clipTransform } : undefined,
@@ -1078,10 +1095,10 @@ const Preview:React.FC<PreviewProps> = () => {
           isTracked: false,
           createdAt: Date.now(),
           lastModified: Date.now(),
-          maskColor: '#000000',
+          maskColor: '#FFFFFF',
           maskOpacity: 100,
           maskColorEnabled: true,
-          backgroundColor: '#FFFFFF',
+          backgroundColor: '#000000',
           backgroundOpacity: 100,
           backgroundColorEnabled: true,
           transform: clipTransform ? { ...clipTransform } : undefined,
@@ -1275,10 +1292,10 @@ const Preview:React.FC<PreviewProps> = () => {
         isTracked: false,
         createdAt: Date.now(),
         lastModified: Date.now(),
-        maskColor: '#000000',
+        maskColor: '#FFFFFF',
         maskOpacity: 100,
         maskColorEnabled: true,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: '#000000',
         backgroundOpacity: 100,
         backgroundColorEnabled: true,
         transform: clipTransform ? { ...clipTransform } : undefined,
@@ -2264,6 +2281,36 @@ useEffect(() => {
               width={rectWidth}
               height={rectHeight}
               fill={'#000000'}
+              onTransform={() => {
+                const node = aspectRectRef.current;
+                if (!node) return;
+                // bake scaleX into width immediately to avoid jitter
+                const scaleX = node.scaleX() || 1;
+                const newW = Math.max(1, node.width() * scaleX);
+                node.width(newW);
+                node.scaleX(1);
+                const newH = Math.max(1, node.height()); // vertical locked by Transformer
+                // keep rect pinned to x=0 during live transform
+                if (node.x() !== 0) node.x(0);
+                // avoid accidental vertical scale jitter
+                if (node.scaleY() !== 1) node.scaleY(1);
+                // rAF-throttle live updates to avoid setState storms
+                if (liveAspectUpdateRafRef.current) {
+                  cancelAnimationFrame(liveAspectUpdateRafRef.current);
+                  liveAspectUpdateRafRef.current = null;
+                }
+                const ratio = newW / newH;
+                liveAspectUpdateRafRef.current = requestAnimationFrame(() => {
+                  const base = 1000;
+                  let w = Math.max(1, Math.round(ratio * base));
+                  let h = base;
+                  const gcd = (a:number,b:number):number => b === 0 ? a : gcd(b, a % b);
+                  const g = gcd(w, h) || 1;
+                  w = Math.round(w / g);
+                  h = Math.round(h / g);
+                  setAspectRatio({ width: w, height: h, id: 'custom' });
+                });
+              }}
               onTransformEnd={() => {
                 const node = aspectRectRef.current;
                 if (!node) return;
@@ -2280,6 +2327,11 @@ useEffect(() => {
                 w = Math.round(w / g);
                 h = Math.round(h / g);
                 setAspectRatio({ width: w, height: h, id: 'custom' });
+                // Recenter all clips based on the committed aspect ratio
+                const baseShortSide = BASE_LONG_SIDE;
+                const committedRectWidth = baseShortSide * (w / h);
+                const committedRectHeight = baseShortSide;
+                recenterAllClips(committedRectWidth, committedRectHeight);
               }}
             />
                {sortClips(filterClips(clips)).map((clip) => {
@@ -2361,22 +2413,59 @@ useEffect(() => {
               <Transformer
                 ref={transformerRef}
                 rotateEnabled={false}
-                enabledAnchors={['middle-left','middle-right']}
-                anchorStroke={'#FFFFFF'}
-                anchorFill={'#FFFFFF'}
+                boundBoxFunc={(oldBox, newBox) => {
+                      // lock Y and height; only allow horizontal resizing
+                      const minWidth = 50;
+                  const tr = transformerRef.current as any;
+                  const active = tr?.getActiveAnchor?.();
+                  let width = newBox.width;
+                  if (active === 'middle-left') {
+                    // compute width based on left edge movement, keep x pinned to 0
+                    const deltaLeft = newBox.x - oldBox.x;
+                    width = oldBox.width - deltaLeft;
+                  } else {
+                    // right edge or unknown: take proposed width
+                    width = newBox.width;
+                  }
+                  width = Math.max(minWidth, width);
+                      return {
+                    x: 0,
+                        y: oldBox.y,
+                        width,
+                        height: oldBox.height,
+                        rotation: oldBox.rotation,
+                      };
+                    }}
+                enabledAnchors={['middle-right']}
+                anchorStroke={'#1D4ED8'}
+                anchorStrokeWidth={2}
+                anchorFill={'#3B82F6'}
                 anchorCornerRadius={12}
-                anchorSize={18}
-                borderStroke={'rgba(255,255,255,0.2)'}
-                borderDash={[4, 4]}
+                anchorSize={28}
+                borderStroke={'rgba(59,130,246,0.35)'}
+                borderDash={[6, 6]}
                 ignoreStroke={true}
                 anchorStyleFunc={(anchor: any) => {
-                  anchor.cornerRadius(12);
-                  if (anchor.hasName('middle-left') || anchor.hasName('middle-right')) {
-                    const h = Math.min(120, rectHeight * 0.3);
-                    anchor.width(8);
+                  anchor.cornerRadius(10);
+                  if (anchor.hasName('middle-right')) {
+                    const h = Math.max(80, Math.min(180, rectHeight * 0.4));
+                    const w = 14;
+                    anchor.width(w);
                     anchor.height(h);
-                    anchor.offsetX(4);
+                    anchor.offsetX(w / 2);
                     anchor.offsetY(h / 2);
+                    // gradient for visibility
+                    if (anchor.fillLinearGradientColorStops) {
+                      anchor.fillLinearGradientStartPoint({ x: 0, y: 0 });
+                      anchor.fillLinearGradientEndPoint({ x: w, y: 0 });
+                      anchor.fillLinearGradientColorStops([0, '#60A5FA', 1, '#1D4ED8']);
+                    }
+                    // glow/shadow
+                    anchor.shadowColor('#1D4ED8');
+                    anchor.shadowBlur(14);
+                    anchor.shadowOpacity(0.7);
+                    // enlarge hit area without changing visual size
+                    anchor.hitStrokeWidth(36);
                   }
                 }}
               />

@@ -399,7 +399,6 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 
     const handleDragMove = useCallback((e:Konva.KonvaEventObject<MouseEvent>) => {
         if (assetMode) return;
-        // rootGroupRef.current?.moveToTop();
         const halfStroke = isSelected ? 1.5 : 0;
         // For preprocessor clips, only update X position to prevent vertical drift
         setClipPosition({x: e.target.x() - halfStroke, y: e.target.y() - halfStroke});
@@ -1079,7 +1078,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 
     const handleDragStart = useCallback((e:Konva.KonvaEventObject<MouseEvent>) => {
         if (assetMode) return;
-        //rootGroupRef.current?.moveToTop();
+        rootGroupRef.current?.moveToTop();
         groupRef.current?.moveToTop();
         
         setSelectedPreprocessorId(null);
@@ -1232,9 +1231,9 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
 
 
     return (
-        <>
+        <Group ref={rootGroupRef}>
             <Group  
-                ref={rootGroupRef}
+                
                 onClick={handleClick} 
                 draggable={!assetMode && resizeSide === null} 
                 onDragEnd={handleDragEnd} 
@@ -1707,7 +1706,7 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
                     closed
                 />
             )}
-            </>
+            </Group>
     )
 }
 

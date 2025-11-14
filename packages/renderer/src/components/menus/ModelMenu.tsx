@@ -1,35 +1,35 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useManifestTypes, useManifests, type ManifestInfo } from '@/lib/manifest';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useManifestTypes, useManifests, type ManifestDocument } from '@/lib/manifest';
 import { cn } from '@/lib/utils';
 import { ScrollArea } from '../ui/scroll-area';
 import { LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuInfo, LuDownload,  LuLoader, LuPlus } from "react-icons/lu";
 import { TbWorldDownload } from 'react-icons/tb';
 import Draggable from '../dnd/Draggable';
 import { useManifestStore } from '@/lib/manifest/store';
-import { useManifest } from '@/lib/manifest/hooks';
-import { useComponentsDownloadStore } from '@/lib/components-download/store';
-import { useShallow } from 'zustand/react/shallow';
+import { useDownloadStore } from '@/lib/download/store';
 import ModelPage from '../models/ModelPage';
 // check 
 import CategorySidebar from './CategorySidebar';
 import { useControlsStore } from '@/lib/control';
 import { useClipStore, getTimelineHeightForClip, getTimelineTypeForClip, isValidTimelineForClip } from '@/lib/clip';
-import { getManifest } from '@/lib/manifest/api';
 import { v4 as uuidv4 } from 'uuid';
 
 
-export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, category?: string }> = ({ manifest, isDragging, category }) => {
-  const { setSelectedManifestId } = useManifestStore();
-  const { data: fullManifest } = useManifest(manifest.id);
-  const downloads = useComponentsDownloadStore(useShallow((s) => s.entries));
-  const startPath = useComponentsDownloadStore((s) => s.startPath);
-  const pendingDeletions = useComponentsDownloadStore(useShallow((s) => s.pendingDeletions[manifest.id] || {}));
+export const ModelItem:React.FC<{ manifest: ManifestDocument, isDragging?: boolean, category?: string }> = ({ manifest, isDragging, category }) => {
+  const { setSelectedManifestId, refreshManifestPart } = useManifestStore();
   const tagsContainerRef = useRef<HTMLDivElement>(null);
   const hiddenMeasureRef = useRef<HTMLDivElement>(null);
   const [visibleTagCount, setVisibleTagCount] = useState<number | null>(null);
   const [isStartingDownload, setIsStartingDownload] = useState(false);
+  const {startAndTrackDownload, wsFilesByPath, downloadingPaths, resolveDownloadBatch, subscribeToJob} = useDownloadStore();
+  const onCompleteDownload = useCallback(async (paths: string | string[]) => {
+    // dispatch a custom event to refresh the model menu
+    window.dispatchEvent(new CustomEvent('component-card-reload', { detail: { paths: Array.isArray(paths) ? paths : [paths], manifestId: manifest.metadata?.id } }));
+    await refreshManifestPart(manifest.metadata?.id || '', `spec.components`);
+  }, [manifest.metadata?.id]);
+
   const isVideoDemo = React.useMemo(() => {
-    const value = (manifest.demo_path || '').toLowerCase();
+    const value = (manifest.metadata?.demo_path || '').toLowerCase();
     try {
       const url = new URL(value);
       const pathname = url.pathname;
@@ -38,45 +38,106 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
     } catch {
       return value.endsWith('.mp4') || value.endsWith('.webm') || value.endsWith('.mov') || value.endsWith('.m4v') || value.endsWith('.ogg') || value.endsWith('.m3u8');
     }
-  }, [manifest.demo_path]);
+  }, [manifest.metadata?.demo_path]);
 
-  const perComponentModelItems = useMemo(() => {
-    const out: Array<Array<{ path: string; isDownloaded?: boolean }>> = [];
-    const doc = fullManifest as any;
-    const components = doc?.spec?.components || [];
+  const getAllComponentPaths = useMemo(() => {
+    const paths = [];
+    const components = manifest?.spec?.components || [];
     for (const comp of components) {
       const modelPaths = Array.isArray(comp.model_path) ? comp.model_path : comp.model_path ? [{ path: comp.model_path }] : [];
-      const items: Array<{ path: string; isDownloaded?: boolean }> = [];
-      for (const item of modelPaths) {
-        if (typeof item === 'string') {
-          items.push({ path: item, isDownloaded: false });
-        } else if (item?.path) {
-          items.push({ path: item.path, isDownloaded: !!item.is_downloaded });
+      // add config_paths too 
+      if (comp?.config_path) {
+        paths.push(comp.config_path as string);
+      }
+      if (comp?.type === 'scheduler' && Array.isArray(comp?.scheduler_options)) {
+        for (const opt of comp.scheduler_options as any[]) {
+          if (opt?.config_path) {
+            paths.push(opt.config_path as string);
+          }
         }
       }
-      out.push(items.filter((it) => !!it.path));
+      // add extra_model_paths too
+      if (Array.isArray(comp?.extra_model_paths)) {
+        paths.push(...comp.extra_model_paths);
+      }
+      for (const modelPath of modelPaths) {
+        if (typeof modelPath === 'string') {
+          paths.push(modelPath);
+        } else {
+          paths.push(modelPath.path);
+        }
+      }
     }
-    return out;
-  }, [fullManifest]);
+    return paths;
+  }, []);
+
+  const getAllLoraPaths = useMemo(() => {
+    const paths = [];
+    const loras = manifest?.spec?.loras || [];
+    for (const lora of loras) {
+      if (typeof lora === 'string') {
+        paths.push(lora);
+      } else {
+        if (lora.source) {
+          paths.push(lora.source);
+        }
+      }
+    }
+    return paths;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      try {
+      const response = await resolveDownloadBatch({
+        item_type: 'component',
+        sources: getAllComponentPaths,
+      });
+
+      if (response?.results?.some((r) => r.running) && !cancelled) {
+        for (const r of response.results) {
+          if (r.running) {
+            await subscribeToJob(r.job_id || '', r.source as string, onCompleteDownload);
+          }
+        }
+      } 
+      
+    } catch {}
+
+    try { 
+      const response = await resolveDownloadBatch({
+        item_type: 'lora',
+        sources: getAllLoraPaths,
+      });
+      if (response?.results?.some((r) => r.running) && !cancelled) {
+        for (const r of response.results) {
+          if (r.running) {
+            await subscribeToJob(r.job_id || '', r.source as string, onCompleteDownload);
+          }
+        }
+      }
+    } catch {}
+
+  }
+    run();
+    return () => {
+      cancelled = true;
+    };
+    
+  }, [manifest.metadata?.id, getAllComponentPaths, getAllLoraPaths])
 
   const isDownloading = useMemo(() => {
-    return perComponentModelItems.flat().some(({ path }) => {
-      const e = downloads[path];
-      return e && (e.status === 'downloading' || e.status === 'pending');
-    });
-  }, [perComponentModelItems, downloads]);
+    return getAllComponentPaths.some((p) => downloadingPaths.has(p)) 
+    || getAllComponentPaths.some((p) => wsFilesByPath[p] && Object.values(wsFilesByPath[p]).some((v) => v.status === 'processing' || v.status === 'pending')) ||
+    getAllLoraPaths.some((p) => downloadingPaths.has(p)) ||
+    getAllLoraPaths.some((p) => wsFilesByPath[p] && Object.values(wsFilesByPath[p]).some((v) => v.status === 'processing' || v.status === 'pending')) ||
+     Array.from(downloadingPaths).some((p) => getAllComponentPaths.includes(p));
+  }, [getAllComponentPaths, wsFilesByPath, downloadingPaths]);
 
   const allDownloaded = useMemo(() => {
-    if (Object.keys(pendingDeletions).length > 0) return false;
-    return manifest.downloaded;
-  }, [manifest.downloaded, pendingDeletions]);
-
-  // If store reflects activity or everything is already downloaded, drop the local starting flag
-  useEffect(() => {
-    if (isDownloading || allDownloaded) {
-      setIsStartingDownload(false);
-    }
-  }, [isDownloading, allDownloaded]);
+    return manifest.downloaded && !isDownloading;
+  }, [manifest.downloaded, isDownloading]);
 
   // Compute how many tags fit on a single line
   useEffect(() => {
@@ -119,14 +180,13 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
       ro.disconnect();
       window.removeEventListener('resize', computeVisibleTags);
     };
-  }, [manifest.tags]);
+  }, [manifest.metadata?.tags]);
 
   const handleDownloadAllDefault = async () => {
     try {
       setIsStartingDownload(true);
-      await useManifestStore.getState().loadManifest(manifest.id, true);
-      const doc = useManifestStore.getState().manifestById[manifest.id] as any;
-      const components = doc?.spec?.components || [];
+      
+      const components = manifest?.spec?.components || [];
       for (const comp of components) {
         const modelPaths = Array.isArray(comp.model_path) ? comp.model_path : comp.model_path ? [{ path: comp.model_path }] : [];
         // Only default variants (treat string paths as default)
@@ -137,16 +197,10 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
         });
         for (const item of filtered) {
           const p = typeof item === 'string' ? item : item?.path;
-          const pendingDelete = p ? !!pendingDeletions[p] : false;
-          const already = !pendingDelete && typeof item === 'object' && !!item?.is_downloaded;
-          if (!p || already) continue;
-          await startPath(p, {
-            savePath: comp?.save_path,
-            manifestId: manifest.id,
-            componentType: comp?.type,
-            label: typeof item === 'object' ? item?.variant : undefined,
-            kind: 'model',
-          });
+          await startAndTrackDownload({
+            item_type: 'component',
+            source: p,
+          }, onCompleteDownload);
         }
         // Ensure scheduler configs (base and options) are downloaded too
         const configPathsSet = new Set<string>();
@@ -160,16 +214,23 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
           }
         }
         for (const cp of configPathsSet) {
-          const entry = useComponentsDownloadStore.getState().entries[cp];
-          const pendingDelete = !!pendingDeletions[cp];
-          if (pendingDelete || !entry || entry.status === 'error' || entry.status === 'canceled') {
-            await startPath(cp, {
-              savePath: comp?.save_path,
-              manifestId: manifest.id,
-              componentType: comp?.type,
-              kind: 'config',
-            });
-          }
+          await startAndTrackDownload({
+            item_type: 'component',
+            source: cp,
+            save_path: comp?.save_path,
+          }, onCompleteDownload);
+        }
+      }
+    } catch {}
+    try {
+      const loras = manifest?.spec?.loras || [];
+      for (const lora of loras) {
+        const source = typeof lora === 'string' ? lora : lora.source;
+        if (source) {
+            await startAndTrackDownload({
+              item_type: 'lora',
+              source: source,
+            }, onCompleteDownload);
         }
       }
     } catch {}
@@ -186,7 +247,7 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
       })}>
         {isVideoDemo ? (
           <video
-            src={manifest.demo_path}
+            src={manifest.metadata?.demo_path}
             className="h-full w-full object-cover rounded-t-md"
             autoPlay
             muted
@@ -194,7 +255,7 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
             playsInline
           />
         ) : (
-          <img src={manifest.demo_path} alt={manifest.name} className="h-full w-full object-cover rounded-t-md" />
+          <img src={manifest.metadata?.demo_path} alt={manifest.metadata?.name} className="h-full w-full object-cover rounded-t-md" />
         )}
       </div>
     </div>
@@ -202,9 +263,9 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
 
   const details = (
     <div className='flex flex-col gap-y-1.5 py-3.5 pb-2 px-3 border-t border-brand-light/5 w-full '>
-      <div className="w-full truncate leading-tight font-semibold text-brand-light text-[12px] text-start">{manifest.name}</div>
+      <div className="w-full truncate leading-tight font-semibold text-brand-light text-[12px] text-start">{manifest.metadata?.name}</div>
       <div ref={tagsContainerRef} className='flex items-center gap-x-1 w-full justify-start gap-y-1 overflow-hidden'>
-        {(visibleTagCount == null ? manifest.tags : manifest.tags.slice(0, visibleTagCount)).map((tag) => (
+        {(visibleTagCount == null ? manifest.metadata?.tags : manifest.metadata?.tags?.slice(0, visibleTagCount))?.map((tag: string) => (
           <span key={tag} className="text-[8px] text-brand-light bg-brand-background border shadow border-brand-light/10 rounded px-2 py-0.5 ">{tag}</span>
         ))}
       </div>
@@ -214,14 +275,14 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
         style={{ position: 'fixed', top: -10000, left: -10000, visibility: 'hidden' }}
         className='flex items-center gap-x-1 flex-wrap justify-start gap-y-1'
       >
-        {manifest.tags.map((tag) => (
+        {manifest?.metadata?.tags?.map((tag: string) => (
           <span key={tag} className="text-[8px] text-brand-light bg-brand-background border shadow border-brand-light/10 rounded px-2 py-0.5 ">{tag}</span>
         ))}
       </div>
     </div>
   );
 
-  const stableId = `model-${manifest.id}-${category}`;
+  const stableId = `model-${manifest.metadata?.id}-${category}`;
 
   return (
     <div className={cn("flex flex-col transition-all font-poppins duration-200 rounded-md relative bg-brand border border-brand-light/5 shadow-md cursor-grab active:cursor-grabbing", {
@@ -247,7 +308,7 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
         <div className='flex items-center gap-x-1 w-full p-3 pt-0'>
           <button
             onClick={() => {
-              setSelectedManifestId(manifest.id);
+              setSelectedManifestId(manifest.metadata?.id || '');
             }}
             type='button'
             className='text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1'
@@ -319,11 +380,15 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
                   speed: 1.0,
                   category,
                 };
-                const manifestResp = await getManifest(manifest.id);
-                if (manifestResp?.data) {
-                  clipBase.manifest = manifestResp.data;
+                const store = useManifestStore.getState();
+                const existing = store.getLoadedManifest(manifest.metadata?.id || '');
+                if (existing) {
+                  clipBase.manifest = existing;
+                  useClipStore.getState().addClip(clipBase);
+                } else {
+                  clipBase.manifest = manifest;
+                  useClipStore.getState().addClip(clipBase);
                 }
-                useClipStore.getState().addClip(clipBase);
               } catch {}
             }}
             type='button'
@@ -348,7 +413,7 @@ export const ModelItem:React.FC<{ manifest: ManifestInfo, isDragging?: boolean, 
   );
 }
 
-const ModelCategory:React.FC<{ category: string, manifests: ManifestInfo[], width: number, onViewAll: () => void }> = ({ category, manifests, width, onViewAll }) => {
+const ModelCategory:React.FC<{ category: string, manifests: ManifestDocument[], width: number, onViewAll: () => void }> = ({ category, manifests, width, onViewAll }) => {
   const carouselRef = useRef<HTMLDivElement>(null);
   const [showLeftArrow, setShowLeftArrow] = useState(false);
   const [showRightArrow, setShowRightArrow] = useState(false);
@@ -417,7 +482,7 @@ const ModelCategory:React.FC<{ category: string, manifests: ManifestInfo[], widt
         )}
         <div ref={carouselRef} className="carousel-container flex gap-x-2 overflow-x-auto rounded-md" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', WebkitOverflowScrolling: 'touch' }}>
           {manifests.map((manifest) => (
-            <div key={manifest.id} className="flex-shrink-0">
+            <div key={manifest.metadata?.id || ''} className="flex-shrink-0">
               <ModelItem manifest={manifest} category={category} />
             </div>
           ))}
@@ -427,7 +492,7 @@ const ModelCategory:React.FC<{ category: string, manifests: ManifestInfo[], widt
   );
 }
 
-const CategoryDetailView:React.FC<{ category: string, manifests: ManifestInfo[], onBack: () => void }> = ({ category, manifests, onBack }) => {
+const CategoryDetailView:React.FC<{ category: string, manifests: ManifestDocument[], onBack: () => void }> = ({ category, manifests, onBack }) => {
   return (
     <div className="flex flex-col h-full w-full">
       <div className="px-7 pt-4 pb-4 border-b border-brand/20">
@@ -442,7 +507,7 @@ const CategoryDetailView:React.FC<{ category: string, manifests: ManifestInfo[],
         <div className="px-7 pt-6">
           <div className="grid gap-x-2 gap-y-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
             {manifests.map((manifest) => (
-              <div key={manifest.id} className="flex justify-center">
+              <div key={manifest.metadata?.id || ''} className="flex justify-center">
                 <ModelItem manifest={manifest} />
               </div>
             ))}
@@ -473,21 +538,21 @@ const ModelMenu:React.FC = () => {
     return map;
   }, [modelTypesData]);
 
-  const manifests: ManifestInfo[] = useMemo(() => manifestsData ?? [], [manifestsData]);
+  const manifests: ManifestDocument[] = useMemo(() => manifestsData ?? [], [manifestsData]);
 
   const filteredManifests = useMemo(() => {
     if (!searchQuery.trim()) return manifests;
     const query = searchQuery.toLowerCase();
     return manifests.filter((m) => {
-      const typeKeys: string[] = Array.isArray(m.model_type) ? m.model_type : [m.model_type];
+      const typeKeys: string[] = Array.isArray(m.spec?.model_type) ? m.spec?.model_type : m.spec?.model_type ? [m.spec?.model_type] : [];
       const typeLabels = typeKeys.map((k) => manifestTypeKeyToLabel.get(k) || k);
       return (
-        m.name.toLowerCase().includes(query) ||
-        (m.description?.toLowerCase().includes(query) ?? false) ||
-        m.model.toLowerCase().includes(query) ||
+        m.metadata?.name.toLowerCase().includes(query) ||
+        (m.metadata?.description?.toLowerCase().includes(query) ?? false) ||
+        m.metadata?.model?.toLowerCase().includes(query) ||
         typeKeys.some((k) => k.toLowerCase().includes(query)) ||
         typeLabels.some((l) => l.toLowerCase().includes(query)) ||
-        (m.tags || []).some((t) => t.toLowerCase().includes(query))
+        (m.metadata?.tags || []).some((t: string) => t.toLowerCase().includes(query))
       );
     });
   }, [manifests, searchQuery, manifestTypeKeyToLabel]);
@@ -495,7 +560,7 @@ const ModelMenu:React.FC = () => {
   const categories = useMemo(() => {
     const set = new Set<string>();
     filteredManifests.forEach((m) => {
-      const typeKeys: string[] = Array.isArray(m.model_type) ? m.model_type : [m.model_type];
+      const typeKeys: string[] = Array.isArray(m.model_type) ? m.model_type : m.model_type ? [m.model_type] : [];
       typeKeys.forEach((k) => set.add(manifestTypeKeyToLabel.get(k) || k));
     });
     return Array.from(set);
@@ -627,7 +692,7 @@ const ModelMenu:React.FC = () => {
           <CategoryDetailView
             category={selectedCategory}
             manifests={filteredManifests.filter((m) => {
-              const keys = Array.isArray(m.model_type) ? m.model_type : [m.model_type];
+              const keys = Array.isArray(m.model_type) ? m.model_type : m.model_type ? [m.model_type] : [];
               const labels = keys.map((k) => manifestTypeKeyToLabel.get(k) || k);
               return labels.includes(selectedCategory);
             })}
@@ -674,7 +739,7 @@ const ModelMenu:React.FC = () => {
                       width={scrollWidth - 36}
                       category={category}
                       manifests={filteredManifests.filter((m) => {
-                        const keys = Array.isArray(m.model_type) ? m.model_type : [m.model_type];
+                        const keys = Array.isArray(m.model_type) ? m.model_type : m.model_type ? [m.model_type] : [];
                         const labels = keys.map((k) => manifestTypeKeyToLabel.get(k) || k);
                         return labels.includes(category);
                       })}

@@ -2,7 +2,6 @@ import { useClipStore } from '@/lib/clip';
 import { MaskClipProps } from '@/lib/types';
 import React, { useMemo, useCallback } from 'react';
 import { cn } from '@/lib/utils';
-import { LuScissors } from 'react-icons/lu';
 import ColorInput from '../ColorInput';
 
 interface MaskOperationsPropertiesProps {
@@ -28,11 +27,6 @@ const MaskOperationsProperties: React.FC<MaskOperationsPropertiesProps> = ({ mas
     updateClip(clipId, { masks: updatedMasks });
   }, [mask.id, clipId, getClipById, updateClip]);
 
-  const handleExtract = () => {
-    // TODO: Implement extraction logic
-    // This will eventually extract the masked region to a new clip
-   
-  };
 
   const handleBinaryMode = () => {
     updateMask({
@@ -144,7 +138,7 @@ const MaskOperationsProperties: React.FC<MaskOperationsPropertiesProps> = ({ mas
                     size="medium" 
                     percentValue={mask.maskOpacity ?? 100} 
                     setPercentValue={(value) => updateMask({ maskOpacity: value })} 
-                    value={mask.maskColor ?? '#ffffff'} 
+                    value={mask.maskColor ?? '#000000'} 
                     onChange={(value) => updateMask({ maskColor: value })} 
                   />
                 )}
@@ -175,7 +169,7 @@ const MaskOperationsProperties: React.FC<MaskOperationsPropertiesProps> = ({ mas
                     size="medium" 
                     percentValue={mask.backgroundOpacity ?? 100} 
                     setPercentValue={(value) => updateMask({ backgroundOpacity: value })} 
-                    value={mask.backgroundColor ?? '#000000'} 
+                    value={mask.backgroundColor ?? '#ffffff'} 
                     onChange={(value) => updateMask({ backgroundColor: value })} 
                   />
                 )}

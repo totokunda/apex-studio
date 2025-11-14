@@ -26,7 +26,8 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
   // skipping preview frames and deduping while keeping the most recent duplicate
   const rawUpdates = (job?.updates || []) as Array<any>
   const dedupeKeys = new Set<string>()
-  const filteredFromEnd: Array<any> = []
+  const filteredFromEnd: Array<any> = [];
+
   for (let i = rawUpdates.length - 1; i >= 0; i--) {
     const u = rawUpdates[i]
     const pct = typeof u.progress === 'number' ? Math.round(u.progress) : undefined
@@ -81,12 +82,12 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
               const timeStr = d ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : ''
               const key = `${job?.jobId || clipId}-u-${idx}`
               return (
-                <li key={key} className="rounded-[6px] border border-brand-light/10 bg-brand p-2.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-[10.5px] font-medium text-brand-light truncate text-start">{(u.message || job?.currentStep || 'Working...').trim().replace(/\s+/g, ' ')}</div>
+                <li key={key} className="rounded-[6px] border border-brand-light/10 bg-brand p-2.5 w-full">
+                  <div className="flex items-start justify-between gap-3 min-w-0">
+                    <div className="min-w-0 flex-1 overflow-hidden w-0">
+                      <div className="text-[10.5px] font-medium text-brand-light truncate text-start w-full max-w-full min-w-0" title={(u.message || job?.currentStep || 'Working...').toString().trim().replace(/\s+/g, ' ')}>{(u.message || job?.currentStep || 'Working...').trim().replace(/\s+/g, ' ')}</div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       {typeof pct === 'number' && (
                         <div className="text-[10.5px] font-medium text-brand-light">{pct}%</div>
                       )}
@@ -108,7 +109,7 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
         ) : (
           <div className="text-[10.5px] text-brand-light/60 p-2.5 text-start w-full bg-brand rounded-[6px] border border-brand-light/10">No updates found.</div>
         )}
-        <div ref={bottomRef} />
+        <div ref={bottomRef} className="h-3" />
       </ScrollArea>
     </div>
   )

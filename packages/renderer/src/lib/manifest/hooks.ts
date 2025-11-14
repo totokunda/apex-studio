@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { ManifestDocument, type ManifestInfo, type ModelTypeInfo } from './api';
+import { ManifestDocument, type ModelTypeInfo } from './api';
 import { useManifestStore } from './store';
 
 type AsyncState<T> = {
@@ -36,73 +36,74 @@ export function useManifests() {
       useManifestStore.getState().loadManifests(false);
     }
   }, [manifests, loading]);
-  return { data: manifests, loading, error } as AsyncState<ManifestInfo[]>;
+  return { data: manifests, loading, error } as AsyncState<ManifestDocument[]>;
 }
 
 export function useManifestsByModel(model: string | null) {
-  const { manifestsByModel, loadingMap, errorMap } = useManifestStore(useShallow((s) => ({
-    manifestsByModel: s.manifestsByModel,
-    loadingMap: s.loading.byModel,
-    errorMap: s.error.byModel,
+  const { manifests, loading, error } = useManifestStore(useShallow((s) => ({
+    manifests: s.manifests,
+    loading: s.loading.manifests,
+    error: s.error.manifests,
   })));
-  const data = model ? (manifestsByModel[model] || undefined) : undefined;
-  const isLoading = !!(model && loadingMap[model]);
+  const data = model ? (manifests || [])?.filter((m) => m.model === model) : [];
+  const isLoading = loading || (manifests == null);
   useEffect(() => {
-    if (model && !data && !isLoading) {
-      useManifestStore.getState().loadManifestsByModel(model, false);
+    if (!isLoading && manifests == null) {
+      useManifestStore.getState().loadManifests(false);
     }
-  }, [model, data, isLoading]);
-  return { data: data || [], loading: isLoading, error: model ? (errorMap[model] || null) : null } as AsyncState<ManifestInfo[]>;
+  }, [isLoading, manifests]);
+  return { data, loading: isLoading, error } as AsyncState<ManifestDocument[]>;
 }
 
 export function useManifestsByType(modelType: string | null) {
-  const { manifestsByType, loadingMap, errorMap } = useManifestStore(useShallow((s) => ({
-    manifestsByType: s.manifestsByType,
-    loadingMap: s.loading.byType,
-    errorMap: s.error.byType,
+  const { manifests, loading, error } = useManifestStore(useShallow((s) => ({
+    manifests: s.manifests,
+    loading: s.loading.manifests,
+    error: s.error.manifests,
   })));
-  const data = modelType ? (manifestsByType[modelType] || undefined) : undefined;
-  const isLoading = !!(modelType && loadingMap[modelType]);
+  const data = modelType ? (manifests || [])?.filter((m) => Array.isArray(m.model_type) && m.model_type.includes(modelType)) : [];
+  const isLoading = loading || (manifests == null);
   useEffect(() => {
-    if (modelType && !data && !isLoading) {
-      useManifestStore.getState().loadManifestsByType(modelType, false);
+    if (!isLoading && manifests == null) {
+      useManifestStore.getState().loadManifests(false);
     }
-  }, [modelType, data, isLoading]);
-  return { data: data || [], loading: isLoading, error: modelType ? (errorMap[modelType] || null) : null } as AsyncState<ManifestInfo[]>;
+  }, [isLoading, manifests]);
+  return { data, loading: isLoading, error } as AsyncState<ManifestDocument[]>;
 }
 
 export function useManifestsByModelAndType(model: string | null, modelType: string | null) {
-  const { dataMap, loadingMap, errorMap } = useManifestStore(useShallow((s) => ({
-    dataMap: s.manifestsByModelAndType,
-    loadingMap: s.loading.byModelAndType,
-    errorMap: s.error.byModelAndType,
+  const { manifests, loading, error } = useManifestStore(useShallow((s) => ({
+    manifests: s.manifests,
+    loading: s.loading.manifests,
+    error: s.error.manifests,
   })));
-  const data = model && modelType ? (dataMap[model]?.[modelType] || undefined) : undefined;
-  const isLoading = !!(model && modelType && loadingMap[model]?.[modelType]);
+  const data = (model && modelType)
+    ? (manifests || [])?.filter((m) => m.model === model && Array.isArray(m.model_type) && m.model_type.includes(modelType))
+    : [];
+  const isLoading = loading || (manifests == null);
   useEffect(() => {
-    if (model && modelType && !data && !isLoading) {
-      useManifestStore.getState().loadManifestsByModelAndType(model, modelType, false);
+    if (!isLoading && manifests == null) {
+      useManifestStore.getState().loadManifests(false);
     }
-  }, [model, modelType, data, isLoading]);
-  const error = model && modelType ? (errorMap[model]?.[modelType] || null) : null;
-  return { data: data || [], loading: isLoading, error } as AsyncState<ManifestInfo[]>;
+  }, [isLoading, manifests]);
+  return { data, loading: isLoading, error } as AsyncState<ManifestDocument[]>;
 }
 
 export function useManifest(manifestId: string | null) {
-  const { dataMap, loadingMap, errorMap } = useManifestStore(useShallow((s) => ({
-    dataMap: s.manifestById,
-    loadingMap: s.loading.byId,
-    errorMap: s.error.byId,
+  const { manifests, loadingById, errorById } = useManifestStore(useShallow((s) => ({
+    manifests: s.manifests,
+    loadingById: s.loading.byId,
+    errorById: s.error.byId,
   })));
-  const data = manifestId ? (dataMap[manifestId] ?? undefined) : undefined;
-  const isLoading = !!(manifestId && loadingMap[manifestId]);
+  const data = manifestId ? (manifests || []).find((m) => (m.metadata?.id || m.id) === manifestId) : undefined;
+  const isLoading = !!(manifestId && loadingById[manifestId]);
   useEffect(() => {
     if (manifestId && !data && !isLoading) {
       useManifestStore.getState().loadManifest(manifestId, false);
     }
   }, [manifestId, data, isLoading]);
-  const error = manifestId ? (errorMap[manifestId] || null) : null;
-  return { data: data ?? null, loading: isLoading, error } as AsyncState<ManifestDocument>;
+  const error = manifestId ? (errorById[manifestId] || null) : null;
+  return { data: (data as ManifestDocument) ?? null, loading: isLoading, error } as AsyncState<ManifestDocument>;
 }
 
 

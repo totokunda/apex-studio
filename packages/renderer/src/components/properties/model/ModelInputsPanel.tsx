@@ -135,13 +135,30 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
   const handleResolutionChange = useCallback((newVal: string) => {
     const resInput = getInputById('resolution') as any;
     const heightInput = getInputById('height') as any;
-    if (!heightInput) return;
+    const widthInput = getInputById('width') as any;
+    if (!heightInput || !widthInput) return;
     const selected = getSelectedOption(resInput, newVal) as any;
-    const targetHeight = Number(selected?.height ?? newVal ?? heightInput?.default ?? 1024) || 1024;
+    const targetHeightRaw = Number(selected?.height ?? newVal ?? heightInput?.default ?? 1024);
+    const targetHeight = Number.isFinite(targetHeightRaw) && targetHeightRaw > 0 ? targetHeightRaw : 1024;
     const heightSnapped = snapToStep(targetHeight, heightInput?.step, heightInput?.min, heightInput?.max);
     const heightInt = Math.max(1, Math.round(heightSnapped));
+    // Preserve current aspect ratio based on existing width/height values
+    const currentHeightRaw = Number(heightInput?.value ?? heightInput?.default ?? NaN);
+    const currentWidthRaw = Number(widthInput?.value ?? widthInput?.default ?? NaN);
+    const hasValidCurrentDims = Number.isFinite(currentHeightRaw) && currentHeightRaw > 0 && Number.isFinite(currentWidthRaw) && currentWidthRaw > 0;
+    let widthInt: number;
+    if (hasValidCurrentDims) {
+      const ratio = currentWidthRaw / currentHeightRaw;
+      const rawWidth = heightInt * ratio;
+      const snapped = snapToStep(rawWidth, widthInput?.step, widthInput?.min, widthInput?.max);
+      widthInt = Math.max(1, Math.round(snapped));
+    } else {
+      // Fallback to aspect ratio select if current dims are not valid
+      widthInt = computeWidthFromAR(heightInt);
+    }
+    // Prevent auto-sync effect from overriding our maintained ratio
+    updateModelInput(clipId, 'aspect_ratio', { value: 'custom' });
     updateModelInput(clipId, 'height', { value: String(heightInt) });
-    const widthInt = computeWidthFromAR(heightInt);
     updateModelInput(clipId, 'width', { value: String(widthInt) });
   }, [clipId, computeWidthFromAR, getInputById, getSelectedOption, snapToStep, updateModelInput]);
 
@@ -242,9 +259,11 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
     return String(panel.name || '').toLowerCase() === 'attention';
   }, [panel.name, clip?.manifest?.spec?.attention_types_detail]);
 
+  const rowSub = 56;
+
   return (
     <div className="">
-      <div onClick={() => setCollapsed((v) => !v)} className={cn("flex items-center justify-between  py-2.5 px-3", {
+      {panel.label && <div onClick={() => setCollapsed((v) => !v)} className={cn("flex items-center justify-between  py-2.5 px-3", {
         'rounded-b': collapsed,
         'rounded-b-none ': !collapsed || !collapsible,
         'cursor-pointer': collapsible,
@@ -263,14 +282,14 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : 'rotate-0'}`} />
           </button>
         )}
-      </div>
+      </div>}
       {(!collapsible || !collapsed) && (
       <div
-        className='px-3 py-3 pb-5 pt-2'
+        className='px-3 py-4  pt-2'
         style={{
           display: 'flex',
           flexDirection: panel.layout.flow as 'row' | 'column',
-          gap: '16px',
+          gap: '12px',
         }}>
         {shouldShowScheduler && (
           <div style={{ display: 'flex', flexDirection: 'row', gap: '12px', width: '100%', minWidth: 0 }}>
@@ -283,18 +302,71 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
           </div>
         )}
         {panel.layout.rows.map((row) => {
+          // Determine if we should override layout for small panels:
+          // If each item's computed width would be too small, stack items vertically.
+          const estimatedPerItem = panelSize / row.length - rowSub;
+          const shouldStackRowItems = estimatedPerItem < 220;
+          const perItemPanelSize = shouldStackRowItems ? (panelSize - rowSub) : estimatedPerItem;
           return (
             <div key={row.join('-')} style={{
               display: 'flex',
-              flexDirection: 'row',
-              gap: '12px',
+              flexDirection: shouldStackRowItems ? 'column' : 'row',
+              columnGap: '10px',
+              rowGap: shouldStackRowItems ? '10px' : '0px',
+              alignItems: 'stretch',
             }}>
               {row.map((inputId) => {
                 const input = getInputById(inputId);
                 switch (input?.type) {
                   case 'text':
-                    
+                    if (input.value === undefined) {
+                      updateModelInput(clipId, inputId, { value: input.default || '' });
+                    }
                     return <TextInput key={inputId} label={input?.label} description={input?.description} value={input?.value || ''} defaultValue={input?.default} onChange={(value) => updateModelInput(clipId, inputId, { value })} placeholder={input?.placeholder} />
+                case 'image+mask': {
+                    const parseImageValue = (v: any) => {
+                      if (!v) return null;
+                      if (typeof v === 'object' && v !== null) {
+                        if ((v as any).kind === 'media' || (v as any).kind === 'clip') return v;
+                        if ((v as any).clipId || (v as any).src || (v as any).type) return v;
+                      }
+                      if (typeof v === 'string') {
+                        try {
+                          const obj = JSON.parse(v);
+                          if (obj && (obj.kind === 'media' || obj.kind === 'clip')) return obj;
+                          if (obj && (obj.clipId || obj.src || obj.type)) return obj;
+                        } catch {}
+                        return { kind: 'media', assetUrl: v } as any;
+                      }
+                      return null;
+                    };
+                    const currentVal: any = parseImageValue((input as any)?.value ?? (input as any)?.default);
+                    const mapToId = (input as any)?.map_to as string | undefined;
+                    const panelSizeToUse = perItemPanelSize;
+                    return (
+                        <ImageInput
+                          inputId={inputId}
+                          clipId={clipId}
+                          label={input?.label}
+                          description={input?.description}
+                          value={currentVal}
+                          panelSize={panelSizeToUse}
+                          onChange={(v: any) => {
+                            updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' });
+                            if (!v && mapToId) {
+                              updateModelInput(clipId, mapToId, { value: '' });
+                            } else if (v && mapToId) {
+                              const hasMasks = Array.isArray((v as any)?.masks) && ((v as any).masks.length > 0);
+                              if (hasMasks) {
+                                const mapped = { ...(v as any), masks: [], disableTimelineSync: true };
+                                updateModelInput(clipId, mapToId, { value: JSON.stringify(mapped) });
+                              }
+                            }
+                          }}
+                        />
+
+                    );
+                  }
                 case 'image+preprocessor': {
                     // Value may be either a raw selection or a composite object with selection/apply/preprocessor_ref
                     const parseComposite = (v: any) => {
@@ -319,27 +391,27 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                     const selectionVal: any = composite?.selection ?? null;
                     const preprocRef = (input as any)?.preprocessor_ref as string | undefined;
                     const preprocName = (input as any)?.preprocessor_name as string | undefined;
+                    const panelSizeToUse = perItemPanelSize;
                     return (
-                      <ImageInput
-                        inputId={inputId}
-                        clipId={clipId}
-                        key={inputId}
-                        label={input?.label}
-                        description={input?.description}
-                        value={selectionVal}
-                        panelSize={panelSize - 64}
-                        preprocessorRef={preprocRef}
-                        preprocessorName={preprocName}
-                        applyPreprocessorInitial={
-                          typeof composite?.apply === 'boolean' ? composite.apply : (typeof composite?.apply_preprocessor === 'boolean' ? composite.apply_preprocessor : undefined)
-                        }
-                        onChangeComposite={(v: any) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
-                        onChange={(v: any) => {
-                          // Fallback: if child calls onChange (selection-only), wrap into composite
-                          const payload = { selection: v ?? null, preprocessor_ref: preprocRef, preprocessor_name: preprocName, apply_preprocessor: true, apply: true };
-                          updateModelInput(clipId, inputId, { value: JSON.stringify(payload) });
-                        }}
-                      />
+                        <ImageInput
+                          inputId={inputId}
+                          clipId={clipId}
+                          label={input?.label}
+                          description={input?.description}
+                          value={selectionVal}
+                          panelSize={panelSizeToUse}
+                          preprocessorRef={preprocRef}
+                          preprocessorName={preprocName}
+                          applyPreprocessorInitial={
+                            typeof composite?.apply === 'boolean' ? composite.apply : (typeof composite?.apply_preprocessor === 'boolean' ? composite.apply_preprocessor : undefined)
+                          }
+                          onChangeComposite={(v: any) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
+                          onChange={(v: any) => {
+                            // Fallback: if child calls onChange (selection-only), wrap into composite
+                            const payload = { selection: v ?? null, preprocessor_ref: preprocRef, preprocessor_name: preprocName, apply_preprocessor: true, apply: true };
+                            updateModelInput(clipId, inputId, { value: JSON.stringify(payload) });
+                          }}
+                        />
                     );
                   }
                 case 'select':
@@ -399,11 +471,13 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                           startLogo={input?.label ? input?.label.charAt(0).toUpperCase() : ''}
                           key={inputId}
                           label={input?.label}
+                          toFixed={input?.value_type === 'integer' ? 0 : 1}
                           description={input?.description}
                           value={strVal}
                           min={input?.min}      
                           max={input?.max}
                           step={input?.step}
+                          
                           onChange={(v) => {
                             updateModelInput(clipId, inputId, { value: v });
                             if (inputId === 'height' || inputId === 'width') {
@@ -442,6 +516,7 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                     })();
                     const preprocRef = (input as any)?.preprocessor_ref as string | undefined;
                     const preprocName = (input as any)?.preprocessor_name as string | undefined;
+                    const panelSizeToUse = perItemPanelSize;
                     return (
                       <VideoInput
                         inputId={inputId}
@@ -450,7 +525,7 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                         label={input?.label || 'Video'}
                         description={input?.description}
                         value={selectionVal}
-                        panelSize={panelSize - 64}
+                        panelSize={panelSizeToUse}
                         preprocessorRef={preprocRef}
                         preprocessorName={preprocName}
                         applyPreprocessorInitial={
@@ -518,17 +593,17 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                       return null;
                     };
                     const currentVal: any = parseImageValue(input?.value);
+                    const panelSizeToUse = perItemPanelSize;
                     return (
-                      <ImageInput
-                        inputId={inputId}
-                        clipId={clipId}
-                        key={inputId}
-                        label={input?.label}
-                        description={input?.description}
-                        value={currentVal}
-                        panelSize={panelSize - 64}
-                        onChange={(v: any) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
-                      />
+                        <ImageInput
+                          inputId={inputId}
+                          clipId={clipId}
+                          label={input?.label}
+                          description={input?.description}
+                          value={currentVal}
+                          panelSize={panelSizeToUse}
+                          onChange={(v: any) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
+                        />
                     );
                   }
                   case 'video': {
@@ -553,18 +628,64 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                       return null;
                     };
                     const currentVal: any = parseVideoValue(input?.value ?? input?.default);
-
+                    const panelSizeToUse = perItemPanelSize;
                     return (
-                      <VideoInput
-                        inputId={inputId}
-                        clipId={clipId}
-                        key={inputId}
-                        label={input?.label || 'Video'}
-                        description={input?.description}
-                        value={currentVal}
-                        panelSize={panelSize - 64}
-                        onChange={(v) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
-                      />
+                        <VideoInput
+                          inputId={inputId}
+                          clipId={clipId}
+                          label={input?.label || 'Video'}
+                          description={input?.description}
+                          value={currentVal}
+                          panelSize={panelSizeToUse}
+                          onChange={(v) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
+                        />
+                    );
+                  }
+                  case 'video+mask': {
+                    const parseVideoValue = (v: any) => {
+                      if (!v) return null;
+                      const coerceRange = (obj: any) => {
+                        const start = Math.max(0, Math.round(Number(obj?.startFrame ?? 0)));
+                        const end = Math.max(start + 1, Math.round(Number(obj?.endFrame ?? start + 1)));
+                        return { ...obj, startFrame: start, endFrame: end };
+                      };
+                      if (typeof v === 'object' && v !== null) {
+                        if ((v as any).kind === 'media' || (v as any).kind === 'clip') return coerceRange(v);
+                        if ((v as any).clipId || (v as any).src || (v as any).type) return coerceRange(v);
+                      }
+                      if (typeof v === 'string') {
+                        try {
+                          const parsed = JSON.parse(v);
+                          if (parsed && (parsed.kind === 'media' || parsed.kind === 'clip')) return coerceRange(parsed);
+                          if (parsed && (parsed.clipId || parsed.src || parsed.type)) return coerceRange(parsed);
+                        } catch {}
+                      }
+                      return null;
+                    };
+                    const currentVal: any = parseVideoValue((input as any)?.value ?? (input as any)?.default);
+                    const mapToId = (input as any)?.map_to as string | undefined;
+                    const panelSizeToUse = perItemPanelSize;
+                    return (
+                        <VideoInput
+                          inputId={inputId}
+                          clipId={clipId}
+                          label={input?.label || 'Video'}
+                          description={input?.description}
+                          value={currentVal}
+                          panelSize={panelSizeToUse}
+                          onChange={(v: any) => {
+                            updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' });
+                            if (!v && mapToId) {
+                              updateModelInput(clipId, mapToId, { value: '' });
+                            } else if (v && mapToId) {
+                              const hasMasks = Array.isArray((v as any)?.masks) && ((v as any).masks.length > 0);
+                              if (hasMasks) {
+                                const mapped = { ...(v as any), masks: [], disableTimelineSync: true };
+                                updateModelInput(clipId, mapToId, { value: JSON.stringify(mapped) });
+                              }
+                            }
+                          }}
+                        />
                     );
                   }
               case 'audio': {
@@ -591,17 +712,17 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                 };
                 
                 const currentVal: any = parseAudioValue(input?.value ?? input?.default);
+                const panelSizeToUse = perItemPanelSize;
                 return (
-                  <AudioInput
-                    inputId={inputId}
-                    clipId={clipId}
-                    key={inputId}
-                    label={input?.label || 'Audio'}
-                    description={input?.description}
-                    value={currentVal}
-                    panelSize={panelSize - 64}
-                    onChange={(v) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
-                  />
+                    <AudioInput
+                      inputId={inputId}
+                      clipId={clipId}
+                      label={input?.label || 'Audio'}
+                      description={input?.description}
+                      value={currentVal}
+                      panelSize={panelSizeToUse}
+                      onChange={(v) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
+                    />
                 );
               }
                   

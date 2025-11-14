@@ -1445,6 +1445,12 @@ async function getManifest(manifestId: string): Promise<ConfigResponse<any>> {
   return await ipcRenderer.invoke('manifest:get', manifestId);
 }
 
+// Fetch a specific part of a manifest (dot-separated path)
+async function getManifestPart<T = any>(manifestId: string, pathDot?: string): Promise<ConfigResponse<T>> {
+  const qp = typeof pathDot === 'string' && pathDot.length > 0 ? pathDot : undefined;
+  return await ipcRenderer.invoke('manifest:get-part', manifestId, qp);
+}
+
 // Engine API functions
 function _normalizeInputsForIpc(obj: any): any {
   if (obj == null) return obj;
@@ -1528,6 +1534,69 @@ function onPostprocessorWebSocketStatus(jobId: string, callback: (data: any) => 
 function onPostprocessorWebSocketError(jobId: string, callback: (data: any) => void): () => void {
   return onWsError(`postprocessor:${jobId}`, callback);
 }
+
+async function startUnifiedDownload(request: {
+  item_type: 'component' | 'lora' | 'preprocessor';
+  source: string | string[];
+  save_path?: string;
+  job_id?: string;
+}): Promise<ConfigResponse<{job_id: string; status: string; message?: string}>> {
+  return await ipcRenderer.invoke('download:start', request);
+}
+
+async function resolveUnifiedDownload(request: {
+  item_type: 'component' | 'lora' | 'preprocessor';
+  source: string | string[];
+  save_path?: string;
+}): Promise<ConfigResponse<{job_id: string; exists: boolean; running: boolean; downloaded: boolean; bucket: string; save_dir: string; source: string | string[] }>> {
+  return await ipcRenderer.invoke('download:resolve', request);
+}
+
+async function getUnifiedDownloadStatus(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('download:status', jobId);
+}
+
+async function cancelUnifiedDownload(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('download:cancel', jobId);
+}
+
+function onUnifiedDownloadUpdate(jobId: string, callback: (data: any) => void): () => void {
+  return onWsUpdate(`download:${jobId}`, callback);
+}
+
+function onUnifiedDownloadStatus(jobId: string, callback: (data: any) => void): () => void {
+  return onWsStatus(`download:${jobId}`, callback);
+}
+
+function onUnifiedDownloadError(jobId: string, callback: (data: any) => void): () => void {
+  return onWsError(`download:${jobId}`, callback);
+}
+
+async function resolveUnifiedDownloadBatch(request: {
+  item_type: 'component' | 'lora' | 'preprocessor';
+  sources: Array<string | string[]>;
+  save_path?: string;
+}): Promise<ConfigResponse<{results: Array<{job_id: string; exists: boolean; running: boolean; downloaded: boolean; bucket: string; save_dir: string; source: string | string[]}>}>> {
+  return await ipcRenderer.invoke('download:resolve-batch', request);
+}
+
+async function connectUnifiedDownloadWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+  return await wsConnect(`download:${jobId}`, `/ws/job/${jobId}`);
+}
+
+async function disconnectUnifiedDownloadWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+  return await wsDisconnect(`download:${jobId}`);
+}
+
+async function deleteDownload(request: {
+  path: string;
+  item_type?: 'component' | 'lora' | 'preprocessor';
+  source?: string | string[];
+  save_path?: string;
+}): Promise<ConfigResponse<{path: string; status: string; removed_mapping?: boolean; unmarked?: boolean}>> {
+  return await ipcRenderer.invoke('download:delete', request);
+}
+
 
 export {
   sha256sum,
@@ -1620,6 +1689,7 @@ export {
   listManifestsByType,
   listManifestsByModelAndType,
   getManifest,
+  getManifestPart,
   runEngine,
   getEngineStatus,
   getEngineResult,
@@ -1632,5 +1702,16 @@ export {
   disconnectPostprocessorWebSocket,
   onPostprocessorWebSocketUpdate,
   onPostprocessorWebSocketStatus,
-  onPostprocessorWebSocketError
+  onPostprocessorWebSocketError,
+  startUnifiedDownload,
+  resolveUnifiedDownload,
+  resolveUnifiedDownloadBatch,
+  getUnifiedDownloadStatus,
+  cancelUnifiedDownload,
+  onUnifiedDownloadUpdate,
+  onUnifiedDownloadStatus,
+  onUnifiedDownloadError,
+  connectUnifiedDownloadWebSocket,
+  disconnectUnifiedDownloadWebSocket,
+  deleteDownload,
 };

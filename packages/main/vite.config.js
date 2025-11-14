@@ -72,6 +72,11 @@ function handleHotReload() {
         return;
       }
 
+      // If dev-mode script manages Electron spawning, skip spawning here
+      if (process.env.ELECTRON_SPAWN_MANAGED === '1') {
+        return;
+      }
+
       /** Kill electron if a process already exists */
       if (electronApp !== null) {
         electronApp.removeListener('exit', process.exit);

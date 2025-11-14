@@ -55,6 +55,7 @@ export class ApexApi implements AppModule {
     this.registerPreprocessorHandlers();
     this.registerPostprocessorHandlers();
     this.registerEngineHandlers();
+    this.registerDownloadHandlers();
     this.registerComponentsHandlers();
     this.registerMaskHandlers();
     this.registerManifestHandlers();
@@ -556,6 +557,12 @@ export class ApexApi implements AppModule {
     ipcMain.handle('manifest:get', async (_event, manifestId: string) => {
       return this.makeRequest<any>('GET', `/manifest/${encodeURIComponent(manifestId)}`);
     });
+
+    // Get a specific part of a manifest by dot-path (e.g., spec.loras or spec.components.0.model_path)
+    ipcMain.handle('manifest:get-part', async (_event, manifestId: string, pathDot?: string) => {
+      const qp = pathDot ? `?path=${encodeURIComponent(pathDot)}` : '';
+      return this.makeRequest<any>('GET', `/manifest/${encodeURIComponent(manifestId)}/part${qp}`);
+    });
   }
 
   private registerComponentsHandlers(): void {
@@ -581,6 +588,78 @@ export class ApexApi implements AppModule {
     });
 
     // WebSocket handlers migrated to unified ws:* IPC
+  }
+
+  private registerDownloadHandlers(): void {
+    // Start unified download
+    ipcMain.handle('download:start', async (_event, request: {
+      item_type: 'component' | 'lora' | 'preprocessor';
+      source: string | string[];
+      save_path?: string;
+      job_id?: string;
+    }) => {
+      const body = {
+        item_type: request.item_type,
+        source: request.source,
+        save_path: request.save_path,
+        job_id: request.job_id,
+      };
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/download', body);
+    });
+
+    // Resolve job id or check if already downloaded
+    ipcMain.handle('download:resolve', async (_event, request: {
+      item_type: 'component' | 'lora' | 'preprocessor';
+      source: string | string[];
+      save_path?: string;
+    }) => {
+      const body = {
+        item_type: request.item_type,
+        source: request.source,
+        save_path: request.save_path,
+      };
+      return this.makeRequest<{ job_id: string; exists: boolean; running: boolean; downloaded: boolean; bucket: string; save_dir: string }>('POST', '/download/resolve', body);
+    });
+
+    // Resolve multiple sources at once
+    ipcMain.handle('download:resolve-batch', async (_event, request: {
+      item_type: 'component' | 'lora' | 'preprocessor';
+      sources: Array<string | string[]>;
+      save_path?: string;
+    }) => {
+      const body = {
+        item_type: request.item_type,
+        sources: request.sources,
+        save_path: request.save_path,
+      };
+      return this.makeRequest<{ results: Array<{ job_id: string; exists: boolean; running: boolean; downloaded: boolean; bucket: string; save_dir: string }> }>('POST', '/download/resolve/batch', body);
+    });
+
+    // Poll unified download status
+    ipcMain.handle('download:status', async (_event, jobId: string) => {
+      return this.makeRequest<any>('GET', `/download/status/${encodeURIComponent(jobId)}`);
+    });
+
+    // Cancel unified download
+    ipcMain.handle('download:cancel', async (_event, jobId: string) => {
+      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/download/cancel/${encodeURIComponent(jobId)}`);
+    });
+
+    // Delete a downloaded path (file or directory) from filesystem
+    ipcMain.handle('download:delete', async (_event, request: {
+      path: string;
+      item_type?: 'component' | 'lora' | 'preprocessor';
+      source?: string | string[];
+      save_path?: string;
+    }) => {
+      const body = {
+        path: String(request.path || ''),
+        item_type: request.item_type,
+        source: request.source,
+        save_path: request.save_path,
+      };
+      return this.makeRequest<{ path: string; status: string; removed_mapping?: boolean; unmarked?: boolean }>('DELETE', '/download/delete', body);
+    });
   }
 
   private registerSystemHandlers(): void {

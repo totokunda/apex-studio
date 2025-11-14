@@ -667,7 +667,7 @@ function buildManifestPathStatus(manifest: ManifestDocument): Map<string, boolea
 }
 
 function reconcileManifestDownloads(manifestId: string) {
-  const manifest = useManifestStore.getState().manifestById[manifestId];
+  const manifest = useManifestStore.getState().getLoadedManifest(manifestId);
   if (!manifest) return;
   const downloadedMap = buildManifestPathStatus(manifest);
   if (downloadedMap.size === 0) return;

@@ -16,6 +16,7 @@ interface NumberListInputProps {
   emptyLabel?: boolean;
   maxItems?: number; // optional max number of items in the list
   valueType?: 'integer' | 'float' | string;
+  toFixed?: number;
 }
 
 const clampNumber = (num: number, min?: number, max?: number) => {
@@ -45,6 +46,7 @@ const NumberListInput: React.FC<NumberListInputProps> = ({
   emptyLabel,
   maxItems,
   valueType,
+  toFixed = 1,
 }) => {
   const [tempValue, setTempValue] = useState<string>('');
   const lastValueRef = useRef<string>(value);
@@ -209,7 +211,7 @@ const NumberListInput: React.FC<NumberListInputProps> = ({
               >
                 <LuChevronLeft className="w-3 h-3" />
               </button>
-              <span className="px-0.5">{valueType === 'integer' ? Math.trunc(num) : num}</span>
+              <span className="px-0.5">{valueType === 'integer' ? Math.trunc(num) : num.toFixed(toFixed)}</span>
               <button
                 className={cn('p-0.5 rounded hover:bg-brand/40 disabled:opacity-40 disabled:cursor-not-allowed')}
                 onClick={() => moveRight(idx)}

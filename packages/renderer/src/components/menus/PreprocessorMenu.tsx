@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Preprocessor } from '@/lib/preprocessor/api'
 import Draggable from '../dnd/Draggable'
 import { ScrollArea } from '../ui/scroll-area'
@@ -6,84 +6,93 @@ import { LuInfo, LuChevronLeft, LuChevronRight, LuArrowRight, LuSearch, LuDownlo
 import { TbWorldDownload } from 'react-icons/tb';
 import { cn } from '@/lib/utils'
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store'
+import { useDownloadStore } from '@/lib/download/store'
+import { formatDownloadProgress, formatSpeed } from '@/lib/components-download/format'
+import { ProgressBar } from '@/components/common/ProgressBar'
 import PreprocessorPage from '../preprocessors/PreprocessorPage'
-import { downloadPreprocessor as downloadPreprocessorApi, usePreprocessorJob, useJobProgress, getPreprocessorStatus, usePreprocessorJobStore } from '@/lib/preprocessor/api'
 import CategorySidebar from './CategorySidebar'
 
 export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?: boolean, onMoreInfo?: (id: string) => void, onAdd?: (preprocessor: Preprocessor) => void, addDisabled?: boolean, dimmed?: boolean}> = ({preprocessor, isDragging, onMoreInfo, onAdd, addDisabled, dimmed}) => {
-    const isDownloaded = !!preprocessor.is_downloaded;
+    const { startAndTrackDownload, cancelDownload, resolveDownload, subscribeToJob, downloadingPaths, wsFilesByPath } = useDownloadStore();
+    const { load } = usePreprocessorsListStore();
     const [jobId, setJobId] = useState<string | null>(null);
     const [starting, setStarting] = useState(false);
-    // Subscribe to the job we started (same mechanism as details page)
-    const { isProcessing, isComplete } = usePreprocessorJob(jobId, true);
-    // Read-only global job state for this preprocessor; do not auto-start tracking to avoid false pending state
-    const globalJob = useJobProgress(preprocessor.id);
-    const isGlobalProcessing = !!(globalJob && (globalJob.status === 'running' || globalJob.status === 'pending'));
-    const { load } = usePreprocessorsListStore();
-    const startTracking = usePreprocessorJobStore((s) => s.startTracking);
-    const isActivelyTracked = usePreprocessorJobStore((s) => s.activeJobs.has(preprocessor.id));
+    const [isDownloaded, setIsDownloaded] = useState<boolean>(!!preprocessor.is_downloaded);
+    const subscriptionRef = useRef<(() => void) | null>(null);
+    const unmountedRef = useRef(false);
+
+    const cleanupSubscription = useCallback(() => {
+        if (subscriptionRef.current) {
+            try { subscriptionRef.current(); } catch {}
+            subscriptionRef.current = null;
+        }
+    }, []);
 
     useEffect(() => {
-        if (isComplete && jobId) {
-            (async () => {
-                try { await load(true); } catch {}
-                setJobId(null);
-                setStarting(false);
-            })();
-        }
-    }, [isComplete, jobId, load]);
+        unmountedRef.current = false;
+        return () => {
+            unmountedRef.current = true;
+            cleanupSubscription();
+        };
+    }, [cleanupSubscription]);
 
-    // If a job already exists in the store for this preprocessor, adopt it locally
     useEffect(() => {
-        if (!jobId && globalJob && (globalJob.status === 'running' || globalJob.status === 'pending')) {
-            setJobId(preprocessor.id);
-            setStarting(false);
-        }
-    }, [jobId, globalJob, preprocessor.id]);
+        setIsDownloaded(!!preprocessor.is_downloaded);
+    }, [preprocessor.is_downloaded]);
 
-    // Adopt downloads started elsewhere (e.g., details page) without creating phantom jobs
+    const handleComplete = useCallback(async () => {
+        if (unmountedRef.current) return;
+        cleanupSubscription();
+        setStarting(false);
+        setJobId(null);
+        setIsDownloaded(true);
+        try { await load(true); } catch {}
+    }, [cleanupSubscription, load]);
+
     useEffect(() => {
         let cancelled = false;
-        if (isDownloaded) return;
-        // If store says it's processing but we are not actively tracking, reattach tracking
-        if (isGlobalProcessing && !isActivelyTracked) {
-            (async () => { try { await startTracking(preprocessor.id); } catch {} })();
-            setJobId(preprocessor.id);
-            setStarting(false);
-            return;
-        }
-        if (isGlobalProcessing) return; // already tracked
-        if (jobId && isProcessing) return; // local job already tracked
-        (async () => {
+        const adoptExisting = async () => {
             try {
-                const res = await getPreprocessorStatus(preprocessor.id);
-                const st = res?.data?.status;
-                if (!cancelled && res.success && (st === 'running' || st === 'pending')) {
-                    try { await startTracking(preprocessor.id); } catch {}
-                    // Also adopt locally so the UI updates immediately
-                    setJobId(preprocessor.id);
-                    setStarting(false);
+                const res = await resolveDownload({
+                    item_type: 'preprocessor',
+                    source: preprocessor.id,
+                });
+                if (cancelled || unmountedRef.current || !res) return;
+                if (res.downloaded) {
+                    setIsDownloaded(true);
+                    cleanupSubscription();
+                    setJobId(null);
+                    return;
+                }
+                if (res.running && res.job_id) {
+                    setJobId(res.job_id);
+                    try {
+                        const off = await subscribeToJob(res.job_id, preprocessor.id, async () => {
+                            await handleComplete();
+                        });
+                        if (cancelled || unmountedRef.current) {
+                            try { off(); } catch {}
+                        } else {
+                            cleanupSubscription();
+                            subscriptionRef.current = () => {
+                                try { off(); } catch {}
+                            };
+                        }
+                    } catch {}
+                } else {
+                    cleanupSubscription();
+                    setJobId(null);
                 }
             } catch {}
-        })();
+        };
+        adoptExisting();
         return () => { cancelled = true; };
-    }, [preprocessor.id, isDownloaded, isGlobalProcessing, isActivelyTracked, jobId, isProcessing, startTracking]);
+    }, [cleanupSubscription, handleComplete, preprocessor.id, resolveDownload, subscribeToJob]);
 
-    const handleDownload = async () => {
-        // Mirror gating from details page: don't block on stale global processing state
-        if (starting || (jobId && isProcessing)) return;
-        setStarting(true);
-        try {
-            const res = await downloadPreprocessorApi(preprocessor.id, preprocessor.id);
-            if (res.success) {
-                setJobId(preprocessor.id);
-            } else {
-                setStarting(false);
-            }
-        } catch {
-            setStarting(false);
-        }
-    };
+    const wsFilesRecord = wsFilesByPath[preprocessor.id] || {};
+    const downloadFiles = Object.values(wsFilesRecord);
+    const isQueued = downloadingPaths.has(preprocessor.id);
+    const isDownloading = isQueued || downloadFiles.length > 0 || !!jobId;
 
     const formatSize = (bytes: number): string | null => {
         if (bytes === 0) {
@@ -100,6 +109,38 @@ export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?:
         }
     };
 
+    const handleDownload = async () => {
+        if (starting || isDownloading || isDownloaded) return;
+        setStarting(true);
+        try {
+            const jobIds = await startAndTrackDownload({
+                item_type: 'preprocessor',
+                source: preprocessor.id,
+            }, async () => {
+                await handleComplete();
+            });
+            if (!unmountedRef.current && jobIds?.[0]) {
+                setJobId(jobIds[0]);
+            }
+        } catch {
+            if (!unmountedRef.current) {
+                setStarting(false);
+            }
+        }
+    };
+
+    const handleCancel = async () => {
+        if (!jobId) return;
+        try {
+            await cancelDownload(jobId);
+        } catch {}
+        cleanupSubscription();
+        if (!unmountedRef.current) {
+            setStarting(false);
+            setJobId(null);
+        }
+    };
+
     const totalDownloadSize = useMemo(() => {
         const bytes = preprocessor.files?.reduce((acc, file) => acc + file.size_bytes, 0) ?? 0;
         return formatSize(bytes);
@@ -107,7 +148,7 @@ export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?:
 
     return (
         <div className={cn("flex flex-col w-28 transition-all duration-200 rounded-md border shadow border-brand-light/10", {
-            'w-36': !isDragging,
+            'w-40': !isDragging,
             'w-32': isDragging
         }, dimmed ? 'opacity-100' : '', addDisabled ? 'cursor-default' : 'cursor-pointer')}>
             {isDragging ? (
@@ -197,7 +238,7 @@ export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?:
                     <button
                         onClick={() => onMoreInfo?.(preprocessor.id)}
                         type='button'
-                        className='text-[10px] font-medium whitespace-nowrap flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1'
+                        className='text-[10px] font-medium whitespace-nowrap w-1/2 flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1'
                         title='Show more info'
                     >
                         <LuInfo className='w-3 h-3' />
@@ -219,20 +260,20 @@ export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?:
                         <button
                             type="button"
                             onClick={handleDownload}
-                            disabled={starting || (!!jobId && isProcessing) || isGlobalProcessing}
+                            disabled={starting || isDownloading}
                             className={cn(
-                                "inline-flex items-center justify-center gap-x-1 text-[10px] font-medium w-full bg-brand-background border border-brand-light/10 rounded py-1 px-1 h-[25px] min-w-7",
+                                "inline-flex items-center justify-center gap-x-1 text-[10px] font-medium w-1/2 bg-brand-background border border-brand-light/10 rounded py-1 px-1 h-[25px] min-w-7",
                                 {
-                                    'text-brand-light/60 cursor-default! opacity-70': jobId,
-                                    'text-brand-light hover:text-brand-light hover:bg-brand-background/70': !jobId
+                                    'text-brand-light/60 cursor-default opacity-70': isDownloading || starting,
+                                    'text-brand-light hover:text-brand-light hover:bg-brand-background/70': !isDownloading && !starting
                                 }
                             )}
                             title={starting ? 'Starting…' : 'Download'}
                         >
-                            {(jobId)
+                            {(isDownloading || starting)
                                 ? <LuLoader className="size-2.5 animate-spin" />
                                 : <LuDownload className="size-2.5" />}
-                            {(jobId) ? 'Installing':"Install"}
+                            {(isDownloading || starting) ? 'Installing':"Install"}
                         </button>
                     )}
                 </div>

@@ -15,6 +15,8 @@ import electron from 'electron';
 const mode = 'development';
 process.env.NODE_ENV = mode;
 process.env.MODE = mode;
+// Ensure only this script spawns Electron; signal others to skip spawning
+process.env.ELECTRON_SPAWN_MANAGED = '1';
 
 
 /**
@@ -84,6 +86,7 @@ const electronProc = spawn(electron, [entryPoint], {
     ...process.env,
     NODE_ENV: mode,
     MODE: mode,
+    ELECTRON_SPAWN_MANAGED: '1',
     VITE_DEV_SERVER_URL: rendererDevUrl,
   },
 });

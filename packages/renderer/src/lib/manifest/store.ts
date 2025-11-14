@@ -2,87 +2,59 @@ import { create } from 'zustand';
 import {
   listModelTypes,
   listManifests,
-  listManifestsByModel,
-  listManifestsByType,
-  listManifestsByModelAndType,
   getManifest,
-  type ManifestInfo,
   type ModelTypeInfo,
+  ManifestDocument,
 } from './api';
-
-type ManifestByModelKey = string; // model
-type ManifestByTypeKey = string; // modelType
 
 export interface ManifestStoreState {
   modelTypes: ModelTypeInfo[] | null;
-  manifests: ManifestInfo[] | null;
-  manifestsByModel: Record<ManifestByModelKey, ManifestInfo[]>;
-  manifestsByType: Record<ManifestByTypeKey, ManifestInfo[]>;
-  manifestsByModelAndType: Record<string, Record<string, ManifestInfo[]>>; // model -> type -> manifests
-  manifestById: Record<string, any>;
+  manifests: ManifestDocument[] | null;
   selectedManifestId: string | null;
   setSelectedManifestId: (manifestId: string) => void;
   clearSelectedManifestId: () => void;
-  getLoadedManifest: (manifestId: string) => ManifestInfo | null;
+  getLoadedManifest: (manifestId: string) => ManifestDocument | null;
   loading: {
     modelTypes: boolean;
     manifests: boolean;
-    byModel: Record<ManifestByModelKey, boolean>;
-    byType: Record<ManifestByTypeKey, boolean>;
-    byModelAndType: Record<string, Record<string, boolean>>; // model -> type -> loading
     byId: Record<string, boolean>;
   };
 
   error: {
     modelTypes: string | null;
     manifests: string | null;
-    byModel: Record<ManifestByModelKey, string | null>;
-    byType: Record<ManifestByTypeKey, string | null>;
-    byModelAndType: Record<string, Record<string, string | null>>;
     byId: Record<string, string | null>;
   };
 
   // Loaders (idempotent; will not refetch if cached unless force=true)
   loadModelTypes: (force?: boolean) => Promise<void>;
   loadManifests: (force?: boolean) => Promise<void>;
-  loadManifestsByModel: (model: string, force?: boolean) => Promise<void>;
-  loadManifestsByType: (modelType: string, force?: boolean) => Promise<void>;
-  loadManifestsByModelAndType: (model: string, modelType: string, force?: boolean) => Promise<void>;
   loadManifest: (manifestId: string, force?: boolean) => Promise<void>;
+  refreshManifestPart: (manifestId: string, pathDot: string) => Promise<void>;
 }
 
 export const useManifestStore = create<ManifestStoreState>((set, get) => ({
   modelTypes: null,
   manifests: null,
-  manifestsByModel: {},
-  manifestsByType: {},
-  manifestsByModelAndType: {},
-  manifestById: {},
   selectedManifestId: null,
   setSelectedManifestId: (manifestId: string) => set({ selectedManifestId: manifestId }),
   clearSelectedManifestId: () => set({ selectedManifestId: null }),
   getLoadedManifest: (manifestId: string) => {
     const state = get();
     const manifests = state.manifests || [];
-    const manifest = manifests.find((manifest) => manifest.id === manifestId);
-    if (manifest) return manifest;
-    return state.manifestById[manifestId] || null;
+    const manifest = manifests.find((manifest) => manifest.metadata?.id === manifestId);
+    if (manifest) return manifest as ManifestDocument;
+    return null;
   },
   loading: {
     modelTypes: false,
     manifests: false,
-    byModel: {},
-    byType: {},
-    byModelAndType: {},
     byId: {},
   },
 
   error: {
     modelTypes: null,
     manifests: null,
-    byModel: {},
-    byType: {},
-    byModelAndType: {},
     byId: {},
   },
 
@@ -105,88 +77,121 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     else set((s) => ({ loading: { ...s.loading, manifests: false }, error: { ...s.error, manifests: res.error || 'Failed to load manifests' } }));
   },
 
-  loadManifestsByModel: async (model: string, force = false) => {
-    const state = get();
-    if (!model) return;
-    if (!force && (state.manifestsByModel[model] || state.loading.byModel[model])) return;
-    set((s) => ({ loading: { ...s.loading, byModel: { ...s.loading.byModel, [model]: true } }, error: { ...s.error, byModel: { ...s.error.byModel, [model]: null } } }));
-    const res = await listManifestsByModel(model);
-    if (res.success) set((s) => ({ manifestsByModel: { ...s.manifestsByModel, [model]: res.data || [] }, loading: { ...s.loading, byModel: { ...s.loading.byModel, [model]: false } } }));
-    else set((s) => ({ loading: { ...s.loading, byModel: { ...s.loading.byModel, [model]: false } }, error: { ...s.error, byModel: { ...s.error.byModel, [model]: res.error || 'Failed to load' } } }));
-  },
-
-  loadManifestsByType: async (modelType: string, force = false) => {
-    const state = get();
-    if (!modelType) return;
-    if (!force && (state.manifestsByType[modelType] || state.loading.byType[modelType])) return;
-    set((s) => ({ loading: { ...s.loading, byType: { ...s.loading.byType, [modelType]: true } }, error: { ...s.error, byType: { ...s.error.byType, [modelType]: null } } }));
-    const res = await listManifestsByType(modelType);
-    if (res.success) set((s) => ({ manifestsByType: { ...s.manifestsByType, [modelType]: res.data || [] }, loading: { ...s.loading, byType: { ...s.loading.byType, [modelType]: false } } }));
-    else set((s) => ({ loading: { ...s.loading, byType: { ...s.loading.byType, [modelType]: false } }, error: { ...s.error, byType: { ...s.error.byType, [modelType]: res.error || 'Failed to load' } } }));
-  },
-
-  loadManifestsByModelAndType: async (model: string, modelType: string, force = false) => {
-    const state = get();
-    if (!model || !modelType) return;
-    const cache = state.manifestsByModelAndType[model]?.[modelType];
-    const isLoading = !!state.loading.byModelAndType[model]?.[modelType];
-    if (!force && (cache || isLoading)) return;
-    set((s) => ({
-      loading: {
-        ...s.loading,
-        byModelAndType: {
-          ...s.loading.byModelAndType,
-          [model]: { ...(s.loading.byModelAndType[model] || {}), [modelType]: true },
-        },
-      },
-      error: {
-        ...s.error,
-        byModelAndType: {
-          ...s.error.byModelAndType,
-          [model]: { ...(s.error.byModelAndType[model] || {}), [modelType]: null },
-        },
-      },
-    }));
-    const res = await listManifestsByModelAndType(model, modelType);
-    if (res.success) set((s) => ({
-      manifestsByModelAndType: {
-        ...s.manifestsByModelAndType,
-        [model]: { ...(s.manifestsByModelAndType[model] || {}), [modelType]: res.data || [] },
-      },
-      loading: {
-        ...s.loading,
-        byModelAndType: {
-          ...s.loading.byModelAndType,
-          [model]: { ...(s.loading.byModelAndType[model] || {}), [modelType]: false },
-        },
-      },
-    }));
-    else set((s) => ({
-      loading: {
-        ...s.loading,
-        byModelAndType: {
-          ...s.loading.byModelAndType,
-          [model]: { ...(s.loading.byModelAndType[model] || {}), [modelType]: false },
-        },
-      },
-      error: {
-        ...s.error,
-        byModelAndType: {
-          ...s.error.byModelAndType,
-          [model]: { ...(s.error.byModelAndType[model] || {}), [modelType]: res.error || 'Failed to load' },
-        },
-      },
-    }));
-  },
-
   loadManifest: async (manifestId: string, force = false) => {
     const state = get();
     if (!manifestId) return;
-    if (!force && (state.manifestById[manifestId] || state.loading.byId[manifestId])) return;
+    const already = state.getLoadedManifest(manifestId);
+    if (!force && (already || state.loading.byId[manifestId])) return;
     set((s) => ({ loading: { ...s.loading, byId: { ...s.loading.byId, [manifestId]: true } }, error: { ...s.error, byId: { ...s.error.byId, [manifestId]: null } } }));
     const res = await getManifest(manifestId);
-    if (res.success) set((s) => ({ manifestById: { ...s.manifestById, [manifestId]: res.data }, loading: { ...s.loading, byId: { ...s.loading.byId, [manifestId]: false } } }));
+    if (res.success) set((s) => {
+      const incoming = res.data as ManifestDocument | undefined;
+      if (!incoming) {
+        return { loading: { ...s.loading, byId: { ...s.loading.byId, [manifestId]: false } } };
+      }
+      const current = s.manifests || [];
+      const idx = current.findIndex((m) => (m.metadata?.id || m.id) === manifestId);
+      const next = [...current];
+      if (idx >= 0) next[idx] = incoming;
+      else next.push(incoming);
+      return { manifests: next, loading: { ...s.loading, byId: { ...s.loading.byId, [manifestId]: false } } };
+    });
     else set((s) => ({ loading: { ...s.loading, byId: { ...s.loading.byId, [manifestId]: false } }, error: { ...s.error, byId: { ...s.error.byId, [manifestId]: res.error || 'Failed to load' } } }));
+  },
+
+  refreshManifestPart: async (manifestId: string, pathDot: string) => {
+    const state = get();
+    if (!manifestId || !pathDot) return;
+
+    // Ensure base manifest is present; load if missing
+    let current = state.getLoadedManifest(manifestId) as any;
+    if (!current) {
+      const resFull = await getManifest(manifestId);
+      if (resFull.success && resFull.data) {
+        current = resFull.data;
+        set((s) => {
+          const list = s.manifests || [];
+          const idx = list.findIndex((m) => (m.metadata?.id || (m as any).id) === manifestId);
+          const next = [...list];
+          if (idx >= 0) next[idx] = current as ManifestDocument;
+          else next.push(current as ManifestDocument);
+          return { manifests: next };
+        });
+      } else {
+        // If full fetch failed, abort
+        return;
+      }
+    }
+
+    // Fetch the part
+    const { getManifestPart } = await import('./api');
+    const res = await getManifestPart<any>(manifestId, pathDot);
+    if (!res.success) return;
+    const partValue = res.data;
+
+    // Apply replacement at dot path in a cloned manifest object
+    const clone: any = JSON.parse(JSON.stringify(current));
+    const tokens = pathDot.split('.').filter((t) => t.length > 0);
+    let cursor: any = clone;
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      const isLast = i === tokens.length - 1;
+      const idx = Number.isFinite(Number(t)) ? Number(t) : null;
+      if (isLast) {
+        if (idx !== null && Array.isArray(cursor)) {
+          cursor[idx] = partValue;
+        } else if (idx !== null) {
+          // Create array if needed
+          if (!Array.isArray(cursor)) {
+            // If parent expects array, replace with array
+            cursor = [];
+          }
+          (cursor as any[])[idx] = partValue;
+        } else {
+          cursor[t] = partValue;
+        }
+      } else {
+        if (idx !== null) {
+          if (!Array.isArray(cursor)) {
+            // Create array if missing
+            const arr: any[] = [];
+            // Assign to parent appropriately by looking back one token
+            const prevToken = tokens[i - 1];
+            if (i === 0) {
+              // top-level replacement (unlikely for array)
+              // no-op here; will assign at end
+            } else {
+              const prevIdx = Number.isFinite(Number(prevToken)) ? Number(prevToken) : null;
+              if (prevIdx !== null) {
+                // parent was array
+                // Not easily re-bindable; bail out to avoid corrupting structure
+              } else {
+                // parent was object
+                try { (clone as any)[prevToken] = arr; } catch {}
+              }
+            }
+            cursor = arr;
+          }
+          if (!cursor[idx]) cursor[idx] = {};
+          cursor = cursor[idx];
+        } else {
+          if (typeof cursor[t] !== 'object' || cursor[t] == null) {
+            cursor[t] = {};
+          }
+          cursor = cursor[t];
+        }
+      }
+    }
+
+    // update manifests list with the modified manifest
+    set((s) => {
+      const list = s.manifests || [];
+      const idx = list.findIndex((m) => (m.metadata?.id || (m as any).id) === manifestId);
+      const next = [...list];
+      if (idx >= 0) next[idx] = clone as ManifestDocument;
+      else next.push(clone as ManifestDocument);
+      return { manifests: next };
+    });
   },
 }));
 

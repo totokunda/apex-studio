@@ -5,7 +5,9 @@ import {
   listManifestsByType as listManifestsByTypePreload,
   listManifestsByModelAndType as listManifestsByModelAndTypePreload,
   getManifest as getManifestPreload,
+  getManifestPart as getManifestPartPreload,
 } from '@app/preload';
+import { ClipType } from '../types';
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -19,26 +21,6 @@ export type ModelTypeInfo = {
   description: string;
 };
 
-export type ManifestInfo = {
-  id: string;
-  name: string;
-  model: string;
-  model_type: string[] | string;
-  full_path: string;
-  version: string;
-  description: string;
-  tags: string[];
-  author: string;
-  license: string;
-  demo_path: string;
-  downloaded?: boolean;
-  desired_duration?: number;
-};
-
-export type ManifestInfoWithType = ManifestInfo & {
-  type: 'model';
-  category: string;
-};
 
 // Manifest v1 Types (aligned with backend schema_v1 and manifest_updated YAMLs)
 export type ManifestSchedulerOption = {
@@ -114,7 +96,7 @@ export type ManifestMetadata = {
   demo_path?: string;
   annotations?: Record<string, any>;
   examples?: ManifestExamplesItem[];
-  [key: string]: any;
+  desired_duration?: number;
 };
 
 // UI Schema (derived from manifest_updated YAML structure)
@@ -181,7 +163,6 @@ export type UIInputNumberList = UIInputBase & {
   items?: UIInputNumber[];
 };
 
-
 export type UIInputRandom = UIInputBase & {
   type: 'random';
   min?: number;
@@ -189,35 +170,39 @@ export type UIInputRandom = UIInputBase & {
   step?: number;
 };
 
-export type UIInputVideo = UIInputBase & {
+export type UIInputMapDimensions = {
+  map_h?: string; // the id of the input for height mapping
+  map_w?: string; // the id of the input for width mapping
+  scale_by: string;
+};
+
+export type UIInputVideo = UIInputBase & UIInputMapDimensions & {
   type: 'video';
 };
 
-export type UIInputVideoMask = UIInputBase & {
+export type UIInputVideoMask = UIInputBase & UIInputMapDimensions & {
   type: 'video+mask';
+  map_to?: string;
 };
 
-export type UIInputImageList = UIInputBase & {
-  type: 'image_list';
-  max_images?: number;
-};
-
-export type UIInputVideoList = UIInputBase & {
-  type: 'video_list';
-  max_videos?: number;
-};
-
-export type UIInputImagePreprocessor = UIInputBase & {
+export type UIInputImagePreprocessor = UIInputBase & UIInputMapDimensions & {
   type: 'image+preprocessor';
 };
 
-export type UIInputVideoPreprocessor = UIInputBase & {
+export type UIInputVideoPreprocessor = UIInputBase & UIInputMapDimensions & {
   type: 'video+preprocessor';
 };
 
-export type UIInputImage = UIInputBase & {
+export type UIInputImage = UIInputBase & UIInputMapDimensions & {
   type: 'image';
 };
+
+export type UIInputImageMask = UIInputBase & UIInputMapDimensions & {
+  type: 'image+mask';
+  map_to?: string;
+};
+
+
 
 export type UIInputAudio = UIInputBase & {
   type: 'audio';
@@ -241,11 +226,10 @@ export type UIInput =
   | UIInputRandom
   | UIInputVideo
   | UIInputVideoMask
-  | UIInputImageList
-  | UIInputVideoList
   | UIInputImagePreprocessor
   | UIInputVideoPreprocessor
   | UIInputImage
+  | UIInputImageMask
   | UIInputAudio
   | UIInputSelect
   | UIInputNumberList
@@ -261,7 +245,6 @@ export type UISchema = {
 export type ManifestSpec = {
   engine?: string;
   model_type?: string | string[];
-  model_types?: string[];
   engine_type?: 'torch' | 'mlx' | string;
   fps?: number;
   max_duration_secs?: number;
@@ -277,12 +260,25 @@ export type ManifestSpec = {
   preprocessors?: any[];
   postprocessors?: any[];
   defaults?: Record<string, any>;
-  loras?: Array<string | Record<string, any>>;
   save?: Record<string, any>;
   resource_requirements?: ManifestResourceRequirements;
   ui?: UISchema; // Typed UI schema
+  loras?: LoraType[];
   [key: string]: any;
 };
+
+export type ManifestWithType = ManifestDocument & {
+  type: ClipType
+  category: string;
+};
+
+export type LoraType = {
+  source?: string;
+  scale?: number;
+  name?: string;
+  label?: string;
+  is_downloaded?: boolean;
+} | string;
 
 export type ManifestDocument = {
   api_version: string;
@@ -290,31 +286,45 @@ export type ManifestDocument = {
   metadata: ManifestMetadata;
   spec: ManifestSpec;
   ui?: UISchema; // allow top-level UI per loader normalization
-  [key: string]: any;
+  id: string;
+  name: string;
+  model: string;
+  model_type: string[];
+  version: string;
+  description: string;
+  tags: string[];
+  author: string;
+  license: string;
+  demo_path: string;
+  downloaded: boolean;
 };
 
 export async function listModelTypes(): Promise<ConfigResponse<ModelTypeInfo[]>> {
   return await listManifestModelTypesPreload();
 }
 
-export async function listManifests(): Promise<ConfigResponse<ManifestInfo[]>> {
+export async function listManifests(): Promise<ConfigResponse<ManifestDocument[]>> {
   return await listManifestsPreload();
 }
 
-export async function listManifestsByModel(model: string): Promise<ConfigResponse<ManifestInfo[]>> {
+export async function listManifestsByModel(model: string): Promise<ConfigResponse<ManifestDocument[]>> {
   return await listManifestsByModelPreload(model);
 }
 
-export async function listManifestsByType(modelType: string): Promise<ConfigResponse<ManifestInfo[]>> {
+export async function listManifestsByType(modelType: string): Promise<ConfigResponse<ManifestDocument[]>> {
   return await listManifestsByTypePreload(modelType);
 }
 
-export async function listManifestsByModelAndType(model: string, modelType: string): Promise<ConfigResponse<ManifestInfo[]>> {
+export async function listManifestsByModelAndType(model: string, modelType: string): Promise<ConfigResponse<ManifestDocument[]>> {
   return await listManifestsByModelAndTypePreload(model, modelType);
 }
 
 export async function getManifest(manifestId: string): Promise<ConfigResponse<ManifestDocument>> {
   return (await getManifestPreload(manifestId)) as ConfigResponse<ManifestDocument>;
+}
+
+export async function getManifestPart<T = any>(manifestId: string, pathDot?: string): Promise<ConfigResponse<T>> {
+  return (await getManifestPartPreload(manifestId, pathDot)) as ConfigResponse<T>;
 }
 
 

@@ -35,6 +35,9 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
   const focusFrame = useInputControlsStore((s) => s.getFocusFrame(inputId) ?? 0);
 
   const timelines = useClipStore((s) => s.timelines);
+  const isOnTimeline = useMemo(() => {
+    return getClipById(clipId ?? '') !== undefined && clipId !== undefined;
+  }, [clipId, getClipById]);
 
   const ratioCacheByClipIdRef = useRef<Record<string, number>>({});
   const [contentRatio, setContentRatio] = useState<number | null>(null);
@@ -145,7 +148,7 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
     const editorRatio = aspectRatio.width / aspectRatio.height;
     const ratio = typeof ratioOverride === 'number' && ratioOverride > 0
       ? ratioOverride
-      : (rootClip && rootClip.type !== 'group' && typeof contentRatio === 'number' && contentRatio > 0)
+      : (!isOnTimeline && typeof contentRatio === 'number' && contentRatio > 0)
         ? contentRatio
         : editorRatio;
     if (!Number.isFinite(ratio) || ratio <= 0) {
@@ -191,7 +194,7 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
 
   return (
     <div className="w-full h-auto rounded-[6px] flex flex-col items-center justify-start">
-    <Stage key={`${width}x${height}:${clipOverride?.clipId || clipId || 'none'}${audioOnly ? ':audio' : ''}`} width={audioOnly? 1:width} height={audioOnly? 1:height}>
+    <Stage key={`${clipOverride?.clipId || clipId || 'none'}${audioOnly ? ':audio' : ''}`} width={audioOnly? 1:width} height={audioOnly? 1:height}>
       <Layer >
         <Group x={view.x} y={view.y} scaleX={view.scale} scaleY={view.scale} listening={false} >
           <Rect x={0} y={0} width={rectWidth} height={rectHeight} fill={'#000000'} />
@@ -209,6 +212,32 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
             const applicators = getApplicators(clip.clipId, effectiveGlobalFrame);
             // Use clipOverride only when an explicit override group is provided
             const overrideToUse = (clipOverride ? (clip) : undefined);
+
+            if (overrideToUse && overrideToUse.transform && (overrideToUse.type === 'image' || overrideToUse.type === 'video') && (overrideToUse.groupId === undefined)) {
+              const t = overrideToUse.transform as any;
+              const rawW = (t.width ?? rectWidth);
+              const rawH = (t.height ?? rectHeight);
+              const sx = (typeof t.scaleX === 'number' ? t.scaleX : 1);
+              const sy = (typeof t.scaleY === 'number' ? t.scaleY : 1);
+              const w = rawW * sx;
+              const h = rawH * sy;
+              const deg = (typeof t.rotation === 'number' ? t.rotation : 0);
+              const rad = deg * Math.PI / 180;
+              const c = Math.cos(rad);
+              const s = Math.sin(rad);
+              // corners after rotation around top-left pivot (0,0)
+              const x1 = w * c;           const y1 = w * s;
+              const x2 = -h * s;          const y2 = h * c;
+              const x3 = w * c - h * s;   const y3 = w * s + h * c;
+              const minX = Math.min(0, x1, x2, x3);
+              const maxX = Math.max(0, x1, x2, x3);
+              const minY = Math.min(0, y1, y2, y3);
+              const maxY = Math.max(0, y1, y2, y3);
+              const aabbW = maxX - minX;
+              const aabbH = maxY - minY;
+              t.x = (rectWidth - aabbW) / 2 - minX;
+              t.y = (rectHeight - aabbH) / 2 - minY;
+            }
 
             switch (clip.type) {
               case 'video':

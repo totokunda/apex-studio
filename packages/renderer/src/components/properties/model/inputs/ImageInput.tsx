@@ -193,7 +193,6 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
                 )}>
                     <TabsTrigger  value="library" className={cn(' w-full py-1.5 flex items-center', selectedTab === 'library' && numEligibleTimelineAssets > 0 ? 'bg-brand-accent-shade' : '',
                     numEligibleTimelineAssets === 0 ? 'cursor-default justify-start px-2.5' : 'cursor-pointer   justify-center px-4' ,
-
                     )}>
                         Media Library
                     </TabsTrigger>
@@ -299,7 +298,9 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
     const externalDragCounterRef = useRef(0);
     const getClipById = useClipStore((s) => s.getClipById);
     const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
+    const updateModelInput = useClipStore((s) => s.updateModelInput);
     const { preprocessors, load } = usePreprocessorsListStore();
+    
     useEffect(() => {
         if (preprocessorRef) {
             void load();
@@ -341,7 +342,67 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         } else {
             onChange(next);
         }
-    }, [onChangeComposite, onChange, preprocessorRef, resolvedPreprocessorName, applyPreprocessor]);
+        // Apply mapped height/width if configured on this input
+        (async () => {
+          try {
+            if (!next) return;
+            const clip: any = getClipById(clipId) as any;
+            const manifest = clip?.manifest;
+            const ui = manifest?.spec?.ui || manifest?.ui;
+            const inputsArr: any[] = Array.isArray(ui?.inputs) ? ui.inputs : [];
+            if (!inputsArr.length) return;
+            const self = inputsArr.find((inp: any) => String(inp?.id) === String(inputId)) || {};
+            const mapHId: string | undefined = self?.map_h;
+            const mapWId: string | undefined = self?.map_w;
+            if (!mapHId && !mapWId) return;
+            const scaleById: string | undefined = self?.scale_by;
+            let targetHeight: number | undefined;
+            if (scaleById) {
+              const scaleInp = inputsArr.find((inp: any) => String(inp?.id) === String(scaleById));
+              if (scaleInp) {
+                const type = String(scaleInp?.type || '');
+                const valStr = String(scaleInp?.value ?? scaleInp?.default ?? '');
+                if (type === 'number' || type === 'number+slider') {
+                  const n = Number(valStr);
+                  if (Number.isFinite(n) && n > 0) targetHeight = Math.floor(n);
+                } else if (type === 'select') {
+                  const opts: any[] = Array.isArray(scaleInp?.options) ? scaleInp.options : [];
+                  const selected = opts.find((o: any) => String(o?.value) === valStr);
+                  const hCandidate = Number(selected?.height ?? selected?.h ?? NaN);
+                  if (Number.isFinite(hCandidate) && hCandidate > 0) targetHeight = Math.floor(hCandidate);
+                } else {
+                  const n = Number(valStr);
+                  if (Number.isFinite(n) && n > 0) targetHeight = Math.floor(n);
+                }
+              }
+            }
+            // Determine intrinsic media dimensions (fallback to mediaInfo if missing)
+            let src: string | undefined = (next as any)?.src;
+            let mw = Number((next as any)?.mediaWidth ?? 0);
+            let mh = Number((next as any)?.mediaHeight ?? 0);
+            if ((!mw || !mh) && src) {
+              try {
+                const info = await getMediaInfo(src);
+                const wCandidate = (info?.video?.displayWidth ?? info?.image?.width ?? (Number.isFinite(mw) ? mw : undefined));
+                const hCandidate = (info?.video?.displayHeight ?? info?.image?.height ?? (Number.isFinite(mh) ? mh : undefined));
+                mw = Number(wCandidate ?? 0);
+                mh = Number(hCandidate ?? 0);
+              } catch {}
+            }
+            if (!mw || !mh) return;
+            const baseAR = mw / Math.max(1, mh);
+            const outH = Math.floor(Number.isFinite(targetHeight as number) && (targetHeight as number) > 0 ? (targetHeight as number) : mh);
+            const outW = Math.floor(Math.max(1, outH * baseAR));
+            // Prevent ModelInputsPanel resolution/aspect sync from overriding mapped values
+            if (mapHId === 'height' || mapWId === 'width') {
+              updateModelInput(clipId, 'resolution', { value: 'custom' } as any);
+              updateModelInput(clipId, 'aspect_ratio', { value: 'custom' } as any);
+            }
+            if (mapHId) updateModelInput(clipId, mapHId, { value: String(outH) } as any);
+            if (mapWId) updateModelInput(clipId, mapWId, { value: String(outW) } as any);
+          } catch {}
+        })();
+    }, [onChangeComposite, onChange, preprocessorRef, resolvedPreprocessorName, applyPreprocessor, getClipById, clipId, inputId, updateModelInput]);
 
     const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
     const aspectRatio = useViewportStore((s) => s.aspectRatio);
@@ -365,6 +426,16 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
   }, [value, mediaClip]);
 
   const selectedClipRatioSignature = clipSignature(selectedClipForRatio as AnyClipProps);
+  const divRef = useRef<HTMLDivElement>(null);
+
+  const superParentHeight = useMemo(() => {
+    if (!divRef.current) return 0;
+    const parentParent = divRef.current.parentElement?.parentElement?.parentElement;
+    if (!parentParent) return 0;
+    return parentParent.clientHeight;
+  }, [divRef.current?.parentElement?.parentElement?.parentElement?.clientWidth]);
+
+
 
   const displayRatio = useMemo(() => {
       const clip = selectedClipForRatio;
@@ -429,6 +500,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         obs.observe(el);
         return () => obs.disconnect();
   }, [panelSize, displayRatio]);
+;
 
     // Ensure width updates immediately when panelSize changes, even if height is unchanged
     useEffect(() => {
@@ -663,6 +735,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
   // Keep preview/input in sync with timeline clip updates/deletions when selection references timeline
   const liveTimelineClip = useClipStore((s) => {
       if (!value) return null;
+      if ((value as any)?.disableTimelineSync) return null;
       const cid = String(value.clipId || '');
       if (cid.startsWith('media:')) return null;
       return (s.getClipById(cid) as AnyClipProps | undefined) ?? null;
@@ -672,6 +745,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
 
   useEffect(() => {
       if (!value) return;
+      if ((value as any)?.disableTimelineSync) return;
       const cid = String(value.clipId || '');
       if (cid.startsWith('media:')) return; // media assets managed via media info
       if (!liveTimelineClip) {
@@ -696,10 +770,10 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
   }, [value, liveTimelineClip, emitSelection]);
 
   return (
-    <Droppable className="w-full h-full" id="image-input" accepts={['media']}>
+    <Droppable className="w-full" id="image-input" accepts={['media']}>
         
-    <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-auto">
-    <div className="w-full h-full flex flex-col items-start justify-start p-3">
+    <div ref={divRef} className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-full">
+    <div className="w-full flex flex-col items-start justify-start p-3 h-full">
     <div className="w-full flex flex-col items-start justify-start mb-3">
         <div className="w-full flex flex-col">
           <div className="flex flex-col items-start justify-start">
@@ -711,7 +785,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
     </div>
     <Popover>
         <PopoverTrigger className="w-full">
-        <div ref={stageContainerRef} onDragEnter={handleExternalDragEnter} onDragOver={handleExternalDragOver} onDragLeave={handleExternalDragLeave} onDrop={handleExternalDrop} style={{ height: stageSize.h }} className={cn("w-full flex flex-col items-center justify-center gap-y-3  shadow-accent  hover:opacity-70  cursor-pointer relative overflow-hidden", 
+        <div ref={stageContainerRef} onDragEnter={handleExternalDragEnter} onDragOver={handleExternalDragOver} onDragLeave={handleExternalDragLeave} onDrop={handleExternalDrop} style={{ height: stageSize.h }} className={cn("w-full flex flex-col items-center justify-center gap-y-3 h-full shadow-accent  hover:opacity-70  cursor-pointer relative overflow-hidden", 
             value ? '': 'border-dashed',
             value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50 rounded'
             )}>
@@ -723,15 +797,15 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
                     (() => {
                         if (!mediaClip) return null;
                         const clipToRender = mediaClip;
-                        return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} inputId={inputId} ratioOverride={displayRatio} />
+                        return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} ratioOverride={displayRatio} inputId={inputId} />
                     })()
                 ) : (
                     <canvas ref={canvasRef} className="w-full h-auto rounded-[6px]" />
                 )
             ) : (
                 <>
-                    <IoImageOutline className="w-10 h-10 text-brand-light" />
-                    <span className="text-brand-light text-[11px] w-full text-center font-medium">Click or drag and drop an image here.</span>
+                    <IoImageOutline className="w-1/4 h-1/4 text-brand-light" />
+                    <span className="text-brand-light text-[10.5px] w-full text-center font-medium">Click or drag and drop an image here.</span>
                 </>
             )}
         </div>

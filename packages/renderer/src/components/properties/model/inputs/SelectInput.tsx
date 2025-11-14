@@ -81,7 +81,10 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
 
     return (
       <div className="flex flex-row items-center w-full gap-x-2 min-w-0 relative mt-1">
-        <label className="text-brand-light text-[10.5px] w-1/4 text-start font-medium">{label}</label>
+        <label className={cn("text-brand-light text-[10.5px] w-1/4 text-start font-medium", {
+          "w-0": !label,
+          "w-1/4": label,
+        })}>{label}</label>
         <div className="flex-1">
           <DropdownMenu >
             <DropdownMenuTrigger asChild>
@@ -128,7 +131,7 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
             </Tooltip>
           )}
         </div>
-        <div className="flex flex-row w-full  rounded-[7px] overflow-hidden border border-brand-light/5 divide-x divide-brand-light/10"> 
+        <div className="flex flex-row w-full  rounded-[6px] overflow-hidden border border-brand-light/5 divide-x divide-brand-light/5"> 
           {normalizedOptions.map((option, index) => (
             <button
               key={option.value}
@@ -150,18 +153,21 @@ const SelectInput: React.FC<SelectInputProps> = ({ label, description, value, on
 
   return (
     <div className="flex flex-row items-center w-full gap-x-2 min-w-0 relative mt-1">
-      <label className="text-brand-light text-[10.5px] w-1/4 text-start font-medium">{label}</label>
-      <div className="flex flex-row flex-1  rounded-[7px] overflow-hidden "> 
+      <label className={cn("text-brand-light text-[10.5px] w-1/4 text-start font-medium", {
+        "w-0": !label,
+        "w-1/4": label,
+      })}>{label}</label>
+      <div className="flex flex-row flex-1  rounded-[6px] overflow-hidden "> 
         {normalizedOptions.map((option, index) => (
           <button
             key={option.value}
             onClick={() => onChange(String(option.value))}
             className={cn(
-              "flex-1 py-1.5 px-3 text-[10px] transition-all duration-200 font-medium",
+              "flex-1 py-1.5 px-3 text-[10px]  font-medium",
               String(selectedOption?.value) === String(option.value)
-                ? "bg-brand-light/[0.075] text-brand-lighter"
+                ? "bg-brand-light/10 text-brand-lighter"
                 : "bg-brand text-brand-light/60 hover:bg-brand-light/5",
-              index !== 0 && "border-l border-brand-light/10"
+              index !== 0 && ""
             )}
           >
             {option.name}

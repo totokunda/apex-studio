@@ -1,605 +1,25 @@
-import { useManifest } from '@/lib/manifest/hooks';
+
 import { useManifestStore } from '@/lib/manifest/store';
-import React, { useMemo, useRef, useState } from 'react'
-import { LuChevronLeft, LuChevronDown, LuChevronRight, LuDownload, LuCheck, LuTrash, LuLoader } from 'react-icons/lu';
-import type { ManifestComponent, ManifestComponentModelPathItem } from '@/lib/manifest/api';
+import React from 'react'
+import { LuChevronLeft, LuPlus } from 'react-icons/lu';
 import { ScrollArea } from '../ui/scroll-area';
-import { cn } from '@/lib/utils';
-import { deleteComponent as deleteComponentApi } from '@/lib/components-download/api';
-import { useComponentsDownloadStore, requestManifestSync } from '@/lib/components-download/store';
-import { useShallow } from 'zustand/react/shallow';
-import { formatDownloadProgress, formatSpeed, formatBytes } from '@/lib/components-download/format';
+import ComponentCard from './ComponentCard';
+import LoRACard from './LoRACard';
+import { useControlsStore } from '@/lib/control';
+import { useClipStore, getTimelineHeightForClip, getTimelineTypeForClip, isValidTimelineForClip } from '@/lib/clip';
+import { v4 as uuidv4 } from 'uuid';
 
 interface ModelPageProps {
   manifestId: string;
 }
 
-const getComponentTypeLabel = (type: string): string => {
-  const labels: Record<string, string> = {
-    'transformer': 'Transformer',
-    'text_encoder': 'Text Encoder',
-    'vae': 'Variational Autoencoder',
-    'scheduler': 'Scheduler',
-    'helper': 'Helper'
-  };
-  return labels[type] || type.charAt(0).toUpperCase() + type.slice(1);
-};
-
-const formatComponentName = (name: string): string => {
-  return name
-    .replace(/\./g, ' ')
-    .replace(/_/g, ' ')
-    .replace(/-/g, ' ')
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-};
-
-const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string }> = ({ component, manifestId }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [componentDownloading, setComponentDownloading] = useState(false);
-  const [deletingByPath, setDeletingByPath] = useState<Record<string, boolean>>({});
-  const [startingByPath, setStartingByPath] = useState<Record<string, boolean>>({});
-  const relevantPaths = React.useMemo(() => {
-    const paths: string[] = [];
-    const modelPathsRaw = Array.isArray(component.model_path)
-      ? component.model_path
-      : component.model_path
-        ? [{ path: component.model_path }]
-        : [];
-    for (const it of modelPathsRaw) {
-      const p = typeof it === 'string' ? it : (it as any)?.path;
-      if (p) paths.push(p);
-    }
-    const baseConfig = (component as any)?.config_path;
-    if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
-    const optionConfigs = Array.isArray((component as any)?.scheduler_options)
-      ? (component as any).scheduler_options.map((o: any) => o?.config_path).filter(Boolean)
-      : [];
-    for (const p of optionConfigs) if (typeof p === 'string') paths.push(p);
-    return Array.from(new Set(paths));
-  }, [component]);
-
-  const downloads = useComponentsDownloadStore(useShallow((s) => {
-    const out: Record<string, any> = {};
-    for (const p of relevantPaths) out[p] = s.entries[p];
-    return out;
-  }));
-  const startPath = useComponentsDownloadStore((s) => s.startPath);
-  const cancelPath = useComponentsDownloadStore((s) => s.cancelPath);
-  const markPendingDeletion = useComponentsDownloadStore((s) => s.markPendingDeletion);
-  const pendingDeletions = useComponentsDownloadStore(useShallow((s) => s.pendingDeletions[manifestId] || {}));
-  const modelPaths = Array.isArray(component.model_path) ? component.model_path : component.model_path ? [{ path: component.model_path }] : [];
-
-  const schedulerConfigPaths = React.useMemo(() => {
-    const paths: string[] = [];
-    const baseConfig = (component as any)?.config_path;
-    if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
-    if (Array.isArray((component as any)?.scheduler_options)) {
-      for (const opt of (component as any).scheduler_options as any[]) {
-        const cp = opt?.config_path;
-        if (typeof cp === 'string' && cp) paths.push(cp);
-      }
-    }
-    return Array.from(new Set(paths));
-  }, [component]);
-
-  const schedulerAnyActive = useMemo(() => (
-    schedulerConfigPaths.some((p) => {
-      const s = downloads[p]?.status;
-      return s === 'downloading' || s === 'pending';
-    })
-  ), [downloads, schedulerConfigPaths]);
-
-  const isEntryEffectivelyCompleted = React.useCallback((entry: any | undefined) => {
-    if (!entry) return false;
-    if (entry.status === 'completed') return true;
-    const files = entry.files ? (Object.values(entry.files) as any[]) : [];
-    return files.length > 0 && files.every((f: any) => f?.status === 'completed');
-  }, []);
-
-  const schedulerAnyCompleted = useMemo(() => (
-    schedulerConfigPaths.some((p) => !pendingDeletions[p] && isEntryEffectivelyCompleted(downloads[p]))
-  ), [downloads, schedulerConfigPaths, isEntryEffectivelyCompleted, pendingDeletions]);
-
-  const schedulerAnyError = useMemo(() => (
-    schedulerConfigPaths.some((p) => downloads[p]?.status === 'error')
-  ), [downloads, schedulerConfigPaths]);
-
-  // progress extraction handled by store; no local parser needed
-
-  React.useEffect(() => {
-    const anyActive = relevantPaths.some((p) => {
-      const e = downloads[p];
-      return e && (e.status === 'downloading' || e.status === 'pending');
-    });
-    setComponentDownloading(anyActive);
-  }, [downloads, component, relevantPaths]);
-
-  const handleDownload = async (path: string, kind: 'model' | 'config' | 'asset' = 'model', label?: string) => {
-    if (!path) return;
-    setStartingByPath((s) => ({ ...s, [path]: true }));
-    await startPath(path, {
-      savePath: (component as any).save_path,
-      manifestId,
-      componentType: component.type,
-      label,
-      kind,
-    });
-  };
-
-  const handleCancel = async (path: string) => {
-    await cancelPath(path);
-  };
-
-  const handleDelete = async (path: string) => {
-    setDeletingByPath((s) => ({ ...s, [path]: true }));
-    try {
-      await deleteComponentApi(path);
-      markPendingDeletion(manifestId, path);
-      requestManifestSync(manifestId, { includeList: true, immediate: true });
-      try { useComponentsDownloadStore.getState().removeEntry(path); } catch {}
-    } catch {}
-    finally {
-      setDeletingByPath((s) => ({ ...s, [path]: false }));
-    }
-  };
-
-  const handleDownloadAll = async () => {
-    const pendingPaths = (Array.isArray(modelPaths) ? modelPaths : [])
-      // Only include default variants; treat string entries as default
-      .filter((item: any) => {
-        if (typeof item === 'string') return true;
-        const v = (item?.variant ?? '').toLowerCase();
-        return v === '' || v === 'default';
-      })
-      .map((item: any) => (typeof item === 'string' ? item : (item?.path || '')))
-      .filter((p: string) => !!p);
-    // Kick off sequentially to get per-path progress; header shows spinner while any active
-    for (const p of pendingPaths) {
-      // Skip already downloaded ones if known
-      const item = (Array.isArray(component.model_path) ? component.model_path : []).find((it: any) => (typeof it === 'string' ? it : it?.path) === p) as any;
-      const already = !!(item && typeof item === 'object' && item.is_downloaded);
-      if (!already) {
-        setComponentDownloading(true);
-        await handleDownload(p, 'model', typeof item === 'object' ? item?.variant : undefined);
-      }
-    }
-    // Download config if it exists
-    if (component.config_path) {
-      setComponentDownloading(true);
-      await handleDownload(component.config_path as string, 'config');
-    }
-  };
-
-  // Persistent store handles cleanup; no-op on unmount here
-
-  // Component downloaded indicator: consider manifest flags OR any relevant download entries completed
-  const hasPendingDeletion = useMemo(() => relevantPaths.some((p) => !!pendingDeletions[p]), [pendingDeletions, relevantPaths]);
-
-  const isDownloaded = useMemo(() => {
-
-    if (hasPendingDeletion) return false;
-    if ((component as any)?.is_downloaded) return true;
-    // Any model path marked as downloaded in manifest
-    const manifestPathDownloaded = (Array.isArray(modelPaths) ? modelPaths : []).some((item: any) => {
-      const p = typeof item === 'string' ? item : item?.path;
-      if (p && pendingDeletions[p]) return false;
-      return !!(item && typeof item === 'object' && item.is_downloaded);
-    });
-    if (manifestPathDownloaded) return true;
-    // Any model-path download entry completed (ignore configs here)
-    const modelPathsOnly = (Array.isArray(modelPaths) ? modelPaths : []).map((it: any) => (typeof it === 'string' ? it : it?.path)).filter(Boolean) as string[];
-    const anyModelCompletedInStore = modelPathsOnly.some((p) => isEntryEffectivelyCompleted(downloads[p]));
-    if (anyModelCompletedInStore) return true;
-    // For schedulers, a completed config download also implies effective readiness
-    if ((component as any)?.type === 'scheduler' && schedulerAnyCompleted) return true;
-    return false;
-  }, [component, modelPaths, downloads, relevantPaths, schedulerAnyCompleted, isEntryEffectivelyCompleted, pendingDeletions, hasPendingDeletion]);
-  const typeLabel = getComponentTypeLabel(component.type);
-  const displayName = component.label || (component.name ? formatComponentName(component.name) : component.base ? formatComponentName(component.base) : typeLabel);
-
-  const [configCompletionGraceOver, setConfigCompletionGraceOver] = useState(false);
-  React.useEffect(() => {
-    // When a config completes but the component isn't marked downloaded yet,
-    // wait briefly to allow the manifest to refresh; then allow retry.
-    if (!isDownloaded && schedulerAnyCompleted && !schedulerAnyActive) {
-      setConfigCompletionGraceOver(false);
-      const t = setTimeout(() => setConfigCompletionGraceOver(true), 4000);
-      return () => { try { clearTimeout(t); } catch {} };
-    }
-    // Reset when active again, error, or confirmed
-    setConfigCompletionGraceOver(false);
-  }, [isDownloaded, schedulerAnyCompleted, schedulerAnyActive]);
-
-  // We keep UI in 'Finalizing…' until the manifest reflects downloaded; no retry button.
-
-  // Clear optimistic starting flags once the store reflects activity for a path
-  React.useEffect(() => {
-    setStartingByPath((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const [path, starting] of Object.entries(prev)) {
-        if (!starting) continue;
-        const status = downloads[path]?.status;
-        if (status === 'pending' || status === 'downloading') {
-          next[path] = false;
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [downloads]);
-
-  // Check if there's any content to show when expanded
-  const hasModelPaths = modelPaths.length > 0;
-  const hasSchedulerOptions = component.type === 'scheduler' && component.scheduler_options && component.scheduler_options.length > 0;
-  const hasExpandableContent = hasModelPaths || hasSchedulerOptions;
-
-  const componentCarRef = useRef<HTMLDivElement>(null);
-
-  return (
-    <div ref={componentCarRef} className="bg-brand border border-brand-light/10 rounded-md text-start">
-      {hasExpandableContent ? (
-        <div 
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="w-full flex items-center justify-between p-3 hover:bg-brand-background/30 transition-colors"
-        >
-          <div className="flex items-center gap-x-2 justify-between w-full mr-2">
-            <div className="flex items-center gap-x-2">
-              <button onClick={async (e) => {
-                if (isDownloaded || componentDownloading) return;
-                e.preventDefault();
-                e.stopPropagation();
-                setComponentDownloading(true);
-                await handleDownloadAll();
-              }} className={cn(
-                "flex items-center justify-center w-4.5 h-4.5 rounded-full border",
-                isDownloaded 
-                  ? "bg-green-500/20 border-green-500/40" 
-                  : componentDownloading
-                    ? "bg-brand-background border-brand-light/20"
-                  : "bg-brand-background border-brand-light/20 hover:bg-brand-background/30 cursor-pointer"
-              )}>
-                {isDownloaded ? (
-                  <LuCheck className="w-3 h-3 text-green-400" />
-                ) : componentDownloading ? (
-                  <LuLoader className="w-2.5 h-2.5 text-brand-light/60 animate-spin" />
-                ) : (
-                  <LuDownload className="w-2.5 h-2.5 text-brand-light/50" />
-                )}
-              </button>
-              <span className="text-brand-light text-[12px] font-medium">{displayName}</span>
-            </div>
-            <span className="text-brand-light/60 text-[10px] font-mono bg-brand-background px-2 py-0.5 rounded">{typeLabel}</span>
-          </div>
-          {isExpanded ? <LuChevronDown className="w-4 h-4 text-brand-light/60" /> : <LuChevronRight className="w-4 h-4 text-brand-light/60" />}
-        </div>
-      ) : (
-        <div className="w-full flex items-center justify-between p-3">
-          <div className="flex items-center gap-x-2 justify-between w-full">
-            <div className="flex items-center gap-x-2.5">
-              <div className={cn(
-                "flex items-center justify-center w-4.5 h-4.5 rounded-full border",
-                isDownloaded 
-                  ? "bg-green-500/20 border-green-500/40" 
-                  : "bg-brand-background border-brand-light/20"
-              )}>
-                {isDownloaded ? (
-                  <LuCheck className="w-3 h-3 text-green-400" />
-                ) : (
-                  <LuDownload className="w-2.5 h-2.5 text-brand-light/50" />
-                )}
-              </div>
-              <span className="text-brand-light text-[12px] font-medium">{displayName}</span>
-            </div>
-            <span className="text-brand-light/60 text-[10px] font-mono bg-brand-background px-2 py-0.5 rounded">{typeLabel}</span>
-          </div>
-        </div>
-      )}
-      {hasExpandableContent && isExpanded && (
-        <div className="px-4 pb-4">
-
-          {modelPaths.length > 0 && (
-            <div className="space-y-2 mt-3">
-              {modelPaths.map((item, idx) => {
-                const pathItem = typeof item === 'string' ? { path: item } : item as ManifestComponentModelPathItem;
-                const entry = downloads[pathItem.path];
-                const pendingDeletion = !!pendingDeletions[pathItem.path];
-                const pathIsEffectivelyDownloaded = !pendingDeletion && ( !!((pathItem as any).is_downloaded) || isEntryEffectivelyCompleted(entry) );
-                return (
-                  <div key={idx} className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full">
-                      {pathItem.variant && (
-                        <div className="flex flex-row justify-between items-center mb-2.5">
-                          
-                          <div className="text-brand-light text-[11px] break-all font-semibold">{pathItem.variant.toLowerCase().includes('default') ? 'Default' : pathItem.variant.toLowerCase().includes('gguf') ? pathItem.variant.replace('GGUF_', '').replace('Q', 'q').toUpperCase() : pathItem.variant}</div>
-                          {typeof (pathItem as any).file_size === 'number' && (pathItem as any).file_size > 0 && (
-                            <div className="flex-shrink-0 ml-2 text-[10px] text-brand-light/80 font-mono whitespace-nowrap">
-                              {formatBytes((pathItem as any).file_size, 1)}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    <div className="flex items-start justify-between gap-x-2 ">
-                      <div className="flex-1 min-w-0 flex-row items-center gap-x-2">
-                        <div className="text-brand-light text-[10.5px] font-medium mb-1">Model Path</div>
-                        <div className="text-brand-light text-[10px] font-mono break-all">{pathItem.path}</div>
-                      </div>
-                      
-                    </div>
-                     {(pathItem.type || pathItem.precision) && (
-                      <div className="flex flex-col items-start  mt-2 justify-start border-t border-brand-light/5  pt-2">
-                      <h4 className="text-brand-light text-[10.5px] font-medium mb-1">
-                        Model specifications
-                      </h4>
-                      {pathItem.type && (
-                        <div className="text-[10px] flex flex-row items-center gap-x-1 ">
-                          <span className="text-brand-light/60 font-medium">Model Type </span>
-                          <span className="text-brand-light/80 font-mono">{pathItem.type === 'gguf' ? 'GGUF' : formatComponentName(pathItem.type)}</span>
-                        </div>
-                      )}
-                
-                    {pathItem.precision && (
-                        <div className="text-[10px] flex flex-row items-center gap-x-1 ">
-                          <span className="text-brand-light/60 font-medium">Precision </span>
-                          <span className="text-brand-light/90 font-mono">{pathItem.precision.toUpperCase()}</span>
-                        </div>
-                      )}
-                    </div>  
-                    )}
-
-                    {pathItem.resource_requirements && (
-                      <div className="mt-2 pt-2 border-t border-brand-light/5">
-                        <div className="text-brand-light text-[10.5px] font-medium mb-1">Resource Requirements</div>
-                        <div className="flex flex-col ">
-                          {pathItem.resource_requirements.min_vram_gb && (
-                            <div className="text-[10px]">
-                              <span className="text-brand-light/60 font-medium">Min VRAM </span>
-                              <span className="text-brand-light/90">{pathItem.resource_requirements.min_vram_gb}GB</span>
-                            </div>
-                          )}
-                          {pathItem.resource_requirements.recommended_vram_gb && (
-                            <div className="text-[10px]">
-                              <span className="text-brand-light/60 font-medium">Recommended VRAM </span>
-                              <span className="text-brand-light/90">{pathItem.resource_requirements.recommended_vram_gb}GB</span>
-                            </div>
-                          )}
-                          {pathItem.resource_requirements.compute_capability && (
-                            <div className="text-[10px]">
-                              <span className="text-brand-light/60">Compute Capability: </span>
-                              <span className="text-brand-light/90">{pathItem.resource_requirements.compute_capability}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    
-                    {!pathIsEffectivelyDownloaded ? (
-                      startingByPath[pathItem.path] && !downloads[pathItem.path]?.status ? (
-                        <div className="w-full mt-3 flex items-center justify-between gap-x-2">
-                          <div className="flex-1 min-w-0">
-                            <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{pathItem.path}</div>
-                          </div>
-                          <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
-                            <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
-                            <span>Preparing...</span>
-                          </div>
-                        </div>
-                      ) : downloads[pathItem.path]?.status === 'downloading' ? (
-                        <div className="w-full mt-3">
-                          {(() => {
-                            const entry = downloads[pathItem.path];
-                            const files = entry?.files ? Object.values(entry.files) : [] as any[];
-                            if (files.length === 0) return null;
-                            return (
-                              <div className="flex flex-col gap-y-2">
-                                {files.map((f: any) => (
-                                  <div key={f.filename} className="flex flex-col gap-y-1">
-                                    <div className="flex items-center justify-between gap-x-2 w-full">
-                                      <div className="flex-1 min-w-0">
-                                        <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{f.filename}</div>
-                                      </div>
-                                      <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">{(f.downloadedBytes / f.totalBytes * 100).toFixed(1)}%</div>
-                                    </div>
-                                    <div className="w-full h-2 bg-brand-background rounded overflow-hidden border border-brand-light/10">
-                                      <div className="h-full bg-brand/90 transition-all" style={{ width: `${(f.downloadedBytes / f.totalBytes * 100)}%` }} />
-                                    </div>
-                                    <div className="flex items-center justify-between">
-                                      {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
-                                        <div className="text-[10px] text-brand-light/90">
-                                          {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
-                                        </div>
-                                      ) : <div />}
-                                      {f.status === 'completed' ? (
-                                        <div className="text-[10px] text-green-400">Completed</div>
-                                      ) : (
-                                        f.downloadSpeed != null && f.downloadSpeed > 0 ? (
-                                          <div className="text-[9px] text-brand-light/50">{formatSpeed(f.downloadSpeed)}</div>
-                                        ) : <div />
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            );
-                          })()}
-                          <div className="flex flex-col items-center justify-between mt-2 w-full">
-                            <button
-                              onClick={() => handleCancel(pathItem.path)}
-                              className="text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : downloads[pathItem.path]?.status === 'pending' ? (
-                        <div className="w-full mt-3 flex items-center justify-between gap-x-2">
-                          <div className="flex-1 min-w-0">
-                            <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{pathItem.path}</div>
-                          </div>
-                          <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
-                            <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
-                            <span>Preparing...</span>
-                          </div>
-                        </div>
-                      ) : downloads[pathItem.path]?.status === 'error' || downloads[pathItem.path]?.status === 'canceled' ? (
-                        <button
-                          onClick={() => handleDownload(pathItem.path, 'model', pathItem.variant)}
-                          className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
-                        >
-                          <LuDownload className="w-3.5 h-3.5" />
-                          <span>Retry Download</span>
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleDownload(pathItem.path, 'model', pathItem.variant)}
-                          className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
-                        >
-                          {startingByPath[pathItem.path] ? (
-                            <>
-                              <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                              <span>Preparing...</span>
-                            </>
-                          ) : (
-                            <>
-                              <LuDownload className="w-3.5 h-3.5" />
-                              <span>Download Model</span>
-                            </>
-                          )}
-                        </button>
-                      )
-                    ) : (
-                    <div className="flex flex-row items-center justify-between gap-x-2">
-                      <div className="text-[11px] font-medium text-brand-light/90 mt-4 mb-1.5 flex items-center justify-start gap-x-1">
-                      <LuCheck className="w-3 h-3 text-green-400" />
-                      <span>Downloaded</span>
-                      </div>
-                      <button onClick={() => handleDelete(pathItem.path)} disabled={!!deletingByPath[pathItem.path]} className="w-fit mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all">
-                        {deletingByPath[pathItem.path] ? (
-                          <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <LuTrash className="w-3.5 h-3.5" />
-                        )}
-                        <span>{deletingByPath[pathItem.path] ? 'Deleting...' : 'Delete Model'}</span>
-                      </button>
-
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {component.type === 'scheduler' && component.scheduler_options && component.scheduler_options.length > 0 && (
-            <div className="mt-3">
-              <div className="text-brand-light/80 text-[11px] font-medium mb-2">Scheduler Options</div>
-              <div className="space-y-2">
-                {component.scheduler_options.map((option, idx) => (
-                  <div key={idx} className="bg-brand-background border border-brand-light/5 rounded-[6px] px-3 py-1.5">
-                    <div className="mb-1">
-                      <span className="text-brand-light text-[11px] font-medium">{option.label || option.name}</span>
-                    </div>
-                    {option.description && (
-                      <div className="text-[10px] text-brand-light/70 mt-1 mb-1.5">
-                        {option.description}
-                      </div>
-                    )}
-                    
-                  </div>
-                ))}
-              </div>
-              {schedulerConfigPaths.length > 0 && (
-                <div className="mt-3">
-                  {schedulerConfigPaths.map((p) => {
-                    const entry = downloads[p];
-                    const status = entry?.status;
-                    if (!(status === 'downloading' || status === 'pending')) return null;
-                    const files = entry?.files ? (Object.values(entry.files) as any[]) : [];
-                    return (
-                      <div key={p} className="w-full">
-                        <div className="text-brand-light text-[10.5px] font-medium mb-2.5">Config Download</div>
-                        {files.length > 0 && status === 'downloading' ? (
-                          <div className="flex flex-col gap-y-2">
-                            {files.map((f: any) => (
-                              <div key={f.filename} className="flex flex-col gap-y-1">
-                                <div className="flex flex-col justify-start gap-y-2 w-full">
-                                  <div className="flex-1 min-w-0">
-                                    <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{f.filename}</div>
-                                  </div>
-                                  <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
-                                    <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
-                                    <span>Preparing...</span>
-                                  </div>
-                                </div>
-                                <div className="w-full h-2 bg-brand-background rounded overflow-hidden border border-brand-light/10">
-                                  <div className="h-full bg-brand/90 transition-all" style={{ width: `${(f.downloadedBytes / f.totalBytes) * 100}%` }} />
-                                </div>
-                                <div className="flex items-center justify-between">
-                                  {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
-                                    <div className="text-[10px] text-brand-light/90">
-                                      {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
-                                    </div>
-                                  ) : <div />}
-                                  {f.status === 'completed' ? (
-                                    <div className="text-[10px] text-green-400">Completed</div>
-                                  ) : (
-                                    f.downloadSpeed != null && f.downloadSpeed > 0 ? (
-                                      <div className="text-[9px] text-brand-light/50">{formatSpeed(f.downloadSpeed)}</div>
-                                    ) : <div />
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="flex flex-col items-start justify-start gap-y-2 w-full">
-                            <div className="flex-1 min-w-0">
-                              <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 40}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{p}</div>
-                            </div>
-                            <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1 justify-start">
-                              <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
-                              <span>Preparing...</span>
-                            </div>
-                          </div>
-                        )}
-                        <div className="flex flex-col items-center justify-between mt-2 w-full">
-                          <button
-                            onClick={() => handleCancel(p)}
-                            className="text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-              {!isDownloaded && !schedulerAnyActive && (schedulerAnyError || !schedulerAnyCompleted || configCompletionGraceOver) && (component.config_path || component.scheduler_options?.some((option) => option.config_path)) && (
-              <button
-                onClick={() => handleDownload(component.config_path || component.scheduler_options?.find((option) => option.config_path)?.config_path as string, 'config')}
-              className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded-md px-3 py-2.5 transition-all">
-                <LuDownload className="w-3.5 h-3.5" />
-                <span>Download Config</span>
-              </button>
-            )}
-            </div>
-            )}
-        </div>
-      )}
-    </div>
-  );
-};
-
 const ModelPage:React.FC<ModelPageProps> = ({ manifestId }) => {
-  const { clearSelectedManifestId, getLoadedManifest } = useManifestStore();
-  const loadManifests = useManifestStore.getState().loadManifests;
-  const simpleManifest = getLoadedManifest(manifestId);
-  const { data: manifest } = useManifest(manifestId);
+  const { clearSelectedManifestId, getLoadedManifest} = useManifestStore();
+  const manifest = getLoadedManifest(manifestId);
+  if (!manifest) return null;
 
   const isVideoDemo = React.useMemo(() => {
-    const value = (simpleManifest?.demo_path || '').toLowerCase();
+    const value = (manifest.metadata?.demo_path || '').toLowerCase();
     try {
       const url = new URL(value);
       const pathname = url.pathname;
@@ -608,19 +28,16 @@ const ModelPage:React.FC<ModelPageProps> = ({ manifestId }) => {
     } catch {
       return value.endsWith('.mp4') || value.endsWith('.webm') || value.endsWith('.mov') || value.endsWith('.m4v') || value.endsWith('.ogg') || value.endsWith('.m3u8');
     }
-  }, [simpleManifest?.demo_path]);
+  }, [manifest.metadata?.demo_path]);
 
   const components = manifest?.spec?.components || [];
-
-  
-  if (!manifest) return null;
 
   return ( 
     <div className="flex flex-col h-full w-full">
       <ScrollArea className="flex-1">
         <div className="p-7 pt-3 pb-28">
           <div className="flex items-center gap-x-3">
-            <button onClick={async () => { try { await loadManifests(true); } catch {}; try { clearSelectedManifestId(); } catch {} }} className="text-brand-light hover:text-brand-light/70 p-1 flex items-center justify-center bg-brand border border-brand-light/10 rounded transition-colors cursor-pointer">
+            <button onClick={async () => {  clearSelectedManifestId(); }} className="text-brand-light hover:text-brand-light/70 p-1 flex items-center justify-center bg-brand border border-brand-light/10 rounded transition-colors cursor-pointer">
               <LuChevronLeft className="w-3 h-3" />
             </button>
             <span className="text-brand-light/90 text-[11px] font-medium">Back</span>
@@ -630,7 +47,7 @@ const ModelPage:React.FC<ModelPageProps> = ({ manifestId }) => {
             <div className="rounded-md overflow-hidden flex items-center w-44 aspect-square justify-start flex-shrink-0">
               {isVideoDemo ? (
                 <video
-                  src={manifest.metadata.demo_path}
+                  src={manifest.demo_path}
                   className="h-full w-full object-cover rounded-md"
                   autoPlay
                   muted
@@ -656,10 +73,82 @@ const ModelPage:React.FC<ModelPageProps> = ({ manifestId }) => {
                   <span key={tag} className="text-brand-light text-[11px] bg-brand border shadow border-brand-light/10 rounded px-2 py-0.5">{tag}</span>
                 ))}
               </div>
+              
             </div>
+            
           </div>
-
-            <div className="mt-6 ">
+          {manifest.downloaded ? (
+                <div className='mt-5 '>
+                  <button
+                    type="button"
+                    className="text-[11px] font-medium w-full flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded-[6px] px-12 py-2 flex-shrink-0 text-brand-light hover:text-brand-light/90 bg-brand-accent-two-shade hover:bg-brand-accent-two-shade/90"
+                    title="Add clip at playhead"
+                    onClick={() => {
+                      try {
+                        const controls = useControlsStore.getState();
+                        const clipStore = useClipStore.getState();
+                        const fps = Math.max(1, controls.fps || 1);
+                        const focusFrame = Math.max(0, controls.focusFrame || 0);
+                        const desiredFrames = Math.max(1, (manifest.metadata?.desired_duration ?? (5 * fps)));
+                        const startFrame = focusFrame;
+                        const endFrame = startFrame + desiredFrames;
+                        
+                        // Choose an existing compatible timeline with free space
+                        const mediaTimelines = clipStore.timelines.filter((t) => isValidTimelineForClip(t, { type: 'model' } as any));
+                        const intervalOverlaps = (loA: number, hiA: number, loB: number, hiB: number) => (loA < hiB) && (hiA > loB);
+                        let targetTimelineId: string | undefined;
+                        for (const t of mediaTimelines) {
+                          const existing = clipStore.getClipsForTimeline(t.timelineId)
+                            .map((c) => ({ lo: c.startFrame || 0, hi: c.endFrame || 0 }))
+                            .filter((iv) => iv.hi > iv.lo);
+                          const hasConflict = existing.some((iv) => intervalOverlaps(startFrame, endFrame, iv.lo, iv.hi));
+                          if (!hasConflict) {
+                            targetTimelineId = t.timelineId;
+                            break;
+                          }
+                        }
+                        // If no space found, create a new timeline
+                        if (!targetTimelineId) {
+                          const timelineId = uuidv4();
+                          const last = clipStore.timelines[clipStore.timelines.length - 1];
+                          clipStore.addTimeline({
+                            timelineId,
+                            type: getTimelineTypeForClip('model'),
+                            timelineHeight: getTimelineHeightForClip('model'),
+                            timelineWidth: last?.timelineWidth ?? 0,
+                            timelineY: (last?.timelineY ?? 0) + (last?.timelineHeight ?? 54),
+                            timelinePadding: last?.timelinePadding ?? 24,
+                            muted: false,
+                            hidden: false,
+                          });
+                          targetTimelineId = timelineId;
+                        }
+                        // Build and add clip
+                        const newClipId = uuidv4();
+                        const clipBase: any = {
+                          timelineId: targetTimelineId,
+                          clipId: newClipId,
+                          startFrame,
+                          endFrame,
+                          // @ts-ignore
+                          type: 'model',
+                          trimEnd: -Infinity,
+                          trimStart: Infinity,
+                          height: 540,
+                          width: 540,
+                          speed: 1.0,
+                          manifest: manifest,
+                        };
+                        useClipStore.getState().addClip(clipBase);
+                      } catch {}
+                    }}
+                  >
+                    <LuPlus className="w-4 h-4" />
+                    <span className="">Add Clip</span>
+                  </button>
+                </div>
+              ) : null}
+            <div className="mt-5 ">
               <div className="flex items-center justify-between">
                 <h3 className="text-brand-light text-[13.5px] font-semibold text-start">
                   Model Architecture
@@ -669,13 +158,27 @@ const ModelPage:React.FC<ModelPageProps> = ({ manifestId }) => {
               
               <div className="space-y-2 mt-3.5">
               {components.map((component, index) => (
-                <ComponentCard key={index} component={component} manifestId={manifestId} />
+                <ComponentCard key={index} component={component} manifestId={manifestId} index={index} />
               ))}
               {components.length === 0 && (
                 <div className="text-brand-light/60 text-[12px] text-center py-8">No components available</div>
               )}
             </div>
           </div>
+          {manifest.spec.loras && manifest.spec.loras.length > 0 && (
+            <div className="mt-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-brand-light text-[13.5px] font-semibold text-start">
+                  LoRAs
+                </h3>
+              </div>
+              <div className="space-y-2 mt-3.5">
+                {manifest.spec.loras.map((l, idx) => (
+                  <LoRACard key={idx} item={l} manifestId={manifestId} />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </ScrollArea>
     </div>

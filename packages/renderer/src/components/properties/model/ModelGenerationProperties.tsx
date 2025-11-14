@@ -14,6 +14,7 @@ export const ModelGenerationProperties: React.FC<ModelGenerationPropertiesProps>
   const clip = useClipStore((s) => s.getClipById(clipId)) as ModelClipProps;
   const updateClip = useClipStore((s) => s.updateClip);
   const updateModelInput = useClipStore((s) => s.updateModelInput);
+  const setClipTransform = useClipStore((s) => s.setClipTransform);
 
   const generations = useMemo(() => (clip?.generations ?? []), [clip?.generations]);
   const visibleGenerations = useMemo(() => {
@@ -44,34 +45,47 @@ export const ModelGenerationProperties: React.FC<ModelGenerationPropertiesProps>
     return idx;
   }, [visibleGenerations, normalizeToFileUrl, selectedFileUrl]);
 
+  const getUiInputById = useCallback((id: string) => {
+    try {
+      const ui = (clip as any)?.manifest?.spec?.ui || (clip as any)?.manifest?.ui;
+      const inputs = Array.isArray(ui?.inputs) ? ui.inputs : [];
+      return inputs.find((inp: any) => String(inp?.id) === String(id)) || null;
+    } catch {
+      return null;
+    }
+  }, [clip]);
+
   const onSelectGeneration = useCallback(async (index: number) => {
+    // Prevent re-selecting the already selected generation
+    if (index === selectedIndex) return;
     const gen = visibleGenerations[index];
     if (!gen) return;
     const fileUrl = normalizeToFileUrl(gen.src);
     if (!fileUrl) return;
     try {
-      const updates: any = { src: fileUrl };
+      // Persist current clip transform into the previously selected generation entry (if any)
+      let updates: any = { src: fileUrl };
+      try {
+        const prevIdx = selectedIndex;
+        const currentTransform = clip?.transform;
+        if (typeof prevIdx === 'number' && prevIdx >= 0 && currentTransform && Array.isArray(clip?.generations)) {
+          const gens = (clip?.generations || []).map((g: any, i: number) => (i === prevIdx ? { ...g, transform: currentTransform } : g));
+          updates.generations = gens;
+        }
+      } catch {}
+      updates.transform = gen.transform ?? clip?.transform;
       if (gen.selectedComponents) {
         updates.selectedComponents = gen.selectedComponents;
       }
       updateClip(clipId, updates);
     } catch {}
-    try {
-      const vals = gen.values || {};
-      for (const [inputId, v] of Object.entries(vals)) {
-        let valueToSet: any = v as any;
-        if (typeof valueToSet === 'object') {
-          // Store objects/arrays as JSON strings to match UI expectations
-          valueToSet = JSON.stringify(valueToSet);
-        } else if (typeof valueToSet === 'boolean' || typeof valueToSet === 'number') {
-          valueToSet = String(valueToSet);
-        } else if (valueToSet == null) {
-          valueToSet = '';
-        }
-        updateModelInput(clipId, inputId, { value: valueToSet } as any);
-      }
-    } catch {}
-  }, [clipId, visibleGenerations, normalizeToFileUrl, updateClip, updateModelInput]);
+
+    const vals = gen.values || {};
+    for (const [inputId, v] of Object.entries(vals)) {
+      updateModelInput(clipId, inputId, { value: v } as any);
+    }
+    // No additional transform work here; applied atomically with updateClip above.
+  }, [clipId, visibleGenerations, normalizeToFileUrl, updateClip, updateModelInput, selectedIndex, clip, setClipTransform, clip.transform]);
 
   if (!visibleGenerations || visibleGenerations.length === 0) {
     return (
@@ -114,7 +128,6 @@ const formatTime = (ts: number | undefined) => {
     const sec = Math.max(0, Math.floor(diffMs / 1000));
     const min = Math.floor(sec / 60);
     const hr = Math.floor(min / 60);
-    const day = Math.floor(hr / 24);
 
     if (sec < 30) return 'just now';
     if (sec < 60) return `${sec}s ago`;
@@ -196,9 +209,10 @@ const GenerationCard: React.FC<{
   return (
     <button
       onClick={onSelect}
+      disabled={isSelected}
       className={cn(
         'w-full flex flex-col items-stretch justify-start rounded-[7px] transition-all duration-150 shadow border border-t-0 border-brand-light/15 bg-brand',
-        isSelected ? '' : ''
+        isSelected ? 'cursor-default opacity-90' : ''
       )}
       style={{ textAlign: 'left' }}
     >

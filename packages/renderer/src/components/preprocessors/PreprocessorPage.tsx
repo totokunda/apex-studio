@@ -1,15 +1,14 @@
-import React from 'react'
-import { useEffect, useRef, useState } from 'react'
-import { LuChevronLeft, LuChevronDown, LuChevronRight, LuImage, LuVideo, LuTrash, LuLoader
- } from 'react-icons/lu'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { LuChevronLeft, LuChevronDown, LuChevronRight, LuImage, LuVideo, LuTrash, LuLoader, LuDownload } from 'react-icons/lu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { Preprocessor } from '@/lib/preprocessor/api'
-import { getPreprocessor, getPreprocessorStatus } from '@/lib/preprocessor/api'
+import { getPreprocessor, deletePreprocessor as deletePreprocessorApi } from '@/lib/preprocessor/api'
 import { cn } from '@/lib/utils'
-import { deletePreprocessor as deletePreprocessorApi, downloadPreprocessor as downloadPreprocessorApi, usePreprocessorJob, useJobProgress } from '@/lib/preprocessor/api'
+
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store'
-import { usePreprocessorJobStore } from '@/lib/preprocessor/store'
-import { cancelPreprocessor } from '@/lib/preprocessor/api'
+import { useDownloadStore } from '@/lib/download/store'
+import { ProgressBar } from '@/components/common/ProgressBar'
+
 import { formatDownloadProgress, formatSpeed } from '@/lib/components-download/format'
 
 interface PreprocessorPageProps {
@@ -132,26 +131,24 @@ const PreprocessorPage:React.FC<PreprocessorPageProps> = ({ preprocessorId, onBa
   )
 }
 
-type InfoParam = {
-  name: string;
-  display_name?: string;
-  type: string;
-  description?: string;
-  required?: boolean;
+type DownloadEntry = {
+  filename?: string;
+  downloadedBytes?: number;
+  totalBytes?: number;
+  status?: string;
+  progress?: number | null;
+  message?: string;
+  bucket?: string;
+  label?: string;
+  downloadSpeed?: number;
 };
-
-type FileEntry = { filename: string; downloadedBytes?: number; totalBytes?: number; progress?: number; downloadSpeed?: number };
 const PreprocessorDownloadSection: React.FC<{ preprocessorId: string; files: { path: string; size_bytes: number; name?: string }[]; onDownloaded: () => Promise<void> }> = ({ preprocessorId, files, onDownloaded }) => {
+  const { startAndTrackDownload, cancelDownload, resolveDownload, subscribeToJob, downloadingPaths, wsFilesByPath } = useDownloadStore();
   const [jobId, setJobId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  const { isProcessing, isComplete } = usePreprocessorJob(jobId, true);
-  // Read-only global job state; do not auto-start tracking to avoid phantom pending
-  const globalJob = useJobProgress(preprocessorId);
-  const isGlobalProcessing = !!(globalJob && (globalJob.status === 'running' || globalJob.status === 'pending'));
-  const isGlobalComplete = !!(globalJob && globalJob.status === 'complete');
-  const [fileMap, setFileMap] = useState<Record<string, FileEntry>>({});
-  
-
+  const subscriptionRef = useRef<(() => void) | null>(null);
+  const unmountedRef = useRef(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const totalBytes = files.reduce((acc, f) => acc + (f.size_bytes || 0), 0);
   const formatSize = (bytes: number): string => {
@@ -161,83 +158,140 @@ const PreprocessorDownloadSection: React.FC<{ preprocessorId: string; files: { p
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
 
-  useEffect(() => {
-    if (isComplete && jobId) {
-      (async () => {
-        try { await onDownloaded(); } catch {}
-        setJobId(null);
-        setStarting(false);
-        setFileMap({});
-      })();
+  const cleanupSubscription = useCallback(() => {
+    if (subscriptionRef.current) {
+      try { subscriptionRef.current(); } catch {}
+      subscriptionRef.current = null;
     }
-  }, [isComplete, jobId, onDownloaded]);
+  }, []);
 
-  // If a job for this preprocessor is already running elsewhere, adopt it so progress is shown immediately
   useEffect(() => {
-    if (!jobId && isGlobalProcessing && !isGlobalComplete) {
-      setJobId(preprocessorId);
-    }
-  }, [jobId, isGlobalProcessing, isGlobalComplete, preprocessorId]);
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      cleanupSubscription();
+    };
+  }, [cleanupSubscription]);
 
-  // If a global job completes before we adopted it locally, still refresh UI/state
-  useEffect(() => {
-    if (!jobId && isGlobalComplete) {
-      (async () => {
-        try { await onDownloaded(); } catch {}
-        setStarting(false);
-        setFileMap({});
-      })();
-    }
-  }, [jobId, isGlobalComplete, onDownloaded]);
+  const handleComplete = useCallback(async () => {
+    if (unmountedRef.current) return;
+    cleanupSubscription();
+    setStarting(false);
+    setJobId(null);
+    try { await onDownloaded(); } catch {}
+  }, [cleanupSubscription, onDownloaded]);
 
-  // Fallback: probe server for an existing job and adopt it if running/pending
   useEffect(() => {
     let cancelled = false;
-    if (jobId || isGlobalProcessing || isGlobalComplete) return;
-    (async () => {
+    const adoptExisting = async () => {
       try {
-        const res = await getPreprocessorStatus(preprocessorId);
-        const st = res?.data?.status;
-        if (!cancelled && res.success && (st === 'running' || st === 'pending')) {
-          setJobId(preprocessorId);
+        const res = await resolveDownload({
+          item_type: 'preprocessor',
+          source: preprocessorId,
+        });
+        if (cancelled || unmountedRef.current || !res) return;
+        if (res.downloaded) {
+          await handleComplete();
+          return;
+        }
+        if (res.running && res.job_id) {
+          setJobId(res.job_id);
+          try {
+            const off = await subscribeToJob(res.job_id, preprocessorId, async () => {
+              await handleComplete();
+            });
+            if (cancelled || unmountedRef.current) {
+              try { off(); } catch {}
+            } else {
+              cleanupSubscription();
+              subscriptionRef.current = () => {
+                try { off(); } catch {}
+              };
+            }
+          } catch {}
+        } else {
+          cleanupSubscription();
+          setJobId(null);
         }
       } catch {}
-    })();
+    };
+    adoptExisting();
     return () => { cancelled = true; };
-  }, [jobId, isGlobalProcessing, isGlobalComplete, preprocessorId]);
+  }, [cleanupSubscription, handleComplete, preprocessorId, resolveDownload, subscribeToJob]);
 
-  // Build per-file progress from job store
-  useEffect(() => {
-    if (!jobId) return;
-    try {
-      // initial sync
-      const initial = usePreprocessorJobStore.getState().jobs[jobId];
-      if (initial?.files) setFileMap(initial.files as Record<string, FileEntry>);
-      // subscribe to only this job's updates
-      const unsub = usePreprocessorJobStore.subscribe(
-        (s) => s.jobs[jobId],
-        (j) => {
-          if (j?.files) setFileMap(j.files as Record<string, FileEntry>);
-        }
-      );
-      return () => { try { unsub(); } catch {} };
-    } catch {}
-  }, [jobId]);
+  const wsFilesRecord = wsFilesByPath[preprocessorId] || {};
+  const downloadFiles = Object.values(wsFilesRecord) as DownloadEntry[];
+  const isQueued = downloadingPaths.has(preprocessorId);
+  const isDownloading = isQueued || downloadFiles.length > 0 || !!jobId;
+
+  const wsFilesByName = useMemo(() => {
+    const map: Record<string, DownloadEntry> = {};
+    downloadFiles.forEach((entry) => {
+      if (entry.filename) map[entry.filename] = entry;
+      if (entry.label && !map[entry.label]) map[entry.label] = entry;
+    });
+    return map;
+  }, [downloadFiles]);
+
+  const findWsFile = useCallback((file: { path: string; size_bytes: number; name?: string }) => {
+    const baseName = file.name || (file.path || '').split(/[/\\]/).pop() || '';
+    const noExt = baseName ? baseName.replace(/\.[^/.]+$/, '') : '';
+    const candidates = [baseName, file.path, noExt].filter(Boolean) as string[];
+    for (const key of candidates) {
+      if (key && wsFilesByName[key]) {
+        return wsFilesByName[key];
+      }
+    }
+    if (file.size_bytes) {
+      return downloadFiles.find((entry) => (entry.totalBytes ?? 0) === file.size_bytes);
+    }
+    return undefined;
+  }, [downloadFiles, wsFilesByName]);
+
+  const getPercent = useCallback((entry?: DownloadEntry) => {
+    if (!entry) return 0;
+    if (typeof entry.totalBytes === 'number' && entry.totalBytes > 0) {
+      return Math.max(0, Math.min(100, ((entry.downloadedBytes || 0) / entry.totalBytes) * 100));
+    }
+    if (typeof entry.progress === 'number') {
+      const pct = entry.progress <= 1 ? entry.progress * 100 : entry.progress;
+      return Math.max(0, Math.min(100, pct));
+    }
+    return 0;
+  }, []);
 
   const handleDownload = async () => {
-    // Avoid blocking a new download attempt due to stale processing state
-    // Also block if there is an active global job for this preprocessor
-    if (starting || (jobId && isProcessing) || isGlobalProcessing) return;
+    if (starting || isDownloading) return;
     setStarting(true);
     try {
-      const res = await downloadPreprocessorApi(preprocessorId, preprocessorId);
-      if (res.success) {
-        setJobId(preprocessorId);
-      } else {
-        setStarting(false);
+      const jobIds = await startAndTrackDownload({
+        item_type: 'preprocessor',
+        source: preprocessorId,
+      }, async () => {
+        await handleComplete();
+      });
+      if (!unmountedRef.current && jobIds?.[0]) {
+        setJobId(jobIds[0]);
       }
     } catch {
+      if (!unmountedRef.current) {
+        setStarting(false);
+      }
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!jobId) return;
+    try {
+      setCancelling(true);
+      await cancelDownload(jobId);
+      
+    } catch {}
+    cleanupSubscription();
+    if (!unmountedRef.current) {
       setStarting(false);
+      setJobId(null);
+      setCancelling(false);
     }
   };
 
@@ -253,14 +307,9 @@ const PreprocessorDownloadSection: React.FC<{ preprocessorId: string; files: { p
         ) : (
           files.map((f, idx) => {
             const name = f.name || (f.path || '').split(/[/\\]/).pop() || f.path;
-            const nameNoExt = name.replace(/\.[^/.]+$/, '');
-            const feByName = fileMap[name] || fileMap[nameNoExt] || fileMap[(f.name || '').replace(/\.[^/.]+$/, '')];
-            const feBySize = (!feByName && f.size_bytes)
-              ? Object.values(fileMap).find((e) => (e?.totalBytes ?? 0) === (f.size_bytes || 0))
-              : undefined;
-            const fe = (feByName || feBySize || {}) as FileEntry;
-
-            const pct = typeof fe.progress === 'number' ? fe.progress : undefined;
+            const wsFile = findWsFile(f);
+            const pct = getPercent(wsFile);
+            const fileSizeBytes = (wsFile?.totalBytes ?? f.size_bytes) || 0;
             return (
               <div key={`${f.path}-${idx}`} className="bg-brand border border-brand-light/10 rounded-md p-3">
                 <div className="flex items-start justify-between gap-x-2 w-full">
@@ -268,44 +317,36 @@ const PreprocessorDownloadSection: React.FC<{ preprocessorId: string; files: { p
                     <div className="text-[10px] text-brand-light/90 font-medium break-all text-start">{name}</div>
                     <div className="text-[10px] text-brand-light/60 font-mono break-all text-start">{f.path}</div>
                   </div>
-                  <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">{formatSize((fe.totalBytes ?? f.size_bytes) || 0)}</div>
+                  <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">{formatSize(fileSizeBytes)}</div>
                 </div>
-                {pct != null ? (
-                  <div className="mt-2">
-                    <div className="w-full h-2 bg-brand-background rounded overflow-hidden border border-brand-light/10">
-                      <div className="h-full bg-brand transition-all" style={{ width: `${pct}%` }} />
-                    </div>
-                    <div className="flex items-center justify-between mt-1">
-                      <div className="text-[10px] text-brand-light/90">
-                        {formatDownloadProgress(fe.downloadedBytes ?? 0, fe.totalBytes ?? 0)}
-                      </div>
-                      {fe.downloadSpeed != null && fe.downloadSpeed > 0 ? (
-                        <div className="text-[9px] text-brand-light/50">{formatSpeed(fe.downloadSpeed)}</div>
-                      ) : <div />}
+                {wsFile && (
+                  <div className="mt-2 flex flex-col gap-y-1">
+                    <ProgressBar percent={pct} barClassName='bg-brand-light/50' />
+                    <div className="flex items-center justify-between text-[10px] text-brand-light/80">
+                      {(typeof wsFile.downloadedBytes === 'number' && typeof wsFile.totalBytes === 'number' && wsFile.totalBytes > 0) ? (
+                        <span>{formatDownloadProgress(wsFile.downloadedBytes, wsFile.totalBytes)}</span>
+                      ) : <span />}
+                      {wsFile.status === 'completed' || wsFile.status === 'complete' ? (
+                        <span className="text-green-400">Completed</span>
+                      ) : (
+                        <span className="text-[9px] text-brand-light/60">
+                          {(wsFile.downloadSpeed ? formatSpeed(wsFile.downloadSpeed) : '')}
+                        </span>
+                      )}
                     </div>
                   </div>
-                ) : ((starting || (jobId && (isProcessing || !isComplete)) || (isGlobalProcessing && !isGlobalComplete)) && (
-                  <div className="mt-2 flex items-center gap-x-2 text-brand-light/70">
-                    <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                    <span className="text-[10px]">Preparing download…</span>
-                  </div>
-                ))}
+                )}
               </div>
             );
           })
         )}
       </div>
       <div className="mt-3">
-        {jobId && (isProcessing || !isComplete) ? (
+        {(jobId && downloadFiles.length > 0) ? (
           <div className="w-full flex items-center gap-x-2">
             <button
-              onClick={async () => {
-                try { if (jobId) await cancelPreprocessor(jobId); } catch {}
-                setStarting(false);
-                setJobId(null);
-                setFileMap({});
-              }}
-              className="text-[10px] text-brand-light/90 mt-0 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2"
+              onClick={handleCancel}
+              className="w-full text-[10px] text-brand-light/90 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2"
             >
               Cancel
             </button>
@@ -313,10 +354,16 @@ const PreprocessorDownloadSection: React.FC<{ preprocessorId: string; files: { p
         ) : (
           <button
             onClick={handleDownload}
-            className="w-full text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
-            disabled={starting || !!isGlobalProcessing || (!!jobId && !!isProcessing)}
+            className="w-full text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+            disabled={starting || isDownloading}
           >
-            <span>{starting ? 'Starting…' : 'Download Preprocessor'}</span>
+            {(starting || isDownloading) ? (
+              <LuLoader className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <LuDownload className="w-3.5 h-3.5" />
+            )}
+            <span>
+              {cancelling ? 'Cancelling...' : (starting || isDownloading) ? 'Downloading...' : 'Download Preprocessor'}</span>
           </button>
         )}
       </div>
@@ -324,49 +371,22 @@ const PreprocessorDownloadSection: React.FC<{ preprocessorId: string; files: { p
   );
 };
 
-const InfoParamDescription: React.FC<{
-  param: InfoParam;
-  isExpanded: boolean;
-  isTruncated: boolean;
-  onToggle: () => void;
-  onTruncationDetected: (isTruncated: boolean) => void;
-}> = ({ param, isExpanded, isTruncated, onToggle, onTruncationDetected }) => {
-  const descRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (descRef.current && param.description && !isExpanded) {
-      const checkTruncation = descRef.current.scrollHeight > descRef.current.clientHeight;
-      if (checkTruncation !== isTruncated) {
-        onTruncationDetected(checkTruncation);
-      }
-    }
-  }, [param.description, isTruncated, isExpanded, onTruncationDetected]);
-
-  if (!param.description) return null;
-
-  return (
-    <div className="flex flex-col gap-y-1">
-      <span
-        ref={descRef}
-        className={`text-brand-light text-[12px] text-start ${!isExpanded ? 'line-clamp-1' : ''}`}
-      >
-        {param.description}
-      </span>
-      {isTruncated && (
-        <button
-          onClick={onToggle}
-          className="text-brand-light/50 hover:text-brand-light text-[9px] text-start transition-colors duration-200"
-        >
-          {isExpanded ? 'Show less' : 'Show more'}
-        </button>
-      )}
-    </div>
-  );
-};
-
 const PreprocessorFilesSection: React.FC<{ preprocessorId: string; files: { path: string; size_bytes: number; name?: string }[]; onRefresh: () => Promise<void> }> = ({ preprocessorId, files, onRefresh }) => {
   const [deleting, setDeleting] = useState(false);
   const loadPreprocessors = usePreprocessorsListStore((s) => s.load);
+  const cancelDownload = useDownloadStore((s) => s.cancelDownload);
+  const jobIdToPath = useDownloadStore((s) => s.jobIdToPath);
+
+  const activeJobId = useMemo(() => {
+    for (const [id, mapped] of Object.entries(jobIdToPath)) {
+      if (Array.isArray(mapped)) {
+        if (mapped.includes(preprocessorId)) return id;
+      } else if (mapped === preprocessorId) {
+        return id;
+      }
+    }
+    return null;
+  }, [jobIdToPath, preprocessorId]);
 
   const formatSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
@@ -381,9 +401,9 @@ const PreprocessorFilesSection: React.FC<{ preprocessorId: string; files: { path
     if (deleting) return;
     setDeleting(true);
     try {
-      // Cancel any active/preparing download job and clear its state so UI doesn't show stale downloading
-      try { await cancelPreprocessor(preprocessorId); } catch {}
-      try { usePreprocessorJobStore.getState().clearJob(preprocessorId); } catch {}
+      if (activeJobId) {
+        try { await cancelDownload(activeJobId); } catch {}
+      }
       await deletePreprocessorApi(preprocessorId);
       await onRefresh();
       try { await loadPreprocessors(true); } catch {}
@@ -434,77 +454,6 @@ const PreprocessorFilesSection: React.FC<{ preprocessorId: string; files: { path
   );
 };
 
-const InfoParametersSection: React.FC<{ parameters: InfoParam[] }> = ({ parameters }) => {
-  const [isParametersExpanded, setIsParametersExpanded] = useState(false);
-  const [expandedDescriptions, setExpandedDescriptions] = useState<Record<string, boolean>>({});
-  const [truncatedDescriptions, setTruncatedDescriptions] = useState<Record<string, boolean>>({});
-
-  const formatParameterName = (name: string) =>
-    name
-      .split('_')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
-
-  const formatParameterType = (type: string) => {
-    if (type === 'int') return 'Integer';
-    if (type === 'float') return 'Float';
-    if (type === 'bool') return 'Boolean';
-    if (type === 'str') return 'String';
-    if (type === 'category') return 'Category';
-    return type;
-  };
-
-  return (
-    <div className="flex flex-col  border-t border-brand-light/10 pt-4 ">
-      <button
-        onClick={() => setIsParametersExpanded(!isParametersExpanded)}
-        className={cn("flex flex-row items-center gap-x-2 px-2 py-3 bg-brand rounded-md border border-b-0 rounded-b-none border-brand-light/10 hover:bg-brand/70 transition-colors duration-200", {
-          'rounded-b-none': isParametersExpanded,
-          'rounded-b-md': !isParametersExpanded,
-          'border-b-0': isParametersExpanded,
-          'border-b': !isParametersExpanded,
-        })}
-      >
-        {isParametersExpanded ? (
-          <LuChevronDown className="text-brand-light w-3.5 h-3.5" />
-        ) : (
-          <LuChevronRight className="text-brand-light w-3.5 h-3.5" />
-        )}
-        <h4 className="text-brand-lighter text-[12px] font-semibold text-start">Inputs</h4>
-      </button>
-
-      {isParametersExpanded && (
-        <div className="flex flex-col gap-y-3 p-3 border-x border-b border-brand-light/10 rounded-b-md bg-brand transition-colors duration-200">
-          {parameters.map((param, index) => (
-            <div key={`${param.name}-${index}`} className="flex flex-col gap-y-2 p-3 rounded-lg bg-brand-light/5 border border-brand-light/10 ">
-              <div className="flex flex-row items-center gap-x-2 justify-between">
-                <span className="text-brand-lighter text-[11px] font-medium">{param.display_name || formatParameterName(param.name)}</span>
-                <div className="flex items-center gap-x-2">
-                  <span className="text-brand-light/60 text-[10px]">{formatParameterType(param.type)}</span>
-                  {param.required && (
-                    <span className="text-red-400/80 text-[9px] px-1.5 py-0.5 bg-red-400/10 rounded-full border border-red-400/20">Required</span>
-                  )}
-                </div>
-              </div>
-              <InfoParamDescription
-                param={param}
-                isExpanded={expandedDescriptions[param.name] || false}
-                isTruncated={truncatedDescriptions[param.name] || false}
-                onToggle={() => setExpandedDescriptions(prev => ({ ...prev, [param.name]: !prev[param.name] }))}
-                onTruncationDetected={(isTruncated) => {
-                  setTruncatedDescriptions(prev => {
-                    if (prev[param.name] === isTruncated) return prev;
-                    return { ...prev, [param.name]: isTruncated };
-                  });
-                }}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
 
 export default PreprocessorPage
 
