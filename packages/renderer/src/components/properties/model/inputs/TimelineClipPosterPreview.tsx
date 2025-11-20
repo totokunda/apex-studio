@@ -25,8 +25,8 @@ import { getMediaInfo } from '@/lib/media/utils';
 //   return children;
 // }
 
-const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps, width: number, height: number, inputId?: string, ratioOverride?: number, audioOnly?: boolean }>
-  = ({ clipId, clip: clipOverride, width, height, inputId, ratioOverride, audioOnly = false }) => {
+const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps, width: number, height: number, inputId?: string, ratioOverride?: number, audioOnly?: boolean, needsStage?: boolean }>
+  = ({ clipId, clip: clipOverride, width, height, inputId, ratioOverride, audioOnly = false, needsStage = false }) => {
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const getClipById = useClipStore((s) => s.getClipById);
   const clips = useClipStore((s) => s.clips);
@@ -38,6 +38,7 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
   const isOnTimeline = useMemo(() => {
     return getClipById(clipId ?? '') !== undefined && clipId !== undefined;
   }, [clipId, getClipById]);
+
 
   const ratioCacheByClipIdRef = useRef<Record<string, number>>({});
   const [contentRatio, setContentRatio] = useState<number | null>(null);
@@ -140,7 +141,6 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
         result.push(...u.children.reverse());
       }
     }
-
     return result;
   }, [timelines, clips])
 
@@ -192,9 +192,12 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
 
   const { rectWidth, rectHeight } = rectDims;
 
+  const StageComponent = needsStage ? Stage: React.Fragment;
+  const StageProps = needsStage ? { width: audioOnly? 1:width, height: audioOnly? 1:height } : {};
+
   return (
-    <div className="w-full h-auto rounded-[6px] flex flex-col items-center justify-start">
-    <Stage key={`${clipOverride?.clipId || clipId || 'none'}${audioOnly ? ':audio' : ''}`} width={audioOnly? 1:width} height={audioOnly? 1:height}>
+    <div className="w-full h-auto flex flex-col items-center justify-start bg-black">
+    <StageComponent key={`${clipOverride?.clipId || clipId || 'none'}${audioOnly ? ':audio' : ''}`} {...StageProps}>
       <Layer >
         <Group x={view.x} y={view.y} scaleX={view.scale} scaleY={view.scale} listening={false} >
           <Rect x={0} y={0} width={rectWidth} height={rectHeight} fill={'#000000'} />
@@ -214,7 +217,7 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
             const overrideToUse = (clipOverride ? (clip) : undefined);
 
             if (overrideToUse && overrideToUse.transform && (overrideToUse.type === 'image' || overrideToUse.type === 'video') && (overrideToUse.groupId === undefined)) {
-              const t = overrideToUse.transform as any;
+              const t = overrideToUse.transform;
               const rawW = (t.width ?? rectWidth);
               const rawH = (t.height ?? rectHeight);
               const sx = (typeof t.scaleX === 'number' ? t.scaleX : 1);
@@ -241,7 +244,7 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
 
             switch (clip.type) {
               case 'video':
-                return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} inputId={inputId} focusFrameOverride={focusFrame} />
+                return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} focusFrameOverride={focusFrame} inputId={inputId} />
               case 'image':
                 return <ImagePreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={rectWidth} rectHeight={rectHeight} applicators={applicators} overlap={true} inputMode={true} inputId={inputId} focusFrameOverride={focusFrame} />
               case 'shape':
@@ -268,7 +271,7 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
           })}
         </Group>
       </Layer>
-    </Stage>
+    </StageComponent>
     </div>
   );
 }

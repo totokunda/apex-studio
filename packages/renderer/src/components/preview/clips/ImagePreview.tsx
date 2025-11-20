@@ -52,6 +52,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         return 0;
       }
     }, [clipInfo.groupId]);
+
     const syntheticGlobalFromLocal = (typeof currentLocalFrameOverride === 'number')
       ? Math.max(0, clipInfo.startFrame + groupStartForClip + Math.max(0, currentLocalFrameOverride))
       : undefined;
@@ -245,7 +246,6 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             height: local.height * scale,
         };
 
-
         // Prevent negative or zero sizes in absolute space just in case
         const MIN_SIZE_ABS = 1e-3;
         if (adjusted.width < MIN_SIZE_ABS) adjusted.width = MIN_SIZE_ABS;
@@ -318,10 +318,10 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
     // Initialize default transform if missing
     useEffect(() => {
-        if (!clipTransform && displayWidth && displayHeight && !overrideClip) {
+        if (!clipTransform && displayWidth && displayHeight && !overrideClip && displayWidth > 0 && displayHeight > 0) {
             setClipTransform(clipId, { x: offsetX, y: offsetY, width: displayWidth, height: displayHeight, scaleX: 1, scaleY: 1, rotation: 0 });
         }
-    }, [clipTransform, displayWidth, displayHeight, offsetX, offsetY, clipId, setClipTransform, overrideClip]);
+    }, [clipTransform, displayWidth, displayHeight, offsetX, offsetY, clipId, setClipTransform, overrideClip, displayWidth, displayHeight]);
 
     // Ensure canvas matches display size for crisp rendering
     useEffect(() => {
@@ -393,7 +393,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             const height = mediaInfoRef.current.image?.height;
             const width = mediaInfoRef.current.image?.width;
             const image = await fetchImage(selectedSrc, height, width, {mediaInfo: mediaInfoRef.current});
-            
+
             if (!image) return;
            
             let canvas = canvasRef.current;
@@ -470,6 +470,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
             imageRef.current?.getLayer()?.batchDraw?.();
         } catch (e) {
+            console.log('error', e);
             console.error(e);
         }
     }, [mediaInfoRef, selectedSrc, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicatorsSignature, applicatorsActiveStore, applyFilters, tool]);
@@ -581,6 +582,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
     }, [transformerRef.current, updateGuidesAndMaybeSnap, setClipTransform, clipId, isRotating]);
 
     useEffect(() => {
+        if (inputMode) return;
         const handleWindowClick = (e: MouseEvent) => {
             if (!isSelected) return;
             const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -605,13 +607,27 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         return () => {
             window.removeEventListener('click', handleWindowClick);
         };
-    }, [clipId, isSelected, removeClipSelection]);
+    }, [clipId, isSelected, removeClipSelection, inputMode]);
+
+    // Calculate pixel crop from normalized crop for Konva Image
+    const pixelCrop = useMemo(() => {
+        const c = clipTransform?.crop;
+        if (!c || !displayWidth || !displayHeight) return undefined;
+        return {
+            x: c.x * (displayWidth),
+            y: c.y * (displayHeight),
+            width: c.width * (displayWidth),
+            height: c.height * (displayHeight)
+        };
+    }, [clipTransform?.crop, displayWidth, displayHeight]);
+
+
 
   return (
     <React.Fragment>
     <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight}>
       <Image 
-      draggable={tool === 'pointer' && !isTransforming } 
+      draggable={tool === 'pointer' && !isTransforming && !inputMode} 
       ref={imageRef}  
       cornerRadius={clipTransform?.cornerRadius ?? 0}
       opacity={(clipTransform?.opacity ?? 100) / 100}
@@ -623,6 +639,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
        scaleX={clipTransform?.scaleX ?? 1}
        scaleY={clipTransform?.scaleY ?? 1}
        rotation={clipTransform?.rotation ?? 0}
+       crop={pixelCrop}
        onDragMove={handleDragMove} 
        onDragStart={handleDragStart} 
        onDragEnd={handleDragEnd} 
@@ -649,7 +666,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         anchorStroke='#E3E3E3' 
         anchorStrokeWidth={1}
         borderStrokeWidth={2}
-        visible={tool === 'pointer' && isSelected && !isFullscreen && overlap}
+        visible={tool === 'pointer' && isSelected && !isFullscreen && overlap && !inputMode}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]} 
         boundBoxFunc={transformerBoundBoxFunc as any}
         ref={(node) => {

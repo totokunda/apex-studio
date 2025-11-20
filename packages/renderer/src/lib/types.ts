@@ -31,6 +31,12 @@ export interface ClipTransform {
     rotation: number;
     cornerRadius: number;
     opacity: number;
+    crop?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
 }
 
 export interface ClipProps {

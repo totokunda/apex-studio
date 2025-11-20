@@ -690,7 +690,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         const targetEndFrame = mediaInfo.current?.endFrame ? Math.round((mediaInfo.current?.endFrame || 0) / projectFps * clipFps) : undefined;
 
         iteratorRef.current = await getVideoIterator(selectedSrc, { mediaInfo: mediaInfo.current || undefined, fps: clipFps, startIndex: startIdx, endIndex: targetEndFrame, isolationKey: instanceIsolationKeyRef.current });
-
         try {
             for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
                 if (myToken !== drawTokenRef.current && !offscreenFast) break;
@@ -699,6 +698,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
 
                 // Determine the decoded sample's frame index in native fps
                 const ts: number | undefined = (wc as any)?.timestamp;
+
                 // Use floor with a tiny epsilon to avoid boundary flip-flop
                 let sampleIdx = Number.isFinite(ts as number)
                     ? Math.floor(((ts as number) * clipFps) + 1e-4)
@@ -932,8 +932,6 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         };
     }, [throttledSeekAndDraw]);
 
-    // While playing, do not restart iterator on every focusFrame tick; decoding loop drives rendering.
-
     const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
         updateGuidesAndMaybeSnap({ snap: true });
         const node = imageRef.current;
@@ -1033,6 +1031,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
     }, [transformerRef.current, updateGuidesAndMaybeSnap, setClipTransform, clipId, isRotating]);
 
     useEffect(() => {
+        if (inputMode) return;
         const handleWindowClick = (e: MouseEvent) => {
             if (!isSelected) return;
             const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -1057,14 +1056,25 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         return () => {
             window.removeEventListener('click', handleWindowClick);
         };
-    }, [clipId, isSelected, removeClipSelection]);
+    }, [clipId, isSelected, removeClipSelection, inputMode]);
     
+    // Calculate pixel crop from normalized crop for Konva Image
+    const pixelCrop = useMemo(() => {
+        const c = clipTransform?.crop;
+        if (!c || !displayWidth || !displayHeight) return undefined;
+        return {
+            x: c.x * ( displayWidth),
+            y: c.y * (displayHeight),
+            width: c.width * (displayWidth),
+            height: c.height * (displayHeight)
+        };
+    }, [clipTransform?.crop, displayWidth, displayHeight]);
 
-  return (
+    return (
     <React.Fragment>
     <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight}>
       <Image 
-      draggable={tool === 'pointer' && !isTransforming } 
+      draggable={tool === 'pointer' && !isTransforming && !inputMode} 
       ref={imageRef}  
       image={imageSource || undefined}
        x={clipTransform?.x ?? offsetX} 
@@ -1076,6 +1086,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
        rotation={clipTransform?.rotation ?? 0}
        cornerRadius={clipTransform?.cornerRadius ?? 0}
        opacity={(clipTransform?.opacity ?? 100) / 100}
+       crop={pixelCrop}
        onDragMove={handleDragMove} 
        onDragStart={handleDragStart} 
        onDragEnd={handleDragEnd} 
@@ -1102,7 +1113,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         anchorStroke='#E3E3E3' 
         anchorStrokeWidth={1}
         borderStrokeWidth={2}
-        visible={tool === 'pointer' && isSelected && !isFullscreen && overlap}
+        visible={tool === 'pointer' && isSelected && !isFullscreen && overlap && !inputMode}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]} 
         boundBoxFunc={transformerBoundBoxFunc as any}
         ref={(node) => {

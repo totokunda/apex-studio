@@ -187,10 +187,14 @@ export type UIInputVideoMask = UIInputBase & UIInputMapDimensions & {
 
 export type UIInputImagePreprocessor = UIInputBase & UIInputMapDimensions & {
   type: 'image+preprocessor';
+  preprocessor_ref?: string;
+  preprocessor_kwargs?: Record<string, any>;
 };
 
 export type UIInputVideoPreprocessor = UIInputBase & UIInputMapDimensions & {
   type: 'video+preprocessor';
+  preprocessor_ref?: string;
+  preprocessor_kwargs?: Record<string, any>;
 };
 
 export type UIInputImage = UIInputBase & UIInputMapDimensions & {
@@ -257,8 +261,6 @@ export type ManifestSpec = {
   denoise_type?: string;
   shared?: string[];
   components?: ManifestComponent[];
-  preprocessors?: any[];
-  postprocessors?: any[];
   defaults?: Record<string, any>;
   save?: Record<string, any>;
   resource_requirements?: ManifestResourceRequirements;

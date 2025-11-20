@@ -14,15 +14,16 @@ import TimelineSearch from './timeline/TimelineSearch';
 import { useClipStore } from '@/lib/clip';
 import { useAssetControlsStore } from '@/lib/assetControl';
 import TimelineClipPosterPreview from './TimelineClipPosterPreview';
-import { AnyClipProps, clipSignature, ImageClipProps, VideoClipProps } from '@/lib/types';
+import { AnyClipProps, clipSignature, ClipTransform, ImageClipProps, VideoClipProps } from '@/lib/types';
 import { VIDEO_EXTS, IMAGE_EXTS} from '@/lib/settings';
 import { getLowercaseExtension, pickMediaPaths, importMediaPaths, getPathForFile } from '@app/preload';
 import { useViewportStore } from '@/lib/viewport';
 import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/library';
-import TimelineSelector from './timeline/TimelineSelector';
 import { useInputControlsStore } from '@/lib/inputControl';
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store';
 import { useControlsStore } from '@/lib/control';
+import { TbEdit, TbPhoto } from 'react-icons/tb';
+import { MediaDialog } from '@/components/dialogs/MediaDialog';
 
 export type ImageSelection = AnyClipProps | null;
 
@@ -299,8 +300,20 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
     const getClipById = useClipStore((s) => s.getClipById);
     const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
     const updateModelInput = useClipStore((s) => s.updateModelInput);
+    const setClipTransform = useClipStore((s) => s.setClipTransform);
     const { preprocessors, load } = usePreprocessorsListStore();
-    
+    const [isDialogOpen, setIsDialogOpen] = useState(false);
+    const {focusFrameByInputId} = useInputControlsStore();
+    const focusFrameForInput = focusFrameByInputId[inputId] ?? 0;
+    const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+
+    const isClipOnTimeline = useMemo(() => {
+        if (!value) return false;
+        const cid = String(value.clipId || '');
+        if (cid.startsWith('media:')) return false;
+        return true;
+    }, [value, getClipById]);
+
     useEffect(() => {
         if (preprocessorRef) {
             void load();
@@ -428,14 +441,31 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
   const selectedClipRatioSignature = clipSignature(selectedClipForRatio as AnyClipProps);
   const divRef = useRef<HTMLDivElement>(null);
 
-  const superParentHeight = useMemo(() => {
-    if (!divRef.current) return 0;
-    const parentParent = divRef.current.parentElement?.parentElement?.parentElement;
-    if (!parentParent) return 0;
-    return parentParent.clientHeight;
-  }, [divRef.current?.parentElement?.parentElement?.parentElement?.clientWidth]);
+  const liveTimelineClip = useClipStore((s) => {
+    if (!value) return null;
+    if ((value as any)?.disableTimelineSync) return null;
+    const cid = String(value.clipId || '');
+    if (cid.startsWith('media:')) return null;
+    return (s.getClipById(cid) as AnyClipProps | undefined) ?? null;
+});
 
 
+  const handleConfirm = (data: { rotation: number; aspectRatio: string; crop?: { x: number; y: number; width: number; height: number }; transformWidth?: number; transformHeight?: number }) => {
+    if (!mediaClip) return;
+    const newTransform: ClipTransform = {
+      ...(mediaClip.transform ?? {}),
+      ...(data.rotation ? { rotation: data.rotation } : {}),
+      ...(data.crop ? { crop: data.crop } : { crop: undefined }),
+      ...(data.transformWidth ? { width: data.transformWidth } : {}),
+      ...(data.transformHeight ? { height: data.transformHeight } : {})
+    } as ClipTransform;
+    setMediaClip({ ...mediaClip, transform: newTransform } as AnyClipProps);
+    emitSelection({ ...mediaClip, transform: newTransform } as AnyClipProps);
+    // check if mediaClip is on the timeline, and if so update it.
+    if (liveTimelineClip) {
+        setClipTransform(liveTimelineClip.clipId, newTransform);
+    }
+  };
 
   const displayRatio = useMemo(() => {
       const clip = selectedClipForRatio;
@@ -486,27 +516,35 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
   }, [selectedClipRatioSignature]);
     // Determine stage rendering dynamically in render branch
 
-    // Keep stage size exactly equal to the trigger box area
+    // Keep stage size scaled, max height 512px
     useEffect(() => {
         const el = stageContainerRef.current;
         if (!el) return;
         const obs = new ResizeObserver((entries) => {
             const rect = entries[0]?.contentRect;
             if (!rect) return;
-            const w = Math.max(1, panelSize);
-          const h = Math.max(1, w / displayRatio);
+            let w = Math.max(1, panelSize);
+            let h = Math.max(1, w / displayRatio);
+            if (h > 400) {
+                h = 400;
+                w = Math.max(1, h * displayRatio);
+            }
             setStageSize({ w, h });
         });
         obs.observe(el);
         return () => obs.disconnect();
   }, [panelSize, displayRatio]);
-;
 
     // Ensure width updates immediately when panelSize changes, even if height is unchanged
     useEffect(() => {
-      setStageSize((prev) => ({ w: Math.max(1, panelSize), h: Math.max(1, panelSize / displayRatio || prev.h) }));
+      let w = Math.max(1, panelSize);
+      let h = Math.max(1, w / displayRatio);
+      if (h > 400) {
+          h = 400;
+          w = Math.max(1, h * displayRatio);
+      }
+      setStageSize({ w, h });
   }, [panelSize, displayRatio]);
-
 
 
     // DnD monitor: track hover-over state and handle drop selection
@@ -727,19 +765,9 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         } catch {}
     };
 
-    const timelineClip = useMemo<AnyClipProps | null>(() => {
-        if (!value) return null;
-        return mediaClip ?? (value as AnyClipProps);
-    }, [value, mediaClip]);
 
   // Keep preview/input in sync with timeline clip updates/deletions when selection references timeline
-  const liveTimelineClip = useClipStore((s) => {
-      if (!value) return null;
-      if ((value as any)?.disableTimelineSync) return null;
-      const cid = String(value.clipId || '');
-      if (cid.startsWith('media:')) return null;
-      return (s.getClipById(cid) as AnyClipProps | undefined) ?? null;
-  });
+  
 
 
 
@@ -783,11 +811,15 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
           
         </div>
     </div>
-    <Popover>
-        <PopoverTrigger className="w-full">
-        <div ref={stageContainerRef} onDragEnter={handleExternalDragEnter} onDragOver={handleExternalDragOver} onDragLeave={handleExternalDragLeave} onDrop={handleExternalDrop} style={{ height: stageSize.h }} className={cn("w-full flex flex-col items-center justify-center gap-y-3 h-full shadow-accent  hover:opacity-70  cursor-pointer relative overflow-hidden", 
-            value ? '': 'border-dashed',
-            value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50 rounded'
+    <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
+        <PopoverTrigger asChild onClick={(e) => { 
+            if (!isPopoverOpen && value) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+         }}>
+        <div ref={stageContainerRef} onDragEnter={handleExternalDragEnter} onDragOver={handleExternalDragOver} onDragLeave={handleExternalDragLeave} onDrop={handleExternalDrop} style={{ height: value ? stageSize.h : undefined }} className={cn("w-full flex flex-col items-center justify-center gap-y-3 h-full shadow-accent group  cursor-pointer relative overflow-hidden", 
+            value ? '': 'border-dashed hover:opacity-70 h-48 p-4 border-brand-light/10 border bg-brand-background-light/50 rounded',
             )}>
             {isOverDropZone && (
                 <div className="absolute inset-0 z-30 bg-brand-background-light/40 backdrop-blur-sm pointer-events-none transition-opacity duration-150" />
@@ -797,7 +829,7 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
                     (() => {
                         if (!mediaClip) return null;
                         const clipToRender = mediaClip;
-                        return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} ratioOverride={displayRatio} inputId={inputId} />
+                        return <TimelineClipPosterPreview key={clipToRender.clipId} clip={clipToRender} width={stageSize.w} height={stageSize.h} ratioOverride={displayRatio} inputId={inputId} needsStage={true} />
                     })()
                 ) : (
                     <canvas ref={canvasRef} className="w-full h-auto rounded-[6px]" />
@@ -808,23 +840,30 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
                     <span className="text-brand-light text-[10.5px] w-full text-center font-medium">Click or drag and drop an image here.</span>
                 </>
             )}
+            {value && <div className="absolute bottom-0 h-full left-0 right-0 z-50 bg-brand/60 hover:backdrop-blur-sm gap-x-4 transition-opacity duration-150 opacity-0 hover:opacity-100 flex items-center justify-center">
+            <div className="flex flex-col justify-center items-center gap-y-2 p-4  rounded-md w-full">
+            <button onClick={() => setIsPopoverOpen(true)} className="z-30 duration-150 flex items-center gap-x-2 px-6 py-2 w-40 bg-brand-light hover:bg-brand-light/90 shadow-md justify-center rounded text-[10.5px] font-poppins font-medium text-brand-accent-two-shade transition-colors">
+                    <TbPhoto className="w-4 h-4" />
+                <span className="">
+                    Select Media
+                </span>
+          </button>
+            {value && (mediaClip && (mediaClip?.type === 'video' || mediaClip.type === 'group' || (mediaClip.type === 'image' && !isClipOnTimeline))) && (
+                <button onClick={() => setIsDialogOpen(true)} className="z-30 duration-150 w-40 justify-center shadow-md flex items-center gap-x-2 px-6 py-2 font-poppins font-medium bg-brand-accent-two-shade  hover:bg-brand-accent-two-shade/90 rounded text-[10.5px] text-brand-light transition-colors">
+                  <TbEdit className="w-4 h-4" />
+                  Edit Image
+                </button>
+          )}
+          
+          </div>
+          </div>}
         </div>
         </PopoverTrigger>
         <PopoverImage value={value} onChange={emitSelection} clipId={clipId} />
     </Popover> 
-    {timelineClip && (timelineClip.type === 'video' || timelineClip.type === 'group') && value && (
-    <div className="w-full h-full mt-3">
-      <TimelineSelector
-        inputId={inputId}
-        clip={timelineClip}
-        width={stageSize.w}
-        height={44}
-        mode="frame"
-      />
-      </div>
-    )}
+   <div className="w-full flex flex-col items-start justify-start  mt-3">
     {preprocessorRef && (
-            <div className=" flex flex-row-reverse items-center gap-x-3 justify-between mt-3">
+            <div className=" flex flex-row-reverse items-center gap-x-3 justify-between">
               <span className="text-brand-light text-[10px] font-medium">Apply {resolvedPreprocessorName}</span>
               <button
                 type="button"
@@ -845,10 +884,20 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
               </button>
             </div>
           )}
+          
+          <MediaDialog
+            isOpen={isDialogOpen}
+            onClose={() => setIsDialogOpen(false)}
+            onConfirm={handleConfirm}
+            clipOverride={mediaClip}
+            timelineSelectorProps={mediaClip && mediaClip.type !== 'image' ? { mode: 'frame', inputId: inputId } : undefined}
+            focusFrame={focusFrameForInput}
+            canCrop={!isClipOnTimeline}
+            setFocusFrame={(frame) => setInputFocusFrame(frame, inputId)}
+          />
+        </div>
     </div>
     </div>
-    
-    
     </Droppable>
     )
 }

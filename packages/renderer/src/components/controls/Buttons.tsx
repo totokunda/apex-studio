@@ -8,9 +8,11 @@ import { useClipStore } from "@/lib/clip";
 import { useCallback, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { MAX_DURATION } from "@/lib/settings";
-import { LuSquareSplitVertical } from "react-icons/lu";
+import { LuSquareSplitVertical, LuCrop } from "react-icons/lu";
 import { getMediaInfoCached } from "@/lib/media/utils";
 import { PiSplitHorizontal } from "react-icons/pi";
+import { MediaDialog } from "@/components/dialogs/MediaDialog";
+import { useState } from "react";
 
 const BackButton = () => {
     const {setFocusFrame,  focusFrame} = useControlsStore();
@@ -276,4 +278,56 @@ const SeparateButton = () => {
 }
 
 
-export { BackButton, RewindBackward, RewindForward, PauseButton, PlayButton, SplitButton, TrashButton, MergeButton, PlayPauseButton, ExtendTimelineButton, ReduceTimelineButton, SeparateButton };
+
+const CropButton = () => {
+    const selectedClipIds = useControlsStore((state) => state.selectedClipIds);
+    const getClipById = useClipStore((state) => state.getClipById);
+
+    const selectedClip = useMemo(() => {
+        if (selectedClipIds.length !== 1) return null;
+        return getClipById(selectedClipIds[0]);
+    }, [selectedClipIds, getClipById]);
+
+    const disabled = !selectedClip || (selectedClip.type !== 'video' && selectedClip.type !== 'image');
+    const [isDialogOpen, setIsDialogOpen] = useState(false);
+    const [focusFrame, setFocusFrame] = useState(0);
+
+    const handleOpen = () => {
+        if (disabled) return;
+        setIsDialogOpen(true);
+    };
+
+    const { setClipTransform } = useClipStore();
+
+    const handleConfirm = (data: { rotation: number; aspectRatio: string; crop?: { x: number; y: number; width: number; height: number }; transformWidth?: number; transformHeight?: number }) => {
+        if (!selectedClip) return;
+        
+        setClipTransform(selectedClip.clipId, {
+            rotation: data.rotation,
+            ...(data.crop ? { crop: data.crop } : { crop: undefined }),
+            ...(data.transformWidth ? { width: data.transformWidth } : {}),
+            ...(data.transformHeight ? { height: data.transformHeight } : {})
+        });
+    };
+
+    return (
+        <>
+            <div 
+                onClick={handleOpen}
+                className={cn("flex shrink-0 transform-gpu items-center cursor-pointer gap-x-2 py-4 justify-center opacity-60 hover:opacity-100 transition-opacity duration-300", disabled && "opacity-30 cursor-not-allowed hover:opacity-30")}
+            > 
+                <LuCrop className=" text-brand-light h-4 w-4" />
+            </div>
+            <MediaDialog 
+                isOpen={isDialogOpen} 
+                onClose={() => setIsDialogOpen(false)} 
+                onConfirm={handleConfirm}
+                focusFrame={focusFrame}
+                setFocusFrame={setFocusFrame}
+            />
+        </>
+    )
+}
+
+
+export { BackButton, RewindBackward, RewindForward, PauseButton, PlayButton, SplitButton, TrashButton, MergeButton, PlayPauseButton, ExtendTimelineButton, ReduceTimelineButton, SeparateButton, CropButton };

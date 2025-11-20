@@ -59,7 +59,13 @@ export const getVideoIterator = async (path: string, options?: { mediaInfo?: Med
         if (!decoder) throw new Error('Decoder not found');
         decoder.lastAccessTs = nowMs();
 
-        return decoder.sink.canvases(startTimestamp, endTimestamp);
+        const stream = await decoder.sink.canvases(startTimestamp, endTimestamp);
+        async function* iterate(): AsyncGenerator<WrappedCanvas | null> {
+            for await (const wc of stream) {
+                yield wc;
+            }
+        }
+        return iterate();
     } 
     finally {
         pruneStaleDecoders();

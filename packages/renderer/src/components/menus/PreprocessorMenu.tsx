@@ -7,13 +7,11 @@ import { TbWorldDownload } from 'react-icons/tb';
 import { cn } from '@/lib/utils'
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store'
 import { useDownloadStore } from '@/lib/download/store'
-import { formatDownloadProgress, formatSpeed } from '@/lib/components-download/format'
-import { ProgressBar } from '@/components/common/ProgressBar'
 import PreprocessorPage from '../preprocessors/PreprocessorPage'
 import CategorySidebar from './CategorySidebar'
 
 export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?: boolean, onMoreInfo?: (id: string) => void, onAdd?: (preprocessor: Preprocessor) => void, addDisabled?: boolean, dimmed?: boolean}> = ({preprocessor, isDragging, onMoreInfo, onAdd, addDisabled, dimmed}) => {
-    const { startAndTrackDownload, cancelDownload, resolveDownload, subscribeToJob, downloadingPaths, wsFilesByPath } = useDownloadStore();
+    const { startAndTrackDownload, resolveDownload, subscribeToJob, downloadingPaths, wsFilesByPath } = useDownloadStore();
     const { load } = usePreprocessorsListStore();
     const [jobId, setJobId] = useState<string | null>(null);
     const [starting, setStarting] = useState(false);
@@ -126,18 +124,6 @@ export const PreprocessorItem:React.FC<{preprocessor: Preprocessor, isDragging?:
             if (!unmountedRef.current) {
                 setStarting(false);
             }
-        }
-    };
-
-    const handleCancel = async () => {
-        if (!jobId) return;
-        try {
-            await cancelDownload(jobId);
-        } catch {}
-        cleanupSubscription();
-        if (!unmountedRef.current) {
-            setStarting(false);
-            setJobId(null);
         }
     };
 
@@ -413,10 +399,9 @@ const CategoryDetailView: React.FC<{category: string, preprocessors: Preprocesso
 const PreprocessorMenu:React.FC = () => {
     const scrollRef = useRef<HTMLDivElement>(null)
     const viewportRef = useRef<HTMLDivElement | null>(null)
-    const { preprocessors, load } = usePreprocessorsListStore();
+    const { preprocessors, load, selectedPreprocessorId, setSelectedPreprocessorId } = usePreprocessorsListStore();
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-    const [selectedPreprocessorId, setSelectedPreprocessorId] = useState<string | null>(null);
     const [scrollWidth, setScrollWidth] = useState(0);
     const categorySectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
     const [activeCategory, setActiveCategory] = useState<string | null>(null);
@@ -501,7 +486,7 @@ const PreprocessorMenu:React.FC = () => {
             resizeObserver.disconnect();
             window.removeEventListener('resize', updateWidth);
         };
-    }, [selectedCategory, selectedPreprocessorId]);
+    }, [selectedCategory, selectedPreprocessorId, setSelectedPreprocessorId]);
 
     // Sync active category to manual scroll position
     useEffect(() => {

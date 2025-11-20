@@ -366,8 +366,8 @@ function __inputPlaybackTick(inputId: string, now: number) {
     const [rangeStartRaw, rangeEndRaw] = controls.getSelectedRange(inputId) || [0, 1];
     const rangeStart = Math.max(0, Math.round(rangeStartRaw));
     const rangeEndExclusive = Math.max(rangeStart + 1, Math.round(rangeEndRaw));
+    
     const stopFrameExclusive = Math.max(1, Math.min(totalFrames || rangeEndExclusive, rangeEndExclusive));
-
     if (!__inputLastTickMsByInput[inputId]) {
         __inputLastTickMsByInput[inputId] = now;
         __requestNextInputTick(inputId);
@@ -382,14 +382,17 @@ function __inputPlaybackTick(inputId: string, now: number) {
         const current = controls.getFocusFrame(inputId) || 0;
         // Ensure playback occurs within the selected range
         const clampedCurrent = current < rangeStart ? rangeStart : current;
-        const next = Math.min(stopFrameExclusive, clampedCurrent + steps);
-        controls.setFocusFrame(next, inputId);
-        if (next >= stopFrameExclusive) {
+        const unclampedNext = clampedCurrent + steps;
+        // If we've reached or passed the exclusive stop frame, clamp to the last valid frame and stop.
+        if (unclampedNext >= stopFrameExclusive) {
+            const finalFrame = Math.max(rangeStart, stopFrameExclusive);
+            controls.setFocusFrame(finalFrame, inputId);
             controls.pause(inputId);
             __inputLastTickMsByInput[inputId] = 0;
             __inputFrameAccumulatorByInput[inputId] = 0;
             return;
         }
+        controls.setFocusFrame(unclampedNext, inputId);
     }
 
     __inputLastTickMsByInput[inputId] = now;

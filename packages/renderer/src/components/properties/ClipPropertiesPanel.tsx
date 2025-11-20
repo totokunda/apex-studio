@@ -1106,7 +1106,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Mask</TabsTrigger>}
             {(hasAudio && !hasMask) && <TabsTrigger value="audio" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Audio</TabsTrigger>}
             {(hasPreprocessorBrowser) && <TabsTrigger value="preprocessors" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Preprocessors</TabsTrigger>}
-            {((hasDuration || hasFilter) && !hasMask) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">
+            {((hasDuration || hasFilter) && !hasMask && !((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending')) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">
               {hasFilter ? 'Filter' : 'Duration'}
               </TabsTrigger>}
               
@@ -1156,7 +1156,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasAudio && !hasMask) && <TabsContent value="audio" className="min-w-0 m-0">
             <AudioProperties clipId={clipId} />
           </TabsContent>}
-          {((hasDuration || hasFilter) && !hasMask) && <TabsContent value="duration" className="min-w-0 m-0">
+          {((hasDuration || hasFilter) && !hasMask && !((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending')) && <TabsContent value="duration" className="min-w-0 m-0">
             {hasFilter && <FilterProperties clipId={clipId} />}
             <DurationProperties clipId={clipId} />
           </TabsContent>}

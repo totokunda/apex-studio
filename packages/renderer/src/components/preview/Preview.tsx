@@ -309,12 +309,15 @@ const Preview:React.FC<PreviewProps> = () => {
     const visibleClips = sortClips(filterClips(clips)).filter((clip) => {
       const clipAtFrame = clipWithinFrame(clip, focusFrame);
       // Only consider clips that can have masks (video and image)
+      const timeline = timelines.find((t) => t.timelineId === clip.timelineId);
+      if (timeline?.hidden) return false;
       return clipAtFrame && (clip.type === 'video' || clip.type === 'image');
     });
     
+
     // Return the first clip (topmost due to sortClips)
     return visibleClips.length > 0 ? visibleClips[visibleClips.length - 1] : null;
-  }, [clips, timelines, focusFrame, sortClips, filterClips, clipWithinFrame]);
+  }, [clips, timelines, focusFrame, sortClips, filterClips, clipWithinFrame, timelines]);
 
   useEffect(() => {
     const el = containerRef.current;

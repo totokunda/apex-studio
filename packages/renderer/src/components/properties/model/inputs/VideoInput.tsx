@@ -14,15 +14,17 @@ import TimelineSearch from './timeline/TimelineSearch';
 import { useClipStore } from '@/lib/clip';
 import { useAssetControlsStore } from '@/lib/assetControl';
 import TimelineClipPosterPreview from './TimelineClipPosterPreview';
-import { AnyClipProps, VideoClipProps, clipSignature } from '@/lib/types';
+import { AnyClipProps, VideoClipProps, clipSignature, ClipTransform } from '@/lib/types';
 import { DEFAULT_FPS, VIDEO_EXTS } from '@/lib/settings';
 import { getLowercaseExtension, importMediaPaths, pickMediaPaths, getPathForFile } from '@app/preload';
 import { useViewportStore } from '@/lib/viewport';
 import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/library';
-import TimelineSelector from './timeline/TimelineSelector';
+
 import { useInputControlsStore } from '@/lib/inputControl';
 import { useControlsStore } from '@/lib/control';
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store';
+import { TbEdit, TbVideo } from 'react-icons/tb';
+import { MediaDialog } from '@/components/dialogs/MediaDialog';
 
 export type VideoSelection = AnyClipProps | null;
 
@@ -317,6 +319,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
   const getClipById = useClipStore((s) => s.getClipById);
   const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
   const updateModelInput = useClipStore((s) => s.updateModelInput);
+  const setClipTransform = useClipStore((s) => s.setClipTransform);
   const { preprocessors, load } = usePreprocessorsListStore();
   useEffect(() => {
     if (preprocessorRef) {
@@ -337,18 +340,22 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
   
   const setInputFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
   const setInputFps = useInputControlsStore((s) => s.setFps);
-  const { fpsByInputId, focusFrameByInputId, selectedRangeByInputId, setFocusFrame, setSelectedRange } = useInputControlsStore();
+  const { fpsByInputId, focusFrameByInputId, selectedRangeByInputId, setFocusFrame, setSelectedRange, play, pause } = useInputControlsStore();
   const isPlaying = useInputControlsStore((s) => !!s.isPlayingByInputId[inputId]);
 
   const fpsForInput = fpsByInputId[inputId] ?? DEFAULT_FPS;
   const selectedRangeTuple = selectedRangeByInputId[inputId] ?? [0, 1];
   const focusFrameForInput = focusFrameByInputId[inputId] ?? 0;
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
 
   const {fps} = useControlsStore();
   const playbackStartTimestampRef = useRef<number | null>(null);
   const playbackLastFrameRef = useRef<number>(0);
   const ratioCacheByClipIdRef = useRef<Record<string, number>>({});
   const [contentRatio, setContentRatio] = useState<number | null>(null);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const scrubberTrackRef = useRef<HTMLDivElement | null>(null);
 
   // Initialize input fps synchronously before first render to avoid slow playback
   React.useLayoutEffect(() => {
@@ -520,22 +527,31 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
   useEffect(() => {
     const el = stageContainerRef.current;
     if (!el) return;
-    const obs = new ResizeObserver(() => {
-      const width = Math.max(1, panelSize);
-      const height = Math.max(1, width / displayRatio);
-      setStageSize({ w: width, h: height });
-    });
-    obs.observe(el);
+    const obs = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect) return;
+      let w = Math.max(1, panelSize);
+      let h = Math.max(1, w / displayRatio);
+      if (h > 400) {
+          h = 400;
+          w = Math.max(1, h * displayRatio);
+      }
+      setStageSize({ w, h });
+  });
+  obs.observe(el);
     return () => obs.disconnect();
   }, [panelSize, displayRatio]);
 
   
 
   useEffect(() => {
-    setStageSize((prev) => ({
-      w: Math.max(1, panelSize),
-      h: Math.max(1, panelSize / displayRatio || prev.h),
-    }));
+    let w = Math.max(1, panelSize);
+      let h = Math.max(1, w / displayRatio);
+      if (h > 400) {
+          h = 400;
+          w = Math.max(1, h * displayRatio);
+      }
+      setStageSize({ w, h });
   }, [panelSize, displayRatio]);
 
   const [rangeStartForInput, rangeEndForInput] = useMemo<[number, number]>(() => {
@@ -543,8 +559,51 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     const endRaw = Math.max(start + 1, Math.round(selectedRangeTuple?.[1] ?? start + 1));
     return [start, endRaw];
   }, [selectedRangeTuple?.[0], selectedRangeTuple?.[1]]);
+  const scrubberProgress = useMemo(() => {
+    const clampedFocus = Math.max(
+      rangeStartForInput,
+      Math.min(
+        Math.max(rangeStartForInput, rangeEndForInput - 1),
+        Math.round(focusFrameForInput ?? rangeStartForInput)
+      )
+    );
+    const span = Math.max(1, rangeEndForInput - rangeStartForInput);
+    if (span <= 1) return 0;
+    return (clampedFocus - rangeStartForInput) / (span - 1);
+  }, [focusFrameForInput, rangeStartForInput, rangeEndForInput]);
 
-  
+  const scrubToClientX = useCallback(
+    (clientX: number) => {
+      if (!scrubberTrackRef.current) return;
+      const rect = scrubberTrackRef.current.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+      const rawRatio = (clientX - rect.left) / rect.width;
+      const ratio = Math.max(0, Math.min(1, rawRatio));
+      const span = Math.max(1, rangeEndForInput - rangeStartForInput);
+      const nextFrame =
+        span <= 1
+          ? rangeStartForInput
+          : rangeStartForInput + Math.round(ratio * (span - 1));
+      setInputFocusFrame(nextFrame, inputId);
+    },
+    [inputId, rangeStartForInput, rangeEndForInput, setInputFocusFrame]
+  );
+
+  useEffect(() => {
+    if (!isScrubbing) return;
+    const handleMove = (e: MouseEvent) => {
+      scrubToClientX(e.clientX);
+    };
+    const handleUp = () => {
+      setIsScrubbing(false);
+    };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [isScrubbing, scrubToClientX]);
 
   const rangeSummary = useMemo(() => {
     const start = rangeStartForInput;
@@ -749,7 +808,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
 
   useEffect(() => {
     const [rangeStart, rangeEnd] = selectedRangeTuple;
-    const clampedFocus = Math.max(rangeStart, Math.min(rangeEnd - 1, Math.round(focusFrameForInput ?? rangeStart)));
+    const clampedFocus = Math.max(rangeStart, Math.min(rangeEnd, Math.round(focusFrameForInput ?? rangeStart)));
     if (clampedFocus !== focusFrameForInput) {
       setInputFocusFrame(clampedFocus, inputId);
     }
@@ -772,6 +831,23 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     if (cid.startsWith('media:')) return null;
     return (s.getClipById(cid) as AnyClipProps | undefined) ?? null;
   });
+
+  const handleConfirm = useCallback((data: { rotation: number; aspectRatio: string; crop?: { x: number; y: number; width: number; height: number }; transformWidth?: number; transformHeight?: number }) => {
+    if (!mediaClip) return;
+    const newTransform: ClipTransform = {
+      ...(mediaClip.transform ?? {}),
+      ...(data.rotation ? { rotation: data.rotation } : {}),
+      ...(data.crop ? { crop: data.crop } : { crop: undefined }),
+      ...(data.transformWidth ? { width: data.transformWidth } : {}),
+      ...(data.transformHeight ? { height: data.transformHeight } : {})
+    } as ClipTransform;
+    const updatedClip = { ...mediaClip, transform: newTransform } as AnyClipProps;
+    setMediaClip(updatedClip);
+    emitSelection(updatedClip as AnyClipProps);
+    if (liveTimelineClip) {
+      setClipTransform(liveTimelineClip.clipId, newTransform);
+    }
+  }, [mediaClip, emitSelection, liveTimelineClip, setClipTransform]);
 
   useEffect(() => {
     if (!value) return;
@@ -842,6 +918,8 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     let curEnd = Math.round(selectedRangeTuple?.[1] ?? (curStart + 1));
     const desiredStart = Math.max(0, Math.min(span - 1, curStart));
     const desiredEnd = Math.max(desiredStart + 1, Math.min(span, curEnd));
+    console.log('clipStart', clipStart);
+    console.log('clipEnd', clipEnd);
     if (desiredStart !== curStart || desiredEnd !== curEnd) {
       setSelectedRange(desiredStart, desiredEnd, inputId);
     }
@@ -855,6 +933,8 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     if (!isDefault) return;
     const clipStart = Math.max(0, Math.round(previewClip.startFrame ?? 0));
     const clipEnd = Math.max(clipStart + 1, Math.round(previewClip.endFrame ?? (clipStart + 1)));
+    console.log('clipStart', clipStart);
+    console.log('clipEnd', clipEnd);
     const span = Math.max(1, clipEnd - clipStart);
     setSelectedRange(0, span, inputId);
   }, [previewClip, selectedRangeTuple?.[0], selectedRangeTuple?.[1], setSelectedRange, inputId]);
@@ -872,9 +952,6 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
       store.pause(inputId);
       return;
     }
-    playbackStartTimestampRef.current = null;
-    playbackLastFrameRef.current = rangeStartForInput;
-    setFocusFrame(rangeStartForInput, inputId);
     store.play(inputId);
   }, [previewClip, isPlaying, rangeStartForInput, rangeEndForInput, inputId, setFocusFrame]);
 
@@ -895,19 +972,26 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
 
             </div>
           </div>
-          <Popover>
-            <PopoverTrigger className="w-full">
+          <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
+            <PopoverTrigger
+              asChild
+              onClick={(e) => {
+                if (!isPopoverOpen && value) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }
+              }}
+            >
               <div
                 ref={stageContainerRef}
                 onDragEnter={handleExternalDragEnter}
                 onDragOver={handleExternalDragOver}
                 onDragLeave={handleExternalDragLeave}
                 onDrop={handleExternalDrop}
-                style={{ height: stageSize.h }}
+                style={{ height: value ? stageSize.h : undefined }}
                 className={cn(
-                  'w-full flex flex-col items-center justify-center gap-y-3 shadow-accent hover:opacity-70 cursor-pointer relative overflow-hidden',
-                  value ? '' : 'border-dashed',
-                  value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50 rounded'
+                  'w-full flex flex-col items-center justify-center gap-y-3 shadow-accent cursor-pointer relative overflow-hidden group',
+                  value ? '' : 'border-dashed h-48 p-4 border-brand-light/10 border bg-brand-background-light/50 rounded',
                 )}
               >
                 {isOverDropZone && (
@@ -918,6 +1002,7 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                     previewClip ? (
                       <TimelineClipPosterPreview
                         key={previewClip.clipId}
+                        needsStage={true}
                         clip={previewClip}
                         width={stageSize.w}
                         height={stageSize.h}
@@ -942,12 +1027,58 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                     </span>
                   </>
                 )}
+                {value && (
+                  <div className="absolute bottom-0 h-full left-0 right-0 z-50 bg-brand/60 hover:backdrop-blur-sm gap-x-4 transition-opacity duration-150 opacity-0 hover:opacity-100 flex items-center justify-center">
+                    <div className="flex flex-col justify-center items-center gap-y-2 p-4 rounded-md w-full">
+                      <button
+                        onClick={() => setIsPopoverOpen(true)}
+                        className="z-30 duration-150 flex items-center gap-x-2 px-6 py-2 w-40 bg-brand-light hover:bg-brand-light/90 shadow-md justify-center rounded text-[10.5px] font-poppins font-medium text-brand-accent-two-shade transition-colors"
+                      >
+                        <TbVideo className="w-4 h-4" />
+                        <span>
+                          Select Media
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => setIsDialogOpen(true)}
+                        className="z-30 duration-150 w-40 justify-center shadow-md flex items-center gap-x-2 px-6 py-2 font-poppins font-medium bg-brand-accent-two-shade  hover:bg-brand-accent-two-shade/90 rounded text-[10.5px] text-brand-light transition-colors"
+                      >
+                        <TbEdit className="w-4 h-4" />
+                        Edit Video
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </PopoverTrigger>
             <PopoverVideo value={value} onChange={emitSelection} clipId={clipId} />
           </Popover>
           {showTimeline && value && (
-            <div className="w-full flex flex-col gap-y-2 mt-3">
+            <div className="w-full flex flex-col gap-y-3 mt-3">
+              <div className="w-full flex flex-col gap-y-1">
+                <div
+                  ref={scrubberTrackRef}
+                  className={cn(
+                    'relative w-full h-1.5 rounded-full bg-brand-background-light/70',
+                    playDisabled ? 'opacity-60 cursor-default' : 'cursor-pointer'
+                  )}
+                  onMouseDown={(e) => {
+                    if (playDisabled) return;
+                    e.preventDefault();
+                    setIsScrubbing(true);
+                    scrubToClientX(e.clientX);
+                  }}
+                >
+                  <div
+                    className="absolute inset-y-0 left-0 bg-brand-light/80 rounded-full pointer-events-none"
+                    style={{ width: `${scrubberProgress * 100}%` }}
+                  />
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white shadow-sm pointer-events-none"
+                    style={{ left: `${scrubberProgress * 100}%` }}
+                  />
+                </div>
+              </div>
               <div className="flex items-center justify-between">
                 <button
                   type="button"
@@ -965,17 +1096,11 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
                 </button>
                 <span className="text-brand-light/70 text-[10px] font-medium">{rangeSummary}</span>
               </div>
-              <TimelineSelector
-                inputId={inputId}
-                clip={previewClip as AnyClipProps}
-                width={Math.max(1, stageSize.w)}
-                height={44}
-                mode="range"
-              />
+              
             </div>
           )}
           {preprocessorRef && (
-            <div className=" flex flex-row-reverse items-center gap-x-3 justify-between">
+            <div className=" flex flex-row-reverse items-center gap-x-3 justify-between mt-3">
               <span className="text-brand-light text-[10px] font-medium">Apply {resolvedPreprocessorName}</span>
               <button
                 type="button"
@@ -996,6 +1121,20 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
               </button>
             </div>
           )}
+          <MediaDialog
+            isOpen={isDialogOpen}
+            onClose={() => setIsDialogOpen(false)}
+            onConfirm={handleConfirm}
+            clipOverride={mediaClip}
+            timelineSelectorProps={{ mode: 'range', inputId }}
+            focusFrame={focusFrameForInput}
+            setFocusFrame={(frame) => setInputFocusFrame(frame, inputId)}
+            isPlayingExternal={isPlaying}
+            onPlay={() => play(inputId)}
+            onPause={() => pause(inputId)}
+            canCrop={mediaClip && (mediaClip.type === 'video' || mediaClip.type === 'image') ? true : false}
+            selectionRange={selectedRangeTuple}
+          />
         </div>
       </div>
     </Droppable>

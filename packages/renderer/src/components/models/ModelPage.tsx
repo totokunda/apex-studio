@@ -36,13 +36,12 @@ const ModelPage:React.FC<ModelPageProps> = ({ manifestId }) => {
     <div className="flex flex-col h-full w-full">
       <ScrollArea className="flex-1">
         <div className="p-7 pt-3 pb-28">
-          <div className="flex items-center gap-x-3">
+          <div className="flex items-center gap-x-2">
             <button onClick={async () => {  clearSelectedManifestId(); }} className="text-brand-light hover:text-brand-light/70 p-1 flex items-center justify-center bg-brand border border-brand-light/10 rounded transition-colors cursor-pointer">
               <LuChevronLeft className="w-3 h-3" />
             </button>
             <span className="text-brand-light/90 text-[11px] font-medium">Back</span>
           </div>
-          
           <div className='mt-4 flex flex-row gap-x-4 w-full'>
             <div className="rounded-md overflow-hidden flex items-center w-44 aspect-square justify-start flex-shrink-0">
               {isVideoDemo ? (

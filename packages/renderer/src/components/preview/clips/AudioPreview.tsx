@@ -20,10 +20,11 @@ const AudioPreview: React.FC<
     overrideClip?: AudioClipProps,
     inputMode?: boolean,
     inputId?: string,
+    disabled?: boolean,
   }
 > = (props) => {
   const { src, startFrame = 0, trimStart, volume = 0, fadeIn = 0, fadeOut = 0, speed: _speed } = props as AudioClipProps;
-  const { inputMode = false, inputId } = props as { inputMode?: boolean; inputId?: string };
+  const { inputMode = false, inputId, disabled = false } = props as { inputMode?: boolean; inputId?: string; disabled?: boolean };
   const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
   const fpsFromControls = useControlsStore((s) => s.fps);
   const fpsByInputId = useInputControlsStore((s) => s.fpsByInputId);
@@ -443,9 +444,9 @@ const AudioPreview: React.FC<
 
   // Start or restart rendering when playback starts or media becomes ready
   useEffect(() => {
-    if (!isPlaying) return;
+    if (!isPlaying || disabled) return;
     void startRendering();
-  }, [isPlaying, ctx, mediaInfoRef.current, src, fps, startRendering, volume, fadeIn, fadeOut]);
+  }, [isPlaying, ctx, mediaInfoRef.current, src, fps, startRendering, volume, fadeIn, fadeOut, disabled]);
 
   // Cleanup on unmount: let scheduled audio complete for smooth transitions
   useEffect(() => {

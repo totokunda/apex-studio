@@ -7,13 +7,16 @@ interface PreprocessorsListState {
   error: string | null;
   loadedAt?: number;
   load: (force?: boolean) => Promise<void>;
+  setSelectedPreprocessorId: (preprocessorId: string | null) => void;
+  selectedPreprocessorId: string | null;
 }
 
 export const usePreprocessorsListStore = create<PreprocessorsListState>((set, get) => ({
   preprocessors: null,
   loading: false,
   error: null,
-
+  selectedPreprocessorId: null,
+  setSelectedPreprocessorId: (preprocessorId: string | null) => set({ selectedPreprocessorId: preprocessorId }),
   load: async (force?: boolean) => {
     const { preprocessors, loading } = get();
     if (loading) return; // prevent concurrent

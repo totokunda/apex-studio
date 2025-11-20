@@ -95,6 +95,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     const clipSpan = useMemo(() => Math.max(1, (currentEndFrame - currentStartFrame)), [currentStartFrame, currentEndFrame]);
     const visibleSpan = useMemo(() => Math.max(1, (timelineDuration[1] - timelineDuration[0])), [timelineDuration]);
     const clipWidth = useMemo(() => Math.max(3, Math.round((clipSpan / visibleSpan) * timelineWidth)), [clipSpan, visibleSpan, timelineWidth]);
+
     const clipX  = useMemo(() => 0, []);
 
 
@@ -104,6 +105,12 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
         return timelineWidth / span;
     }, [timelineWidth, timelineDuration]);
     const frameWidthSafe = useMemo(() => Math.max(1e-6, frameWidthPx), [frameWidthPx]);
+
+    const visibleStart = timelineDuration[0] ?? 0;
+    const frameToX = useCallback(
+        (frame: number) => (frame - visibleStart) * frameWidthSafe,
+        [visibleStart, frameWidthSafe]
+    );
 
     const constrainedFocusFrame = useMemo(() => {
         // Focus frame in store is clip-local; convert to absolute for overlay
@@ -115,11 +122,8 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
 
     const focusXLocal = useMemo(() => {
         // Position the focus frame relative to the currently visible window
-        // Convert absolute constrained focus to clip-local, then subtract visible window start
-        const localFocus = (constrainedFocusFrame - currentStartFrame);
-        const windowStartLocal = Math.max(0, Math.round(timelineDuration[0] ?? 0));
-        return (localFocus - windowStartLocal) * frameWidthPx;
-    }, [constrainedFocusFrame, currentStartFrame, frameWidthPx, timelineDuration]);
+        return frameToX(constrainedFocusFrame);
+    }, [constrainedFocusFrame, frameToX]);
 
     const [rangeStart, rangeEnd] = useMemo<[number, number]>(() => {
         // selectedRange is stored clip-local; convert to absolute for rendering
@@ -134,9 +138,25 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
     }, [selectedRange, currentStartFrame, currentEndFrame]);
 
     const rangeSpanFrames = useMemo(() => Math.max(1, rangeEnd - rangeStart), [rangeStart, rangeEnd]);
-    const rangeStartLocal = useMemo(() => (rangeStart - currentStartFrame) * frameWidthSafe, [rangeStart, currentStartFrame, frameWidthSafe]);
-    const rangeWidthPx = useMemo(() => Math.max(frameWidthSafe, (rangeEnd - rangeStart) * frameWidthSafe), [frameWidthSafe, rangeEnd, rangeStart]);
-    const rangeEndLocal = useMemo(() => rangeStartLocal + rangeWidthPx, [rangeStartLocal, rangeWidthPx]);
+
+    // Base X positions for the absolute range, then clipped to the visible window
+    const baseRangeStartX = useMemo(() => frameToX(rangeStart), [rangeStart, frameToX]);
+    const baseRangeEndX = useMemo(() => frameToX(rangeEnd), [rangeEnd, frameToX]);
+
+    const rangeStartLocal = useMemo(
+        () => Math.max(0, Math.min(timelineWidth, baseRangeStartX)),
+        [baseRangeStartX, timelineWidth]
+    );
+
+    const rangeEndLocal = useMemo(
+        () => Math.max(0, Math.min(timelineWidth, baseRangeEndX)),
+        [baseRangeEndX, timelineWidth]
+    );
+
+    const rangeWidthPx = useMemo(
+        () => Math.max(frameWidthSafe, rangeEndLocal - rangeStartLocal),
+        [frameWidthSafe, rangeEndLocal, rangeStartLocal]
+    );
     const maxRangeStart = useMemo(() => Math.max(currentStartFrame, currentEndFrame - rangeSpanFrames), [currentStartFrame, currentEndFrame, rangeSpanFrames]);
     const rangeHandleWidth = useMemo(() => 3, []);
 
@@ -144,44 +164,85 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
         const clampedStart = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, Math.round(startFrame)));
         const minEnd = clampedStart + 1;
         const clampedEnd = Math.max(minEnd, Math.min(currentEndFrame, Math.round(endFrame)));
+
         // Store selection as clip-local
         const localStart = clampedStart - currentStartFrame;
         const localEnd = clampedEnd - currentStartFrame;
         const [existingStart, existingEnd] = useInputControlsStore.getState().getSelectedRange(inputId);
-        if (existingStart === localStart && existingEnd === localEnd) return;
-        setSelectedRange(localStart, localEnd, inputId);
-    }, [currentStartFrame, currentEndFrame, inputId, setSelectedRange]);
+        if (existingStart === localStart && existingEnd === localEnd) {
+            // Range already matches; still ensure focus is clamped into this range if needed.
+        } else {
+            setSelectedRange(localStart, localEnd, inputId);
+        }
+
+        // Ensure focus frame does not jump to range start when moving range.
+        // Keep previous focus if it stays inside the new range, otherwise clamp to range edges.
+        const prevAbsFocus = currentStartFrame + Math.max(0, Math.round(focusFrame));
+        let newAbsFocus = prevAbsFocus;
+
+        if (prevAbsFocus < clampedStart) {
+            newAbsFocus = clampedStart;
+        } else if (prevAbsFocus >= clampedEnd) {
+            newAbsFocus = clampedEnd - 1;
+        }
+
+        const newLocalFocus = newAbsFocus - currentStartFrame;
+        setFocusFrame(newLocalFocus, inputId);
+
+        const [winStart, winEnd] = timelineDuration;
+        const winSpan = Math.max(1, winEnd - winStart);
+        const anchor = (newLocalFocus - winStart) / winSpan;
+        setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId);
+    }, [
+        currentStartFrame,
+        currentEndFrame,
+        focusFrame,
+        inputId,
+        setSelectedRange,
+        setFocusFrame,
+        setFocusAnchorRatio,
+        timelineDuration,
+    ]);
 
     // Smooth drag: directly move Konva nodes and throttle store updates
     const rangeRectRef = useRef<Konva.Rect>(null);
     const leftHandleRef = useRef<Konva.Rect>(null);
     const rightHandleRef = useRef<Konva.Rect>(null);
+    const scrubberRef = useRef<Konva.Rect>(null);
     const isDraggingRangeRef = useRef(false);
     
 
     const updateRangeVisuals = useCallback((startFrame: number, endFrame: number) => {
-        const startLocal = (startFrame - currentStartFrame) * frameWidthSafe;
-        const endLocal = (endFrame - currentStartFrame) * frameWidthSafe;
-        const widthPx = Math.max(frameWidthSafe, endLocal - startLocal);
+        // Convert absolute frames to local X, then clip to the visible timeline window
+        const rawStartLocal = frameToX(startFrame);
+        const rawEndLocal = frameToX(endFrame);
+
+        const visStartX = 0;
+        const visEndX = timelineWidth;
+
+        const clippedStart = Math.max(visStartX, Math.min(visEndX, rawStartLocal));
+        const clippedEnd = Math.max(visStartX, Math.min(visEndX, rawEndLocal));
+
+        const widthPx = Math.max(frameWidthSafe, clippedEnd - clippedStart);
         const rect = rangeRectRef.current;
         const left = leftHandleRef.current;
         const right = rightHandleRef.current;
         if (rect) {
-            rect.x(Math.max(0, Math.min(Math.max(0, clipWidth - widthPx), startLocal)));
-            rect.width(widthPx);
+            rect.x(clippedStart);
+            rect.width(Math.max(0, Math.min(widthPx, visEndX - clippedStart)));
             rect.y(0);
         }
         if (left) {
-            left.x(startLocal - rangeHandleWidth / 2);
+            left.x(clippedStart - rangeHandleWidth / 2);
             left.y(0);
         }
         if (right) {
-            right.x(startLocal + widthPx - rangeHandleWidth / 2);
+            right.x(clippedEnd - rangeHandleWidth / 2);
             right.y(0);
         }
         const layer = rect?.getLayer() || left?.getLayer() || right?.getLayer();
         if (layer) layer.batchDraw();
-    }, [clipWidth, currentStartFrame, frameWidthSafe, rangeHandleWidth]);
+    }, [frameToX, frameWidthSafe, rangeHandleWidth, timelineWidth]);
 
     
 
@@ -531,6 +592,7 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                 clipY={0}
                 clipWidth={clipWidth}
                 clipHeight={timelineHeight}
+                
                 clipFunc={(ctx) => {
                     const w = Math.max(1, clipWidth);
                     const h = Math.max(1, timelineHeight);
@@ -930,12 +992,11 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                     })}
                 </Group>
             )}
-
             {effectiveSelectionMode === 'range' && rangeWidthPx > 0 && (
                 <Group
                     x={clipPosition.x + 1}
                     y={clipPosition.y}
-                    width={clipWidth}
+                    width={timelineWidth}
                     height={timelineHeight}
                     clipX={0}
                     clipY={0}
@@ -948,14 +1009,14 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         y={0}
                         width={rangeWidthPx}
                         height={Math.max(1, timelineHeight)}
-                        fill={'rgba(43, 127, 255, 0.60)'}
-                        stroke={'rgba(43, 127, 255, 0.9)'}
+                        fill={'rgba(255, 255, 255, 0.35)'}
+                        stroke={'rgba(255, 255, 255, 0.9)'}
                         strokeWidth={3}
                         cornerRadius={1}
                         draggable
                         dragBoundFunc={(pos) => {
                             const minX = 0;
-                            const maxX = Math.max(0, clipWidth - rangeWidthPx);
+                            const maxX = Math.max(0, timelineWidth - rangeWidthPx);
                             const boundedX = Math.max(minX, Math.min(maxX, pos.x));
                             return { x: boundedX, y: 0 };
                         }}
@@ -975,11 +1036,14 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         }}
                         onDragMove={(e) => {
                             e.target.y(0);
-                            const rawX = Math.max(0, Math.min(clipWidth - rangeWidthPx, e.target.x()));
+                            const rawX = Math.max(0, Math.min(timelineWidth - rangeWidthPx, e.target.x()));
                             const frameOffset = Math.round(rawX / frameWidthSafe);
-                            const proposedStart = currentStartFrame + frameOffset;
-                            const clampedStart = Math.max(currentStartFrame, Math.min(maxRangeStart, proposedStart));
-                            const nextStartLocal = (clampedStart - currentStartFrame) * frameWidthSafe;
+                            const proposedStart = visibleStart + frameOffset;
+                            const clampedStart = Math.max(
+                                currentStartFrame,
+                                Math.min(maxRangeStart, proposedStart)
+                            );
+                            const nextStartLocal = frameToX(clampedStart);
                             e.target.x(nextStartLocal);
                             const endFrame = clampedStart + rangeSpanFrames;
                             updateRangeVisuals(clampedStart, endFrame);
@@ -988,11 +1052,14 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             const container = e.target.getStage()?.container();
                             if (container) container.style.cursor = 'grab';
                             e.target.y(0);
-                            const rawX = Math.max(0, Math.min(clipWidth - rangeWidthPx, e.target.x()));
+                            const rawX = Math.max(0, Math.min(timelineWidth - rangeWidthPx, e.target.x()));
                             const frameOffset = Math.round(rawX / frameWidthSafe);
-                            const proposedStart = currentStartFrame + frameOffset;
-                            const clampedStart = Math.max(currentStartFrame, Math.min(maxRangeStart, proposedStart));
-                            const finalLocal = (clampedStart - currentStartFrame) * frameWidthSafe;
+                            const proposedStart = visibleStart + frameOffset;
+                            const clampedStart = Math.max(
+                                currentStartFrame,
+                                Math.min(maxRangeStart, proposedStart)
+                            );
+                            const finalLocal = frameToX(clampedStart);
                             e.target.x(finalLocal);
                             const endFrame = clampedStart + rangeSpanFrames;
                             updateRangeVisuals(clampedStart, endFrame);
@@ -1008,10 +1075,10 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         y={0}
                         width={rangeHandleWidth}
                         height={Math.max(1, timelineHeight)}
-                        fill={'rgba(43, 127, 255, 0.9)'}
+                        fill={'rgba(255, 255, 255, 0.9)'}
                         //cornerRadius={[2, 0, 2, 0]}
                         draggable
-                        stroke={'rgba(43, 127, 255, 0.9)'}
+                        stroke={'rgba(255, 255, 255, 0.9)'}
                         strokeWidth={0}
                         dragBoundFunc={(pos) => ({ x: pos.x, y: 0 })}
                         onDragStart={(e) => {
@@ -1030,13 +1097,20 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         }}
                         onDragMove={(e) => {
                             e.target.y(0);
-                            const maxLocal = rangeEndLocal - Math.max(frameWidthSafe, rangeHandleWidth);
-                            const bounded = Math.max(-rangeHandleWidth / 2, Math.min(maxLocal - rangeHandleWidth / 2, e.target.x()));
-                            const adjustedLocal = bounded + rangeHandleWidth / 2;
-                            const frameOffset = Math.round(adjustedLocal / frameWidthSafe);
-                            const proposedStart = currentStartFrame + frameOffset;
-                            const clampedStart = Math.max(currentStartFrame, Math.min(rangeEnd - 1, proposedStart));
-                            const nextLocal = (clampedStart - currentStartFrame) * frameWidthSafe;
+                            const minCenter = 0;
+                            const maxCenter = rangeEndLocal - frameWidthSafe;
+                            const center = e.target.x() + rangeHandleWidth / 2;
+                            const boundedCenter = Math.max(
+                                minCenter,
+                                Math.min(maxCenter, center)
+                            );
+                            const frameOffset = Math.round(boundedCenter / frameWidthSafe);
+                            const proposedStart = visibleStart + frameOffset;
+                            const clampedStart = Math.max(
+                                currentStartFrame,
+                                Math.min(rangeEnd - 1, proposedStart)
+                            );
+                            const nextLocal = frameToX(clampedStart);
                             e.target.x(nextLocal - rangeHandleWidth / 2);
                             const endFrame = Math.max(clampedStart + 1, rangeEnd);
                             updateRangeVisuals(clampedStart, endFrame);
@@ -1045,11 +1119,20 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             const container = e.target.getStage()?.container();
                             if (container) container.style.cursor = 'ew-resize';
                             e.target.y(0);
-                            const handleCenter = e.target.x() + rangeHandleWidth / 2;
-                            const frameOffset = Math.round(handleCenter / frameWidthSafe);
-                            const proposedStart = currentStartFrame + frameOffset;
-                            const clampedStart = Math.max(currentStartFrame, Math.min(rangeEnd - 1, proposedStart));
-                            const nextLocal = (clampedStart - currentStartFrame) * frameWidthSafe;
+                            const center = e.target.x() + rangeHandleWidth / 2;
+                            const minCenter = 0;
+                            const maxCenter = rangeEndLocal - frameWidthSafe;
+                            const boundedCenter = Math.max(
+                                minCenter,
+                                Math.min(maxCenter, center)
+                            );
+                            const frameOffset = Math.round(boundedCenter / frameWidthSafe);
+                            const proposedStart = visibleStart + frameOffset;
+                            const clampedStart = Math.max(
+                                currentStartFrame,
+                                Math.min(rangeEnd - 1, proposedStart)
+                            );
+                            const nextLocal = frameToX(clampedStart);
                             e.target.x(nextLocal - rangeHandleWidth / 2);
                             const endFrame = Math.max(clampedStart + 1, rangeEnd);
                             updateRangeVisuals(clampedStart, endFrame);
@@ -1065,8 +1148,8 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         y={0}
                         width={rangeHandleWidth}
                         height={Math.max(1, timelineHeight)}
-                        fill={'rgba(43, 127, 255, 0.9)'}
-                        stroke={'rgba(43, 127, 255, 0.9)'}
+                        fill={'rgba(255, 255, 255, 0.9)'}
+                        stroke={'rgba(255, 255, 255, 0.9)'}
                         strokeWidth={0}
                         //cornerRadius={[0, 2, 0, 2]}
                         draggable
@@ -1087,13 +1170,20 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         }}
                         onDragMove={(e) => {
                             e.target.y(0);
-                            const minLocal = rangeStartLocal + Math.max(frameWidthSafe, rangeHandleWidth);
-                            const bounded = Math.max(minLocal - rangeHandleWidth / 2, Math.min(clipWidth - rangeHandleWidth / 2, e.target.x()));
-                            const adjustedLocal = bounded + rangeHandleWidth / 2;
-                            const frameOffset = Math.round(adjustedLocal / frameWidthSafe);
-                            const proposedEnd = currentStartFrame + frameOffset;
-                            const clampedEnd = Math.max(rangeStart + 1, Math.min(currentEndFrame, proposedEnd));
-                            const nextLocal = (clampedEnd - currentStartFrame) * frameWidthSafe;
+                            const minCenter = rangeStartLocal + frameWidthSafe;
+                            const maxCenter = timelineWidth;
+                            const center = e.target.x() + rangeHandleWidth / 2;
+                            const boundedCenter = Math.max(
+                                minCenter,
+                                Math.min(maxCenter, center)
+                            );
+                            const frameOffset = Math.round(boundedCenter / frameWidthSafe);
+                            const proposedEnd = visibleStart + frameOffset;
+                            const clampedEnd = Math.max(
+                                rangeStart + 1,
+                                Math.min(currentEndFrame, proposedEnd)
+                            );
+                            const nextLocal = frameToX(clampedEnd);
                             e.target.x(nextLocal - rangeHandleWidth / 2);
                             updateRangeVisuals(rangeStart, clampedEnd);
                         }}
@@ -1101,15 +1191,89 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             const container = e.target.getStage()?.container();
                             if (container) container.style.cursor = 'ew-resize';
                             e.target.y(0);
-                            const handleCenter = e.target.x() + rangeHandleWidth / 2;
-                            const frameOffset = Math.round(handleCenter / frameWidthSafe);
-                            const proposedEnd = currentStartFrame + frameOffset;
-                            const clampedEnd = Math.max(rangeStart + 1, Math.min(currentEndFrame, proposedEnd));
-                            const nextLocal = (clampedEnd - currentStartFrame) * frameWidthSafe;
+                            const center = e.target.x() + rangeHandleWidth / 2;
+                            const minCenter = rangeStartLocal + frameWidthSafe;
+                            const maxCenter = timelineWidth;
+                            const boundedCenter = Math.max(
+                                minCenter,
+                                Math.min(maxCenter, center)
+                            );
+                            const frameOffset = Math.round(boundedCenter / frameWidthSafe);
+                            const proposedEnd = visibleStart + frameOffset;
+                            const clampedEnd = Math.max(
+                                rangeStart + 1,
+                                Math.min(currentEndFrame, proposedEnd)
+                            );
+                            const nextLocal = frameToX(clampedEnd);
                             e.target.x(nextLocal - rangeHandleWidth / 2);
                             updateRangeVisuals(rangeStart, clampedEnd);
                             commitRange(rangeStart, clampedEnd);
                             isDraggingRangeRef.current = false;
+                        }}
+                    />
+
+                    {/* Range scrubber */}
+                    <Rect
+                        ref={scrubberRef}
+                        x={focusXLocal}
+                        y={0}
+                        width={5}
+                        height={Math.max(1, timelineHeight)}
+                        cornerRadius={5}
+                        fill={'rgba(255, 255, 255, 1)'}
+                        stroke={'rgba(255, 255, 255, 1)'}
+                        strokeWidth={1}
+                        shadowBlur={4}
+                        shadowColor={'#666666'}
+                        shadowOpacity={0.8}
+                        draggable
+                        dragBoundFunc={(pos) => {
+                            const minX = rangeStartLocal;
+                            // Allow selecting the last frame in range
+                            const maxFrameIndex = Math.max(0, rangeEnd - 1 - visibleStart);
+                            const maxX = Math.max(minX, maxFrameIndex * frameWidthSafe);
+
+                            const boundedX = Math.max(minX, Math.min(maxX, pos.x));
+                            return { x: boundedX, y: 0 };
+                        }}
+                        onMouseEnter={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'grab';
+                        }}
+                        onMouseLeave={(e) => {
+                            const container = e.target.getStage()?.container();
+                            if (container) container.style.cursor = 'default';
+                        }}
+                        onDragStart={(e) => {
+                             const container = e.target.getStage()?.container();
+                             if (container) container.style.cursor = 'grabbing';
+                             e.target.y(0);
+                        }}
+                        onDragMove={(e) => {
+                            e.target.y(0);
+                            const minX = rangeStartLocal;
+                            const maxFrameIndex = Math.max(0, rangeEnd - 1 - visibleStart);
+                            const maxX = Math.max(minX, maxFrameIndex * frameWidthSafe);
+                            const localX = Math.max(minX, Math.min(maxX, e.target.x()));
+
+                            const frameOffset = Math.round(localX / frameWidthSafe);
+                            const newFocus = Math.max(
+                                currentStartFrame,
+                                Math.min(currentEndFrame - 1, visibleStart + frameOffset)
+                            );
+
+                            setFocusFrame(newFocus - currentStartFrame, inputId);
+
+                            const [winStart, winEnd] = timelineDuration;
+                            const winSpan = Math.max(1, winEnd - winStart);
+                            const newLocalFocus = newFocus - currentStartFrame;
+                            const anchor = (newLocalFocus - winStart) / winSpan;
+                            setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId);
+                        }}
+                        onDragEnd={(e) => {
+                             const container = e.target.getStage()?.container();
+                             if (container) container.style.cursor = 'grab';
+                             e.target.y(0);
                         }}
                     />
                 </Group>
@@ -1140,16 +1304,16 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                         <Rect
                             x={Math.max(0, Math.min(clipWidth - Math.max(12, frameWidthPx), focusXLocal))}
                             y={0}
-                            width={Math.max(12, frameWidthPx)}
+                            width={Math.max(8, frameWidthPx)}
                             height={Math.max(1, timelineHeight)}
-                            fill={'rgba(43, 127, 255, 0.6)'}
-                            stroke={'rgba(43, 127, 255, 0.9)'}
+                            fill={'rgba(255, 255, 255, 0.6)'}
+                            stroke={'rgba(255, 255, 255, 0.9)'}
                             strokeWidth={2}
                             draggable
                             cornerRadius={1}
                             shadowBlur={4}
                             shadowColor={'#6247AA'}
-                            shadowOpacity={0.35}
+                            shadowOpacity={0.8}
                             dragBoundFunc={(pos) => {
                                 const rectWidth = Math.max(8, frameWidthPx);
                                 const minX = 0;
@@ -1167,10 +1331,9 @@ const TimelineClip: React.FC<TimelineProps & {clip:AnyClipProps, cornerRadius?: 
                             onDragMove={(e) => {
                                 e.target.y(0);
                                 const rectWidth = Math.max(8, frameWidthPx);
-                                const localX = Math.max(0, Math.min(clipWidth - rectWidth, e.target.x()));
+                                const localX = Math.max(0, Math.min(clipWidth - rectWidth, e.target.x()))
                                 const frameOffset = Math.round(localX / Math.max(1e-6, frameWidthPx));
-                                const newFocus = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, currentStartFrame + frameOffset));
-                                // Store focus as clip-local
+                                const newFocus = Math.max(currentStartFrame, Math.min(currentEndFrame - 1, currentStartFrame + frameOffset)) + timelineDuration[0];
                                 setFocusFrame(newFocus - currentStartFrame, inputId);
                                 const [winStart, winEnd] = timelineDuration;
                                 const winSpan = Math.max(1, winEnd - winStart);
