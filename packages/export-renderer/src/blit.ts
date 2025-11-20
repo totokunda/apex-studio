@@ -23,6 +23,14 @@ export interface ClipTransform {
   rotation: number;
   cornerRadius: number;
   opacity: number;
+  // Normalized crop in local content coordinates (0-1, relative to full media bounds)
+  // Matches renderer `ClipTransform.crop` semantics used by `ImagePreview` / `VideoPreview`.
+  crop?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 }
 
 interface BaseClipProps {
@@ -106,7 +114,10 @@ export interface DrawingClipProps extends BaseClipProps {
 
 type Canvas = HTMLCanvasElement;
 
-function ensureTransform(transform?: ClipTransform, canvas?: Canvas): Required<ClipTransform> {
+function ensureTransform(
+  transform?: ClipTransform,
+  canvas?: Canvas
+): Required<Omit<ClipTransform, 'crop'>> & { crop?: ClipTransform['crop'] } {
   const defaultWidth = canvas?.width ?? 100;
   const defaultHeight = canvas?.height ?? 100;
   return {
@@ -119,6 +130,7 @@ function ensureTransform(transform?: ClipTransform, canvas?: Canvas): Required<C
     rotation: transform?.rotation ?? 0,
     cornerRadius: transform?.cornerRadius ?? 0,
     opacity: transform?.opacity ?? 100,
+    crop: transform?.crop,
   };
 }
 
@@ -737,7 +749,6 @@ export async function blitVideo(
   iterator: AsyncIterator<WrappedCanvas | null>,
   projectFrame: number
 ): Promise<void> {
-  
   const t = ensureTransform(clip.transform, canvas);
   const content = document.createElement('canvas');
   content.width = Math.max(1, Math.floor(t.width));
@@ -750,12 +761,27 @@ export async function blitVideo(
     const wrapped = value;
     if (!wrapped) return;
 
-    // Draw decoded frame into content
+    // Draw decoded frame into content, honoring crop (if any) in the same
+    // normalized coordinates used by the renderer preview components.
     cctx.clearRect(0, 0, content.width, content.height);
     cctx.imageSmoothingEnabled = true;
     // @ts-ignore
     cctx.imageSmoothingQuality = 'high';
-    try { cctx.drawImage(wrapped.canvas, 0, 0, content.width, content.height); } catch {}
+    try {
+      const sourceCanvas = wrapped.canvas as HTMLCanvasElement;
+      const sw = Math.max(1, sourceCanvas.width);
+      const sh = Math.max(1, sourceCanvas.height);
+      const crop = t.crop;
+      if (crop && crop.width > 0 && crop.height > 0) {
+        const sx = Math.max(0, Math.min(sw, crop.x * sw));
+        const sy = Math.max(0, Math.min(sh, crop.y * sh));
+        const sWidth = Math.max(1, Math.min(sw - sx, crop.width * sw));
+        const sHeight = Math.max(1, Math.min(sh - sy, crop.height * sh));
+        cctx.drawImage(sourceCanvas, sx, sy, sWidth, sHeight, 0, 0, content.width, content.height);
+      } else {
+        cctx.drawImage(sourceCanvas, 0, 0, content.width, content.height);
+      }
+    } catch {}
 
     // Apply masks
     if (Array.isArray(clip.masks) && clip.masks.length > 0) {
@@ -924,7 +950,20 @@ export async function blitImage(
       cctx.imageSmoothingEnabled = true;
       // @ts-ignore
       cctx.imageSmoothingQuality = 'high';
-      cctx.drawImage(img, 0, 0, content.width, content.height);
+      // Draw image into content, honoring normalized crop (if any) to match
+      // the behavior of `ImagePreview` in the renderer.
+      const nativeW = img.naturalWidth || img.width || content.width;
+      const nativeH = img.naturalHeight || img.height || content.height;
+      const crop = t.crop;
+      if (crop && crop.width > 0 && crop.height > 0) {
+        const sx = Math.max(0, Math.min(nativeW, crop.x * nativeW));
+        const sy = Math.max(0, Math.min(nativeH, crop.y * nativeH));
+        const sWidth = Math.max(1, Math.min(nativeW - sx, crop.width * nativeW));
+        const sHeight = Math.max(1, Math.min(nativeH - sy, crop.height * nativeH));
+        cctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, content.width, content.height);
+      } else {
+        cctx.drawImage(img, 0, 0, content.width, content.height);
+      }
 
       // Apply masks
       if (Array.isArray(clip.masks) && clip.masks.length > 0) {
