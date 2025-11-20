@@ -251,6 +251,7 @@ export type ManifestSpec = {
   model_type?: string | string[];
   engine_type?: 'torch' | 'mlx' | string;
   fps?: number;
+  min_duration_secs?: number;
   max_duration_secs?: number;
   attention_types: string[];
   attention_types_detail: {
