@@ -8,6 +8,7 @@ import { useDownloadStore } from '@/lib/download/store';
 import { ProgressBar } from '@/components/common/ProgressBar';
 import { useManifestStore } from '@/lib/manifest/store';
 import { toast } from 'sonner';
+import { cancelRayJob } from '@/lib/jobs/api';
 
 const getComponentTypeLabel = (type: string): string => {
   const labels: Record<string, string> = {
@@ -33,7 +34,7 @@ const formatComponentName = (name: string): string => {
 const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string, index:number }> = ({ component:originalComponent, manifestId, index }) => {
   const { refreshManifestPart, getLoadedManifest } = useManifestStore();
   const [isExpanded, setIsExpanded] = useState(false);
-  const { startAndTrackDownload,  cancelDownload, resolveDownloadBatch, deleteDownload, subscribeToJob, downloadingPaths, wsFilesByPath } = useDownloadStore();
+  const { startAndTrackDownload,  resolveDownloadBatch, deleteDownload, subscribeToJob, downloadingPaths, wsFilesByPath } = useDownloadStore();
   const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
   const schedulersConfigDownloading = false;
   const [downloadedPaths, setDownloadedPaths] = useState<Set<string>>(new Set());
@@ -57,12 +58,21 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
       const p = typeof it === 'string' ? it : (it as any)?.path;
       if (p) paths.push(p);
     }
-  const baseConfig = (component as any)?.config_path;
+    const baseConfig = (component as any)?.config_path;
     if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
     const optionConfigs = Array.isArray((component as any)?.scheduler_options)
       ? (component as any).scheduler_options.map((o: any) => o?.config_path).filter(Boolean)
       : [];
     for (const p of optionConfigs) if (typeof p === 'string') paths.push(p);
+    const extraModelPathsRaw = (component as any)?.extra_model_paths;
+    if (Array.isArray(extraModelPathsRaw)) {
+      for (const it of extraModelPathsRaw) {
+        const p = typeof it === 'string' ? it : (it as any)?.path;
+        if (p) paths.push(p);
+      }
+    } else if (typeof extraModelPathsRaw === 'string' && extraModelPathsRaw) {
+      paths.push(extraModelPathsRaw);
+    }
     return Array.from(new Set(paths));
   }, [component]);
 
@@ -90,12 +100,21 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
       const p = typeof it === 'string' ? it : (it as any)?.path;
       if (p && (typeof it === 'string' || (it as any)?.variant?.toLowerCase() === 'default')) paths.push(p);
     }
-  const baseConfig = (component as any)?.config_path;
+    const baseConfig = (component as any)?.config_path;
     if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
     const optionConfigs = Array.isArray((component as any)?.scheduler_options)
       ? (component as any).scheduler_options.map((o: any) => o?.config_path).filter(Boolean)
       : [];
     for (const p of optionConfigs) if (typeof p === 'string') paths.push(p);
+    const extraModelPathsRaw = (component as any)?.extra_model_paths;
+    if (Array.isArray(extraModelPathsRaw)) {
+      for (const it of extraModelPathsRaw) {
+        const p = typeof it === 'string' ? it : (it as any)?.path;
+        if (p) paths.push(p);
+      }
+    } else if (typeof extraModelPathsRaw === 'string' && extraModelPathsRaw) {
+      paths.push(extraModelPathsRaw);
+    }
     return Array.from(new Set(paths));
   }, [component]);
 
@@ -191,6 +210,29 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
 
   const modelPaths = Array.isArray(component.model_path) ? component.model_path : component.model_path ? [{ path: component.model_path }] : [];
 
+  const extraModelPaths = useMemo(() => {
+    const items: ManifestComponentModelPathItem[] = [];
+    const raw = (component as any)?.extra_model_paths;
+    if (Array.isArray(raw)) {
+      for (const it of raw) {
+        if (typeof it === 'string') {
+          items.push({ path: it } as ManifestComponentModelPathItem);
+        } else if (it && typeof (it as any)?.path === 'string') {
+          items.push(it as ManifestComponentModelPathItem);
+        }
+      }
+    } else if (typeof raw === 'string' && raw) {
+      items.push({ path: raw } as ManifestComponentModelPathItem);
+    }
+    const seen = new Set<string>();
+    return items.filter((item) => {
+      const p = item.path;
+      if (!p || seen.has(p)) return false;
+      seen.add(p);
+      return true;
+    });
+  }, [component]);
+
   const schedulerConfigPaths = useMemo(() => {
     const paths: string[] = [];
     const baseConfig = (component)?.config_path;
@@ -243,10 +285,11 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   };
 
   const handleCancel = async (jobId: string) => {
-
-    await cancelDownload(jobId);
+    await cancelRayJob(jobId);
+    // remove from downloading paths if 
     try {
       window.dispatchEvent(new CustomEvent('component-card-reload', { detail: { componentName: component.name, manifestId: manifestId, componentIndex: index } }));
+      window.dispatchEvent(new CustomEvent('jobs-menu-reload', { detail: { jobId: jobId } }));
     } catch {}
   };
 
@@ -447,6 +490,95 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                         </div>
                       </div>
                     )}
+                    {extraModelPaths.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-brand-light/5">
+                        <div className="text-brand-light text-[10.5px] font-medium mb-1">Extra Model Paths</div>
+                        <div className="flex flex-col space-y-2">
+                          {extraModelPaths.map((extra, extraIdx) => {
+                            const extraPath = extra.path;
+                            if (!extraPath) return null;
+                            const extraDownloaded = downloadedPaths.has(extraPath);
+                            const wsFilesObj = wsFilesByPath[extraPath] || {};
+                            const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
+                              filename,
+                              downloadedBytes: v.downloadedBytes,
+                              totalBytes: v.totalBytes,
+                              status: v.status,
+                              progress: v.progress,
+                              message: v.message,
+                              bucket: v.bucket,
+                              label: v.label,
+                              downloadSpeed: (v as any).downloadSpeed,
+                            })) as any[];
+                            const isExtraDownloading = wsFiles.length > 0;
+                            return (
+                              <div key={extraIdx} className="flex flex-col gap-y-1.5">
+                                <div className="text-brand-light text-[10px] font-mono break-all">{extraPath}</div>
+                                {!extraDownloaded && (
+                                  isExtraDownloading && (
+                                    <div className="w-full">
+                                      <div className="flex flex-col gap-y-2">
+                                        {wsFiles.map((f: any) => (
+                                          <div key={f.filename} className="flex flex-col gap-y-1">
+                                            <div className="flex items-center justify-between gap-x-2 w-full">
+                                              <div className="flex-1 min-w-0">
+                                                <div
+                                                  style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
+                                                  className="text-[10px] text-brand-light/80 font-mono truncate break-all"
+                                                >
+                                                  {f.filename}
+                                                </div>
+                                              </div>
+                                              <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                                                {(() => {
+                                                  const pct = f.totalBytes
+                                                    ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                                                    : typeof f.progress === 'number'
+                                                      ? f.progress * 100
+                                                      : 0;
+                                                  return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
+                                                })()}
+                                              </div>
+                                            </div>
+                                            <ProgressBar
+                                              percent={(() => {
+                                                const pct = f.totalBytes
+                                                  ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                                                  : typeof f.progress === 'number'
+                                                    ? f.progress * 100
+                                                    : 0;
+                                                return Math.max(0, Math.min(100, pct));
+                                              })()}
+                                            />
+                                            <div className="flex items-center justify-between">
+                                              {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
+                                                <div className="text-[10px] text-brand-light/90">
+                                                  {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
+                                                </div>
+                                              ) : (
+                                                <div />
+                                              )}
+                                              {f.status === 'completed' || f.status === 'complete' ? (
+                                                <div className="text-[10px] text-green-400">Completed</div>
+                                              ) : (
+                                                <div className="text-[9px] text-brand-light/60">
+                                                  {f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : ''}
+                                                </div>
+                                              )}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                      
+                                    </div>
+                                  )
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                     {!downloadedPaths.has(pathItem.path) ? (
                         (() => {
                           const wsFilesObj = wsFilesByPath[pathItem.path] || {};
@@ -529,7 +661,11 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                         </div>
                       ) : (
                         <button
-                          onClick={() => handleDownload(pathItem.path)}
+                          onClick={() => {
+                            const extraPaths = extraModelPaths.map((it) => it.path).filter(Boolean) as string[];
+                            const allPaths = [pathItem.path, ...extraPaths];
+                            handleDownload(allPaths);
+                          }}
                           className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
                         >
                           {downloadingPaths.has(pathItem.path) ? (
@@ -552,7 +688,25 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                           <span>Downloaded</span>
                         </div>
                         <button
-                          onClick={() => pathItem.custom ? handleDeleteCustomPath(pathItem) : handleDelete(pathItem.path)}
+                          onClick={async () => {
+                            if (pathItem.custom) {
+                              await handleDeleteCustomPath(pathItem);
+                              return;
+                            }
+                            const primaryPath = pathItem.path;
+                            if (!primaryPath) return;
+                            // If there is only one model path for this component, treat extras as tightly coupled
+                            if (modelPaths.length === 1 && extraModelPaths.length > 0) {
+                              await handleDelete(primaryPath);
+                              for (const extra of extraModelPaths) {
+                                if (extra.path) {
+                                  await handleDelete(extra.path);
+                                }
+                              }
+                            } else {
+                              await handleDelete(primaryPath);
+                            }
+                          }}
                           disabled={deletingPaths.has(pathItem.path)}
                           className="w-fit mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
                         >

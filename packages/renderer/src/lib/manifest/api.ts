@@ -66,7 +66,7 @@ export type ManifestComponent = {
   save_path?: string;
   converter_kwargs?: Record<string, any>;
   model_key?: string;
-  extra_model_paths?: string[];
+  extra_model_paths?: (string | ManifestComponentModelPathItem)[];
   converted_model_path?: string;
   scheduler_options?: ManifestSchedulerOption[];
   gguf_files?: { type: string; path: string }[];

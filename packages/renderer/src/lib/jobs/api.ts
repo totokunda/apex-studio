@@ -21,6 +21,7 @@ export type RayJobLatest = {
 export type RayJobStatus = {
   job_id: string;
   status: string;
+  category?: 'download' | 'processor' | 'engine' | 'other' | string;
   message?: string;
   error?: string;
   result?: any;
