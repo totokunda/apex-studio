@@ -563,6 +563,47 @@ export class ApexApi implements AppModule {
       const qp = pathDot ? `?path=${encodeURIComponent(pathDot)}` : '';
       return this.makeRequest<any>('GET', `/manifest/${encodeURIComponent(manifestId)}/part${qp}`);
     });
+
+    // Validate and register a custom model path for a manifest component
+    ipcMain.handle(
+      'manifest:validate-custom-model-path',
+      async (
+        _event,
+        request: {
+          manifest_id: string;
+          component_index: number;
+          name?: string;
+          path: string;
+        },
+      ) => {
+        const body = {
+          manifest_id: String(request.manifest_id || ''),
+          component_index: Number(request.component_index),
+          name: request.name,
+          path: String(request.path || ''),
+        };
+        return this.makeRequest<any>('POST', '/manifest/custom-model-path', body);
+      },
+    );
+
+    ipcMain.handle(
+      'manifest:delete-custom-model-path',
+      async (
+        _event,
+        request: {
+          manifest_id: string;
+          component_index: number;
+          path: string;
+        },
+      ) => {
+        const body = {
+          manifest_id: String(request.manifest_id || ''),
+          component_index: Number(request.component_index),
+          path: String(request.path || ''),
+        };
+        return this.makeRequest<any>('DELETE', '/manifest/custom-model-path', body);
+      },
+    );
   }
 
   private registerComponentsHandlers(): void {
@@ -678,6 +719,23 @@ export class ApexApi implements AppModule {
     // Unified job cancel
     ipcMain.handle('jobs:cancel', async (_event, jobId: string) => {
       return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/jobs/cancel/${encodeURIComponent(jobId)}`);
+    });
+
+    // Ray job listing and management (aggregated view across subsystems)
+    ipcMain.handle('ray:jobs:list', async () => {
+      return this.makeRequest<any>('GET', '/ray/jobs');
+    });
+
+    ipcMain.handle('ray:jobs:get', async (_event, jobId: string) => {
+      return this.makeRequest<any>('GET', `/ray/jobs/${encodeURIComponent(jobId)}`);
+    });
+
+    ipcMain.handle('ray:jobs:cancel', async (_event, jobId: string) => {
+      return this.makeRequest<any>('POST', `/ray/jobs/${encodeURIComponent(jobId)}/cancel`);
+    });
+
+    ipcMain.handle('ray:jobs:cancel-all', async () => {
+      return this.makeRequest<any>('POST', '/ray/jobs/cancel_all');
     });
   }
 

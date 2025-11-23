@@ -532,7 +532,8 @@ const ModelMenu:React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const DOWNLOADED_CATEGORY = 'Downloaded';
 
-  const manifestTypeKeyToLabel = useMemo(() => {
+  // Map from category key -> human-friendly label (backend /manifest/categories).
+  const manifestCategoryKeyToLabel = useMemo(() => {
     const map = new Map<string, string>();
     (modelTypesData || []).forEach((t) => map.set(t.key, t.label));
     return map;
@@ -544,27 +545,30 @@ const ModelMenu:React.FC = () => {
     if (!searchQuery.trim()) return manifests;
     const query = searchQuery.toLowerCase();
     return manifests.filter((m) => {
-      const typeKeys: string[] = Array.isArray(m.spec?.model_type) ? m.spec?.model_type : m.spec?.model_type ? [m.spec?.model_type] : [];
-      const typeLabels = typeKeys.map((k) => manifestTypeKeyToLabel.get(k) || k);
+      const categoryKeys: string[] = m.metadata?.categories || [];
+      const categoryLabels = categoryKeys.map((k) => manifestCategoryKeyToLabel.get(k) || k);
       return (
         m.metadata?.name.toLowerCase().includes(query) ||
         (m.metadata?.description?.toLowerCase().includes(query) ?? false) ||
         m.metadata?.model?.toLowerCase().includes(query) ||
-        typeKeys.some((k) => k.toLowerCase().includes(query)) ||
-        typeLabels.some((l) => l.toLowerCase().includes(query)) ||
+        categoryKeys.some((k) => k.toLowerCase().includes(query)) ||
+        categoryLabels.some((l) => l.toLowerCase().includes(query)) ||
         (m.metadata?.tags || []).some((t: string) => t.toLowerCase().includes(query))
       );
     });
-  }, [manifests, searchQuery, manifestTypeKeyToLabel]);
+  }, [manifests, searchQuery, manifestCategoryKeyToLabel]);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
     filteredManifests.forEach((m) => {
-      const typeKeys: string[] = Array.isArray(m.model_type) ? m.model_type : m.model_type ? [m.model_type] : [];
-      typeKeys.forEach((k) => set.add(manifestTypeKeyToLabel.get(k) || k));
+      const categoryKeys: string[] = m.metadata?.categories || [];
+      categoryKeys.forEach((k) => {
+        const label = manifestCategoryKeyToLabel.get(k) || k.replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim();
+        set.add(label);
+      });
     });
     return Array.from(set);
-  }, [filteredManifests, manifestTypeKeyToLabel]);
+  }, [filteredManifests, manifestCategoryKeyToLabel]);
 
   const hasDownloaded = useMemo(() => {
     return filteredManifests.some((m) => !!m.downloaded);
@@ -692,8 +696,8 @@ const ModelMenu:React.FC = () => {
           <CategoryDetailView
             category={selectedCategory}
             manifests={filteredManifests.filter((m) => {
-              const keys = Array.isArray(m.model_type) ? m.model_type : m.model_type ? [m.model_type] : [];
-              const labels = keys.map((k) => manifestTypeKeyToLabel.get(k) || k);
+              const keys: string[] = m.metadata?.categories || [];
+              const labels = keys.map((k) => manifestCategoryKeyToLabel.get(k) || k.replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim());
               return labels.includes(selectedCategory);
             })}
             onBack={() => setSelectedCategory(null)}
@@ -739,8 +743,8 @@ const ModelMenu:React.FC = () => {
                       width={scrollWidth - 36}
                       category={category}
                       manifests={filteredManifests.filter((m) => {
-                        const keys = Array.isArray(m.model_type) ? m.model_type : m.model_type ? [m.model_type] : [];
-                        const labels = keys.map((k) => manifestTypeKeyToLabel.get(k) || k);
+                        const keys: string[] = m.metadata?.categories || [];
+                        const labels = keys.map((k) => manifestCategoryKeyToLabel.get(k) || k.replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim());
                         return labels.includes(category);
                       })}
                       onViewAll={() => setSelectedCategory(category)}

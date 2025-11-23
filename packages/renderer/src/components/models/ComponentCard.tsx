@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ManifestComponent, ManifestComponentModelPathItem } from '@/lib/manifest/api';
+import { validateAndRegisterCustomModelPath, deleteCustomModelPath } from '@/lib/manifest/api';
 import { cn } from '@/lib/utils';
 import { formatDownloadProgress, formatSpeed, formatBytes } from '@/lib/components-download/format';
-import { LuChevronDown, LuChevronRight, LuDownload, LuCheck, LuTrash, LuLoader } from 'react-icons/lu';
+import { LuChevronDown, LuChevronRight, LuDownload, LuCheck, LuTrash, LuLoader, LuPlus } from 'react-icons/lu';
 import { useDownloadStore } from '@/lib/download/store';
 import { ProgressBar } from '@/components/common/ProgressBar';
 import { useManifestStore } from '@/lib/manifest/store';
+import { toast } from 'sonner';
 
 const getComponentTypeLabel = (type: string): string => {
   const labels: Record<string, string> = {
@@ -39,6 +41,10 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   const liveComponent = getLoadedManifest(manifestId)?.spec.components?.[index] as ManifestComponent | undefined;
   const component = liveComponent || originalComponent;
   const [schedulerIsDownloading, setSchedulerIsDownloading] = useState(false);
+  const [isAddingModelPath, setIsAddingModelPath] = useState(false);
+  const [newModelPath, setNewModelPath] = useState('');
+  const [newModelName, setNewModelName] = useState('');
+  const [isValidatingModelPath, setIsValidatingModelPath] = useState(false);
 
   const relevantPaths = useMemo(() => {
     const paths: string[] = [];
@@ -257,6 +263,29 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     setDeletingPaths((s) => new Set(Array.from(s).filter((p) => p !== path)));
   };
 
+  const handleDeleteCustomPath = async (pathItem: ManifestComponentModelPathItem) => {
+    const path = pathItem.path;
+    if (!path) return;
+    setDeletingPaths((s) => new Set([...s, path]));
+    try {
+      const res = await deleteCustomModelPath(manifestId, index, path);
+      if (!res?.success) {
+        (toast as any).error(res && typeof res.error === 'string' ? res.error : 'Failed to remove custom model path');
+        return;
+      }
+      try {
+        window.dispatchEvent(
+          new CustomEvent('component-card-reload', {
+            detail: { manifestId, componentIndex: index },
+          }),
+        );
+      } catch {}
+      await refreshManifestPart(manifestId, `spec.components.${index}`);
+    } finally {
+      setDeletingPaths((s) => new Set(Array.from(s).filter((p) => p !== path)));
+    }
+  };
+
   const handleDownloadAll = async () => {
     await startAndTrackDownload({
       item_type: 'component',
@@ -344,9 +373,24 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                 const pathItem = typeof item === 'string' ? { path: item } : item as ManifestComponentModelPathItem;
                 return (
                   <div key={idx} className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full">
-                    {pathItem.variant && (
+                    {(pathItem.variant || pathItem.custom) && (
                       <div className="flex flex-row justify-between items-center mb-2.5">
-                        <div className="text-brand-light text-[11px] break-all font-semibold">{pathItem.variant.toLowerCase().includes('default') ? 'Default' : pathItem.variant.toLowerCase().includes('gguf') ? pathItem.variant.replace('GGUF_', '').replace('Q', 'q').toUpperCase() : pathItem.variant}</div>
+                        <div className="flex items-center gap-x-1.5">
+                          {pathItem.variant && (
+                            <div className="text-brand-light text-[11px] break-all font-semibold">
+                              {pathItem.variant.toLowerCase().includes('default')
+                                ? 'Default'
+                                : pathItem.variant.toLowerCase().includes('gguf')
+                                  ? pathItem.variant.replace('GGUF_', '').replace('Q', 'q').toUpperCase()
+                                  : pathItem.variant}
+                            </div>
+                          )}
+                          {pathItem.custom && (
+                            <span className="inline-flex items-center rounded-full bg-brand-background px-2 py-0.5 text-[9px] font-medium text-brand-light/80 border border-brand-light/20">
+                              Custom
+                            </span>
+                          )}
+                        </div>
                         {typeof (pathItem as any).file_size === 'number' && (pathItem as any).file_size > 0 && (
                           <div className="flex-shrink-0 ml-2 text-[10px] text-brand-light/80 font-mono whitespace-nowrap">
                             {formatBytes((pathItem as any).file_size, 1)}
@@ -507,19 +551,139 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
                           <LuCheck className="w-3 h-3 text-green-400" />
                           <span>Downloaded</span>
                         </div>
-                        <button onClick={() => handleDelete(pathItem.path)} disabled={deletingPaths.has(pathItem.path)} className="w-fit mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all">
+                        <button
+                          onClick={() => pathItem.custom ? handleDeleteCustomPath(pathItem) : handleDelete(pathItem.path)}
+                          disabled={deletingPaths.has(pathItem.path)}
+                          className="w-fit mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
+                        >
                           {deletingPaths.has(pathItem.path) ? (
                             <LuLoader className="w-3.5 h-3.5 animate-spin" />
                           ) : (
                             <LuTrash className="w-3.5 h-3.5" />
                           )}
-                          <span>{deletingPaths.has(pathItem.path) ? 'Deleting...' : 'Delete Model'}</span>
+                          <span>
+                            {deletingPaths.has(pathItem.path)
+                              ? 'Deleting...'
+                              : pathItem.custom
+                                ? 'Remove Path'
+                                : 'Delete Model'}
+                          </span>
                         </button>
                       </div>
                     )}
                   </div>
                 );
               })}
+              {!isAddingModelPath ? (
+                <button
+                  type="button"
+                  onClick={() => setIsAddingModelPath(true)}
+                  className="w-full mt-2.5 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand-background/90 hover:bg-brand-background border border-brand-light/10 rounded-md px-3 py-2.5 transition-all"
+                >
+                  <LuPlus className="w-3.5 h-3.5" />
+                  <span>Add Model Path</span>
+                </button>
+              ) : (
+                <div className="mt-2.5 w-full bg-brand-background border border-brand-light/15 rounded-md px-3 py-3.5 space-y-2.5">
+                  <div className="flex flex-col gap-y-1.5">
+                    <label className="text-[10px] text-brand-light/90 font-medium">
+                      Model Name
+                    </label>
+                    <p className="text-[9.5px] text-brand-light/55">
+                      A friendly label used in the UI for this model; this can be any text.
+                    </p>
+                    <input
+                      type="text"
+                      value={newModelName}
+                      onChange={(e) => setNewModelName(e.target.value)}
+                      className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
+                      placeholder="e.g. Local GGUF Q4 variant"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-y-1.5">
+                    <label className="text-[10px] text-brand-light/90 font-medium">
+                      Model Path
+                    </label>
+                    <p className="text-[9.5px] text-brand-light/55">
+                      Local path on this machine. Can be a file or a directory and will be checked before use.
+                    </p>
+                    <input
+                      type="text"
+                      value={newModelPath}
+                      onChange={(e) => setNewModelPath(e.target.value)}
+                      className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light font-mono placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
+                      placeholder="/Users/you/models/my_model.safetensors"
+                    />
+                  </div>
+                  <div className="flex items-center justify-end gap-x-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddingModelPath(false);
+                        setNewModelName('');
+                        setNewModelPath('');
+                      }}
+                      className="text-[10px] font-medium text-brand-light/70 hover:text-brand-light/90 px-2 py-1 rounded-md transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isValidatingModelPath}
+                      onClick={async () => {
+                        const path = newModelPath.trim();
+                        const name = newModelName.trim();
+                        if (!path || isValidatingModelPath) return;
+                        try {
+                          setIsValidatingModelPath(true);
+                          const res = await validateAndRegisterCustomModelPath(
+                            manifestId,
+                            index,
+                            name || undefined,
+                            path,
+                          );
+                          
+                          if (!res?.success) {
+                            // If backend reports an error, keep the form open and let the user adjust.
+                            (toast as any).error(res && typeof res.error === 'string' ? res.error : 'Failed to validate model path');
+                            return;
+                          }
+                          // Backend has updated the YAML manifest; refresh this component globally
+                          await refreshManifestPart(manifestId, `spec.components.${index}`);
+                          try {
+                            window.dispatchEvent(
+                              new CustomEvent('component-card-reload', {
+                                detail: { manifestId, componentIndex: index },
+                              }),
+                            );
+                          } catch {}
+                          setIsAddingModelPath(false);
+                          setNewModelName('');
+                          setNewModelPath('');
+                          toast.success('Model path validated and registered successfully');
+                        } catch {
+                          // Silently fail for now; can add toast or inline error later.
+                        } finally {
+                          setIsValidatingModelPath(false);
+                        }
+                      }}
+                      className="text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
+                    >
+                      {isValidatingModelPath ? (
+                        <>
+                          <LuLoader className="w-3.5 h-3.5 animate-spin" />
+                          <span>Verifying...</span>
+                        </>
+                      ) : (
+                        <>
+                          <LuPlus className="w-3.5 h-3.5" />
+                          <span>Add</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {isConfigOnly && component.type !== 'scheduler' && (

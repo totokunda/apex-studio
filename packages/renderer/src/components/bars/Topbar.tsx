@@ -15,6 +15,7 @@ import { PiResize } from 'react-icons/pi';
 import { LayoutIcon } from './LayoutIcon';
 import { TbPackageExport } from 'react-icons/tb';
 import SystemMemoryMenu from '@/components/system/SystemMemoryMenu';
+import JobsMenu from '@/components/system/JobsMenu';
 interface TopBarProps {
 
 }
@@ -70,6 +71,7 @@ const TopBar:React.FC<TopBarProps> = () => {
             </button>
           )}
           <SystemMemoryMenu />
+          <JobsMenu />
            <DropdownMenu open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
                 <DropdownMenuTrigger className='text-brand-light/90 dark w-32 h-[34px] relative flex items-center space-x-2 px-2 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer'>
                   <span className='text-[11px] inline-flex items-center space-x-1 w-full'><span className='text-brand-light/50 font-light'>⌘</span> <span>Shortcuts</span> 

@@ -1375,6 +1375,23 @@ async function jobCancel(jobId: string): Promise<ConfigResponse<any>> {
   return await ipcRenderer.invoke('jobs:cancel', jobId);
 }
 
+// Ray job inspection helpers (aggregated across subsystems)
+async function listRayJobs(): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('ray:jobs:list');
+}
+
+async function getRayJob(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('ray:jobs:get', jobId);
+}
+
+async function cancelRayJob(jobId: string): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('ray:jobs:cancel', jobId);
+}
+
+async function cancelAllRayJobs(): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('ray:jobs:cancel-all');
+}
+
 // Unified WebSocket helpers (renderer-wide API)
 async function wsConnect(key: string, pathOrUrl: string): Promise<ConfigResponse<{ key: string }>> {
   return await ipcRenderer.invoke('ws:connect', { key, pathOrUrl });
@@ -1449,6 +1466,33 @@ async function getManifest(manifestId: string): Promise<ConfigResponse<any>> {
 async function getManifestPart<T = any>(manifestId: string, pathDot?: string): Promise<ConfigResponse<T>> {
   const qp = typeof pathDot === 'string' && pathDot.length > 0 ? pathDot : undefined;
   return await ipcRenderer.invoke('manifest:get-part', manifestId, qp);
+}
+
+async function validateAndRegisterCustomModelPath(
+  manifestId: string,
+  componentIndex: number,
+  name: string | undefined,
+  path: string,
+): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:validate-custom-model-path', {
+    manifest_id: manifestId,
+    component_index: componentIndex,
+    name,
+    path,
+  });
+  
+}
+
+async function deleteCustomModelPath(
+  manifestId: string,
+  componentIndex: number,
+  path: string,
+): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:delete-custom-model-path', {
+    manifest_id: manifestId,
+    component_index: componentIndex,
+    path,
+  });
 }
 
 // Engine API functions
@@ -1690,6 +1734,8 @@ export {
   listManifestsByModelAndType,
   getManifest,
   getManifestPart,
+  validateAndRegisterCustomModelPath,
+  deleteCustomModelPath,
   runEngine,
   getEngineStatus,
   getEngineResult,
@@ -1714,4 +1760,8 @@ export {
   connectUnifiedDownloadWebSocket,
   disconnectUnifiedDownloadWebSocket,
   deleteDownload,
+  listRayJobs,
+  getRayJob,
+  cancelRayJob,
+  cancelAllRayJobs,
 };

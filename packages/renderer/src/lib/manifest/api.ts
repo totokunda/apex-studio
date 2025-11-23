@@ -6,6 +6,8 @@ import {
   listManifestsByModelAndType as listManifestsByModelAndTypePreload,
   getManifest as getManifestPreload,
   getManifestPart as getManifestPartPreload,
+  validateAndRegisterCustomModelPath as validateAndRegisterCustomModelPathPreload,
+  deleteCustomModelPath as deleteCustomModelPathPreload,
 } from '@app/preload';
 import { ClipType } from '../types';
 
@@ -47,6 +49,7 @@ export type ManifestComponentModelPathItem = {
   file_size?: number;
   resource_requirements?: ManifestResourceRequirements;
   [key: string]: any;
+  custom?: boolean;
 };
 
 export type ManifestComponent = {
@@ -97,6 +100,7 @@ export type ManifestMetadata = {
   annotations?: Record<string, any>;
   examples?: ManifestExamplesItem[];
   desired_duration?: number;
+  categories?: string[];
 };
 
 // UI Schema (derived from manifest_updated YAML structure)
@@ -328,6 +332,32 @@ export async function getManifest(manifestId: string): Promise<ConfigResponse<Ma
 
 export async function getManifestPart<T = any>(manifestId: string, pathDot?: string): Promise<ConfigResponse<T>> {
   return (await getManifestPartPreload(manifestId, pathDot)) as ConfigResponse<T>;
+}
+
+export async function validateAndRegisterCustomModelPath(
+  manifestId: string,
+  componentIndex: number,
+  name: string | undefined,
+  path: string,
+): Promise<ConfigResponse<any>> {
+  return (await validateAndRegisterCustomModelPathPreload(
+    manifestId,
+    componentIndex,
+    name,
+    path,
+  )) as ConfigResponse<any>;
+}
+
+export async function deleteCustomModelPath(
+  manifestId: string,
+  componentIndex: number,
+  path: string,
+): Promise<ConfigResponse<any>> {
+  return (await deleteCustomModelPathPreload(
+    manifestId,
+    componentIndex,
+    path,
+  )) as ConfigResponse<any>;
 }
 
 
