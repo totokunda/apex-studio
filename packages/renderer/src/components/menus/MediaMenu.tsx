@@ -509,7 +509,6 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             </DropdownMenuContent>
         </div>
         </DropdownMenu>
-
       </div>
       <div className="border-t border-brand-light/5"></div>
       {/* Filter & Sort Toolbar */}
@@ -621,7 +620,10 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {loading && (
+        {/* Only show the loading state when we have no items yet.
+            This prevents the entire panel from "flashing" to the loading/empty state
+            when updating a single item's state (rename, delete, proxy changes). */}
+        {loading && items.length === 0 && (
           <div className="text-brand-lighter/70 text-xs px-5 py-4 pt-1">Loading media…</div>
         )}
         {!loading && items.length === 0 && (
@@ -633,7 +635,8 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             </div>
           </div>
         )}
-        {!loading && items.length > 0 && (
+        {/* Keep showing the grid even while background reloads happen. */}
+        {items.length > 0 && (
           <ScrollArea style={{ height: Math.max(0, panelHeight - 172) }} className="px-5 py-4 pt-1 dark"
           >
             <div className="grid gap-2 w-full" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}>

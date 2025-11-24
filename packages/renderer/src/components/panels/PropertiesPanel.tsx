@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react'
 import { ResizablePanel } from '../ui/resizable'
 import EmptyPropertiesPanel from '../properties/EmptyPropertiesPanel'
-import ClipPropertiesPanel from '../properties/ClipPropertiesPanel'
+import ClipPropertiesPanel from './ClipPropertiesPanel'
 import { useControlsStore } from '@/lib/control'
 import { ImperativePanelHandle } from 'react-resizable-panels'
 import { useClipStore } from '@/lib/clip'

@@ -354,7 +354,7 @@ export interface Point {
     y: number;
   }
 
-export type SidebarSection = 'media' | 'models' | 'filters' | 'loras' | 'templates' | 'preprocessors';
+export type SidebarSection = 'media' | 'models' | 'filters' | 'templates' | 'generations' | 'transitions' | 'effects';
 
 
 export interface Filter {

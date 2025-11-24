@@ -31,10 +31,21 @@ const formatComponentName = (name: string): string => {
     .join(' ');
 };
 
-const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string, index:number }> = ({ component:originalComponent, manifestId, index }) => {
+const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string; index: number }> = ({
+  component: originalComponent,
+  manifestId,
+  index,
+}) => {
   const { refreshManifestPart, getLoadedManifest } = useManifestStore();
   const [isExpanded, setIsExpanded] = useState(false);
-  const { startAndTrackDownload,  resolveDownloadBatch, deleteDownload, subscribeToJob, downloadingPaths, wsFilesByPath } = useDownloadStore();
+  const {
+    startAndTrackDownload,
+    resolveDownloadBatch,
+    deleteDownload,
+    subscribeToJob,
+    downloadingPaths,
+    wsFilesByPath,
+  } = useDownloadStore();
   const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
   const schedulersConfigDownloading = false;
   const [downloadedPaths, setDownloadedPaths] = useState<Set<string>>(new Set());
@@ -235,10 +246,10 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
 
   const schedulerConfigPaths = useMemo(() => {
     const paths: string[] = [];
-    const baseConfig = (component)?.config_path;
+    const baseConfig = component?.config_path;
     if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
-    if (Array.isArray((component)?.scheduler_options)) {
-      for (const opt of (component)?.scheduler_options) {
+    if (Array.isArray(component?.scheduler_options)) {
+      for (const opt of component?.scheduler_options) {
         const cp = opt?.config_path;
         if (typeof cp === 'string' && cp) paths.push(cp);
       }
@@ -250,13 +261,16 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
 
   const isConfigOnly = useMemo(() => {
     const hasNoModelPaths = (Array.isArray(modelPaths) ? modelPaths : []).length === 0;
-    const baseConfig = (component)?.config_path
-    const schedulerOptions = (component)?.scheduler_options;
+    const baseConfig = component?.config_path;
+    const schedulerOptions = component?.scheduler_options;
     const schedulerConfigs = schedulerOptions?.map((option) => option.config_path).filter(Boolean);
-    return hasNoModelPaths && (typeof baseConfig === 'string' && !!baseConfig || (schedulerConfigs && schedulerConfigs.length > 0));
+    return (
+      hasNoModelPaths &&
+      ((typeof baseConfig === 'string' && !!baseConfig) || (schedulerConfigs && schedulerConfigs.length > 0))
+    );
   }, [component, modelPaths]);
   const baseConfigPath = useMemo(() => {
-    const val = (component)?.config_path;
+    const val = component?.config_path;
     return typeof val === 'string' && val ? (val as string) : undefined;
   }, [component]);
 
@@ -346,740 +360,76 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
 
   return (
     <div ref={componentCarRef} className="bg-brand border border-brand-light/10 rounded-md text-start">
-      {(() => {
-        const hasModelPaths = modelPaths.length > 0;
-        const hasSchedulerOptions = component.type === 'scheduler' && component.scheduler_options && component.scheduler_options.length > 0;
-        const hasExpandableContent = hasModelPaths || hasSchedulerOptions || isConfigOnly;
-        return hasExpandableContent ? (
-          <div 
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="w-full flex items-center justify-between p-3 hover:bg-brand-background/30 transition-colors"
-          >
-            <div className="flex items-center gap-x-2 justify-between w-full mr-2">
-              <div className="flex items-center gap-x-2">
-                <button onClick={async (e) => {
-                  if (componentFlagDownloaded || isComponentDownlading) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  await handleDownloadAll();
-                }} className={cn(
-                  "flex items-center justify-center w-4.5 h-4.5 rounded-full border",
-                  componentFlagDownloaded
-                    ? "bg-green-500/20 border-green-500/40" 
-                    : isComponentDownlading
-                      ? "bg-brand-background border-brand-light/20"
-                    : "bg-brand-background border-brand-light/20 hover:bg-brand-background/30 cursor-pointer"
-                )}>
-                  {componentFlagDownloaded ? (
-                    <LuCheck className="w-3 h-3 text-green-400" />
-                  ) : isComponentDownlading ? (
-                    <LuLoader className="w-2.5 h-2.5 text-brand-light/60 animate-spin" />
-                  ) : (
-                    <LuDownload className="w-2.5 h-2.5 text-brand-light/50" />
-                  )}
-                </button>
-                <span className="text-brand-light text-[12px] font-medium">{displayName}</span>
-              </div>
-              <span className="text-brand-light/60 text-[10px] font-mono bg-brand-background px-2 py-0.5 rounded">{typeLabel}</span>
-            </div>
-            {isExpanded ? <LuChevronDown className="w-4 h-4 text-brand-light/60" /> : <LuChevronRight className="w-4 h-4 text-brand-light/60" />}
-          </div>
-        ) : (
-          <div className="w-full flex items-center justify-between p-3">
-            <div className="flex items-center gap-x-2 justify-between w-full">
-              <div className="flex items-center gap-x-2.5">
-                <div className={cn(
-                  "flex items-center justify-center w-4.5 h-4.5 rounded-full border",
-                  componentFlagDownloaded 
-                    ? "bg-green-500/20 border-green-500/40" 
-                    : "bg-brand-background border-brand-light/20"
-                )}>
-                  {componentFlagDownloaded ? (
-                    <LuCheck className="w-3 h-3 text-green-400" />
-                  ) : (
-                    <LuDownload className="w-2.5 h-2.5 text-brand-light/50" />
-                  )}
-                </div>
-                <span className="text-brand-light text-[12px] font-medium">{displayName}</span>
-              </div>
-              <span className="text-brand-light/60 text-[10px] font-mono bg-brand-background px-2 py-0.5 rounded">{typeLabel}</span>
-            </div>
-          </div>
-        );
-      })()}
+      <ComponentCardHeader
+        component={component}
+        componentFlagDownloaded={componentFlagDownloaded}
+        displayName={displayName}
+        isComponentDownlading={isComponentDownlading}
+        isConfigOnly={isConfigOnly || false}
+        isExpanded={isExpanded}
+        onToggleExpanded={() => setIsExpanded((prev) => !prev)}
+        onDownloadAll={handleDownloadAll}
+        typeLabel={typeLabel}
+      />
 
       {isExpanded && (
         <div className="px-4 pb-4">
           {modelPaths.length > 0 && (
-            <div className="space-y-2 mt-3">
-              {modelPaths.map((item, idx) => {
-                const pathItem = typeof item === 'string' ? { path: item } : item as ManifestComponentModelPathItem;
-                return (
-                  <div key={idx} className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full">
-                    {(pathItem.variant || pathItem.custom) && (
-                      <div className="flex flex-row justify-between items-center mb-2.5">
-                        <div className="flex items-center gap-x-1.5">
-                          {pathItem.variant && (
-                            <div className="text-brand-light text-[11px] break-all font-semibold">
-                              {pathItem.variant.toLowerCase().includes('default')
-                                ? 'Default'
-                                : pathItem.variant.toLowerCase().includes('gguf')
-                                  ? pathItem.variant.replace('GGUF_', '').replace('Q', 'q').toUpperCase()
-                                  : pathItem.variant}
-                            </div>
-                          )}
-                          {pathItem.custom && (
-                            <span className="inline-flex items-center rounded-full bg-brand-background px-2 py-0.5 text-[9px] font-medium text-brand-light/80 border border-brand-light/20">
-                              Custom
-                            </span>
-                          )}
-                        </div>
-                        {typeof (pathItem as any).file_size === 'number' && (pathItem as any).file_size > 0 && (
-                          <div className="flex-shrink-0 ml-2 text-[10px] text-brand-light/80 font-mono whitespace-nowrap">
-                            {formatBytes((pathItem as any).file_size, 1)}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <div className="flex items-start justify-between gap-x-2 ">
-                      <div className="flex-1 min-w-0 flex-row items-center gap-x-2">
-                        <div className="text-brand-light text-[10.5px] font-medium mb-1">Model Path</div>
-                        <div className="text-brand-light text-[10px] font-mono break-all">{pathItem.path}</div>
-                      </div>
-                    </div>
-                    {(pathItem.type || pathItem.precision) && (
-                      <div className="flex flex-col items-start  mt-2 justify-start border-t border-brand-light/5  pt-2">
-                        <h4 className="text-brand-light text-[10.5px] font-medium mb-1">Model specifications</h4>
-                        {pathItem.type && (
-                          <div className="text-[10px] flex flex-row items-center gap-x-1 ">
-                            <span className="text-brand-light/60 font-medium">Model Type </span>
-                            <span className="text-brand-light/80 font-mono">{pathItem.type === 'gguf' ? 'GGUF' : formatComponentName(pathItem.type)}</span>
-                          </div>
-                        )}
-                        {pathItem.precision && (
-                          <div className="text-[10px] flex flex-row items-center gap-x-1 ">
-                            <span className="text-brand-light/60 font-medium">Precision </span>
-                            <span className="text-brand-light/90 font-mono">{pathItem.precision.toUpperCase()}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {pathItem.resource_requirements && (
-                      <div className="mt-2 pt-2 border-t border-brand-light/5">
-                        <div className="text-brand-light text-[10.5px] font-medium mb-1">Resource Requirements</div>
-                        <div className="flex flex-col ">
-                          {pathItem.resource_requirements.min_vram_gb && (
-                            <div className="text-[10px]">
-                              <span className="text-brand-light/60 font-medium">Min VRAM </span>
-                              <span className="text-brand-light/90">{pathItem.resource_requirements.min_vram_gb}GB</span>
-                            </div>
-                          )}
-                          {pathItem.resource_requirements.recommended_vram_gb && (
-                            <div className="text-[10px]">
-                              <span className="text-brand-light/60 font-medium">Recommended VRAM </span>
-                              <span className="text-brand-light/90">{pathItem.resource_requirements.recommended_vram_gb}GB</span>
-                            </div>
-                          )}
-                          {pathItem.resource_requirements.compute_capability && (
-                            <div className="text-[10px]">
-                              <span className="text-brand-light/60">Compute Capability: </span>
-                              <span className="text-brand-light/90">{pathItem.resource_requirements.compute_capability}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    {extraModelPaths.length > 0 && (
-                      <div className="mt-2 pt-2 border-t border-brand-light/5">
-                        <div className="text-brand-light text-[10.5px] font-medium mb-1">Extra Model Paths</div>
-                        <div className="flex flex-col space-y-2">
-                          {extraModelPaths.map((extra, extraIdx) => {
-                            const extraPath = extra.path;
-                            if (!extraPath) return null;
-                            const extraDownloaded = downloadedPaths.has(extraPath);
-                            const wsFilesObj = wsFilesByPath[extraPath] || {};
-                            const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
-                              filename,
-                              downloadedBytes: v.downloadedBytes,
-                              totalBytes: v.totalBytes,
-                              status: v.status,
-                              progress: v.progress,
-                              message: v.message,
-                              bucket: v.bucket,
-                              label: v.label,
-                              downloadSpeed: (v as any).downloadSpeed,
-                            })) as any[];
-                            const isExtraDownloading = wsFiles.length > 0;
-                            return (
-                              <div key={extraIdx} className="flex flex-col gap-y-1.5">
-                                <div className="text-brand-light text-[10px] font-mono break-all">{extraPath}</div>
-                                {!extraDownloaded && (
-                                  isExtraDownloading && (
-                                    <div className="w-full">
-                                      <div className="flex flex-col gap-y-2">
-                                        {wsFiles.map((f: any) => (
-                                          <div key={f.filename} className="flex flex-col gap-y-1">
-                                            <div className="flex items-center justify-between gap-x-2 w-full">
-                                              <div className="flex-1 min-w-0">
-                                                <div
-                                                  style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
-                                                  className="text-[10px] text-brand-light/80 font-mono truncate break-all"
-                                                >
-                                                  {f.filename}
-                                                </div>
-                                              </div>
-                                              <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
-                                                {(() => {
-                                                  const pct = f.totalBytes
-                                                    ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                                                    : typeof f.progress === 'number'
-                                                      ? f.progress * 100
-                                                      : 0;
-                                                  return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
-                                                })()}
-                                              </div>
-                                            </div>
-                                            <ProgressBar
-                                              percent={(() => {
-                                                const pct = f.totalBytes
-                                                  ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                                                  : typeof f.progress === 'number'
-                                                    ? f.progress * 100
-                                                    : 0;
-                                                return Math.max(0, Math.min(100, pct));
-                                              })()}
-                                            />
-                                            <div className="flex items-center justify-between">
-                                              {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
-                                                <div className="text-[10px] text-brand-light/90">
-                                                  {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
-                                                </div>
-                                              ) : (
-                                                <div />
-                                              )}
-                                              {f.status === 'completed' || f.status === 'complete' ? (
-                                                <div className="text-[10px] text-green-400">Completed</div>
-                                              ) : (
-                                                <div className="text-[9px] text-brand-light/60">
-                                                  {f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : ''}
-                                                </div>
-                                              )}
-                                            </div>
-                                          </div>
-                                        ))}
-                                      </div>
-                                      
-                                    </div>
-                                  )
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                    {!downloadedPaths.has(pathItem.path) ? (
-                        (() => {
-                          const wsFilesObj = wsFilesByPath[pathItem.path] || {};
-                          const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
-                            filename,
-                            downloadedBytes: v.downloadedBytes,
-                            totalBytes: v.totalBytes,
-                            status: v.status,
-                            progress: v.progress,
-                            message: v.message,
-                            bucket: v.bucket,
-                            label: v.label,
-                          })) as any[];
-                          const isDownloading = wsFiles.length > 0;
-                          return isDownloading;
-                        })() ? (
-                        <div className="w-full mt-3">
-                          {(() => {
-                            const wsFilesObj = wsFilesByPath[pathItem.path] || {};
-                            const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
-                              filename,
-                              downloadedBytes: v.downloadedBytes,
-                              totalBytes: v.totalBytes,
-                              status: v.status,
-                              progress: v.progress,
-                              message: v.message,
-                              bucket: v.bucket,
-                              label: v.label,
-                            })) as any[];
-                            const files = wsFiles.length > 0 ? wsFiles : [] as any[];
-                            if (files.length === 0) return null;
-                            return (
-                              <div className="flex flex-col gap-y-2">
-                                {files.map((f: any) => (
-                                  <div key={f.filename} className="flex flex-col gap-y-1">
-                                    <div className="flex items-center justify-between gap-x-2 w-full">
-                                      <div className="flex-1 min-w-0">
-                                        <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{f.filename}</div>
-                                      </div>
-                                      <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
-                                        {(() => {
-                                          const pct = f.totalBytes ? ((f.downloadedBytes || 0) / f.totalBytes) * 100 : (typeof f.progress === 'number' ? f.progress * 100 : 0);
-                                          return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
-                                        })()}
-                                      </div>
-                                    </div>
-                                    <ProgressBar percent={(() => {
-                                      const pct = f.totalBytes ? ((f.downloadedBytes || 0) / f.totalBytes) * 100 : (typeof f.progress === 'number' ? f.progress * 100 : 0);
-                                      return Math.max(0, Math.min(100, pct));
-                                    })()} />
-                                    <div className="flex items-center justify-between">
-                                      {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
-                                        <div className="text-[10px] text-brand-light/90">
-                                          {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
-                                        </div>
-                                      ) : <div />}
-                                      {f.status === 'completed' || f.status === 'complete' ? (
-                                        <div className="text-[10px] text-green-400">Completed</div>
-                                      ) : (
-                                        <div className="text-[9px] text-brand-light/60">
-                                          {(f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : '')}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            );
-                          })()}
-                          <div className="flex flex-col items-center justify-between mt-2 w-full">
-                            <button
-                              onClick={() => handleCancel(
-                                pathToJobId[pathItem.path]
-                              )}
-                              className={cn("text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2", )}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            const extraPaths = extraModelPaths.map((it) => it.path).filter(Boolean) as string[];
-                            const allPaths = [pathItem.path, ...extraPaths];
-                            handleDownload(allPaths);
-                          }}
-                          className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
-                        >
-                          {downloadingPaths.has(pathItem.path) ? (
-                            <>
-                              <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                              <span>Downloading...</span>
-                            </>
-                          ) : (
-                            <>
-                              <LuDownload className="w-3.5 h-3.5" />
-                              <span>Download Model</span>
-                            </>
-                          )}
-                        </button>
-                      )
-                    ) : (
-                      <div className="flex flex-row items-center justify-between gap-x-2">
-                        <div className="text-[11px] font-medium text-brand-light/90 mt-4 mb-1.5 flex items-center justify-start gap-x-1">
-                          <LuCheck className="w-3 h-3 text-green-400" />
-                          <span>Downloaded</span>
-                        </div>
-                        <button
-                          onClick={async () => {
-                            if (pathItem.custom) {
-                              await handleDeleteCustomPath(pathItem);
-                              return;
-                            }
-                            const primaryPath = pathItem.path;
-                            if (!primaryPath) return;
-                            // If there is only one model path for this component, treat extras as tightly coupled
-                            if (modelPaths.length === 1 && extraModelPaths.length > 0) {
-                              await handleDelete(primaryPath);
-                              for (const extra of extraModelPaths) {
-                                if (extra.path) {
-                                  await handleDelete(extra.path);
-                                }
-                              }
-                            } else {
-                              await handleDelete(primaryPath);
-                            }
-                          }}
-                          disabled={deletingPaths.has(pathItem.path)}
-                          className="w-fit mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
-                        >
-                          {deletingPaths.has(pathItem.path) ? (
-                            <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <LuTrash className="w-3.5 h-3.5" />
-                          )}
-                          <span>
-                            {deletingPaths.has(pathItem.path)
-                              ? 'Deleting...'
-                              : pathItem.custom
-                                ? 'Remove Path'
-                                : 'Delete Model'}
-                          </span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {!isAddingModelPath ? (
-                <button
-                  type="button"
-                  onClick={() => setIsAddingModelPath(true)}
-                  className="w-full mt-2.5 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand-background/90 hover:bg-brand-background border border-brand-light/10 rounded-md px-3 py-2.5 transition-all"
-                >
-                  <LuPlus className="w-3.5 h-3.5" />
-                  <span>Add Model Path</span>
-                </button>
-              ) : (
-                <div className="mt-2.5 w-full bg-brand-background border border-brand-light/15 rounded-md px-3 py-3.5 space-y-2.5">
-                  <div className="flex flex-col gap-y-1.5">
-                    <label className="text-[10px] text-brand-light/90 font-medium">
-                      Model Name
-                    </label>
-                    <p className="text-[9.5px] text-brand-light/55">
-                      A friendly label used in the UI for this model; this can be any text.
-                    </p>
-                    <input
-                      type="text"
-                      value={newModelName}
-                      onChange={(e) => setNewModelName(e.target.value)}
-                      className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
-                      placeholder="e.g. Local GGUF Q4 variant"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-y-1.5">
-                    <label className="text-[10px] text-brand-light/90 font-medium">
-                      Model Path
-                    </label>
-                    <p className="text-[9.5px] text-brand-light/55">
-                      Local path on this machine. Can be a file or a directory and will be checked before use.
-                    </p>
-                    <input
-                      type="text"
-                      value={newModelPath}
-                      onChange={(e) => setNewModelPath(e.target.value)}
-                      className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light font-mono placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
-                      placeholder="/Users/you/models/my_model.safetensors"
-                    />
-                  </div>
-                  <div className="flex items-center justify-end gap-x-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsAddingModelPath(false);
-                        setNewModelName('');
-                        setNewModelPath('');
-                      }}
-                      className="text-[10px] font-medium text-brand-light/70 hover:text-brand-light/90 px-2 py-1 rounded-md transition-colors"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isValidatingModelPath}
-                      onClick={async () => {
-                        const path = newModelPath.trim();
-                        const name = newModelName.trim();
-                        if (!path || isValidatingModelPath) return;
-                        try {
-                          setIsValidatingModelPath(true);
-                          const res = await validateAndRegisterCustomModelPath(
-                            manifestId,
-                            index,
-                            name || undefined,
-                            path,
-                          );
-                          
-                          if (!res?.success) {
-                            // If backend reports an error, keep the form open and let the user adjust.
-                            (toast as any).error(res && typeof res.error === 'string' ? res.error : 'Failed to validate model path');
-                            return;
-                          }
-                          // Backend has updated the YAML manifest; refresh this component globally
-                          await refreshManifestPart(manifestId, `spec.components.${index}`);
-                          try {
-                            window.dispatchEvent(
-                              new CustomEvent('component-card-reload', {
-                                detail: { manifestId, componentIndex: index },
-                              }),
-                            );
-                          } catch {}
-                          setIsAddingModelPath(false);
-                          setNewModelName('');
-                          setNewModelPath('');
-                          toast.success('Model path validated and registered successfully');
-                        } catch {
-                          // Silently fail for now; can add toast or inline error later.
-                        } finally {
-                          setIsValidatingModelPath(false);
-                        }
-                      }}
-                      className="text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
-                    >
-                      {isValidatingModelPath ? (
-                        <>
-                          <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                          <span>Verifying...</span>
-                        </>
-                      ) : (
-                        <>
-                          <LuPlus className="w-3.5 h-3.5" />
-                          <span>Add</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <ModelPathsSection
+              baseModelPaths={modelPaths}
+              componentCarRef={componentCarRef}
+              deletingPaths={deletingPaths}
+              downloadedPaths={downloadedPaths}
+              downloadingPaths={downloadingPaths}
+              extraModelPaths={extraModelPaths}
+              manifestId={manifestId}
+              index={index}
+              isAddingModelPath={isAddingModelPath}
+              isValidatingModelPath={isValidatingModelPath}
+              modelPaths={modelPaths}
+              newModelName={newModelName}
+              newModelPath={newModelPath}
+              onCancel={handleCancel}
+              onDelete={handleDelete}
+              onDeleteCustomPath={handleDeleteCustomPath}
+              onDownload={handleDownload}
+              pathToJobId={pathToJobId}
+              refreshManifestPart={refreshManifestPart}
+              setIsAddingModelPath={setIsAddingModelPath}
+              setNewModelName={setNewModelName}
+              setNewModelPath={setNewModelPath}
+              setIsValidatingModelPath={setIsValidatingModelPath}
+              wsFilesByPath={wsFilesByPath}
+            />
           )}
-          {isConfigOnly && component.type !== 'scheduler' && (
-            <div className="space-y-2 mt-3">
-              <div className="bg-brand-background border border-brand-light/10 rounded-md p-3 w-full">
-                <div className="text-brand-light text-[10.5px] font-medium mb-1.5">Config Path</div>
-                {baseConfigPath && (
-                  <div className="text-[10px] text-brand-light/80 font-mono break-all">{baseConfigPath}</div>
-                )}
-                {!componentFlagDownloaded ? (
-                  (() => {
-                    const wsFilesObj = wsFilesByPath[baseConfigPath || ''] || {};
-                    const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
-                      filename,
-                      downloadedBytes: v.downloadedBytes,
-                      totalBytes: v.totalBytes,
-                      status: v.status,
-                      progress: v.progress,
-                      message: v.message,
-                      bucket: v.bucket,
-                      label: v.label,
-                    })) as any[];
-                    const isDownloading = wsFiles.length > 0;
-                    if (isDownloading) {
-                      const files = wsFiles.length > 0 ? wsFiles : [] as any[];
-                      if (files.length === 0) {
-                        return (
-                          <div className="w-full mt-3" />
-                        );
-                      }
-                      return (
-                        <div className="w-full mt-3">
-                          <div className="flex flex-col gap-y-2">
-                            {files.map((f: any) => (
-                              <div key={f.filename} className="flex flex-col gap-y-1">
-                                <div className="flex items-center justify-between gap-x-2 w-full">
-                                  <div className="flex-1 min-w-0">
-                                    <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{f.filename}</div>
-                                  </div>
-                                  <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
-                                    {(() => {
-                                      const pct = f.totalBytes ? ((f.downloadedBytes || 0) / f.totalBytes) * 100 : (typeof f.progress === 'number' ? f.progress * 100 : 0);
-                                      return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
-                                    })()}
-                                  </div>
-                                </div>
-                                <ProgressBar percent={(() => {
-                                  const pct = f.totalBytes ? ((f.downloadedBytes || 0) / f.totalBytes) * 100 : (typeof f.progress === 'number' ? f.progress * 100 : 0);
-                                  return Math.max(0, Math.min(100, pct));
-                                })()} />
-                              </div>
-                            ))}
-                          </div>
-                          <div className="flex flex-col items-center justify-between mt-2 w-full">
-                            <button
-                              onClick={() => baseConfigPath && handleCancel(baseConfigPath)}
-                              className="text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    }
-                    return (
-                      <button
-                        onClick={() => baseConfigPath && handleDownload(baseConfigPath)}
-                        className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
-                      >
-                        {downloadingPaths.has(baseConfigPath || '') ? (
-                          <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <LuDownload className="w-3.5 h-3.5" />
-                        )}
-                        <span>{downloadingPaths.has(baseConfigPath || '') ? 'Downloading...' : 'Download Config'}</span>
-                      </button>
-                    );
-                  })()
-                ) : (
-                  <div className="flex flex-row items-center justify-between gap-x-2">
-                    <div className="text-[11px] font-medium text-brand-light/90 mt-4 mb-1.5 flex items-center justify-start gap-x-1">
-                      <LuCheck className="w-3 h-3 text-green-400" />
-                      <span>Downloaded</span>
-                    </div>
-                    <button onClick={() => baseConfigPath && handleDelete(baseConfigPath)} disabled={deletingPaths.has(baseConfigPath || '')} className="w-fit mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all">
-                      {deletingPaths.has(baseConfigPath || '') ? (
-                        <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <LuTrash className="w-3.5 h-3.5" />
-                      )}
-                      <span>{deletingPaths.has(baseConfigPath || '') ? 'Deleting...' : 'Delete Config'}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
+          {isConfigOnly && component.type !== 'scheduler' && baseConfigPath && (
+            <ConfigOnlySection
+              baseConfigPath={baseConfigPath}
+              componentCarRef={componentCarRef}
+              componentFlagDownloaded={componentFlagDownloaded}
+              deletingPaths={deletingPaths}
+              downloadingPaths={downloadingPaths}
+              onCancel={handleCancel}
+              onDelete={handleDelete}
+              onDownload={handleDownload}
+              wsFilesByPath={wsFilesByPath}
+            />
           )}
           {component.type === 'scheduler' && component.scheduler_options && component.scheduler_options.length > 0 && (
-            <div className="mt-3">
-              <div className="text-brand-light/80 text-[11px] font-medium mb-2">Scheduler Options</div>
-              <div className={cn("space-y-0 bg-brand-background border  border-b-0 border-brand-light/10 rounded-t-[6px] divide-y divide-brand-light/10", {
-                "rounded-b-[6px] border-b": componentFlagDownloaded
-              })}>
-                {component.scheduler_options.map((option, idx) => (
-                  <div key={idx} className={cn(" border-brand-light/10 border-t-border-x px-3.5 py-2")}>
-                    <div className="mb-1">
-                      <span className="text-brand-light text-[11px] font-medium">{option.label || option.name}</span>
-                    </div>
-                    {option.description && (
-                      <div className="text-[10px] text-brand-light/70 mt-1 mb-1.5 ">
-                        {option.description}
-                      </div>
-                    )}
-                    
-                  </div>
-                ))}
-              </div>
-              {schedulerConfigPaths.length > 0 && (
-                <div className={cn("bg-brand-background p-3 rounded-b-[6px]", {
-                  "p-0": !schedulersConfigDownloading
-                })}>
-                  {schedulerConfigPaths.map((p) => {
-                    const wsFilesObj = wsFilesByPath[p] || {};
-                    const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
-                      filename,
-                      downloadedBytes: v.downloadedBytes,
-                      totalBytes: v.totalBytes,
-                      status: v.status,
-                      progress: v.progress,
-                      message: v.message,
-                      bucket: v.bucket,
-                      label: v.label,
-                    }));
-                    const files = wsFiles.length > 0 ? wsFiles : [];
-                    if (!(files.length > 0)) return null;
-                    return (
-                      <div key={p} className="w-full">
-                        <div className="text-brand-light text-[10.5px] font-medium mb-2.5">Config Download</div>
-                        {files.length > 0 ? (
-                          <div className="flex flex-col gap-y-2">
-                            {files.map((f: any) => (
-                              <div key={f.filename} className="flex flex-col gap-y-1">
-                                <div className="flex flex-col justify-start gap-y-2 w-full">
-                                  <div className="flex-1 min-w-0">
-                                    <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{f.filename}</div>
-                                  </div>
-                                  <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
-                                    <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
-                                    <span>{typeof f.message === 'string' && f.message ? f.message : 'Preparing...'}</span>
-                                  </div>
-                                </div>
-                                <ProgressBar percent={(() => {
-                                  const pct = f.totalBytes ? ((f.downloadedBytes || 0) / f.totalBytes) * 100 : (typeof f.progress === 'number' ? f.progress * 100 : 0);
-                                  return Math.max(0, Math.min(100, pct));
-                                })()} />
-                                <div className="flex items-center justify-between">
-                                  {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
-                                    <div className="text-[10px] text-brand-light/90">
-                                      {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
-                                    </div>
-                                  ) : <div />}
-                                  {f.status === 'completed' || f.status === 'complete' ? (
-                                    <div className="text-[10px] text-green-400">Completed</div>
-                                  ) : (
-                                    <div className="text-[9px] text-brand-light/60">
-                                      {(f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : '')}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="flex flex-col items-start justify-start gap-y-2 w-full">
-                            <div className="flex-1 min-w-0">
-                              <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 40}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{p}</div>
-                            </div>
-                            <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1 justify-start">
-                              <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
-                              <span>Preparing...</span>
-                            </div>
-                          </div>
-                        )}
-                        <div className="flex flex-col items-center justify-between mt-2 w-full">
-                          <button
-                            onClick={() => handleCancel(p)}
-                            className="text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-              {!componentFlagDownloaded && (
-                <div className="bg-brand-background p-3 rounded-b-[6px] border border-t-0 border-brand-light/10">
-                  <button
-                    onClick={() => handleDownload(schedulerConfigPaths)}
-                    className="w-full text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light  hover:bg-brand/70 border border-brand-light/10 rounded-[6px] bg-brand px-3 py-2 transition-all"
-                  >
-                    {schedulerConfigPaths.some((p) => downloadingPaths.has(p)) || schedulerIsDownloading ? (
-                      <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <LuDownload className="w-3.5 h-3.5" />
-                    )}
-                    <span>{schedulerConfigPaths.some((p) => downloadingPaths.has(p)) || schedulerIsDownloading ? 'Downloading...' : 'Download Config'}</span>
-                  </button>
-                </div>
-              )}
-              {componentFlagDownloaded && schedulerConfigPaths.length > 0 && (
-                <div className="bg-brand-background rounded-[6px] mt-2 py-1 border  border-brand-light/10">
-                  <div className="space-y-2 divide-y divide-brand-light/10">
-                    {schedulerConfigPaths.map((p) => (
-                      <div key={p} className="flex flex-col items-start justify-start gap-y-2 w-full py-2 px-3">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[10px] text-brand-light font-medium mb-1"> 
-                            Config Path
-                          </p>
-                          <div style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 60}px` }} className="text-[10px] text-brand-light/80 font-mono truncate break-all">{p}</div>
-                        </div>
-                        <div className="flex flex-row items-center justify-between gap-x-2 w-full">
-                          <div className="text-[11px] font-medium text-brand-light/90 flex items-center justify-start gap-x-1">
-                            <LuCheck className="w-3 h-3 text-green-400" />
-                            <span>Downloaded</span>
-                          </div>
-                          <button onClick={() => handleDelete(p)} className="w-fit text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[5px] px-2.5 py-1.5 transition-all">
-                            {deletingPaths.has(p) ? (
-                              <LuLoader className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <LuTrash className="w-3 h-3" />
-                            )}
-                            <span>{deletingPaths.has(p) ? 'Deleting...' : 'Delete'}</span>
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            <SchedulerSection
+              component={component}
+              componentCarRef={componentCarRef}
+              componentFlagDownloaded={componentFlagDownloaded}
+              deletingPaths={deletingPaths}
+              downloadingPaths={downloadingPaths}
+              onCancel={handleCancel}
+              onDelete={handleDelete}
+              onDownload={handleDownload}
+              schedulerConfigPaths={schedulerConfigPaths}
+              schedulerIsDownloading={schedulerIsDownloading}
+              schedulersConfigDownloading={schedulersConfigDownloading}
+              wsFilesByPath={wsFilesByPath}
+            />
           )}
         </div>
       )}
@@ -1088,5 +438,1040 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
 };
 
 export default ComponentCard;
+
+interface ComponentCardHeaderProps {
+  component: ManifestComponent;
+  componentFlagDownloaded: boolean;
+  displayName: string;
+  isComponentDownlading: boolean;
+  isConfigOnly: boolean | undefined;
+  isExpanded: boolean;
+  onDownloadAll: () => Promise<void>;
+  onToggleExpanded: () => void;
+  typeLabel: string;
+}
+
+const ComponentCardHeader: React.FC<ComponentCardHeaderProps> = ({
+  component,
+  componentFlagDownloaded,
+  displayName,
+  isComponentDownlading,
+  isConfigOnly,
+  isExpanded,
+  onDownloadAll,
+  onToggleExpanded,
+  typeLabel,
+}) => {
+  const hasModelPaths = Array.isArray(component.model_path)
+    ? component.model_path.length > 0
+    : !!component.model_path;
+  const hasSchedulerOptions =
+    component.type === 'scheduler' && component.scheduler_options && component.scheduler_options.length > 0;
+  const hasExpandableContent = hasModelPaths || hasSchedulerOptions || !!isConfigOnly;
+
+  if (!hasExpandableContent) {
+    return (
+      <div className="w-full flex items-center justify-between p-3">
+        <div className="flex items-center gap-x-2 justify-between w-full">
+          <div className="flex items-center gap-x-2.5">
+            <div
+              className={cn(
+                'flex items-center justify-center w-4.5 h-4.5 rounded-full border',
+                componentFlagDownloaded ? 'bg-green-500/20 border-green-500/40' : 'bg-brand-background border-brand-light/20',
+              )}
+            >
+              {componentFlagDownloaded ? (
+                <LuCheck className="w-3 h-3 text-green-400" />
+              ) : (
+                <LuDownload className="w-2.5 h-2.5 text-brand-light/50" />
+              )}
+            </div>
+            <span className="text-brand-light text-[12px] font-medium">{displayName}</span>
+          </div>
+          <span className="text-brand-light/60 text-[10px] font-mono bg-brand-background px-2 py-0.5 rounded">
+            {typeLabel}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      onClick={onToggleExpanded}
+      className="w-full flex items-center justify-between p-3 hover:bg-brand-background/30 transition-colors"
+    >
+      <div className="flex items-center gap-x-2 justify-between w-full mr-2">
+        <div className="flex items-center gap-x-2">
+          <button
+            onClick={async (e) => {
+              if (componentFlagDownloaded || isComponentDownlading) return;
+              e.preventDefault();
+              e.stopPropagation();
+              await onDownloadAll();
+            }}
+            className={cn(
+              'flex items-center justify-center w-4.5 h-4.5 rounded-full border',
+              componentFlagDownloaded
+                ? 'bg-green-500/20 border-green-500/40'
+                : isComponentDownlading
+                  ? 'bg-brand-background border-brand-light/20'
+                  : 'bg-brand-background border-brand-light/20 hover:bg-brand-background/30 cursor-pointer',
+            )}
+          >
+            {componentFlagDownloaded ? (
+              <LuCheck className="w-3 h-3 text-green-400" />
+            ) : isComponentDownlading ? (
+              <LuLoader className="w-2.5 h-2.5 text-brand-light/60 animate-spin" />
+            ) : (
+              <LuDownload className="w-2.5 h-2.5 text-brand-light/50" />
+            )}
+          </button>
+          <span className="text-brand-light text-[12px] font-medium">{displayName}</span>
+        </div>
+        <span className="text-brand-light/60 text-[10px] font-mono bg-brand-background px-2 py-0.5 rounded">
+          {typeLabel}
+        </span>
+      </div>
+      {isExpanded ? (
+        <LuChevronDown className="w-4 h-4 text-brand-light/60" />
+      ) : (
+        <LuChevronRight className="w-4 h-4 text-brand-light/60" />
+      )}
+    </div>
+  );
+};
+
+interface ModelPathsSectionProps {
+  baseModelPaths: (string | ManifestComponentModelPathItem)[];
+  componentCarRef: React.RefObject<HTMLDivElement | null>;
+  deletingPaths: Set<string>;
+  downloadedPaths: Set<string>;
+  downloadingPaths: Set<string>;
+  extraModelPaths: ManifestComponentModelPathItem[];
+  index: number;
+  isAddingModelPath: boolean;
+  isValidatingModelPath: boolean;
+  manifestId: string;
+  modelPaths: (string | ManifestComponentModelPathItem)[];
+  newModelName: string;
+  newModelPath: string;
+  onCancel: (jobId: string) => Promise<void>;
+  onDelete: (path: string) => Promise<void>;
+  onDeleteCustomPath: (pathItem: ManifestComponentModelPathItem) => Promise<void>;
+  onDownload: (path: string | string[]) => Promise<void>;
+  pathToJobId: Record<string, string>;
+  refreshManifestPart: (manifestId: string, path: string) => Promise<void>;
+  setIsAddingModelPath: React.Dispatch<React.SetStateAction<boolean>>;
+  setIsValidatingModelPath: React.Dispatch<React.SetStateAction<boolean>>;
+  setNewModelName: React.Dispatch<React.SetStateAction<string>>;
+  setNewModelPath: React.Dispatch<React.SetStateAction<string>>;
+  wsFilesByPath: Record<string, any>;
+}
+
+const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
+  componentCarRef,
+  deletingPaths,
+  downloadedPaths,
+  downloadingPaths,
+  extraModelPaths,
+  index,
+  isAddingModelPath,
+  isValidatingModelPath,
+  manifestId,
+  modelPaths,
+  newModelName,
+  newModelPath,
+  onCancel,
+  onDelete,
+  onDeleteCustomPath,
+  onDownload,
+  pathToJobId,
+  refreshManifestPart,
+  setIsAddingModelPath,
+  setIsValidatingModelPath,
+  setNewModelName,
+  setNewModelPath,
+  wsFilesByPath,
+}) => {
+  return (
+    <div className="space-y-2 mt-3">
+      {modelPaths.map((item, idx) => {
+        const pathItem = (typeof item === 'string' ? { path: item } : item) as ManifestComponentModelPathItem;
+
+        const isDownloaded = pathItem.path ? downloadedPaths.has(pathItem.path) : false;
+
+        const wsFilesObj = pathItem.path ? wsFilesByPath[pathItem.path] || {} : {};
+        const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
+          filename,
+          downloadedBytes: (v as any).downloadedBytes,
+          totalBytes: (v as any).totalBytes,
+          status: (v as any).status,
+          progress: (v as any).progress,
+          message: (v as any).message,
+          bucket: (v as any).bucket,
+          label: (v as any).label,
+        })) as any[];
+        const isDownloading = wsFiles.length > 0;
+
+        return (
+          <div key={idx} className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full">
+            {(pathItem.variant || pathItem.custom) && (
+              <div className="flex flex-row justify-between items-center mb-2.5">
+                <div className="flex items-center gap-x-1.5">
+                  {pathItem.variant && (
+                    <div className="text-brand-light text-[11px] break-all font-semibold">
+                      {pathItem.variant.toLowerCase().includes('default')
+                        ? 'Default'
+                        : pathItem.variant.toLowerCase().includes('gguf')
+                          ? pathItem.variant.replace('GGUF_', '').replace('Q', 'q').toUpperCase()
+                          : pathItem.variant}
+                    </div>
+                  )}
+                  {pathItem.custom && (
+                    <span className="inline-flex items-center rounded-full bg-brand-background px-2 py-0.5 text-[9px] font-medium text-brand-light/80 border border-brand-light/20">
+                      Custom
+                    </span>
+                  )}
+                </div>
+                {typeof (pathItem as any).file_size === 'number' && (pathItem as any).file_size > 0 && (
+                  <div className="flex-shrink-0 ml-2 text-[10px] text-brand-light/80 font-mono whitespace-nowrap">
+                    {formatBytes((pathItem as any).file_size, 1)}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex items-start justify-between gap-x-2 ">
+              <div className="flex-1 min-w-0 flex-row items-center gap-x-2">
+                <div className="text-brand-light text-[10.5px] font-medium mb-1">Model Path</div>
+                <div className="text-brand-light text-[10px] font-mono break-all">{pathItem.path}</div>
+              </div>
+            </div>
+            {(pathItem.type || pathItem.precision) && (
+              <div className="flex flex-col items-start  mt-2 justify-start border-t border-brand-light/5  pt-2">
+                <h4 className="text-brand-light text-[10.5px] font-medium mb-1">Model specifications</h4>
+                {pathItem.type && (
+                  <div className="text-[10px] flex flex-row items-center gap-x-1 ">
+                    <span className="text-brand-light/60 font-medium">Model Type </span>
+                    <span className="text-brand-light/80 font-mono">
+                      {pathItem.type === 'gguf' ? 'GGUF' : formatComponentName(pathItem.type)}
+                    </span>
+                  </div>
+                )}
+                {pathItem.precision && (
+                  <div className="text-[10px] flex flex-row items-center gap-x-1 ">
+                    <span className="text-brand-light/60 font-medium">Precision </span>
+                    <span className="text-brand-light/90 font-mono">{pathItem.precision.toUpperCase()}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {pathItem.resource_requirements && (
+              <div className="mt-2 pt-2 border-t border-brand-light/5">
+                <div className="text-brand-light text-[10.5px] font-medium mb-1">Resource Requirements</div>
+                <div className="flex flex-col ">
+                  {pathItem.resource_requirements.min_vram_gb && (
+                    <div className="text-[10px]">
+                      <span className="text-brand-light/60 font-medium">Min VRAM </span>
+                      <span className="text-brand-light/90">{pathItem.resource_requirements.min_vram_gb}GB</span>
+                    </div>
+                  )}
+                  {pathItem.resource_requirements.recommended_vram_gb && (
+                    <div className="text-[10px]">
+                      <span className="text-brand-light/60 font-medium">Recommended VRAM </span>
+                      <span className="text-brand-light/90">
+                        {pathItem.resource_requirements.recommended_vram_gb}GB
+                      </span>
+                    </div>
+                  )}
+                  {pathItem.resource_requirements.compute_capability && (
+                    <div className="text-[10px]">
+                      <span className="text-brand-light/60">Compute Capability: </span>
+                      <span className="text-brand-light/90">{pathItem.resource_requirements.compute_capability}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {extraModelPaths.length > 0 && (
+              <ExtraModelPathsSection
+                componentCarRef={componentCarRef}
+                downloadedPaths={downloadedPaths}
+                extraModelPaths={extraModelPaths}
+                wsFilesByPath={wsFilesByPath}
+              />
+            )}
+
+            {!isDownloaded ? (
+              isDownloading ? (
+                <DownloadProgressSection
+                  componentCarRef={componentCarRef}
+                  files={wsFiles}
+                  onCancel={() => onCancel(pathToJobId[pathItem.path || ''])}
+                />
+              ) : (
+                <button
+                  onClick={() => {
+                    const extraPaths = extraModelPaths.map((it) => it.path).filter(Boolean) as string[];
+                    const allPaths = [pathItem.path, ...extraPaths].filter(Boolean) as string[];
+                    if (allPaths.length > 0) {
+                      onDownload(allPaths);
+                    }
+                  }}
+                  className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
+                >
+                  {pathItem.path && downloadingPaths.has(pathItem.path) ? (
+                    <>
+                      <LuLoader className="w-3.5 h-3.5 animate-spin" />
+                      <span>Downloading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <LuDownload className="w-3.5 h-3.5" />
+                      <span>Download Model</span>
+                    </>
+                  )}
+                </button>
+              )
+            ) : (
+              <DownloadedModelActions
+                deletingPaths={deletingPaths}
+                extraModelPaths={extraModelPaths}
+                modelPaths={modelPaths}
+                onDelete={onDelete}
+                onDeleteCustomPath={onDeleteCustomPath}
+                pathItem={pathItem}
+              />
+            )}
+          </div>
+        );
+      })}
+
+      {!isAddingModelPath ? (
+        <button
+          type="button"
+          onClick={() => setIsAddingModelPath(true)}
+          className="w-full mt-2.5 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand-background/90 hover:bg-brand-background border border-brand-light/10 rounded-md px-3 py-2.5 transition-all"
+        >
+          <LuPlus className="w-3.5 h-3.5" />
+          <span>Add Model Path</span>
+        </button>
+      ) : (
+        <AddModelPathForm
+          index={index}
+          isValidatingModelPath={isValidatingModelPath}
+          manifestId={manifestId}
+          newModelName={newModelName}
+          newModelPath={newModelPath}
+          refreshManifestPart={refreshManifestPart}
+          setIsAddingModelPath={setIsAddingModelPath}
+          setIsValidatingModelPath={setIsValidatingModelPath}
+          setNewModelName={setNewModelName}
+          setNewModelPath={setNewModelPath}
+        />
+      )}
+    </div>
+  );
+};
+
+interface ExtraModelPathsSectionProps {
+  componentCarRef: React.RefObject<HTMLDivElement | null>;
+  downloadedPaths: Set<string>;
+  extraModelPaths: ManifestComponentModelPathItem[];
+  wsFilesByPath: Record<string, any>;
+}
+
+const ExtraModelPathsSection: React.FC<ExtraModelPathsSectionProps> = ({
+  componentCarRef,
+  downloadedPaths,
+  extraModelPaths,
+  wsFilesByPath,
+}) => {
+  return (
+    <div className="mt-2 pt-2 border-t border-brand-light/5">
+      <div className="text-brand-light text-[10.5px] font-medium mb-1">Extra Model Paths</div>
+      <div className="flex flex-col space-y-2">
+        {extraModelPaths.map((extra, extraIdx) => {
+          const extraPath = extra.path;
+          if (!extraPath) return null;
+          const extraDownloaded = downloadedPaths.has(extraPath);
+          const wsFilesObj = wsFilesByPath[extraPath] || {};
+          const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
+            filename,
+            downloadedBytes: (v as any).downloadedBytes,
+            totalBytes: (v as any).totalBytes,
+            status: (v as any).status,
+            progress: (v as any).progress,
+            message: (v as any).message,
+            bucket: (v as any).bucket,
+            label: (v as any).label,
+            downloadSpeed: (v as any).downloadSpeed,
+          })) as any[];
+          const isExtraDownloading = wsFiles.length > 0;
+
+          return (
+            <div key={extraIdx} className="flex flex-col gap-y-1.5">
+              <div className="text-brand-light text-[10px] font-mono break-all">{extraPath}</div>
+              {!extraDownloaded &&
+                isExtraDownloading && (
+                  <div className="w-full">
+                    <div className="flex flex-col gap-y-2">
+                      {wsFiles.map((f: any) => (
+                        <div key={f.filename} className="flex flex-col gap-y-1">
+                          <div className="flex items-center justify-between gap-x-2 w-full">
+                            <div className="flex-1 min-w-0">
+                              <div
+                                style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
+                                className="text-[10px] text-brand-light/80 font-mono truncate break-all"
+                              >
+                                {f.filename}
+                              </div>
+                            </div>
+                            <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                              {(() => {
+                                const pct = f.totalBytes
+                                  ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                                  : typeof f.progress === 'number'
+                                    ? f.progress * 100
+                                    : 0;
+                                return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
+                              })()}
+                            </div>
+                          </div>
+                          <ProgressBar
+                            percent={(() => {
+                              const pct = f.totalBytes
+                                ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                                : typeof f.progress === 'number'
+                                  ? f.progress * 100
+                                  : 0;
+                              return Math.max(0, Math.min(100, pct));
+                            })()}
+                          />
+                          <div className="flex items-center justify-between">
+                            {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
+                              <div className="text-[10px] text-brand-light/90">
+                                {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
+                              </div>
+                            ) : (
+                              <div />
+                            )}
+                            {f.status === 'completed' || f.status === 'complete' ? (
+                              <div className="text-[10px] text-green-400">Completed</div>
+                            ) : (
+                              <div className="text-[9px] text-brand-light/60">
+                                {f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : ''}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+interface DownloadProgressSectionProps {
+  componentCarRef: React.RefObject<HTMLDivElement | null>;
+  files: any[];
+  onCancel: () => void;
+}
+
+const DownloadProgressSection: React.FC<DownloadProgressSectionProps> = ({ componentCarRef, files, onCancel }) => {
+  if (!files.length) return null;
+
+  return (
+    <div className="w-full mt-3">
+      <div className="flex flex-col gap-y-2">
+        {files.map((f: any) => (
+          <div key={f.filename} className="flex flex-col gap-y-1">
+            <div className="flex items-center justify-between gap-x-2 w-full">
+              <div className="flex-1 min-w-0">
+                <div
+                  style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
+                  className="text-[10px] text-brand-light/80 font-mono truncate break-all"
+                >
+                  {f.filename}
+                </div>
+              </div>
+              <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                {(() => {
+                  const pct = f.totalBytes
+                    ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                    : typeof f.progress === 'number'
+                      ? f.progress * 100
+                      : 0;
+                  return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
+                })()}
+              </div>
+            </div>
+            <ProgressBar
+              percent={(() => {
+                const pct = f.totalBytes
+                  ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                  : typeof f.progress === 'number'
+                    ? f.progress * 100
+                    : 0;
+                return Math.max(0, Math.min(100, pct));
+              })()}
+            />
+            <div className="flex items-center justify-between">
+              {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
+                <div className="text-[10px] text-brand-light/90">
+                  {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
+                </div>
+              ) : (
+                <div />
+              )}
+              {f.status === 'completed' || f.status === 'complete' ? (
+                <div className="text-[10px] text-green-400">Completed</div>
+              ) : (
+                <div className="text-[9px] text-brand-light/60">
+                  {f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : ''}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-col items-center justify-between mt-2 w-full">
+        <button
+          onClick={onCancel}
+          className={cn(
+            'text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2',
+          )}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+};
+
+interface DownloadedModelActionsProps {
+  deletingPaths: Set<string>;
+  extraModelPaths: ManifestComponentModelPathItem[];
+  modelPaths: (string | ManifestComponentModelPathItem)[];
+  onDelete: (path: string) => Promise<void>;
+  onDeleteCustomPath: (pathItem: ManifestComponentModelPathItem) => Promise<void>;
+  pathItem: ManifestComponentModelPathItem;
+}
+
+const DownloadedModelActions: React.FC<DownloadedModelActionsProps> = ({
+  deletingPaths,
+  extraModelPaths,
+  modelPaths,
+  onDelete,
+  onDeleteCustomPath,
+  pathItem,
+}) => {
+  return (
+    <div className="flex flex-row items-center justify-between gap-x-2">
+      <div className="text-[11px] font-medium text-brand-light/90 mt-4 mb-1.5 flex items-center justify-start gap-x-1">
+        <LuCheck className="w-3 h-3 text-green-400" />
+        <span>Downloaded</span>
+      </div>
+      <button
+        onClick={async () => {
+          if (pathItem.custom) {
+            await onDeleteCustomPath(pathItem);
+            return;
+          }
+          const primaryPath = pathItem.path;
+          if (!primaryPath) return;
+          // If there is only one model path for this component, treat extras as tightly coupled
+          if (modelPaths.length === 1 && extraModelPaths.length > 0) {
+            await onDelete(primaryPath);
+            for (const extra of extraModelPaths) {
+              if (extra.path) {
+                await onDelete(extra.path);
+              }
+            }
+          } else {
+            await onDelete(primaryPath);
+          }
+        }}
+        disabled={!!pathItem.path && deletingPaths.has(pathItem.path)}
+        className="w-fit mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
+      >
+        {pathItem.path && deletingPaths.has(pathItem.path) ? (
+          <LuLoader className="w-3.5 h-3.5 animate-spin" />
+        ) : (
+          <LuTrash className="w-3.5 h-3.5" />
+        )}
+        <span>
+          {pathItem.path && deletingPaths.has(pathItem.path)
+            ? 'Deleting...'
+            : pathItem.custom
+              ? 'Remove Path'
+              : 'Delete Model'}
+        </span>
+      </button>
+    </div>
+  );
+};
+
+interface AddModelPathFormProps {
+  index: number;
+  isValidatingModelPath: boolean;
+  manifestId: string;
+  newModelName: string;
+  newModelPath: string;
+  refreshManifestPart: (manifestId: string, path: string) => Promise<void>;
+  setIsAddingModelPath: React.Dispatch<React.SetStateAction<boolean>>;
+  setIsValidatingModelPath: React.Dispatch<React.SetStateAction<boolean>>;
+  setNewModelName: React.Dispatch<React.SetStateAction<string>>;
+  setNewModelPath: React.Dispatch<React.SetStateAction<string>>;
+}
+
+const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
+  index,
+  isValidatingModelPath,
+  manifestId,
+  newModelName,
+  newModelPath,
+  refreshManifestPart,
+  setIsAddingModelPath,
+  setIsValidatingModelPath,
+  setNewModelName,
+  setNewModelPath,
+}) => {
+  return (
+    <div className="mt-2.5 w-full bg-brand-background border border-brand-light/15 rounded-md px-3 py-3.5 space-y-2.5">
+      <div className="flex flex-col gap-y-1.5">
+        <label className="text-[10px] text-brand-light/90 font-medium">Model Name</label>
+        <p className="text-[9.5px] text-brand-light/55">
+          A friendly label used in the UI for this model; this can be any text.
+        </p>
+        <input
+          type="text"
+          value={newModelName}
+          onChange={(e) => setNewModelName(e.target.value)}
+          className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
+          placeholder="e.g. Local GGUF Q4 variant"
+        />
+      </div>
+      <div className="flex flex-col gap-y-1.5">
+        <label className="text-[10px] text-brand-light/90 font-medium">Model Path</label>
+        <p className="text-[9.5px] text-brand-light/55">
+          Local path on this machine. Can be a file or a directory and will be checked before use.
+        </p>
+        <input
+          type="text"
+          value={newModelPath}
+          onChange={(e) => setNewModelPath(e.target.value)}
+          className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light font-mono placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
+          placeholder="/Users/you/models/my_model.safetensors"
+        />
+      </div>
+      <div className="flex items-center justify-end gap-x-2 pt-1">
+        <button
+          type="button"
+          onClick={() => {
+            setIsAddingModelPath(false);
+            setNewModelName('');
+            setNewModelPath('');
+          }}
+          className="text-[10px] font-medium text-brand-light/70 hover:text-brand-light/90 px-2 py-1 rounded-md transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={isValidatingModelPath}
+          onClick={async () => {
+            const path = newModelPath.trim();
+            const name = newModelName.trim();
+            if (!path || isValidatingModelPath) return;
+            try {
+              setIsValidatingModelPath(true);
+              const res = await validateAndRegisterCustomModelPath(manifestId, index, name || undefined, path);
+
+              if (!res?.success) {
+                (toast as any).error(
+                  res && typeof res.error === 'string' ? res.error : 'Failed to validate model path',
+                );
+                return;
+              }
+
+              await refreshManifestPart(manifestId, `spec.components.${index}`);
+              try {
+                window.dispatchEvent(
+                  new CustomEvent('component-card-reload', {
+                    detail: { manifestId, componentIndex: index },
+                  }),
+                );
+              } catch {}
+              setIsAddingModelPath(false);
+              setNewModelName('');
+              setNewModelPath('');
+              toast.success('Model path validated and registered successfully');
+            } catch {
+            } finally {
+              setIsValidatingModelPath(false);
+            }
+          }}
+          className="text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
+        >
+          {isValidatingModelPath ? (
+            <>
+              <LuLoader className="w-3.5 h-3.5 animate-spin" />
+              <span>Verifying...</span>
+            </>
+          ) : (
+            <>
+              <LuPlus className="w-3.5 h-3.5" />
+              <span>Add</span>
+            </>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+interface ConfigOnlySectionProps {
+  baseConfigPath: string;
+  componentCarRef: React.RefObject<HTMLDivElement | null>;
+  componentFlagDownloaded: boolean;
+  deletingPaths: Set<string>;
+  downloadingPaths: Set<string>;
+  onCancel: (jobId: string) => Promise<void>;
+  onDelete: (path: string) => Promise<void>;
+  onDownload: (path: string | string[]) => Promise<void>;
+  wsFilesByPath: Record<string, any>;
+}
+
+const ConfigOnlySection: React.FC<ConfigOnlySectionProps> = ({
+  baseConfigPath,
+  componentCarRef,
+  componentFlagDownloaded,
+  deletingPaths,
+  downloadingPaths,
+  onCancel,
+  onDelete,
+  onDownload,
+  wsFilesByPath,
+}) => {
+  const wsFilesObj = wsFilesByPath[baseConfigPath] || {};
+  const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
+    filename,
+    downloadedBytes: (v as any).downloadedBytes,
+    totalBytes: (v as any).totalBytes,
+    status: (v as any).status,
+    progress: (v as any).progress,
+    message: (v as any).message,
+    bucket: (v as any).bucket,
+    label: (v as any).label,
+  })) as any[];
+  const isDownloading = wsFiles.length > 0;
+
+  return (
+    <div className="space-y-2 mt-3">
+      <div className="bg-brand-background border border-brand-light/10 rounded-md p-3 w-full">
+        <div className="text-brand-light text-[10.5px] font-medium mb-1.5">Config Path</div>
+        <div className="text-[10px] text-brand-light/80 font-mono break-all">{baseConfigPath}</div>
+        {!componentFlagDownloaded ? (
+          isDownloading ? (
+            <div className="w-full mt-3">
+              <div className="flex flex-col gap-y-2">
+                {wsFiles.map((f: any) => (
+                  <div key={f.filename} className="flex flex-col gap-y-1">
+                    <div className="flex items-center justify-between gap-x-2 w-full">
+                      <div className="flex-1 min-w-0">
+                        <div
+                          style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
+                          className="text-[10px] text-brand-light/80 font-mono truncate break-all"
+                        >
+                          {f.filename}
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                        {(() => {
+                          const pct = f.totalBytes
+                            ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                            : typeof f.progress === 'number'
+                              ? f.progress * 100
+                              : 0;
+                          return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
+                        })()}
+                      </div>
+                    </div>
+                    <ProgressBar
+                      percent={(() => {
+                        const pct = f.totalBytes
+                          ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                          : typeof f.progress === 'number'
+                            ? f.progress * 100
+                            : 0;
+                        return Math.max(0, Math.min(100, pct));
+                      })()}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-col items-center justify-between mt-2 w-full">
+                <button
+                  onClick={() => onCancel(baseConfigPath)}
+                  className="text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => onDownload(baseConfigPath)}
+              className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
+            >
+              {downloadingPaths.has(baseConfigPath) ? (
+                <LuLoader className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <LuDownload className="w-3.5 h-3.5" />
+              )}
+              <span>{downloadingPaths.has(baseConfigPath) ? 'Downloading...' : 'Download Config'}</span>
+            </button>
+          )
+        ) : (
+          <div className="flex flex-row items-center justify-between gap-x-2">
+            <div className="text-[11px] font-medium text-brand-light/90 mt-4 mb-1.5 flex items-center justify-start gap-x-1">
+              <LuCheck className="w-3 h-3 text-green-400" />
+              <span>Downloaded</span>
+            </div>
+            <button
+              onClick={() => onDelete(baseConfigPath)}
+              disabled={deletingPaths.has(baseConfigPath)}
+              className="w-fit mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
+            >
+              {deletingPaths.has(baseConfigPath) ? (
+                <LuLoader className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <LuTrash className="w-3.5 h-3.5" />
+              )}
+              <span>{deletingPaths.has(baseConfigPath) ? 'Deleting...' : 'Delete Config'}</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+interface SchedulerSectionProps {
+  component: ManifestComponent;
+  componentCarRef: React.RefObject<HTMLDivElement | null>;
+  componentFlagDownloaded: boolean;
+  deletingPaths: Set<string>;
+  downloadingPaths: Set<string>;
+  onCancel: (jobId: string) => Promise<void>;
+  onDelete: (path: string) => Promise<void>;
+  onDownload: (path: string | string[]) => Promise<void>;
+  schedulerConfigPaths: string[];
+  schedulerIsDownloading: boolean;
+  schedulersConfigDownloading: boolean;
+  wsFilesByPath: Record<string, any>;
+}
+
+const SchedulerSection: React.FC<SchedulerSectionProps> = ({
+  component,
+  componentCarRef,
+  componentFlagDownloaded,
+  deletingPaths,
+  downloadingPaths,
+  onCancel,
+  onDelete,
+  onDownload,
+  schedulerConfigPaths,
+  schedulerIsDownloading,
+  schedulersConfigDownloading,
+  wsFilesByPath,
+}) => {
+  return (
+    <div className="mt-3">
+      <div className="text-brand-light/80 text-[11px] font-medium mb-2">Scheduler Options</div>
+      <div
+        className={cn(
+          'space-y-0 bg-brand-background border  border-b-0 border-brand-light/10 rounded-t-[6px] divide-y divide-brand-light/10',
+          {
+            'rounded-b-[6px] border-b': componentFlagDownloaded,
+          },
+        )}
+      >
+        {component.scheduler_options?.map((option, idx) => (
+          <div key={idx} className={cn(' border-brand-light/10 border-t-border-x px-3.5 py-2')}>
+            <div className="mb-1">
+              <span className="text-brand-light text-[11px] font-medium">{option.label || option.name}</span>
+            </div>
+            {option.description && (
+              <div className="text-[10px] text-brand-light/70 mt-1 mb-1.5 ">{option.description}</div>
+            )}
+          </div>
+        ))}
+      </div>
+      {schedulerConfigPaths.length > 0 && (
+        <div
+          className={cn('bg-brand-background p-3 rounded-b-[6px]', {
+            'p-0': !schedulersConfigDownloading,
+          })}
+        >
+          {schedulerConfigPaths.map((p) => {
+            const wsFilesObj = wsFilesByPath[p] || {};
+            const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
+              filename,
+              downloadedBytes: (v as any).downloadedBytes,
+              totalBytes: (v as any).totalBytes,
+              status: (v as any).status,
+              progress: (v as any).progress,
+              message: (v as any).message,
+              bucket: (v as any).bucket,
+              label: (v as any).label,
+            }));
+            const files = wsFiles.length > 0 ? wsFiles : [];
+            if (!(files.length > 0)) return null;
+            return (
+              <div key={p} className="w-full">
+                <div className="text-brand-light text-[10.5px] font-medium mb-2.5">Config Download</div>
+                {files.length > 0 ? (
+                  <div className="flex flex-col gap-y-2">
+                    {files.map((f: any) => (
+                      <div key={f.filename} className="flex flex-col gap-y-1">
+                        <div className="flex flex-col justify-start gap-y-2 w-full">
+                          <div className="flex-1 min-w-0">
+                            <div
+                              style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
+                              className="text-[10px] text-brand-light/80 font-mono truncate break-all"
+                            >
+                              {f.filename}
+                            </div>
+                          </div>
+                          <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
+                            <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
+                            <span>{typeof f.message === 'string' && f.message ? f.message : 'Preparing...'}</span>
+                          </div>
+                        </div>
+                        <ProgressBar
+                          percent={(() => {
+                            const pct = f.totalBytes
+                              ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                              : typeof f.progress === 'number'
+                                ? f.progress * 100
+                                : 0;
+                            return Math.max(0, Math.min(100, pct));
+                          })()}
+                        />
+                        <div className="flex items-center justify-between">
+                          {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
+                            <div className="text-[10px] text-brand-light/90">
+                              {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
+                            </div>
+                          ) : (
+                            <div />
+                          )}
+                          {f.status === 'completed' || f.status === 'complete' ? (
+                            <div className="text-[10px] text-green-400">Completed</div>
+                          ) : (
+                            <div className="text-[9px] text-brand-light/60">
+                              {f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : ''}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-start justify-start gap-y-2 w-full">
+                    <div className="flex-1 min-w-0">
+                      <div
+                        style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 40}px` }}
+                        className="text-[10px] text-brand-light/80 font-mono truncate break-all"
+                      >
+                        {p}
+                      </div>
+                    </div>
+                    <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1 justify-start">
+                      <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
+                      <span>Preparing...</span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex flex-col items-center justify-between mt-2 w-full">
+                  <button
+                    onClick={() => onCancel(p)}
+                    className="text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {!componentFlagDownloaded && (
+        <div className="bg-brand-background p-3 rounded-b-[6px] border border-t-0 border-brand-light/10">
+          <button
+            onClick={() => onDownload(schedulerConfigPaths)}
+            className="w-full text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light  hover:bg-brand/70 border border-brand-light/10 rounded-[6px] bg-brand px-3 py-2 transition-all"
+          >
+            {schedulerConfigPaths.some((p) => downloadingPaths.has(p)) || schedulerIsDownloading ? (
+              <LuLoader className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <LuDownload className="w-3.5 h-3.5" />
+            )}
+            <span>
+              {schedulerConfigPaths.some((p) => downloadingPaths.has(p)) || schedulerIsDownloading
+                ? 'Downloading...'
+                : 'Download Config'}
+            </span>
+          </button>
+        </div>
+      )}
+      {componentFlagDownloaded && schedulerConfigPaths.length > 0 && (
+        <div className="bg-brand-background rounded-[6px] mt-2 py-1 border  border-brand-light/10">
+          <div className="space-y-2 divide-y divide-brand-light/10">
+            {schedulerConfigPaths.map((p) => (
+              <div key={p} className="flex flex-col items-start justify-start gap-y-2 w-full py-2 px-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] text-brand-light font-medium mb-1">Config Path</p>
+                  <div
+                    style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 60}px` }}
+                    className="text-[10px] text-brand-light/80 font-mono truncate break-all"
+                  >
+                    {p}
+                  </div>
+                </div>
+                <div className="flex flex-row items-center justify-between gap-x-2 w-full">
+                  <div className="text-[11px] font-medium text-brand-light/90 flex items-center justify-start gap-x-1">
+                    <LuCheck className="w-3 h-3 text-green-400" />
+                    <span>Downloaded</span>
+                  </div>
+                  <button
+                    onClick={() => onDelete(p)}
+                    className="w-fit text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[5px] px-2.5 py-1.5 transition-all"
+                  >
+                    {deletingPaths.has(p) ? (
+                      <LuLoader className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <LuTrash className="w-3 h-3" />
+                    )}
+                    <span>{deletingPaths.has(p) ? 'Deleting...' : 'Delete'}</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 

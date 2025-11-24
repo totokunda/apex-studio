@@ -8,6 +8,9 @@ import {
   getManifestPart as getManifestPartPreload,
   validateAndRegisterCustomModelPath as validateAndRegisterCustomModelPathPreload,
   deleteCustomModelPath as deleteCustomModelPathPreload,
+  updateManifestLoraScale as updateManifestLoraScalePreload,
+  updateManifestLoraName as updateManifestLoraNamePreload,
+  deleteManifestLora as deleteManifestLoraPreload,
 } from '@app/preload';
 import { ClipType } from '../types';
 
@@ -281,6 +284,8 @@ export type ManifestWithType = ManifestDocument & {
 
 export type LoraType = {
   source?: string;
+  remote_source?: string;
+  verified?: boolean;
   scale?: number;
   name?: string;
   label?: string;
@@ -357,6 +362,40 @@ export async function deleteCustomModelPath(
     manifestId,
     componentIndex,
     path,
+  )) as ConfigResponse<any>;
+}
+
+export async function updateManifestLoraScale(
+  manifestId: string,
+  loraIndex: number,
+  scale: number,
+): Promise<ConfigResponse<any>> {
+  return (await updateManifestLoraScalePreload(
+    manifestId,
+    loraIndex,
+    scale,
+  )) as ConfigResponse<any>;
+}
+
+export async function updateManifestLoraName(
+  manifestId: string,
+  loraIndex: number,
+  name: string,
+): Promise<ConfigResponse<any>> {
+  return (await updateManifestLoraNamePreload(
+    manifestId,
+    loraIndex,
+    name,
+  )) as ConfigResponse<any>;
+}
+
+export async function deleteManifestLora(
+  manifestId: string,
+  loraIndex: number,
+): Promise<ConfigResponse<any>> {
+  return (await deleteManifestLoraPreload(
+    manifestId,
+    loraIndex,
   )) as ConfigResponse<any>;
 }
 

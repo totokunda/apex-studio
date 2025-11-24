@@ -604,6 +604,64 @@ export class ApexApi implements AppModule {
         return this.makeRequest<any>('DELETE', '/manifest/custom-model-path', body);
       },
     );
+
+    // Update a single LoRA entry's scale inside a manifest YAML
+    ipcMain.handle(
+      'manifest:update-lora-scale',
+      async (
+        _event,
+        request: {
+          manifest_id: string;
+          lora_index: number;
+          scale: number;
+        },
+      ) => {
+        const body = {
+          manifest_id: String(request.manifest_id || ''),
+          lora_index: Number(request.lora_index),
+          scale: Number(request.scale),
+        };
+        return this.makeRequest<any>('POST', '/manifest/lora/scale', body);
+      },
+    );
+
+    // Update a LoRA entry's name/label inside a manifest YAML
+    ipcMain.handle(
+      'manifest:update-lora-name',
+      async (
+        _event,
+        request: {
+          manifest_id: string;
+          lora_index: number;
+          name: string;
+        },
+      ) => {
+        const body = {
+          manifest_id: String(request.manifest_id || ''),
+          lora_index: Number(request.lora_index),
+          name: String(request.name || '').trim(),
+        };
+        return this.makeRequest<any>('POST', '/manifest/lora/name', body);
+      },
+    );
+
+    // Delete a LoRA entry (and best-effort remove its local path)
+    ipcMain.handle(
+      'manifest:delete-lora',
+      async (
+        _event,
+        request: {
+          manifest_id: string;
+          lora_index: number;
+        },
+      ) => {
+        const body = {
+          manifest_id: String(request.manifest_id || ''),
+          lora_index: Number(request.lora_index),
+        };
+        return this.makeRequest<any>('DELETE', '/manifest/lora', body);
+      },
+    );
   }
 
   private registerComponentsHandlers(): void {
@@ -638,12 +696,16 @@ export class ApexApi implements AppModule {
       source: string | string[];
       save_path?: string;
       job_id?: string;
+      manifest_id?: string;
+      lora_name?: string;
     }) => {
       const body = {
         item_type: request.item_type,
         source: request.source,
         save_path: request.save_path,
         job_id: request.job_id,
+        manifest_id: request.manifest_id,
+        lora_name: request.lora_name,
       };
       return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/download', body);
     });

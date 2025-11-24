@@ -45,15 +45,7 @@ export const ModelGenerationProperties: React.FC<ModelGenerationPropertiesProps>
     return idx;
   }, [visibleGenerations, normalizeToFileUrl, selectedFileUrl]);
 
-  const getUiInputById = useCallback((id: string) => {
-    try {
-      const ui = (clip as any)?.manifest?.spec?.ui || (clip as any)?.manifest?.ui;
-      const inputs = Array.isArray(ui?.inputs) ? ui.inputs : [];
-      return inputs.find((inp: any) => String(inp?.id) === String(id)) || null;
-    } catch {
-      return null;
-    }
-  }, [clip]);
+
 
   const onSelectGeneration = useCallback(async (index: number) => {
     // Prevent re-selecting the already selected generation

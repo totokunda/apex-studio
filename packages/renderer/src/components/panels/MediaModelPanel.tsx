@@ -16,6 +16,7 @@ import PreprocessorMenu from '../menus/PreprocessorMenu'
 import { TbWorldDownload } from 'react-icons/tb'
 import { useManifestStore } from '@/lib/manifest/store';
 import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store'
+import { RiAiGenerate } from 'react-icons/ri'
 
 
 interface MediaModelPanelProps { order?: number; defaultSize?: number; minSize?: number; maxSize?: number }
@@ -29,8 +30,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
     const [canScrollRight, setCanScrollRight] = useState(false);
     const { section } = useSidebarStore();
     const { clearSelectedManifestId } = useManifestStore();
-    const { setSelectedPreprocessorId } = usePreprocessorsListStore();  
-    
+
 
 
     const resizePanelOpen = useCallback(() => {
@@ -103,8 +103,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({ order, defaultSize = 
           <MediaModelTrigger icon={<HiFilm className="h-4 w-4" />} title="Media" section="media" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger onClick={() => { clearSelectedManifestId(); }} icon={<LuBox className="h-4 w-4 stroke-2" />} title="Models" section="models" onOpen={resizePanelOpen} onClose={resizePanelClose} />
           <MediaModelTrigger icon={<MdPhotoFilter className="h-4 w-4 " />} title="Filters" section="filters" onOpen={resizePanelOpen} onClose={resizePanelClose} />
-          <MediaModelTrigger icon={<MdOutlineMovieFilter className="h-4 w-4 " />} title="LoRAs" section="loras" onOpen={resizePanelOpen} onClose={resizePanelClose} />
-          {/*<MediaModelTrigger icon={<HiOutlineTemplate className="h-4 w-4 stroke-2" />} title="Templates" section="templates" onOpen={resizePanelOpen} onClose={resizePanelClose} />*/}
+          <MediaModelTrigger icon={<RiAiGenerate className="h-4 w-4 " />} title="Generations" section="generations" onOpen={resizePanelOpen} onClose={resizePanelClose} />
         </div>
       </div>
       <LuChevronRight onClick={() => {

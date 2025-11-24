@@ -316,12 +316,28 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
     }, [mediaInfoRef.current?.image?.height, mediaInfoRef.current?.image?.width, rectWidth, rectHeight]);
 
-    // Initialize default transform if missing
+    // Initialize default transform if missing or invalid (zero-sized),
+    // always recentering the clip in the preview rect.
     useEffect(() => {
-        if (!clipTransform && displayWidth && displayHeight && !overrideClip && displayWidth > 0 && displayHeight > 0) {
-            setClipTransform(clipId, { x: offsetX, y: offsetY, width: displayWidth, height: displayHeight, scaleX: 1, scaleY: 1, rotation: 0 });
+        if (!overrideClip && displayWidth > 0 && displayHeight > 0) {
+            const hasTransform = !!clipTransform;
+            const width = clipTransform?.width ?? 0;
+            const height = clipTransform?.height ?? 0;
+            const needsInit = !hasTransform || width <= 0 || height <= 0;
+
+            if (needsInit) {
+                setClipTransform(clipId, {
+                    x: offsetX,
+                    y: offsetY,
+                    width: displayWidth,
+                    height: displayHeight,
+                    scaleX: 1,
+                    scaleY: 1,
+                    rotation: 0,
+                });
+            }
         }
-    }, [clipTransform, displayWidth, displayHeight, offsetX, offsetY, clipId, setClipTransform, overrideClip, displayWidth, displayHeight]);
+    }, [clipTransform, displayWidth, displayHeight, offsetX, offsetY, clipId, setClipTransform, overrideClip]);
 
     // Ensure canvas matches display size for crisp rendering
     useEffect(() => {

@@ -39,10 +39,12 @@ interface PropertiesSliderProps {
   step?: number;
   toFixed?: number;
   labelClass?: string;
+  inputClass?: string;
+  buttonClass?: string;
   disabled?: boolean;
 }
 
-const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChange, renderInput, suffix, min, max, step = 0., toFixed = 1, labelClass, disabled = false }) => {
+const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChange, renderInput, suffix, min, max, step = 0., toFixed = 1, labelClass, inputClass, buttonClass, disabled = false }) => {
   const [tempValue, setTempValue] = useState(value.toFixed(toFixed));
   const [isFocused, setIsFocused] = useState(false);
   const lastValueRef = React.useRef(value);
@@ -109,7 +111,7 @@ const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChan
       <Slider value={[value]} onValueChange={(value) => onChange(value[0])} min={min} max={max} step={step} disabled={disabled} />
         <div className="flex flex-row items-center">
         <input 
-          className={cn("w-15 h-6 px-1.5 text-center text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1 rounded-l bg-brand", disabled && "opacity-50 cursor-not-allowed")}
+          className={cn("w-15 h-6 px-1.5 text-center text-brand-light text-[11px] font-normal items-center border border-brand-light/10 p-1 rounded-l bg-brand", inputClass, disabled && "opacity-50 cursor-not-allowed")}
           value={renderInput ? renderInput(tempValue) : (isFocused ? tempValue : tempValue + (suffix || ''))}
           onChange={(e) => setTempValue(e.target.value)}
           onFocus={() => !disabled && setIsFocused(true)}
@@ -117,7 +119,7 @@ const PropertiesSlider:React.FC<PropertiesSliderProps> = ({ label, value, onChan
           onKeyDown={disabled ? undefined : handleKeyDown}
           readOnly={disabled}
         />
-        <div className={cn("flex flex-col items-center justify-center divide-y divide-brand-light/10 bg-brand  h-6 rounded-r", disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer")}>
+        <div className={cn("flex flex-col items-center justify-center divide-y divide-brand-light/10 bg-brand  h-6 rounded-r", buttonClass, disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer")}>
             <button className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200" disabled={disabled} onClick={() => {
               if (!disabled && !isNaN(value) && isFinite(value)) onChange(Math.min(value + step, max ?? value + step));
             }}>

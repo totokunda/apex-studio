@@ -19,19 +19,23 @@ export interface DownloadStore {
   }>>;
   // Overloads to accommodate single path and multiple paths
   subscribeToJob: {
-    (jobId: string, path: string, onComplete?: (path: string) => void): Promise<() => void>;
-    (jobId: string, paths: string[], onComplete?: (paths: string[]) => void): Promise<() => void>;
+    (jobId: string, path: string, onComplete?: (path: string) => void, onError?: (error: unknown, path: string) => void): Promise<() => void>;
+    (jobId: string, paths: string[], onComplete?: (paths: string[]) => void, onError?: (error: unknown, paths: string[]) => void): Promise<() => void>;
   };
   startAndTrackDownload: (request: {
     item_type: 'component' | 'lora' | 'preprocessor';
     source: string | string[];
     save_path?: string;
-  }, onComplete?: (path: string) => void) => Promise<string[]>;
+    manifest_id?: string;
+    lora_name?: string;
+  }, onComplete?: (path: string) => void, onError?: (error: unknown, source: string) => void) => Promise<string[]>;
   startDownload: (request: {
     item_type: 'component' | 'lora' | 'preprocessor';
     source: string | string[];
     save_path?: string;
     job_id?: string;
+    manifest_id?: string;
+    lora_name?: string;
   }) => Promise<string>;
   resolveDownload: (request: {
     item_type: 'component' | 'lora' | 'preprocessor';
@@ -62,11 +66,21 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
   downloadingPaths: new Set<string>(),
   jobIdToPath: {},
   wsFilesByPath: {},
-  subscribeToJob: async (jobId: string, pathOrPaths: string | string[], onComplete?: (arg: any) => void) => {
+  subscribeToJob: async (jobId: string, pathOrPaths: string | string[], onComplete?: (arg: any) => void, onError?: (error: unknown, arg: any) => void) => {
     const pathsArr: string[] = Array.isArray(pathOrPaths) ? pathOrPaths : [pathOrPaths];
     const primaryPath: string | undefined = pathsArr[0];
     set((state) => ({ jobIdToPath: { ...state.jobIdToPath, [jobId]: pathOrPaths } }));
-    try { await connectUnifiedDownloadWebSocket(jobId); } catch {}
+    try {
+      await connectUnifiedDownloadWebSocket(jobId);
+    } catch (error) {
+      if (onError) {
+        try {
+          onError(error, pathOrPaths);
+        } catch {
+          // ignore secondary errors from onError
+        }
+      }
+    }
     const off = onUnifiedDownloadUpdate(jobId, (data: UnifiedDownloadWsUpdate) => {
       try {
         const meta = (data && (data as any).metadata) || {};
@@ -82,6 +96,13 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
         // If we received a terminal status without byte info, still clear local downloading flag
 
         if (isTerminal) {
+          if ((status === 'error' || status === 'canceled') && onError) {
+            try {
+              onError({ status, message }, pathOrPaths);
+            } catch {
+              // ignore secondary errors from onError
+            }
+          }
           if (onComplete) onComplete(pathOrPaths);
           setTimeout(() => {set((state) => {
             const nextDownloading = new Set(state.downloadingPaths);
@@ -154,7 +175,15 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
           try { off(); } catch {}
           disconnectUnifiedDownloadWebSocket(jobId).catch(() => {});
         }
-      } catch {}
+      } catch (error) {
+        if (onError) {
+          try {
+            onError(error, pathOrPaths);
+          } catch {
+            // ignore secondary errors from onError
+          }
+        }
+      }
     });
     return off;
   },
@@ -162,7 +191,9 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
     item_type: 'component' | 'lora' | 'preprocessor';
     source: string | string[];
     save_path?: string;
-  }, onComplete?: (path: string) => void) => {
+    manifest_id?: string;
+    lora_name?: string;
+  }, onComplete?: (path: string) => void, onError?: (error: unknown, source: string) => void) => {
     const sources = Array.isArray(request.source) ? request.source : [request.source];
     set((state) => {
       const next = new Set(state.downloadingPaths);
@@ -176,18 +207,27 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
           item_type: request.item_type,
           source: s,
           save_path: request.save_path,
+          manifest_id: request.manifest_id,
+          lora_name: request.lora_name,
         });
         if (jobId) jobIds.push(jobId);
         try { await get().resolveDownload({ item_type: request.item_type, source: s, save_path: request.save_path }); } catch {}
         if (jobId) {
-          await get().subscribeToJob(jobId, s, onComplete);
+          await get().subscribeToJob(jobId, s, onComplete, onError);
         }
-      } catch {
+      } catch (error) {
         set((state) => {
           const next = new Set(state.downloadingPaths);
           next.delete(s);
           return { downloadingPaths: next };
         });
+        if (onError) {
+          try {
+            onError(error, s);
+          } catch {
+            // Swallow errors from onError handler to avoid breaking the download loop
+          }
+        }
       }
     }
     return jobIds;
@@ -197,6 +237,8 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
     source: string | string[];
     save_path?: string;
     job_id?: string;
+    manifest_id?: string;
+    lora_name?: string;
   }) => {
     const response = await startUnifiedDownload(request);
     if (response.success) {

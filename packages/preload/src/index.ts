@@ -1495,6 +1495,40 @@ async function deleteCustomModelPath(
   });
 }
 
+async function updateManifestLoraScale(
+  manifestId: string,
+  loraIndex: number,
+  scale: number,
+): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:update-lora-scale', {
+    manifest_id: manifestId,
+    lora_index: loraIndex,
+    scale,
+  });
+}
+
+async function updateManifestLoraName(
+  manifestId: string,
+  loraIndex: number,
+  name: string,
+): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:update-lora-name', {
+    manifest_id: manifestId,
+    lora_index: loraIndex,
+    name,
+  });
+}
+
+async function deleteManifestLora(
+  manifestId: string,
+  loraIndex: number,
+): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke('manifest:delete-lora', {
+    manifest_id: manifestId,
+    lora_index: loraIndex,
+  });
+}
+
 // Engine API functions
 function _normalizeInputsForIpc(obj: any): any {
   if (obj == null) return obj;
@@ -1584,6 +1618,8 @@ async function startUnifiedDownload(request: {
   source: string | string[];
   save_path?: string;
   job_id?: string;
+  manifest_id?: string;
+  lora_name?: string;
 }): Promise<ConfigResponse<{job_id: string; status: string; message?: string}>> {
   return await ipcRenderer.invoke('download:start', request);
 }
@@ -1736,6 +1772,9 @@ export {
   getManifestPart,
   validateAndRegisterCustomModelPath,
   deleteCustomModelPath,
+  updateManifestLoraScale,
+  updateManifestLoraName,
+  deleteManifestLora,
   runEngine,
   getEngineStatus,
   getEngineResult,

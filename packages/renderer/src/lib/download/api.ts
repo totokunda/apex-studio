@@ -55,6 +55,8 @@ export async function startUnifiedDownload(request: {
     source: string | string[];
     save_path?: string;
     job_id?: string;
+    manifest_id?: string;
+    lora_name?: string;
 }): Promise<ConfigResponse<{job_id: string; status: string; message?: string}>> {
     return await startUnifiedDownloadPreload(request);
 }

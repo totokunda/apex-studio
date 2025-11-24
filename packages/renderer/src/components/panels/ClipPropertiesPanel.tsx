@@ -1,21 +1,21 @@
 import { useClipStore } from '@/lib/clip'
 import { useControlsStore } from '@/lib/control'
-import AudioProperties from './AudioProperties'
+import AudioProperties from '../properties/AudioProperties'
 import { useMemo, useRef, useEffect, useState, useCallback } from 'react'
 import {  convertApexCachePath, convertUserDataPath, getMediaInfoCached } from '@/lib/media/utils'
-import DurationProperties from './DurationProperties'
-import PositionProperties from './PositionProperties'
-import LayoutProperties from './LayoutProperties'
+import DurationProperties from '../properties/DurationProperties'
+import PositionProperties from '../properties/PositionProperties'
+import LayoutProperties from '../properties/LayoutProperties'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import AppearanceProperties from './AppearanceProperties'
-import AdjustProperties from './AdjustProperties'  
+import AppearanceProperties from '../properties/AppearanceProperties'
+import AdjustProperties from '../properties/AdjustProperties'  
 import {LuChevronRight, LuChevronLeft, LuMonitorCog} from 'react-icons/lu'
 import { cn } from '@/lib/utils'  
-import TextProperties from './TextProperties'
-import LineProperties from './LineProperties'
-import PreprocessorDurationPanel from './preprocessor/PreprocessorDurationPanel'
-import PreprocessorParametersPanel from './preprocessor/PreprocessorParametersPanel'
+import TextProperties from '../properties/TextProperties'
+import LineProperties from '../properties/LineProperties'
+import PreprocessorDurationPanel from '../properties/preprocessor/PreprocessorDurationPanel'
+import PreprocessorParametersPanel from '../properties/preprocessor/PreprocessorParametersPanel'
 import { FaStop } from 'react-icons/fa'
 import { runPreprocessor, cancelPreprocessor } from '@/lib/preprocessor/api'
 import { toast } from 'sonner';
@@ -24,12 +24,12 @@ import { toFrameRange } from '@/lib/media/fps';
 import { usePreprocessorJobActions } from '@/lib/preprocessor/api';
 import { useDrawingStore } from '@/lib/drawing';
 import { useViewportStore } from '@/lib/viewport';
-import MaskPropertiesPanel from './mask/MaskPropertiesPanel';
-import { ModelInputsProperties } from './model/ModelInputsProperties'
+import MaskPropertiesPanel from '../properties/mask/MaskPropertiesPanel';
+import { ModelInputsProperties } from '../properties/model/ModelInputsProperties'
 import { RiAiGenerate } from 'react-icons/ri'
-import { ModelGenerationProperties } from './model/ModelGenerationProperties'
-import ProgressPanel from './model/ProgressPanel'
-import FilterProperties from './FilterProperties'
+import { ModelGenerationProperties } from '../properties/model/ModelGenerationProperties'
+import ProgressPanel from '../properties/model/ProgressPanel'
+import FilterProperties from '../properties/FilterProperties'
 import { savePreviewImage, getPreviewPath} from '@app/preload'
 import { AnyClipProps, ModelClipProps } from '@/lib/types'
 import {ExportClip, exportSequence, exportClip} from '@app/export-renderer'
@@ -41,10 +41,11 @@ import { validatePreprocessorFrames } from '@/lib/preprocessorHelpers';
 import { runEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/lib/engine/api';
 import { useManifest } from '@/lib/manifest/hooks';
 import { ManifestComponent } from '@/lib/manifest/api';
-import ModelComponentsProperties from './model/ModelComponentsProperties'
+import ModelComponentsProperties from '../properties/model/ModelComponentsProperties'
 import { v4 as uuidv4 } from 'uuid';
-import FrameInterpolateProperties from './FrameInterpolateProperties'
-import PreprocessorProperties from './preprocessor/PreprocessorProperties'
+import FrameInterpolateProperties from '../properties/FrameInterpolateProperties'
+import PreprocessorProperties from '../properties/preprocessor/PreprocessorProperties'
+import LoraPanel from '../properties/model/LoraPanel'
 interface PropertiesPanelProps {
     panelSize: number;
 }
@@ -1099,6 +1100,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Inputs</TabsTrigger>}
             {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5  whitespace-nowrap">Progress</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-architecture" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Architecture</TabsTrigger>}
+            {(hasModel) && <TabsTrigger value="model-lora" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">LoRA</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Generations</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">Text</TabsTrigger>}
@@ -1180,6 +1182,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           </TabsContent>}
             {(hasFrameInterpolate) && <TabsContent value="enhance" className="min-w-0 m-0">
             <FrameInterpolateProperties clipId={clipId} />
+          </TabsContent>}
+          {(hasModel) && <TabsContent value="model-lora" className="min-w-0 m-0"> 
+            <LoraPanel clipId={clipId} />
           </TabsContent>}
           </div>
         </ScrollArea>
