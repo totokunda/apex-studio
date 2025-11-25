@@ -26,7 +26,6 @@ export type ModelTypeInfo = {
   description: string;
 };
 
-
 // Manifest v1 Types (aligned with backend schema_v1 and manifest_updated YAMLs)
 export type ManifestSchedulerOption = {
   name: string;
@@ -213,7 +212,12 @@ export type UIInputImageMask = UIInputBase & UIInputMapDimensions & {
   map_to?: string;
 };
 
-
+export type UIInputImageList = UIInputBase & UIInputMapDimensions & {
+  type: 'image_list';
+  items?: UIInputImage[];
+  min?: number;
+  max?: number;
+};
 
 export type UIInputAudio = UIInputBase & {
   type: 'audio';
@@ -240,6 +244,7 @@ export type UIInput =
   | UIInputImagePreprocessor
   | UIInputVideoPreprocessor
   | UIInputImage
+  | UIInputImageList
   | UIInputImageMask
   | UIInputAudio
   | UIInputSelect
@@ -259,6 +264,7 @@ export type ManifestSpec = {
   engine_type?: 'torch' | 'mlx' | string;
   fps?: number;
   min_duration_secs?: number;
+  default_duration_secs?: number;
   max_duration_secs?: number;
   attention_types: string[];
   attention_types_detail: {
@@ -290,6 +296,7 @@ export type LoraType = {
   name?: string;
   label?: string;
   is_downloaded?: boolean;
+  required?: boolean; 
 } | string;
 
 export type ManifestDocument = {

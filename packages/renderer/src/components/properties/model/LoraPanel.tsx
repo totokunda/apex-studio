@@ -565,7 +565,9 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId }) => {
                 </div>
             </div>
         )}
-      {loras.length === 0 && !isAddingLora && (
+      {loras.filter(
+            (lora) => typeof lora !== 'string' ? !lora.required : true
+          ).length === 0 && !isAddingLora && (
         <div className="text-brand-light/90 text-[12px] font-medium flex flex-col justify-center items-center gap-y-2 p-4 w-full h-28 border border-brand-light/10 rounded-md bg-brand"
         >
             <PiCubeDuotone className="w-6 h-6 text-brand-light/90" />
@@ -574,7 +576,9 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId }) => {
       )}
       {loras.length > 0 && (
         <div className="flex flex-col gap-y-1">
-          {loras.map((lora, idx) => (
+          {loras.filter(
+            (lora) => typeof lora !== 'string' ? !lora.required : true
+          ).map((lora, idx) => (
             <LoraItem
               key={typeof lora === 'string' ? lora : lora.source || `${manifest?.metadata?.id || ''}-${idx}`}
               item={lora}

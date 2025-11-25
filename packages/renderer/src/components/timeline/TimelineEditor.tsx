@@ -21,7 +21,6 @@ import { calculateFrameFromX, getOtherPreprocessors } from '@/lib/preprocessorHe
 import {convertFrameRange} from '@/lib/media/fps';
 
 import { ManifestWithType } from '@/lib/manifest/api';
-import { useManifestStore } from '@/lib/manifest/store';
 import { useViewportStore } from '@/lib/viewport';
 
 interface TimelineEditorProps {
@@ -220,7 +219,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       if (!data) return;
       
       
-      
+
       if (data.type === 'preprocessor') {
         const clipFrames = controlStore.fps * 5;
         setGhostStartEndFrame(0, clipFrames);
@@ -230,7 +229,7 @@ const TimelineEditor:React.FC<TimelineEditorProps> = React.memo(() => {
       setIsDragging(true);
  
       if (data.type === 'model') {
-        const clipFrames = (data as ManifestWithType).metadata?.desired_duration ?? 5 * controlStore.fps;
+        const clipFrames = (data as ManifestWithType).spec?.default_duration_secs ?? 5 * controlStore.fps;
         setGhostStartEndFrame(0, clipFrames);
         return;
       }
