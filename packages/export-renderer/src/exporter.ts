@@ -416,18 +416,78 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
   const { clip, fps, mode, imageFrame, range, encoderOptions, filename } = opts;
   const includeAudio = (opts as any)?.includeAudio !== undefined ? !!(opts as any).includeAudio : true;
 
+  // For image/video clips, normalize the transform and output canvas so that:
+  // - The clip.transform width/height correspond to the requested export size
+  //   (width/height coming in via opts or existing transform/originalTransform)
+  // - The canvas dimensions are tightly aligned to that transform and scaled
+  //   to any normalized crop present on the transform.
+  let workingClip = clip as ExportClip;
+  if (workingClip.type === 'image' || workingClip.type === 'video') {
+    const currentTransform = ((workingClip as any).transform ?? (workingClip as any).originalTransform ?? {}) as {
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+      scaleX?: number;
+      scaleY?: number;
+      rotation?: number;
+      cornerRadius?: number;
+      opacity?: number;
+      crop?: { x: number; y: number; width: number; height: number };
+    };
+
+    const crop = currentTransform?.crop;
+
+    const baseWidthRaw =
+      (typeof opts.width === 'number' && opts.width > 0
+        ? opts.width
+        : (typeof currentTransform.width === 'number' && currentTransform.width > 0 ? currentTransform.width : 0)) || 0;
+    const baseHeightRaw =
+      (typeof opts.height === 'number' && opts.height > 0
+        ? opts.height
+        : (typeof currentTransform.height === 'number' && currentTransform.height > 0 ? currentTransform.height : 0)) || 0;
+
+    let baseWidth = baseWidthRaw || 1920;
+    let baseHeight = baseHeightRaw || 1080;
+
+    let scaledWidth = baseWidth;
+    let scaledHeight = baseHeight;
+
+    // If a normalized crop is present, shrink the target region by this crop
+    // so the exported canvas corresponds to the cropped content.
+    if (crop && crop.width > 0 && crop.height > 0) {
+      scaledWidth = Math.max(1, Math.floor(baseWidth * crop.width));
+      scaledHeight = Math.max(1, Math.floor(baseHeight * crop.height));
+    }
+
+    const adjustedTransform = {
+      ...currentTransform,
+      x: 0,
+      y: 0,
+      width: scaledWidth,
+      height: scaledHeight,
+    };
+
+    workingClip = { ...(workingClip as any), transform: adjustedTransform } as typeof workingClip;
+  }
+
   // Resolve output canvas (create if not provided)
   let canvas = opts.canvas;
   if (!canvas) {
-    // Infer size from clip transform or fallback
-    const inferredWidth = Math.max(
-      opts.width || 0,
-      Number(((clip.transform as { width?: number } | undefined)?.width)) || 0,
-    );
-    const inferredHeight = Math.max(
-      opts.height || 0,
-      Number(((clip.transform as { height?: number } | undefined)?.height)) || 0,
-    );
+    // Infer size from clip transform or fallback. For image/video clips we
+    // prefer the (possibly crop-adjusted) transform dimensions from
+    // workingClip, falling back to opts.width/height only when needed.
+    const isImageOrVideo = workingClip.type === 'image' || workingClip.type === 'video';
+    const fromTransformWidth = Number(((workingClip.transform as { width?: number } | undefined)?.width)) || 0;
+    const fromTransformHeight = Number(((workingClip.transform as { height?: number } | undefined)?.height)) || 0;
+
+    const inferredWidth = isImageOrVideo
+      ? (fromTransformWidth || opts.width || 0)
+      : Math.max(opts.width || 0, fromTransformWidth);
+    const inferredHeight = isImageOrVideo
+      ? (fromTransformHeight || opts.height || 0)
+      : Math.max(opts.height || 0, fromTransformHeight);
+
     const w = Math.max(1, inferredWidth || 1920);
     const h = Math.max(1, inferredHeight || 1080);
     canvas = document.createElement('canvas');
@@ -439,8 +499,8 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
   if (!ctx) return;
 
   // Local duration relative to this clip
-  const clipStartGlobal = Number(clip.startFrame ?? 0);
-  const clipEndGlobal = Number(clip.endFrame ?? clipStartGlobal + 1);
+  const clipStartGlobal = Number(workingClip.startFrame ?? 0);
+  const clipEndGlobal = Number(workingClip.endFrame ?? clipStartGlobal + 1);
   const localDuration = Math.max(1, Math.max(0, clipEndGlobal - clipStartGlobal));
   const startFrame = range?.start ?? 0;
   const endFrame = range?.end ?? localDuration;
@@ -476,7 +536,9 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
    
 
     // Applicators bound to this clip, active at this frame (LOCAL frame indexing)
-    const bound = clip.applicators && Array.isArray(clip.applicators) ? (clip.applicators as ExportApplicatorClip[]) : [];
+    const bound = workingClip.applicators && Array.isArray(workingClip.applicators)
+      ? (workingClip.applicators as ExportApplicatorClip[])
+      : [];
     const activeApps = bound.filter((a) => {
       const s = a.startFrame ?? Number.NEGATIVE_INFINITY;
       const e = a.endFrame ?? Number.POSITIVE_INFINITY;
@@ -489,12 +551,18 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
     const applicators = applicatorsRaw as unknown as Array<{ apply: (c: HTMLCanvasElement) => HTMLCanvasElement; ensureResources?: () => Promise<void> }>;
 
 
-    if (clip.type === 'image') {
-      await blitImage(temp, clip as unknown as BlitImageClipProps, applicators, frame);
-    } else if (clip.type === 'video') {
-      const { selectedSrc, frameOffset } = resolveVideoSourceForFrame(clip, frame);
-      const speed = (() => { const s = Number(clip?.speed ?? 1); return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1; })();
-      const baseOffsetFrames = (selectedSrc === clip.src) ? Math.max(0, Number(clip?.trimStart) || 0) : -Math.max(0, frameOffset || 0);
+    if (workingClip.type === 'image') {
+      await blitImage(temp, workingClip as unknown as BlitImageClipProps, applicators, frame);
+    } else if (workingClip.type === 'video') {
+      const { selectedSrc, frameOffset } = resolveVideoSourceForFrame(workingClip as ExportVideoClip, frame);
+      const speed = (() => {
+        const s = Number((workingClip as any)?.speed ?? 1);
+        return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
+      })();
+      const baseOffsetFrames =
+        (selectedSrc === (workingClip as ExportVideoClip).src)
+          ? Math.max(0, Number((workingClip as any)?.trimStart) || 0)
+          : -Math.max(0, frameOffset || 0);
       const clipStart = 0; // local
       const clipEnd = localDuration; // local
       const durationFrames = Math.max(0, Math.floor(clipEnd - clipStart));
@@ -510,12 +578,12 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
       }
       const iterKey = `${selectedSrc}|s:${speed}|pfps:${fps}|rs:${rangeStartLocal}|re:${rangeEndLocal ?? 'inf'}`;
 
-      let ctxIter = videoIters.get(clip.clipId) as IterCtx | undefined;
+      let ctxIter = videoIters.get(workingClip.clipId) as IterCtx | undefined;
       const reusable = !!(ctxIter && ctxIter.key === iterKey && ctxIter.currentProjectIndex <= (rangeStartLocal + Math.max(0, Math.floor(frame - startFrame))));
       if (!reusable || (ctxIter && ctxIter.currentProjectIndex > (rangeStartLocal + Math.max(0, Math.floor(frame - startFrame))))) {
         const asyncIterable = await getVideoFrameIterator(selectedSrc, { projectFps: Math.max(1, fps), startIndex: rangeStartLocal, endIndex: rangeEndLocal, speed });
         ctxIter = { key: iterKey, iter: asyncIterable[Symbol.asyncIterator](), currentProjectIndex: rangeStartLocal };
-        videoIters.set(clip.clipId, ctxIter);
+        videoIters.set(workingClip.clipId, ctxIter);
       }
       if (mode === 'image') {
         // go to the target frame
@@ -524,14 +592,14 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
           (ctxIter as IterCtx).currentProjectIndex++;
         }
       }
-      await blitVideo(temp, clip as unknown as BlitVideoClipProps, applicators, (ctxIter as IterCtx).iter, frame);
+      await blitVideo(temp, workingClip as unknown as BlitVideoClipProps, applicators, (ctxIter as IterCtx).iter, frame);
       (ctxIter as IterCtx).currentProjectIndex++;
-    } else if (clip.type === 'text') {
-      blitText(temp, clip as unknown as BlitTextClipProps, applicators);
-    } else if (clip.type === 'shape') {
-      blitShape(temp, clip as unknown as BlitShapeClipProps, applicators);
-    } else if (clip.type === 'draw') {
-      await blitDrawing(temp, clip as unknown as BlitDrawingClipProps, applicators);
+    } else if (workingClip.type === 'text') {
+      blitText(temp, workingClip as unknown as BlitTextClipProps, applicators);
+    } else if (workingClip.type === 'shape') {
+      blitShape(temp, workingClip as unknown as BlitShapeClipProps, applicators);
+    } else if (workingClip.type === 'draw') {
+      await blitDrawing(temp, workingClip as unknown as BlitDrawingClipProps, applicators);
     } else {
       // audio/filter-only clip does not draw to canvas
     }
@@ -570,22 +638,22 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
       return blob;
     }
 
-    if (clip.type === 'audio') {
-      const outPath = await renderAudioMixToFile(clip as unknown as ExportAudioClip, startFrame, endFrame, fps, 'mp3', filename ?? 'output.mp3', filename);
+    if (workingClip.type === 'audio') {
+      const outPath = await renderAudioMixToFile(workingClip as unknown as ExportAudioClip, startFrame, endFrame, fps, 'mp3', filename ?? 'output.mp3', filename);
       return outPath || undefined;
     } 
     
     // Optional: include audio when exporting a single video clip if an audio source is attached
-    if (includeAudio && clip.type === 'video') {
+    if (includeAudio && workingClip.type === 'video') {
       const spec = [{
-        src: String((clip as any).src),
-        startFrame: Number(clip.startFrame) || 0,
-        endFrame: typeof clip.endFrame === 'number' ? Number(clip.endFrame) : endFrame,
-        trimStart: Math.max(0, Number((clip as any)?.trimStart) || 0),
+        src: String((workingClip as any).src),
+        startFrame: Number(workingClip.startFrame) || 0,
+        endFrame: typeof workingClip.endFrame === 'number' ? Number(workingClip.endFrame) : endFrame,
+        trimStart: Math.max(0, Number((workingClip as any)?.trimStart) || 0),
         volumeDb: 0,
         fadeInSec: 0,
         fadeOutSec: 0,
-        speed: (() => { const s = Number((clip as any)?.speed ?? 1); return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1; })(),
+        speed: (() => { const s = Number((workingClip as any)?.speed ?? 1); return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1; })(),
       }];
       try {
         const out = await renderAudioMixWithFfmpeg(spec as any, { fps, exportStartFrame: startFrame, exportEndFrame: endFrame, outFormat: 'wav', fileNameHint: (filename ?? 'temp_audio') + '.wav' });

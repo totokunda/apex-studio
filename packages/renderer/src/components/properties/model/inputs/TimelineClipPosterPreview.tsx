@@ -238,8 +238,29 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
               const maxY = Math.max(0, y1, y2, y3);
               const aabbW = maxX - minX;
               const aabbH = maxY - minY;
-              t.x = (rectWidth - aabbW) / 2 - minX;
-              t.y = (rectHeight - aabbH) / 2 - minY;
+
+              // Uniformly scale content so its rotated bounds cover the poster rect as much as possible,
+              // which avoids a visible "ring" around cropped content.
+              const coverScale = Math.max(
+                aabbW > 0 ? rectWidth / aabbW : 1,
+                aabbH > 0 ? rectHeight / aabbH : 1
+              );
+
+              if (Number.isFinite(coverScale) && coverScale > 0) {
+                const finalScale = coverScale;
+                const scaledMinX = minX * finalScale;
+                const scaledMinY = minY * finalScale;
+                const scaledAabbW = aabbW * finalScale;
+                const scaledAabbH = aabbH * finalScale;
+
+                t.scaleX = sx * finalScale;
+                t.scaleY = sy * finalScale;
+                t.x = (rectWidth - scaledAabbW) / 2 - scaledMinX;
+                t.y = (rectHeight - scaledAabbH) / 2 - scaledMinY;
+              } else {
+                t.x = (rectWidth - aabbW) / 2 - minX;
+                t.y = (rectHeight - aabbH) / 2 - minY;
+              }
             }
 
             switch (clip.type) {

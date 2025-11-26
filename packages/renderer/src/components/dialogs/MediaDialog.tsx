@@ -826,88 +826,139 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                                                   const applicators = getApplicators(clip.clipId, effectiveGlobalFrame);
                                                   // Use clipOverride only when an explicit override group is provided
                                                   const overrideToUse = { ...clip };
+                                                  
+                                                  if (
+                                                    overrideToUse &&
+                                                    overrideToUse.transform &&
+                                                    (overrideToUse.type === 'image' || overrideToUse.type === 'video') &&
+                                                    !overrideToUse.clipId?.startsWith('media:') &&
+                                                    !overrideToUse.groupId
+                                                  ) {
+                                                    const t = { ...(overrideToUse.transform ?? {}) };
 
+                                                    // In the media dialog, always show the full underlying item for
+                                                    // non-group clips, even if a crop was previously applied.
+                                                    // Reset crop and base width/height to the native media dimensions.
+                                                    // @ts-ignore - mediaWidth/mediaHeight exist on image/video clips
+                                                    const nativeW = overrideToUse.mediaWidth || overrideToUse.width || 0;
+                                                    // @ts-ignore
+                                                    const nativeH = overrideToUse.mediaHeight || overrideToUse.height || 0;
+
+                                                    if (nativeW > 0 && nativeH > 0) {
+                                                      t.width = nativeW;
+                                                      t.height = nativeH;
+                                                    }
+
+                                                    if ((t as any).crop) {
+                                                      delete (t as any).crop;
+                                                    }
+
+                                                    // Use the logical preview rect as the "canvas" the input should fit inside
+                                                    const canvasW = previewRect.width || size.width;
+                                                    const canvasH = previewRect.height || size.height;
+
+                                                    if (canvasW > 0 && canvasH > 0) {
+                                                      const rawW = t.width ?? canvasW;
+                                                      const rawH = t.height ?? canvasH;
+                                                      const baseSx = typeof t.scaleX === 'number' ? t.scaleX : 1;
+                                                      const baseSy = typeof t.scaleY === 'number' ? t.scaleY : 1;
+                                                      const deg = typeof t.rotation === 'number' ? t.rotation : 0;
+                                                      const rad = (deg * Math.PI) / 180;
+                                                      const c = Math.cos(rad);
+                                                      const s = Math.sin(rad);
+
+                                                      // First, compute the axis-aligned bounding box of the current transform
+                                                      const w0 = rawW * baseSx;
+                                                      const h0 = rawH * baseSy;
+                                                      const x1_0 = w0 * c;          const y1_0 = w0 * s;
+                                                      const x2_0 = -h0 * s;         const y2_0 = h0 * c;
+                                                      const x3_0 = w0 * c - h0 * s; const y3_0 = w0 * s + h0 * c;
+                                                      const minX0 = Math.min(0, x1_0, x2_0, x3_0);
+                                                      const maxX0 = Math.max(0, x1_0, x2_0, x3_0);
+                                                      const minY0 = Math.min(0, y1_0, y2_0, y3_0);
+                                                      const maxY0 = Math.max(0, y1_0, y2_0, y3_0);
+                                                      const aabbW0 = maxX0 - minX0;
+                                                      const aabbH0 = maxY0 - minY0;
+
+                                                      // If the bounding box is larger than the canvas, scale it down uniformly
+                                                      let fitScale = 1;
+                                                      if (aabbW0 > 0 && aabbH0 > 0 && (aabbW0 > canvasW || aabbH0 > canvasH)) {
+                                                        const scaleXFit = canvasW / aabbW0;
+                                                        const scaleYFit = canvasH / aabbH0;
+                                                        fitScale = Math.min(scaleXFit, scaleYFit, 1);
+                                                      }
+
+                                                      const sx = baseSx * fitScale;
+                                                      const sy = baseSy * fitScale;
+                                                      const w = rawW * sx;
+                                                      const h = rawH * sy;
+
+                                                      const x1 = w * c;          const y1 = w * s;
+                                                      const x2 = -h * s;         const y2 = h * c;
+                                                      const x3 = w * c - h * s;  const y3 = w * s + h * c;
+                                                      const minX = Math.min(0, x1, x2, x3);
+                                                      const maxX = Math.max(0, x1, x2, x3);
+                                                      const minY = Math.min(0, y1, y2, y3);
+                                                      const maxY = Math.max(0, y1, y2, y3);
+                                                      const aabbW = maxX - minX;
+                                                      const aabbH = maxY - minY;
+
+                                                      t.scaleX = sx;
+                                                      t.scaleY = sy;
+                                                      t.x = (canvasW - aabbW) / 2 - minX;
+                                                      t.y = (canvasH - aabbH) / 2 - minY;
+
+                                                      overrideToUse.transform = t;
+                                                    }
+                                                  }
+
+                                                  if (
+                                                    groupCentering &&
+                                                    overrideToUse?.groupId === groupCentering.groupId &&
+                                                    overrideToUse.transform &&
+                                                    (overrideToUse.type === 'image' ||
+                                                      overrideToUse.type === 'video' ||
+                                                      overrideToUse.type === 'shape' ||
+                                                      overrideToUse.type === 'text' ||
+                                                      overrideToUse.type === 'draw')
+                                                  ) {
+                                                    const t = { ...(overrideToUse.transform ?? {}) };
+                                                    const baseX = t.x ?? 0;
+                                                    const baseY = t.y ?? 0;
+                                                    const existingScaleX = typeof t.scaleX === 'number' ? t.scaleX : 1;
+                                                    const existingScaleY = typeof t.scaleY === 'number' ? t.scaleY : 1;
+                                                    const scale = typeof (groupCentering as any).scale === 'number'
+                                                      ? (groupCentering as any).scale
+                                                      : 1;
+
+                                                    t.x = baseX * scale + groupCentering.dx;
+                                                    t.y = baseY * scale + groupCentering.dy;
+                                                    t.scaleX = existingScaleX * scale;
+                                                    t.scaleY = existingScaleY * scale;
+
+                                                    overrideToUse.transform = t;
+                                                  }
 
                                                   
-                                                 if (
-                                                   overrideToUse &&
-                                                   overrideToUse.transform &&
-                                                   (overrideToUse.type === 'image' || overrideToUse.type === 'video') &&
-                                                   !overrideToUse.clipId?.startsWith('media:') &&
-                                                   !overrideToUse.groupId
-                                                 ) {
-                                                   const t = { ...(overrideToUse.transform ?? {}) };
-                                                   const rawW = (t.width ?? size.width);
-                                                   const rawH = (t.height ?? size.height);
-                                                   const sx = (typeof t.scaleX === 'number' ? t.scaleX : 1);
-                                                   const sy = (typeof t.scaleY === 'number' ? t.scaleY : 1);
-                                                   const w = rawW * sx;
-                                                   const h = rawH * sy;
-                                                   const deg = (typeof t.rotation === 'number' ? t.rotation : 0);
-                                                   const rad = deg * Math.PI / 180;
-                                                   const c = Math.cos(rad);
-                                                   const s = Math.sin(rad);
-                                                   // corners after rotation around top-left pivot (0,0)
-                                                   const x1 = w * c;           const y1 = w * s;
-                                                   const x2 = -h * s;          const y2 = h * c;
-                                                   const x3 = w * c - h * s;   const y3 = w * s + h * c;
-                                                   const minX = Math.min(0, x1, x2, x3);
-                                                   const maxX = Math.max(0, x1, x2, x3);
-                                                   const minY = Math.min(0, y1, y2, y3);
-                                                   const maxY = Math.max(0, y1, y2, y3);
-                                                   const aabbW = maxX - minX;
-                                                   const aabbH = maxY - minY;
-                                                   t.x = (size.width - aabbW) / 2 - minX;
-                                                   t.y = (size.height - aabbH) / 2 - minY;
-                                                   overrideToUse.transform = t;
-                                                 }
+                                                  if (overrideToUse?.clipId?.startsWith('media:')) {
+                                                    overrideToUse.transform = undefined;
+                                                  }
 
-                                                if (
-                                                  groupCentering &&
-                                                  overrideToUse?.groupId === groupCentering.groupId &&
-                                                  overrideToUse.transform &&
-                                                  (overrideToUse.type === 'image' ||
-                                                    overrideToUse.type === 'video' ||
-                                                    overrideToUse.type === 'shape' ||
-                                                    overrideToUse.type === 'text' ||
-                                                    overrideToUse.type === 'draw')
-                                                ) {
-                                                  const t = { ...(overrideToUse.transform ?? {}) };
-                                                  const baseX = t.x ?? 0;
-                                                  const baseY = t.y ?? 0;
-                                                  const existingScaleX = typeof t.scaleX === 'number' ? t.scaleX : 1;
-                                                  const existingScaleY = typeof t.scaleY === 'number' ? t.scaleY : 1;
-                                                  const scale = typeof (groupCentering as any).scale === 'number'
-                                                    ? (groupCentering as any).scale
-                                                    : 1;
-
-                                                  t.x = baseX * scale + groupCentering.dx;
-                                                  t.y = baseY * scale + groupCentering.dy;
-                                                  t.scaleX = existingScaleX * scale;
-                                                  t.scaleY = existingScaleY * scale;
-
-                                                  overrideToUse.transform = t;
-                                                }
-                                                
-                                                if (overrideToUse?.clipId?.startsWith('media:')) {
-                                                   overrideToUse.transform = undefined;
-                                                }
-
-                                                switch (clip.type) {
-                                                  case 'video':
-                                                    return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} applicators={applicators} overlap={true} inputMode={true} focusFrameOverride={focusFrame} inputId={timelineSelectorProps?.inputId} />
-                                                  case 'image':
-                                                    return <ImagePreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} applicators={applicators} overlap={true} inputMode={true} inputId={timelineSelectorProps?.inputId} focusFrameOverride={focusFrame} />
-                                                  case 'shape':
-                                                    return <ShapePreview key={clip.clipId} {...(clip as any)} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} applicators={applicators} assetMode={true} />
-                                                  case 'text':
-                                                    return <TextPreview key={clip.clipId} {...(clip as any)} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} applicators={applicators} assetMode={true} />
-                                                  case 'draw':
-                                                    return <DrawingPreview key={clip.clipId} {...(clip as any)} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} assetMode={true} applicators={applicators} />
-                                                  default:
-                                                    return null;
-                                                }
-                                              })}
+                                                  switch (clip.type) {
+                                                    case 'video':
+                                                      return <VideoPreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} applicators={applicators} overlap={true} inputMode={true} focusFrameOverride={focusFrame} inputId={timelineSelectorProps?.inputId} />
+                                                    case 'image':
+                                                      return <ImagePreview key={clip.clipId} {...(clip as any)} overrideClip={overrideToUse} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} applicators={applicators} overlap={true} inputMode={true} inputId={timelineSelectorProps?.inputId} focusFrameOverride={focusFrame} />
+                                                    case 'shape':
+                                                      return <ShapePreview key={clip.clipId} {...(clip as any)} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} applicators={applicators} assetMode={true} />
+                                                    case 'text':
+                                                      return <TextPreview key={clip.clipId} {...(clip as any)} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} applicators={applicators} assetMode={true} />
+                                                    case 'draw':
+                                                      return <DrawingPreview key={clip.clipId} {...(clip as any)} rectWidth={previewRect.width || size.width} rectHeight={previewRect.height || size.height} assetMode={true} applicators={applicators} />
+                                                    default:
+                                                      return null;
+                                                  }
+                                                })}
                                         </Group>
                                         <Group y={32} x={16} visible={canCrop}>
                                             {/* Dark overlay outside crop area */}

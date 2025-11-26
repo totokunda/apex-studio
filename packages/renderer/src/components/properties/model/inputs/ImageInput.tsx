@@ -30,6 +30,7 @@ export type ImageSelection = AnyClipProps | null;
 interface ImageInputProps {
   label?: string;
   description?: string;
+  height?: number;
   inputId: string;
   value: ImageSelection;
   onChange: (value: ImageSelection) => void;
@@ -290,7 +291,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({ value, onChange, clipId }) 
 }
 
 
-const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, value, onChange, clipId, panelSize, preprocessorRef, preprocessorName, applyPreprocessorInitial, onChangeComposite }) => {
+const ImageInput: React.FC<ImageInputProps> = ({ label, description, height, inputId, value, onChange, clipId, panelSize, preprocessorRef, preprocessorName, applyPreprocessorInitial, onChangeComposite }) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const stageContainerRef = useRef<HTMLDivElement | null>(null);
     const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -485,25 +486,41 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
           setContentRatio(null);
           return;
       }
-      const cached = ratioCacheByClipIdRef.current[clip.clipId];
+
+      const transform = (clip as any)?.transform as ClipTransform | undefined;
+      const crop = transform?.crop;
+      const cropKey = crop
+        ? `${crop.x.toFixed(4)},${crop.y.toFixed(4)},${crop.width.toFixed(4)},${crop.height.toFixed(4)}`
+        : '';
+      const cacheKey = cropKey ? `${clip.clipId}|${cropKey}` : clip.clipId;
+
+      const cached = ratioCacheByClipIdRef.current[cacheKey];
       if (typeof cached === 'number' && cached > 0) {
           setContentRatio(cached);
           return;
       }
+
       const src = (clip as any)?.src as string | undefined;
       if (!src) {
           setContentRatio(null);
           return;
       }
+
       let cancelled = false;
       (async () => {
           try {
             const info = await getMediaInfo(src);
-            const w = info?.video?.displayWidth ?? info?.image?.width ?? 0;
-            const h = info?.video?.displayHeight ?? info?.image?.height ?? 0;
+            let w = info?.video?.displayWidth ?? info?.image?.width ?? 0;
+            let h = info?.video?.displayHeight ?? info?.image?.height ?? 0;
+
+            if (crop && crop.width > 0 && crop.height > 0 && Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+              w = w * crop.width;
+              h = h * crop.height;
+            }
+
             const r = w / h;
             if (!cancelled && Number.isFinite(r) && r > 0) {
-              ratioCacheByClipIdRef.current[clip.clipId] = r;
+              ratioCacheByClipIdRef.current[cacheKey] = r;
               setContentRatio(r);
             }
           } catch {
@@ -525,26 +542,26 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             if (!rect) return;
             let w = Math.max(1, panelSize);
             let h = Math.max(1, w / displayRatio);
-            if (h > 400) {
-                h = 400;
+            if (h > (height ?? 400)) {
+                h = height ?? 400;
                 w = Math.max(1, h * displayRatio);
             }
             setStageSize({ w, h });
         });
         obs.observe(el);
         return () => obs.disconnect();
-  }, [panelSize, displayRatio]);
+  }, [panelSize, displayRatio, height]);
 
     // Ensure width updates immediately when panelSize changes, even if height is unchanged
     useEffect(() => {
       let w = Math.max(1, panelSize);
       let h = Math.max(1, w / displayRatio);
-      if (h > 400) {
-          h = 400;
+      if (h > (height ?? 400)) {
+          h = height ?? 400;
           w = Math.max(1, h * displayRatio);
       }
       setStageSize({ w, h });
-  }, [panelSize, displayRatio]);
+  }, [panelSize, displayRatio, height]);
 
 
     // DnD monitor: track hover-over state and handle drop selection
@@ -800,17 +817,19 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
   return (
     <Droppable className="w-full" id="image-input" accepts={['media']}>
         
-    <div ref={divRef} className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-full">
-    <div className="w-full flex flex-col items-start justify-start p-3 h-full">
-    <div className="w-full flex flex-col items-start justify-start mb-3">
+    <div ref={divRef} className="flex flex-col items-start w-full gap-y-1 min-w-0   h-full" style={{ height: height ? `${height}px` : undefined }}>
+    <div className={cn("w-full flex flex-col items-start justify-start  h-full", {
+        "p-0 rounded-md": !!height,
+        "p-3 border border-brand-light/5 rounded-[7px]": !height,
+    })}>
+    {(label || description) && (<div className="w-full flex flex-col items-start justify-start mb-3">
         <div className="w-full flex flex-col">
           <div className="flex flex-col items-start justify-start">
-            {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
-            {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start">{description}</span>}
-          </div>
-          
+                {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
+                {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start">{description}</span>}
+            </div>
         </div>
-    </div>
+    </div>)}
     <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
         <PopoverTrigger asChild onClick={(e) => { 
             if (!isPopoverOpen && value) {
@@ -819,9 +838,10 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
             }
          }}>
         <div ref={stageContainerRef} onDragEnter={handleExternalDragEnter} onDragOver={handleExternalDragOver} onDragLeave={handleExternalDragLeave} onDrop={handleExternalDrop} style={{ height: value ? stageSize.h : undefined }} className={cn("w-full flex flex-col items-center justify-center gap-y-3 h-full shadow-accent group  cursor-pointer relative overflow-hidden", 
-            value ? '': 'border-dashed hover:opacity-70 h-48 p-4 border-brand-light/10 border bg-brand-background-light/50 rounded',
+            value ? '': 'border-dashed hover:opacity-70 p-4 border-brand-light/10 border bg-brand-background-light/50 ',
+            height ? 'h-full rounded-md' : 'h-48 rounded',
             )}>
-            {isOverDropZone && (
+            {isOverDropZone && !height && (
                 <div className="absolute inset-0 z-30 bg-brand-background-light/40 backdrop-blur-sm pointer-events-none transition-opacity duration-150" />
             )}
             {value ? (
@@ -836,22 +856,38 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
                 )
             ) : (
                 <>
-                    <IoImageOutline className="w-1/4 h-1/4 text-brand-light" />
-                    <span className="text-brand-light text-[10.5px] w-full text-center font-medium">Click or drag and drop an image here.</span>
+                    <IoImageOutline className={cn(" text-brand-light", {
+                        "w-6 h-6": height,
+                        "w-1/4 h-1/4": !height,
+                    })} />
+                    <span className={cn("text-brand-light text-[10.5px] w-full text-center font-medium", {
+                        "text-[11.5px]": height,
+                        "text-[10.5px]": !height,
+                    })}>
+                        {height ? 'Click to select an image.' : 'Click or drag and drop an image here.'}</span>
                 </>
             )}
-            {value && <div className="absolute bottom-0 h-full left-0 right-0 z-50 bg-brand/60 hover:backdrop-blur-sm gap-x-4 transition-opacity duration-150 opacity-0 hover:opacity-100 flex items-center justify-center">
+            {value && <div className={cn("absolute bottom-0 h-full left-0 right-0 z-50 bg-brand/60 hover:backdrop-blur-sm gap-x-4 transition-opacity duration-150 opacity-0 hover:opacity-100 flex items-center justify-center", {
+                "rounded-md": !!height,
+                "rounded": !height,
+            })}>
             <div className="flex flex-col justify-center items-center gap-y-2 p-4  rounded-md w-full">
-            <button onClick={() => setIsPopoverOpen(true)} className="z-30 duration-150 flex items-center gap-x-2 px-6 py-2 w-40 bg-brand-light hover:bg-brand-light/90 shadow-md justify-center rounded text-[10.5px] font-poppins font-medium text-brand-accent-two-shade transition-colors">
+            <button onClick={() => setIsPopoverOpen(true)} className={cn("z-30 duration-150 flex items-center px-6 py-2  bg-brand-light hover:bg-brand-light/90 shadow-md justify-center rounded text-[10.5px] font-poppins font-medium text-brand-accent-two-shade transition-colors", {
+                "w-28 gap-x-1": !!height,
+                "w-40 gap-x-2": !height,
+            })}>
                     <TbPhoto className="w-4 h-4" />
                 <span className="">
-                    Select Media
+                    {height ? 'Select' : 'Select Media'}
                 </span>
           </button>
             {value && (mediaClip && (mediaClip?.type === 'video' || mediaClip.type === 'group' || (mediaClip.type === 'image' && !isClipOnTimeline))) && (
-                <button onClick={() => setIsDialogOpen(true)} className="z-30 duration-150 w-40 justify-center shadow-md flex items-center gap-x-2 px-6 py-2 font-poppins font-medium bg-brand-accent-two-shade  hover:bg-brand-accent-two-shade/90 rounded text-[10.5px] text-brand-light transition-colors">
+                <button onClick={() => setIsDialogOpen(true)} className={cn("z-30 duration-150 justify-center shadow-md flex items-center  px-6 py-2 font-poppins font-medium bg-brand-accent-two-shade  hover:bg-brand-accent-two-shade/90 rounded text-[10.5px] text-brand-light transition-colors", {
+                    "w-28 gap-x-1": !!height,
+                    "w-40 gap-x-2": !height,
+                })}>
                   <TbEdit className="w-4 h-4" />
-                  Edit Image
+                  {height ? 'Edit' : 'Edit Media'}
                 </button>
           )}
           
@@ -861,7 +897,10 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, inputId, va
         </PopoverTrigger>
         <PopoverImage value={value} onChange={emitSelection} clipId={clipId} />
     </Popover> 
-   <div className="w-full flex flex-col items-start justify-start  mt-3">
+   <div className={cn("w-full flex flex-col items-start justify-start ", {
+    "mt-0": !!height,
+    "mt-3": !height,
+   })}>
     {preprocessorRef && (
             <div className=" flex flex-row-reverse items-center gap-x-3 justify-between">
               <span className="text-brand-light text-[10px] font-medium">Apply {resolvedPreprocessorName}</span>

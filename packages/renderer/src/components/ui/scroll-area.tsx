@@ -15,7 +15,10 @@ const ScrollArea = React.forwardRef<
     <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-[inherit]">
       {children}
     </ScrollAreaPrimitive.Viewport>
-    <ScrollBar />
+    {/* Vertical scrollbar */}
+    <ScrollBar orientation="vertical" />
+    {/* Horizontal scrollbar for sideways scrolling use-cases */}
+    <ScrollBar orientation="horizontal" />
     <ScrollAreaPrimitive.Corner />
   </ScrollAreaPrimitive.Root>
 ))

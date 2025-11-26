@@ -16,6 +16,7 @@ import NumberListInput from './inputs/NumberListInput';
 import AudioInput from './inputs/AudioInput';
 import SchedulerPanel from './SchedulerPanel';
 import AttentionPanel from './AttentionPanel';
+import ImageInputList from './inputs/ImageInputList';
 
 export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], clipId: string, panelSize:number }> = ({ panel, inputs, clipId, panelSize }) => {
 
@@ -604,6 +605,67 @@ export const ModelInputsPanel: React.FC<{ panel: UIPanel, inputs: UIInput[], cli
                           panelSize={panelSizeToUse}
                           onChange={(v: any) => updateModelInput(clipId, inputId, { value: v ? JSON.stringify(v) : '' })}
                         />
+                    );
+                  }
+                  case 'image_list': {
+                    const parseImageListValue = (v: any) => {
+                      if (!v) return [] as any[];
+                      const toSelection = (item: any): any => {
+                        if (!item) return null;
+                        if (typeof item === 'object') {
+                          if ((item as any).kind === 'media' || (item as any).kind === 'clip') return item;
+                          if ((item as any).clipId || (item as any).src || (item as any).type) return item;
+                          return null;
+                        }
+                        if (typeof item === 'string') {
+                          try {
+                            const obj = JSON.parse(item);
+                            if (obj && (obj.kind === 'media' || obj.kind === 'clip')) return obj;
+                            if (obj && (obj.clipId || obj.src || obj.type)) return obj;
+                          } catch {}
+                          return { kind: 'media', assetUrl: item } as any;
+                        }
+                        return null;
+                      };
+                      let arr: any[] = [];
+                      if (Array.isArray(v)) {
+                        arr = v;
+                      } else if (typeof v === 'string') {
+                        try {
+                          const parsed = JSON.parse(v);
+                          if (Array.isArray(parsed)) {
+                            arr = parsed;
+                          } else if (parsed && typeof parsed === 'object') {
+                            arr = [parsed];
+                          }
+                        } catch {
+                          // ignore parse errors and fall back to empty
+                        }
+                      } else if (typeof v === 'object') {
+                        arr = [v];
+                      }
+                      // Preserve null/empty entries so they render as empty slots in ImageInputList
+                      return arr.map(toSelection);
+                    };
+                    const currentVal: any[] = parseImageListValue((input as any)?.value ?? (input as any)?.default);
+                    const panelSizeToUse = perItemPanelSize;
+                    const min = (input as any)?.min;
+                    const max = (input as any)?.max;
+                    return (
+                      <ImageInputList
+                        key={inputId}
+                        inputId={inputId}
+                        clipId={clipId}
+                        label={input?.label}
+                        description={input?.description}
+                        value={currentVal}
+                        panelSize={panelSizeToUse}
+                        min={typeof min === 'number' ? min : undefined}
+                        max={typeof max === 'number' ? max : undefined}
+                        onChange={(vals) => {
+                          updateModelInput(clipId, inputId, { value: vals && vals.length ? JSON.stringify(vals) : '' });
+                        }}
+                      />
                     );
                   }
                   case 'video': {

@@ -1000,7 +1000,9 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const isVideoish = typeStr.startsWith('video');
             const isAudioish = typeStr.startsWith('audio');
             const isImageish = typeStr.startsWith('image');
-            if (isVideoish || isAudioish || isImageish) {
+            const isImageList = typeStr === 'image_list';
+            // image_list is a special case: keep it as an array of selections, do not coerce to a single clip
+            if (isVideoish || isAudioish || (isImageish && !isImageList)) {
                 // Resolve composite values (selection + preprocessor flags) and ensure we return AnyClipProps
                 // Prefer: finalVal = <clip object> with selectedRange/selectedFrame and apply_preprocessor (if present)
                 let selectedClip: any = null;
