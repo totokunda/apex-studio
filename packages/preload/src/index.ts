@@ -190,6 +190,44 @@ async function savePreviewImage(
   return absPath;
 }
 
+// Save an image buffer or data URL directly to a specified absolute path.
+async function saveImageToPath(
+  data: ArrayBuffer | Uint8Array | string,
+  outPath: string,
+): Promise<string> {
+  let buffer: Buffer;
+  if (typeof data === 'string') {
+    const m = /^data:image\/(png|jpe?g|webp);base64,(.*)$/i.exec(data.trim());
+    if (m && m[2]) {
+      buffer = Buffer.from(m[2], 'base64');
+    } else {
+      throw new Error('saveImageToPath: expected data URL string or binary buffer');
+    }
+  } else if (data instanceof Uint8Array) {
+    buffer = Buffer.from(data);
+  } else {
+    buffer = Buffer.from(new Uint8Array(data));
+  }
+
+  let p = String(outPath || '');
+  if (!p) throw new Error('saveImageToPath: outPath is required');
+  if (p.startsWith('file://')) {
+    try {
+      p = fileURLToPath(p);
+    } catch {
+      // fall through with original
+    }
+  }
+
+  const dir = dirname(p);
+  if (!fs.existsSync(dir)) {
+    await fsp.mkdir(dir, { recursive: true });
+  }
+
+  await fsp.writeFile(p, buffer);
+  return p;
+}
+
 // Save arbitrary audio buffer to previews directory
 async function savePreviewAudio(
   data: ArrayBuffer | Uint8Array | string,
@@ -293,6 +331,49 @@ function buildAtempoChain(rate: number): string[] {
   return parts;
 }
 
+// Detect whether a media file has at least one audio stream using ffprobe.
+// If ffprobe is unavailable or returns an unexpected error, we conservatively
+// assume audio is present so behavior degrades to the previous implementation.
+async function hasAudioStream(path: string): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    try {
+      const ff = spawn('ffprobe', [
+        '-v', 'error',
+        '-select_streams', 'a',
+        '-show_entries', 'stream=index',
+        '-of', 'csv=p=0',
+        path,
+      ]);
+      let stdout = '';
+      let stderr = '';
+      ff.stdout.setEncoding('utf8');
+      ff.stderr.setEncoding('utf8');
+      ff.stdout.on('data', (d) => { stdout += String(d); });
+      ff.stderr.on('data', (d) => { stderr += String(d); });
+      ff.on('close', (code) => {
+        // Typical "no audio" case: ffprobe complains that the stream specifier
+        // matches no streams.
+        if (stderr.includes('matches no streams')) {
+          resolve(false);
+          return;
+        }
+        if (code === 0 && stdout.trim().length > 0) {
+          resolve(true);
+          return;
+        }
+        // Unexpected error: assume audio exists to preserve legacy behavior.
+        resolve(true);
+      });
+      ff.on('error', () => {
+        // If ffprobe itself fails (missing, permissions, etc), keep old behavior.
+        resolve(true);
+      });
+    } catch {
+      resolve(true);
+    }
+  });
+}
+
 async function renderAudioMixWithFfmpeg(
   clips: AudioMixClipSpec[],
   options: { fps: number; exportStartFrame: number; exportEndFrame: number; outFormat?: 'wav' | 'mp3'; fileNameHint?: string, filename?: string }
@@ -328,35 +409,63 @@ async function renderAudioMixWithFfmpeg(
   
 
   const args: string[] = ['-y'];
-  // Inputs
-  const normPaths: string[] = [];
+  // Inputs – only include sources that actually have an audio stream so we don't
+  // reference nonexistent pads like "[2:a]" for silent video files.
+  type ActiveClip = { clip: AudioMixClipSpec; inputIndex: number };
+  const activeClips: ActiveClip[] = [];
+  let nextInputIndex = 0;
   for (const c of clips) {
     let p = c.src;
-    try { if (p.startsWith('file://')) p = fileURLToPath(p); } catch {}
-    normPaths.push(p);
+    try { if (typeof p === 'string' && p.startsWith('file://')) p = fileURLToPath(p); } catch {}
+    // eslint-disable-next-line no-await-in-loop
+    const hasAudio = await hasAudioStream(p);
+    if (!hasAudio) continue;
     args.push('-i', p);
+    activeClips.push({ clip: c, inputIndex: nextInputIndex });
+    nextInputIndex += 1;
+  }
+
+  if (activeClips.length === 0) {
+    // No usable audio inputs – nothing to mix.
+    return null;
   }
 
   const filterParts: string[] = [];
   const outLabels: string[] = [];
-  clips.forEach((c, i) => {
+  activeClips.forEach(({ clip: c, inputIndex }) => {
     const volDb = Number.isFinite(c.volumeDb as number) ? (c.volumeDb as number) : 0;
     const fadeIn = Math.max(0, Number(c.fadeInSec || 0));
     const fadeOut = Math.max(0, Number(c.fadeOutSec || 0));
     const speed = Math.max(0.1, Math.min(5, Number(c.speed || 1)));
-    const clipStart = Math.max(0, Math.trunc(c.startFrame || 0));
-    const clipEnd = Math.max(clipStart, Math.trunc((c.endFrame as number) || clipStart));
-    const actStart = Math.max(0, clipStart - exportStart);
-    const actEnd = Math.max(0, Math.min(exportEnd, clipEnd) - exportStart);
-    const clipTimelineDurSec = Math.max(0, (actEnd - actStart) / fps);
-    const delayMs = Math.max(0, Math.round((actStart / fps) * 1000));
-    const trimStartFrames = Math.max(0, Math.trunc(c.trimStart || 0));
-    // Start reading from inside the source at the selection start within the clip (not scaled by speed)
-    const selectionStartWithinClipFrames = Math.max(0, actStart);
-    const mediaStartSec = (trimStartFrames + selectionStartWithinClipFrames) / fps;
+    const clipStart = Math.max(0, Math.trunc(c.startFrame ?? 0));
+    const clipEnd = Math.max(clipStart, Math.trunc((c.endFrame as number) ?? clipStart));
+
+    // Normalize trimStart to a finite, non-negative frame count.
+    const trimStartFramesRaw = Number(c.trimStart ?? 0);
+    const trimStartFrames = Number.isFinite(trimStartFramesRaw)
+      ? Math.max(0, Math.trunc(trimStartFramesRaw))
+      : 0;
+
+    // Project-frame position at which the underlying media frame 0 would have appeared
+    // before any timeline trims. This stays stable as the user trims the head of the clip.
+    const realStartFrame = clipStart - trimStartFrames;
+
+    // Intersection of this clip's visible range with the export range.
+    const visibleStart = Math.max(exportStart, clipStart);
+    const visibleEnd = Math.max(visibleStart, Math.min(exportEnd, clipEnd));
+
+    // Duration of this clip within the export timeline.
+    const clipTimelineDurSec = Math.max(0, (visibleEnd - visibleStart) / fps);
+
+    // Delay from exportStart until this clip becomes audible on the mixed timeline.
+    const delayMs = Math.max(0, Math.round(((visibleStart - exportStart) / fps) * 1000));
+
+    // Where to start reading from inside the source (in frames/seconds).
+    const mediaStartFrames = Math.max(0, visibleStart - realStartFrame);
+    const mediaStartSec = mediaStartFrames / fps;
     const atempoChain = buildAtempoChain(speed);
-    const labelIn = `[${i}:a]`;
-    const labelOut = `[a${i}]`;
+    const labelIn = `[${inputIndex}:a]`;
+    const labelOut = `[a${inputIndex}]`;
     const chain: string[] = [];
     chain.push('aresample=async=1');
     chain.push(`atrim=start=${mediaStartSec.toFixed(6)}`);
@@ -376,6 +485,13 @@ async function renderAudioMixWithFfmpeg(
     filterParts.push(`${labelIn}${chain.length ? chain.join(',') : 'anull'}${labelOut}`);
     outLabels.push(labelOut);
   });
+
+  // Add a silent base track spanning the entire export duration so that
+  // gaps between clips are emitted as silence and the mixed audio always
+  // covers the full export range.
+  const baseLabel = '[base]';
+  filterParts.unshift(`anullsrc=r=48000:cl=stereo:d=${durationSec.toFixed(6)}${baseLabel}`);
+  outLabels.unshift(baseLabel);
 
   // Mix and confine to export duration
   if (outLabels.length === 1) {
@@ -924,6 +1040,44 @@ async function importMediaPaths(inputAbsPaths: string[], resolution?: string): P
 async function ensureUniqueConvertedName(desiredName: string): Promise<string> {
   const {symlinksAbs} = await ensureMediaDirs();
   return ensureUniqueNameSync(symlinksAbs, desiredName);
+}
+
+// Reveal a media item in the OS file manager using its symlinked path.
+async function revealMediaItemInFolder(fileName: string): Promise<void> {
+  try {
+    if (!fileName) return;
+    const { symlinksAbs } = await ensureMediaDirs();
+    const symlinkPath = join(symlinksAbs, fileName);
+    // Prefer the original target path of the symlink (outside appdata), falling
+    // back to the symlink itself if it is not a symlink for some reason.
+    let targetPath = symlinkPath;
+    try {
+      const st = await fsp.lstat(symlinkPath);
+      if (st.isSymbolicLink()) {
+        targetPath = await fsp.realpath(symlinkPath);
+      }
+    } catch {
+      // If the symlink entry is missing, just try with the constructed path
+    }
+
+    await ipcRenderer.invoke('files:reveal-in-folder', targetPath);
+  } catch (e) {
+    // Best-effort; log but don't surface to the UI
+    // eslint-disable-next-line no-console
+    console.error('revealMediaItemInFolder failed', e);
+  }
+}
+
+// Reveal an arbitrary absolute path in the OS file manager.
+async function revealPathInFolder(absPath: string): Promise<void> {
+  try {
+    if (!absPath) return;
+    await ipcRenderer.invoke('files:reveal-in-folder', absPath);
+  } catch (e) {
+    // Best-effort; log but don't surface to the UI
+    // eslint-disable-next-line no-console
+    console.error('revealPathInFolder failed', e);
+  }
 }
 
 function getPathForFile(file: File): string {
@@ -1689,8 +1843,11 @@ export {
   listConvertedMedia,
   importMediaPaths,
   ensureUniqueConvertedName,
+  revealMediaItemInFolder,
+  revealPathInFolder,
   ensurePreviewDir,
   savePreviewImage,
+  saveImageToPath,
   savePreviewVideoFromFrames,
   getPreviewPath,
   exportVideoOpen,

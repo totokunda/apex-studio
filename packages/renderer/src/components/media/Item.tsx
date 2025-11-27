@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect } from 'react'
 import { Input } from "@/components/ui/input"
 import { cn } from '@/lib/utils'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { TbDots, TbPencil, TbTrash, TbVideo, TbVideoOff } from "react-icons/tb"
+import { TbDots, TbFolderOpen, TbPencil, TbTrash, TbVideo, TbVideoOff } from "react-icons/tb"
 import { LuLoaderCircle } from "react-icons/lu"
 
 interface DeleteAlertDialogProps {
@@ -15,6 +15,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { ClipType, MediaInfo } from '@/lib/types'
 import { generateAudioWaveformCanvas, generatePosterCanvas } from '@/lib/media/timeline'
 import Draggable from '@/components/dnd/Draggable'
+import { revealMediaItemInFolder } from '@app/preload'
 
 const DeleteAlertDialog: React.FC<React.PropsWithChildren<DeleteAlertDialogProps>> = ({ onDelete, open, onOpenChange}) => {
     return (
@@ -240,6 +241,13 @@ const Item:React.FC<ItemProps> = ({ item, renamingItem, setRenamingItem, renameC
                           <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11px]">
                             Rename
                           </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem className='py-1 rounded' onClick={() => { void revealMediaItemInFolder(item.name); }}>
+                            <TbFolderOpen className="w-3.5 h-3.5" />
+                            <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11px]">
+                              Open File Location
+                            </span>
                         </DropdownMenuItem>
                         
                         <DropdownMenuSeparator />

@@ -10,6 +10,12 @@ import { Shape } from 'konva/lib/Shape.js';
 import { applyWebGLFilters } from './webgl-filters/apply';
 import { applyMasksToCanvas } from './masks/apply';
 import type { WrappedCanvas } from 'mediabunny';
+import { remapMaskWithClipTransform } from '../../renderer/src/lib/mask/transformUtils';
+
+import Konva from 'konva';
+//@ts-ignore
+Konva._fixTextRendering = true;
+
 
 type ShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'line' | 'star';
 
@@ -33,9 +39,23 @@ export interface ClipTransform {
   };
 }
 
+type NormalizedTransform = {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+};
+
 interface BaseClipProps {
   clipId: string;
   transform?: ClipTransform;
+  /**
+   * Optional normalized transform in [0, 1] space describing how this clip
+   * should occupy the output canvas. When present, it will be mapped to
+   * pixel coordinates using the target canvas size while leaving `transform`
+   * as a pixel-space fallback.
+   */
+  normalizedTransform?: NormalizedTransform;
   type: 'shape' | 'text' | 'draw';
 }
 
@@ -86,6 +106,41 @@ export interface TextClipProps extends BaseClipProps {
   backgroundOpacity?: number;
   backgroundCornerRadius?: number;
 }
+type MaskTransform = ClipTransform;
+
+type MaskTool = 'lasso' | 'shape' | 'draw' | 'touch';
+type MaskShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'star';
+type MaskTrackingDirection = 'forward' | 'backward' | 'both';
+
+
+export type MaskClipProps = {
+  id: string;
+  clipId?: string;
+  tool: MaskTool;
+  featherAmount: number;
+  brushSize?: number;
+  // Mask data for the initial frame/keyframes
+  keyframes: Map<number, any> | Record<number, any>;
+  // Tracking settings
+  isTracked: boolean;
+  trackingDirection?: MaskTrackingDirection;
+  confidenceThreshold?: number;
+  // Transform applied to mask
+  transform?: MaskTransform;
+  // Metadata
+  createdAt: number;
+  lastModified: number;
+  // Operation settings
+  inverted?: boolean; // Invert the mask
+  backgroundColor?: string;
+  backgroundOpacity?: number;
+  backgroundColorEnabled?: boolean;
+  maskColor?: string;
+  maskOpacity?: number;
+  maskColorEnabled?: boolean;
+  maxTrackingFrames?: number;
+}
+
 
 interface DrawingLineTransform {
   x: number;
@@ -114,6 +169,35 @@ export interface DrawingClipProps extends BaseClipProps {
 
 type Canvas = HTMLCanvasElement;
 
+function computeSizeRatios(
+  original?: ClipTransform,
+  resolved?: { width: number; height: number }
+): { ratioX: number; ratioY: number } {
+  if (!original || !resolved) return { ratioX: 1, ratioY: 1 };
+  const ow = Number(original.width) || 0;
+  const oh = Number(original.height) || 0;
+  if (ow <= 0 || oh <= 0) return { ratioX: 1, ratioY: 1 };
+  const rx = resolved.width / ow;
+  const ry = resolved.height / oh;
+  return {
+    ratioX: Number.isFinite(rx) && rx > 0 ? rx : 1,
+    ratioY: Number.isFinite(ry) && ry > 0 ? ry : 1,
+  };
+}
+
+function scaleTransformSize(
+  transform: ClipTransform | undefined,
+  ratioX: number,
+  ratioY: number
+): ClipTransform | undefined {
+  if (!transform || (ratioX === 1 && ratioY === 1)) return transform;
+  return {
+    ...transform,
+    width: transform.width * ratioX,
+    height: transform.height * ratioY,
+  };
+}
+
 function ensureTransform(
   transform?: ClipTransform,
   canvas?: Canvas
@@ -131,6 +215,40 @@ function ensureTransform(
     cornerRadius: transform?.cornerRadius ?? 0,
     opacity: transform?.opacity ?? 100,
     crop: transform?.crop,
+  };
+}
+
+function resolveTransformFromClip(
+  transform: ClipTransform | undefined,
+  normalizedTransform: NormalizedTransform | undefined,
+  canvas?: Canvas
+): Required<Omit<ClipTransform, 'crop'>> & { crop?: ClipTransform['crop'] } {
+  const base = ensureTransform(transform, canvas);
+  if (!canvas || !normalizedTransform) return base;
+
+  const cw = Math.max(1, canvas.width || 1);
+  const ch = Math.max(1, canvas.height || 1);
+
+  const toPx = (normVal: any, dim: number, fallback: number): number => {
+    const n = Number(normVal);
+    
+    if (!Number.isFinite(n)) return fallback;
+    // Allow values outside [0, 1] so off‑canvas normalized positions/sizes
+    // are preserved when mapped back into pixel space.
+    return n * dim;
+  };
+
+  const x = toPx(normalizedTransform.x, cw, base.x);
+  const y = toPx(normalizedTransform.y, ch, base.y);
+  const width = toPx(normalizedTransform.width, cw, base.width);
+  const height = toPx(normalizedTransform.height, ch, base.height);
+
+  return {
+    ...base,
+    x,
+    y,
+    width,
+    height,
   };
 }
 
@@ -454,7 +572,7 @@ export async function blitDrawing(
 
 export function blitShape(canvas: Canvas, clip: ShapeClipProps | PolygonClipProps | StarClipProps, applicators?: Array<{ apply: (c: HTMLCanvasElement) => HTMLCanvasElement; ensureResources?: () => Promise<void> }>): void {
   withStage(canvas, (layer) => {
-    const t = ensureTransform(clip.transform, canvas);
+    const t = resolveTransformFromClip(clip.transform, (clip as any).normalizedTransform, canvas);
     const shapeType: ShapeTool = (clip as ShapeClipProps).shapeType ?? 'rectangle';
     const fillHex = (clip as ShapeClipProps).fill ?? '#3b82f6';
     const strokeHex = (clip as ShapeClipProps).stroke ?? '#1e40af';
@@ -578,13 +696,17 @@ export function blitShape(canvas: Canvas, clip: ShapeClipProps | PolygonClipProp
 
 export function blitText(canvas: Canvas, clip: TextClipProps, applicators?: Array<{ apply: (c: HTMLCanvasElement) => HTMLCanvasElement; ensureResources?: () => Promise<void> }>): void {
   withStage(canvas, (layer) => {
-    const t = ensureTransform(clip.transform, canvas);
-    const defaultWidth = 400;
-    const defaultHeight = 100;
+    const t = resolveTransformFromClip(clip.transform, (clip as any).normalizedTransform, canvas);
+    // Editor world units use BASE_LONG_SIDE = 600 for the short side of the rect.
+    // Scale font-related sizes by the ratio of export canvas height to this base
+    // so text appears consistent across resolutions (e.g. 1080p vs 480p).
+    const BASE_LONG_SIDE = 600;
+    const canvasScale = canvas.height > 0 ? canvas.height / BASE_LONG_SIDE : 1;
+
     const x = t.x ?? 0;
     const y = t.y ?? 0;
-    const width = t.width || defaultWidth;
-    const height = t.height || defaultHeight;
+    const width = t.width;
+    const height = t.height;
 
     const backgroundEnabled = clip.backgroundEnabled ?? false;
     const backgroundColor = clip.backgroundColor ?? '#000000';
@@ -599,7 +721,7 @@ export function blitText(canvas: Canvas, clip: TextClipProps, applicators?: Arra
         height,
         fill: backgroundColor,
         opacity: Math.max(0, Math.min(1, (backgroundOpacity / 100) * (t.opacity / 100))),
-        cornerRadius: backgroundCornerRadius,
+        cornerRadius: backgroundCornerRadius * canvasScale,
         rotation: t.rotation,
         listening: false,
       });
@@ -609,13 +731,27 @@ export function blitText(canvas: Canvas, clip: TextClipProps, applicators?: Arra
     const text = clip.text ?? '';
     const textTransformed = applyTextTransform(text, clip.textTransform);
 
+    const baseFontSize = clip.fontSize ?? 48;
+    const scaledFontSize = baseFontSize * canvasScale;
+
+    const baseStrokeWidth = clip.strokeEnabled ? (clip.strokeWidth ?? 2) : undefined;
+    const scaledStrokeWidth = baseStrokeWidth !== undefined ? baseStrokeWidth * canvasScale : undefined;
+
+    const baseShadowBlur = clip.shadowEnabled ? (clip.shadowBlur ?? 4) : undefined;
+    const scaledShadowBlur = baseShadowBlur !== undefined ? baseShadowBlur * canvasScale : undefined;
+
+    const baseShadowOffsetX = clip.shadowEnabled ? (clip.shadowOffsetX ?? 2) : undefined;
+    const baseShadowOffsetY = clip.shadowEnabled ? (clip.shadowOffsetY ?? 2) : undefined;
+    const scaledShadowOffsetX = baseShadowOffsetX !== undefined ? baseShadowOffsetX * canvasScale : undefined;
+    const scaledShadowOffsetY = baseShadowOffsetY !== undefined ? baseShadowOffsetY * canvasScale : undefined;
+
     const txt = new Text({
       x,
       y,
       width,
       height,
       text: textTransformed,
-      fontSize: clip.fontSize ?? 48,
+      fontSize: scaledFontSize,
       fontFamily: clip.fontFamily ?? 'Arial',
       fontStyle: `${clip.fontStyle ?? 'normal'} ${(clip.fontWeight ?? 400) >= 700 ? 'bold' : 'normal'}`.trim(),
       textDecoration: clip.textDecoration ?? 'none',
@@ -624,16 +760,16 @@ export function blitText(canvas: Canvas, clip: TextClipProps, applicators?: Arra
       fill: clip.color ?? '#000000',
       fillOpacity: ((clip.colorOpacity ?? 100) / 100),
       stroke: clip.strokeEnabled ? (clip.stroke ?? '#000000') : undefined,
-      strokeWidth: clip.strokeEnabled ? (clip.strokeWidth ?? 2) : undefined,
+      strokeWidth: scaledStrokeWidth,
       shadowColor: clip.shadowEnabled ? (clip.shadowColor ?? '#000000') : undefined,
-      shadowBlur: clip.shadowEnabled ? (clip.shadowBlur ?? 4) : undefined,
+      shadowBlur: scaledShadowBlur,
       shadowOpacity: clip.shadowEnabled ? ((clip.shadowOpacity ?? 75) / 100) : undefined,
-      shadowOffsetX: clip.shadowEnabled ? (clip.shadowOffsetX ?? 2) : undefined,
-      shadowOffsetY: clip.shadowEnabled ? (clip.shadowOffsetY ?? 2) : undefined,
+      shadowOffsetX: scaledShadowOffsetX,
+      shadowOffsetY: scaledShadowOffsetY,
       opacity: Math.max(0, Math.min(1, t.opacity / 100)),
       rotation: t.rotation,
-      scaleX: 1,
-      scaleY: 1,
+      scaleX: t.scaleX,
+      scaleY: t.scaleY,
       perfectDrawEnabled: false,
       shadowForStrokeEnabled: false,
     });
@@ -675,6 +811,7 @@ export interface ImageClipProps {
   }>;
   transform?: ClipTransform;
   originalTransform?: ClipTransform;
+  normalizedTransform?: NormalizedTransform;
   // adjustments
   brightness?: number;
   contrast?: number;
@@ -685,7 +822,7 @@ export interface ImageClipProps {
   sharpness?: number;
   vignette?: number;
   // masks
-  masks?: Array<any>;
+  masks?: Array<MaskClipProps>;
   // timing
   startFrame?: number;
   endFrame?: number;
@@ -706,6 +843,7 @@ export interface VideoClipProps {
   }>;
   transform?: ClipTransform;
   originalTransform?: ClipTransform;
+  normalizedTransform?: NormalizedTransform;
   // adjustments same as image
   brightness?: number;
   contrast?: number;
@@ -715,7 +853,7 @@ export interface VideoClipProps {
   noise?: number;
   sharpness?: number;
   vignette?: number;
-  masks?: Array<any>;
+  masks?: Array<MaskClipProps>;
   // timing
   startFrame?: number;
   endFrame?: number;
@@ -749,10 +887,10 @@ export async function blitVideo(
   iterator: AsyncIterator<WrappedCanvas | null>,
   projectFrame: number
 ): Promise<void> {
-  const t = ensureTransform(clip.transform, canvas);
+  
   const content = document.createElement('canvas');
-  content.width = Math.max(1, Math.floor(t.width));
-  content.height = Math.max(1, Math.floor(t.height));
+  content.width = canvas.width;
+  content.height = canvas.height;
   const cctx = content.getContext('2d');
   if (!cctx) return;
 
@@ -760,6 +898,8 @@ export async function blitVideo(
     const { value } = (await iterator.next()) as { value: WrappedCanvas | null };
     const wrapped = value;
     if (!wrapped) return;
+
+    const t = resolveTransformFromClip(clip.transform, clip.normalizedTransform, canvas);
 
     // Draw decoded frame into content, honoring crop (if any) in the same
     // normalized coordinates used by the renderer preview components.
@@ -777,7 +917,12 @@ export async function blitVideo(
         const sy = Math.max(0, Math.min(sh, crop.y * sh));
         const sWidth = Math.max(1, Math.min(sw - sx, crop.width * sw));
         const sHeight = Math.max(1, Math.min(sh - sy, crop.height * sh));
-        cctx.drawImage(sourceCanvas, sx, sy, sWidth, sHeight, 0, 0, content.width, content.height);
+        const dx = 0;
+        const dy = 0;
+        const dWidth = content.width;
+        const dHeight = content.height;
+        console.log(sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
+        cctx.drawImage(sourceCanvas, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
       } else {
         cctx.drawImage(sourceCanvas, 0, 0, content.width, content.height);
       }
@@ -794,18 +939,11 @@ export async function blitVideo(
         ? Math.max(0, baseLocal - Math.max(0, frameOffset))
         : Math.max(0, baseLocal + (Number(clip.trimStart) || 0));
       const maskFrame = Math.max(0, Math.floor(derivedLocal * speedFactor));
+
       applyMasksToCanvas(content, {
         focusFrame: projectFrame,
-        masks: clip.masks as any,
-        clip: {
-          clipId: clip.clipId,
-          type: 'video',
-          startFrame: clip.startFrame,
-          endFrame: clip.endFrame,
-          trimStart: clip.trimStart,
-          transform: { ...t, scaleX: 1, scaleY: 1 },
-          originalTransform: clip.originalTransform,
-        },
+        masks: clip.masks as MaskClipProps[],
+        clip:clip,
         disabled: false,
         maskFrameOverride: maskFrame,
       });
@@ -841,8 +979,8 @@ export async function blitVideo(
     drawRoundedImage(
       ctx,
       content,
-      t.x,
-      t.y,
+      t.x * (t.crop?.width ?? 1),
+      t.y * (t.crop?.height ?? 1),
       t.width,
       t.height,
       t.cornerRadius ?? 0,
@@ -896,6 +1034,7 @@ function drawRoundedImage(
     ctx.clip();
   }
 
+
   ctx.drawImage(imageCanvas, 0, 0, width, height);
   ctx.restore();
 }
@@ -906,7 +1045,9 @@ export async function blitImage(
   applicators?: Array<{ apply: (c: HTMLCanvasElement) => HTMLCanvasElement; ensureResources?: () => Promise<void> }>,
   focusFrame?: number
 ): Promise<void> {
-  const t = ensureTransform(clip.transform, canvas);
+
+  const t = resolveTransformFromClip(clip.transform, clip.normalizedTransform, canvas);
+
   const content = document.createElement('canvas');
   content.width = Math.max(1, Math.floor(t.width));
   content.height = Math.max(1, Math.floor(t.height));
@@ -956,29 +1097,28 @@ export async function blitImage(
       const nativeH = img.naturalHeight || img.height || content.height;
       const crop = t.crop;
       if (crop && crop.width > 0 && crop.height > 0) {
+        // Map the normalized crop rect both in source-space (native media
+        // pixels) and destination-space (content canvas pixels) so that we
+        // *crop* without introducing an extra zoom when both width and height
+        // are cropped.
         const sx = Math.max(0, Math.min(nativeW, crop.x * nativeW));
         const sy = Math.max(0, Math.min(nativeH, crop.y * nativeH));
         const sWidth = Math.max(1, Math.min(nativeW - sx, crop.width * nativeW));
         const sHeight = Math.max(1, Math.min(nativeH - sy, crop.height * nativeH));
-        cctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, content.width, content.height);
+        const dx = 0;
+        const dy = 0;
+        cctx.drawImage(img, sx, sy, sWidth, sHeight, dx, dy, content.width, content.height);
       } else {
         cctx.drawImage(img, 0, 0, content.width, content.height);
       }
+
 
       // Apply masks
       if (Array.isArray(clip.masks) && clip.masks.length > 0) {
         applyMasksToCanvas(content, {
           focusFrame: 0,
-          masks: clip.masks as any,
-          clip: {
-            clipId: clip.clipId,
-            type: 'image',
-            startFrame: clip.startFrame,
-            endFrame: clip.endFrame,
-            trimStart: clip.trimStart,
-            transform: { ...t, scaleX: 1, scaleY: 1 },
-            originalTransform: clip.originalTransform,
-          },
+          masks: clip.masks as MaskClipProps[],
+          clip: clip,
           disabled: false,
         });
       }
@@ -1010,6 +1150,7 @@ export async function blitImage(
       // Composite to destination canvas at transform with rotation, corner radius, opacity
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
+
       drawRoundedImage(
         ctx,
         content,
@@ -1030,5 +1171,4 @@ export async function blitImage(
 
   await loadAndDraw();
 }
-
 

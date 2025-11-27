@@ -41,11 +41,11 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
   const selectedMaskId = useControlsStore((s) => s.selectedMaskId);
   const setSelectedMaskId = useControlsStore((s) => s.setSelectedMaskId);
   const focusFrame = useControlsStore((s) => s.focusFrame);
-  const maskTool = useMaskStore((s) => s.tool);
-  const maskShape = useMaskStore((s) => s.shape);
+
   const selectedClipIds = useControlsStore((s) => s.selectedClipIds);
   const setSelectedClipIds = useControlsStore((s) => s.setSelectedClipIds);
-  
+  const getClipTransform = useClipStore((s) => s.getClipTransform);
+
   const shapeWhiteRef = useRef<any>(null);
   const shapeBlackRef = useRef<any>(null);
   const groupRef = useRef<Konva.Group>(null);

@@ -740,7 +740,15 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
   const playDisabled = !previewClip || rangeEndForInput <= rangeStartForInput;
 
   const handleDialogConfirm = useCallback(
-    (_data: { rotation: number; aspectRatio: string; crop?: { x: number; y: number; width: number; height: number }; transformWidth?: number; transformHeight?: number }) => {
+    (_data: {
+      rotation: number;
+      aspectRatio: string;
+      crop?: { x: number; y: number; width: number; height: number };
+      transformWidth?: number;
+      transformHeight?: number;
+      transformX?: number;
+      transformY?: number;
+    }) => {
       // Audio does not currently apply spatial transforms; selection range is edited via TimelineSelector inside MediaDialog.
     },
     []

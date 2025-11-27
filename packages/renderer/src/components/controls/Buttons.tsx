@@ -299,14 +299,22 @@ const CropButton = () => {
 
     const { setClipTransform } = useClipStore();
 
-    const handleConfirm = (data: { rotation: number; aspectRatio: string; crop?: { x: number; y: number; width: number; height: number }; transformWidth?: number; transformHeight?: number }) => {
+    const handleConfirm = (data: {
+        rotation: number;
+        aspectRatio: string;
+        crop?: { x: number; y: number; width: number; height: number };
+        transformWidth?: number;
+        transformHeight?: number;
+        transformX?: number;
+        transformY?: number;
+    }) => {
         if (!selectedClip) return;
-        
         setClipTransform(selectedClip.clipId, {
-            rotation: data.rotation,
-            ...(data.crop ? { crop: data.crop } : { crop: undefined }),
-            ...(data.transformWidth ? { width: data.transformWidth } : {}),
-            ...(data.transformHeight ? { height: data.transformHeight } : {})
+            crop: data.crop,
+            width: data.transformWidth,
+            height: data.transformHeight,
+            x: data.transformX,
+            y: data.transformY,
         });
     };
 

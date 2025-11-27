@@ -325,6 +325,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             const height = clipTransform?.height ?? 0;
             const needsInit = !hasTransform || width <= 0 || height <= 0;
 
+
             if (needsInit) {
                 setClipTransform(clipId, {
                     x: offsetX,
@@ -495,9 +496,6 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
         draw();
     }, [draw]);
 
-
-
-
     const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
         updateGuidesAndMaybeSnap({ snap: true });
         const node = imageRef.current;
@@ -636,8 +634,6 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             height: c.height * (displayHeight)
         };
     }, [clipTransform?.crop, displayWidth, displayHeight]);
-
-
 
   return (
     <React.Fragment>

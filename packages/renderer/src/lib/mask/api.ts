@@ -12,7 +12,8 @@ import {
 } from '@app/preload';
 import { toast } from 'sonner';
 import {useEffect, useRef, useState, useCallback} from 'react';
-import type {MediaInfo} from '../types';
+import type {ClipTransform, MediaInfo} from '../types';
+import { getCropOffset } from '@/components/preview/mask/touch';
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -38,6 +39,7 @@ export interface MaskResponse {
   contours?: Array<Array<number>>;
   message?: string;
 }
+
 
 const maskCache = new Map<string, MaskResponse>();
 
@@ -102,14 +104,14 @@ export function pointsToFlatArray(points: Array<{x: number, y: number}>): number
 }
 
 // Helper function to normalize points from display coordinates to media coordinates
-// This accounts for aspect-fit letterboxing and user transforms
+// This accounts for aspect-fit letterboxing, user transforms, and optional crops
 export function normalizePoints(
   points: Array<{x: number, y: number}>,
   displayWidth: number,
   displayHeight: number,
   mediaInfo: MediaInfo,
   filterOutOfBounds: boolean = true,
-  clipTransform?: {x: number, y: number, width: number, height: number, scaleX?: number, scaleY?: number, rotation?: number}
+  clipTransform?: ClipTransform
 ): Array<{x: number, y: number}> {
   
   const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
@@ -125,10 +127,20 @@ export function normalizePoints(
   let imageX, imageY, imageWidth, imageHeight;
   
   if (clipTransform) {
-    imageX = clipTransform.x;
-    imageY = clipTransform.y;
-    imageWidth = clipTransform.width * (clipTransform.scaleX || 1);
-    imageHeight = clipTransform.height * (clipTransform.scaleY || 1);
+    const sx = clipTransform.scaleX || 1;
+    const sy = clipTransform.scaleY || 1;
+    const cropW = clipTransform.crop?.width && clipTransform.crop.width > 0 ? clipTransform.crop.width : 1;
+    const cropH = clipTransform.crop?.height && clipTransform.crop.height > 0 ? clipTransform.crop.height : 1;
+    const uncroppedWidth = clipTransform.width * sx / cropW;
+    const uncroppedHeight = clipTransform.height * sy / cropH;
+    const cropX = clipTransform.crop?.x || 0;
+    const cropY = clipTransform.crop?.y || 0;
+
+    imageWidth = uncroppedWidth;
+    imageHeight = uncroppedHeight;
+    // Shift the image rect so (0,0) corresponds to the top-left of the uncropped media
+    imageX = clipTransform.x - cropX * uncroppedWidth;
+    imageY = clipTransform.y - cropY * uncroppedHeight;
   } else {
     // Calculate aspect-fit dimensions (letterbox/pillarbox)
     const mediaAspect = mediaWidth / mediaHeight;
@@ -182,7 +194,7 @@ export function normalizePointsWithLabels(
   displayHeight: number,
   mediaInfo: MediaInfo,
   filterOutOfBounds: boolean = true,
-  clipTransform?: {x: number, y: number, width: number, height: number, scaleX?: number, scaleY?: number, rotation?: number}
+  clipTransform?: ClipTransform
 ): {points: Array<{x: number, y: number}>, labels: Array<number>} {
   
   const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
@@ -202,10 +214,21 @@ export function normalizePointsWithLabels(
     imageY = clipTransform.y;
     imageWidth = clipTransform.width * (clipTransform.scaleX || 1);
     imageHeight = clipTransform.height * (clipTransform.scaleY || 1);
+    if (clipTransform.crop) {
+      imageWidth = imageWidth / (clipTransform.crop.width || 1);
+      imageHeight = imageHeight / (clipTransform.crop.height || 1);
+      let imageXOffset = clipTransform.crop.x * imageWidth;
+      let imageYOffset = clipTransform.crop.y * imageHeight;
+      imageX -= imageXOffset;
+      imageY -= imageYOffset;
+    }
+    
+    
   } else {
     // Calculate aspect-fit dimensions (letterbox/pillarbox)
     const mediaAspect = mediaWidth / mediaHeight;
     const rectAspect = displayWidth / displayHeight;
+
     
     if (rectAspect > mediaAspect) {
       // Letterbox (black bars on left/right)
@@ -232,9 +255,10 @@ export function normalizePointsWithLabels(
     // Then scale to media dimensions
     const mediaX = (localX / imageWidth) * mediaWidth;
     const mediaY = (localY / imageHeight) * mediaHeight;
-    
+
     const normalizedPoint = {x: mediaX, y: mediaY};
     const inBounds = mediaX >= 0 && mediaX <= mediaWidth && mediaY >= 0 && mediaY <= mediaHeight;
+
     
     return {
       point: normalizedPoint,
@@ -265,7 +289,7 @@ export function normalizeBox(
   displayWidth: number,
   displayHeight: number,
   mediaInfo: MediaInfo,
-  clipTransform?: {x: number, y: number, width: number, height: number, scaleX?: number, scaleY?: number, rotation?: number}
+  clipTransform?: ClipTransform
 ): {x1: number, y1: number, x2: number, y2: number} {
   const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
   const mediaHeight = mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
@@ -331,7 +355,7 @@ export function denormalizeContours(
   displayWidth: number,
   displayHeight: number,
   mediaInfo: MediaInfo,
-  clipTransform?: {x: number, y: number, width: number, height: number, scaleX?: number, scaleY?: number, rotation?: number}
+  clipTransform?: ClipTransform
 ): Array<Array<number>> {
   const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
   const mediaHeight = mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
@@ -349,6 +373,14 @@ export function denormalizeContours(
     imageY = clipTransform.y;
     imageWidth = clipTransform.width * (clipTransform.scaleX || 1);
     imageHeight = clipTransform.height * (clipTransform.scaleY || 1);
+    if (clipTransform.crop) {
+      imageWidth = imageWidth / (clipTransform.crop.width || 1);
+      imageHeight = imageHeight / (clipTransform.crop.height || 1);
+      let imageXOffset = clipTransform.crop.x * imageWidth;
+      let imageYOffset = clipTransform.crop.y * imageHeight;
+      imageX -= imageXOffset;
+      imageY -= imageYOffset;
+    }
   } else {
     // Calculate aspect-fit dimensions (letterbox/pillarbox)
     const mediaAspect = mediaWidth / mediaHeight;
@@ -375,10 +407,9 @@ export function denormalizeContours(
       // Scale from media to image-local coordinates
       const localX = (contour[i] / mediaWidth) * imageWidth;
       const localY = (contour[i + 1] / mediaHeight) * imageHeight;
-      
-      // Translate to canvas coordinates
-      const canvasX = localX + imageX;
-      const canvasY = localY + imageY;
+
+      const canvasX = localX + imageX
+      const canvasY = localY + imageY
       
       denormalized.push(canvasX, canvasY);
     }
@@ -392,7 +423,7 @@ export function denormalizeShapeBounds(
   displayWidth: number,
   displayHeight: number,
   mediaInfo: MediaInfo,
-  clipTransform?: {x: number, y: number, width: number, height: number, scaleX?: number, scaleY?: number, rotation?: number}
+  clipTransform?: ClipTransform
 ): { x: number; y: number; width: number; height: number; rotation?: number; shapeType?: string; scaleX?: number; scaleY?: number } {
   const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
   const mediaHeight = mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
@@ -520,7 +551,7 @@ export interface UseMaskOptions {
   displayWidth?: number;
   displayHeight?: number;
   mediaInfo?: MediaInfo;
-  clipTransform?: {x: number, y: number, width: number, height: number, scaleX?: number, scaleY?: number, rotation?: number};
+  clipTransform?: ClipTransform;
   multimaskOutput?: boolean;
   simplifyTolerance?: number;
   modelType?: string;
@@ -584,7 +615,6 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
         const pointObjects = Object.prototype.hasOwnProperty.call(points[0], 'x') 
             && Object.prototype.hasOwnProperty.call(points[0], 'y') ? points as Array<{x: number, y: number}> : flatArrayToPoints(points as number[]); 
         
-
         // Normalize if mediaInfo and display dimensions are provided
         if (mediaInfo && displayWidth && displayHeight) {
           // If we have labels, normalize points and labels together to keep them in sync

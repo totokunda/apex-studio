@@ -73,12 +73,12 @@ const fragmentShader = `
     // Precompute scale and rotation helpers
     float shapeScaleX = max(u_shapeScale.x, 0.0001);
     float shapeScaleY = max(u_shapeScale.y, 0.0001);
-    vec2 invCanvasScale = vec2(1.0 / max(u_canvasScale.x, 0.0001),
-                               1.0 / max(u_canvasScale.y, 0.0001));
-    float baseWidthMask = u_shapeBounds.z * invCanvasScale.x;
-    float baseHeightMask = u_shapeBounds.w * invCanvasScale.y;
-    float rectWidthMask = max(baseWidthMask * shapeScaleX, 0.0001);
-    float rectHeightMask = max(baseHeightMask * shapeScaleY, 0.0001);
+    
+    // We work in screen pixels to avoid rotation distortion from non-uniform canvas scaling.
+    // u_shapeBounds are already in screen pixels.
+
+    float rectWidthMask = max(u_shapeBounds.z * shapeScaleX, 0.0001);
+    float rectHeightMask = max(u_shapeBounds.w * shapeScaleY, 0.0001);
     float halfW = rectWidthMask * 0.5;
     float halfH = rectHeightMask * 0.5;
 
@@ -97,10 +97,11 @@ const fragmentShader = `
       // Rectangle rotates around its top-left corner to match editor behavior
       vec2 pivot = vec2(u_shapeBounds.x, u_shapeBounds.y);
       vec2 localCanvas = pixelCoord - pivot;
-      vec2 maskSpace = vec2(localCanvas.x * invCanvasScale.x,
-                            localCanvas.y * invCanvasScale.y);
-      vec2 rotRect = vec2(c * maskSpace.x - s * maskSpace.y,
-                          s * maskSpace.x + c * maskSpace.y);
+      
+      // Rotate in pixel space
+      vec2 rotRect = vec2(c * localCanvas.x - s * localCanvas.y,
+                          s * localCanvas.x + c * localCanvas.y);
+                          
       insideRect = (rotRect.x >= 0.0) && (rotRect.x <= rectWidthMask) &&
                    (rotRect.y >= 0.0) && (rotRect.y <= rectHeightMask);
     } else {
@@ -108,10 +109,10 @@ const fragmentShader = `
       vec2 center = vec2(u_shapeBounds.x + 0.5 * scaledWCanvas,
                          u_shapeBounds.y + 0.5 * scaledHCanvas);
       vec2 local = pixelCoord - center;
-      vec2 maskSpace = vec2(local.x * invCanvasScale.x,
-                            local.y * invCanvasScale.y);
-      vec2 rotLocal = vec2(c * maskSpace.x - s * maskSpace.y,
-                           s * maskSpace.x + c * maskSpace.y);
+      
+      // Rotate in pixel space
+      vec2 rotLocal = vec2(c * local.x - s * local.y,
+                           s * local.x + c * local.y);
 
       insideRect = abs(rotLocal.x) <= halfW &&
                    abs(rotLocal.y) <= halfH;
@@ -123,27 +124,38 @@ const fragmentShader = `
 
       // Triangle (upward) inclusion: base along bottom edge of bounds, apex at top-center
       // Define triangle vertices in rotated local space with origin at shape center
-      vec2 tApex = vec2(0.0, -halfH);
-      vec2 tLeft = vec2(-halfW, halfH);
-      vec2 tRight = vec2(halfW, halfH);
+      // Shift Y by -h/6 to align centroid with bounding box center (matching Konva)
+      float yOffset = -rectHeightMask / 6.0;
+      vec2 tApex = vec2(0.0, -halfH + yOffset);
+      vec2 tLeft = vec2(-halfW, halfH + yOffset);
+      vec2 tRight = vec2(halfW, halfH + yOffset);
       insideTriangle = pointInTriangle(rotLocal, tApex, tLeft, tRight);
 
       // Star (5-point) inclusion using even-odd point-in-polygon computed on-the-fly
       const int MAX_VERTS = 10; // 5-point star => 10 vertices (outer/inner alternating)
-      float baseRadius = min(halfW, halfH);
-      float rOuter = baseRadius;
-      float rInner = 0.5 * baseRadius;
+      
+      // Use halfW/halfH directly for radii to allow stretching (anisotropic scaling)
+      float rOuterX = max(halfW, 0.0001);
+      float rOuterY = max(halfH, 0.0001);
+      float rInnerX = 0.5 * rOuterX;
+      float rInnerY = 0.5 * rOuterY;
+
       // Initialize previous vertex to the last star vertex (index 9, which is inner)
       float prevAngle = float(MAX_VERTS - 1) * 3.14159265358979323846 / 5.0;
-      float prevRadius = rInner;
-      vec2 prevVertex = vec2(prevRadius * sin(prevAngle), -prevRadius * cos(prevAngle));
+      // Check if MAX_VERTS-1 is even or odd. 9 is odd -> inner radius.
+      // But loop logic below: i=0 (even) uses Outer. i=9 (odd) uses Inner.
+      // So init with Inner.
+      vec2 prevVertex = vec2(rInnerX * sin(prevAngle), -rInnerY * cos(prevAngle));
       
       // Even-odd ray casting without array indexing
       bool useOuter = true; // i=0 uses outer radius
       for (int i = 0; i < MAX_VERTS; i++) {
-        float radius = useOuter ? rOuter : rInner;
+        float rx = useOuter ? rOuterX : rInnerX;
+        float ry = useOuter ? rOuterY : rInnerY;
+        
         float angle = float(i) * 3.14159265358979323846 / 5.0;
-        vec2 vi = vec2(radius * sin(angle), -radius * cos(angle));
+        vec2 vi = vec2(rx * sin(angle), -ry * cos(angle));
+        
         bool intersect = ((vi.y > rotLocal.y) != (prevVertex.y > rotLocal.y)) &&
           (rotLocal.x < (prevVertex.x - vi.x) * (rotLocal.y - vi.y) / ((prevVertex.y - vi.y) + 0.000001) + vi.x);
         if (intersect) {
@@ -193,23 +205,43 @@ interface ShapeBounds {
 const applyClipTransform = (shapeBounds: ShapeBounds, clipTransform?: ClipTransform, maskTransform?: ClipTransform): ShapeBounds => {
   if (!clipTransform) return shapeBounds;
 
-  if (!maskTransform) {
-    return shapeBounds;
-  }
+  let localX: number, localY: number, scaledWidth: number, scaledHeight: number;
 
+  if (maskTransform) {
   const baseScaleX = maskTransform.scaleX || 1;
   const baseScaleY = maskTransform.scaleY || 1;
   const scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
   const scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
 
-  const localX = (shapeBounds.x - maskTransform.x) * scaleRatioX;
-  const localY = (shapeBounds.y - maskTransform.y) * scaleRatioY;
+    localX = (shapeBounds.x - maskTransform.x) * scaleRatioX;
+    localY = (shapeBounds.y - maskTransform.y) * scaleRatioY;
 
-  const scaledWidth = shapeBounds.width * scaleRatioX;
-  const scaledHeight = shapeBounds.height * scaleRatioY;
+    scaledWidth = shapeBounds.width * scaleRatioX;
+    scaledHeight = shapeBounds.height * scaleRatioY;
+  } else {
+    localX = shapeBounds.x;
+    localY = shapeBounds.y;
+    scaledWidth = shapeBounds.width;
+    scaledHeight = shapeBounds.height;
+  }
+
+  if (clipTransform.crop) {
+    const cropX = clipTransform.crop.x;
+    const cropY = clipTransform.crop.y;
+    const cropW = clipTransform.crop.width;
+    const cropH = clipTransform.crop.height;
+
+    const displayWidth = Math.abs((clipTransform.width || 0) * (clipTransform.scaleX || 1));
+    const displayHeight = Math.abs((clipTransform.height || 0) * (clipTransform.scaleY || 1));
+
+    localX = (cropX * displayWidth) + (localX * cropW);
+    localY = (cropY * displayHeight) + (localY * cropH);
+    scaledWidth *= cropW;
+    scaledHeight *= cropH;
+  }
 
   const newBounds: ShapeBounds = {
-    x: localX,
+    x: localX ,
     y: localY,
     width: scaledWidth,
     height: scaledHeight,
@@ -218,17 +250,6 @@ const applyClipTransform = (shapeBounds: ShapeBounds, clipTransform?: ClipTransf
     rotation: shapeBounds.rotation,
     shapeType: shapeBounds.shapeType,
   };
-
-  if (shapeBounds.shapeType === 'polygon') {
-    const rotation = shapeBounds.rotation ?? 0;
-    const rotRad = (rotation * Math.PI) / 180;
-    const sizeDiff = scaledWidth - scaledHeight;
-    const diffY = Math.cos(rotRad) * sizeDiff;
-    const diffX = Math.sin(rotRad) * sizeDiff;
-    newBounds.y -= diffY;
-    newBounds.x += diffX;
-  }
-
 
   return newBounds;
 };
@@ -359,7 +380,7 @@ export class ShapeMask extends WebGLMaskBase {
     const y = transformedBounds.y * canvasScaleY;
     const width = transformedBounds.width * canvasScaleX;
     const height = transformedBounds.height * canvasScaleY;
-
+ 
     // Normalize inputs
     const backgroundColorHex = mask.backgroundColor || '#000000';
     const maskColorHex = mask.maskColor || '#ffffff';
@@ -444,7 +465,9 @@ export class ShapeMask extends WebGLMaskBase {
 
     // rotation in radians (default 0). shapeBounds.rotation is in degrees? Assuming degrees, convert.
     const rotDeg = keyFrameData.shapeBounds.rotation ?? 0;
+    console.log('rotDeg', rotDeg);
     const rotRad = (rotDeg * Math.PI) / 180;
+    console.log('rotRad', rotRad);
     this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_rotation'), rotRad);
 
     // per-shape scale (default 1). When provided, scales bounds about center in shader

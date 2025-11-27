@@ -225,11 +225,6 @@ export interface MaskData {
         renderOnce?: boolean;
     };
 
-    // For draw tool - freeform strokes
-    drawStrokes?: {
-        points: number[]; // [x1, y1, x2, y2, ...]
-        strokeWidth: number;
-    }[];
     // For touch/SAM2 tool - AI generated mask or selection points
     touchPoints?: Array<{ x: number; y: number; label: 1 | 0 }>; // positive/negative
     touchBox?: { x1: number; y1: number; x2: number; y2: number };

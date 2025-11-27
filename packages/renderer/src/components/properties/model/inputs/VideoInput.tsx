@@ -832,14 +832,24 @@ const VideoInput: React.FC<VideoInputProps> = ({ label, description, inputId, va
     return (s.getClipById(cid) as AnyClipProps | undefined) ?? null;
   });
 
-  const handleConfirm = useCallback((data: { rotation: number; aspectRatio: string; crop?: { x: number; y: number; width: number; height: number }; transformWidth?: number; transformHeight?: number }) => {
+  const handleConfirm = useCallback((data: {
+    rotation: number;
+    aspectRatio: string;
+    crop?: { x: number; y: number; width: number; height: number };
+    transformWidth?: number;
+    transformHeight?: number;
+    transformX?: number;
+    transformY?: number;
+  }) => {
     if (!mediaClip) return;
     const newTransform: ClipTransform = {
       ...(mediaClip.transform ?? {}),
       ...(data.rotation ? { rotation: data.rotation } : {}),
       ...(data.crop ? { crop: data.crop } : { crop: undefined }),
       ...(data.transformWidth ? { width: data.transformWidth } : {}),
-      ...(data.transformHeight ? { height: data.transformHeight } : {})
+      ...(data.transformHeight ? { height: data.transformHeight } : {}),
+      ...(typeof data.transformX === 'number' ? { x: data.transformX } : {}),
+      ...(typeof data.transformY === 'number' ? { y: data.transformY } : {}),
     } as ClipTransform;
     const updatedClip = { ...mediaClip, transform: newTransform } as AnyClipProps;
     setMediaClip(updatedClip);

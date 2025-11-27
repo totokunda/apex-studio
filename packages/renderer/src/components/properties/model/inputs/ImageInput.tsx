@@ -451,18 +451,34 @@ const ImageInput: React.FC<ImageInputProps> = ({ label, description, height, inp
 });
 
 
-  const handleConfirm = (data: { rotation: number; aspectRatio: string; crop?: { x: number; y: number; width: number; height: number }; transformWidth?: number; transformHeight?: number }) => {
+  const handleConfirm = (data: {
+    rotation: number;
+    aspectRatio: string;
+    crop?: { x: number; y: number; width: number; height: number };
+    transformWidth?: number;
+    transformHeight?: number;
+    transformX?: number;
+    transformY?: number;
+    originalTransform?: ClipTransform;
+  }) => {
     if (!mediaClip) return;
+
     const newTransform: ClipTransform = {
       ...(mediaClip.transform ?? {}),
       ...(data.rotation ? { rotation: data.rotation } : {}),
       ...(data.crop ? { crop: data.crop } : { crop: undefined }),
       ...(data.transformWidth ? { width: data.transformWidth } : {}),
-      ...(data.transformHeight ? { height: data.transformHeight } : {})
+      ...(data.transformHeight ? { height: data.transformHeight } : {}),
+      ...(typeof data.transformX === 'number' ? { x: data.transformX } : {}),
+      ...(typeof data.transformY === 'number' ? { y: data.transformY } : {}),
     } as ClipTransform;
-    setMediaClip({ ...mediaClip, transform: newTransform } as AnyClipProps);
-    emitSelection({ ...mediaClip, transform: newTransform } as AnyClipProps);
-    // check if mediaClip is on the timeline, and if so update it.
+    const clipToUse = { ...mediaClip, transform: newTransform } as AnyClipProps;
+    if (data.originalTransform) {
+      clipToUse.originalTransform = { ...data.originalTransform };
+    }
+    setMediaClip(clipToUse);
+    emitSelection(clipToUse);
+
     if (liveTimelineClip) {
         setClipTransform(liveTimelineClip.clipId, newTransform);
     }

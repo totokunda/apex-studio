@@ -864,8 +864,21 @@ const TimelineClip: React.FC<TimelineProps & {clipId: string, clipType: ClipType
         const isModelWithSrc = clip?.type === 'model' && typeof clip.src === 'string';
 
         const otherCommands: ContextMenuItem[] = [
-            { id: 'export', label: 'Export…', action: 'export' },
+            
         ];
+
+        if (clip?.type === 'image') {
+            otherCommands.push({ id: 'export', label: 'Export as Image', action: 'export' });
+        }
+        if (clip?.type === 'video' ) {
+            const fps = useControlsStore.getState().fps;
+            const duration = (currentEndFrame - currentStartFrame) / fps;
+            if (duration <= 10) {
+                otherCommands.push({ id: 'export', label: 'Export as Video', action: 'export' });
+            }
+        } else if (clip?.type === 'audio' && clip.src) {
+            otherCommands.push({ id: 'export', label: 'Export as Audio', action: 'export' });
+        }
         // check if any of the selected clips are groups if so, we cannot group it 
         const isAnyGroup = (controls.selectedClipIds || []).some((clipId) => {
             const clip = clipsState.getClipById(clipId);

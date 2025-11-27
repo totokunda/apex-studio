@@ -1,6 +1,6 @@
 import {AppModule} from '../AppModule.js';
 import {ModuleContext} from '../ModuleContext.js';
-import {  App, ipcMain } from 'electron';
+import {  App, ipcMain, shell } from 'electron';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -769,6 +769,22 @@ export class ApexApi implements AppModule {
     // System memory usage
     ipcMain.handle('system:memory', async () => {
       return this.makeRequest<any>('GET', '/system/memory');
+    });
+
+    // Reveal a file or folder in the OS file manager
+    ipcMain.handle('files:reveal-in-folder', async (_event, absPath: string) => {
+      try {
+        if (typeof absPath !== 'string' || !absPath) {
+          return { success: false, error: 'Invalid path' };
+        }
+        shell.showItemInFolder(absPath);
+        return { success: true, data: { path: absPath } };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to reveal item in folder',
+        };
+      }
     });
   }
 

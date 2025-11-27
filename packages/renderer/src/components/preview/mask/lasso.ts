@@ -110,24 +110,62 @@ const fragmentShader = `
 const applyClipTransform = (lassoPoints: number[], clipTransform?: ClipTransform, maskTransform?: ClipTransform): number[] => {
     if (!clipTransform) return lassoPoints;
     
-    if (!maskTransform) {
+    let scaleRatioX = 1;
+    let scaleRatioY = 1;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (maskTransform) {
+      const baseScaleX = maskTransform.scaleX || 1;
+      const baseScaleY = maskTransform.scaleY || 1;
+      scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
+      scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
+      offsetX = maskTransform.x;
+      offsetY = maskTransform.y;
+    }
+
+    if (!maskTransform && !clipTransform.crop) {
       return lassoPoints;
     }
     
-    // Calculate the difference between current and original transform
-    const deltaX = clipTransform.x - maskTransform.x;
-    const deltaY = clipTransform.y - maskTransform.y;
-    const baseScaleX = maskTransform.scaleX || 1;
-    const baseScaleY = maskTransform.scaleY || 1;
-    const scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
-    const scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
-  
-   // Convert stage-space points to clip-local space like shape.ts
+    let hasCrop = false;
+    let cropX = 0;
+    let cropY = 0;
+    let cropW = 1;
+    let cropH = 1;
+    let displayWidth = 0;
+    let displayHeight = 0;
+
+    if (clipTransform.crop) {
+      hasCrop = true;
+      cropX = clipTransform.crop.x;
+      cropY = clipTransform.crop.y;
+      cropW = clipTransform.crop.width;
+      cropH = clipTransform.crop.height;
+
+      displayWidth = (clipTransform.width || 0) * (clipTransform.scaleX || 1);
+      displayHeight = (clipTransform.height || 0) * (clipTransform.scaleY || 1);
+    }
+
    const newLassoPoints: number[] = [];
    for (let i = 0; i < lassoPoints.length; i += 2) {
-    const x = (lassoPoints[i] + deltaX) - clipTransform.x;
-    const y = (lassoPoints[i + 1] + deltaY) - clipTransform.y;
-    newLassoPoints.push(x * scaleRatioX, y * scaleRatioY);
+      let x: number;
+      let y: number;
+      
+      if (maskTransform) {
+        x = (lassoPoints[i] - offsetX) * scaleRatioX;
+        y = (lassoPoints[i + 1] - offsetY) * scaleRatioY;
+      } else {
+        x = lassoPoints[i];
+        y = lassoPoints[i + 1];
+      }
+
+      if (hasCrop) {
+        x = (cropX * displayWidth) + (x * cropW);
+        y = (cropY * displayHeight) + (y * cropH);
+      }
+
+      newLassoPoints.push(x, y);
    }
   
     return newLassoPoints;

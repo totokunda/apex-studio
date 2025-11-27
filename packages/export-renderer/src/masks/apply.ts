@@ -91,6 +91,7 @@ export function applyMasksToCanvas(
   if (!workingCtx) {
     return;
   }
+  
   workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
   workingCtx.drawImage(sourceCanvas, 0, 0);
 

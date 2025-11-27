@@ -24,8 +24,19 @@ export type {
 } from './applicators/utils';
 export { applyMasksToCanvas } from './masks/apply';
 export type { MaskClipProps as ExportMaskClipProps } from './masks/apply';
-export { exportSequence, exportClip } from './exporter';
-export type { ExportClip, ExportImageClip, ExportTextClip, ExportShapeClip, ExportDrawClip, FrameEncoder, ExportOptions, ExportClipOptions } from './exporter';
+export { exportSequence, exportClip, exportSequenceCancellable, ExportCancelledError } from './exporter';
+export type {
+  ExportClip,
+  ExportImageClip,
+  ExportTextClip,
+  ExportShapeClip,
+  ExportDrawClip,
+  FrameEncoder,
+  ExportOptions,
+  ExportClipOptions,
+  ExportCancelToken,
+  CancellableExportResult,
+} from './exporter';
 export { prepareExportClips } from './prepare';
 export { FfmpegFrameEncoder, type FfmpegEncoderOptionsNoFilename } from './ffmpegEncoder';
 export type { FfmpegEncoderOptions } from './ffmpegEncoder';

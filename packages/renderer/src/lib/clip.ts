@@ -21,6 +21,7 @@ interface ClipStore {
     getClipById: (clipId: string, timelineId?: string) => AnyClipProps | undefined;
     getClipsByType: (type: ClipType) => AnyClipProps[]; 
     getClipTransform: (clipId: string) => ClipTransform | undefined;
+    getUncroppedClipTransform: (clipId: string) => ClipTransform | undefined;
     setClipTransform: (clipId: string, transform: Partial<ClipTransform>) => void;
     setClips: (clips: AnyClipProps[]) => void;
     addClip: (clip: AnyClipProps) => void;
@@ -31,7 +32,7 @@ interface ClipStore {
     separateClip: (clipId: string) => void;
     isValidResize: (clipId: string, side: 'left' | 'right', newFrame: number) => boolean;   
     splitClip: (cutFrame: number, clipId: string) => void;
-    mergeClips: (clipIds: string[]) => void;
+    mergeClips: (clipIds: string[]) => void;    
     moveClipToEnd: (clipId: string) => void;
     clipboard: AnyClipProps[];
     copyClips: (clipIds: string[]) => void;
@@ -419,13 +420,33 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const clip = get().clips.find((c) => c.clipId === clipId);
         return clip?.transform;
     },
+    getUncroppedClipTransform: (clipId: string) => {
+        const clip = get().clips.find((c) => c.clipId === clipId);
+        if (!clip) return undefined;
+        const crop = clip.transform?.crop;
+        if (!crop) return clip.transform;
+        return {
+            ...clip.transform,
+            width: (clip.transform?.width ?? 0) / crop.width,
+            height: (clip.transform?.height ?? 0) / crop.height,
+            crop: undefined,
+            x: clip.transform?.x ?? 0,
+            y: clip.transform?.y ?? 0,
+            scaleX: clip.transform?.scaleX ?? 1,
+            scaleY: clip.transform?.scaleY ?? 1,
+            rotation: clip.transform?.rotation ?? 0,
+            cornerRadius: clip.transform?.cornerRadius ?? 0,
+            opacity: clip.transform?.opacity ?? 100,
+        };
+    },
     setClipTransform: (clipId: string, transform: Partial<ClipTransform>) => set((state) => {
+
         const index = state.clips.findIndex((c) => c.clipId === clipId);
         if (index === -1) return { clips: state.clips };
 
         const current = state.clips[index];
         const hadTransform = !!current.transform;
-        const previous: ClipTransform = current.transform || { x: 0, y: 0, width: 0, height: 0, scaleX: 1, scaleY: 1, rotation: 0, cornerRadius: 0, opacity: 100 };
+        const previous: ClipTransform = current.transform || { x: 0, y: 0, width: 0, height: 0, scaleX: 1, scaleY: 1, rotation: 0, cornerRadius: 0, opacity: 100, crop: { x: 0, y: 0, width: 1, height: 1 } };
         const next: ClipTransform = { ...previous, ...transform };
 
         const updatedClip: AnyClipProps = { ...current, transform: next };
@@ -442,7 +463,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
                     if (!hadTransform) {
                         return { ...mask, transform: { ...next } };
                     }
-                    return remapMaskWithClipTransform(mask, baseTransform, next);
+                    let maskNext = { ...next };
+                    return remapMaskWithClipTransform(mask, baseTransform, maskNext);
                 });
                 (updatedClip as VideoClipProps | ImageClipProps).masks = remappedMasks;
             }
@@ -761,21 +783,32 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         
         const currentClip = sortedClips[currentIndex];
 
-        // Enforce max duration for model clips if specified in manifest (in frames: fps * max_duration_secs)
+        // Enforce min/max duration for model clips if specified in manifest (in frames: fps * duration_secs)
         try {
-            if (currentClip.type === 'model') {
-                const fps = Math.max(1, (useControlsStore.getState().fps || 1));
-                const maxSecs = Number(((currentClip as any)?.manifest?.spec?.max_duration_secs));
-                if (Number.isFinite(maxSecs) && maxSecs > 0) {
-                    const maxFrames = Math.max(1, Math.floor(maxSecs * fps));
+            if (currentClip.type === 'model' && (currentClip as any)?.manifest?.spec) {
+                const manifestSpec = (currentClip as any).manifest.spec as any;
+                const manifestFps = Number(manifestSpec.fps);
+                const projectFps = Math.max(1, (useControlsStore.getState().fps || 1));
+                const fps = (Number.isFinite(manifestFps) && manifestFps > 0) ? manifestFps : projectFps;
+                const maxSecs = Number(manifestSpec.max_duration_secs);
+                const minSecs = Number(manifestSpec.min_duration_secs);
+                const hasMax = Number.isFinite(maxSecs) && maxSecs > 0;
+                const hasMin = Number.isFinite(minSecs) && minSecs > 0;
+                const maxFrames = hasMax ? Math.max(1, Math.floor(maxSecs * fps)) : null;
+                const minFrames = hasMin ? Math.max(1, Math.ceil(minSecs * fps)) : null;
+                if (maxFrames || minFrames) {
                     const start = Math.max(0, currentClip.startFrame || 0);
                     const end = Math.max(start + 1, currentClip.endFrame || (start + 1));
                     if (side === 'right') {
                         const newEndFrame = Math.max(start + 1, newFrame);
-                        if ((newEndFrame - start) > maxFrames) return false;
+                        const newDuration = newEndFrame - start;
+                        if (maxFrames && newDuration > maxFrames) return false;
+                        if (minFrames && newDuration < minFrames) return false;
                     } else {
                         const newStartFrame = Math.min(end - 1, newFrame);
-                        if ((end - newStartFrame) > maxFrames) return false;
+                        const newDuration = end - newStartFrame;
+                        if (maxFrames && newDuration > maxFrames) return false;
+                        if (minFrames && newDuration < minFrames) return false;
                     }
                 }
             }
@@ -820,15 +853,26 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const start = Math.max(0, currentClip.startFrame || 0);
             let desiredEndFrame = Math.max(start + 1, newFrame);
 
-            // Clamp by model max duration if applicable
+            // Clamp by model min/max duration if applicable
             try {
-                if (currentClip.type === 'model') {
-                    const fps = Math.max(1, (useControlsStore.getState().fps || 1));
-                    const maxSecs = Number(((currentClip as any)?.manifest?.spec?.max_duration_secs));
-                    if (Number.isFinite(maxSecs) && maxSecs > 0) {
-                        const maxFrames = Math.max(1, Math.floor(maxSecs * fps));
+                if (currentClip.type === 'model' && (currentClip as any)?.manifest?.spec) {
+                    const manifestSpec = (currentClip as any).manifest.spec as any;
+                    const manifestFps = Number(manifestSpec.fps);
+                    const projectFps = Math.max(1, (useControlsStore.getState().fps || 1));
+                    const fps = (Number.isFinite(manifestFps) && manifestFps > 0) ? manifestFps : projectFps;
+                    const maxSecs = Number(manifestSpec.max_duration_secs);
+                    const minSecs = Number(manifestSpec.min_duration_secs);
+                    const hasMax = Number.isFinite(maxSecs) && maxSecs > 0;
+                    const hasMin = Number.isFinite(minSecs) && minSecs > 0;
+                    const maxFrames = hasMax ? Math.max(1, Math.floor(maxSecs * fps)) : null;
+                    const minFrames = hasMin ? Math.max(1, Math.ceil(minSecs * fps)) : null;
+                    if (maxFrames) {
                         const limitEnd = start + maxFrames;
                         desiredEndFrame = Math.min(desiredEndFrame, limitEnd);
+                    }
+                    if (minFrames) {
+                        const minEnd = start + minFrames;
+                        desiredEndFrame = Math.max(desiredEndFrame, minEnd);
                     }
                 }
             } catch {}
@@ -848,15 +892,24 @@ export const useClipStore = create<ClipStore>((set, get) => ({
             const end = Math.max((currentClip.endFrame || 0), (oldStartFrame + 1));
             let desiredStartFrame = Math.min(end - 1, newFrame);
 
-            // Clamp by model max duration if applicable
+            // Clamp by model min/max duration if applicable
             try {
-                if (currentClip.type === 'model') {
-                    const fps = Math.max(1, (useControlsStore.getState().fps || 1));
-                    const maxSecs = Number(((currentClip as any)?.manifest?.spec?.max_duration_secs));
-                    if (Number.isFinite(maxSecs) && maxSecs > 0) {
-                        const maxFrames = Math.max(1, Math.floor(maxSecs * fps));
-                        const limitStart = Math.max(0, end - maxFrames);
-                        desiredStartFrame = Math.max(desiredStartFrame, limitStart);
+                if (currentClip.type === 'model' && (currentClip as any)?.manifest?.spec) {
+                    const manifestSpec = (currentClip as any).manifest.spec as any;
+                    const projectFps = Math.max(1, (useControlsStore.getState().fps || 1));
+                    const maxSecs = Number(manifestSpec.max_duration_secs);
+                    const minSecs = Number(manifestSpec.min_duration_secs);
+                    const hasMax = Number.isFinite(maxSecs) && maxSecs > 0;
+                    const hasMin = Number.isFinite(minSecs) && minSecs > 0;
+                    const maxFrames = hasMax ? Math.max(1, Math.floor(maxSecs * projectFps)) : null;
+                    const minFrames = hasMin ? Math.max(1, Math.ceil(minSecs * projectFps)) : null;
+                    if (maxFrames) {
+                        const limitStartMax = Math.max(0, end - maxFrames);
+                        desiredStartFrame = Math.max(desiredStartFrame, limitStartMax);
+                    }
+                    if (minFrames) {
+                        const limitStartMin = Math.max(0, end - minFrames);
+                        desiredStartFrame = Math.min(desiredStartFrame, limitStartMin);
                     }
                 }
             } catch {}

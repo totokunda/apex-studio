@@ -13,10 +13,11 @@ import {
 } from '@/lib/types';
 import { useViewportStore } from '@/lib/viewport';
 import { useMaskStore } from '@/lib/mask';
+import { getCropOffset } from '@/components/preview/mask/touch';
+
 import LassoMaskPreview from './LassoMaskPreview';
 import ShapeMaskPreview from './ShapeMaskPreview';
 import TouchMaskPreview from './TouchMaskPreview';
-import DrawMaskPreview from './DrawMaskPreview';
 
 interface MaskPreviewProps {
   clips: AnyClipProps[];
@@ -52,9 +53,26 @@ const buildMaskGroupTransforms = (transform?: ClipTransform): MaskGroupTransform
   const y = Number.isFinite(transform.y) ? transform.y : 0;
   const rotation = Number.isFinite(transform.rotation) ? transform.rotation : 0;
 
+  // When a crop is applied to the clip, the visible media content is shifted
+  // inside the clip's bounding box by an offset proportional to the crop
+  // origin. The image preview accounts for this via the `crop` prop on the
+  // Konva Image, but the saved mask geometry (lasso points, shapes, touch
+  // points) remains in the original, uncropped coordinate space.
+  //
+  // To keep masks visually aligned with the cropped media, we apply the same
+  // effective translation to the mask preview by shifting the inner group.
+  // This preserves the existing rotation behaviour (masks rotate around the
+  // clip origin) while re-centering them over the cropped content.
+  const { offsetX: cropX, offsetY: cropY } = getCropOffset(transform);
+  const innerOffsetX = -cropX;
+  const innerOffsetY = -cropY;
+
+
+
+
   return {
     outer: { x, y, rotation },
-    inner: { x: -x, y: -y },
+    inner: { x: innerOffsetX, y: innerOffsetY },
   };
 };
 
@@ -279,23 +297,6 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
             </Group>
           );
         }
-
-        if (mask.tool === 'draw' && maskData?.drawStrokes) {
-          return (
-            <Group key={`mask-${mask.id}-${activeKeyframe}`} {...outer}>
-              <Group {...inner}>
-                <DrawMaskPreview
-                  mask={mask}
-                  drawStrokes={maskData.drawStrokes}
-                  animationOffset={animationOffset}
-                  rectWidth={rectWidth}
-                  rectHeight={rectHeight}
-                />
-              </Group>
-            </Group>
-          );
-        }
-
         return null;
       })}
     </Group>

@@ -21,11 +21,19 @@ export const videoDecoders = new Map<VideoDecoderKey, VideoDecoderContext>();
 export const audioDecoders = new Map<AudioDecoderKey, AudioDecoderContext>();
 export const canvasDecoders = new Map<CanvasDecoderKey, CanvasDecoderContext>();
 
-export const getMediaInfoCached = (path: string): MediaInfo | undefined => {
+export const getMediaInfoCached = (path: string | undefined): MediaInfo | undefined => {
     const mediaCache = MediaCache.getState();
-    if (mediaCache.isMediaCached(path)) {
+    if (path && mediaCache.isMediaCached(path)) {
         return mediaCache.getMedia(path)!;
     }
+
+    if (path && path.startsWith('app://user-data/')) {
+        const localPath = convertUserDataPathToLocalPath(path);
+        if (mediaCache.isMediaCached(localPath)) {
+            return mediaCache.getMedia(localPath)!;
+        }
+    }
+    return undefined;
 }
 
 const getUrlWithoutHashSuffix = (path: string): string => {
@@ -43,6 +51,16 @@ const getUrlWithoutSearchParams = (path: string): string => {
 export const convertUserDataPath = (path: string): string => {
     const filePath = fileURLToPath(path);
     return `app://user-data/${filePath}`;
+}
+
+export const convertUserDataPathToLocalPath = (path: string): string => {
+    if (path.startsWith('app://user-data/')) {
+        let pathUrl = new URL(`file://${path.replace('app://user-data/', '')}`);
+        // ensure starts with file://
+        pathUrl.protocol = 'file';
+        return pathUrl.toString();
+    }
+    return path;
 }
 
 export const convertApexCachePath = (path: string): string => {

@@ -215,52 +215,16 @@ const TimelineClipPosterPreview: React.FC<{ clipId?: string, clip?: AnyClipProps
             const applicators = getApplicators(clip.clipId, effectiveGlobalFrame);
             // Use clipOverride only when an explicit override group is provided
             const overrideToUse = (clipOverride ? (clip) : undefined);
+            if (overrideToUse?.transform && !overrideToUse.groupId && overrideToUse.originalTransform){ 
+              if (overrideToUse.transform.crop) {
+                // multiply width and height by crop 
+                const cropWidth = overrideToUse.originalTransform.width * overrideToUse.transform.crop.width;
+                const cropHeight = overrideToUse.originalTransform.height * overrideToUse.transform.crop.height;
 
-            if (overrideToUse && overrideToUse.transform && (overrideToUse.type === 'image' || overrideToUse.type === 'video') && (overrideToUse.groupId === undefined)) {
-              const t = overrideToUse.transform;
-              const rawW = (t.width ?? rectWidth);
-              const rawH = (t.height ?? rectHeight);
-              const sx = (typeof t.scaleX === 'number' ? t.scaleX : 1);
-              const sy = (typeof t.scaleY === 'number' ? t.scaleY : 1);
-              const w = rawW * sx;
-              const h = rawH * sy;
-              const deg = (typeof t.rotation === 'number' ? t.rotation : 0);
-              const rad = deg * Math.PI / 180;
-              const c = Math.cos(rad);
-              const s = Math.sin(rad);
-              // corners after rotation around top-left pivot (0,0)
-              const x1 = w * c;           const y1 = w * s;
-              const x2 = -h * s;          const y2 = h * c;
-              const x3 = w * c - h * s;   const y3 = w * s + h * c;
-              const minX = Math.min(0, x1, x2, x3);
-              const maxX = Math.max(0, x1, x2, x3);
-              const minY = Math.min(0, y1, y2, y3);
-              const maxY = Math.max(0, y1, y2, y3);
-              const aabbW = maxX - minX;
-              const aabbH = maxY - minY;
-
-              // Uniformly scale content so its rotated bounds cover the poster rect as much as possible,
-              // which avoids a visible "ring" around cropped content.
-              const coverScale = Math.max(
-                aabbW > 0 ? rectWidth / aabbW : 1,
-                aabbH > 0 ? rectHeight / aabbH : 1
-              );
-
-              if (Number.isFinite(coverScale) && coverScale > 0) {
-                const finalScale = coverScale;
-                const scaledMinX = minX * finalScale;
-                const scaledMinY = minY * finalScale;
-                const scaledAabbW = aabbW * finalScale;
-                const scaledAabbH = aabbH * finalScale;
-
-                t.scaleX = sx * finalScale;
-                t.scaleY = sy * finalScale;
-                t.x = (rectWidth - scaledAabbW) / 2 - scaledMinX;
-                t.y = (rectHeight - scaledAabbH) / 2 - scaledMinY;
+                overrideToUse.transform = { ...overrideToUse.originalTransform, width: cropWidth, height: cropHeight, crop: overrideToUse.transform.crop };
               } else {
-                t.x = (rectWidth - aabbW) / 2 - minX;
-                t.y = (rectHeight - aabbH) / 2 - minY;
-              }
+                overrideToUse.transform = { ...overrideToUse.originalTransform };
+              }              
             }
 
             switch (clip.type) {

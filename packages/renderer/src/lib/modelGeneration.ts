@@ -1,12 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import _ from 'lodash';
-import type { AnyClipProps, ModelClipProps } from '@/lib/types';
+import type { AnyClipProps, ModelClipProps, TimelineProps } from '@/lib/types';
 import { getPreviewPath, savePreviewImage } from '@app/preload';
-import { getMediaInfoCached, convertUserDataPath, convertApexCachePath } from '@/lib/media/utils';
-import { BASE_LONG_SIDE } from '@/lib/settings';
-import type { ExportClip } from '@app/export-renderer';
+import { getMediaInfoCached } from '@/lib/media/utils';
 import { exportClip, exportSequence } from '@app/export-renderer';
 import type { ManifestComponent } from '@/lib/manifest/api';
+import { prepareExportClipsForValue } from '@/lib/prepareExportClips';
 
 export interface GenerateContext {
   clipId: any;
@@ -16,6 +15,7 @@ export interface GenerateContext {
   getClipsForGroup: (children: any) => any[];
   getClipsByType: (type: any) => any[];
   getClipPositionScore: (clipId: any) => number;
+  timelines: TimelineProps[];
   getModelValues: (clipId?: any) => any;
   getRawModelValues: (clipId?: any) => any;
   manifestData: any;
@@ -71,6 +71,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
     getClipsForGroup,
     getClipsByType,
     getClipPositionScore,
+    timelines,
     getModelValues,
     getRawModelValues,
     manifestData,
@@ -85,7 +86,6 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
   toast.info('Preparing inputs and starting generation...');
   const modelValues = getModelValues(clipId);
-  const rawModelValues = getRawModelValues(clipId);
   if (!modelValues) return;
   const inputs = (clip as ModelClipProps)?.manifest?.spec.ui?.inputs || [];
 
@@ -116,128 +116,22 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           continue;
         }
 
-        let width = 0;
-        let height = 0;
-        if (value.type === 'image') {
-          const mediaInfo = getMediaInfoCached(value.src);
-          const filePath = convertUserDataPath(value.src);
-          value.src = filePath;
-          const transform = (value as any).originalTransform;
-          width = transform?.width ?? mediaInfo?.image?.width ?? 0;
-          height = transform?.height ?? mediaInfo?.image?.height ?? 0;
-          if (!mediaInfo) continue;
-        } else if (value.type === 'video') {
-          const mediaInfo = getMediaInfoCached(value.src);
-          const transform = (value as any).originalTransform;
-          width = transform?.width ?? mediaInfo?.video?.displayWidth ?? 0;
-          height = transform?.height ?? mediaInfo?.video?.displayHeight ?? 0;
-          if (!mediaInfo) continue;
-        } else {
-          const ratio = aspectRatio.width / aspectRatio.height;
-          const baseShortSide = BASE_LONG_SIDE;
-          if (Number.isFinite(ratio) && ratio > 0) {
-            width = baseShortSide * ratio;
-            height = baseShortSide;
-          } else {
-            width = 0;
-            height = 0;
-          }
-        }
+        const prepared = prepareExportClipsForValue(
+          value as AnyClipProps,
+          {
+            aspectRatio,
+            getClipsForGroup,
+            getClipsByType,
+            getClipPositionScore,
+            timelines,
+          },
+          {
+            clearMasks: false,
+            applyCentering: true,
+          },
+        );
 
-        let clips: AnyClipProps[] = [value as any];
-        let offsetStart = 0;
-        if (value.type === 'group') {
-          const groupedClips = getClipsForGroup((value as any).children);
-          const groupStart = value.startFrame ?? 0;
-          offsetStart = groupStart;
-          clips = groupedClips.map((c) => {
-            const newClip = { ...c };
-            newClip.startFrame = (c.startFrame ?? 0) - groupStart;
-            newClip.endFrame = (c.endFrame ?? 0) - groupStart;
-            if (newClip.type === 'image') {
-              const mediaInfo = getMediaInfoCached((newClip as any).src);
-              if (!mediaInfo) return newClip;
-              const filePath = convertUserDataPath((newClip as any).src);
-              (newClip as any).src = filePath;
-            }
-            if (Object.prototype.hasOwnProperty.call(newClip, 'preprocessors')) {
-              (newClip as any).preprocessors = (c as any).preprocessors?.map((p: any) => ({
-                ...p,
-                startFrame: (p.startFrame ?? 0) - groupStart,
-                endFrame: (p.endFrame ?? 0) - groupStart,
-              })) ?? [];
-            }
-            return newClip;
-          });
-        } else {
-          offsetStart = value.startFrame ?? 0;
-          clips = [value];
-        }
-
-        const filterClips = getClipsByType('filter');
-        clips = clips
-          .filter((c) => c.type !== 'filter')
-          .sort((a, b) => getClipPositionScore(a.clipId) - getClipPositionScore(b.clipId));
-
-        filterClips.forEach((c) => {
-          if (c.type === 'filter') {
-            (c as any).score = getClipPositionScore(c.clipId);
-          }
-        });
-
-        const exportClips: ExportClip[] = [];
-        for (const c of clips as ExportClip[]) {
-          const newClip = { ...c };
-          if (Array.isArray((c as any).preprocessors)) {
-            (newClip as any).preprocessors = (c as any).preprocessors.map((p: any) => {
-              const convertedSrc = p?.status === 'complete' && p?.src ? convertApexCachePath(p.src) : p?.src;
-              return { ...p, src: convertedSrc };
-            });
-          }
-          for (const filter of [...filterClips]) {
-            if (getClipPositionScore(filter.clipId) < getClipPositionScore(newClip.clipId)) {
-              if (!newClip.applicators) {
-                newClip.applicators = [];
-              }
-              const newFilter = { ...filter };
-              newFilter.startFrame = (newFilter.startFrame ?? 0) - offsetStart;
-              newFilter.endFrame = (newFilter.endFrame ?? 0) - offsetStart;
-              newClip.applicators?.push(newFilter as any);
-            }
-          }
-          newClip.applicators = _.uniqBy(newClip.applicators ?? [], 'clipId');
-          try {
-            const isRenderable = newClip.type === 'image' || newClip.type === 'video';
-            const isGroupChild = (newClip as any)?.groupId !== undefined && (newClip as any)?.groupId !== null;
-            const originalTransform = ((newClip as any)?.transform ?? {}) as any;
-            const t = { ...originalTransform } as any;
-            if (isRenderable && !isGroupChild && t && typeof width === 'number' && typeof height === 'number') {
-              const rawW = (Number(t.width) || 0) || width;
-              const rawH = (Number(t.height) || 0) || height;
-              const sx = Number.isFinite(t.scaleX) ? Number(t.scaleX) : 1;
-              const sy = Number.isFinite(t.scaleY) ? Number(t.scaleY) : 1;
-              const w = Math.max(0, rawW * sx);
-              const h = Math.max(0, rawH * sy);
-              const deg = Number.isFinite(t.rotation) ? Number(t.rotation) : 0;
-              const rad = (deg * Math.PI) / 180;
-              const cCos = Math.cos(rad);
-              const sSin = Math.sin(rad);
-              const x1 = w * cCos; const y1 = w * sSin;
-              const x2 = -h * sSin; const y2 = h * cCos;
-              const x3 = w * cCos - h * sSin; const y3 = w * sSin + h * cCos;
-              const minX = Math.min(0, x1, x2, x3);
-              const maxX = Math.max(0, x1, x2, x3);
-              const minY = Math.min(0, y1, y2, y3);
-              const maxY = Math.max(0, y1, y2, y3);
-              const aabbW = maxX - minX;
-              const aabbH = maxY - minY;
-              t.x = (width - aabbW) / 2 - minX;
-              t.y = (height - aabbH) / 2 - minY;
-              (newClip as any).transform = t;
-            }
-          } catch {}
-          exportClips.unshift(newClip);
-        }
+        const { exportClips, width, height } = prepared;
 
         let absolutePath: string | null = null;
         const frame = value.type === 'video' || value.type === 'group' ? (value as any).selectedFrame ?? 0 : 0;
@@ -282,139 +176,37 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     if (typeStr.startsWith('image') || typeStr.startsWith('video')) {
       const isMapTarget = mapToTargets.has(String(input.id));
-      const rawValue = { ...modelValues[input.id] } as AnyClipProps & { selectedFrame?: number; selectedRange?: [number, number]; selection?: string; apply_preprocessor?: boolean };
+      const rawValue = { ...modelValues[input.id] } as AnyClipProps & {
+        selectedFrame?: number;
+        selectedRange?: [number, number];
+        selection?: string;
+        apply_preprocessor?: boolean;
+      };
       const value = isMapTarget ? ({ ...rawValue, masks: [] } as typeof rawValue) : rawValue;
       clipValues[input.id] = value;
       if (!value) continue;
       if (Object.prototype.hasOwnProperty.call(value, 'selection') && (value.selection === undefined || value.selection === null || value.selection === '')) continue;
 
-      let width = 0;
-      let height = 0;
-      if (value.type === 'image') {
-        const mediaInfo = getMediaInfoCached(value.src);
-        const filePath = convertUserDataPath(value.src);
-        value.src = filePath;
-        const transform = (value as any).originalTransform;
-        width = transform?.width ?? mediaInfo?.image?.width ?? 0;
-        height = transform?.height ?? mediaInfo?.image?.height ?? 0;
-        if (!mediaInfo) continue;
-      } else if (value.type === 'video') {
-        const mediaInfo = getMediaInfoCached(value.src);
-        const transform = (value as any).originalTransform;
-        width = transform?.width ?? mediaInfo?.video?.displayWidth ?? 0;
-        height = transform?.height ?? mediaInfo?.video?.displayHeight ?? 0;
-        if (!mediaInfo) continue;
-      } else {
-        const ratio = aspectRatio.width / aspectRatio.height;
-        const baseShortSide = BASE_LONG_SIDE;
-        if (Number.isFinite(ratio) && ratio > 0) {
-          width = baseShortSide * ratio;
-          height = baseShortSide;
-        } else {
-          width = 0;
-          height = 0;
-        }
-      }
-
-      let clips: AnyClipProps[] = [value as any];
-      let offsetStart = 0;
-      if (value.type === 'group') {
-        const groupedClips = getClipsForGroup(value.children);
-        const groupStart = value.startFrame ?? 0;
-        offsetStart = groupStart;
-        clips = groupedClips.map((c) => {
-          const newClip = { ...c };
-          newClip.startFrame = (c.startFrame ?? 0) - groupStart;
-          newClip.endFrame = (c.endFrame ?? 0) - groupStart;
-          if (isMapTarget && Object.prototype.hasOwnProperty.call(newClip, 'masks')) {
-            (newClip as any).masks = [];
-          }
-          if (newClip.type === 'image') {
-            const mediaInfo = getMediaInfoCached(newClip.src);
-            if (!mediaInfo) return newClip;
-            const filePath = convertUserDataPath(newClip.src);
-            newClip.src = filePath;
-          }
-          if (Object.prototype.hasOwnProperty.call(newClip, 'preprocessors')) {
-            (newClip as any).preprocessors = (c as any).preprocessors?.map((p: any) => ({
-              ...p,
-              startFrame: (p.startFrame ?? 0) - groupStart,
-              endFrame: (p.endFrame ?? 0) - groupStart,
-            })) ?? [];
-          }
-          return newClip;
-        });
-      } else {
-        offsetStart = value.startFrame ?? 0;
-        clips = [value];
-      }
-
-      const filterClips = getClipsByType('filter');
-      clips = clips.filter((c) => c.type !== 'filter').sort((a, b) => getClipPositionScore(a.clipId) - getClipPositionScore(b.clipId));
-
-      filterClips.map((c) => {
-        if (c.type === 'filter') {
-          (c as any).score = getClipPositionScore(c.clipId);
-        }
-      });
-
-      const exportClips: ExportClip[] = [];
-      for (const clipItem of clips as ExportClip[]) {
-        const newClip = { ...clipItem };
-        if (Array.isArray((clipItem as any).preprocessors)) {
-          (newClip as any).preprocessors = (clipItem as any).preprocessors.map((p: any) => {
-            const convertedSrc = p?.status === 'complete' && p?.src ? convertApexCachePath(p.src) : p?.src;
-            return { ...p, src: convertedSrc };
-          });
-        }
-        if (isMapTarget && Object.prototype.hasOwnProperty.call(newClip, 'masks')) {
-          (newClip as any).masks = [];
-        }
-        for (const filter of [...filterClips]) {
-          if (getClipPositionScore(filter.clipId) < getClipPositionScore(newClip.clipId)) {
-            if (!newClip.applicators) {
-              newClip.applicators = [];
-            }
-            const newFilter = { ...filter };
-            newFilter.startFrame = (newFilter.startFrame ?? 0) - offsetStart;
-            newFilter.endFrame = (newFilter.endFrame ?? 0) - offsetStart;
-            newClip.applicators?.push(newFilter as any);
-          }
-        }
-        newClip.applicators = _.uniqBy(newClip.applicators ?? [], 'clipId');
-        try {
-          const isRenderable = newClip.type === 'image' || newClip.type === 'video';
-          const isGroupChild = (newClip as any)?.groupId !== undefined && (newClip as any)?.groupId !== null;
-          const originalTransform = ((newClip as any)?.transform ?? {}) as any;
-          const t = { ...originalTransform } as any;
-          if (isRenderable && !isGroupChild && t && typeof width === 'number' && typeof height === 'number') {
-            const rawW = (Number(t.width) || 0) || width;
-            const rawH = (Number(t.height) || 0) || height;
-            const sx = Number.isFinite(t.scaleX) ? Number(t.scaleX) : 1;
-            const sy = Number.isFinite(t.scaleY) ? Number(t.scaleY) : 1;
-            const w = Math.max(0, rawW * sx);
-            const h = Math.max(0, rawH * sy);
-            const deg = Number.isFinite(t.rotation) ? Number(t.rotation) : 0;
-            const rad = deg * Math.PI / 180;
-            const c = Math.cos(rad);
-            const s = Math.sin(rad);
-            const x1 = w * c;           const y1 = w * s;
-            const x2 = -h * s;          const y2 = h * c;
-            const x3 = w * c - h * s;   const y3 = w * s + h * c;
-            const minX = Math.min(0, x1, x2, x3);
-            const maxX = Math.max(0, x1, x2, x3);
-            const minY = Math.min(0, y1, y2, y3);
-            const maxY = Math.max(0, y1, y2, y3);
-            const aabbW = maxX - minX;
-            const aabbH = maxY - minY;
-            t.x = (width - aabbW) / 2 - minX;
-            t.y = (height - aabbH) / 2 - minY;
-            (newClip as any).transform = t;
-          }
-        } catch {}
-        exportClips.unshift(newClip);
-      }
-
+     
+      const prepared = prepareExportClipsForValue(
+        value as AnyClipProps,
+        {
+          aspectRatio,
+          getClipsForGroup,
+          getClipsByType,
+          getClipPositionScore,
+          timelines,
+        },
+        {
+          clearMasks: isMapTarget,
+          useMediaDimensionsForExport: true,
+          useOriginalTransform: true,
+          applyCentering: true,
+          dimensionsFrom: 'clip',
+        },
+      );
+      
+      const { exportClips, width, height } = prepared;
       let absolutePath: string | null = null;
 
       if (String(input.type).startsWith('video')) {

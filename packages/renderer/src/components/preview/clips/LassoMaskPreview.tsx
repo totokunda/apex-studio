@@ -20,8 +20,6 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
   mask,
   points,
   animationOffset,
-  rectWidth,
-  rectHeight,
 }) => {
 
   const tool = useViewportStore((s) => s.tool);

@@ -1086,6 +1086,7 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         };
     }, [clipTransform?.crop, displayWidth, displayHeight]);
 
+
     return (
     <React.Fragment>
     <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight}>

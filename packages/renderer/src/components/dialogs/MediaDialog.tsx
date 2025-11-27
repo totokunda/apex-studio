@@ -23,7 +23,7 @@ import VideoPreview from "@/components/preview/clips/VideoPreview";
 import ImagePreview from "@/components/preview/clips/ImagePreview";
 import { getApplicatorsForClip } from "@/lib/applicator-utils";
 import { useWebGLHaldClut } from "@/components/preview/webgl-filters";
-import { AnyClipProps, AudioClipProps, ClipTransform, ImageClipProps, VideoClipProps } from "@/lib/types";
+import { AnyClipProps, AudioClipProps, ClipTransform, ImageClipProps, MaskClipProps, VideoClipProps } from "@/lib/types";
 import TimelineSelector from "@/components/properties/model/inputs/timeline/TimelineSelector";
 import { BASE_LONG_SIDE } from "@/lib/settings";
 import AudioPreview from "../preview/clips/AudioPreview";
@@ -31,6 +31,7 @@ import { CircularAudioVisualizer } from "../properties/model/inputs/CircularAudi
 import ShapePreview from "../preview/clips/ShapePreview";
 import TextPreview from "../preview/clips/TextPreview";
 import DrawingPreview from "../preview/clips/DrawingPreview";
+import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
 
 interface PartialTimelineSelectorProps {
     mode: 'frame' | 'range';
@@ -40,7 +41,16 @@ interface PartialTimelineSelectorProps {
 interface MediaDialogProps {
     isOpen: boolean;
     onClose: () => void;
-    onConfirm: (data: { rotation: number; aspectRatio: string; crop?: { x: number; y: number; width: number; height: number }; transformWidth?: number; transformHeight?: number }) => void;
+    onConfirm: (data: {
+        rotation: number;
+        aspectRatio: string;
+        crop?: { x: number; y: number; width: number; height: number };
+        transformWidth?: number;
+        transformHeight?: number;
+        transformX?: number;
+        transformY?: number;
+        originalTransform?: ClipTransform;
+    }) => void;
     clipOverride?: AnyClipProps | null;
     timelineSelectorProps?: PartialTimelineSelectorProps;
     focusFrame: number;
@@ -278,6 +288,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
              // This prevents shrinking when switching aspect ratios and keeps the visual size consistent.
              
             let currentTransform = clipOverride ? clipOverride.transform : getClipTransform(selectedClip.clipId) as ClipTransform;
+            let originalTransform = clipOverride ? clipOverride.originalTransform : getClipTransform(selectedClip.clipId) as ClipTransform;
             if (!currentTransform) {
                 
                 const contentRatio = nativeW / nativeH;
@@ -295,25 +306,52 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                 } as ClipTransform;
             }
 
-             // Calculate current scale based on the currently visible portion of the native width
-             const currentCropW = currentTransform.crop ? currentTransform.crop.width : 1.0;
-             const currentCropH = currentTransform.crop ? currentTransform.crop.height : 1.0;
-             const effectiveNativeW = nativeW * currentCropW;
-             const effectiveNativeH = nativeH * currentCropH;
-             const currentScaleWidth = effectiveNativeW > 0 ? currentTransform.width / effectiveNativeW : 1;
+            if (!originalTransform) {
+                originalTransform = { ...currentTransform };
+            } else {
+              originalTransform = undefined;
+            }
+
+          
+            // Calculate current scale based on the currently visible portion of the native width
+            const currentCropW = currentTransform.crop ? currentTransform.crop.width : 1.0;
+            const currentCropH = currentTransform.crop ? currentTransform.crop.height : 1.0;
+            const effectiveNativeW = nativeW * currentCropW;
+            const effectiveNativeH = nativeH * currentCropH;
+            const currentScaleWidth = effectiveNativeW > 0 ? currentTransform.width / effectiveNativeW : 1;
             const currentScaleHeight = effectiveNativeH > 0 ? currentTransform.height / effectiveNativeH : 1;
             const currentScale = Math.max(currentScaleWidth, currentScaleHeight);
-             const newWidth = nativeW * normalizedCrop.width * currentScale;
-             const newHeight = nativeH * normalizedCrop.height * currentScale;
 
+            const newWidth = nativeW * normalizedCrop.width * currentScale;
+            const newHeight = nativeH * normalizedCrop.height * currentScale;
 
-             onConfirm({ 
-                 rotation, 
-                 aspectRatio, 
-                 crop: normalizedCrop,
-                 transformWidth: newWidth,
-                 transformHeight: newHeight
-             });
+            // Compute new transform position so the remaining visible area stays in place
+            const currentCropX = currentTransform.crop ? currentTransform.crop.x : 0;
+            const currentCropY = currentTransform.crop ? currentTransform.crop.y : 0;
+            const deltaCropX = normalizedCrop.x - currentCropX;
+            const deltaCropY = normalizedCrop.y - currentCropY;
+
+            const deltaNativeX = nativeW * deltaCropX;
+            const deltaNativeY = nativeH * deltaCropY;
+
+            const baseX = typeof currentTransform.x === "number" ? currentTransform.x : 0;
+            const baseY = typeof currentTransform.y === "number" ? currentTransform.y : 0;
+
+            // When we crop away pixels on the left/top, we shift the transform in the
+            // opposite direction so the visible content appears to stay put.
+            const newX = baseX + deltaNativeX * currentScale;
+            const newY = baseY + deltaNativeY * currentScale;
+
+            onConfirm({ 
+                rotation, 
+                aspectRatio, 
+                crop: normalizedCrop,
+                transformWidth: newWidth,
+                transformHeight: newHeight,
+                transformX: newX,
+                transformY: newY,
+                originalTransform: originalTransform
+            });
         } else {
              onConfirm({ rotation, aspectRatio });
         }
@@ -835,6 +873,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                                                     !overrideToUse.groupId
                                                   ) {
                                                     const t = { ...(overrideToUse.transform ?? {}) };
+                                                    t.rotation = overrideToUse.originalTransform?.rotation ?? 0;
 
                                                     // In the media dialog, always show the full underlying item for
                                                     // non-group clips, even if a crop was previously applied.
@@ -910,6 +949,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
 
                                                       overrideToUse.transform = t;
                                                     }
+
                                                   }
 
                                                   if (
@@ -940,6 +980,21 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                                                   }
 
                                                   
+
+                                                  
+                                                  
+                                                  if (
+                                                    (overrideToUse.type === 'video' || overrideToUse.type === 'image') && 
+                                                    overrideToUse.transform && 
+                                                    clip.transform && 
+                                                    (overrideToUse as any).masks?.length > 0
+                                                  ) {
+                                                     const masks = (overrideToUse as any).masks as MaskClipProps[];
+                                                     (overrideToUse as any).masks = masks.map((mask: MaskClipProps) => 
+                                                       remapMaskWithClipTransform(mask, clip.transform!, overrideToUse.transform!)
+                                                     );
+                                                  }
+
                                                   if (overrideToUse?.clipId?.startsWith('media:')) {
                                                     overrideToUse.transform = undefined;
                                                   }

@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useState, useRef } from 'react';
 import { Group, Circle, Line } from 'react-konva';
-import { useMask, useMaskStore } from '@/lib/mask';
+import {  useMask, useMaskStore } from '@/lib/mask';
 import { PreprocessorClipType } from '@/lib/types';
 import { useControlsStore } from '@/lib/control';
 import { useClipStore } from '@/lib/clip';
@@ -9,7 +9,6 @@ import Konva from 'konva';
 import { useViewportStore } from '@/lib/viewport';
 import _ from 'lodash';
 import { getLocalFrame } from '@/lib/clip';
-import { projectContoursBetweenTransforms } from '@/lib/mask/transformUtils';
 
 interface TouchMaskPreviewProps {
   clip: PreprocessorClipType;
@@ -109,7 +108,7 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
   // Get media info and clip transform
   const mediaInfo = useMemo(() => getMediaInfoCached(clip.src) || null, [clip.src]);
   const clipTransform = useMemo(() => getClipTransform(clip.clipId || ''), [clip.clipId, getClipTransform]);
-  const maskTransform = currentMask?.transform;
+
   
   const points = useMemo<Array<{ x: number; y: number }>>(() => {
     if (!touchPoints) return [];
@@ -120,8 +119,6 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
     if (!touchPoints) return [];
     return touchPoints.map((point) => point.label as number);
   }, [touchPoints]);
-  
-  
 
   const mapFrameToLocalFrame = useMemo(() => {
     if (clip.type === 'image') return 0;
@@ -140,7 +137,7 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
     displayWidth: rectWidth,
     displayHeight: rectHeight,
     mediaInfo: mediaInfo || undefined,
-    clipTransform: clipTransform || undefined,
+    clipTransform: clipTransform  || undefined,
     enabled: (touchPoints && touchPoints.length > 0) && !!mediaInfo,
   });
 
@@ -277,17 +274,6 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
     return touchPoints || [];
   }, [touchPoints, renderedTouchPoints, contours]);
 
-  const displayContours = useMemo(() => {
-    if (!contours) return [] as Array<Array<number>>;
-    if (!clipTransform) return contours;
-    // If maskTransform missing, assume same space as contours (no transform)
-    if (!maskTransform) return contours;
-    try {
-      return projectContoursBetweenTransforms(contours, maskTransform, clipTransform);
-    } catch {
-      return contours;
-    }
-  }, [contours, maskTransform, clipTransform]);
 
   // Handle keyboard events for deletion
   useEffect(() => {
@@ -334,8 +320,18 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
     };
   }, []);
 
+
+  const displayContours = useMemo(() => {
+       return contours;
+      
+  }, [contours, clipTransform]);
+
   return (
-    <Group visible={tool==='mask'} ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight} >
+    // Do not apply an additional clipping rect here; the parent preview
+    // group already clips to the viewport. Having a second clip rectangle
+    // combined with the outer/inner transforms in MaskPreview causes the
+    // rotated contours to be cropped when re-entering mask mode.
+    <Group visible={tool==='mask'} ref={groupRef} clipX={0} clipY={0}>
       {/* Render contours with zebra stripes (generated from lasso strokes and touch points) */}
       {Array.isArray(displayContours) && displayContours.length > 0 && displayContours.map((contour, index) => (
         <Group key={`contour-${index}`}>

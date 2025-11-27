@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Group, Rect, Line as KonvaLine, Ellipse as KonvaEllipse, RegularPolygon, Star as KonvaStar, Circle, Transformer } from 'react-konva';
 import { useViewportStore } from '@/lib/viewport';
+import { sortClipsForStacking } from '@/lib/clipOrdering';
 import { getLocalFrame, useClipStore } from '@/lib/clip';
 import { KonvaEventObject } from 'konva/lib/Node';
 import { BASE_LONG_SIDE, DEFAULT_FPS } from '@/lib/settings'; 
@@ -30,10 +31,45 @@ import { calculateArea, doPolygonsIntersect, isPolygonInsidePolygon, mergePolygo
 const getFiniteNumber = (value: number | undefined, fallback = 0): number =>
   Number.isFinite(value) ? (value as number) : fallback;
 
- 
+// Compute the pixel offset introduced by a normalized crop on a clip transform.
+// We intentionally use the clip's base width/height (pre-scale) to match how
+// mask previews compensate for crop inside `MaskPreview`.
+const getCropOffset = (
+  transform?: ClipTransform | null
+): { offsetX: number; offsetY: number } => {
+  if (!transform) {
+    return { offsetX: 0, offsetY: 0 };
+  }
 
- 
+  const anyTransform = transform as any;
+  const crop = anyTransform?.crop as
+    | { x?: number; y?: number; width?: number; height?: number }
+    | undefined;
 
+  const hasValidCrop =
+    crop &&
+    Number.isFinite(crop.x) &&
+    Number.isFinite(crop.y) &&
+    Number.isFinite(transform.width) &&
+    Number.isFinite(transform.height);
+
+  if (!hasValidCrop) {
+    return { offsetX: 0, offsetY: 0 };
+  }
+
+  const cropW = (crop!.width && crop!.width > 0) ? crop!.width : 1;
+  const cropH = (crop!.height && crop!.height > 0) ? crop!.height : 1;
+
+  const baseWidth = (transform.width as number) || 0;
+  const baseHeight = (transform.height as number) || 0;
+  const offsetX = (baseWidth / cropW) * (crop!.x as number);
+  const offsetY = (baseHeight / cropH) * (crop!.y as number);
+
+  return {
+    offsetX,
+    offsetY,
+  };
+};
 
 const normalizeMaskPointForRotation = (
   x: number,
@@ -41,20 +77,32 @@ const normalizeMaskPointForRotation = (
   transform?: ClipTransform | null
 ): { x: number; y: number } => {
   if (!transform) return { x, y };
+
+  const { offsetX, offsetY } = getCropOffset(transform);
   const rotation = getFiniteNumber(transform.rotation);
-  if (Math.abs(rotation) < 1e-6) {
-    return { x, y };
-  }
   const originX = getFiniteNumber(transform.x);
   const originY = getFiniteNumber(transform.y);
+
+  // No rotation: we only need to encode the crop offset into mask space
+  if (Math.abs(rotation) < 1e-6) {
+    return {
+      x: x - originX + offsetX,
+      y: y - originY + offsetY,
+    };
+  }
+
   const angleRad = (rotation * Math.PI) / 180;
   const dx = x - originX;
   const dy = y - originY;
   const cos = Math.cos(angleRad);
   const sin = Math.sin(angleRad);
-  const unrotatedX = originX + cos * dx + sin * dy;
-  const unrotatedY = originY - sin * dx + cos * dy;
-  return { x: unrotatedX, y: unrotatedY };
+  const unrotatedX = cos * dx + sin * dy;
+  const unrotatedY = -sin * dx + cos * dy;
+
+  return {
+    x: unrotatedX + offsetX,
+    y: unrotatedY + offsetY,
+  };
 };
 
 const normalizeFlatPointsForRotation = (
@@ -90,15 +138,22 @@ const denormalizeMaskPointForRotation = (
   transform?: ClipTransform | null
 ): { x: number; y: number } => {
   if (!transform) return { x, y };
-  const rotation = getFiniteNumber(transform.rotation);
-  if (Math.abs(rotation) < 1e-6) {
-    return { x, y };
-  }
+
+  // Inverse of `normalizeMaskPointForRotation`: first remove the crop offset
+  // from mask-space, then re-apply rotation about the clip origin.
+  const { offsetX, offsetY } = getCropOffset(transform);
+  const baseX = x - offsetX;
+  const baseY = y - offsetY;
   const originX = getFiniteNumber(transform.x);
   const originY = getFiniteNumber(transform.y);
+
+  const rotation = getFiniteNumber(transform.rotation);
+  if (Math.abs(rotation) < 1e-6) {
+    return { x: baseX + originX, y: baseY + originY };
+  }
   const angleRad = (rotation * Math.PI) / 180;
-  const dx = x - originX;
-  const dy = y - originY;
+  const dx = baseX;
+  const dy = baseY;
   const cos = Math.cos(angleRad);
   const sin = Math.sin(angleRad);
   const rotatedX = originX + cos * dx - sin * dy;
@@ -231,64 +286,14 @@ const Preview:React.FC<PreviewProps> = () => {
     
     Promise.all(loadPromises).catch(console.error);
   }, [clips, haldClutInstance]);
-  
+ 
 
-  const sortClips = useCallback((clips: AnyClipProps[]) => {
-    // Treat each group as a single sortable unit; then expand children in defined order
-    type GroupUnit = { kind: 'group'; id: string; y: number; start: number; children: AnyClipProps[] };
-    type SingleUnit = { kind: 'single'; y: number; start: number; clip: AnyClipProps };
-
-    const groups = clips.filter(c => c.type === 'group') as AnyClipProps[];
-    const childrenSet = new Set<string>(
-      groups.flatMap(g => {
-        const nested = ((g as any).children as string[][] | undefined) ?? [];
-        return nested.flat();
-      })
-    );
-
-    // Build group units
-    const groupUnits: GroupUnit[] = groups.map((g) => {
-      const y = (timelines.find(t => t.timelineId === g.timelineId)?.timelineY) ?? 0;
-      const start = g.startFrame ?? 0;
-      const nested = ((g as any).children as string[][] | undefined) ?? [];
-      const childIdsFlat = nested.flat();
-      const children = childIdsFlat
-        .map(id => clips.find(c => c.clipId === id))
-        .filter(Boolean) as AnyClipProps[];
-      return { kind: 'group', id: g.clipId, y, start, children };
-    });
-
-    // Build single units for non-group, non-child clips
-    const singleUnits: SingleUnit[] = clips
-      .filter(c => c.type !== 'group' && !childrenSet.has(c.clipId))
-      .map((c) => {
-        const y = (timelines.find(t => t.timelineId === c.timelineId)?.timelineY) ?? 0;
-        const start = c.startFrame ?? 0;
-        return { kind: 'single', y, start, clip: c };
-      });
-
-    // Sort units: lower on screen first (higher y), then earlier start
-    const units = [...groupUnits, ...singleUnits].sort((a, b) => {
-      if (a.y !== b.y) return b.y - a.y;
-      return a.start - b.start;
-    });
-
-    // Flatten units back to clip list; for groups, expand children in their defined order
-    const result: AnyClipProps[] = [];
-    for (const u of units) {
-      if (u.kind === 'single') {
-        result.push(u.clip);
-      } else {
-        // Ensure children are ordered as in group's children list
-        result.push(...u.children.reverse());
-      }
-    }
-
-    return result;
-  }, [timelines, clips])
+  const sortClips = useCallback((inputClips: AnyClipProps[]) => {
+    return sortClipsForStacking(inputClips, timelines);
+  }, [timelines])
 
   const filterClips = useCallback((clips: AnyClipProps[], audio:boolean = false) => {
-    const filteredClips = clips.filter((clip) => {
+    const filteredClips = clips.filter((clip: AnyClipProps) => {
       const timeline = timelines.find((t) => t.timelineId === clip.timelineId);
       if (audio) {
         if (timeline?.muted) {
@@ -306,7 +311,7 @@ const Preview:React.FC<PreviewProps> = () => {
   
   // Find the topmost rendered clip at the current focus frame
   const getTopmostClipAtFrame = useCallback(() => {
-    const visibleClips = sortClips(filterClips(clips)).filter((clip) => {
+    const visibleClips = sortClips(filterClips(clips)).filter((clip: AnyClipProps) => {
       const clipAtFrame = clipWithinFrame(clip, focusFrame);
       // Only consider clips that can have masks (video and image)
       const timeline = timelines.find((t) => t.timelineId === clip.timelineId);
@@ -375,7 +380,7 @@ const Preview:React.FC<PreviewProps> = () => {
   // Helper: recenter all clips for a given rect size
   const recenterAllClips = useCallback((targetRectWidth: number, targetRectHeight: number) => {
     const { clips: currentClips } = useClipStore.getState();
-    currentClips.forEach((clip) => {
+    currentClips.forEach((clip: AnyClipProps) => {
       const t = useClipStore.getState().getClipTransform(clip.clipId);
       const w = t?.width ?? 0;
       const h = t?.height ?? 0;
@@ -2337,7 +2342,7 @@ useEffect(() => {
                 recenterAllClips(committedRectWidth, committedRectHeight);
               }}
             />
-               {sortClips(filterClips(clips)).map((clip) => {
+               {sortClips(filterClips(clips)).map((clip: AnyClipProps) => {
 
                 const startFrame = clip.startFrame || 0;
                 const hasOverlap = (clip.type === 'video' || clip.type === 'image') && (startFrame > 0) ? true : false;
@@ -2485,7 +2490,7 @@ useEffect(() => {
       </div>
     )}
     {<>
-        {sortClips(filterClips(clips, true)).map((clip) => {
+        {sortClips(filterClips(clips, true)).map((clip: AnyClipProps) => {
           const hasOverlap = (clip.type === 'video' && (clip.startFrame || 0) > 0) ? true : false;
           const clipAtFrame = clipWithinFrame(clip, focusFrame, hasOverlap, 1);
           if (!clipAtFrame) return null;

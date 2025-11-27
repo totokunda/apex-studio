@@ -18,7 +18,6 @@ const transformsEqual = (a?: ClipTransform, b?: ClipTransform): boolean => {
   );
 };
 
-const degToRad = (deg: number): number => (deg * Math.PI) / 180;
 
 const getSafeNumber = (value: number | undefined, fallback: number): number =>
   isFiniteNumber(value) ? value! : fallback;
@@ -51,14 +50,6 @@ const getActualSize = (transform: ClipTransform): { width: number; height: numbe
   };
 };
 
-const getCenter = (transform: ClipTransform): { x: number; y: number } => {
-  const actual = getActualSize(transform);
-  return {
-    x: getSafeNumber(transform.x, 0) + actual.width / 2,
-    y: getSafeNumber(transform.y, 0) + actual.height / 2,
-  };
-};
-
 
 const transformPoint = (
   x: number,
@@ -68,21 +59,28 @@ const transformPoint = (
 ): { x: number; y: number } => {
   const deltaX = (to.x ?? 0) - (from.x ?? 0);
   const deltaY = (to.y ?? 0) - (from.y ?? 0);
-  const fromWidth = from.width ?? 0;
-  const fromHeight = from.height ?? 0;
-  const toWidth = to.width ?? fromWidth;
-  const toHeight = to.height ?? fromHeight;
-  if (!fromWidth || !fromHeight || !isFiniteNumber(fromWidth) || !isFiniteNumber(fromHeight)) {
+  
+  const fSx = sanitizeScale(from.scaleX);
+  const fSy = sanitizeScale(from.scaleY);
+  const fW = (from.width ?? 0) * fSx;
+  const fH = (from.height ?? 0) * fSy;
+  
+  const tSx = sanitizeScale(to.scaleX);
+  const tSy = sanitizeScale(to.scaleY);
+  const tW = (to.width ?? from.width ?? 0) * tSx;
+  const tH = (to.height ?? from.height ?? 0) * tSy;
+
+  if (!fW || !fH || !isFiniteNumber(fW) || !isFiniteNumber(fH)) {
     return {
       x: x + deltaX,
       y: y + deltaY,
     };
   }
-  const relX = (x - (from.x ?? 0)) / fromWidth;
-  const relY = (y - (from.y ?? 0)) / fromHeight;
+  const relX = (x - (from.x ?? 0)) / fW;
+  const relY = (y - (from.y ?? 0)) / fH;
   return {
-    x: (to.x ?? 0) + relX * (toWidth || fromWidth),
-    y: (to.y ?? 0) + relY * (toHeight || fromHeight),
+    x: (to.x ?? 0) + relX * (tW || fW),
+    y: (to.y ?? 0) + relY * (tH || fH),
   };
 };
 
@@ -94,6 +92,8 @@ const transformDimension = (value: number, fromSize: number, toSize: number): nu
 };
 
 const transformFlatPoints = (points: number[], from: ClipTransform, to: ClipTransform): number[] => {
+  from = getUncroppedTransform(from);
+  to = getUncroppedTransform(to);
   if (!Array.isArray(points) || points.length === 0) {
     return points.slice();
   }
@@ -125,6 +125,8 @@ const transformTouchPoints = (
   from: ClipTransform,
   to: ClipTransform
 ): Array<{ x: number; y: number; label: 0 | 1 }> => {
+  from = getUncroppedTransform(from);
+  to = getUncroppedTransform(to);
   if (!Array.isArray(points) || points.length === 0) {
     return points.slice();
   }
@@ -150,14 +152,46 @@ const transformRotation = (rotation: number, from: ClipTransform, to: ClipTransf
   return normalize(rotation + deltaRotation);
 }
 
+export const getUncroppedTransform = (transform: ClipTransform, offsetXY:boolean = true): ClipTransform => {
+  if (!transform.crop) {
+    return transform;
+  }
+   let uncroppedWidth = transform.width / transform.crop.width;
+   let uncroppedHeight = transform.height / transform.crop.height;
+   let offsetX = transform.crop.x * uncroppedWidth;
+   let offsetY = transform.crop.y * uncroppedHeight;
+
+   return {
+    ...transform,
+    width: uncroppedWidth,
+    height: uncroppedHeight,
+    x: offsetXY ? transform.x - offsetX : transform.x,
+    y: offsetXY ? transform.y - offsetY : transform.y,
+  };
+};
+
 const transformShapeBounds = (
   bounds: NonNullable<MaskData['shapeBounds']>,
   from: ClipTransform,
   to: ClipTransform
 ): NonNullable<MaskData['shapeBounds']> => {
+  from = getUncroppedTransform(from);
+  to = getUncroppedTransform(to);
   const topLeft = transformPoint(bounds.x, bounds.y, from, to);
-  const newWidth = transformDimension(bounds.width, from.width ?? 0, to.width ?? from.width ?? 0);
-  const newHeight = transformDimension(bounds.height, from.height ?? 0, to.height ?? from.height ?? 0);
+  
+  const fSx = sanitizeScale(from.scaleX);
+  const fSy = sanitizeScale(from.scaleY);
+  const fW = (from.width ?? 0) * fSx;
+  const fH = (from.height ?? 0) * fSy;
+  
+  const tSx = sanitizeScale(to.scaleX);
+  const tSy = sanitizeScale(to.scaleY);
+  const tW = (to.width ?? from.width ?? 0) * tSx;
+  const tH = (to.height ?? from.height ?? 0) * tSy;
+
+  const newWidth = transformDimension(bounds.width, fW, tW || fW);
+  const newHeight = transformDimension(bounds.height, fH, tH || fH);
+
 
   return {
     ...bounds,
@@ -193,12 +227,7 @@ const transformMaskData = (data: MaskData, from: ClipTransform, to: ClipTransfor
       y2: bottomRight.y,
     };
   }
-  if (data.drawStrokes) {
-    nextData.drawStrokes = data.drawStrokes.map((stroke) => ({
-      ...stroke,
-      points: transformFlatPoints(stroke.points, from, to),
-    }));
-  }
+  
 
   return nextData;
 };
@@ -208,6 +237,8 @@ export const remapMaskWithClipTransform = (
   from: ClipTransform,
   to: ClipTransform
 ): MaskClipProps => {
+
+  
   if (transformsEqual(from, to)) {
     return { ...mask, transform: { ...to } };
   }

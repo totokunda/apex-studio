@@ -133,6 +133,44 @@ const fragmentShader = `
   }
 `;
 
+
+export const getCropOffset = (
+  transform?: ClipTransform | null
+): { offsetX: number; offsetY: number } => {
+  if (!transform) {
+    return { offsetX: 0, offsetY: 0 };
+  }
+
+  const anyTransform = transform as any;
+  const crop = anyTransform?.crop as
+    | { x?: number; y?: number; width?: number; height?: number }
+    | undefined;
+
+  const hasValidCrop =
+    crop &&
+    Number.isFinite(crop.x) &&
+    Number.isFinite(crop.y) &&
+    Number.isFinite(transform.width) &&
+    Number.isFinite(transform.height);
+
+  if (!hasValidCrop) {
+    return { offsetX: 0, offsetY: 0 };
+  }
+
+  const cropW = (crop!.width && crop!.width > 0) ? crop!.width : 1;
+  const cropH = (crop!.height && crop!.height > 0) ? crop!.height : 1;
+
+  const baseWidth = (transform.width as number) || 0;
+  const baseHeight = (transform.height as number) || 0;
+  const offsetX = (baseWidth / cropW) * (crop!.x as number);
+  const offsetY = (baseHeight / cropH) * (crop!.y as number);
+
+  return {
+    offsetX,
+    offsetY,
+  };
+};
+
 const applyClipTransformContours = (
   contours: number[][],
   clipTransform?: ClipTransform,
@@ -148,14 +186,44 @@ const applyClipTransformContours = (
   const scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
   const scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
 
+
   const transformed: number[][] = [];
+  
+  let hasCrop = false;
+  let cropX = 0;
+  let cropY = 0;
+  let cropW = 1;
+  let cropH = 1;
+  let displayWidth = 0;
+  let displayHeight = 0;
+
+  if (clipTransform.crop) {
+    hasCrop = true;
+    cropX = clipTransform.crop.x;
+    cropY = clipTransform.crop.y;
+    cropW = clipTransform.crop.width;
+    cropH = clipTransform.crop.height;
+
+    displayWidth = (clipTransform.width || 0) * (clipTransform.scaleX || 1);
+    displayHeight = (clipTransform.height || 0) * (clipTransform.scaleY || 1);
+  }
+
   for (let c = 0; c < contours.length; c++) {
     const contour = contours[c];
     const newPts: number[] = [];
     for (let i = 0; i < contour.length; i += 2) {
-      const x = (contour[i] + deltaX) - clipTransform.x;
-      const y = (contour[i + 1] + deltaY) - clipTransform.y;
-      newPts.push(x * scaleRatioX, y * scaleRatioY);
+      let x = (contour[i] + deltaX) - clipTransform.x
+      let y = (contour[i + 1] + deltaY) - clipTransform.y;
+      
+      x = x * scaleRatioX;
+      y = y * scaleRatioY;
+
+      if (hasCrop) {
+        x = (cropX * displayWidth) + (x * cropW);
+        y = (cropY * displayHeight) + (y * cropH);
+      }
+
+      newPts.push(x, y);
     }
     transformed.push(newPts);
   }
@@ -174,6 +242,7 @@ const computeCanvasScale = (
 
   const scaleX = baseWidth !== 0 ? canvas.width / baseWidth : 1;
   const scaleY = baseHeight !== 0 ? canvas.height / baseHeight : 1;
+
 
   return { scaleX, scaleY };
 };

@@ -16,6 +16,17 @@ import { LayoutIcon } from './LayoutIcon';
 import { TbPackageExport } from 'react-icons/tb';
 import SystemMemoryMenu from '@/components/system/SystemMemoryMenu';
 import JobsMenu from '@/components/system/JobsMenu';
+import ExportModal, { ExportSettings } from '@/components/dialogs/ExportModal';
+import { ProgressBar } from '@/components/common/ProgressBar';
+import { ExportClip, exportSequenceCancellable, ExportCancelledError } from '@app/export-renderer';
+import { useClipStore } from '@/lib/clip';
+import { useControlsStore } from '@/lib/control';
+import type { AnyClipProps } from '@/lib/types';
+import { prepareExportClipsForValue } from '@/lib/prepareExportClips';
+import { sortClipsForStacking } from '@/lib/clipOrdering';
+import { toast } from 'sonner';
+import { revealPathInFolder } from '@app/preload';
+
 interface TopBarProps {
 
 }
@@ -50,13 +61,128 @@ const TopBar:React.FC<TopBarProps> = () => {
     const setIsAspectEditing = useViewportStore((s) => s.setAspectEditing);
     const isAspectEditing = useViewportStore((s) => s.isAspectEditing);
     const [shortcutsOpen, setShortcutsOpen] = useState(false);
+    const [exportOpen, setExportOpen] = useState(false);
+    const [isExporting, setIsExporting] = useState(false);
+    const [exportProgress, setExportProgress] = useState<number | null>(null);
+    const [cancelExportFn, setCancelExportFn] = useState<(() => void) | null>(null);
     const layoutLabel = layout === 'default' ? 'Default' : layout === 'media' ? 'Media' : 'Properties';
+    const clips = useClipStore((s) => s.clips);
+    const timelines = useClipStore((s) => s.timelines);
+    const getClipsForGroup = useClipStore((s) => s.getClipsForGroup);
+    const getClipsByType = useClipStore((s) => s.getClipsByType);
+    const getClipPositionScore = useClipStore((s) => s.getClipPositionScore);
+    const fps = useControlsStore((s) => s.fps);
+    const handleExport = async (settings: ExportSettings) => {
+      const outpath = `${settings.path}/${settings.name}.${settings.format}`;
+
+      // Derive pixel dimensions from the chosen resolution and the editor rect ratio.
+      // In the editor we compute rectWidth/rectHeight as:
+      //   rectWidth  = BASE_LONG_SIDE * (aspectRatio.width / aspectRatio.height)
+      //   rectHeight = BASE_LONG_SIDE
+      // so the effective ratio is rectWidth / rectHeight = aspectRatio.width / aspectRatio.height.
+      const base = Math.max(1, settings.resolution || 0);
+      const rawRatio = aspectRatio.width / aspectRatio.height;
+      const ratio = Number.isFinite(rawRatio) && rawRatio > 0 ? rawRatio : 1;
+
+      // Mirror the editor rect: fix the "height" (short side in editor units) to `base`
+      // and scale the width by the same ratio derived from rectWidth:rectHeight.
+      const heightPx = base;
+      const widthPx = Math.round(base * ratio);
+
+      
+      const preserveAlpha = !!settings.preserveAlpha;
+
+      setIsExporting(true);
+      setExportProgress(0);
+
+      try {
+        // Prepare export-ready clips (attach filters, preprocessors, normalize paths, etc.).
+        const preparedClips: ExportClip[] = [];
+        let contentClips = sortClipsForStacking(clips as AnyClipProps[], timelines);
+        // filter clips with non visible timelines
+        contentClips = contentClips.filter((clip) => {
+          const timeline = timelines.find((t) => t.timelineId === clip.timelineId);
+          return !timeline?.hidden;
+        });
+        
+        for (const clip of contentClips) {
+          if (clip.type === 'filter') continue; // filters become applicators, not standalone content
+          const prepared = prepareExportClipsForValue(
+            clip as AnyClipProps,
+            {
+              aspectRatio,
+              getClipsForGroup,
+              getClipsByType,
+              getClipPositionScore,
+              timelines,
+            },
+            {
+              clearMasks: false,
+              applyCentering: false,
+              dimensionsFrom: 'aspect',
+            },
+          );
+          preparedClips.push(...prepared.exportClips);
+        }
+
+
+
+        const { promise, cancel } = exportSequenceCancellable({
+          mode: 'video',
+          filename: outpath,
+          includeAudio: settings.includeAudio,
+          clips: preparedClips,
+          fps: fps,
+          width: widthPx,
+          height: heightPx,
+          encoderOptions: {
+            format: settings.format,
+            codec: settings.codec,
+            bitrate: settings.bitrate,
+            alpha: preserveAlpha,
+          },
+          backgroundColor: preserveAlpha ? undefined : '#000000',
+          audioOptions: {
+            format: settings.audioFormat ?? 'mp3',
+          },
+          onProgress: ({ ratio }) => {
+            setIsExporting(true);
+            setExportProgress(typeof ratio === 'number' ? ratio : 0);
+          },
+          onDone: async () => {
+            toast('Export completed', {
+              description: outpath,
+            });
+            // Best-effort: open the exported file location for the user.
+            try {
+              await revealPathInFolder(outpath);
+            } catch (e) {
+              // eslint-disable-next-line no-console
+              console.error('Failed to reveal export path', e);
+            }
+          },
+        });
+
+        setCancelExportFn(() => cancel);
+
+        await promise;
+      } catch (err) {
+        if (err instanceof ExportCancelledError || (err as any)?.name === 'ExportCancelledError') {
+          // Export was cancelled by the user; do not treat as an error or show a completion toast.
+        } else {
+          // Swallow other errors; the user can retry.
+          // Optionally log for debugging.
+          console.error(err);
+        }
+      } finally {
+        setIsExporting(false);
+        setExportProgress(null);
+        setCancelExportFn(null);
+      }
+    }
 
   return (
     <div className="w-full relative h-8 mt-2 px-6 flex items-center justify-end space-x-2">
-      
-          
-          
           {/* Exit Custom button when in aspect editing mode */}
           {isAspectEditing && (
             <button 
@@ -244,9 +370,52 @@ const TopBar:React.FC<TopBarProps> = () => {
                 </DropdownMenuContent>
            </DropdownMenu>
 
-            <button className='text-brand-light space-x-1.5 flex items-center justify-center px-5 font-medium h-[34px] hover:text-brand-light bg-brand-accent border border-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer'>
-            <TbPackageExport size={16} /><span className='text-[11px]'>Export</span>
-            </button>
+           <div className="flex items-center gap-2">
+             {!isExporting ? (
+               <button
+                 type="button"
+                 className='text-brand-light space-x-1.5 flex items-center justify-center px-5 font-medium h-[34px] hover:text-brand-light bg-brand-accent border border-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer'
+                 onClick={() => setExportOpen(true)}
+               >
+                <TbPackageExport size={16} />
+                <span className='text-[11px]'>Export</span>
+               </button>
+             ) : (
+               <button
+                 type="button"
+                 className="hidden md:flex items-center gap-2 min-w-[180px] h-[34px] px-3 pr-5 rounded-[6px] border border-brand-light/10 bg-brand-background/80 hover:bg-brand-background cursor-pointer transition-colors"
+                 onClick={() => setExportOpen(true)}
+               >
+                 <TbPackageExport size={14} className="text-brand-light/80" />
+                 <span className="text-[10px] text-brand-light/70 whitespace-nowrap">
+                   Exporting
+                 </span>
+                 <div className="flex-1 w-24">
+                   <ProgressBar
+                     percent={Math.round(Math.max(0, Math.min(1, exportProgress ?? 0)) * 100)}
+                     className="h-1.5 border-brand-light/20 bg-brand-background-dark/80"
+                     barClassName="bg-brand-accent"
+                   />
+                 </div>
+                 <span className="text-[10px] text-brand-light/60 w-4 text-right">
+                   {Math.round(Math.max(0, Math.min(1, exportProgress ?? 0)) * 100)}%
+                 </span>
+               </button>
+             )}
+           </div>
+
+           <ExportModal
+             open={exportOpen}
+             onOpenChange={setExportOpen}
+             onExport={handleExport}
+             isExporting={isExporting}
+             exportProgress={exportProgress}
+            onCancelExport={() => {
+              if (cancelExportFn) {
+                cancelExportFn();
+              }
+            }}
+           />
 
       </div>
   )
