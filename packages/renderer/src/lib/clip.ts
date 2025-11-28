@@ -445,7 +445,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         if (index === -1) return { clips: state.clips };
 
         const current = state.clips[index];
-        const hadTransform = !!current.transform;
         const previous: ClipTransform = current.transform || { x: 0, y: 0, width: 0, height: 0, scaleX: 1, scaleY: 1, rotation: 0, cornerRadius: 0, opacity: 100, crop: { x: 0, y: 0, width: 1, height: 1 } };
         const next: ClipTransform = { ...previous, ...transform };
 
@@ -453,21 +452,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
         if (!current.originalTransform) {
             updatedClip.originalTransform = { ...next };
-        }
-
-        if ((current.type === 'video' || current.type === 'image') && Array.isArray((current as VideoClipProps | ImageClipProps).masks)) {
-            const currentMasks = (current as VideoClipProps | ImageClipProps).masks;
-            if (currentMasks.length > 0) {
-                const remappedMasks = currentMasks.map((mask) => {
-                    const baseTransform = mask.transform ?? previous;
-                    if (!hadTransform) {
-                        return { ...mask, transform: { ...next } };
-                    }
-                    let maskNext = { ...next };
-                    return remapMaskWithClipTransform(mask, baseTransform, maskNext);
-                });
-                (updatedClip as VideoClipProps | ImageClipProps).masks = remappedMasks;
-            }
         }
 
         const newClips = [...state.clips];

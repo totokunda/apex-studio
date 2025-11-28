@@ -8,6 +8,7 @@ import {symlinksDir, proxyDir} from './media/paths.js';
 import {promises as fsp} from 'node:fs';
 import fs from 'node:fs';
 import {join, basename, extname, dirname} from 'node:path';
+import {homedir} from 'node:os';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 import {AUDIO_EXTS, IMAGE_EXTS, VIDEO_EXTS, getLowercaseExtension} from './media/fileExts.js';
 import {ensureUniqueNameSync} from './media/links.js';
@@ -18,6 +19,14 @@ import {spawn} from 'node:child_process';
 
 function send(channel: string, message: string) {
   return ipcRenderer.invoke(channel, message);
+}
+
+function resolvePath(inputPath: string): string {
+  if (!inputPath) return '';
+  if (inputPath.startsWith('~/') || inputPath === '~') {
+    return join(homedir(), inputPath.slice(1));
+  }
+  return inputPath;
 }
 
 // Safely delete a file from disk. Accepts absolute paths or file:// URLs.
@@ -1838,6 +1847,7 @@ export {
   processMediaTo24,
   renameMediaPair,
   deleteMediaPair,
+  resolvePath,
   send,
   getMediaRootAbsolute,
   listConvertedMedia,

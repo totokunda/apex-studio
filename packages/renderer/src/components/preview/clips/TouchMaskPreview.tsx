@@ -27,12 +27,15 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
   const groupRef = useRef<Konva.Group>(null);
 
   const touchDrawMode = useMaskStore((s) => s.touchDrawMode);
+  const touchMaskRefetchToken = useMaskStore((s) => s.touchMaskRefetchToken);
+  const setTouchMaskRefetchToken = useMaskStore((s) => s.setTouchMaskRefetchToken);
 
   const [renderedTouchPoints, setRenderedTouchPoints] = useState<Array<{ x: number; y: number; label: 1 | 0 }>>([]);
   const [contours, setContours] = useState<Array<Array<number>>>([]);
   const lastStoredDataRef = useRef<string>('');
   const lastDataRef = useRef<any>(null);
   const lastDataFrameRef = useRef<number | null>(null);
+  const previousLoadingRef = useRef<boolean>(false);
   const [selectedPoints, setSelectedPoints] = useState<Array<{ x: number; y: number; label: 1 | 0 }>>([]);
   const {fps} = useControlsStore();
   const setSelectedMaskId = useControlsStore((s) => s.setSelectedMaskId);
@@ -127,6 +130,7 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
     return Math.round(currentFrame * (clipFps / fps)) + Math.round(startFrame * (clipFps / fps));
   }, [currentFrame, fps, mediaInfo, clip.type]);
 
+
   const { data, loading } = useMask({
     id: currentMask?.id || '',
     inputPath: clip.src,
@@ -138,8 +142,25 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({ clip, touchPoints, 
     displayHeight: rectHeight,
     mediaInfo: mediaInfo || undefined,
     clipTransform: clipTransform  || undefined,
-    enabled: (touchPoints && touchPoints.length > 0) && !!mediaInfo,
+    enabled: touchMaskRefetchToken !== null && touchPoints && touchPoints.length > 0,
   });
+
+  // Once a mask request has actually run and completed (loading true → false), clear the global trigger
+  useEffect(() => {
+    if (touchMaskRefetchToken == null) {
+      previousLoadingRef.current = loading;
+      return;
+    }
+
+    const wasLoading = previousLoadingRef.current;
+    const isLoading = loading;
+
+    if (wasLoading && !isLoading) {
+      setTouchMaskRefetchToken(null);
+    }
+
+    previousLoadingRef.current = isLoading;
+  }, [loading, touchMaskRefetchToken, setTouchMaskRefetchToken]);
 
   useEffect(() => {
     if (!loading && data && data !== lastDataRef.current) {

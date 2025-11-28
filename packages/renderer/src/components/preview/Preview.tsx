@@ -226,6 +226,7 @@ const Preview:React.FC<PreviewProps> = () => {
   const featherAmount = useMaskStore((s) => s.featherAmount);
   const touchLabel = useMaskStore((s) => s.touchLabel);
   const touchDrawMode = useMaskStore((s) => s.touchDrawMode);
+  const setTouchMaskRefetchToken = useMaskStore((s) => s.setTouchMaskRefetchToken);
   const [isDrawingLasso, setIsDrawingLasso] = useState(false);
   const [lassoPoints, setLassoPoints] = useState<number[]>([]);
   const [isDrawingMaskRect, setIsDrawingMaskRect] = useState(false);
@@ -605,8 +606,8 @@ const Preview:React.FC<PreviewProps> = () => {
 
 
           existingTouchMask.lastModified = Date.now();
-          
-
+          // Signal touch mask preview to refetch mask for updated points
+          setTouchMaskRefetchToken(Date.now());
           updateClip(targetClip.clipId, {
             masks: currentMasks,
           });
@@ -646,6 +647,9 @@ const Preview:React.FC<PreviewProps> = () => {
           updateClip(targetClip.clipId, {
             masks: currentMasks,
           });
+
+          // Signal touch mask preview to refetch mask for new mask points
+          setTouchMaskRefetchToken(Date.now());
 
           // Ensure the related clip and mask are selected
           setSelectedClipIds([targetClip.clipId]);

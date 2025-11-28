@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { useClipStore } from "@/lib/clip";
 import { useControlsStore } from "@/lib/control";
 import { getMediaInfoCached } from "@/lib/media/utils";
-import { pickMediaPaths } from "@app/preload";
+import { pickMediaPaths, resolvePath } from "@app/preload";
 import { TbCancel, TbMovie } from "react-icons/tb";
 import { ProgressBar } from "@/components/common/ProgressBar";
 import { LuLoaderCircle } from "react-icons/lu";
@@ -302,7 +302,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     if (isExporting) return;
     onExport({
       name: name.trim(),
-      path: path.trim(),
+      path: resolvePath(path.trim()),
       resolution,
       bitrate,
       codec,

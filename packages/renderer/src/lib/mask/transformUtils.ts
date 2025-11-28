@@ -51,36 +51,71 @@ const getActualSize = (transform: ClipTransform): { width: number; height: numbe
 };
 
 
+const rotate = (x: number, y: number, angleDeg: number) => {
+  const rad = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    x: x * cos - y * sin,
+    y: x * sin + y * cos,
+  };
+};
+
 const transformPoint = (
   x: number,
   y: number,
   from: ClipTransform,
   to: ClipTransform
 ): { x: number; y: number } => {
-  const deltaX = (to.x ?? 0) - (from.x ?? 0);
-  const deltaY = (to.y ?? 0) - (from.y ?? 0);
-  
+  const fRot = isFiniteNumber(from.rotation) ? from.rotation : 0;
   const fSx = sanitizeScale(from.scaleX);
   const fSy = sanitizeScale(from.scaleY);
   const fW = (from.width ?? 0) * fSx;
   const fH = (from.height ?? 0) * fSy;
   
+  const tRot = isFiniteNumber(to.rotation) ? to.rotation : 0;
   const tSx = sanitizeScale(to.scaleX);
   const tSy = sanitizeScale(to.scaleY);
   const tW = (to.width ?? from.width ?? 0) * tSx;
   const tH = (to.height ?? from.height ?? 0) * tSy;
 
   if (!fW || !fH || !isFiniteNumber(fW) || !isFiniteNumber(fH)) {
+    const deltaX = (to.x ?? 0) - (from.x ?? 0);
+    const deltaY = (to.y ?? 0) - (from.y ?? 0);
     return {
       x: x + deltaX,
       y: y + deltaY,
     };
   }
-  const relX = (x - (from.x ?? 0)) / fW;
-  const relY = (y - (from.y ?? 0)) / fH;
+
+  // Relative to from.x, from.y
+  let dx = x - (from.x ?? 0);
+  let dy = y - (from.y ?? 0);
+
+  // Un-rotate
+  if (fRot !== 0) {
+    const unrotated = rotate(dx, dy, -fRot);
+    dx = unrotated.x;
+    dy = unrotated.y;
+  }
+
+  const relX = dx / fW;
+  const relY = dy / fH;
+
+  // Scale
+  let tx = relX * tW;
+  let ty = relY * tH;
+
+  // Rotate
+  if (tRot !== 0) {
+    const rotated = rotate(tx, ty, tRot);
+    tx = rotated.x;
+    ty = rotated.y;
+  }
+
   return {
-    x: (to.x ?? 0) + relX * (tW || fW),
-    y: (to.y ?? 0) + relY * (tH || fH),
+    x: (to.x ?? 0) + tx,
+    y: (to.y ?? 0) + ty,
   };
 };
 
@@ -149,8 +184,8 @@ const transformRotation = (rotation: number, from: ClipTransform, to: ClipTransf
   const fromRotation = isFiniteNumber(from.rotation) ? from.rotation : 0;
   const toRotation = isFiniteNumber(to.rotation) ? to.rotation : 0;
   const deltaRotation = normalize(toRotation - fromRotation);
-  return normalize(rotation + deltaRotation);
-}
+  return rotation + deltaRotation;
+};
 
 export const getUncroppedTransform = (transform: ClipTransform, offsetXY:boolean = true): ClipTransform => {
   if (!transform.crop) {
@@ -161,16 +196,31 @@ export const getUncroppedTransform = (transform: ClipTransform, offsetXY:boolean
    let offsetX = transform.crop.x * uncroppedWidth;
    let offsetY = transform.crop.y * uncroppedHeight;
 
+   let finalX = transform.x;
+   let finalY = transform.y;
+
+   if (offsetXY) {
+     const rot = isFiniteNumber(transform.rotation) ? transform.rotation : 0;
+     if (rot !== 0) {
+         const rotated = rotate(offsetX, offsetY, rot);
+         finalX -= rotated.x;
+         finalY -= rotated.y;
+     } else {
+         finalX -= offsetX;
+         finalY -= offsetY;
+     }
+   }
+
    return {
     ...transform,
     width: uncroppedWidth,
     height: uncroppedHeight,
-    x: offsetXY ? transform.x - offsetX : transform.x,
-    y: offsetXY ? transform.y - offsetY : transform.y,
+    x: finalX,
+    y: finalY,
   };
 };
 
-const transformShapeBounds = (
+export const transformShapeBounds = (
   bounds: NonNullable<MaskData['shapeBounds']>,
   from: ClipTransform,
   to: ClipTransform
@@ -178,7 +228,8 @@ const transformShapeBounds = (
   from = getUncroppedTransform(from);
   to = getUncroppedTransform(to);
   const topLeft = transformPoint(bounds.x, bounds.y, from, to);
-  
+
+
   const fSx = sanitizeScale(from.scaleX);
   const fSy = sanitizeScale(from.scaleY);
   const fW = (from.width ?? 0) * fSx;
@@ -191,6 +242,7 @@ const transformShapeBounds = (
 
   const newWidth = transformDimension(bounds.width, fW, tW || fW);
   const newHeight = transformDimension(bounds.height, fH, tH || fH);
+  const newRotation = transformRotation(bounds.rotation ?? 0, from, to);
 
 
   return {
@@ -199,10 +251,11 @@ const transformShapeBounds = (
     y: topLeft.y,
     width: newWidth,
     height: newHeight,
+    rotation: newRotation,
   };
 };
 
-const transformMaskData = (data: MaskData, from: ClipTransform, to: ClipTransform): MaskData => {
+export const transformMaskData = (data: MaskData, from: ClipTransform, to: ClipTransform): MaskData => {
   const nextData: MaskData = { ...data };
 
   if (data.shapeBounds) {

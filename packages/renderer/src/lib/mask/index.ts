@@ -18,6 +18,8 @@ interface MaskState {
   touchDrawMode: TouchDrawMode;
   isMaskDragging: boolean;
   isOverMask: boolean;
+  touchMaskRefetchToken: number | null;
+  setTouchMaskRefetchToken: (token: number | null) => void;
   setTool: (tool: MaskTool) => void;
   setShape: (shape: MaskShapeTool) => void;
   setBrushSize: (size: number) => void;
@@ -45,6 +47,7 @@ export const useMaskStore = create<MaskState>((set) => ({
   touchDrawMode: 'point',
   isMaskDragging: false,
   isOverMask: false,
+  touchMaskRefetchToken: null,
   setTool: (tool) => set({ tool }),
   setShape: (shape) => set({ shape }),
   setBrushSize: (brushSize) => set({ brushSize }),
@@ -57,6 +60,7 @@ export const useMaskStore = create<MaskState>((set) => ({
   setTouchDrawMode: (touchDrawMode) => set({ touchDrawMode }),
   setIsMaskDragging: (isMaskDragging) => set({ isMaskDragging }),
   setIsOverMask: (isOverMask) => set({ isOverMask }),
+  setTouchMaskRefetchToken: (touchMaskRefetchToken) => set({ touchMaskRefetchToken }),
 }));
 
 // Export API functions and types

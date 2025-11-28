@@ -9,9 +9,12 @@ import { useViewportStore } from '@/lib/viewport';
 // (useClipStore already imported above)
 import { useWebGLFilters } from '@/components/preview/webgl-filters';
 import { BaseClipApplicator } from './apply/base';
-import { useClipStore } from '@/lib/clip';
+import { useClipStore, getLocalFrame } from '@/lib/clip';
 import { useWebGLMask } from '../mask/useWebGLMask';
 import { useInputControlsStore } from '@/lib/inputControl';
+import ShapeMaskPreview from './ShapeMaskPreview';
+import { getCropOffset } from '@/components/preview/mask/touch';
+import { MaskClipProps, MaskShapeTool, MaskData } from '@/lib/types';
 
 const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: ImageClipProps, inputMode?: boolean, inputId?: string, focusFrameOverride?: number, currentLocalFrameOverride?: number}> = ({ src, clipId, rectWidth, rectHeight, applicators, overlap, overrideClip, inputMode = false, inputId, focusFrameOverride, currentLocalFrameOverride}) => {
     const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
@@ -438,7 +441,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
 
             // Apply mask to working canvas (may return same or different canvas)
             // Pass the current focusFrame explicitly; do not depend on applyMask identity
-            let processedCanvas = applyMaskRef.current ? applyMaskRef.current(workingCanvas, focusFrame as number) : workingCanvas;
+            let processedCanvas = applyMaskRef.current?.(workingCanvas, focusFrame) ?? workingCanvas;
             
             // If mask returned a different canvas, copy it back to working canvas to maintain single reference
             if (processedCanvas !== workingCanvas) {
@@ -490,7 +493,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             console.log('error', e);
             console.error(e);
         }
-    }, [mediaInfoRef, selectedSrc, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicatorsSignature, applicatorsActiveStore, applyFilters, tool]);
+    }, [mediaInfoRef, selectedSrc, displayWidth, displayHeight, clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, clip.masks, applicatorsSignature, applicatorsActiveStore, applyFilters, tool]);
 
     useEffect(() => {
         draw();
@@ -556,6 +559,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
             if (!node) return;
             const newWidth = node.width() * node.scaleX();
             const newHeight = node.height() * node.scaleY();
+
             setClipTransform(clipId, {
                 x: node.x(),
                 y: node.y(),
@@ -657,6 +661,7 @@ const ImagePreview: React.FC<ImageClipProps & {rectWidth: number, rectHeight: nu
        onDragEnd={handleDragEnd} 
        onClick={handleClick} 
        />
+     
       {tool === 'pointer' && isSelected && isInteracting && !isRotating && !isFullscreen && (
         <React.Fragment>
           {guides.vCenter && <Line listening={false} points={[rectWidth/2, 0, rectWidth/2, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}

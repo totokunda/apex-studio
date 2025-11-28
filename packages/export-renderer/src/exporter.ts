@@ -612,23 +612,45 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
 
   // Resolve output dimensions
   const isImageOrVideo = workingClip.type === 'image' || workingClip.type === 'video';
-  const fromTransformWidth = Number(((workingClip.transform as { width?: number } | undefined)?.width)) || 0;
-  const fromTransformHeight = Number(((workingClip.transform as { height?: number } | undefined)?.height)) || 0;
+  const fromTransformWidth = Number(
+    ((workingClip.transform as { width?: number } | undefined)?.width),
+  ) || 0;
+  const fromTransformHeight = Number(
+    ((workingClip.transform as { height?: number } | undefined)?.height),
+  ) || 0;
 
+  // Base canvas size before any crop is applied.
   const inferredWidth = isImageOrVideo
-    ? (fromTransformWidth || opts.width || 0)
+    ? (opts.width || fromTransformWidth || 0)
     : Math.max(opts.width || 0, fromTransformWidth);
   const inferredHeight = isImageOrVideo
-    ? (fromTransformHeight || opts.height || 0)
+    ? (opts.height || fromTransformHeight || 0)
     : Math.max(opts.height || 0, fromTransformHeight);
 
-  const w = Math.max(1, inferredWidth || 1920);
-  const h = Math.max(1, inferredHeight || 1080);
-  
+  // If the clip has a normalized crop, shrink the export canvas so the
+  // output resolution matches the cropped region instead of the full rect.
+  const crop = (workingClip.transform as any)?.crop as
+    | { width?: number; height?: number }
+    | undefined;
+  const cropWidthRatio =
+    crop && typeof crop.width === 'number' && isFinite(crop.width) && crop.width > 0
+      ? crop.width
+      : 1;
+  const cropHeightRatio =
+    crop && typeof crop.height === 'number' && isFinite(crop.height) && crop.height > 0
+      ? crop.height
+      : 1;
+
+  const w = Math.max(1, (inferredWidth || 1920) * cropWidthRatio);
+  const h = Math.max(1, (inferredHeight || 1080) * cropHeightRatio);
+
   const renderer = new KonvaExportRenderer({
     width: w,
     height: h,
   });
+
+  console.log(w, h);
+
 
   // Local duration relative to this clip
   const clipStartGlobal = Number(workingClip.startFrame ?? 0);

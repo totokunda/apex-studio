@@ -264,7 +264,6 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
 
   return (
     <Group 
-    visible={tool==='mask'}
       ref={groupRef}
       draggable={canInteract && isSelected}
       onDragStart={handleDragStart}

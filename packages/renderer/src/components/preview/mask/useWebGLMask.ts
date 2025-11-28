@@ -57,6 +57,7 @@ export function useWebGLMask({
     }, []);
     
     const applyMask = useCallback((sourceCanvas: HTMLCanvasElement, frame?:number) => {
+        
 
         if (!shapeMaskRef.current) return sourceCanvas;
         if (disabled || masks.length === 0) {

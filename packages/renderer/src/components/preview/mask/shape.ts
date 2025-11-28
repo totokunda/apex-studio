@@ -225,7 +225,7 @@ const applyClipTransform = (shapeBounds: ShapeBounds, clipTransform?: ClipTransf
     scaledHeight = shapeBounds.height;
   }
 
-  if (clipTransform.crop) {
+  if (clipTransform && clipTransform.crop) {
     const cropX = clipTransform.crop.x;
     const cropY = clipTransform.crop.y;
     const cropW = clipTransform.crop.width;
@@ -233,13 +233,13 @@ const applyClipTransform = (shapeBounds: ShapeBounds, clipTransform?: ClipTransf
 
     const displayWidth = Math.abs((clipTransform.width || 0) * (clipTransform.scaleX || 1));
     const displayHeight = Math.abs((clipTransform.height || 0) * (clipTransform.scaleY || 1));
-
     localX = (cropX * displayWidth) + (localX * cropW);
     localY = (cropY * displayHeight) + (localY * cropH);
     scaledWidth *= cropW;
     scaledHeight *= cropH;
-  }
 
+
+  }
   const newBounds: ShapeBounds = {
     x: localX ,
     y: localY,
@@ -465,9 +465,9 @@ export class ShapeMask extends WebGLMaskBase {
 
     // rotation in radians (default 0). shapeBounds.rotation is in degrees? Assuming degrees, convert.
     const rotDeg = keyFrameData.shapeBounds.rotation ?? 0;
-    console.log('rotDeg', rotDeg);
+    
     const rotRad = (rotDeg * Math.PI) / 180;
-    console.log('rotRad', rotRad);
+
     this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_rotation'), rotRad);
 
     // per-shape scale (default 1). When provided, scales bounds about center in shader

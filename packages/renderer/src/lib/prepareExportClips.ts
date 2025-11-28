@@ -560,8 +560,46 @@ export function prepareExportClipsForValue(
     }
 
     if (newClip.masks && newClip.transform && newClip.normalizedTransform && useOriginalTransform && target) {
-      const resolvedTransform = resolveTransformFromClip(newClip.originalTransform, newClip.normalizedTransform, target as Canvas);
-      newClip.masks = newClip.masks.map((mask: MaskClipProps) => remapMaskWithClipTransform(mask, mask.transform!, resolvedTransform));
+      // When exporting with an explicit target canvas size while using the
+      // original (editor) transform, we need clip, mask and canvas to live in
+      // the same coordinate space. Previously we only remapped the masks to a
+      // resolved transform but left `newClip.transform` pointing at the
+      // original editor-space transform. The mask pipeline (`applyMasksToCanvas`)
+      // then received mismatched `clipTransform` (editor space) and
+      // `maskTransform` (export space), which caused mask bounds to be scaled
+      // incorrectly for single‑clip exports (notably via `exportClip`).
+      //
+      // Fix: resolve a unified export‑space transform and:
+      //   1) remap masks into that space
+      //   2) update clip transforms to match
+      //   3) attach a normalized snapshot relative to the *target* canvas.
+      const resolvedTransform = resolveTransformFromClip(
+        newClip.originalTransform,
+        newClip.normalizedTransform,
+        target as Canvas,
+      );
+
+      // Remap all mask keyframes into the resolved/export transform space.
+      newClip.masks = newClip.masks.map((mask: MaskClipProps) =>
+        remapMaskWithClipTransform(mask, mask.transform!, resolvedTransform),
+      );
+
+      // Keep clip transforms in the same coordinate system as the masks so
+      // WebGL masks (Shape/Lasso/Touch) receive consistent inputs.
+      newClip.originalTransform = { ...(resolvedTransform as any) };
+      newClip.transform = {
+        ...(resolvedTransform as any),
+        // Preserve any crop encoded on the (previous) transform.
+        crop: newClip.transform?.crop,
+      };
+
+      // Recompute the normalized transform against the actual export canvas
+      // dimensions so downstream exporters can safely map back into pixels.
+      (newClip as any).normalizedTransform = normalizeTransformForCanvas(
+        resolvedTransform,
+        target.width,
+        target.height,
+      );
     }
 
     

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { useViewportStore } from '@/lib/viewport';
 import type { AnyClipProps } from '@/lib/types';
 import { prepareExportClipsForValue } from '@/lib/prepareExportClips';
+import { getMediaInfoCached } from '@/lib/media/utils';
 import { exportSequence, exportClip } from '@app/export-renderer';
 import { saveImageToPath } from '@app/preload';
 import ClipExportModal, { ClipExportSettings } from '@/components/dialogs/ClipExportModal';
@@ -122,9 +123,29 @@ const GlobalContextMenu: React.FC = () => {
           });
         } else if (settings.kind === 'video') {
           const baseH = settings.resolution ?? 1080;
-          const ratio = baseH > 0 ? baseH / 1080 : 16 / 9;
+          // Derive aspect ratio from the clip's native media dimensions when possible.
+          let nativeW = 0;
+          let nativeH = 0;
+          if (clip.type === 'image') {
+            const info = getMediaInfoCached((clip as any).src as string | undefined);
+            nativeW = info?.image?.width ?? 0;
+            nativeH = info?.image?.height ?? 0;
+          } else if (clip.type === 'video') {
+            const info = getMediaInfoCached((clip as any).src as string | undefined);
+            nativeW = info?.video?.displayWidth ?? 0;
+            nativeH = info?.video?.displayHeight ?? 0;
+          }
+
+          const fallbackAspect =
+            aspectRatio && aspectRatio.height > 0
+              ? aspectRatio.width / aspectRatio.height
+              : 16 / 9;
+          const aspect =
+            nativeW > 0 && nativeH > 0 ? nativeW / nativeH : fallbackAspect;
+
           const targetH = baseH;
-          const targetW = Math.max(1, Math.round(targetH * ratio));
+          const targetW = Math.max(1, Math.round(targetH * aspect));
+
           const prepared = prepareExportClipsForValue(
             clip as AnyClipProps,
             {
@@ -154,6 +175,7 @@ const GlobalContextMenu: React.FC = () => {
           };
 
           if (exportClips.length === 1) {
+
             await exportClip({
               mode: 'video',
               clip: exportClips[0],
@@ -184,9 +206,29 @@ const GlobalContextMenu: React.FC = () => {
           }
         } else if (settings.kind === 'image') {
           const baseH = settings.resolution ?? 1080;
-          const ratio = baseH > 0 ? baseH / 1080 : 16 / 9;
+          // Derive aspect ratio from the clip's native media dimensions when possible.
+          let nativeW = 0;
+          let nativeH = 0;
+          if (clip.type === 'image') {
+            const info = getMediaInfoCached((clip as any).src as string | undefined);
+            nativeW = info?.image?.width ?? 0;
+            nativeH = info?.image?.height ?? 0;
+          } else if (clip.type === 'video') {
+            const info = getMediaInfoCached((clip as any).src as string | undefined);
+            nativeW = info?.video?.displayWidth ?? 0;
+            nativeH = info?.video?.displayHeight ?? 0;
+          }
+
+          const fallbackAspect =
+            aspectRatio && aspectRatio.height > 0
+              ? aspectRatio.width / aspectRatio.height
+              : 16 / 9;
+          const aspect =
+            nativeW > 0 && nativeH > 0 ? nativeW / nativeH : fallbackAspect;
+
           const targetH = baseH;
-          const targetW = Math.max(1, Math.round(targetH * ratio));
+          const targetW = Math.max(1, Math.round(targetH * aspect));
+
           const prepared = prepareExportClipsForValue(
             clip as AnyClipProps,
             {
@@ -204,11 +246,15 @@ const GlobalContextMenu: React.FC = () => {
               target: { width: targetW, height: targetH },
             },
           );
+
           const { exportClips } = prepared;
           const frame =
             clip.type === 'video' || clip.type === 'group'
               ? (clip as any).selectedFrame ?? 0
               : 0;
+
+            
+            
 
           if (exportClips.length === 1) {
             const result = await exportClip({
@@ -218,6 +264,9 @@ const GlobalContextMenu: React.FC = () => {
               imageFrame: frame,
               clip: exportClips[0],
               backgroundColor: '#000000',
+              encoderOptions: {
+                resolution: { width: targetW, height: targetH },
+              },
               fps,
               onProgress: ({ ratio }) => {
                 setExportProgress(typeof ratio === 'number' ? ratio : 0);

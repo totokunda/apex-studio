@@ -1031,6 +1031,32 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                                                 strokeWidth={1}
                                                 fill="transparent"
                                                 draggable
+                                                dragBoundFunc={(pos) => {
+                                                    if (!mediaDisplayRect || !cropRectRef.current) return pos;
+                                                    
+                                                    const groupOffsetX = 16;
+                                                    const groupOffsetY = 32;
+
+                                                    const { x: localMinX, y: localMinY, width: boundaryW, height: boundaryH } = mediaDisplayRect;
+                                                    const minX = localMinX + groupOffsetX;
+                                                    const minY = localMinY + groupOffsetY;
+                                                    const maxX = minX + boundaryW;
+                                                    const maxY = minY + boundaryH;
+
+                                                    const node = cropRectRef.current;
+                                                    const w = node.width() * node.scaleX();
+                                                    const h = node.height() * node.scaleY();
+
+                                                    let x = pos.x;
+                                                    let y = pos.y;
+
+                                                    if (x < minX) x = minX;
+                                                    if (y < minY) y = minY;
+                                                    if (x + w > maxX) x = maxX - w;
+                                                    if (y + h > maxY) y = maxY - h;
+
+                                                    return { x, y };
+                                                }}
                                                 onTransform={handleTransform}
                                                 onDragMove={handleTransform}
                                             />
@@ -1043,6 +1069,43 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                                                     if (newBox.width < 5 || newBox.height < 5) {
                                                         return oldBox;
                                                     }
+
+                                                    if (mediaDisplayRect) {
+                                                        const groupOffsetX = 16;
+                                                        const groupOffsetY = 32;
+
+                                                        const { x: localMinX, y: localMinY, width: boundaryW, height: boundaryH } = mediaDisplayRect;
+                                                        const minX = localMinX + groupOffsetX;
+                                                        const minY = localMinY + groupOffsetY;
+                                                        const maxX = minX + boundaryW;
+                                                        const maxY = minY + boundaryH;
+
+                                                        let { x, y, width, height } = newBox;
+
+                                                        if (x < minX) {
+                                                            width -= (minX - x);
+                                                            x = minX;
+                                                        }
+                                                        if (y < minY) {
+                                                            height -= (minY - y);
+                                                            y = minY;
+                                                        }
+                                                        if (x + width > maxX) {
+                                                            width = maxX - x;
+                                                        }
+                                                        if (y + height > maxY) {
+                                                            height = maxY - y;
+                                                        }
+
+                                                        return {
+                                                            ...newBox,
+                                                            x,
+                                                            y,
+                                                            width,
+                                                            height
+                                                        };
+                                                    }
+
                                                     return newBox;
                                                 }}
                                                 anchorCornerRadius={100}

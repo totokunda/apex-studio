@@ -370,6 +370,7 @@ export class KonvaExportRenderer {
 
     // 4. Apply Masks
     if (Array.isArray(clip.masks) && clip.masks.length > 0) {
+        // map masks to the content canvas
       applyMasksToCanvas(content, {
         focusFrame: typeof focusFrame === 'number' ? focusFrame : 0,
         masks: clip.masks,
