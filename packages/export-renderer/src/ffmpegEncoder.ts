@@ -42,12 +42,9 @@ export class FfmpegFrameEncoder implements FrameEncoder {
     this.outAbs = outAbs;
   }
 
-  async addFrame(canvas: HTMLCanvasElement): Promise<void> {
+  async addFrame(buffer: Uint8Array): Promise<void> {
     if (!this.sessionId) throw new Error('FfmpegFrameEncoder: start() not called');
-    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve as any, 'image/png'));
-    if (!blob) throw new Error('FfmpegFrameEncoder: failed to create PNG frame');
-    const buf = new Uint8Array(await blob.arrayBuffer());
-    await exportVideoAppend(this.sessionId, buf);
+    await exportVideoAppend(this.sessionId, buffer);
   }
 
   async finalize(): Promise<string> {
@@ -64,5 +61,3 @@ export class FfmpegFrameEncoder implements FrameEncoder {
     }
   }
 }
-
-

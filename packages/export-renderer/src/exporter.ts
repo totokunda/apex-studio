@@ -1,4 +1,6 @@
-import { blitDrawing, blitImage, blitShape, blitText, blitVideo, cleanupVideoDecoders, type ImageClipProps as BlitImageClipProps, type VideoClipProps as BlitVideoClipProps, type TextClipProps as BlitTextClipProps, type ShapeClipProps as BlitShapeClipProps, type DrawingClipProps as BlitDrawingClipProps } from './blit';
+import { cleanupVideoDecoders, type ImageClipProps as BlitImageClipProps, type VideoClipProps as BlitVideoClipProps, type TextClipProps as BlitTextClipProps, type ShapeClipProps as BlitShapeClipProps, type DrawingClipProps as BlitDrawingClipProps } from './blit';
+import { KonvaExportRenderer } from './export';
+import { Rect } from 'konva/lib/shapes/Rect';
 import { getVideoFrameIterator } from '../../../packages/renderer/src/lib/media/video';
 import { renderAudioMixWithFfmpeg, deleteFile } from '@app/preload';
 import type { WrappedCanvas } from 'mediabunny';
@@ -124,7 +126,7 @@ export interface CancellableExportResult<T = Blob | Uint8Array | string | void> 
 
 export interface FrameEncoder {
   start: (opts: { width: number; height: number; fps: number; audioPath?: string }) => Promise<void>;
-  addFrame: (canvas: HTMLCanvasElement) => Promise<void>;
+  addFrame: (buffer: Uint8Array) => Promise<void>;
   finalize: () => Promise<Blob | Uint8Array | string | void>;
 }
 
@@ -275,25 +277,20 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
     }
   };
 
-  // Resolve output canvas (create if not provided)
-  let canvas = opts.canvas;
-  if (!canvas) {
-    // Infer size from clips' transforms or fallback
-    const inferredWidth = opts.width ? Math.max(opts.width, 0) : Math.max(
-      ...clips.map((c) => Number(((c.transform as { width?: number } | undefined)?.width)) || 0),
-    );
-    const inferredHeight = opts.height ? Math.max(opts.height, 0) : Math.max(
-      ...clips.map((c) => Number(((c.transform as { height?: number } | undefined)?.height)) || 0),
-    );
-    const w = Math.max(1, inferredWidth || 1920);
-    const h = Math.max(1, inferredHeight || 1080);
-    canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-  }
+  // Resolve output dimensions
+  const inferredWidth = opts.width ? Math.max(opts.width, 0) : Math.max(
+    ...clips.map((c) => Number(((c.transform as { width?: number } | undefined)?.width)) || 0),
+  );
+  const inferredHeight = opts.height ? Math.max(opts.height, 0) : Math.max(
+    ...clips.map((c) => Number(((c.transform as { height?: number } | undefined)?.height)) || 0),
+  );
+  const w = Math.max(1, inferredWidth || 1920);
+  const h = Math.max(1, inferredHeight || 1080);
 
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
+  const renderer = new KonvaExportRenderer({
+    width: w,
+    height: h,
+  });
 
   // precompute duration if not provided
   let startFrame = 0;
@@ -307,13 +304,6 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
   // Prepare applicators per clip using shared hald clut (only if needed by filters)
   const hald = acquireHaldClut();
 
-  // Temp canvas for per-clip drawing to preserve prior layers (since some blits clear target)
-  const temp = document.createElement('canvas');
-  temp.width = canvas.width;
-  temp.height = canvas.height;
-
-  const tctx = temp.getContext('2d');
-
   // Maintain per-clip video iterators across frames (for this export run)
   type IterCtx = { key: string; iter: AsyncIterator<WrappedCanvas | null>; currentProjectIndex: number };
   const videoIters: Map<string, IterCtx> = new Map<string, IterCtx>();
@@ -322,11 +312,21 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
   const drawFrame = async (frame: number) => {
     checkCancelled();
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    renderer.clearStage();
+    
     if (opts.backgroundColor) {
-      ctx.fillStyle = opts.backgroundColor;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const layer = renderer.getLayer();
+      const bg = new Rect({
+        x: 0,
+        y: 0,
+        width: w,
+        height: h,
+        fill: opts.backgroundColor,
+        listening: false,
+      });
+      layer.add(bg);
     }
+
     // Active clips at this frame
     const active = clips.filter(c => {
       const s = c.startFrame ?? 0 - (range?.start ? c.startFrame ?? 0 : 0);
@@ -339,11 +339,6 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
     const ordered = active;
 
     for (const clip of ordered) {
-      // Clear temp
-      if (tctx) {
-        tctx.clearRect(0, 0, temp.width, temp.height);
-      }
-
       // Gather applicators bound to this clip, active at this frame
       const bound = clip.applicators && Array.isArray(clip.applicators) ? clip.applicators as ExportApplicatorClip[] : [];
       const activeApps = bound.filter((a) => {
@@ -358,7 +353,7 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
       const applicators = applicatorsRaw as unknown as Array<{ apply: (c: HTMLCanvasElement) => HTMLCanvasElement; ensureResources?: () => Promise<void> }>;
 
       if (clip.type === 'image') {
-        await blitImage(temp, clip as unknown as BlitImageClipProps, applicators, frame);
+        await renderer.blitImage(clip as unknown as BlitImageClipProps, applicators, frame);
       } else if (clip.type === 'video') {
         const c = clip as ExportVideoClip;
         const { selectedSrc, frameOffset } = resolveVideoSourceForFrame(c, frame);
@@ -409,21 +404,17 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
             (ctxIter as IterCtx).currentProjectIndex++;
           }
         }
-
-        await blitVideo(temp, c as unknown as BlitVideoClipProps, applicators, (ctxIter as IterCtx).iter, frame);
+        await renderer.blitVideo(c as unknown as BlitVideoClipProps, applicators, (ctxIter as IterCtx).iter, frame);
         (ctxIter as IterCtx).currentProjectIndex++;
       } else if (clip.type === 'text') {
-        blitText(temp, clip as unknown as BlitTextClipProps, applicators);
+        await renderer.blitText(clip as unknown as BlitTextClipProps, applicators);
       } else if (clip.type === 'shape') {
-        blitShape(temp, clip as unknown as BlitShapeClipProps, applicators);
+        await renderer.blitShape(clip as unknown as BlitShapeClipProps, applicators);
       } else if (clip.type === 'draw') {
-        await blitDrawing(temp, clip as unknown as BlitDrawingClipProps, applicators);
+        await renderer.blitDrawing(clip as unknown as BlitDrawingClipProps, applicators);
       } else {
         continue;
       }
-
-      // Composite temp onto destination
-      ctx.drawImage(temp, 0, 0);
     }
   };
 
@@ -467,11 +458,11 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
         onProgress({ currentFrame: 1, totalFrames: 1, ratio: 1 });
       }
       // Download image
-      const blob: Blob = await new Promise((resolve) => canvas.toBlob(b => resolve(b || new Blob()), 'image/png'));
+      const blob = await renderer.toBlob({ mimeType: 'image/png' });
       if (!cancelToken?.cancelled) {
         try { opts.onDone?.(); } catch {}
       }
-      return blob;
+      return blob || new Blob();
     }
 
     // Determine audio usage
@@ -567,12 +558,16 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
 
     const encoder = new FfmpegFrameEncoder({ filename: filename ?? 'output.mp4', ...(encoderOptions ?? {}) });
     if (!encoder) throw new Error('No encoder provided. Please provide a FrameEncoder implemented in preload or main.');
-    await encoder.start({ width: canvas.width, height: canvas.height, fps, audioPath });
+    await encoder.start({ width: w, height: h, fps, audioPath });
 
     for (let f = startFrame; f < endFrame; f++) {
       checkCancelled();
       await drawFrame(f);
-      await encoder.addFrame(canvas);
+      const blob = await renderer.toBlob({ mimeType: 'image/png' });
+      if (blob) {
+        const buffer = new Uint8Array(await blob.arrayBuffer());
+        await encoder.addFrame(buffer);
+      }
       if (onProgress) {
         const currentFrame = Math.max(1, f - startFrame + 1);
         const clampedRatio = Math.min(1, Math.max(0, currentFrame / totalFrames));
@@ -590,6 +585,7 @@ export async function exportSequence(opts: ExportOptions): Promise<Blob | Uint8A
       if (audioPath) await deleteFile(audioPath);
     } catch {}
     try { cleanupVideoDecoders(); } catch {}
+    renderer.destroy();
     releaseHaldClut();
   }
 }
@@ -614,32 +610,25 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
   let workingClip = clip as ExportClip;
 
 
-  // Resolve output canvas (create if not provided)
-  let canvas = opts.canvas;
-  if (!canvas) {
-    // Infer size from clip transform or fallback. For image/video clips we
-    // prefer the (possibly crop-adjusted) transform dimensions from
-    // workingClip, falling back to opts.width/height only when needed.
-    const isImageOrVideo = workingClip.type === 'image' || workingClip.type === 'video';
-    const fromTransformWidth = Number(((workingClip.transform as { width?: number } | undefined)?.width)) || 0;
-    const fromTransformHeight = Number(((workingClip.transform as { height?: number } | undefined)?.height)) || 0;
+  // Resolve output dimensions
+  const isImageOrVideo = workingClip.type === 'image' || workingClip.type === 'video';
+  const fromTransformWidth = Number(((workingClip.transform as { width?: number } | undefined)?.width)) || 0;
+  const fromTransformHeight = Number(((workingClip.transform as { height?: number } | undefined)?.height)) || 0;
 
-    const inferredWidth = isImageOrVideo
-      ? (fromTransformWidth || opts.width || 0)
-      : Math.max(opts.width || 0, fromTransformWidth);
-    const inferredHeight = isImageOrVideo
-      ? (fromTransformHeight || opts.height || 0)
-      : Math.max(opts.height || 0, fromTransformHeight);
+  const inferredWidth = isImageOrVideo
+    ? (fromTransformWidth || opts.width || 0)
+    : Math.max(opts.width || 0, fromTransformWidth);
+  const inferredHeight = isImageOrVideo
+    ? (fromTransformHeight || opts.height || 0)
+    : Math.max(opts.height || 0, fromTransformHeight);
 
-    const w = Math.max(1, inferredWidth || 1920);
-    const h = Math.max(1, inferredHeight || 1080);
-    canvas = document.createElement('canvas');
-    (canvas as HTMLCanvasElement).width = w;
-    (canvas as HTMLCanvasElement).height = h;
-  }
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
+  const w = Math.max(1, inferredWidth || 1920);
+  const h = Math.max(1, inferredHeight || 1080);
+  
+  const renderer = new KonvaExportRenderer({
+    width: w,
+    height: h,
+  });
 
   // Local duration relative to this clip
   const clipStartGlobal = Number(workingClip.startFrame ?? 0);
@@ -652,31 +641,25 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
   // Prepare applicators using shared hald clut
   const hald = acquireHaldClut();
 
-  // Temp canvas for per-clip drawing
-  const temp = document.createElement('canvas');
-  temp.width = canvas.width;
-  temp.height = canvas.height;
-  const tctx = temp.getContext('2d');
-
   // Maintain per-clip video iterators across frames (for this export run)
   type IterCtx = { key: string; iter: AsyncIterator<WrappedCanvas | null>; currentProjectIndex: number };
   const videoIters: Map<string, IterCtx> = new Map<string, IterCtx>();
 
   const drawFrame = async (frame: number) => {
     checkCancelled();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    renderer.clearStage();
 
     if (opts.backgroundColor) {
-      ctx.fillStyle = opts.backgroundColor;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-    // Clear temp
-    if (tctx) {
-      tctx.clearRect(0, 0, temp.width, temp.height);
-      if (opts.backgroundColor) {
-        tctx.fillStyle = opts.backgroundColor;
-        tctx.fillRect(0, 0, temp.width, temp.height);
-      }
+      const layer = renderer.getLayer();
+      const bg = new Rect({
+        x: 0,
+        y: 0,
+        width: w,
+        height: h,
+        fill: opts.backgroundColor,
+        listening: false,
+      });
+      layer.add(bg);
     }
    
 
@@ -696,7 +679,7 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
     const applicators = applicatorsRaw as unknown as Array<{ apply: (c: HTMLCanvasElement) => HTMLCanvasElement; ensureResources?: () => Promise<void> }>;
 
     if (workingClip.type === 'image') {
-      await blitImage(temp, workingClip as unknown as BlitImageClipProps, applicators, frame);
+      await renderer.blitImage(workingClip as unknown as BlitImageClipProps, applicators, frame);
     } else if (workingClip.type === 'video') {
       const { selectedSrc, frameOffset } = resolveVideoSourceForFrame(workingClip as ExportVideoClip, frame);
       const speed = (() => {
@@ -738,20 +721,17 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
           (ctxIter as IterCtx).currentProjectIndex++;
         }
       }
-      await blitVideo(temp, workingClip as unknown as BlitVideoClipProps, applicators, (ctxIter as IterCtx).iter, frame);
+      await renderer.blitVideo(workingClip as unknown as BlitVideoClipProps, applicators, (ctxIter as IterCtx).iter, frame);
       (ctxIter as IterCtx).currentProjectIndex++;
     } else if (workingClip.type === 'text') {
-      blitText(temp, workingClip as unknown as BlitTextClipProps, applicators);
+      await renderer.blitText(workingClip as unknown as BlitTextClipProps, applicators);
     } else if (workingClip.type === 'shape') {
-      blitShape(temp, workingClip as unknown as BlitShapeClipProps, applicators);
+      await renderer.blitShape(workingClip as unknown as BlitShapeClipProps, applicators);
     } else if (workingClip.type === 'draw') {
-      await blitDrawing(temp, workingClip as unknown as BlitDrawingClipProps, applicators);
+      await renderer.blitDrawing(workingClip as unknown as BlitDrawingClipProps, applicators);
     } else {
       // audio/filter-only clip does not draw to canvas
     }
-
-    // Composite temp onto destination
-    ctx.drawImage(temp, 0, 0);
   };
 
   // Helper: render audio mix for provided audio clip using ffmpeg (pitch-preserving)
@@ -798,11 +778,11 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
       if (onProgress) {
         onProgress({ currentFrame: 1, totalFrames: 1, ratio: 1 });
       }
-      const blob: Blob = await new Promise((resolve) => canvas.toBlob(b => resolve(b || new Blob()), 'image/png'));
+      const blob = await renderer.toBlob({ mimeType: 'image/png' });
       if (!cancelToken?.cancelled) {
         try { opts.onDone?.(); } catch {}
       }
-      return blob;
+      return blob || new Blob();
     }
 
     if (workingClip.type === 'audio') {
@@ -850,12 +830,16 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
 
     const encoder = new FfmpegFrameEncoder({ filename: filename ?? 'output.mp4', ...(encoderOptions ?? {}) });
     if (!encoder) throw new Error('No encoder provided. Please provide a FrameEncoder implemented in preload or main.');
-    await encoder.start({ width: canvas.width, height: canvas.height, fps, ...(audioPath ? { audioPath } : {}) });
+    await encoder.start({ width: w, height: h, fps, ...(audioPath ? { audioPath } : {}) });
 
     for (let f = startFrame; f < endFrame; f++) {
       checkCancelled();
       await drawFrame(f);
-      await encoder.addFrame(canvas);
+      const blob = await renderer.toBlob({ mimeType: 'image/png' });
+      if (blob) {
+        const buffer = new Uint8Array(await blob.arrayBuffer());
+        await encoder.addFrame(buffer);
+      }
       if (onProgress) {
         const currentFrame = Math.max(1, f - startFrame + 1);
         const ratio = Math.min(1, Math.max(0, currentFrame / totalFrames));
@@ -873,7 +857,7 @@ export async function exportClip(opts: ExportClipOptions): Promise<Blob | Uint8A
       if (audioPath) await deleteFile(audioPath);
     } catch {}
     try { cleanupVideoDecoders(); } catch {}
+    renderer.destroy();
     releaseHaldClut();
   }
 }
-

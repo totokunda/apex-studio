@@ -284,8 +284,6 @@ function withStage<T>(canvas: Canvas, draw: (layer: Layer) => T): T {
 
   const stage = new Stage({
     container,
-    width: canvas.width,
-    height: canvas.height,
   });
   const layer = new Layer();
   stage.add(layer);
