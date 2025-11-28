@@ -48,7 +48,6 @@ type AudioFormatOption = {
   value: "wav" | "mp3";
 };
 
-
 export interface ExportSettings {
   name: string;
   path: string;
@@ -112,10 +111,8 @@ const AUDIO_FORMAT_OPTIONS: AudioFormatOption[] = [
   { label: "MP3", value: "mp3" },
 ];
 
-
 const fieldLabelClass =
   "text-brand-light text-[10.5px] font-medium mb-1.5 flex items-center justify-between";
-
 
 export const ExportModal: React.FC<ExportModalProps> = ({
   open,
@@ -130,16 +127,20 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [name, setName] = useState(defaultName);
   const [path, setPath] = useState(defaultPath);
   const [resolution, setResolution] = useState<number>(
-    RESOLUTION_OPTIONS[0]?.value ?? 0
+    RESOLUTION_OPTIONS[0]?.value ?? 0,
   );
   const [bitrate, setBitrate] = useState<string>(
-    BITRATE_OPTIONS[1]?.value ?? ""
+    BITRATE_OPTIONS[1]?.value ?? "",
   );
-  const [codec, setCodec] = useState<CodecOption["value"]>(CODEC_OPTIONS[0]?.value ?? "h264");
-  const [format, setFormat] = useState<FormatOption["value"]>(FORMAT_OPTIONS[0]?.value ?? "mp4");
+  const [codec, setCodec] = useState<CodecOption["value"]>(
+    CODEC_OPTIONS[0]?.value ?? "h264",
+  );
+  const [format, setFormat] = useState<FormatOption["value"]>(
+    FORMAT_OPTIONS[0]?.value ?? "mp4",
+  );
   const [includeAudio, setIncludeAudio] = useState<boolean>(true);
   const [audioFormat, setAudioFormat] = useState<AudioFormatOption["value"]>(
-    AUDIO_FORMAT_OPTIONS[0]?.value ?? "mp3"
+    AUDIO_FORMAT_OPTIONS[0]?.value ?? "mp3",
   );
 
   const [preserveAlpha, setPreserveAlpha] = useState<boolean>(false);
@@ -184,7 +185,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       }
 
       const totalFrames = Number(clipDuration || 0);
-      if (Number.isFinite(totalFrames) && totalFrames > 0 && Number.isFinite(fps) && fps > 0) {
+      if (
+        Number.isFinite(totalFrames) &&
+        totalFrames > 0 &&
+        Number.isFinite(fps) &&
+        fps > 0
+      ) {
         const seconds = totalFrames / fps;
         setDurationSeconds(seconds);
         setDurationFrames(totalFrames);
@@ -249,7 +255,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
 
     const progress =
-      typeof exportProgress === "number" ? Math.max(0, Math.min(1, exportProgress)) : 0;
+      typeof exportProgress === "number"
+        ? Math.max(0, Math.min(1, exportProgress))
+        : 0;
 
     if (progress <= 0 || progress >= 1) {
       if (progress >= 1) {
@@ -260,7 +268,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
 
     const now =
-      typeof performance !== "undefined" && typeof performance.now === "function"
+      typeof performance !== "undefined" &&
+      typeof performance.now === "function"
         ? performance.now()
         : Date.now();
 
@@ -278,7 +287,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   }, [isExporting, exportProgress]);
 
   const etaLabel = useMemo(() => {
-    if (!isExporting || etaSeconds === null || !Number.isFinite(etaSeconds) || etaSeconds <= 0) {
+    if (
+      !isExporting ||
+      etaSeconds === null ||
+      !Number.isFinite(etaSeconds) ||
+      etaSeconds <= 0
+    ) {
       return null;
     }
     const totalSeconds = Math.round(etaSeconds);
@@ -374,7 +388,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                           directory: true,
                           title: "Choose export folder",
                         });
-                        const dir = Array.isArray(picked) && picked.length > 0 ? picked[0] : null;
+                        const dir =
+                          Array.isArray(picked) && picked.length > 0
+                            ? picked[0]
+                            : null;
                         if (dir && typeof dir === "string") {
                           setPath(dir);
                         }
@@ -421,7 +438,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <label className={fieldLabelClass}>
                     <span>Bitrate</span>
                   </label>
-                  <Select value={bitrate} onValueChange={(value) => setBitrate(value)}>
+                  <Select
+                    value={bitrate}
+                    onValueChange={(value) => setBitrate(value)}
+                  >
                     <SelectTrigger
                       size="sm"
                       className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
@@ -448,7 +468,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <label className={fieldLabelClass}>
                     <span>Codec</span>
                   </label>
-                  <Select value={codec} onValueChange={(value) => setCodec(value as CodecOption["value"])}>
+                  <Select
+                    value={codec}
+                    onValueChange={(value) =>
+                      setCodec(value as CodecOption["value"])
+                    }
+                  >
                     <SelectTrigger
                       size="sm"
                       className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
@@ -473,7 +498,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <label className={fieldLabelClass}>
                     <span>Format</span>
                   </label>
-                  <Select value={format} onValueChange={(value) => setFormat(value as FormatOption["value"])}>
+                  <Select
+                    value={format}
+                    onValueChange={(value) =>
+                      setFormat(value as FormatOption["value"])
+                    }
+                  >
                     <SelectTrigger
                       size="sm"
                       className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
@@ -500,7 +530,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <Checkbox
                     id="preserve-alpha"
                     checked={preserveAlpha}
-                    onCheckedChange={(checked) => setPreserveAlpha(Boolean(checked))}
+                    onCheckedChange={(checked) =>
+                      setPreserveAlpha(Boolean(checked))
+                    }
                     className="mt-0.5"
                   />
                   <label
@@ -523,14 +555,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     }
                     className={cn(
                       "mt-0.5",
-                      !hasAnyAudio && "opacity-40 cursor-not-allowed"
+                      !hasAnyAudio && "opacity-40 cursor-not-allowed",
                     )}
                   />
                   <label
                     htmlFor="include-audio"
                     className={cn(
                       "text-brand-light text-[11px] font-medium cursor-pointer",
-                      !hasAnyAudio && "text-brand-light/40 cursor-not-allowed"
+                      !hasAnyAudio && "text-brand-light/40 cursor-not-allowed",
                     )}
                   >
                     Include audio in export
@@ -543,7 +575,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     </label>
                     <Select
                       value={audioFormat}
-                      onValueChange={(value) => setAudioFormat(value as AudioFormatOption["value"])}
+                      onValueChange={(value) =>
+                        setAudioFormat(value as AudioFormatOption["value"])
+                      }
                     >
                       <SelectTrigger
                         size="sm"
@@ -563,7 +597,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                         ))}
                       </SelectContent>
                     </Select>
-                   
                   </div>
                 )}
               </div>
@@ -575,7 +608,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   Exporting your video…
                 </span>
                 <span className="text-[10px] text-brand-light/60 text-start">
-                  You can close this dialog. The export will continue in the background.
+                  You can close this dialog. The export will continue in the
+                  background.
                 </span>
               </div>
               <div className="w-full">
@@ -585,13 +619,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   barClassName="bg-brand-accent"
                 />
                 <div className="mt-2 text-[10px] text-brand-light/75 flex items-center justify-between">
-                  <div>
-                    {etaLabel ? `${etaLabel} remaining` : ""}
-                  </div>
-                  <div>
-                  {safeProgressPercent}%
-                  </div>
-                  
+                  <div>{etaLabel ? `${etaLabel} remaining` : ""}</div>
+                  <div>{safeProgressPercent}%</div>
                 </div>
               </div>
             </div>
@@ -599,12 +628,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         </div>
 
         <div className="px-5 py-3 border-t border-brand-light/10 bg-brand-background flex items-center justify-between">
-          {!isExporting && <div className="text-[10px] text-brand-light/60 flex items-center gap-1">
-          <TbMovie className="w-4 h-4" />
-          <span className="font-normal">Duration:</span>
-            <span className="font-normal">{durationLabel}</span>
-          </div>}
-          <div className={cn("flex items-center gap-2 ", isExporting && "justify-end w-full")}>
+          {!isExporting && (
+            <div className="text-[10px] text-brand-light/60 flex items-center gap-1">
+              <TbMovie className="w-4 h-4" />
+              <span className="font-normal">Duration:</span>
+              <span className="font-normal">{durationLabel}</span>
+            </div>
+          )}
+          <div
+            className={cn(
+              "flex items-center gap-2 ",
+              isExporting && "justify-end w-full",
+            )}
+          >
             <Button
               type="button"
               variant="ghost"
@@ -637,7 +673,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 }}
               >
                 <div className="flex flex-row items-center gap-x-1">
-                 {!tryCancelExport ? <TbCancel className="w-3.5! !h-3.5" /> : <LuLoaderCircle className="w-3.5! !h-3.5 animate-spin" />}
+                  {!tryCancelExport ? (
+                    <TbCancel className="w-3.5! !h-3.5" />
+                  ) : (
+                    <LuLoaderCircle className="w-3.5! !h-3.5 animate-spin" />
+                  )}
                   <div>Cancel</div>
                 </div>
               </Button>
@@ -650,5 +690,3 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 };
 
 export default ExportModal;
-
-

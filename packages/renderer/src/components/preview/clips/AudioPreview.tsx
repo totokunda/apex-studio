@@ -1,38 +1,54 @@
-import React, {  useCallback, useEffect, useMemo, useRef } from 'react';
-import { useControlsStore } from '@/lib/control';
-import { useInputControlsStore } from '@/lib/inputControl';
-import { AnyClipProps, MediaInfo, AudioClipProps } from '@/lib/types';
-import { getMediaInfo, getMediaInfoCached } from '@/lib/media/utils';
-import { getAudioIterator } from '@/lib/media/audio';
-import { WrappedAudioBuffer } from 'mediabunny';
-import type { BaseClipApplicator } from './apply/base';
+import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import { useControlsStore } from "@/lib/control";
+import { useInputControlsStore } from "@/lib/inputControl";
+import { AnyClipProps, MediaInfo, AudioClipProps } from "@/lib/types";
+import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
+import { getAudioIterator } from "@/lib/media/audio";
+import { WrappedAudioBuffer } from "mediabunny";
+import type { BaseClipApplicator } from "./apply/base";
 
 type ClipWithSrc = Extract<AnyClipProps, { src: string }>;
 
 // Schedules audio playback for a clip in sync with the timeline. Renders nothing.
 const AudioPreview: React.FC<
   ClipWithSrc & {
-    framesToPrefetch?: number,
-    rectWidth?: number,
-    rectHeight?: number,
-    applicators?: BaseClipApplicator[],
-    overlap?: boolean,
-    overrideClip?: AudioClipProps,
-    inputMode?: boolean,
-    inputId?: string,
-    disabled?: boolean,
+    framesToPrefetch?: number;
+    rectWidth?: number;
+    rectHeight?: number;
+    applicators?: BaseClipApplicator[];
+    overlap?: boolean;
+    overrideClip?: AudioClipProps;
+    inputMode?: boolean;
+    inputId?: string;
+    disabled?: boolean;
   }
 > = (props) => {
-  const { src, startFrame = 0, trimStart, volume = 0, fadeIn = 0, fadeOut = 0, speed: _speed } = props as AudioClipProps;
-  const { inputMode = false, inputId, disabled = false } = props as { inputMode?: boolean; inputId?: string; disabled?: boolean };
-  const mediaInfoRef = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
+  const {
+    src,
+    startFrame = 0,
+    trimStart,
+    volume = 0,
+    fadeIn = 0,
+    fadeOut = 0,
+    speed: _speed,
+  } = props as AudioClipProps;
+  const {
+    inputMode = false,
+    inputId,
+    disabled = false,
+  } = props as { inputMode?: boolean; inputId?: string; disabled?: boolean };
+  const mediaInfoRef = useRef<MediaInfo | null>(
+    getMediaInfoCached(src) || null,
+  );
   const fpsFromControls = useControlsStore((s) => s.fps);
   const fpsByInputId = useInputControlsStore((s) => s.fpsByInputId);
-  const fpsFromInputs = fpsByInputId[inputId || ''] ?? fpsFromControls;
+  const fpsFromInputs = fpsByInputId[inputId || ""] ?? fpsFromControls;
   const fps = inputMode ? fpsFromInputs : fpsFromControls;
   const focusFrameFromControls = useControlsStore((s) => s.focusFrame);
-  const focusFrameByInputId = useInputControlsStore((s) => s.focusFrameByInputId);
-  const focusFrameFromInputs = focusFrameByInputId[inputId || ''] ?? 0;
+  const focusFrameByInputId = useInputControlsStore(
+    (s) => s.focusFrameByInputId,
+  );
+  const focusFrameFromInputs = focusFrameByInputId[inputId || ""] ?? 0;
   const focusFrame = inputMode ? focusFrameFromInputs : focusFrameFromControls;
   // In input mode, focusFrame is clip-local and the input timeline is [0, span],
   // so we must not subtract the absolute clip start. Use local focus + trimStart.
@@ -42,11 +58,13 @@ const AudioPreview: React.FC<
   }, [focusFrame, startFrame, trimStart, inputMode]);
   const isPlayingFromControls = useControlsStore((s) => s.isPlaying);
   const isPlayingByInputId = useInputControlsStore((s) => s.isPlayingByInputId);
-  const isPlayingFromInputs = !!isPlayingByInputId[inputId || ''];
+  const isPlayingFromInputs = !!isPlayingByInputId[inputId || ""];
   const isPlaying = inputMode ? isPlayingFromInputs : isPlayingFromControls;
   const prevIsPlayingRef = useRef<boolean>(isPlaying);
   const startTimeRef = useRef(0);
-  const iteratorRef = useRef<AsyncIterable<WrappedAudioBuffer | null> | null>(null);
+  const iteratorRef = useRef<AsyncIterable<WrappedAudioBuffer | null> | null>(
+    null,
+  );
   const currentStartFrameRef = useRef<number>(0);
   const playbackTimeAtStartRef = useRef<number>(0);
   const audioQueueRef = useRef<Set<AudioBufferSourceNode>>(new Set());
@@ -62,22 +80,43 @@ const AudioPreview: React.FC<
     const wasPlaying = prevIsPlayingRef.current;
     if (!wasPlaying && isPlaying) {
       try {
-        const detail = { src, currentFrame, fps, timeSec: fps ? currentFrame / fps : 0, inputMode: !!inputMode, inputId: inputMode ? String(inputId || '') : null } as any;
-        window.dispatchEvent(new CustomEvent('apex:playback:playing', { detail }));
+        const detail = {
+          src,
+          currentFrame,
+          fps,
+          timeSec: fps ? currentFrame / fps : 0,
+          inputMode: !!inputMode,
+          inputId: inputMode ? String(inputId || "") : null,
+        } as any;
+        window.dispatchEvent(
+          new CustomEvent("apex:playback:playing", { detail }),
+        );
       } catch {}
     }
     if (wasPlaying && !isPlaying) {
       try {
-        const detail = { src, currentFrame, fps, timeSec: fps ? currentFrame / fps : 0, inputMode: !!inputMode, inputId: inputMode ? String(inputId || '') : null } as any;
-        window.dispatchEvent(new CustomEvent('apex:playback:paused', { detail }));
+        const detail = {
+          src,
+          currentFrame,
+          fps,
+          timeSec: fps ? currentFrame / fps : 0,
+          inputMode: !!inputMode,
+          inputId: inputMode ? String(inputId || "") : null,
+        } as any;
+        window.dispatchEvent(
+          new CustomEvent("apex:playback:paused", { detail }),
+        );
       } catch {}
     }
     prevIsPlayingRef.current = isPlaying;
   }, [isPlaying, src, currentFrame, fps, inputMode, inputId]);
-  
 
-  const { ctx, gainNode } = useMemo<{ ctx: AudioContext; gainNode: GainNode }>(() => {
-    const AudioContext: any = (window as any).AudioContext || (window as any).webkitAudioContext;
+  const { ctx, gainNode } = useMemo<{
+    ctx: AudioContext;
+    gainNode: GainNode;
+  }>(() => {
+    const AudioContext: any =
+      (window as any).AudioContext || (window as any).webkitAudioContext;
     const ctx = new AudioContext();
     const gainNode = ctx.createGain();
     gainNode.connect(ctx.destination);
@@ -90,11 +129,20 @@ const AudioPreview: React.FC<
     try {
       const key = inputMode && inputId ? String(inputId) : null;
       if (!key) return;
-      const store: any = (window as any);
-      store.__apexAudioAnalysers = store.__apexAudioAnalysers || new Map<string, { ctx: AudioContext; analyser: AnalyserNode }>();
+      const store: any = window as any;
+      store.__apexAudioAnalysers =
+        store.__apexAudioAnalysers ||
+        new Map<string, { ctx: AudioContext; analyser: AnalyserNode }>();
       if (analyserRef.current) {
-        store.__apexAudioAnalysers.set(key, { ctx, analyser: analyserRef.current });
-        window.dispatchEvent(new CustomEvent('apex:audio:analyser-ready', { detail: { inputId: key } }));
+        store.__apexAudioAnalysers.set(key, {
+          ctx,
+          analyser: analyserRef.current,
+        });
+        window.dispatchEvent(
+          new CustomEvent("apex:audio:analyser-ready", {
+            detail: { inputId: key },
+          }),
+        );
       }
     } catch {}
   }, [ctx, inputMode, inputId]);
@@ -111,7 +159,9 @@ const AudioPreview: React.FC<
       analyser.minDecibels = -90;
       analyser.maxDecibels = -10;
       analyser.smoothingTimeConstant = 0.85;
-      try { gainNode.disconnect(); } catch {}
+      try {
+        gainNode.disconnect();
+      } catch {}
       gainNode.connect(analyser);
       analyser.connect(ctx.destination);
       analyserRef.current = analyser;
@@ -125,8 +175,11 @@ const AudioPreview: React.FC<
       try {
         const key = inputMode && inputId ? String(inputId) : null;
         if (key) {
-          const store: any = (window as any);
-          if (store.__apexAudioAnalysers && typeof store.__apexAudioAnalysers.delete === 'function') {
+          const store: any = window as any;
+          if (
+            store.__apexAudioAnalysers &&
+            typeof store.__apexAudioAnalysers.delete === "function"
+          ) {
             store.__apexAudioAnalysers.delete(key);
           }
         }
@@ -143,7 +196,9 @@ const AudioPreview: React.FC<
   // playback time is derived from the audio clock on demand to avoid rerenders
   const getPlaybackTime = () => {
     if (isPlaying) {
-      return ctx.currentTime - startTimeRef.current + playbackTimeAtStartRef.current;
+      return (
+        ctx.currentTime - startTimeRef.current + playbackTimeAtStartRef.current
+      );
     }
     return playbackTimeAtStartRef.current;
   };
@@ -157,73 +212,109 @@ const AudioPreview: React.FC<
         if (!cancelled) mediaInfoRef.current = info;
       } catch {}
     })();
-    return () => { cancelled = true };
+    return () => {
+      cancelled = true;
+    };
   }, [src]);
 
   useEffect(() => {
-    const onPlaying = async (e: CustomEvent<{ src: string; currentFrame: number; fps: number; timeSec: number; inputMode?: boolean; inputId?: string | null }>) => {
-        const d: any = e.detail || {};
+    const onPlaying = async (
+      e: CustomEvent<{
+        src: string;
+        currentFrame: number;
+        fps: number;
+        timeSec: number;
+        inputMode?: boolean;
+        inputId?: string | null;
+      }>,
+    ) => {
+      const d: any = e.detail || {};
 
-        currentStartFrameRef.current = d.currentFrame;
-        playbackTimeAtStartRef.current = d.timeSec;
-        if (ctx.state === 'suspended') {
-          try { await ctx.resume(); } catch {}
-        }
+      currentStartFrameRef.current = d.currentFrame;
+      playbackTimeAtStartRef.current = d.timeSec;
+      if (ctx.state === "suspended") {
+        try {
+          await ctx.resume();
+        } catch {}
+      }
     };
     const handler = (e: Event) => onPlaying(e as any);
-    window.addEventListener('apex:playback:playing', handler);
-    return () => window.removeEventListener('apex:playback:playing', handler);
+    window.addEventListener("apex:playback:playing", handler);
+    return () => window.removeEventListener("apex:playback:playing", handler);
   }, [ctx, inputMode, inputId]);
 
   useEffect(() => {
-    const onPaused = (e: CustomEvent<{ src: string; currentFrame: number; fps: number; timeSec: number; inputMode?: boolean; inputId?: string | null }>) => {
-        const d: any = e.detail || {};
-        currentStartFrameRef.current = 0;
-        // @ts-ignore
-        iteratorRef.current?.return?.();
-        iteratorRef.current = null;
-        // lock in playback time at pause
-        playbackTimeAtStartRef.current = (d && typeof d.timeSec === 'number') ? d.timeSec : getPlaybackTime();
-        for (const node of audioQueueRef.current) {
-          try { node.stop(); } catch {}
-        }
-        audioQueueRef.current.clear();
+    const onPaused = (
+      e: CustomEvent<{
+        src: string;
+        currentFrame: number;
+        fps: number;
+        timeSec: number;
+        inputMode?: boolean;
+        inputId?: string | null;
+      }>,
+    ) => {
+      const d: any = e.detail || {};
+      currentStartFrameRef.current = 0;
+      // @ts-ignore
+      iteratorRef.current?.return?.();
+      iteratorRef.current = null;
+      // lock in playback time at pause
+      playbackTimeAtStartRef.current =
+        d && typeof d.timeSec === "number" ? d.timeSec : getPlaybackTime();
+      for (const node of audioQueueRef.current) {
+        try {
+          node.stop();
+        } catch {}
+      }
+      audioQueueRef.current.clear();
     };
     const handler = (e: Event) => onPaused(e as any);
-    window.addEventListener('apex:playback:paused', handler);
-    return () => window.removeEventListener('apex:playback:paused', handler);
+    window.addEventListener("apex:playback:paused", handler);
+    return () => window.removeEventListener("apex:playback:paused", handler);
   }, [inputMode, inputId]);
-
 
   const ensureSoundtouchNode = useCallback(async () => {
     if (!ctx?.audioWorklet || soundtouchUnavailableRef.current) {
       return null;
     }
     // If existing node was created on a different context, drop it
-    if (soundtouchNodeRef.current && (soundtouchNodeRef.current as any).context !== ctx) {
-      try { soundtouchNodeRef.current.disconnect(); } catch {}
+    if (
+      soundtouchNodeRef.current &&
+      (soundtouchNodeRef.current as any).context !== ctx
+    ) {
+      try {
+        soundtouchNodeRef.current.disconnect();
+      } catch {}
       soundtouchNodeRef.current = null;
     }
     // Reset init promise if it was for another context
-    if (soundtouchInitPromiseRef.current && soundtouchInitCtxRef.current !== ctx) {
+    if (
+      soundtouchInitPromiseRef.current &&
+      soundtouchInitCtxRef.current !== ctx
+    ) {
       soundtouchInitPromiseRef.current = null;
     }
     if (!soundtouchInitPromiseRef.current) {
       const candidates = (() => {
-        if (typeof window === 'undefined') {
-          return ['soundtouch-worklet.js'];
+        if (typeof window === "undefined") {
+          return ["soundtouch-worklet.js"];
         }
-        const baseHref = window.location?.href || '';
-        const origin = window.location?.origin || '';
+        const baseHref = window.location?.href || "";
+        const origin = window.location?.origin || "";
         const urls = new Set<string>();
         if (baseHref) {
-          try { urls.add(new URL('soundtouch-worklet.js', baseHref).toString()); } catch {}
+          try {
+            urls.add(new URL("soundtouch-worklet.js", baseHref).toString());
+          } catch {}
         }
         if (origin) {
-          try { urls.add(new URL('soundtouch-worklet.js', origin).toString()); } catch {}
+          try {
+            urls.add(new URL("soundtouch-worklet.js", origin).toString());
+          } catch {}
         }
-        urls.add('/soundtouch-worklet.js');
-        urls.add('soundtouch-worklet.js');
+        urls.add("/soundtouch-worklet.js");
+        urls.add("soundtouch-worklet.js");
         return Array.from(urls);
       })();
       soundtouchInitPromiseRef.current = (async () => {
@@ -232,7 +323,10 @@ const AudioPreview: React.FC<
             await ctx.audioWorklet.addModule(candidate);
             return true;
           } catch (err) {
-            console.warn('[audio] Failed to load soundtouch worklet', { candidate, err });
+            console.warn("[audio] Failed to load soundtouch worklet", {
+              candidate,
+              err,
+            });
           }
         }
         return false;
@@ -246,18 +340,18 @@ const AudioPreview: React.FC<
     }
     if (!soundtouchNodeRef.current) {
       try {
-        const node = new AudioWorkletNode(ctx, 'soundtouch-processor', {
+        const node = new AudioWorkletNode(ctx, "soundtouch-processor", {
           numberOfInputs: 1,
           numberOfOutputs: 1,
           channelCount: 2,
-          channelCountMode: 'explicit',
-          channelInterpretation: 'speakers',
+          channelCountMode: "explicit",
+          channelInterpretation: "speakers",
           outputChannelCount: [2],
         });
         node.connect(gainNode);
         soundtouchNodeRef.current = node;
       } catch (err) {
-        console.warn('[audio] Failed to create soundtouch node', err);
+        console.warn("[audio] Failed to create soundtouch node", err);
         soundtouchUnavailableRef.current = true;
         soundtouchNodeRef.current = null;
         return null;
@@ -266,56 +360,83 @@ const AudioPreview: React.FC<
     return soundtouchNodeRef.current;
   }, [ctx, gainNode]);
 
-  const configureSoundtouchForSpeed = useCallback((playbackSpeed: number) => {
-    if (!ctx) return;
-    const node = soundtouchNodeRef.current;
-    if (!node) return;
-    const safeSpeed = Math.min(5, Math.max(0.1, Number.isFinite(playbackSpeed) && playbackSpeed > 0 ? playbackSpeed : 1));
-    if (lastConfiguredSpeedRef.current === safeSpeed) return;
-    lastConfiguredSpeedRef.current = safeSpeed;
+  const configureSoundtouchForSpeed = useCallback(
+    (playbackSpeed: number) => {
+      if (!ctx) return;
+      const node = soundtouchNodeRef.current;
+      if (!node) return;
+      const safeSpeed = Math.min(
+        5,
+        Math.max(
+          0.1,
+          Number.isFinite(playbackSpeed) && playbackSpeed > 0
+            ? playbackSpeed
+            : 1,
+        ),
+      );
+      if (lastConfiguredSpeedRef.current === safeSpeed) return;
+      lastConfiguredSpeedRef.current = safeSpeed;
 
-    const desiredPitchRatio = Number.isFinite(safeSpeed) && safeSpeed > 0 ? 1 / safeSpeed : 1;
-    const tempoParam = node.parameters.get('tempo');
-    const rateParam = node.parameters.get('rate');
-    const pitchParam = node.parameters.get('pitch');
-    const pitchSemitoneParam = node.parameters.get('pitchSemitones');
+      const desiredPitchRatio =
+        Number.isFinite(safeSpeed) && safeSpeed > 0 ? 1 / safeSpeed : 1;
+      const tempoParam = node.parameters.get("tempo");
+      const rateParam = node.parameters.get("rate");
+      const pitchParam = node.parameters.get("pitch");
+      const pitchSemitoneParam = node.parameters.get("pitchSemitones");
 
-    const minPitchLog = Math.log2(0.25);
-    const maxPitchLog = Math.log2(4);
-    const semitoneMin = -24;
-    const semitoneMax = 24;
+      const minPitchLog = Math.log2(0.25);
+      const maxPitchLog = Math.log2(4);
+      const semitoneMin = -24;
+      const semitoneMax = 24;
 
-    const ratioLog = Math.log2(Math.max(1e-6, desiredPitchRatio));
-    let semitoneValue = 0;
-    if (ratioLog < minPitchLog) {
-      semitoneValue = Math.max(semitoneMin, -Math.ceil((minPitchLog - ratioLog) * 12));
-    } else if (ratioLog > maxPitchLog) {
-      semitoneValue = Math.min(semitoneMax, Math.ceil((ratioLog - maxPitchLog) * 12));
-    }
-    let adjustedLog = ratioLog - semitoneValue / 12;
-    adjustedLog = Math.min(maxPitchLog, Math.max(minPitchLog, adjustedLog));
-    const basePitch = Math.pow(2, adjustedLog);
+      const ratioLog = Math.log2(Math.max(1e-6, desiredPitchRatio));
+      let semitoneValue = 0;
+      if (ratioLog < minPitchLog) {
+        semitoneValue = Math.max(
+          semitoneMin,
+          -Math.ceil((minPitchLog - ratioLog) * 12),
+        );
+      } else if (ratioLog > maxPitchLog) {
+        semitoneValue = Math.min(
+          semitoneMax,
+          Math.ceil((ratioLog - maxPitchLog) * 12),
+        );
+      }
+      let adjustedLog = ratioLog - semitoneValue / 12;
+      adjustedLog = Math.min(maxPitchLog, Math.max(minPitchLog, adjustedLog));
+      const basePitch = Math.pow(2, adjustedLog);
 
-    const now = ctx.currentTime;
-    tempoParam?.setValueAtTime(1, now);
-    rateParam?.setValueAtTime(1, now);
-    pitchParam?.setValueAtTime(basePitch, now);
-    pitchSemitoneParam?.setValueAtTime(semitoneValue, now);
-  }, [ctx]);
+      const now = ctx.currentTime;
+      tempoParam?.setValueAtTime(1, now);
+      rateParam?.setValueAtTime(1, now);
+      pitchParam?.setValueAtTime(basePitch, now);
+      pitchSemitoneParam?.setValueAtTime(semitoneValue, now);
+    },
+    [ctx],
+  );
 
   const startRendering = useCallback(async () => {
     // Only play audio when clip is actually active (not during prebuffer period)
-    if (!isPlaying || !ctx || !mediaInfoRef.current || !mediaInfoRef.current.audio || !fps || !hasValidCurrentFrame) {
+    if (
+      !isPlaying ||
+      !ctx ||
+      !mediaInfoRef.current ||
+      !mediaInfoRef.current.audio ||
+      !fps ||
+      !hasValidCurrentFrame
+    ) {
       return;
     }
     // align starting frame and playback anchor with current UI state
-    if (typeof currentFrame === 'number' && fps) {
-      currentStartFrameRef.current = currentFrame
+    if (typeof currentFrame === "number" && fps) {
+      currentStartFrameRef.current = currentFrame;
       playbackTimeAtStartRef.current = currentFrame / fps;
     }
     // Stop any existing buffers and iterator
     for (const node of audioQueueRef.current) {
-      try { node.stop(); } catch {}
+      try {
+        node.stop();
+      } catch {}
     }
     audioQueueRef.current.clear();
     // @ts-ignore
@@ -323,13 +444,24 @@ const AudioPreview: React.FC<
 
     startTimeRef.current = ctx.currentTime;
     lastResyncTimeRef.current = Date.now();
-    
+
     // Sample from the correct media frame based on speed
-    const mediaFrameIndex = Math.max(0, Math.floor(currentStartFrameRef.current * Math.max(0.1, speed))) + (mediaInfoRef.current?.startFrame || 0);
+    const mediaFrameIndex =
+      Math.max(
+        0,
+        Math.floor(currentStartFrameRef.current * Math.max(0.1, speed)),
+      ) + (mediaInfoRef.current?.startFrame || 0);
     const mediaTimeAtStart = mediaFrameIndex / fps;
     // Extend audio beyond clip boundary for seamless transitions with adjacent clips
-    const endIndex = mediaInfoRef.current?.endFrame ? mediaInfoRef.current.endFrame : undefined;
-    iteratorRef.current = await getAudioIterator(src, { mediaInfo:mediaInfoRef.current || undefined, fps, startIndex: mediaFrameIndex, endIndex });
+    const endIndex = mediaInfoRef.current?.endFrame
+      ? mediaInfoRef.current.endFrame
+      : undefined;
+    iteratorRef.current = await getAudioIterator(src, {
+      mediaInfo: mediaInfoRef.current || undefined,
+      fps,
+      startIndex: mediaFrameIndex,
+      endIndex,
+    });
 
     const soundtouchNode = await ensureSoundtouchNode();
     if (soundtouchNode) {
@@ -338,7 +470,6 @@ const AudioPreview: React.FC<
 
     for await (const buf of iteratorRef.current) {
       if (!buf) continue; // Skip null buffers but keep trying
-
 
       const buffer = buf.buffer || null;
       const duration = buf.duration || 0;
@@ -350,8 +481,10 @@ const AudioPreview: React.FC<
 
       // Map media timestamp to wall clock according to speed.
       // Timeline seconds advance 1:1 with wall clock; media advances at `speed`.
-      let startTimestamp = startTimeRef.current + (timestamp - mediaTimeAtStart) / Math.max(0.1, speed);
-      
+      let startTimestamp =
+        startTimeRef.current +
+        (timestamp - mediaTimeAtStart) / Math.max(0.1, speed);
+
       // Ensure no gap at clip boundaries - if this buffer should start very soon, start it immediately
       const timeUntilStart = startTimestamp - ctx.currentTime;
       if (timeUntilStart > 0 && timeUntilStart < 0.001) {
@@ -363,7 +496,9 @@ const AudioPreview: React.FC<
       const playbackRate = Math.max(0.1, speed);
       node.playbackRate.setValueAtTime(playbackRate, ctx.currentTime);
       if (!soundtouchNode) {
-        try { (node as any).preservesPitch = true; } catch {}
+        try {
+          (node as any).preservesPitch = true;
+        } catch {}
       }
 
       const nodeGain = ctx.createGain();
@@ -372,45 +507,102 @@ const AudioPreview: React.FC<
         try {
           nodeGain.connect(soundtouchNode);
         } catch {
-          try { nodeGain.connect(gainNode); } catch {}
+          try {
+            nodeGain.connect(gainNode);
+          } catch {}
         }
       } else {
-        try { nodeGain.connect(gainNode); } catch {}
+        try {
+          nodeGain.connect(gainNode);
+        } catch {}
       }
 
-		  const baseGain = dbToGain(volume || 0);
-		  const fadeInDuration = fadeIn || 0;
-		  const fadeOutDuration = fadeOut || 0;
-		  const totalDuration = mediaInfoRef.current?.duration || duration;
-		  
-		  // Set up fade in
-		  if (fadeInDuration > 0 && timestamp < fadeInDuration) {
-		    const fadeProgress = Math.min(1, timestamp / fadeInDuration);
-		    nodeGain.gain.setValueAtTime(baseGain * fadeProgress, startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime);
-		    if (timestamp + duration <= fadeInDuration) {
-		      const endFadeProgress = Math.min(1, (timestamp + duration) / fadeInDuration);
-		      nodeGain.gain.linearRampToValueAtTime(baseGain * endFadeProgress, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + duration);
-		    } else {
-		      nodeGain.gain.linearRampToValueAtTime(baseGain, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + (fadeInDuration - timestamp));
-		    }
-		  } else if (fadeOutDuration > 0 && timestamp + duration > totalDuration - fadeOutDuration) {
-		    // Set up fade out
-		    const fadeStartTime = totalDuration - fadeOutDuration;
-		    if (timestamp >= fadeStartTime) {
-		      const fadeProgress = 1 - ((timestamp - fadeStartTime) / fadeOutDuration);
-		      nodeGain.gain.setValueAtTime(baseGain * fadeProgress, startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime);
-		      const endFadeProgress = Math.max(0, 1 - ((timestamp + duration - fadeStartTime) / fadeOutDuration));
-		      nodeGain.gain.linearRampToValueAtTime(baseGain * endFadeProgress, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + duration);
-		    } else {
-		      nodeGain.gain.setValueAtTime(baseGain, startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime);
-		      const bufferOverlap = (timestamp + duration) - fadeStartTime;
-		      nodeGain.gain.linearRampToValueAtTime(baseGain, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + (duration - bufferOverlap));
-		      nodeGain.gain.linearRampToValueAtTime(0, (startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime) + duration);
-		    }
-		  } else {
-		    // No fade - just apply constant volume
-		    nodeGain.gain.setValueAtTime(baseGain, startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime);
-		  }
+      const baseGain = dbToGain(volume || 0);
+      const fadeInDuration = fadeIn || 0;
+      const fadeOutDuration = fadeOut || 0;
+      const totalDuration = mediaInfoRef.current?.duration || duration;
+
+      // Set up fade in
+      if (fadeInDuration > 0 && timestamp < fadeInDuration) {
+        const fadeProgress = Math.min(1, timestamp / fadeInDuration);
+        nodeGain.gain.setValueAtTime(
+          baseGain * fadeProgress,
+          startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime,
+        );
+        if (timestamp + duration <= fadeInDuration) {
+          const endFadeProgress = Math.min(
+            1,
+            (timestamp + duration) / fadeInDuration,
+          );
+          nodeGain.gain.linearRampToValueAtTime(
+            baseGain * endFadeProgress,
+            (startTimestamp >= ctx.currentTime
+              ? startTimestamp
+              : ctx.currentTime) + duration,
+          );
+        } else {
+          nodeGain.gain.linearRampToValueAtTime(
+            baseGain,
+            (startTimestamp >= ctx.currentTime
+              ? startTimestamp
+              : ctx.currentTime) +
+              (fadeInDuration - timestamp),
+          );
+        }
+      } else if (
+        fadeOutDuration > 0 &&
+        timestamp + duration > totalDuration - fadeOutDuration
+      ) {
+        // Set up fade out
+        const fadeStartTime = totalDuration - fadeOutDuration;
+        if (timestamp >= fadeStartTime) {
+          const fadeProgress =
+            1 - (timestamp - fadeStartTime) / fadeOutDuration;
+          nodeGain.gain.setValueAtTime(
+            baseGain * fadeProgress,
+            startTimestamp >= ctx.currentTime
+              ? startTimestamp
+              : ctx.currentTime,
+          );
+          const endFadeProgress = Math.max(
+            0,
+            1 - (timestamp + duration - fadeStartTime) / fadeOutDuration,
+          );
+          nodeGain.gain.linearRampToValueAtTime(
+            baseGain * endFadeProgress,
+            (startTimestamp >= ctx.currentTime
+              ? startTimestamp
+              : ctx.currentTime) + duration,
+          );
+        } else {
+          nodeGain.gain.setValueAtTime(
+            baseGain,
+            startTimestamp >= ctx.currentTime
+              ? startTimestamp
+              : ctx.currentTime,
+          );
+          const bufferOverlap = timestamp + duration - fadeStartTime;
+          nodeGain.gain.linearRampToValueAtTime(
+            baseGain,
+            (startTimestamp >= ctx.currentTime
+              ? startTimestamp
+              : ctx.currentTime) +
+              (duration - bufferOverlap),
+          );
+          nodeGain.gain.linearRampToValueAtTime(
+            0,
+            (startTimestamp >= ctx.currentTime
+              ? startTimestamp
+              : ctx.currentTime) + duration,
+          );
+        }
+      } else {
+        // No fade - just apply constant volume
+        nodeGain.gain.setValueAtTime(
+          baseGain,
+          startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime,
+        );
+      }
 
       if (startTimestamp >= ctx.currentTime) {
         node.start(startTimestamp);
@@ -421,14 +613,24 @@ const AudioPreview: React.FC<
       audioQueueRef.current.add(node);
       node.onended = () => {
         audioQueueRef.current.delete(node);
-        try { node.disconnect(); } catch {}
-        try { nodeGain.disconnect(); } catch {}
+        try {
+          node.disconnect();
+        } catch {}
+        try {
+          nodeGain.disconnect();
+        } catch {}
       };
       // More aggressive buffering for seamless playback - queue up to 2 seconds ahead
-      if ((timestamp - mediaTimeAtStart) / Math.max(0.1, speed) - (ctx.currentTime - startTimeRef.current) >= 2) {
+      if (
+        (timestamp - mediaTimeAtStart) / Math.max(0.1, speed) -
+          (ctx.currentTime - startTimeRef.current) >=
+        2
+      ) {
         await new Promise<void>((resolve) => {
           const id = setInterval(() => {
-            const ahead = (timestamp - mediaTimeAtStart) / Math.max(0.1, speed) - (ctx.currentTime - startTimeRef.current);
+            const ahead =
+              (timestamp - mediaTimeAtStart) / Math.max(0.1, speed) -
+              (ctx.currentTime - startTimeRef.current);
             if (ahead < 1.5) {
               clearInterval(id);
               resolve();
@@ -436,17 +638,39 @@ const AudioPreview: React.FC<
           }, 50);
         });
       }
-
     }
-
-  }, [isPlaying,  ctx, mediaInfoRef.current, fps, src, gainNode, volume, fadeIn, fadeOut, speed, hasValidCurrentFrame, ensureSoundtouchNode, configureSoundtouchForSpeed]);
-
+  }, [
+    isPlaying,
+    ctx,
+    mediaInfoRef.current,
+    fps,
+    src,
+    gainNode,
+    volume,
+    fadeIn,
+    fadeOut,
+    speed,
+    hasValidCurrentFrame,
+    ensureSoundtouchNode,
+    configureSoundtouchForSpeed,
+  ]);
 
   // Start or restart rendering when playback starts or media becomes ready
   useEffect(() => {
     if (!isPlaying || disabled) return;
     void startRendering();
-  }, [isPlaying, ctx, mediaInfoRef.current, src, fps, startRendering, volume, fadeIn, fadeOut, disabled]);
+  }, [
+    isPlaying,
+    ctx,
+    mediaInfoRef.current,
+    src,
+    fps,
+    startRendering,
+    volume,
+    fadeIn,
+    fadeOut,
+    disabled,
+  ]);
 
   // Cleanup on unmount: let scheduled audio complete for smooth transitions
   useEffect(() => {
@@ -455,7 +679,7 @@ const AudioPreview: React.FC<
       // This prevents gaps when transitioning between adjacent clips
       // The nodes will clean themselves up via their onended handlers
       audioQueueRef.current.clear();
-      
+
       // Stop the audio iterator to prevent scheduling new buffers
       // @ts-ignore
       iteratorRef.current?.return?.();
@@ -468,6 +692,6 @@ const AudioPreview: React.FC<
   }, []);
 
   return null;
-}
+};
 
 export default AudioPreview;

@@ -1,7 +1,7 @@
-import { ClipTransform, MaskClipProps, MaskData } from '@/lib/types';
+import { ClipTransform, MaskClipProps, MaskData } from "@/lib/types";
 
 const isFiniteNumber = (value: number | undefined | null): value is number =>
-  typeof value === 'number' && Number.isFinite(value);
+  typeof value === "number" && Number.isFinite(value);
 
 const transformsEqual = (a?: ClipTransform, b?: ClipTransform): boolean => {
   if (!a || !b) return false;
@@ -18,7 +18,6 @@ const transformsEqual = (a?: ClipTransform, b?: ClipTransform): boolean => {
   );
 };
 
-
 const getSafeNumber = (value: number | undefined, fallback: number): number =>
   isFiniteNumber(value) ? value! : fallback;
 
@@ -31,17 +30,23 @@ const sanitizeScale = (value: number | undefined): number => {
   return v;
 };
 
-const getScale = (transform: ClipTransform): { scaleX: number; scaleY: number } => ({
+const getScale = (
+  transform: ClipTransform,
+): { scaleX: number; scaleY: number } => ({
   scaleX: sanitizeScale(transform.scaleX),
   scaleY: sanitizeScale(transform.scaleY),
 });
 
-const getBaseSize = (transform: ClipTransform): { width: number; height: number } => ({
+const getBaseSize = (
+  transform: ClipTransform,
+): { width: number; height: number } => ({
   width: getSafeNumber(transform.width, 0),
   height: getSafeNumber(transform.height, 0),
 });
 
-const getActualSize = (transform: ClipTransform): { width: number; height: number } => {
+const getActualSize = (
+  transform: ClipTransform,
+): { width: number; height: number } => {
   const base = getBaseSize(transform);
   const scale = getScale(transform);
   return {
@@ -49,7 +54,6 @@ const getActualSize = (transform: ClipTransform): { width: number; height: numbe
     height: base.height * scale.scaleY,
   };
 };
-
 
 const rotate = (x: number, y: number, angleDeg: number) => {
   const rad = (angleDeg * Math.PI) / 180;
@@ -65,14 +69,14 @@ const transformPoint = (
   x: number,
   y: number,
   from: ClipTransform,
-  to: ClipTransform
+  to: ClipTransform,
 ): { x: number; y: number } => {
   const fRot = isFiniteNumber(from.rotation) ? from.rotation : 0;
   const fSx = sanitizeScale(from.scaleX);
   const fSy = sanitizeScale(from.scaleY);
   const fW = (from.width ?? 0) * fSx;
   const fH = (from.height ?? 0) * fSy;
-  
+
   const tRot = isFiniteNumber(to.rotation) ? to.rotation : 0;
   const tSx = sanitizeScale(to.scaleX);
   const tSy = sanitizeScale(to.scaleY);
@@ -119,14 +123,22 @@ const transformPoint = (
   };
 };
 
-const transformDimension = (value: number, fromSize: number, toSize: number): number => {
+const transformDimension = (
+  value: number,
+  fromSize: number,
+  toSize: number,
+): number => {
   if (!fromSize || !isFiniteNumber(fromSize)) {
     return value;
   }
-  return value * (toSize || fromSize) / fromSize;
+  return (value * (toSize || fromSize)) / fromSize;
 };
 
-const transformFlatPoints = (points: number[], from: ClipTransform, to: ClipTransform): number[] => {
+const transformFlatPoints = (
+  points: number[],
+  from: ClipTransform,
+  to: ClipTransform,
+): number[] => {
   from = getUncroppedTransform(from);
   to = getUncroppedTransform(to);
   if (!Array.isArray(points) || points.length === 0) {
@@ -148,17 +160,23 @@ const transformFlatPoints = (points: number[], from: ClipTransform, to: ClipTran
   return next;
 };
 
-const transformContours = (contours: number[][], from: ClipTransform, to: ClipTransform): number[][] => {
+const transformContours = (
+  contours: number[][],
+  from: ClipTransform,
+  to: ClipTransform,
+): number[][] => {
   if (!Array.isArray(contours) || contours.length === 0) {
     return contours.slice();
   }
-  return contours.map((contour) => transformFlatPoints(contour ?? [], from, to));
+  return contours.map((contour) =>
+    transformFlatPoints(contour ?? [], from, to),
+  );
 };
 
 const transformTouchPoints = (
   points: Array<{ x: number; y: number; label: 0 | 1 }>,
   from: ClipTransform,
-  to: ClipTransform
+  to: ClipTransform,
 ): Array<{ x: number; y: number; label: 0 | 1 }> => {
   from = getUncroppedTransform(from);
   to = getUncroppedTransform(to);
@@ -174,7 +192,11 @@ const transformTouchPoints = (
   });
 };
 
-const transformRotation = (rotation: number, from: ClipTransform, to: ClipTransform): number => {
+const transformRotation = (
+  rotation: number,
+  from: ClipTransform,
+  to: ClipTransform,
+): number => {
   const normalize = (angle: number): number => {
     let a = ((angle % 360) + 360) % 360; // [0, 360)
     if (a > 180) a -= 360; // (-180, 180]
@@ -187,31 +209,34 @@ const transformRotation = (rotation: number, from: ClipTransform, to: ClipTransf
   return rotation + deltaRotation;
 };
 
-export const getUncroppedTransform = (transform: ClipTransform, offsetXY:boolean = true): ClipTransform => {
+export const getUncroppedTransform = (
+  transform: ClipTransform,
+  offsetXY: boolean = true,
+): ClipTransform => {
   if (!transform.crop) {
     return transform;
   }
-   let uncroppedWidth = transform.width / transform.crop.width;
-   let uncroppedHeight = transform.height / transform.crop.height;
-   let offsetX = transform.crop.x * uncroppedWidth;
-   let offsetY = transform.crop.y * uncroppedHeight;
+  let uncroppedWidth = transform.width / transform.crop.width;
+  let uncroppedHeight = transform.height / transform.crop.height;
+  let offsetX = transform.crop.x * uncroppedWidth;
+  let offsetY = transform.crop.y * uncroppedHeight;
 
-   let finalX = transform.x;
-   let finalY = transform.y;
+  let finalX = transform.x;
+  let finalY = transform.y;
 
-   if (offsetXY) {
-     const rot = isFiniteNumber(transform.rotation) ? transform.rotation : 0;
-     if (rot !== 0) {
-         const rotated = rotate(offsetX, offsetY, rot);
-         finalX -= rotated.x;
-         finalY -= rotated.y;
-     } else {
-         finalX -= offsetX;
-         finalY -= offsetY;
-     }
-   }
+  if (offsetXY) {
+    const rot = isFiniteNumber(transform.rotation) ? transform.rotation : 0;
+    if (rot !== 0) {
+      const rotated = rotate(offsetX, offsetY, rot);
+      finalX -= rotated.x;
+      finalY -= rotated.y;
+    } else {
+      finalX -= offsetX;
+      finalY -= offsetY;
+    }
+  }
 
-   return {
+  return {
     ...transform,
     width: uncroppedWidth,
     height: uncroppedHeight,
@@ -221,20 +246,19 @@ export const getUncroppedTransform = (transform: ClipTransform, offsetXY:boolean
 };
 
 export const transformShapeBounds = (
-  bounds: NonNullable<MaskData['shapeBounds']>,
+  bounds: NonNullable<MaskData["shapeBounds"]>,
   from: ClipTransform,
-  to: ClipTransform
-): NonNullable<MaskData['shapeBounds']> => {
+  to: ClipTransform,
+): NonNullable<MaskData["shapeBounds"]> => {
   from = getUncroppedTransform(from);
   to = getUncroppedTransform(to);
   const topLeft = transformPoint(bounds.x, bounds.y, from, to);
-
 
   const fSx = sanitizeScale(from.scaleX);
   const fSy = sanitizeScale(from.scaleY);
   const fW = (from.width ?? 0) * fSx;
   const fH = (from.height ?? 0) * fSy;
-  
+
   const tSx = sanitizeScale(to.scaleX);
   const tSy = sanitizeScale(to.scaleY);
   const tW = (to.width ?? from.width ?? 0) * tSx;
@@ -243,7 +267,6 @@ export const transformShapeBounds = (
   const newWidth = transformDimension(bounds.width, fW, tW || fW);
   const newHeight = transformDimension(bounds.height, fH, tH || fH);
   const newRotation = transformRotation(bounds.rotation ?? 0, from, to);
-
 
   return {
     ...bounds,
@@ -255,7 +278,11 @@ export const transformShapeBounds = (
   };
 };
 
-export const transformMaskData = (data: MaskData, from: ClipTransform, to: ClipTransform): MaskData => {
+export const transformMaskData = (
+  data: MaskData,
+  from: ClipTransform,
+  to: ClipTransform,
+): MaskData => {
   const nextData: MaskData = { ...data };
 
   if (data.shapeBounds) {
@@ -271,8 +298,18 @@ export const transformMaskData = (data: MaskData, from: ClipTransform, to: ClipT
     nextData.touchPoints = transformTouchPoints(data.touchPoints, from, to);
   }
   if (data.touchBox) {
-    const topLeft = transformPoint(data.touchBox.x1, data.touchBox.y1, from, to);
-    const bottomRight = transformPoint(data.touchBox.x2, data.touchBox.y2, from, to);
+    const topLeft = transformPoint(
+      data.touchBox.x1,
+      data.touchBox.y1,
+      from,
+      to,
+    );
+    const bottomRight = transformPoint(
+      data.touchBox.x2,
+      data.touchBox.y2,
+      from,
+      to,
+    );
     nextData.touchBox = {
       x1: topLeft.x,
       y1: topLeft.y,
@@ -280,7 +317,6 @@ export const transformMaskData = (data: MaskData, from: ClipTransform, to: ClipT
       y2: bottomRight.y,
     };
   }
-  
 
   return nextData;
 };
@@ -288,10 +324,8 @@ export const transformMaskData = (data: MaskData, from: ClipTransform, to: ClipT
 export const remapMaskWithClipTransform = (
   mask: MaskClipProps,
   from: ClipTransform,
-  to: ClipTransform
+  to: ClipTransform,
 ): MaskClipProps => {
-
-  
   if (transformsEqual(from, to)) {
     return { ...mask, transform: { ...to } };
   }
@@ -301,7 +335,7 @@ export const remapMaskWithClipTransform = (
     return transformMaskData(data, from, to);
   };
 
-  let keyframes: MaskClipProps['keyframes'];
+  let keyframes: MaskClipProps["keyframes"];
   if (mask.keyframes instanceof Map) {
     const updated = new Map<number, MaskData>();
     mask.keyframes.forEach((value, key) => {
@@ -312,7 +346,10 @@ export const remapMaskWithClipTransform = (
     const updated: Record<number, MaskData> = {};
     Object.keys(mask.keyframes).forEach((key) => {
       const numericKey = Number(key);
-      updated[numericKey] = transformFrame((mask.keyframes as Record<number, MaskData>)[numericKey]) ?? {};
+      updated[numericKey] =
+        transformFrame(
+          (mask.keyframes as Record<number, MaskData>)[numericKey],
+        ) ?? {};
     });
     keyframes = updated;
   }
@@ -328,7 +365,7 @@ export const remapMaskWithClipTransform = (
 export const projectContoursBetweenTransforms = (
   contours: number[][],
   from?: ClipTransform,
-  to?: ClipTransform
+  to?: ClipTransform,
 ): number[][] => {
   if (!from || !to || !Array.isArray(contours) || contours.length === 0) {
     return contours;
@@ -339,7 +376,7 @@ export const projectContoursBetweenTransforms = (
 export const projectTouchPointsBetweenTransforms = (
   points: Array<{ x: number; y: number; label: 0 | 1 }>,
   from?: ClipTransform,
-  to?: ClipTransform
+  to?: ClipTransform,
 ): Array<{ x: number; y: number; label: 0 | 1 }> => {
   if (!from || !to || !Array.isArray(points) || points.length === 0) {
     return points;

@@ -1,4 +1,4 @@
-import { getSystemMemory } from '@app/preload';
+import { getSystemMemory } from "@app/preload";
 
 export type MemoryBreakdown = {
   total: number;
@@ -19,14 +19,14 @@ export type SystemMemoryResponse = {
   unified: MemoryBreakdown | null;
   cpu: MemoryBreakdown | null;
   gpu: {
-    device_type: 'cuda';
+    device_type: "cuda";
     count: number;
     adapters: GpuAdapter[];
     total: number;
     used: number;
     percent: number;
   } | null;
-  device_type: 'mps' | 'cuda' | 'cpu';
+  device_type: "mps" | "cuda" | "cpu";
 };
 
 export async function fetchSystemMemory(): Promise<SystemMemoryResponse | null> {
@@ -34,5 +34,3 @@ export async function fetchSystemMemory(): Promise<SystemMemoryResponse | null> 
   if (!res.success) return null;
   return res.data as SystemMemoryResponse;
 }
-
-

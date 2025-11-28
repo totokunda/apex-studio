@@ -8,7 +8,7 @@ export {
   type ConfigResponse,
   type ManifestDocument,
   type ModelTypeInfo,
-} from './api';
+} from "./api";
 
 export {
   useManifestTypes,
@@ -17,6 +17,4 @@ export {
   useManifestsByType,
   useManifestsByModelAndType,
   useManifest,
-} from './hooks';
-
-
+} from "./hooks";

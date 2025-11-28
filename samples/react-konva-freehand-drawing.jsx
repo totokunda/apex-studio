@@ -1,8 +1,8 @@
-import React from 'react';
-import { Stage, Layer, Line, Text } from 'react-konva';
+import React from "react";
+import { Stage, Layer, Line, Text } from "react-konva";
 
 const App = () => {
-  const [tool, setTool] = React.useState('pen');
+  const [tool, setTool] = React.useState("pen");
   const [lines, setLines] = React.useState([]);
   const isDrawing = React.useRef(false);
 
@@ -65,7 +65,7 @@ const App = () => {
               lineCap="round"
               lineJoin="round"
               globalCompositeOperation={
-                line.tool === 'eraser' ? 'destination-out' : 'source-over'
+                line.tool === "eraser" ? "destination-out" : "source-over"
               }
             />
           ))}

@@ -1,5 +1,5 @@
-import path from 'path';
-import { fileURLToPath } from 'url';
+import path from "path";
+import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default /**
@@ -7,26 +7,24 @@ export default /**
  */ ({
   build: {
     sourcemap: false,
-    outDir: 'dist',
-    assetsDir: '.',
-    target: 'esnext',
+    outDir: "dist",
+    assetsDir: ".",
+    target: "esnext",
     lib: {
-      entry: 'src/index.ts',
-      formats: ['es'],
+      entry: "src/index.ts",
+      formats: ["es"],
     },
     rollupOptions: {
       output: {
-        entryFileNames: '[name].js'
-      }
+        entryFileNames: "[name].js",
+      },
     },
     emptyOutDir: true,
     reportCompressedSize: false,
   },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, '../renderer/src'),
+      "@": path.resolve(__dirname, "../renderer/src"),
     },
   },
 });
-
-

@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ProgressBar } from "@/components/common/ProgressBar";
-import { pickMediaPaths } from "@app/preload";
+import { pickMediaPaths, resolvePath } from "@app/preload";
 
 type ClipExportKind = "audio" | "image" | "video";
 
@@ -91,7 +91,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
   const [name, setName] = useState<string>(defaultName);
   const [path, setPath] = useState<string>(defaultPath);
   const [resolution, setResolution] = useState<number>(
-    RESOLUTION_OPTIONS[2]?.value ?? 1080
+    RESOLUTION_OPTIONS[2]?.value ?? 1080,
   );
   const [imageFormat, setImageFormat] = useState<ImageFormat>("png");
   const [videoFormat, setVideoFormat] = useState<VideoFormat>("mp4");
@@ -133,7 +133,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
     onExport({
       kind,
       name: trimmedName,
-      path: trimmedPath,
+      path: resolvePath(trimmedPath),
       resolution: kind === "audio" ? undefined : resolution,
       imageFormat: kind === "image" ? imageFormat : undefined,
       videoFormat: kind === "video" ? videoFormat : undefined,
@@ -150,7 +150,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange} >
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-sm w-full bg-brand-background/90 backdrop-blur-sm text-foreground p-0 gap-0 overflow-hidden dark font-poppins border border-brand-light/10">
         <DialogHeader className="px-5 py-3.5 border-b border-brand-light/10 flex-shrink-0 bg-brand-background">
           <DialogTitle className="text-start text-[13px] font-medium text-brand-light">
@@ -355,5 +355,3 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
 };
 
 export default ClipExportModal;
-
-

@@ -1,8 +1,18 @@
-import type { WebGLHaldClut } from '../../../renderer/src/components/preview/webgl-filters/hald-clut';
-import type { BaseClipApplicator } from '../../../renderer/src/components/preview/clips/apply/base';
-import { FilterPreview } from '../../../renderer/src/components/preview/clips/apply/filter';
+import type { WebGLHaldClut } from "../../../renderer/src/components/preview/webgl-filters/hald-clut";
+import type { BaseClipApplicator } from "../../../renderer/src/components/preview/clips/apply/base";
+import { FilterPreview } from "../../../renderer/src/components/preview/clips/apply/filter";
 
-export type ClipType = 'video' | 'image' | 'audio' | 'model' | 'text' | 'lora' | 'shape' | 'draw' | 'filter' | 'group';
+export type ClipType =
+  | "video"
+  | "image"
+  | "audio"
+  | "model"
+  | "text"
+  | "lora"
+  | "shape"
+  | "draw"
+  | "filter"
+  | "group";
 
 export interface AnyClipProps {
   type: ClipType;
@@ -21,7 +31,7 @@ export interface TimelineLike {
 }
 
 export interface FilterClipProps extends AnyClipProps {
-  type: 'filter';
+  type: "filter";
   smallPath?: string;
   fullPath?: string;
   category?: string;
@@ -35,30 +45,49 @@ export interface ApplicatorFactoryConfig {
 
 export function createApplicatorFromClip(
   clip: AnyClipProps,
-  config: ApplicatorFactoryConfig
+  config: ApplicatorFactoryConfig,
 ): BaseClipApplicator | null {
   switch (clip.type) {
-    case 'filter': {
+    case "filter": {
       if (!config.haldClutInstance) {
-        console.warn('[Export ApplicatorFactory] Cannot create FilterPreview: haldClutInstance is null');
+        console.warn(
+          "[Export ApplicatorFactory] Cannot create FilterPreview: haldClutInstance is null",
+        );
         return null;
       }
-      const filterApplicator = new FilterPreview(clip as FilterClipProps) as unknown as BaseClipApplicator & { setHaldClutInstance?: (h: WebGLHaldClut) => void; setFocusFrameOverride?: (f: number) => void; setStrength?: (s: number) => void };
+      const filterApplicator = new FilterPreview(
+        clip as FilterClipProps,
+      ) as unknown as BaseClipApplicator & {
+        setHaldClutInstance?: (h: WebGLHaldClut) => void;
+        setFocusFrameOverride?: (f: number) => void;
+        setStrength?: (s: number) => void;
+      };
       if (filterApplicator.setHaldClutInstance) {
         filterApplicator.setHaldClutInstance(config.haldClutInstance);
       }
-      if (typeof config.focusFrameOverride === 'number' && filterApplicator.setFocusFrameOverride) {
+      if (
+        typeof config.focusFrameOverride === "number" &&
+        filterApplicator.setFocusFrameOverride
+      ) {
         filterApplicator.setFocusFrameOverride(config.focusFrameOverride);
       }
-      const intensity = (clip as FilterClipProps).intensity as number | undefined;
-      if (typeof intensity === 'number' && Number.isFinite(intensity) && filterApplicator.setStrength) {
+      const intensity = (clip as FilterClipProps).intensity as
+        | number
+        | undefined;
+      if (
+        typeof intensity === "number" &&
+        Number.isFinite(intensity) &&
+        filterApplicator.setStrength
+      ) {
         const normalized = Math.max(0, Math.min(1, intensity / 100));
         filterApplicator.setStrength(normalized);
       }
       return filterApplicator as BaseClipApplicator;
     }
     default:
-      console.warn(`[Export ApplicatorFactory] Unsupported applicator type: ${clip.type}`);
+      console.warn(
+        `[Export ApplicatorFactory] Unsupported applicator type: ${clip.type}`,
+      );
       return null;
   }
 }
@@ -67,16 +96,18 @@ export function getApplicableClips(
   targetClip: AnyClipProps,
   allClips: AnyClipProps[],
   timelines: TimelineLike[],
-  applicatorTypes: ClipType[] = ['filter'],
-  focusFrame?: number
+  applicatorTypes: ClipType[] = ["filter"],
+  focusFrame?: number,
 ): AnyClipProps[] {
   const getEffectiveTimelineY = (c: AnyClipProps): number => {
-    const own = timelines.find(t => t.timelineId === c.timelineId);
+    const own = timelines.find((t) => t.timelineId === c.timelineId);
     if (own) return own.timelineY ?? 0;
     if (c.groupId) {
-      const groupClip = allClips.find(x => x.clipId === c.groupId);
+      const groupClip = allClips.find((x) => x.clipId === c.groupId);
       if (groupClip) {
-        const groupTl = timelines.find(t => t.timelineId === groupClip.timelineId);
+        const groupTl = timelines.find(
+          (t) => t.timelineId === groupClip.timelineId,
+        );
         if (groupTl) return groupTl.timelineY ?? 0;
       }
     }
@@ -85,8 +116,15 @@ export function getApplicableClips(
 
   const targetY = getEffectiveTimelineY(targetClip);
   const targetGroupId = targetClip.groupId;
-  const targetGroup = targetGroupId ? allClips.find(c => c.clipId === targetGroupId) as AnyClipProps | undefined : undefined;
-  const targetChildrenNested = (targetGroup && (targetGroup as any).children as string[][] | undefined) ?? [];
+  const targetGroup = targetGroupId
+    ? (allClips.find((c) => c.clipId === targetGroupId) as
+        | AnyClipProps
+        | undefined)
+    : undefined;
+  const targetChildrenNested =
+    (targetGroup &&
+      ((targetGroup as any).children as string[][] | undefined)) ??
+    [];
   const targetChildrenFlat = targetChildrenNested.flat();
   const targetChildIndex = targetChildrenFlat.indexOf(targetClip.clipId);
 
@@ -94,17 +132,23 @@ export function getApplicableClips(
     if (!applicatorTypes.includes(c.type)) return false;
     const effY = getEffectiveTimelineY(c);
     let allowedByVertical = effY < targetY;
-    if (!allowedByVertical && targetGroupId && c.groupId === targetGroupId && targetChildIndex !== -1) {
+    if (
+      !allowedByVertical &&
+      targetGroupId &&
+      c.groupId === targetGroupId &&
+      targetChildIndex !== -1
+    ) {
       const idx = targetChildrenFlat.indexOf(c.clipId);
       if (idx !== -1 && idx < targetChildIndex) {
         allowedByVertical = true;
       }
     }
     if (!allowedByVertical) return false;
-    const tlOwnerId = (allClips.find(x => x.clipId === c.groupId)?.timelineId || c.timelineId);
-    const tl = timelines.find(t => t.timelineId === tlOwnerId);
+    const tlOwnerId =
+      allClips.find((x) => x.clipId === c.groupId)?.timelineId || c.timelineId;
+    const tl = timelines.find((t) => t.timelineId === tlOwnerId);
     if (tl?.hidden) return false;
-    if (typeof focusFrame === 'number') {
+    if (typeof focusFrame === "number") {
       const s = c.startFrame ?? 0;
       const e = c.endFrame ?? 0;
       return focusFrame >= s && focusFrame <= e;
@@ -116,7 +160,11 @@ export function getApplicableClips(
     const yA = getEffectiveTimelineY(a);
     const yB = getEffectiveTimelineY(b);
     if (yA !== yB) return yA - yB;
-    if (targetGroupId && a.groupId === targetGroupId && b.groupId === targetGroupId) {
+    if (
+      targetGroupId &&
+      a.groupId === targetGroupId &&
+      b.groupId === targetGroupId
+    ) {
       const ia = targetChildrenFlat.indexOf(a.clipId);
       const ib = targetChildrenFlat.indexOf(b.clipId);
       if (ia !== ib) return ia - ib;
@@ -134,11 +182,15 @@ export function getApplicatorsForClipExport(
   config: ApplicatorFactoryConfig,
   applicatorTypes?: ClipType[],
 ): BaseClipApplicator[] {
-  const applicableClips = getApplicableClips(targetClip, allClips, timelines, applicatorTypes, config.focusFrameOverride);
+  const applicableClips = getApplicableClips(
+    targetClip,
+    allClips,
+    timelines,
+    applicatorTypes,
+    config.focusFrameOverride,
+  );
   const applicators = applicableClips
-    .map(clip => createApplicatorFromClip(clip, config))
+    .map((clip) => createApplicatorFromClip(clip, config))
     .filter((a): a is BaseClipApplicator => a !== null);
   return applicators;
 }
-
-

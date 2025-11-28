@@ -14,6 +14,6 @@ export const useLayoutConfigStore = create<LayoutConfigState>()(
       layout: "default",
       setLayout: (layout) => set({ layout }),
     }),
-    { name: "apex-studio:layout-config" }
-  )
+    { name: "apex-studio:layout-config" },
+  ),
 );

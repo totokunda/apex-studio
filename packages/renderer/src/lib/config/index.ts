@@ -12,5 +12,4 @@ export {
   type HomeDirectoryConfig,
   type TorchDeviceConfig,
   type CachePathConfig,
-} from './api';
-
+} from "./api";

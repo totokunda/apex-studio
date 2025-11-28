@@ -1,8 +1,10 @@
-type WebGLContextType = 'webgl' | 'webgl2';
+type WebGLContextType = "webgl" | "webgl2";
 
 export interface WebGLContextListener {
   onContextLost?: () => void;
-  onContextRestored?: (gl: WebGLRenderingContext | WebGL2RenderingContext) => void;
+  onContextRestored?: (
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ) => void;
 }
 
 export interface WebGLSharedContextHandle {
@@ -34,7 +36,10 @@ class WebGLContextHandleImpl implements WebGLSharedContextHandle {
   private released = false;
   private unsubscribeCallbacks: Array<() => void> = [];
 
-  constructor(private readonly manager: typeof WebGLContextManager, private readonly record: ContextRecord) {}
+  constructor(
+    private readonly manager: typeof WebGLContextManager,
+    private readonly record: ContextRecord,
+  ) {}
 
   get canvas(): HTMLCanvasElement {
     return this.record.canvas;
@@ -79,11 +84,14 @@ class WebGLContextHandleImpl implements WebGLSharedContextHandle {
 export class WebGLContextManager {
   private static contexts = new Map<string, ContextRecord>();
 
-  static acquire(key: string, options: AcquireOptions = {}): WebGLSharedContextHandle {
+  static acquire(
+    key: string,
+    options: AcquireOptions = {},
+  ): WebGLSharedContextHandle {
     let record = this.contexts.get(key);
     if (!record) {
-      const canvas = document.createElement('canvas');
-      const contextType = options.contextType ?? 'webgl';
+      const canvas = document.createElement("canvas");
+      const contextType = options.contextType ?? "webgl";
       const attributes = options.attributes;
 
       record = {
@@ -111,7 +119,7 @@ export class WebGLContextManager {
       record.restoredHandler = () => {
         const gl = this.ensureContext(record!);
         if (!gl) {
-          console.error('Failed to restore shared WebGL context');
+          console.error("Failed to restore shared WebGL context");
           return;
         }
         const listeners = Array.from(record!.listeners);
@@ -120,8 +128,12 @@ export class WebGLContextManager {
         });
       };
 
-      canvas.addEventListener('webglcontextlost', record.lostHandler, false);
-      canvas.addEventListener('webglcontextrestored', record.restoredHandler, false);
+      canvas.addEventListener("webglcontextlost", record.lostHandler, false);
+      canvas.addEventListener(
+        "webglcontextrestored",
+        record.restoredHandler,
+        false,
+      );
 
       this.ensureContext(record);
       this.contexts.set(key, record);
@@ -134,27 +146,45 @@ export class WebGLContextManager {
   private static createContext(
     canvas: HTMLCanvasElement,
     type: WebGLContextType,
-    attributes?: WebGLContextAttributes
+    attributes?: WebGLContextAttributes,
   ): WebGLRenderingContext | WebGL2RenderingContext | null {
-    if (type === 'webgl2') {
-      const gl2 = canvas.getContext('webgl2', attributes) as WebGL2RenderingContext | null;
+    if (type === "webgl2") {
+      const gl2 = canvas.getContext(
+        "webgl2",
+        attributes,
+      ) as WebGL2RenderingContext | null;
       if (gl2) {
         return gl2;
       }
-      console.warn('WebGL2 not available, falling back to WebGL1 for shared context');
+      console.warn(
+        "WebGL2 not available, falling back to WebGL1 for shared context",
+      );
     }
-    const gl = canvas.getContext('webgl', attributes) as WebGLRenderingContext | null;
+    const gl = canvas.getContext(
+      "webgl",
+      attributes,
+    ) as WebGLRenderingContext | null;
     if (!gl) {
-      console.error('Failed to initialize shared WebGL context');
+      console.error("Failed to initialize shared WebGL context");
     }
     return gl;
   }
 
-  static ensureContext(record: ContextRecord): WebGLRenderingContext | WebGL2RenderingContext | null {
-    if (record.gl && typeof record.gl.isContextLost === 'function' && !record.gl.isContextLost()) {
+  static ensureContext(
+    record: ContextRecord,
+  ): WebGLRenderingContext | WebGL2RenderingContext | null {
+    if (
+      record.gl &&
+      typeof record.gl.isContextLost === "function" &&
+      !record.gl.isContextLost()
+    ) {
       return record.gl;
     }
-    record.gl = WebGLContextManager.createContext(record.canvas, record.contextType, record.attributes);
+    record.gl = WebGLContextManager.createContext(
+      record.canvas,
+      record.contextType,
+      record.attributes,
+    );
     return record.gl;
   }
 
@@ -168,12 +198,18 @@ export class WebGLContextManager {
       return;
     }
 
-    existing.canvas.removeEventListener('webglcontextlost', existing.lostHandler);
-    existing.canvas.removeEventListener('webglcontextrestored', existing.restoredHandler);
+    existing.canvas.removeEventListener(
+      "webglcontextlost",
+      existing.lostHandler,
+    );
+    existing.canvas.removeEventListener(
+      "webglcontextrestored",
+      existing.restoredHandler,
+    );
 
     // Attempt to proactively release GPU resources.
     if (existing.gl) {
-      const loseExt = existing.gl.getExtension('WEBGL_lose_context');
+      const loseExt = existing.gl.getExtension("WEBGL_lose_context");
       loseExt?.loseContext();
       existing.gl = null;
     }

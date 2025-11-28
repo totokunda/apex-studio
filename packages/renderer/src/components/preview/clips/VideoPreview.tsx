@@ -1,186 +1,1317 @@
-import { MediaInfo, VideoClipProps} from '@/lib/types'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {Image, Transformer, Group, Line} from 'react-konva'
-import {getVideoIterator} from '@/lib/media/video'
-import {getMediaInfo, getMediaInfoCached} from '@/lib/media/utils'
-import { useControlsStore } from '@/lib/control';
-import Konva from 'konva';
-import { useViewportStore } from '@/lib/viewport';
-import { DEFAULT_FPS } from '@/lib/settings';
-import { useClipStore } from '@/lib/clip';
-import { WrappedCanvas } from 'mediabunny';
-import { useWebGLFilters } from '@/components/preview/webgl-filters';
-import { BaseClipApplicator } from './apply/base'
-import _ from 'lodash';
-import { useWebGLMask } from '../mask/useWebGLMask'
-import { useInputControlsStore } from '@/lib/inputControl';
+import { MediaInfo, VideoClipProps } from "@/lib/types";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { Image, Transformer, Group, Line } from "react-konva";
+import { getVideoIterator } from "@/lib/media/video";
+import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
+import { useControlsStore } from "@/lib/control";
+import Konva from "konva";
+import { useViewportStore } from "@/lib/viewport";
+import { DEFAULT_FPS } from "@/lib/settings";
+import { useClipStore } from "@/lib/clip";
+import { WrappedCanvas } from "mediabunny";
+import { useWebGLFilters } from "@/components/preview/webgl-filters";
+import { BaseClipApplicator } from "./apply/base";
+import _ from "lodash";
+import { useWebGLMask } from "../mask/useWebGLMask";
+import { useInputControlsStore } from "@/lib/inputControl";
 
 // (prefetch helper removed by request; timeline-driven rendering only)
 
-const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWidth: number, rectHeight: number, applicators: BaseClipApplicator[], overlap: boolean, overrideClip?: VideoClipProps, inputMode?: boolean, inputId?: string, focusFrameOverride?: number, currentLocalFrameOverride?: number, offscreenFast?: boolean}> = ({ src, clipId, startFrame = 0, framesToPrefetch: _framesToPrefetch = 32, rectWidth, rectHeight, trimStart, speed: _speed, applicators, overlap, overrideClip, inputMode = false, inputId, focusFrameOverride, currentLocalFrameOverride, offscreenFast = false}) => {
-    const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
-    const focusFrameFromControls = useControlsStore((state) => state.focusFrame);
-    const focusFrameFromInputs = useInputControlsStore((s) => s.getFocusFrame(inputId));
-    const focusFrame = (typeof focusFrameOverride === 'number')
-        ? focusFrameOverride
-        : (inputMode ? focusFrameFromInputs : focusFrameFromControls);
-    const [stableFocusFrame, setStableFocusFrame] = useState(focusFrame);
-    const canvasRef = useRef<HTMLCanvasElement | null>(null);
-    const [imageSource, setImageSource] = useState<HTMLCanvasElement | null>(null);
-    const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
-    const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
-    const imageRef = useRef<Konva.Image>(null);
-    const transformerRef = useRef<Konva.Transformer>(null);
-    const drawTokenRef = useRef(0);
-    const suppressUntilRef = useRef<number>(0);
-    const { applyFilters } = useWebGLFilters();
-    // Resolve clip early so timing math can reference grouping info
-    const clipFromStore = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps;
-    const clip = (overrideClip as VideoClipProps) || clipFromStore;
-    // In input mode, when a clip is part of a group, offset by the group's start so playback is contiguous
-    const groupStartForClip = useMemo(() => {
-      const grpId = (clip as any)?.groupId as string | undefined;
-      if (!grpId) return 0;
-      try {
-        const groupClip = useClipStore.getState().getClipById(grpId) as any;
-        return groupClip?.startFrame ?? 0;
-      } catch {
-        return 0;
-      }
-    }, [clip]);
-    const startFrameUsed = useMemo(() => {
-      if (!inputMode) return startFrame;
-      const s = (clip as any)?.startFrame as number | undefined;
-      const hasGroup = Boolean((clip as any)?.groupId);
-      if (hasGroup && typeof s === 'number') {
-        const rel = s - (groupStartForClip || 0);
-        return Math.max(0, rel);
-      }
+const VideoPreview: React.FC<
+  VideoClipProps & {
+    framesToPrefetch?: number;
+    rectWidth: number;
+    rectHeight: number;
+    applicators: BaseClipApplicator[];
+    overlap: boolean;
+    overrideClip?: VideoClipProps;
+    inputMode?: boolean;
+    inputId?: string;
+    focusFrameOverride?: number;
+    currentLocalFrameOverride?: number;
+    offscreenFast?: boolean;
+  }
+> = ({
+  src,
+  clipId,
+  startFrame = 0,
+  framesToPrefetch: _framesToPrefetch = 32,
+  rectWidth,
+  rectHeight,
+  trimStart,
+  speed: _speed,
+  applicators,
+  overlap,
+  overrideClip,
+  inputMode = false,
+  inputId,
+  focusFrameOverride,
+  currentLocalFrameOverride,
+  offscreenFast = false,
+}) => {
+  const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(src) || null);
+  const focusFrameFromControls = useControlsStore((state) => state.focusFrame);
+  const focusFrameFromInputs = useInputControlsStore((s) =>
+    s.getFocusFrame(inputId),
+  );
+  const focusFrame =
+    typeof focusFrameOverride === "number"
+      ? focusFrameOverride
+      : inputMode
+        ? focusFrameFromInputs
+        : focusFrameFromControls;
+  const [stableFocusFrame, setStableFocusFrame] = useState(focusFrame);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [imageSource, setImageSource] = useState<HTMLCanvasElement | null>(
+    null,
+  );
+  const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
+  const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imageRef = useRef<Konva.Image>(null);
+  const transformerRef = useRef<Konva.Transformer>(null);
+  const drawTokenRef = useRef(0);
+  const suppressUntilRef = useRef<number>(0);
+  const { applyFilters } = useWebGLFilters();
+  // Resolve clip early so timing math can reference grouping info
+  const clipFromStore = useClipStore((s) =>
+    s.getClipById(clipId),
+  ) as VideoClipProps;
+  const clip = (overrideClip as VideoClipProps) || clipFromStore;
+  // In input mode, when a clip is part of a group, offset by the group's start so playback is contiguous
+  const groupStartForClip = useMemo(() => {
+    const grpId = (clip as any)?.groupId as string | undefined;
+    if (!grpId) return 0;
+    try {
+      const groupClip = useClipStore.getState().getClipById(grpId) as any;
+      return groupClip?.startFrame ?? 0;
+    } catch {
       return 0;
-    }, [inputMode, startFrame, clip, groupStartForClip]);
-    const currentFrame = useMemo(() => focusFrame - startFrameUsed + (trimStart || 0), [focusFrame, startFrameUsed, trimStart]);
-    const speed = useMemo(() => {
-      const s = Number(_speed ?? 1);
-      return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
-    }, [_speed]);
-    const tool = useViewportStore((s) => s.tool);
-    const scale = useViewportStore((s) => s.scale);
-    const position = useViewportStore((s) => s.position);
-    const setClipTransform = useClipStore((s) => s.setClipTransform);
-    const clipTransform = overrideClip ? overrideClip.transform : useClipStore((s) => s.getClipTransform(clipId));
-    const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
-    const addClipSelection = useControlsStore((s) => s.addClipSelection);
-    const clearSelection = useControlsStore((s) => s.clearSelection);
-    const {selectedClipIds, isFullscreen, fps:srcFps} = useControlsStore();
-    const isSelected = useMemo(() => selectedClipIds.includes(clipId), [clipId, selectedClipIds]);
-    const lastSelectedSrcRef = useRef<string | null>(null); 
-    const cachedPreprocessorRangeRef = useRef<{startFrame: number, endFrame: number, selectedSrc: string, frameOffset: number} | null>(null);
-    const addedTimestampRef = useRef<number | undefined>(undefined); // last timestamp rendered
+    }
+  }, [clip]);
+  const startFrameUsed = useMemo(() => {
+    if (!inputMode) return startFrame;
+    const s = (clip as any)?.startFrame as number | undefined;
+    const hasGroup = Boolean((clip as any)?.groupId);
+    if (hasGroup && typeof s === "number") {
+      const rel = s - (groupStartForClip || 0);
+      return Math.max(0, rel);
+    }
+    return 0;
+  }, [inputMode, startFrame, clip, groupStartForClip]);
+  const currentFrame = useMemo(
+    () => focusFrame - startFrameUsed + (trimStart || 0),
+    [focusFrame, startFrameUsed, trimStart],
+  );
+  const speed = useMemo(() => {
+    const s = Number(_speed ?? 1);
+    return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
+  }, [_speed]);
+  const tool = useViewportStore((s) => s.tool);
+  const scale = useViewportStore((s) => s.scale);
+  const position = useViewportStore((s) => s.position);
+  const setClipTransform = useClipStore((s) => s.setClipTransform);
+  const clipTransform = overrideClip
+    ? overrideClip.transform
+    : useClipStore((s) => s.getClipTransform(clipId));
+  const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
+  const addClipSelection = useControlsStore((s) => s.addClipSelection);
+  const clearSelection = useControlsStore((s) => s.clearSelection);
+  const { selectedClipIds, isFullscreen, fps: srcFps } = useControlsStore();
+  const isSelected = useMemo(
+    () => selectedClipIds.includes(clipId),
+    [clipId, selectedClipIds],
+  );
+  const lastSelectedSrcRef = useRef<string | null>(null);
+  const cachedPreprocessorRangeRef = useRef<{
+    startFrame: number;
+    endFrame: number;
+    selectedSrc: string;
+    frameOffset: number;
+  } | null>(null);
+  const addedTimestampRef = useRef<number | undefined>(undefined); // last timestamp rendered
 
-    const { applyMask } = useWebGLMask({
-        focusFrame: focusFrame,
-        masks: clip?.masks || [],
-        disabled: tool === 'mask' && !inputMode,
-        clip: clip,
+  const { applyMask } = useWebGLMask({
+    focusFrame: focusFrame,
+    masks: clip?.masks || [],
+    disabled: tool === "mask" && !inputMode,
+    clip: clip,
+  });
+
+  const { selectedSrc, frameOffset } = useMemo(() => {
+    // Check if we can use the cached result
+
+    // Cache miss - recalculate
+    if (
+      !Object.prototype.hasOwnProperty.call(clip, "preprocessors") ||
+      !clip.preprocessors ||
+      clip.preprocessors.length === 0
+    ) {
+      cachedPreprocessorRangeRef.current = null;
+      addedTimestampRef.current = 0;
+      return { selectedSrc: src, frameOffset: 0 };
+    }
+
+    if (
+      cachedPreprocessorRangeRef.current &&
+      currentFrame >= cachedPreprocessorRangeRef.current.startFrame &&
+      currentFrame <= cachedPreprocessorRangeRef.current.endFrame
+    ) {
+      return {
+        selectedSrc: cachedPreprocessorRangeRef.current.selectedSrc,
+        frameOffset: cachedPreprocessorRangeRef.current.frameOffset,
+      };
+    }
+
+    // go through the preprocessors and find the one that is within the focus frame
+    // adjust preprocessor ranges by trimStart to match currentFrame's reference frame
+    const cliptrimStart = trimStart || 0;
+    for (const preprocessor of clip.preprocessors) {
+      if (
+        preprocessor.startFrame !== undefined &&
+        preprocessor.endFrame !== undefined &&
+        preprocessor.status === "complete" &&
+        preprocessor.src
+      ) {
+        const adjustedStartFrame = preprocessor.startFrame + cliptrimStart;
+        const adjustedEndFrame = preprocessor.endFrame + cliptrimStart;
+
+        if (
+          currentFrame >= adjustedStartFrame &&
+          currentFrame <= adjustedEndFrame
+        ) {
+          const startSec = preprocessor.startFrame / srcFps;
+          addedTimestampRef.current = startSec;
+
+          cachedPreprocessorRangeRef.current = {
+            startFrame: adjustedStartFrame,
+            endFrame: adjustedEndFrame,
+            selectedSrc: preprocessor.src,
+            frameOffset: preprocessor.startFrame,
+          };
+
+          return {
+            selectedSrc: preprocessor.src,
+            frameOffset: preprocessor.startFrame,
+          };
+        }
+      }
+    }
+
+    cachedPreprocessorRangeRef.current = null;
+    addedTimestampRef.current = 0;
+    return { selectedSrc: src, frameOffset: 0 };
+  }, [clip?.preprocessors, src, currentFrame, trimStart]);
+
+  // Use refs to store current filter values to avoid callback recreation
+  const filterParamsRef = useRef({
+    brightness: clip?.brightness,
+    contrast: clip?.contrast,
+    hue: clip?.hue,
+    saturation: clip?.saturation,
+    blur: clip?.blur,
+    sharpness: clip?.sharpness,
+    noise: clip?.noise,
+    vignette: clip?.vignette,
+  });
+
+  // Use ref to store current applicators to avoid callback recreation
+  const applicatorsRef = useRef(applicators);
+
+  const maskFrameForCurrentFocus = useMemo(() => {
+    const speedFactor = Math.max(0.1, speed);
+    if (clip) {
+      if (inputMode) {
+        const local = Math.max(0, focusFrame + (trimStart || 0));
+        return Math.max(0, Math.floor(local * speedFactor));
+      }
+      const isUsingPreprocessorSrc = selectedSrc !== src;
+      const baseLocal = Math.max(0, focusFrame - startFrameUsed);
+      const derivedLocal = isUsingPreprocessorSrc
+        ? Math.max(0, baseLocal - Math.max(0, frameOffset))
+        : Math.max(0, baseLocal + (trimStart || 0));
+      return Math.max(0, Math.floor(derivedLocal * speedFactor));
+    }
+    return Math.max(0, Math.floor(Math.max(0, currentFrame) * speedFactor));
+  }, [
+    clip,
+    focusFrame,
+    currentFrame,
+    inputMode,
+    trimStart,
+    speed,
+    selectedSrc,
+    src,
+    frameOffset,
+    startFrameUsed,
+  ]);
+
+  const aspectRatio = useMemo(() => {
+    const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
+    const originalHeight = mediaInfo.current?.video?.displayHeight || 0;
+    if (!originalWidth || !originalHeight) return 16 / 9;
+    const aspectRatio = originalWidth / originalHeight;
+
+    return aspectRatio;
+  }, [
+    mediaInfo.current?.video?.displayWidth,
+    mediaInfo.current?.video?.displayHeight,
+  ]);
+
+  const groupRef = useRef<Konva.Group>(null);
+  const SNAP_THRESHOLD_PX = 4; // pixels at screen scale
+  const [guides, setGuides] = useState({
+    vCenter: false,
+    hCenter: false,
+    v25: false,
+    v75: false,
+    h25: false,
+    h75: false,
+    left: false,
+    right: false,
+    top: false,
+    bottom: false,
+  });
+  const [isInteracting, setIsInteracting] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
+  const [isTransforming, setIsTransforming] = useState(false);
+  const iteratorRef = useRef<AsyncIterable<WrappedCanvas | null> | null>(null);
+  // Unique per-component key to isolate decoders even when src is the same
+  const instanceIsolationKeyRef = useRef<string>(
+    `${inputMode ? "input" : "preview"}:${inputId || clipId}:${Math.random().toString(36).slice(2)}`,
+  );
+  const isPlayingFromControls = useControlsStore((s) => s.isPlaying);
+  const isPlayingFromInputs = useInputControlsStore((s) =>
+    s.getIsPlaying(inputId),
+  );
+  const isPlayingRef = useRef(
+    inputMode ? isPlayingFromInputs : isPlayingFromControls,
+  );
+  useEffect(() => {
+    isPlayingRef.current = inputMode
+      ? isPlayingFromInputs
+      : isPlayingFromControls;
+  }, [isPlayingFromInputs, isPlayingFromControls, inputMode]);
+  const isPlaying = offscreenFast ? true : isPlayingRef.current;
+  const focusFrameRef = useRef(focusFrame);
+  useEffect(() => {
+    focusFrameRef.current = focusFrame;
+  }, [focusFrame]);
+  const fpsFromControls = useControlsStore((s) => s.fps);
+  const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId));
+  const fps = inputMode ? fpsFromInputs : fpsFromControls;
+  const currentStartFrameRef = useRef<number>(0);
+  const lastRenderedFrameRef = useRef<number>(-1);
+
+  // Debounce focusFrame to avoid spinning up decoders on every scrub tick while paused
+  useEffect(() => {
+    let t: any;
+    // Slightly tighter debounce for inputMode to keep inputs responsive
+    const delay = inputMode ? 50 : 100;
+    t = setTimeout(() => setStableFocusFrame(focusFrame), delay);
+    return () => clearTimeout(t);
+  }, [focusFrame, inputMode]);
+
+  // Update refs when values change
+  useEffect(() => {
+    filterParamsRef.current = {
+      brightness: clip?.brightness,
+      contrast: clip?.contrast,
+      hue: clip?.hue,
+      saturation: clip?.saturation,
+      blur: clip?.blur,
+      sharpness: clip?.sharpness,
+      noise: clip?.noise,
+      vignette: clip?.vignette,
+    };
+    applicatorsRef.current = applicators;
+  }, [
+    clip?.brightness,
+    clip?.contrast,
+    clip?.hue,
+    clip?.saturation,
+    clip?.blur,
+    clip?.sharpness,
+    clip?.noise,
+    clip?.vignette,
+    applicators,
+    applicators.length,
+  ]);
+
+  const updateGuidesAndMaybeSnap = useCallback(
+    (opts: { snap: boolean }) => {
+      if (isRotating) return; // disable guides/snapping while rotating
+      const node = imageRef.current;
+      const group = groupRef.current;
+      if (!node || !group) return;
+      const thresholdLocal = SNAP_THRESHOLD_PX / Math.max(0.0001, scale);
+      const client = node.getClientRect({
+        skipShadow: true,
+        skipStroke: true,
+        relativeTo: group as any,
+      });
+      const centerX = client.x + client.width / 2;
+      const centerY = client.y + client.height / 2;
+      const dxToVCenter = rectWidth / 2 - centerX;
+      const dyToHCenter = rectHeight / 2 - centerY;
+      const dxToV25 = rectWidth * 0.25 - centerX;
+      const dxToV75 = rectWidth * 0.75 - centerX;
+      const dyToH25 = rectHeight * 0.25 - centerY;
+      const dyToH75 = rectHeight * 0.75 - centerY;
+      const distVCenter = Math.abs(dxToVCenter);
+      const distHCenter = Math.abs(dyToHCenter);
+      const distV25 = Math.abs(dxToV25);
+      const distV75 = Math.abs(dxToV75);
+      const distH25 = Math.abs(dyToH25);
+      const distH75 = Math.abs(dyToH75);
+      const distLeft = Math.abs(client.x - 0);
+      const distRight = Math.abs(client.x + client.width - rectWidth);
+      const distTop = Math.abs(client.y - 0);
+      const distBottom = Math.abs(client.y + client.height - rectHeight);
+
+      const nextGuides = {
+        vCenter: distVCenter <= thresholdLocal,
+        hCenter: distHCenter <= thresholdLocal,
+        v25: distV25 <= thresholdLocal,
+        v75: distV75 <= thresholdLocal,
+        h25: distH25 <= thresholdLocal,
+        h75: distH75 <= thresholdLocal,
+        left: distLeft <= thresholdLocal,
+        right: distRight <= thresholdLocal,
+        top: distTop <= thresholdLocal,
+        bottom: distBottom <= thresholdLocal,
+      };
+      setGuides(nextGuides);
+
+      if (opts.snap) {
+        let deltaX = 0;
+        let deltaY = 0;
+        if (nextGuides.vCenter) {
+          deltaX += dxToVCenter;
+        } else if (nextGuides.v25) {
+          deltaX += dxToV25;
+        } else if (nextGuides.v75) {
+          deltaX += dxToV75;
+        } else if (nextGuides.left) {
+          deltaX += -client.x;
+        } else if (nextGuides.right) {
+          deltaX += rectWidth - (client.x + client.width);
+        }
+        if (nextGuides.hCenter) {
+          deltaY += dyToHCenter;
+        } else if (nextGuides.h25) {
+          deltaY += dyToH25;
+        } else if (nextGuides.h75) {
+          deltaY += dyToH75;
+        } else if (nextGuides.top) {
+          deltaY += -client.y;
+        } else if (nextGuides.bottom) {
+          deltaY += rectHeight - (client.y + client.height);
+        }
+        if (deltaX !== 0 || deltaY !== 0) {
+          node.x(node.x() + deltaX);
+          node.y(node.y() + deltaY);
+          setClipTransform(clipId, { x: node.x(), y: node.y() });
+        }
+      }
+    },
+    [rectWidth, rectHeight, scale, setClipTransform, clipId, isRotating],
+  );
+
+  const transformerBoundBoxFunc = useCallback(
+    (_oldBox: any, newBox: any) => {
+      if (isRotating) return newBox; // do not snap bounds while rotating
+      // Convert absolute newBox to local coordinates of the content group (rect space)
+      const invScale = 1 / Math.max(0.0001, scale);
+      const local = {
+        x: (newBox.x - position.x) * invScale,
+        y: (newBox.y - position.y) * invScale,
+        width: newBox.width * invScale,
+        height: newBox.height * invScale,
+      };
+      const thresholdLocal = SNAP_THRESHOLD_PX * invScale;
+
+      const left = local.x;
+      const right = local.x + local.width;
+      const top = local.y;
+      const bottom = local.y + local.height;
+      const v25 = rectWidth * 0.25;
+      const v75 = rectWidth * 0.75;
+      const h25 = rectHeight * 0.25;
+      const h75 = rectHeight * 0.75;
+
+      // Snap left edge to 0, 25%, 75%
+      if (Math.abs(left - 0) <= thresholdLocal) {
+        local.x = 0;
+        local.width = right - local.x;
+      } else if (Math.abs(left - v25) <= thresholdLocal) {
+        local.x = v25;
+        local.width = right - local.x;
+      } else if (Math.abs(left - v75) <= thresholdLocal) {
+        local.x = v75;
+        local.width = right - local.x;
+      }
+      // Snap right edge to rectWidth, 75%, 25%
+      if (Math.abs(rectWidth - right) <= thresholdLocal) {
+        local.width = rectWidth - local.x;
+      } else if (Math.abs(v75 - right) <= thresholdLocal) {
+        local.width = v75 - local.x;
+      } else if (Math.abs(v25 - right) <= thresholdLocal) {
+        local.width = v25 - local.x;
+      }
+      // Snap top edge to 0, 25%, 75%
+      if (Math.abs(top - 0) <= thresholdLocal) {
+        local.y = 0;
+        local.height = bottom - local.y;
+      } else if (Math.abs(top - h25) <= thresholdLocal) {
+        local.y = h25;
+        local.height = bottom - local.y;
+      } else if (Math.abs(top - h75) <= thresholdLocal) {
+        local.y = h75;
+        local.height = bottom - local.y;
+      }
+      // Snap bottom edge to rectHeight, 75%, 25%
+      if (Math.abs(rectHeight - bottom) <= thresholdLocal) {
+        local.height = rectHeight - local.y;
+      } else if (Math.abs(h75 - bottom) <= thresholdLocal) {
+        local.height = h75 - local.y;
+      } else if (Math.abs(h25 - bottom) <= thresholdLocal) {
+        local.height = h25 - local.y;
+      }
+
+      // Convert back to absolute space
+      let adjusted = {
+        ...newBox,
+        x: position.x + local.x * scale,
+        y: position.y + local.y * scale,
+        width: local.width * scale,
+        height: local.height * scale,
+      };
+
+      // Prevent negative or zero sizes in absolute space just in case
+      const MIN_SIZE_ABS = 1e-3;
+      if (adjusted.width < MIN_SIZE_ABS) adjusted.width = MIN_SIZE_ABS;
+      if (adjusted.height < MIN_SIZE_ABS) adjusted.height = MIN_SIZE_ABS;
+
+      return adjusted;
+    },
+    [
+      rectWidth,
+      rectHeight,
+      scale,
+      position.x,
+      position.y,
+      isRotating,
+      aspectRatio,
+    ],
+  );
+
+  // Create canvas once and expose to Konva Image via state so initial render receives it
+  useEffect(() => {
+    if (!canvasRef.current) {
+      canvasRef.current = document.createElement("canvas");
+      setImageSource(canvasRef.current);
+    } else {
+      setImageSource(canvasRef.current);
+    }
+    return () => {
+      canvasRef.current = null;
+      originalFrameRef.current = null;
+      processingCanvasRef.current = null;
+      setImageSource(null);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSelected) return;
+    const tr = transformerRef.current;
+    const img = imageRef.current;
+    if (!tr || !img) return;
+    const raf = requestAnimationFrame(() => {
+      tr.nodes([img]);
+      if (typeof (tr as any).forceUpdate === "function") {
+        (tr as any).forceUpdate();
+      }
+      tr.getLayer()?.batchDraw?.();
     });
+    return () => cancelAnimationFrame(raf);
+  }, [isSelected]);
 
-    const {
-        selectedSrc,
-        frameOffset,
-    } = useMemo(() => {
-        // Check if we can use the cached result
-
-        // Cache miss - recalculate
-        if (!Object.prototype.hasOwnProperty.call(clip, 'preprocessors') || !clip.preprocessors || clip.preprocessors.length === 0) {
-            cachedPreprocessorRangeRef.current = null;
-            addedTimestampRef.current = 0;
-            return {selectedSrc: src, frameOffset: 0};
+  useEffect(() => {
+    let cancelled = false;
+    if (lastSelectedSrcRef.current === selectedSrc) return;
+    lastSelectedSrcRef.current = selectedSrc;
+    // Force redraw on source switch: reset last rendered frame and clear cached original frame
+    lastRenderedFrameRef.current = -1;
+    originalFrameRef.current = null;
+    // @ts-ignore
+    iteratorRef.current?.return?.();
+    iteratorRef.current = null;
+    let info = getMediaInfoCached(selectedSrc);
+    if (!info) {
+      (async () => {
+        try {
+          if (!info) info = await getMediaInfo(selectedSrc);
+          if (!cancelled) {
+            mediaInfo.current = info;
+            // Media info arrived; force immediate redraw
+            lastRenderedFrameRef.current = -1;
+            try {
+              void seekAndDrawRef.current?.();
+            } catch {}
+          }
+        } catch (e) {
+          console.error(e);
         }
+      })();
+    } else {
+      mediaInfo.current = info;
+      // Have cached info; force immediate redraw
+      lastRenderedFrameRef.current = -1;
+      try {
+        void seekAndDrawRef.current?.();
+      } catch {}
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSrc]);
 
-        if (cachedPreprocessorRangeRef.current && 
-            currentFrame >= cachedPreprocessorRangeRef.current.startFrame && 
-            currentFrame <= cachedPreprocessorRangeRef.current.endFrame) {
-            return {
-                selectedSrc: cachedPreprocessorRangeRef.current.selectedSrc,
-                frameOffset: cachedPreprocessorRangeRef.current.frameOffset
-            };
+  // Compute aspect-fit display size and offsets within the preview rect
+  const { displayWidth, displayHeight, offsetX, offsetY } = useMemo(() => {
+    const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
+    const originalHeight = mediaInfo.current?.video?.displayHeight || 0;
+    if (!originalWidth || !originalHeight || !rectWidth || !rectHeight) {
+      return { displayWidth: 0, displayHeight: 0, offsetX: 0, offsetY: 0 };
+    }
+    const aspectRatio = originalWidth / originalHeight;
+    let dw = rectWidth;
+    let dh = rectHeight;
+    if (rectWidth / rectHeight > aspectRatio) {
+      dw = rectHeight * aspectRatio;
+    } else {
+      dh = rectWidth / aspectRatio;
+    }
+    const ox = (rectWidth - dw) / 2;
+    const oy = (rectHeight - dh) / 2;
+
+    return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
+  }, [
+    mediaInfo.current?.video?.displayWidth,
+    mediaInfo.current?.video?.displayHeight,
+    rectWidth,
+    rectHeight,
+  ]);
+
+  // Initialize default transform if missing or invalid (zero-sized),
+  // always recentering the clip in the preview rect.
+  useEffect(() => {
+    if (!overrideClip && displayWidth > 0 && displayHeight > 0) {
+      const hasTransform = !!clipTransform;
+      const width = clipTransform?.width ?? 0;
+      const height = clipTransform?.height ?? 0;
+      const needsInit = !hasTransform || width <= 0 || height <= 0;
+
+      if (needsInit) {
+        setClipTransform(clipId, {
+          x: offsetX,
+          y: offsetY,
+          width: displayWidth,
+          height: displayHeight,
+          scaleX: 1,
+          scaleY: 1,
+          rotation: 0,
+        });
+      }
+    }
+  }, [
+    clipTransform,
+    displayWidth,
+    displayHeight,
+    offsetX,
+    offsetY,
+    clipId,
+    setClipTransform,
+    overrideClip,
+  ]);
+
+  // Ensure canvas matches display size for crisp rendering
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    if (!displayWidth || !displayHeight) return;
+    const canvas = canvasRef.current;
+    const w = Math.floor(displayWidth);
+    const h = Math.floor(displayHeight);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+  }, [displayWidth, displayHeight]);
+
+  const ensureProcessingCanvas = useCallback(
+    (width: number, height: number) => {
+      let canvas = processingCanvasRef.current;
+      if (!canvas) {
+        canvas = document.createElement("canvas");
+        processingCanvasRef.current = canvas;
+      }
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      return canvas;
+    },
+    [],
+  );
+
+  const drawWrappedCanvas = useCallback(
+    (wc: WrappedCanvas, maskFrame?: number) => {
+      let canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.imageSmoothingEnabled = true;
+      // @ts-ignore
+      ctx.imageSmoothingQuality = "high";
+      try {
+        ctx.drawImage(wc.canvas, 0, 0, canvas.width, canvas.height);
+      } catch {}
+
+      // Store the original unfiltered frame for filter adjustments while paused
+      if (!originalFrameRef.current) {
+        originalFrameRef.current = document.createElement("canvas");
+      }
+      if (
+        originalFrameRef.current.width !== canvas.width ||
+        originalFrameRef.current.height !== canvas.height
+      ) {
+        originalFrameRef.current.width = canvas.width;
+        originalFrameRef.current.height = canvas.height;
+      }
+
+      const origCtx = originalFrameRef.current.getContext("2d");
+      if (origCtx) {
+        origCtx.clearRect(0, 0, canvas.width, canvas.height);
+        origCtx.drawImage(canvas, 0, 0);
+      }
+
+      const workingCanvas = ensureProcessingCanvas(canvas.width, canvas.height);
+      const workingCtx = workingCanvas.getContext("2d");
+      if (!workingCtx) return;
+
+      workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+      workingCtx.drawImage(canvas, 0, 0);
+
+      // Apply masks before running filters/applicators so downstream operations see masked pixels
+      const maskedCanvas = applyMask(workingCanvas, maskFrame);
+      if (maskedCanvas !== workingCanvas) {
+        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+        try {
+          workingCtx.drawImage(
+            maskedCanvas,
+            0,
+            0,
+            workingCanvas.width,
+            workingCanvas.height,
+          );
+        } catch {}
+      }
+
+      // Apply WebGL filters for better performance (fast enough for real-time playback)
+      // Use ref values to avoid callback recreation on filter/applicator changes
+      applyFilters(workingCanvas, filterParamsRef.current);
+
+      // Apply applicators to canvas
+      let processedCanvas = workingCanvas;
+
+      for (const applicator of applicatorsRef.current) {
+        const result = applicator.apply(processedCanvas);
+        // Ensure result is copied back to working canvas for chaining
+        if (result !== processedCanvas) {
+          workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+          workingCtx.drawImage(
+            result,
+            0,
+            0,
+            workingCanvas.width,
+            workingCanvas.height,
+          );
+          processedCanvas = workingCanvas;
         }
+      }
 
-        
-        // go through the preprocessors and find the one that is within the focus frame
-        // adjust preprocessor ranges by trimStart to match currentFrame's reference frame
-        const cliptrimStart = trimStart || 0;
-        for (const preprocessor of clip.preprocessors) {
-            if (preprocessor.startFrame !== undefined && preprocessor.endFrame !== undefined && preprocessor.status === 'complete' && preprocessor.src) {
-                const adjustedStartFrame = preprocessor.startFrame + cliptrimStart;
-                const adjustedEndFrame = preprocessor.endFrame + cliptrimStart;
-                
-                if (currentFrame >= adjustedStartFrame && currentFrame <= adjustedEndFrame) {
-                    const startSec = preprocessor.startFrame / srcFps;
-                    addedTimestampRef.current = startSec;
+      // Always draw the final processed result back to display canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
+      imageRef.current?.getLayer()?.batchDraw?.();
+    },
+    [applyFilters, applyMask, ensureProcessingCanvas, applicatorsRef.current],
+  );
 
-                    cachedPreprocessorRangeRef.current = {
-                        startFrame: adjustedStartFrame,
-                        endFrame: adjustedEndFrame,
-                        selectedSrc: preprocessor.src,
-                        frameOffset: preprocessor.startFrame,
-                    };
-                    
-                    return {selectedSrc: preprocessor.src, frameOffset: preprocessor.startFrame};
-                }
-            }
+  const seekAndDraw = useCallback(async () => {
+    if (!canvasRef.current) return;
+    if (!mediaInfo) return;
+    if (!displayWidth || !displayHeight) return;
+    // If playback has started, do not run paused seek rendering to avoid cancelling live decode
+    if (isPlayingRef.current) return;
+    const clipFps =
+      mediaInfo.current?.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
+    const projectFps = fps || DEFAULT_FPS;
+    if (!Number.isFinite(clipFps) || clipFps <= 0) return;
+    if (!Number.isFinite(projectFps) || projectFps <= 0) return;
+
+    // Map from project fps space to native clip fps space based on a debounced/stable focus frame
+    const isUsingPreprocessorSrc = selectedSrc !== src;
+    const currentFrameForSeek =
+      stableFocusFrame - startFrameUsed + (trimStart || 0);
+    const adjustedCurrentFrame = isUsingPreprocessorSrc
+      ? currentFrameForSeek - (trimStart || 0)
+      : currentFrameForSeek;
+    const idealFrame =
+      Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
+    const actualFrame = Math.round((idealFrame / projectFps) * clipFps);
+    const totalFrames = Math.max(
+      0,
+      Math.floor((mediaInfo.current?.duration || 0) * clipFps),
+    );
+    const targetFrame =
+      Math.max(0, Math.min(totalFrames, actualFrame)) +
+      Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
+
+    // Skip if we already rendered this frame (but only when not in inputMode)
+    if (!inputMode && lastRenderedFrameRef.current === targetFrame) return;
+
+    // Cancel any ongoing paused seek operations (do not interfere with live decode token)
+    const myToken = ++drawTokenRef.current;
+
+    try {
+      // Iterator-based paused seeking starting near the target frame
+      // @ts-ignore
+      iteratorRef.current?.return?.();
+      iteratorRef.current = await getVideoIterator(selectedSrc, {
+        mediaInfo: mediaInfo.current || undefined,
+        fps: clipFps,
+        startIndex: Math.max(0, targetFrame - 2),
+        endIndex: Math.min(totalFrames, targetFrame + 32),
+        isolationKey: instanceIsolationKeyRef.current,
+      });
+
+      // Compute mask frame using the stable focus and adjust by speed
+      const focusFrameForMask = stableFocusFrame;
+      const speedFactor = Math.max(0.1, speed);
+      let pausedMaskFrame: number;
+      if (clip) {
+        if (inputMode) {
+          const local = Math.max(0, focusFrameForMask + (trimStart || 0));
+          pausedMaskFrame = Math.max(0, Math.floor(local * speedFactor));
+        } else {
+          const isUsingPreprocessorSrc = selectedSrc !== src;
+          const baseLocal = Math.max(0, focusFrameForMask - startFrameUsed);
+          const derivedLocal = isUsingPreprocessorSrc
+            ? Math.max(0, baseLocal - Math.max(0, frameOffset))
+            : Math.max(0, baseLocal + (trimStart || 0));
+          pausedMaskFrame = Math.max(0, Math.floor(derivedLocal * speedFactor));
         }
+      } else {
+        const local = Math.max(
+          0,
+          focusFrameForMask - startFrameUsed + (trimStart || 0),
+        );
+        pausedMaskFrame = Math.max(0, Math.floor(local * speedFactor));
+      }
 
-        cachedPreprocessorRangeRef.current = null;
-        addedTimestampRef.current = 0;
-        return {selectedSrc: src, frameOffset: 0};
-    }, [clip?.preprocessors, src, currentFrame, trimStart]);
+      let bestCanvas: WrappedCanvas | null = null;
+      let bestIdx: number | null = null;
+      for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
+        if (myToken !== drawTokenRef.current) break;
+        if (!wc) continue;
+        const ts: number | undefined = (wc as any)?.timestamp;
+        const sampleIdx: number = Number.isFinite(ts as number)
+          ? Math.floor((ts as number) * clipFps + 1e-4)
+          : (bestIdx ?? targetFrame - 1) + 1;
 
-    // Use refs to store current filter values to avoid callback recreation
-    const filterParamsRef = useRef({
-        brightness: clip?.brightness,
-        contrast: clip?.contrast,
-        hue: clip?.hue,
-        saturation: clip?.saturation,
-        blur: clip?.blur,
-        sharpness: clip?.sharpness,
-        noise: clip?.noise,
-        vignette: clip?.vignette
+        // Track the closest frame at or after target
+        if (sampleIdx >= targetFrame) {
+          bestCanvas = wc as WrappedCanvas;
+          bestIdx = sampleIdx;
+          break;
+        }
+        // Otherwise remember the latest before target in case GOP jumps over
+        bestCanvas = wc as WrappedCanvas;
+        bestIdx = sampleIdx;
+      }
+
+      if (myToken !== drawTokenRef.current) return;
+      if (bestCanvas && bestIdx !== null) {
+        drawWrappedCanvas(bestCanvas, pausedMaskFrame);
+        lastRenderedFrameRef.current = bestIdx;
+      }
+    } catch (e) {
+      console.warn("[video] seek draw failed", e);
+    }
+  }, [
+    mediaInfo,
+    fps,
+    selectedSrc,
+    src,
+    displayWidth,
+    displayHeight,
+    stableFocusFrame,
+    drawWrappedCanvas,
+    speed,
+    frameOffset,
+    trimStart,
+    clip?.masks,
+    clip?.preprocessors,
+    applicators.length,
+    inputMode,
+    startFrame,
+    startFrameUsed,
+    inputId,
+  ]);
+
+  const startRendering = useCallback(async () => {
+    if (!canvasRef.current) return;
+    if (!mediaInfo.current) return;
+    if (!displayWidth || !displayHeight) return;
+    const clipFps =
+      mediaInfo.current?.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
+    const projectFps = fps || DEFAULT_FPS;
+
+    if (!Number.isFinite(clipFps) || clipFps <= 0) return;
+    if (!Number.isFinite(projectFps) || projectFps <= 0) return;
+
+    // Map from project fps space to native clip fps space
+    // When using a preprocessor src, we need to subtract trimStart since it's already in currentFrame
+    const isUsingPreprocessorSrc = selectedSrc !== src;
+    const adjustedCurrentFrame = isUsingPreprocessorSrc
+      ? currentFrame - (trimStart || 0)
+      : currentFrame;
+    const idealStartFrame =
+      Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
+    const actualStartFrame = Math.round(
+      (idealStartFrame / projectFps) * clipFps,
+    );
+    const totalFrames = Math.max(
+      0,
+      Math.floor((mediaInfo.current?.duration || 0) * clipFps),
+    );
+    const startIdx =
+      Math.max(0, Math.min(totalFrames, actualStartFrame)) +
+      Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
+    currentStartFrameRef.current = startIdx;
+    lastRenderedFrameRef.current = startIdx - 1;
+
+    const myToken = ++drawTokenRef.current;
+    // @ts-ignore
+    iteratorRef.current?.return?.();
+    const targetEndFrame = mediaInfo.current?.endFrame
+      ? Math.round(((mediaInfo.current?.endFrame || 0) / projectFps) * clipFps)
+      : undefined;
+
+    iteratorRef.current = await getVideoIterator(selectedSrc, {
+      mediaInfo: mediaInfo.current || undefined,
+      fps: clipFps,
+      startIndex: startIdx,
+      endIndex: targetEndFrame,
+      isolationKey: instanceIsolationKeyRef.current,
     });
+    try {
+      for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
+        if (myToken !== drawTokenRef.current && !offscreenFast) break;
+        if (!isPlaying) break;
+        if (!wc) continue;
 
-    // Use ref to store current applicators to avoid callback recreation
-    const applicatorsRef = useRef(applicators);
+        // Determine the decoded sample's frame index in native fps
+        const ts: number | undefined = (wc as any)?.timestamp;
 
+        // Use floor with a tiny epsilon to avoid boundary flip-flop
+        let sampleIdx = Number.isFinite(ts as number)
+          ? Math.floor((ts as number) * clipFps + 1e-4)
+          : lastRenderedFrameRef.current + 1;
 
-    const maskFrameForCurrentFocus = useMemo(() => {
+        // Compute current timeline-local frame mapped to native fps (clip space)
+        const computeLocalFocusMedia = () => {
+          const focusFrameValue = focusFrameRef.current;
+          // Base timeline-local frames relative to clip start (no give-start applied)
+          const baseLocal = Math.max(
+            0,
+            (focusFrameValue ?? 0) - startFrameUsed,
+          );
+          // When using preprocessor src, align to its own frame space by subtracting its start offset.
+          // Otherwise, include trimStart to match the main clip's reference frame.
+          const derivedLocal = isUsingPreprocessorSrc
+            ? Math.max(0, baseLocal - Math.max(0, frameOffset))
+            : Math.max(0, baseLocal + (trimStart || 0));
+          const localProjectFrames =
+            typeof currentLocalFrameOverride === "number"
+              ? Math.max(0, currentLocalFrameOverride)
+              : derivedLocal;
+          const speedAdjusted = Math.max(
+            0,
+            localProjectFrames * Math.max(0.1, speed),
+          );
+          // Map from project fps to native fps using floor to reduce jitter
+          const actualFrameIdx = Math.floor(
+            (speedAdjusted / projectFps) * clipFps + 1e-4,
+          );
+          return (
+            actualFrameIdx +
+            Math.round(
+              ((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps,
+            )
+          );
+        };
+
+        if (!offscreenFast) {
+          // Skip stale frames that are behind the timeline by more than 1 frame
+          let localFocus = computeLocalFocusMedia();
+          if (sampleIdx < localFocus - 1) {
+            lastRenderedFrameRef.current = sampleIdx;
+            continue;
+          }
+          // If we're ahead of the timeline, wait until the timeline catches up (sync to rAF)
+          while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
+            if (myToken !== drawTokenRef.current) break;
+            if (!isPlaying) break;
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve()),
+            );
+          }
+        }
+
+        if (myToken !== drawTokenRef.current && !offscreenFast) break;
+        if (!isPlaying) break;
+        const focusFrameForMask = focusFrameRef.current;
         const speedFactor = Math.max(0.1, speed);
+        let maskFrame: number;
         if (clip) {
-            if (inputMode) {
-                const local = Math.max(0, (focusFrame + (trimStart || 0)));
-                return Math.max(0, Math.floor(local * speedFactor));
-            }
+          if (inputMode) {
+            const local = Math.max(0, focusFrameForMask + (trimStart || 0));
+            maskFrame = Math.max(0, Math.floor(local * speedFactor));
+          } else {
             const isUsingPreprocessorSrc = selectedSrc !== src;
-            const baseLocal = Math.max(0, focusFrame - startFrameUsed);
+            const baseLocal = Math.max(0, focusFrameForMask - startFrameUsed);
             const derivedLocal = isUsingPreprocessorSrc
-                ? Math.max(0, baseLocal - Math.max(0, frameOffset))
-                : Math.max(0, baseLocal + (trimStart || 0));
-            return Math.max(0, Math.floor(derivedLocal * speedFactor));
+              ? Math.max(0, baseLocal - Math.max(0, frameOffset))
+              : Math.max(0, baseLocal + (trimStart || 0));
+            maskFrame = Math.max(0, Math.floor(derivedLocal * speedFactor));
+          }
+        } else {
+          const local = Math.max(
+            0,
+            focusFrameForMask - startFrameUsed + (trimStart || 0),
+          );
+          maskFrame = Math.max(0, Math.floor(local * speedFactor));
         }
-        return Math.max(0, Math.floor(Math.max(0, currentFrame) * speedFactor));
-    }, [clip, focusFrame, currentFrame, inputMode, trimStart, speed, selectedSrc, src, frameOffset, startFrameUsed]);
+        drawWrappedCanvas(wc as WrappedCanvas, maskFrame);
+        lastRenderedFrameRef.current = sampleIdx;
+      }
+    } catch (e) {
+      // swallow
+    }
+  }, [
+    mediaInfo,
+    fps,
+    selectedSrc,
+    src,
+    displayWidth,
+    displayHeight,
+    currentFrame,
+    drawWrappedCanvas,
+    speed,
+    startFrameUsed,
+    frameOffset,
+    trimStart,
+    clip,
+    isPlaying,
+    inputMode,
+  ]);
 
-    const aspectRatio = useMemo(() => {
-      const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
-      const originalHeight = mediaInfo.current?.video?.displayHeight || 0;
-      if (!originalWidth || !originalHeight) return 16/9;
-      const aspectRatio = originalWidth / originalHeight;
-   
-      return aspectRatio;
-    }, [mediaInfo.current?.video?.displayWidth, mediaInfo.current?.video?.displayHeight]);
+  useEffect(() => {
+    if (isPlaying || offscreenFast) {
+      void startRendering();
+    } else {
+      void seekAndDraw();
+    }
+    return () => {
+      drawTokenRef.current++;
+      // @ts-ignore
+      iteratorRef.current?.return?.();
+    };
+  }, [
+    isPlaying,
+    offscreenFast,
+    selectedSrc,
+    mediaInfo,
+    displayWidth,
+    displayHeight,
+    fps,
+    speed,
+    frameOffset,
+    applicators.length,
+    inputId,
+    inputMode,
+  ]);
 
-    const groupRef = useRef<Konva.Group>(null);
-    const SNAP_THRESHOLD_PX = 4; // pixels at screen scale
-    const [guides, setGuides] = useState({
+  // If video is paused, reapply filters and applicators when they change
+  useEffect(() => {
+    if (!isPlaying && canvasRef.current && imageRef.current) {
+      // If we have an original frame cached, use it for fast reapplication
+      if (originalFrameRef.current) {
+        let canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          const workingCanvas = ensureProcessingCanvas(
+            canvas.width,
+            canvas.height,
+          );
+          const workingCtx = workingCanvas.getContext("2d");
+          if (!workingCtx) return;
+
+          // Start with the original unfiltered frame
+          workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+          workingCtx.drawImage(originalFrameRef.current, 0, 0);
+
+          // Apply masks before filters so masked pixels feed the rest of the pipeline
+          const maskedCanvas = applyMask(
+            workingCanvas,
+            maskFrameForCurrentFocus,
+          );
+          if (maskedCanvas !== workingCanvas) {
+            workingCtx.clearRect(
+              0,
+              0,
+              workingCanvas.width,
+              workingCanvas.height,
+            );
+            workingCtx.drawImage(
+              maskedCanvas,
+              0,
+              0,
+              workingCanvas.width,
+              workingCanvas.height,
+            );
+          }
+
+          // Apply filters to the clean frame
+          applyFilters(workingCanvas, filterParamsRef.current);
+
+          // Apply applicators (filter clips from layers above)
+          let processedCanvas = workingCanvas;
+          for (const applicator of applicatorsRef.current) {
+            const result = applicator.apply(processedCanvas);
+            if (result !== processedCanvas) {
+              workingCtx.clearRect(
+                0,
+                0,
+                workingCanvas.width,
+                workingCanvas.height,
+              );
+              workingCtx.drawImage(
+                result,
+                0,
+                0,
+                workingCanvas.width,
+                workingCanvas.height,
+              );
+              processedCanvas = workingCanvas;
+            }
+          }
+
+          // Always draw final result back to display canvas
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
+
+          imageRef.current.getLayer()?.batchDraw();
+        }
+      } else {
+        // If no cached frame exists, decode the current frame
+        // Force re-decode even if we already rendered this frame index
+        lastRenderedFrameRef.current = -1;
+        void seekAndDraw();
+      }
+    }
+  }, [
+    clip?.brightness,
+    clip?.contrast,
+    clip?.hue,
+    clip?.saturation,
+    clip?.blur,
+    clip?.sharpness,
+    clip?.noise,
+    clip?.vignette,
+    isPlaying,
+    applyFilters,
+    applicators,
+    applicators.length,
+    applyMask,
+    maskFrameForCurrentFocus,
+    seekAndDraw,
+    ensureProcessingCanvas,
+    inputId,
+    inputMode,
+  ]);
+
+  // Ensure any CLUTs needed by filter applicators are preloaded before drawing
+  useEffect(() => {
+    let cancelled = false;
+    const maybePreload = async () => {
+      const preloadTasks: Promise<void>[] = [];
+      for (const app of applicatorsRef.current) {
+        const maybeEnsure = (app as any)?.ensureResources as
+          | (() => Promise<void>)
+          | undefined;
+        if (typeof maybeEnsure === "function") {
+          preloadTasks.push(maybeEnsure());
+        }
+      }
+      if (preloadTasks.length) {
+        try {
+          await Promise.all(preloadTasks);
+        } catch {}
+      }
+      if (cancelled) return;
+      // After resources are ready, force redraw immediately
+      if (canvasRef.current) {
+        lastRenderedFrameRef.current = -1;
+        if (!isPlaying) {
+          void seekAndDrawRef.current();
+        }
+        imageRef.current?.getLayer()?.batchDraw?.();
+      }
+    };
+    void maybePreload();
+    return () => {
+      cancelled = true;
+    };
+  }, [applicators, applicators.length, isPlaying, inputId, inputMode]);
+
+  // Force update when override clip's duration changes (e.g., synthetic media clip set with full endFrame)
+  useEffect(() => {
+    // Only apply when paused; playing loop will handle updates
+    if (!overrideClip) return;
+    if (isPlayingRef.current) return;
+    lastRenderedFrameRef.current = -1;
+    try {
+      void seekAndDrawRef.current();
+    } catch {}
+  }, [overrideClip?.endFrame, overrideClip?.src]);
+
+  // Use ref to store the latest seekAndDraw to avoid throttle recreation
+  const seekAndDrawRef = useRef(seekAndDraw);
+  seekAndDrawRef.current = seekAndDraw;
+
+  // Create a stable throttled version for smoother scrubbing
+  const throttledSeekAndDraw = useMemo(() => {
+    return _.throttle(
+      () => {
+        void seekAndDrawRef.current();
+      },
+      16,
+      { leading: true, trailing: true },
+    ); // ~60fps throttle
+  }, []);
+
+  // If playback starts, cancel any pending throttled seek callbacks to avoid cancelling live decode
+  useEffect(() => {
+    if (isPlaying) {
+      throttledSeekAndDraw.cancel();
+    }
+  }, [isPlaying, throttledSeekAndDraw]);
+
+  // While paused, redraw on scrubs/jumps using debounced focus. In inputMode, draw immediately when stable.
+  useEffect(() => {
+    if (isPlaying) return;
+    if (inputMode) {
+      void seekAndDrawRef.current();
+    } else {
+      throttledSeekAndDraw();
+    }
+  }, [stableFocusFrame, isPlaying, throttledSeekAndDraw, inputMode]);
+
+  // In offscreen/single-frame scenarios, ensure immediate seek when explicit overrides change (no debounce)
+  useEffect(() => {
+    if (isPlaying) return;
+    // Force a draw whenever caller overrides the exact frame to display
+    if (
+      typeof focusFrameOverride === "number" ||
+      typeof currentLocalFrameOverride === "number"
+    ) {
+      lastRenderedFrameRef.current = -1;
+      void seekAndDrawRef.current();
+    }
+  }, [focusFrameOverride, currentLocalFrameOverride, isPlaying]);
+
+  // Force re-init when the selected clip changes (clipId) or overrideClip identity changes
+  useEffect(() => {
+    // reset caches to guarantee re-render of first frame for new selection
+    lastSelectedSrcRef.current = null;
+    lastRenderedFrameRef.current = -1;
+    originalFrameRef.current = null;
+    // @ts-ignore
+    iteratorRef.current?.return?.();
+    iteratorRef.current = null;
+    if (!isPlaying) {
+      try {
+        void seekAndDrawRef.current();
+      } catch {}
+    }
+  }, [clipId, overrideClip]);
+
+  // Cleanup throttled function on unmount
+  useEffect(() => {
+    return () => {
+      throttledSeekAndDraw.cancel();
+    };
+  }, [throttledSeekAndDraw]);
+
+  const handleDragMove = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      updateGuidesAndMaybeSnap({ snap: true });
+      const node = imageRef.current;
+      if (node) {
+        setClipTransform(clipId, { x: node.x(), y: node.y() });
+      } else {
+        setClipTransform(clipId, { x: e.target.x(), y: e.target.y() });
+      }
+    },
+    [setClipTransform, clipId, updateGuidesAndMaybeSnap],
+  );
+
+  const handleDragStart = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      e.target.getStage()!.container().style.cursor = "grab";
+      addClipSelection(clipId);
+      const now =
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : Date.now();
+      suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 250);
+      setIsInteracting(true);
+      updateGuidesAndMaybeSnap({ snap: true });
+    },
+    [clipId, addClipSelection, updateGuidesAndMaybeSnap],
+  );
+
+  const handleDragEnd = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      e.target.getStage()!.container().style.cursor = "default";
+      const now =
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : Date.now();
+      suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 250);
+      setClipTransform(clipId, { x: e.target.x(), y: e.target.y() });
+      setIsInteracting(false);
+      setGuides({
         vCenter: false,
         hCenter: false,
         v25: false,
@@ -191,961 +1322,323 @@ const VideoPreview: React.FC<VideoClipProps & {framesToPrefetch?: number, rectWi
         right: false,
         top: false,
         bottom: false,
-    });
-    const [isInteracting, setIsInteracting] = useState(false);
-    const [isRotating, setIsRotating] = useState(false);
-    const [isTransforming, setIsTransforming] = useState(false);
-    const iteratorRef = useRef<AsyncIterable<WrappedCanvas | null> | null>(null);
-    // Unique per-component key to isolate decoders even when src is the same
-    const instanceIsolationKeyRef = useRef<string>(`${inputMode ? 'input' : 'preview'}:${(inputId || clipId)}:${Math.random().toString(36).slice(2)}`);
-    const isPlayingFromControls = useControlsStore((s) => s.isPlaying);
-    const isPlayingFromInputs = useInputControlsStore((s) => s.getIsPlaying(inputId));
-    const isPlayingRef = useRef(inputMode ? isPlayingFromInputs : isPlayingFromControls);
-    useEffect(() => {
-        isPlayingRef.current = inputMode ? isPlayingFromInputs : isPlayingFromControls;
-    }, [isPlayingFromInputs, isPlayingFromControls, inputMode]);
-    const isPlaying = offscreenFast ? true : isPlayingRef.current;
-    const focusFrameRef = useRef(focusFrame);
-    useEffect(() => {
-        focusFrameRef.current = focusFrame;
-    }, [focusFrame]);
-    const fpsFromControls = useControlsStore((s) => s.fps);
-    const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId));
-    const fps = inputMode ? fpsFromInputs : fpsFromControls;
-    const currentStartFrameRef = useRef<number>(0);
-    const lastRenderedFrameRef = useRef<number>(-1);
+      });
+    },
+    [setClipTransform, clipId],
+  );
 
-    // Debounce focusFrame to avoid spinning up decoders on every scrub tick while paused
-    useEffect(() => {
-        let t: any;
-        // Slightly tighter debounce for inputMode to keep inputs responsive
-        const delay = inputMode ? 50 : 100;
-        t = setTimeout(() => setStableFocusFrame(focusFrame), delay);
-        return () => clearTimeout(t);
-    }, [focusFrame, inputMode]);
+  const handleClick = useCallback(() => {
+    if (isFullscreen) return;
+    clearSelection();
+    addClipSelection(clipId);
+  }, [addClipSelection, clipId, isFullscreen]);
 
-    // Update refs when values change
-    useEffect(() => {
-        filterParamsRef.current = {
-            brightness: clip?.brightness,
-            contrast: clip?.contrast,
-            hue: clip?.hue,
-            saturation: clip?.saturation,
-            blur: clip?.blur,
-            sharpness: clip?.sharpness,
-            noise: clip?.noise,
-            vignette: clip?.vignette
-        };
-        applicatorsRef.current = applicators;
-    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, applicators, applicators.length]);
-
-    const updateGuidesAndMaybeSnap = useCallback((opts: { snap: boolean }) => {
-        if (isRotating) return; // disable guides/snapping while rotating
-        const node = imageRef.current;
-        const group = groupRef.current;
-        if (!node || !group) return;
-        const thresholdLocal = SNAP_THRESHOLD_PX / Math.max(0.0001, scale);
-        const client = node.getClientRect({ skipShadow: true, skipStroke: true, relativeTo: group as any });
-        const centerX = client.x + client.width / 2;
-        const centerY = client.y + client.height / 2;
-        const dxToVCenter = (rectWidth / 2) - centerX;
-        const dyToHCenter = (rectHeight / 2) - centerY;
-        const dxToV25 = (rectWidth * 0.25) - centerX;
-        const dxToV75 = (rectWidth * 0.75) - centerX;
-        const dyToH25 = (rectHeight * 0.25) - centerY;
-        const dyToH75 = (rectHeight * 0.75) - centerY;
-        const distVCenter = Math.abs(dxToVCenter);
-        const distHCenter = Math.abs(dyToHCenter);
-        const distV25 = Math.abs(dxToV25);
-        const distV75 = Math.abs(dxToV75);
-        const distH25 = Math.abs(dyToH25);
-        const distH75 = Math.abs(dyToH75);
-        const distLeft = Math.abs(client.x - 0);
-        const distRight = Math.abs((client.x + client.width) - rectWidth);
-        const distTop = Math.abs(client.y - 0);
-        const distBottom = Math.abs((client.y + client.height) - rectHeight);
-
-        const nextGuides = {
-            vCenter: distVCenter <= thresholdLocal,
-            hCenter: distHCenter <= thresholdLocal,
-            v25: distV25 <= thresholdLocal,
-            v75: distV75 <= thresholdLocal,
-            h25: distH25 <= thresholdLocal,
-            h75: distH75 <= thresholdLocal,
-            left: distLeft <= thresholdLocal,
-            right: distRight <= thresholdLocal,
-            top: distTop <= thresholdLocal,
-            bottom: distBottom <= thresholdLocal,
-        };
-        setGuides(nextGuides);
-
-        if (opts.snap) {
-            let deltaX = 0;
-            let deltaY = 0;
-            if (nextGuides.vCenter) {
-                deltaX += dxToVCenter;
-            } else if (nextGuides.v25) {
-                deltaX += dxToV25;
-            } else if (nextGuides.v75) {
-                deltaX += dxToV75;
-            } else if (nextGuides.left) {
-                deltaX += -client.x;
-            } else if (nextGuides.right) {
-                deltaX += rectWidth - (client.x + client.width);
-            }
-            if (nextGuides.hCenter) {
-                deltaY += dyToHCenter;
-            } else if (nextGuides.h25) {
-                deltaY += dyToH25;
-            } else if (nextGuides.h75) {
-                deltaY += dyToH75;
-            } else if (nextGuides.top) {
-                deltaY += -client.y;
-            } else if (nextGuides.bottom) {
-                deltaY += rectHeight - (client.y + client.height);
-            }
-            if (deltaX !== 0 || deltaY !== 0) {
-                node.x(node.x() + deltaX);
-                node.y(node.y() + deltaY);
-                setClipTransform(clipId, { x: node.x(), y: node.y() });
-            }
-        }
-    }, [rectWidth, rectHeight, scale, setClipTransform, clipId, isRotating]);
-
-    const transformerBoundBoxFunc = useCallback((_oldBox: any, newBox: any) => {
-        if (isRotating) return newBox; // do not snap bounds while rotating
-        // Convert absolute newBox to local coordinates of the content group (rect space)
-        const invScale = 1 / Math.max(0.0001, scale);
-        const local = {
-            x: (newBox.x - position.x) * invScale,
-            y: (newBox.y - position.y) * invScale,
-            width: newBox.width * invScale,
-            height: newBox.height * invScale,
-        };
-        const thresholdLocal = SNAP_THRESHOLD_PX * invScale;
-
-        const left = local.x;
-        const right = local.x + local.width;
-        const top = local.y;
-        const bottom = local.y + local.height;
-        const v25 = rectWidth * 0.25;
-        const v75 = rectWidth * 0.75;
-        const h25 = rectHeight * 0.25;
-        const h75 = rectHeight * 0.75;
-
-        // Snap left edge to 0, 25%, 75%
-        if (Math.abs(left - 0) <= thresholdLocal) {
-            local.x = 0;
-            local.width = right - local.x;
-        } else if (Math.abs(left - v25) <= thresholdLocal) {
-            local.x = v25;
-            local.width = right - local.x;
-        } else if (Math.abs(left - v75) <= thresholdLocal) {
-            local.x = v75;
-            local.width = right - local.x;
-        }
-        // Snap right edge to rectWidth, 75%, 25%
-        if (Math.abs(rectWidth - right) <= thresholdLocal) {
-            local.width = rectWidth - local.x;
-        } else if (Math.abs(v75 - right) <= thresholdLocal) {
-            local.width = v75 - local.x;
-        } else if (Math.abs(v25 - right) <= thresholdLocal) {
-            local.width = v25 - local.x;
-        }
-        // Snap top edge to 0, 25%, 75%
-        if (Math.abs(top - 0) <= thresholdLocal) {
-            local.y = 0;
-            local.height = bottom - local.y;
-        } else if (Math.abs(top - h25) <= thresholdLocal) {
-            local.y = h25;
-            local.height = bottom - local.y;
-        } else if (Math.abs(top - h75) <= thresholdLocal) {
-            local.y = h75;
-            local.height = bottom - local.y;
-        }
-        // Snap bottom edge to rectHeight, 75%, 25%
-        if (Math.abs(rectHeight - bottom) <= thresholdLocal) {
-            local.height = rectHeight - local.y;
-        } else if (Math.abs(h75 - bottom) <= thresholdLocal) {
-            local.height = h75 - local.y;
-        } else if (Math.abs(h25 - bottom) <= thresholdLocal) {
-            local.height = h25 - local.y;
-        }
-
-        // Convert back to absolute space
-        let adjusted = {
-            ...newBox,
-            x: position.x + local.x * scale,
-            y: position.y + local.y * scale,
-            width: local.width * scale,
-            height: local.height * scale,
-        };
-
-        // Prevent negative or zero sizes in absolute space just in case
-        const MIN_SIZE_ABS = 1e-3;
-        if (adjusted.width < MIN_SIZE_ABS) adjusted.width = MIN_SIZE_ABS;
-        if (adjusted.height < MIN_SIZE_ABS) adjusted.height = MIN_SIZE_ABS;
-
-        return adjusted;
-    }, [rectWidth, rectHeight, scale, position.x, position.y, isRotating, aspectRatio]);
-
-    // Create canvas once and expose to Konva Image via state so initial render receives it
-    useEffect(() => {
-        if (!canvasRef.current) {
-            canvasRef.current = document.createElement('canvas');
-            setImageSource(canvasRef.current);
-        } else {
-            setImageSource(canvasRef.current);
-        }
-        return () => {
-            canvasRef.current = null;
-            originalFrameRef.current = null;
-            processingCanvasRef.current = null;
-            setImageSource(null);
-        };
-    }, []);
-
-    useEffect(() => {
-        if (!isSelected) return;
-        const tr = transformerRef.current;
-        const img = imageRef.current;
-        if (!tr || !img) return;
-        const raf = requestAnimationFrame(() => {
-            tr.nodes([img]);
-            if (typeof (tr as any).forceUpdate === 'function') {
-                (tr as any).forceUpdate();
-            }
-            tr.getLayer()?.batchDraw?.();
-        });
-        return () => cancelAnimationFrame(raf);
-    }, [isSelected]);
-
-    useEffect(() => {
-        let cancelled = false;
-        if (lastSelectedSrcRef.current === selectedSrc) return;
-        lastSelectedSrcRef.current = selectedSrc;
-        // Force redraw on source switch: reset last rendered frame and clear cached original frame
-        lastRenderedFrameRef.current = -1;
-        originalFrameRef.current = null;
-        // @ts-ignore
-        iteratorRef.current?.return?.();
-        iteratorRef.current = null;
-        let info = getMediaInfoCached(selectedSrc);
-        if (!info) {
-        (async () => {
-            try {
-                if (!info) info = await getMediaInfo(selectedSrc);
-                if (!cancelled) {
-                    mediaInfo.current = info;
-                    // Media info arrived; force immediate redraw
-                    lastRenderedFrameRef.current = -1;
-                    try { void (seekAndDrawRef.current?.()); } catch {}
-                }
-            } catch (e) {
-                console.error(e);
-                }
-            })();
-        } else {
-            mediaInfo.current = info;
-            // Have cached info; force immediate redraw
-            lastRenderedFrameRef.current = -1;
-            try { void (seekAndDrawRef.current?.()); } catch {}
-        }
-        return () => { cancelled = true };
-    }, [selectedSrc]);
-
-    // Compute aspect-fit display size and offsets within the preview rect
-    const {displayWidth, displayHeight, offsetX, offsetY} = useMemo(() => {
-        const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
-        const originalHeight = mediaInfo.current?.video?.displayHeight || 0;
-        if (!originalWidth || !originalHeight || !rectWidth || !rectHeight) {
-            return { displayWidth: 0, displayHeight: 0, offsetX: 0, offsetY: 0 };
-        }
-        const aspectRatio = originalWidth / originalHeight;
-        let dw = rectWidth;
-        let dh = rectHeight;
-        if (rectWidth / rectHeight > aspectRatio) {
-            dw = rectHeight * aspectRatio;
-        } else {
-            dh = rectWidth / aspectRatio;
-        }
-        const ox = (rectWidth - dw) / 2;
-        const oy = (rectHeight - dh) / 2;
-
-
-        return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
-    }, [mediaInfo.current?.video?.displayWidth, mediaInfo.current?.video?.displayHeight, rectWidth, rectHeight]);
-
-    // Initialize default transform if missing or invalid (zero-sized),
-    // always recentering the clip in the preview rect.
-    useEffect(() => {
-        if (!overrideClip && displayWidth > 0 && displayHeight > 0) {
-            const hasTransform = !!clipTransform;
-            const width = clipTransform?.width ?? 0;
-            const height = clipTransform?.height ?? 0;
-            const needsInit = !hasTransform || width <= 0 || height <= 0;
-
-            if (needsInit) {
-                setClipTransform(clipId, {
-                    x: offsetX,
-                    y: offsetY,
-                    width: displayWidth,
-                    height: displayHeight,
-                    scaleX: 1,
-                    scaleY: 1,
-                    rotation: 0,
-                });
-            }
-        }
-    }, [clipTransform, displayWidth, displayHeight, offsetX, offsetY, clipId, setClipTransform, overrideClip]);
-
-    // Ensure canvas matches display size for crisp rendering
-    useEffect(() => {
-        if (!canvasRef.current) return;
-        if (!displayWidth || !displayHeight) return;
-        const canvas = canvasRef.current;
-        const w = Math.floor(displayWidth);
-        const h = Math.floor(displayHeight);
-        if (canvas.width !== w || canvas.height !== h) {
-            canvas.width = w;
-            canvas.height = h;
-        }
-    }, [displayWidth, displayHeight]);
-
-    const ensureProcessingCanvas = useCallback((width: number, height: number) => {
-        let canvas = processingCanvasRef.current;
-        if (!canvas) {
-            canvas = document.createElement('canvas');
-            processingCanvasRef.current = canvas;
-        }
-        if (canvas.width !== width || canvas.height !== height) {
-            canvas.width = width;
-            canvas.height = height;
-        }
-        return canvas;
-    }, []);
-
-    const drawWrappedCanvas = useCallback((wc: WrappedCanvas, maskFrame?: number) => {
-        let canvas = canvasRef.current;
-        if (!canvas) return;
-        
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.imageSmoothingEnabled = true;
-        // @ts-ignore
-        ctx.imageSmoothingQuality = 'high';
-        try { ctx.drawImage(wc.canvas, 0, 0, canvas.width, canvas.height); } catch {}
-        
-        // Store the original unfiltered frame for filter adjustments while paused
-        if (!originalFrameRef.current) {
-            originalFrameRef.current = document.createElement('canvas');
-        }
-        if (originalFrameRef.current.width !== canvas.width || originalFrameRef.current.height !== canvas.height) {
-            originalFrameRef.current.width = canvas.width;
-            originalFrameRef.current.height = canvas.height;
-        }
-
-        const origCtx = originalFrameRef.current.getContext('2d');
-        if (origCtx) {
-            origCtx.clearRect(0, 0, canvas.width, canvas.height);
-            origCtx.drawImage(canvas, 0, 0);
-        }
-
-        const workingCanvas = ensureProcessingCanvas(canvas.width, canvas.height);
-        const workingCtx = workingCanvas.getContext('2d');
-        if (!workingCtx) return;
-        
-        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-        workingCtx.drawImage(canvas, 0, 0);
-        
-        // Apply masks before running filters/applicators so downstream operations see masked pixels
-        const maskedCanvas = applyMask(workingCanvas, maskFrame);
-        if (maskedCanvas !== workingCanvas) {
-            workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-            try { workingCtx.drawImage(maskedCanvas, 0, 0, workingCanvas.width, workingCanvas.height); } catch {}
-        }
-        
-        // Apply WebGL filters for better performance (fast enough for real-time playback)
-        // Use ref values to avoid callback recreation on filter/applicator changes
-        applyFilters(workingCanvas, filterParamsRef.current);
-        
-        // Apply applicators to canvas
-        let processedCanvas = workingCanvas;
-
-        for (const applicator of applicatorsRef.current) {
-            const result = applicator.apply(processedCanvas);
-            // Ensure result is copied back to working canvas for chaining
-            if (result !== processedCanvas) {
-                workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-                workingCtx.drawImage(result, 0, 0, workingCanvas.width, workingCanvas.height);
-                processedCanvas = workingCanvas;
-            }
-        }
-        
-        // Always draw the final processed result back to display canvas
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
-        imageRef.current?.getLayer()?.batchDraw?.();
-    }, [applyFilters, applyMask, ensureProcessingCanvas, applicatorsRef.current]);
-
-    const seekAndDraw = useCallback(async () => {
-        if (!canvasRef.current) return;
-        if (!mediaInfo) return;
-        if (!displayWidth || !displayHeight) return;
-        // If playback has started, do not run paused seek rendering to avoid cancelling live decode
-        if (isPlayingRef.current) return;
-        const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
-        const projectFps = fps || DEFAULT_FPS;
-        if (!Number.isFinite(clipFps) || clipFps <= 0) return;
-        if (!Number.isFinite(projectFps) || projectFps <= 0) return;
-
-        // Map from project fps space to native clip fps space based on a debounced/stable focus frame
-        const isUsingPreprocessorSrc = selectedSrc !== src;
-        const currentFrameForSeek = (stableFocusFrame - startFrameUsed + (trimStart || 0));
-        const adjustedCurrentFrame = isUsingPreprocessorSrc ? (currentFrameForSeek - (trimStart || 0)) : currentFrameForSeek;
-        const idealFrame = Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
-        const actualFrame = Math.round((idealFrame / projectFps) * clipFps);
-        const totalFrames = Math.max(0, Math.floor((mediaInfo.current?.duration || 0) * clipFps));
-        const targetFrame = Math.max(0, Math.min(totalFrames, actualFrame)) + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
-        
-        // Skip if we already rendered this frame (but only when not in inputMode)
-        if (!inputMode && lastRenderedFrameRef.current === targetFrame) return;
-        
-        // Cancel any ongoing paused seek operations (do not interfere with live decode token)
-        const myToken = ++drawTokenRef.current;
-        
-        try {
-            // Iterator-based paused seeking starting near the target frame
-            // @ts-ignore
-            iteratorRef.current?.return?.();
-            iteratorRef.current = await getVideoIterator(selectedSrc, {
-                mediaInfo: mediaInfo.current || undefined,
-                fps: clipFps,
-                startIndex: Math.max(0, targetFrame - 2),
-                endIndex: Math.min(totalFrames, targetFrame + 32),
-                isolationKey: instanceIsolationKeyRef.current,
-            });
-
-            // Compute mask frame using the stable focus and adjust by speed
-            const focusFrameForMask = stableFocusFrame;
-            const speedFactor = Math.max(0.1, speed);
-            let pausedMaskFrame: number;
-            if (clip) {
-                if (inputMode) {
-                    const local = Math.max(0, (focusFrameForMask + (trimStart || 0)));
-                    pausedMaskFrame = Math.max(0, Math.floor(local * speedFactor));
-                } else {
-                    const isUsingPreprocessorSrc = (selectedSrc !== src);
-                    const baseLocal = Math.max(0, (focusFrameForMask - startFrameUsed));
-                    const derivedLocal = isUsingPreprocessorSrc
-                        ? Math.max(0, baseLocal - Math.max(0, frameOffset))
-                        : Math.max(0, baseLocal + (trimStart || 0));
-                    pausedMaskFrame = Math.max(0, Math.floor(derivedLocal * speedFactor));
-                }
-            } else {
-                const local = Math.max(0, (focusFrameForMask - startFrameUsed + (trimStart || 0)));
-                pausedMaskFrame = Math.max(0, Math.floor(local * speedFactor));
-            }
-
-            let bestCanvas: WrappedCanvas | null = null;
-            let bestIdx: number | null = null;
-            for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
-                if (myToken !== drawTokenRef.current) break;
-                if (!wc) continue;
-                const ts: number | undefined = (wc as any)?.timestamp;
-                const sampleIdx: number = Number.isFinite(ts as number)
-                    ? Math.floor(((ts as number) * clipFps) + 1e-4)
-                    : ((bestIdx ?? (targetFrame - 1)) + 1);
-
-                // Track the closest frame at or after target
-                if (sampleIdx >= targetFrame) {
-                    bestCanvas = wc as WrappedCanvas;
-                    bestIdx = sampleIdx;
-                    break;
-                }
-                // Otherwise remember the latest before target in case GOP jumps over
-                bestCanvas = wc as WrappedCanvas;
-                bestIdx = sampleIdx;
-            }
-
-            if (myToken !== drawTokenRef.current) return;
-            if (bestCanvas && bestIdx !== null) {
-                drawWrappedCanvas(bestCanvas, pausedMaskFrame);
-                lastRenderedFrameRef.current = bestIdx;
-            }
-        } catch (e) {
-            console.warn('[video] seek draw failed', e);
-        }
-    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, stableFocusFrame, drawWrappedCanvas, speed, frameOffset, trimStart, clip?.masks, clip?.preprocessors, applicators.length, inputMode, startFrame, startFrameUsed, inputId]);
-
-    const startRendering = useCallback(async () => {
-        if (!canvasRef.current) return;
-        if (!mediaInfo.current) return;
-        if (!displayWidth || !displayHeight) return;
-        const clipFps = mediaInfo.current?.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
-        const projectFps = fps || DEFAULT_FPS;
-
-        if (!Number.isFinite(clipFps) || clipFps <= 0) return;
-        if (!Number.isFinite(projectFps) || projectFps <= 0) return;
-        
-        // Map from project fps space to native clip fps space
-        // When using a preprocessor src, we need to subtract trimStart since it's already in currentFrame
-        const isUsingPreprocessorSrc = selectedSrc !== src;
-        const adjustedCurrentFrame = isUsingPreprocessorSrc ? currentFrame - (trimStart || 0) : currentFrame;
-        const idealStartFrame = Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
-        const actualStartFrame = Math.round((idealStartFrame / projectFps) * clipFps);
-        const totalFrames = Math.max(0, Math.floor((mediaInfo.current?.duration || 0) * clipFps));
-        const startIdx = Math.max(0, Math.min(totalFrames, actualStartFrame)) + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
-        currentStartFrameRef.current = startIdx;
-        lastRenderedFrameRef.current = startIdx - 1;
-
-        const myToken = ++drawTokenRef.current;
-        // @ts-ignore
-        iteratorRef.current?.return?.();
-        const targetEndFrame = mediaInfo.current?.endFrame ? Math.round((mediaInfo.current?.endFrame || 0) / projectFps * clipFps) : undefined;
-
-        iteratorRef.current = await getVideoIterator(selectedSrc, { mediaInfo: mediaInfo.current || undefined, fps: clipFps, startIndex: startIdx, endIndex: targetEndFrame, isolationKey: instanceIsolationKeyRef.current });
-        try {
-            for await (const wc of iteratorRef.current as AsyncIterable<WrappedCanvas | null>) {
-                if (myToken !== drawTokenRef.current && !offscreenFast) break;
-                if (!isPlaying) break;
-                if (!wc) continue;
-
-                // Determine the decoded sample's frame index in native fps
-                const ts: number | undefined = (wc as any)?.timestamp;
-
-                // Use floor with a tiny epsilon to avoid boundary flip-flop
-                let sampleIdx = Number.isFinite(ts as number)
-                    ? Math.floor(((ts as number) * clipFps) + 1e-4)
-                    : (lastRenderedFrameRef.current + 1);
-
-                // Compute current timeline-local frame mapped to native fps (clip space)
-                const computeLocalFocusMedia = () => {
-                    const focusFrameValue = focusFrameRef.current;
-                    // Base timeline-local frames relative to clip start (no give-start applied)
-                    const baseLocal = Math.max(0, ((focusFrameValue ?? 0) - startFrameUsed));
-                    // When using preprocessor src, align to its own frame space by subtracting its start offset.
-                    // Otherwise, include trimStart to match the main clip's reference frame.
-                    const derivedLocal = isUsingPreprocessorSrc
-                        ? Math.max(0, baseLocal - Math.max(0, frameOffset))
-                        : Math.max(0, baseLocal + (trimStart || 0));
-                    const localProjectFrames = (typeof currentLocalFrameOverride === 'number')
-                        ? Math.max(0, currentLocalFrameOverride)
-                        : derivedLocal;
-                    const speedAdjusted = Math.max(0, localProjectFrames * Math.max(0.1, speed));
-                    // Map from project fps to native fps using floor to reduce jitter
-                    const actualFrameIdx = Math.floor(((speedAdjusted / projectFps) * clipFps) + 1e-4);
-                    return actualFrameIdx + Math.round(((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps);
-                };
-
-                if (!offscreenFast) {
-                    // Skip stale frames that are behind the timeline by more than 1 frame
-                    let localFocus = computeLocalFocusMedia();
-                    if (sampleIdx < localFocus - 1) {
-                        lastRenderedFrameRef.current = sampleIdx;
-                        continue;
-                    }
-                    // If we're ahead of the timeline, wait until the timeline catches up (sync to rAF)
-                    while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
-                        if (myToken !== drawTokenRef.current) break;
-                        if (!isPlaying) break;
-                        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-                    }
-                }
-
-
-                if (myToken !== drawTokenRef.current && !offscreenFast) break;
-                if (!isPlaying) break;
-                const focusFrameForMask = focusFrameRef.current;
-                const speedFactor = Math.max(0.1, speed);
-                let maskFrame: number;
-                if (clip) {
-                    if (inputMode) {
-                        const local = Math.max(0, (focusFrameForMask + (trimStart || 0)));
-                        maskFrame = Math.max(0, Math.floor(local * speedFactor));
-                    } else {
-                        const isUsingPreprocessorSrc = (selectedSrc !== src);
-                        const baseLocal = Math.max(0, (focusFrameForMask - startFrameUsed));
-                        const derivedLocal = isUsingPreprocessorSrc
-                            ? Math.max(0, baseLocal - Math.max(0, frameOffset))
-                            : Math.max(0, baseLocal + (trimStart || 0));
-                        maskFrame = Math.max(0, Math.floor(derivedLocal * speedFactor));
-                    }
-                } else {
-                    const local = Math.max(0, (focusFrameForMask - startFrameUsed + (trimStart || 0)));
-                    maskFrame = Math.max(0, Math.floor(local * speedFactor));
-                }
-                drawWrappedCanvas(wc as WrappedCanvas, maskFrame);
-                lastRenderedFrameRef.current = sampleIdx;
-            }
-        } catch (e) {
-            // swallow
-        }
-    }, [mediaInfo, fps, selectedSrc, src, displayWidth, displayHeight, currentFrame, drawWrappedCanvas, speed, startFrameUsed, frameOffset, trimStart, clip, isPlaying, inputMode]);
-
-
-    useEffect(() => {
-        if (isPlaying || offscreenFast) {
-            void startRendering();
-        } else {
-            void seekAndDraw();
-        }
-        return () => {
-            drawTokenRef.current++;
-            // @ts-ignore
-            iteratorRef.current?.return?.();
-        };
-    }, [isPlaying, offscreenFast, selectedSrc, mediaInfo, displayWidth, displayHeight, fps, speed, frameOffset, applicators.length, inputId, inputMode]);
-
-    // If video is paused, reapply filters and applicators when they change
-    useEffect(() => {
-        if (!isPlaying && canvasRef.current && imageRef.current) {
-            // If we have an original frame cached, use it for fast reapplication
-            if (originalFrameRef.current) {
-                let canvas = canvasRef.current;
-                const ctx = canvas.getContext('2d');
-                if (ctx) {
-                    const workingCanvas = ensureProcessingCanvas(canvas.width, canvas.height);
-                    const workingCtx = workingCanvas.getContext('2d');
-                    if (!workingCtx) return;
-                    
-                    // Start with the original unfiltered frame
-                    workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-                    workingCtx.drawImage(originalFrameRef.current, 0, 0);
-
-                    // Apply masks before filters so masked pixels feed the rest of the pipeline
-                    const maskedCanvas = applyMask(workingCanvas, maskFrameForCurrentFocus);
-                    if (maskedCanvas !== workingCanvas) {
-                        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-                        workingCtx.drawImage(maskedCanvas, 0, 0, workingCanvas.width, workingCanvas.height);
-                    }
-                    
-                    // Apply filters to the clean frame
-                    applyFilters(workingCanvas, filterParamsRef.current);
-                    
-                    // Apply applicators (filter clips from layers above)
-                    let processedCanvas = workingCanvas;
-                    for (const applicator of applicatorsRef.current) {
-                        const result = applicator.apply(processedCanvas);
-                        if (result !== processedCanvas) {
-                            workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-                            workingCtx.drawImage(result, 0, 0, workingCanvas.width, workingCanvas.height);
-                            processedCanvas = workingCanvas;
-                        }
-                    }
-                    
-                    // Always draw final result back to display canvas
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
-                    
-                    imageRef.current.getLayer()?.batchDraw();
-                }
-            } else {
-                // If no cached frame exists, decode the current frame
-                // Force re-decode even if we already rendered this frame index
-                lastRenderedFrameRef.current = -1;
-                void seekAndDraw();
-            }
-        }
-    }, [clip?.brightness, clip?.contrast, clip?.hue, clip?.saturation, clip?.blur, clip?.sharpness, clip?.noise, clip?.vignette, isPlaying, applyFilters, applicators, applicators.length, applyMask, maskFrameForCurrentFocus, seekAndDraw, ensureProcessingCanvas, inputId, inputMode]);
-
-    // Ensure any CLUTs needed by filter applicators are preloaded before drawing
-    useEffect(() => {
-        let cancelled = false;
-        const maybePreload = async () => {
-            const preloadTasks: Promise<void>[] = [];
-            for (const app of applicatorsRef.current) {
-                const maybeEnsure = (app as any)?.ensureResources as (() => Promise<void>) | undefined;
-                if (typeof maybeEnsure === 'function') {
-                    preloadTasks.push(maybeEnsure());
-                }
-            }
-            if (preloadTasks.length) {
-                try {
-                    await Promise.all(preloadTasks);
-                } catch {}
-            }
-            if (cancelled) return;
-            // After resources are ready, force redraw immediately
-            if (canvasRef.current) {
-                lastRenderedFrameRef.current = -1;
-                if (!isPlaying) {
-                    void seekAndDrawRef.current();
-                }
-                imageRef.current?.getLayer()?.batchDraw?.();
-            }
-        };
-        void maybePreload();
-        return () => { cancelled = true };
-    }, [applicators, applicators.length, isPlaying, inputId, inputMode]);
-
-    // Force update when override clip's duration changes (e.g., synthetic media clip set with full endFrame)
-    useEffect(() => {
-        // Only apply when paused; playing loop will handle updates
-        if (!overrideClip) return;
-        if (isPlayingRef.current) return;
-        lastRenderedFrameRef.current = -1;
-        try { void seekAndDrawRef.current(); } catch {}
-    }, [overrideClip?.endFrame, overrideClip?.src]);
-
-    // Use ref to store the latest seekAndDraw to avoid throttle recreation
-    const seekAndDrawRef = useRef(seekAndDraw);
-    seekAndDrawRef.current = seekAndDraw;
-
-    // Create a stable throttled version for smoother scrubbing
-    const throttledSeekAndDraw = useMemo(() => {
-        return _.throttle(() => {
-            void seekAndDrawRef.current();
-        }, 16, { leading: true, trailing: true }); // ~60fps throttle
-    }, []);
-
-    // If playback starts, cancel any pending throttled seek callbacks to avoid cancelling live decode
-    useEffect(() => {
-        if (isPlaying) {
-            throttledSeekAndDraw.cancel();
-        }
-    }, [isPlaying, throttledSeekAndDraw]);
-
-    // While paused, redraw on scrubs/jumps using debounced focus. In inputMode, draw immediately when stable.
-    useEffect(() => {
-        if (isPlaying) return;
-        if (inputMode) {
-            void seekAndDrawRef.current();
-        } else {
-            throttledSeekAndDraw();
-        }
-    }, [stableFocusFrame, isPlaying, throttledSeekAndDraw, inputMode]);
-
-    // In offscreen/single-frame scenarios, ensure immediate seek when explicit overrides change (no debounce)
-    useEffect(() => {
-        if (isPlaying) return;
-        // Force a draw whenever caller overrides the exact frame to display
-        if (typeof focusFrameOverride === 'number' || typeof currentLocalFrameOverride === 'number') {
-            lastRenderedFrameRef.current = -1;
-            void seekAndDrawRef.current();
-        }
-    }, [focusFrameOverride, currentLocalFrameOverride, isPlaying]);
-
-  // Force re-init when the selected clip changes (clipId) or overrideClip identity changes
   useEffect(() => {
-      // reset caches to guarantee re-render of first frame for new selection
-      lastSelectedSrcRef.current = null;
-      lastRenderedFrameRef.current = -1;
-      originalFrameRef.current = null;
-      // @ts-ignore
-      iteratorRef.current?.return?.();
-      iteratorRef.current = null;
-      if (!isPlaying) {
-          try { void seekAndDrawRef.current(); } catch {}
+    const transformer = transformerRef.current;
+    if (!transformer) return;
+    const bumpSuppress = () => {
+      const now =
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : Date.now();
+      suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 300);
+    };
+    const onTransformStart = () => {
+      bumpSuppress();
+      setIsTransforming(true);
+      const active = (transformer as any)?.getActiveAnchor?.();
+      const rotating = typeof active === "string" && active.includes("rotater");
+      setIsRotating(!!rotating);
+      setIsInteracting(true);
+      if (!rotating) {
+        updateGuidesAndMaybeSnap({ snap: false });
+      } else {
+        setGuides({
+          vCenter: false,
+          hCenter: false,
+          v25: false,
+          v75: false,
+          h25: false,
+          h75: false,
+          left: false,
+          right: false,
+          top: false,
+          bottom: false,
+        });
       }
-  }, [clipId, overrideClip]);
+    };
+    const persistTransform = () => {
+      const node = imageRef.current;
+      if (!node) return;
+      const newWidth = node.width() * node.scaleX();
+      const newHeight = node.height() * node.scaleY();
+      setClipTransform(clipId, {
+        x: node.x(),
+        y: node.y(),
+        width: newWidth,
+        height: newHeight,
+        scaleX: 1,
+        scaleY: 1,
+        rotation: node.rotation(),
+      });
+      node.width(newWidth);
+      node.height(newHeight);
+      node.scaleX(1);
+      node.scaleY(1);
+    };
+    const onTransform = () => {
+      bumpSuppress();
+      if (!isRotating) {
+        updateGuidesAndMaybeSnap({ snap: false });
+      }
+      persistTransform();
+    };
+    const onTransformEnd = () => {
+      bumpSuppress();
+      setIsTransforming(false);
+      setIsInteracting(false);
+      setIsRotating(false);
+      setGuides({
+        vCenter: false,
+        hCenter: false,
+        v25: false,
+        v75: false,
+        h25: false,
+        h75: false,
+        left: false,
+        right: false,
+        top: false,
+        bottom: false,
+      });
+      persistTransform();
+    };
+    transformer.on("transformstart", onTransformStart);
+    transformer.on("transform", onTransform);
+    transformer.on("transformend", onTransformEnd);
+    return () => {
+      transformer.off("transformstart", onTransformStart);
+      transformer.off("transform", onTransform);
+      transformer.off("transformend", onTransformEnd);
+    };
+  }, [
+    transformerRef.current,
+    updateGuidesAndMaybeSnap,
+    setClipTransform,
+    clipId,
+    isRotating,
+  ]);
 
-    // Cleanup throttled function on unmount
-    useEffect(() => {
-        return () => {
-            throttledSeekAndDraw.cancel();
-        };
-    }, [throttledSeekAndDraw]);
+  useEffect(() => {
+    if (inputMode) return;
+    const handleWindowClick = (e: MouseEvent) => {
+      if (!isSelected) return;
+      const now =
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : Date.now();
+      if (now < suppressUntilRef.current) return;
+      const stage = imageRef.current?.getStage();
+      const container = stage?.container();
+      // check that node is inside container
+      const node = e.target;
+      if (!container?.contains(node as Node)) return;
+      if (!stage || !container || !imageRef.current) return;
+      const containerRect = container.getBoundingClientRect();
+      const pointerX = e.clientX - containerRect.left;
+      const pointerY = e.clientY - containerRect.top;
+      const imgRect = imageRef.current.getClientRect({
+        skipShadow: true,
+        skipStroke: true,
+      });
+      const insideImage =
+        pointerX >= imgRect.x &&
+        pointerX <= imgRect.x + imgRect.width &&
+        pointerY >= imgRect.y &&
+        pointerY <= imgRect.y + imgRect.height;
 
-    const handleDragMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-        updateGuidesAndMaybeSnap({ snap: true });
-        const node = imageRef.current;
-        if (node) {
-            setClipTransform(clipId, { x: node.x(), y: node.y() });
-        } else {
-            setClipTransform(clipId, { x: e.target.x(), y: e.target.y() });
-        }
-    }, [setClipTransform, clipId, updateGuidesAndMaybeSnap]);
+      if (!insideImage) {
+        removeClipSelection(clipId);
+      }
+    };
+    window.addEventListener("click", handleWindowClick);
+    return () => {
+      window.removeEventListener("click", handleWindowClick);
+    };
+  }, [clipId, isSelected, removeClipSelection, inputMode]);
 
-    const handleDragStart = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-        e.target.getStage()!.container().style.cursor = 'grab';
-        addClipSelection(clipId);
-        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-        suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 250);
-        setIsInteracting(true);
-        updateGuidesAndMaybeSnap({ snap: true });
-    }, [clipId, addClipSelection, updateGuidesAndMaybeSnap]);
+  // Calculate pixel crop from normalized crop for Konva Image
+  const pixelCrop = useMemo(() => {
+    const c = clipTransform?.crop;
+    if (!c || !displayWidth || !displayHeight) return undefined;
+    return {
+      x: c.x * displayWidth,
+      y: c.y * displayHeight,
+      width: c.width * displayWidth,
+      height: c.height * displayHeight,
+    };
+  }, [clipTransform?.crop, displayWidth, displayHeight]);
 
-    const handleDragEnd = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-        e.target.getStage()!.container().style.cursor = 'default';
-        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-        suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 250);
-        setClipTransform(clipId, { x: e.target.x(), y: e.target.y() });
-        setIsInteracting(false);
-        setGuides({ vCenter: false, hCenter: false, v25: false, v75: false, h25: false, h75: false, left: false, right: false, top: false, bottom: false });
-    }, [setClipTransform, clipId]);
-
-    const handleClick = useCallback(() => {
-        if (isFullscreen) return;
-        clearSelection();
-        addClipSelection(clipId);
-    }, [addClipSelection, clipId, isFullscreen]);
-
-    useEffect(() => {
-        const transformer = transformerRef.current;
-        if (!transformer) return;
-        const bumpSuppress = () => {
-            const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-            suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 300);
-        };
-        const onTransformStart = () => {
-            bumpSuppress();
-            setIsTransforming(true);
-            const active = (transformer as any)?.getActiveAnchor?.();
-            const rotating = typeof active === 'string' && active.includes('rotater');
-            setIsRotating(!!rotating);
-            setIsInteracting(true);
-            if (!rotating) {
-                updateGuidesAndMaybeSnap({ snap: false });
-            } else {
-                setGuides({ vCenter: false, hCenter: false, v25: false, v75: false, h25: false, h75: false, left: false, right: false, top: false, bottom: false });
-            }
-        };
-        const persistTransform = () => {
-            const node = imageRef.current;
-            if (!node) return;
-            const newWidth = node.width() * node.scaleX();
-            const newHeight = node.height() * node.scaleY();
-            setClipTransform(clipId, {
-                x: node.x(),
-                y: node.y(),
-                width: newWidth,
-                height: newHeight,
-                scaleX: 1,
-                scaleY: 1,
-                rotation: node.rotation(),
-            });
-            node.width(newWidth);
-            node.height(newHeight);
-            node.scaleX(1);
-            node.scaleY(1);
-        };
-        const onTransform = () => {
-            bumpSuppress();
-            if (!isRotating) {
-                updateGuidesAndMaybeSnap({ snap: false });
-            }
-            persistTransform();
-        };
-        const onTransformEnd = () => {
-            bumpSuppress();
-            setIsTransforming(false);
-            setIsInteracting(false);
-            setIsRotating(false);
-            setGuides({ vCenter: false, hCenter: false, v25: false, v75: false, h25: false, h75: false, left: false, right: false, top: false, bottom: false });
-            persistTransform();
-        };
-        transformer.on('transformstart', onTransformStart);
-        transformer.on('transform', onTransform);
-        transformer.on('transformend', onTransformEnd);
-        return () => {
-            transformer.off('transformstart', onTransformStart);
-            transformer.off('transform', onTransform);
-            transformer.off('transformend', onTransformEnd);
-        };
-    }, [transformerRef.current, updateGuidesAndMaybeSnap, setClipTransform, clipId, isRotating]);
-
-    useEffect(() => {
-        if (inputMode) return;
-        const handleWindowClick = (e: MouseEvent) => {
-            if (!isSelected) return;
-            const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-            if (now < suppressUntilRef.current) return;
-            const stage = imageRef.current?.getStage();
-            const container = stage?.container();
-            // check that node is inside container
-            const node = e.target;
-            if (!container?.contains(node as Node)) return;
-            if (!stage || !container || !imageRef.current) return;
-            const containerRect = container.getBoundingClientRect();
-            const pointerX = e.clientX - containerRect.left;
-            const pointerY = e.clientY - containerRect.top;
-            const imgRect = imageRef.current.getClientRect({ skipShadow: true, skipStroke: true });
-            const insideImage = pointerX >= imgRect.x && pointerX <= imgRect.x + imgRect.width && pointerY >= imgRect.y && pointerY <= imgRect.y + imgRect.height;
-            
-            if (!insideImage) {
-                removeClipSelection(clipId);
-            }
-        };
-        window.addEventListener('click', handleWindowClick);
-        return () => {
-            window.removeEventListener('click', handleWindowClick);
-        };
-    }, [clipId, isSelected, removeClipSelection, inputMode]);
-    
-    // Calculate pixel crop from normalized crop for Konva Image
-    const pixelCrop = useMemo(() => {
-        const c = clipTransform?.crop;
-        if (!c || !displayWidth || !displayHeight) return undefined;
-        return {
-            x: c.x * ( displayWidth),
-            y: c.y * (displayHeight),
-            width: c.width * (displayWidth),
-            height: c.height * (displayHeight)
-        };
-    }, [clipTransform?.crop, displayWidth, displayHeight]);
-
-
-    return (
+  return (
     <React.Fragment>
-    <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight}>
-      <Image 
-      draggable={tool === 'pointer' && !isTransforming && !inputMode} 
-      ref={imageRef}  
-      image={imageSource || undefined}
-       x={clipTransform?.x ?? offsetX} 
-       y={clipTransform?.y ?? offsetY} 
-       width={clipTransform?.width ?? displayWidth} 
-       height={clipTransform?.height ?? displayHeight} 
-       scaleX={clipTransform?.scaleX ?? 1}
-       scaleY={clipTransform?.scaleY ?? 1}
-       rotation={clipTransform?.rotation ?? 0}
-       cornerRadius={clipTransform?.cornerRadius ?? 0}
-       opacity={(clipTransform?.opacity ?? 100) / 100}
-       crop={pixelCrop}
-       onDragMove={handleDragMove} 
-       onDragStart={handleDragStart} 
-       onDragEnd={handleDragEnd} 
-       onClick={handleClick} 
-       />
-      {tool === 'pointer' && isSelected && isInteracting && !isRotating && !isFullscreen && (
-        <React.Fragment>
-          {guides.vCenter && <Line listening={false} points={[rectWidth/2, 0, rectWidth/2, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-          {guides.v25 && <Line listening={false} points={[rectWidth*0.25, 0, rectWidth*0.25, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-          {guides.v75 && <Line listening={false} points={[rectWidth*0.75, 0, rectWidth*0.75, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-          {guides.hCenter && <Line listening={false} points={[0, rectHeight/2, rectWidth, rectHeight/2]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-          {guides.h25 && <Line listening={false} points={[0, rectHeight*0.25, rectWidth, rectHeight*0.25]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-          {guides.h75 && <Line listening={false} points={[0, rectHeight*0.75, rectWidth, rectHeight*0.75]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-          {guides.left && <Line listening={false} points={[0, 0, 0, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-          {guides.right && <Line listening={false} points={[rectWidth, 0, rectWidth, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-          {guides.top && <Line listening={false} points={[0, 0, rectWidth, 0]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-          {guides.bottom && <Line listening={false} points={[0, rectHeight, rectWidth, rectHeight]} stroke={'#AE81CE'} strokeWidth={1} dash={[6, 4]} />}
-        </React.Fragment>
-      )}
-    </Group>
-    <Transformer 
-        borderStroke='#AE81CE'
-        anchorCornerRadius={8} 
-        anchorStroke='#E3E3E3' 
+      <Group
+        ref={groupRef}
+        clipX={0}
+        clipY={0}
+        clipWidth={rectWidth}
+        clipHeight={rectHeight}
+      >
+        <Image
+          draggable={tool === "pointer" && !isTransforming && !inputMode}
+          ref={imageRef}
+          image={imageSource || undefined}
+          x={clipTransform?.x ?? offsetX}
+          y={clipTransform?.y ?? offsetY}
+          width={clipTransform?.width ?? displayWidth}
+          height={clipTransform?.height ?? displayHeight}
+          scaleX={clipTransform?.scaleX ?? 1}
+          scaleY={clipTransform?.scaleY ?? 1}
+          rotation={clipTransform?.rotation ?? 0}
+          cornerRadius={clipTransform?.cornerRadius ?? 0}
+          opacity={(clipTransform?.opacity ?? 100) / 100}
+          crop={pixelCrop}
+          onDragMove={handleDragMove}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onClick={handleClick}
+        />
+        {tool === "pointer" &&
+          isSelected &&
+          isInteracting &&
+          !isRotating &&
+          !isFullscreen && (
+            <React.Fragment>
+              {guides.vCenter && (
+                <Line
+                  listening={false}
+                  points={[rectWidth / 2, 0, rectWidth / 2, rectHeight]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+              {guides.v25 && (
+                <Line
+                  listening={false}
+                  points={[rectWidth * 0.25, 0, rectWidth * 0.25, rectHeight]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+              {guides.v75 && (
+                <Line
+                  listening={false}
+                  points={[rectWidth * 0.75, 0, rectWidth * 0.75, rectHeight]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+              {guides.hCenter && (
+                <Line
+                  listening={false}
+                  points={[0, rectHeight / 2, rectWidth, rectHeight / 2]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+              {guides.h25 && (
+                <Line
+                  listening={false}
+                  points={[0, rectHeight * 0.25, rectWidth, rectHeight * 0.25]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+              {guides.h75 && (
+                <Line
+                  listening={false}
+                  points={[0, rectHeight * 0.75, rectWidth, rectHeight * 0.75]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+              {guides.left && (
+                <Line
+                  listening={false}
+                  points={[0, 0, 0, rectHeight]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+              {guides.right && (
+                <Line
+                  listening={false}
+                  points={[rectWidth, 0, rectWidth, rectHeight]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+              {guides.top && (
+                <Line
+                  listening={false}
+                  points={[0, 0, rectWidth, 0]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+              {guides.bottom && (
+                <Line
+                  listening={false}
+                  points={[0, rectHeight, rectWidth, rectHeight]}
+                  stroke={"#AE81CE"}
+                  strokeWidth={1}
+                  dash={[6, 4]}
+                />
+              )}
+            </React.Fragment>
+          )}
+      </Group>
+      <Transformer
+        borderStroke="#AE81CE"
+        anchorCornerRadius={8}
+        anchorStroke="#E3E3E3"
         anchorStrokeWidth={1}
         borderStrokeWidth={2}
-        visible={tool === 'pointer' && isSelected && !isFullscreen && overlap && !inputMode}
-        rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]} 
+        visible={
+          tool === "pointer" &&
+          isSelected &&
+          !isFullscreen &&
+          overlap &&
+          !inputMode
+        }
+        rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
         boundBoxFunc={transformerBoundBoxFunc as any}
         ref={(node) => {
-            transformerRef.current = node;
-            if (node && imageRef.current) {
-                node.nodes([imageRef.current]);
-                if (typeof (node as any).forceUpdate === 'function') {
-                    (node as any).forceUpdate();
-                }
-                node.getLayer()?.batchDraw?.();
+          transformerRef.current = node;
+          if (node && imageRef.current) {
+            node.nodes([imageRef.current]);
+            if (typeof (node as any).forceUpdate === "function") {
+              (node as any).forceUpdate();
             }
-        }} 
-        enabledAnchors={['top-left', 'bottom-right', 'top-right', 'bottom-left']} />
+            node.getLayer()?.batchDraw?.();
+          }
+        }}
+        enabledAnchors={[
+          "top-left",
+          "bottom-right",
+          "top-right",
+          "bottom-left",
+        ]}
+      />
     </React.Fragment>
-  )
-}
+  );
+};
 
-export default VideoPreview
+export default VideoPreview;

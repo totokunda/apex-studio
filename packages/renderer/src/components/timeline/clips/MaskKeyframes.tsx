@@ -1,6 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Konva from "konva";
-import { Group,  Line } from "react-konva";
+import { Group, Line } from "react-konva";
 import { getGlobalFrame, getLocalFrame, useClipStore } from "@/lib/clip";
 import { useControlsStore } from "@/lib/control";
 import { MaskClipProps, MaskData, VideoClipProps } from "@/lib/types";
@@ -36,13 +42,17 @@ export const Diamond: React.FC<DiamondProps> = ({
 }) => {
   // Define diamond points relative to center
   const points = [
-    0, -height / 2, // top
-    width / 2, 0,   // right
-    0, height / 2,  // bottom
-    -width / 2, 0,  // left
+    0,
+    -height / 2, // top
+    width / 2,
+    0, // right
+    0,
+    height / 2, // bottom
+    -width / 2,
+    0, // left
   ];
   const lineRef = useRef<Konva.Line>(null);
-  const {selectedClipIds} = useControlsStore();
+  const { selectedClipIds } = useControlsStore();
   const isDragging = useClipStore((s) => s.isDragging);
 
   useEffect(() => {
@@ -117,7 +127,9 @@ const cloneKeyframes = (keyframes: MaskClipProps["keyframes"]) => {
   return { ...(keyframes as Record<number, MaskData>) };
 };
 
-const toSortedEntries = (keyframes: MaskClipProps["keyframes"]): KeyframeEntry[] => {
+const toSortedEntries = (
+  keyframes: MaskClipProps["keyframes"],
+): KeyframeEntry[] => {
   if (!keyframes) return [];
   if (keyframes instanceof Map) {
     return Array.from(keyframes.entries())
@@ -190,8 +202,6 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     return () => window.clearTimeout(t);
   }, [selectedClipIds, clip.clipId, keyframes]);
 
-  
-
   const clipDuration = useMemo(() => {
     return Math.max(1, (currentEndFrame ?? 0) - (currentStartFrame ?? 0));
   }, [currentEndFrame, currentStartFrame]);
@@ -200,8 +210,12 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     return clipWidth / clipDuration;
   }, [clipWidth, clipDuration]);
 
-  const visualBaseX = isDragging ? clipPosition.x + CLIP_DRAG_OFFSET : clipPosition.x;
-  const visualBaseY = isDragging ? clipPosition.y + CLIP_DRAG_OFFSET : clipPosition.y;
+  const visualBaseX = isDragging
+    ? clipPosition.x + CLIP_DRAG_OFFSET
+    : clipPosition.x;
+  const visualBaseY = isDragging
+    ? clipPosition.y + CLIP_DRAG_OFFSET
+    : clipPosition.y;
   const keyframeY = visualBaseY + timelineHeight / 2;
 
   const activeFrame = useMemo(() => {
@@ -225,7 +239,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
 
   // Only one keyframe should be visually active at a time: prefer selected, else focus-derived
   const displayActiveFrame = useMemo(() => {
-    return (selectedFrame != null ? selectedFrame : activeFrame);
+    return selectedFrame != null ? selectedFrame : activeFrame;
   }, [selectedFrame, activeFrame]);
 
   useEffect(() => {
@@ -246,7 +260,9 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
       if (!mask) return;
       const updated = updater(mask);
       if (!updated) return;
-      updateClip(clip.clipId, { masks: replaceMask(clip.masks ?? [], updated) });
+      updateClip(clip.clipId, {
+        masks: replaceMask(clip.masks ?? [], updated),
+      });
     },
     [clip.clipId, clip.masks, mask, updateClip],
   );
@@ -293,7 +309,9 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
       // If this is the final keyframe, remove the mask entirely
       const entriesNow = toSortedEntries(mask.keyframes);
       if (entriesNow.length <= 1) {
-        const remainingMasks = (clip.masks ?? []).filter((m) => m.id !== mask.id);
+        const remainingMasks = (clip.masks ?? []).filter(
+          (m) => m.id !== mask.id,
+        );
         updateClip(clip.clipId, { masks: remainingMasks });
         const nextMaskId = remainingMasks[0]?.id ?? null;
         setSelectedMaskId(nextMaskId);
@@ -311,17 +329,19 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
           delete (currentKeyframes as Record<number, MaskData>)[frameToRemove];
         }
 
-        const remaining = entries.filter(({ frame }) => frame !== frameToRemove);
-        const nearest = remaining.reduce<{ frame: number; distance: number } | null>(
-          (best, entry) => {
-            const distance = Math.abs(entry.frame - frameToRemove);
-            if (!best || distance < best.distance) {
-              return { frame: entry.frame, distance };
-            }
-            return best;
-          },
-          null,
+        const remaining = entries.filter(
+          ({ frame }) => frame !== frameToRemove,
         );
+        const nearest = remaining.reduce<{
+          frame: number;
+          distance: number;
+        } | null>((best, entry) => {
+          const distance = Math.abs(entry.frame - frameToRemove);
+          if (!best || distance < best.distance) {
+            return { frame: entry.frame, distance };
+          }
+          return best;
+        }, null);
 
         const fallbackFrame = nearest?.frame ?? remaining[0]?.frame ?? null;
         setSelectedFrame(fallbackFrame ?? null);
@@ -336,7 +356,15 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
         };
       });
     },
-    [clip, commitMaskUpdate, mask, setFocusFrame, setSelectedMaskId, setSelectedFrame, updateClip],
+    [
+      clip,
+      commitMaskUpdate,
+      mask,
+      setFocusFrame,
+      setSelectedMaskId,
+      setSelectedFrame,
+      updateClip,
+    ],
   );
 
   useEffect(() => {
@@ -347,7 +375,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
       if (target) {
         const tag = target.tagName?.toLowerCase();
         const isEditable = (target as any).isContentEditable === true;
-        if (tag === 'input' || tag === 'textarea' || isEditable) {
+        if (tag === "input" || tag === "textarea" || isEditable) {
           return; // don't hijack typing/deleting in form fields
         }
       }
@@ -391,19 +419,21 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     };
   };
 
-  const handleDragEnd = (originalFrame: number) => (e: Konva.KonvaEventObject<DragEvent>) => {
-    const absoluteX = e.target.x();
-    const relativeX = absoluteX - visualBaseX;
-    const nextFrame = Math.round(relativeX / Math.max(1e-6, pxPerFrame));
-    const clamped = Math.max(0, Math.min(clipDuration, nextFrame));
-    moveKeyframe(originalFrame, clamped);
-  };
+  const handleDragEnd =
+    (originalFrame: number) => (e: Konva.KonvaEventObject<DragEvent>) => {
+      const absoluteX = e.target.x();
+      const relativeX = absoluteX - visualBaseX;
+      const nextFrame = Math.round(relativeX / Math.max(1e-6, pxPerFrame));
+      const clamped = Math.max(0, Math.min(clipDuration, nextFrame));
+      moveKeyframe(originalFrame, clamped);
+    };
 
-  const handleDragStart = (frame: number) => (e: Konva.KonvaEventObject<DragEvent>) => {
-    e.cancelBubble = true;
-    setSelectedMaskId(mask.id);
-    setSelectedFrame(frame);
-  };
+  const handleDragStart =
+    (frame: number) => (e: Konva.KonvaEventObject<DragEvent>) => {
+      e.cancelBubble = true;
+      setSelectedMaskId(mask.id);
+      setSelectedFrame(frame);
+    };
 
   return (
     <Group ref={containerRef} listening>
@@ -420,7 +450,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
           <Group
             key={`${mask.id}-${frame}`}
             x={frameToX(frame)}
-            y={keyframeY} 
+            y={keyframeY}
             draggable
             dragBoundFunc={boundDrag()}
             onDragStart={handleDragStart(frame)}
@@ -430,7 +460,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
             }}
             onClick={(e) => {
               e.cancelBubble = true;
-              
+
               handleKeyframeClick(frame);
             }}
           >
@@ -438,7 +468,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
               x={0}
               y={0}
               width={KEYFRAME_RADIUS}
-              height={KEYFRAME_RADIUS*1.2}
+              height={KEYFRAME_RADIUS * 1.2}
               fill={fill}
               stroke={stroke}
               strokeWidth={strokeWidth}

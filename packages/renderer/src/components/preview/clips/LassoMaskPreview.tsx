@@ -1,12 +1,17 @@
-import React, { useCallback, useEffect, useRef } from 'react';
-import { Group, Line as KonvaLine, Rect as KonvaRect, Transformer } from 'react-konva';
-import { useClipStore, getLocalFrame } from '@/lib/clip';
-import { useViewportStore } from '@/lib/viewport';
-import { useControlsStore } from '@/lib/control';
-import { useMaskStore } from '@/lib/mask';
-import { MaskClipProps, MaskData } from '@/lib/types';
-import Konva from 'konva';
-import { KonvaEventObject } from 'konva/lib/Node';
+import React, { useCallback, useEffect, useRef } from "react";
+import {
+  Group,
+  Line as KonvaLine,
+  Rect as KonvaRect,
+  Transformer,
+} from "react-konva";
+import { useClipStore, getLocalFrame } from "@/lib/clip";
+import { useViewportStore } from "@/lib/viewport";
+import { useControlsStore } from "@/lib/control";
+import { useMaskStore } from "@/lib/mask";
+import { MaskClipProps, MaskData } from "@/lib/types";
+import Konva from "konva";
+import { KonvaEventObject } from "konva/lib/Node";
 
 interface LassoMaskPreviewProps {
   mask: MaskClipProps;
@@ -21,7 +26,6 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
   points,
   animationOffset,
 }) => {
-
   const tool = useViewportStore((s) => s.tool);
   const isFullscreen = useControlsStore((s) => s.isFullscreen);
   const selectedMaskId = useControlsStore((s) => s.selectedMaskId);
@@ -37,26 +41,26 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
   const suppressUntilRef = useRef(0);
   const setIsOverMask = useMaskStore((s) => s.setIsOverMask);
   const isSelected = selectedMaskId === mask.id;
-  
+
   // Allow interaction only when in mask mode with lasso tool
-  const canInteract = tool === 'mask' && maskTool === 'lasso';
+  const canInteract = tool === "mask" && maskTool === "lasso";
 
   // Calculate bounding box for the lasso
   const bounds = React.useMemo(() => {
     if (points.length < 2) return { x: 0, y: 0, width: 100, height: 100 };
-    
+
     let minX = points[0];
     let maxX = points[0];
     let minY = points[1];
     let maxY = points[1];
-    
+
     for (let i = 0; i < points.length; i += 2) {
       minX = Math.min(minX, points[i]);
       maxX = Math.max(maxX, points[i]);
       minY = Math.min(minY, points[i + 1]);
       maxY = Math.max(maxY, points[i + 1]);
     }
-    
+
     return {
       x: minX,
       y: minY,
@@ -64,34 +68,45 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
       height: maxY - minY,
     };
   }, [points]);
-  
 
-  const handleClick = useCallback((e: KonvaEventObject<MouseEvent>) => {
-    if (!canInteract) return;
-    e.cancelBubble = true;
-    e.evt?.preventDefault?.();
-    e.evt?.stopPropagation?.();
-    try {
-      // Selecting a lasso mask should clear any selected touch points globally
-      window.dispatchEvent(new CustomEvent('apex-mask-clear-touch-selection'));
-    } catch {}
-    setSelectedMaskId(mask.id);
-    
-    // Also select the corresponding clip
-    if (mask.clipId && !selectedClipIds.includes(mask.clipId)) {
-      setSelectedClipIds([mask.clipId]);
-    }
-  }, [canInteract, mask.id, mask.clipId, selectedClipIds, setSelectedMaskId, setSelectedClipIds]);
-  
+  const handleClick = useCallback(
+    (e: KonvaEventObject<MouseEvent>) => {
+      if (!canInteract) return;
+      e.cancelBubble = true;
+      e.evt?.preventDefault?.();
+      e.evt?.stopPropagation?.();
+      try {
+        // Selecting a lasso mask should clear any selected touch points globally
+        window.dispatchEvent(
+          new CustomEvent("apex-mask-clear-touch-selection"),
+        );
+      } catch {}
+      setSelectedMaskId(mask.id);
+
+      // Also select the corresponding clip
+      if (mask.clipId && !selectedClipIds.includes(mask.clipId)) {
+        setSelectedClipIds([mask.clipId]);
+      }
+    },
+    [
+      canInteract,
+      mask.id,
+      mask.clipId,
+      selectedClipIds,
+      setSelectedMaskId,
+      setSelectedClipIds,
+    ],
+  );
+
   const handleDragStart = useCallback(() => {
     if (!canInteract || !isSelected) return;
     setIsMaskDragging(true);
     try {
       // When starting to drag a mask, also clear touch point selections
-      window.dispatchEvent(new CustomEvent('apex-mask-clear-touch-selection'));
+      window.dispatchEvent(new CustomEvent("apex-mask-clear-touch-selection"));
     } catch {}
   }, [canInteract, isSelected, setIsMaskDragging]);
-  
+
   const handleDragEnd = useCallback(() => {
     setIsMaskDragging(false);
     const group = groupRef.current;
@@ -99,35 +114,44 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
 
     const dx = group.x();
     const dy = group.y();
-    
+
     // Only update if there was actual movement
     if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) {
       group.position({ x: 0, y: 0 });
       return;
     }
-    
+
     // Update mask position by shifting all points
-    const keyframes = mask.keyframes instanceof Map 
-      ? mask.keyframes 
-      : (mask.keyframes as Record<number, any>);
-    
-    const keyframeNumbers = keyframes instanceof Map
-      ? Array.from(keyframes.keys()).map(Number).sort((a, b) => a - b)
-      : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
-    
-    const activeKeyframe = keyframeNumbers.filter(k => k <= focusFrame).pop();
+    const keyframes =
+      mask.keyframes instanceof Map
+        ? mask.keyframes
+        : (mask.keyframes as Record<number, any>);
+
+    const keyframeNumbers =
+      keyframes instanceof Map
+        ? Array.from(keyframes.keys())
+            .map(Number)
+            .sort((a, b) => a - b)
+        : Object.keys(keyframes)
+            .map(Number)
+            .sort((a, b) => a - b);
+
+    const activeKeyframe = keyframeNumbers.filter((k) => k <= focusFrame).pop();
     const referenceKeyframe = activeKeyframe ?? keyframeNumbers[0];
-    
+
     if (referenceKeyframe !== undefined) {
-      const maskData = keyframes instanceof Map 
-        ? keyframes.get(referenceKeyframe) 
-        : keyframes[referenceKeyframe];
-      
+      const maskData =
+        keyframes instanceof Map
+          ? keyframes.get(referenceKeyframe)
+          : keyframes[referenceKeyframe];
+
       const basePoints = maskData?.lassoPoints;
 
       if (basePoints && basePoints.length > 0) {
         const clipStoreState = useClipStore.getState();
-        const targetClip = mask.clipId ? clipStoreState.getClipById(mask.clipId) : undefined;
+        const targetClip = mask.clipId
+          ? clipStoreState.getClipById(mask.clipId)
+          : undefined;
 
         if (!targetClip || !mask.clipId) {
           group.position({ x: 0, y: 0 });
@@ -135,21 +159,28 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
         }
 
         let targetFrame = focusFrame;
-        if (targetClip.type === 'video') {
-          targetFrame = Math.max(0, Math.round(getLocalFrame(focusFrame, targetClip)));
-        } else if (targetClip.type === 'image') {
+        if (targetClip.type === "video") {
+          targetFrame = Math.max(
+            0,
+            Math.round(getLocalFrame(focusFrame, targetClip)),
+          );
+        } else if (targetClip.type === "image") {
           targetFrame = 0;
         }
 
         const frameExists = keyframeNumbers.includes(targetFrame);
         const sourceFrame = frameExists ? targetFrame : referenceKeyframe;
-        const sourceData = sourceFrame !== undefined
-          ? (keyframes instanceof Map ? keyframes.get(sourceFrame) : keyframes[sourceFrame])
-          : undefined;
+        const sourceData =
+          sourceFrame !== undefined
+            ? keyframes instanceof Map
+              ? keyframes.get(sourceFrame)
+              : keyframes[sourceFrame]
+            : undefined;
 
-        const pointsToShift = sourceData?.lassoPoints && sourceData.lassoPoints.length > 0
-          ? sourceData.lassoPoints
-          : basePoints;
+        const pointsToShift =
+          sourceData?.lassoPoints && sourceData.lassoPoints.length > 0
+            ? sourceData.lassoPoints
+            : basePoints;
 
         if (!pointsToShift || pointsToShift.length === 0) {
           group.position({ x: 0, y: 0 });
@@ -162,9 +193,8 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
           shiftedPoints.push(pointsToShift[i + 1] + dy);
         }
 
-        const updatedKeyframes = keyframes instanceof Map
-          ? new Map(keyframes)
-          : { ...keyframes };
+        const updatedKeyframes =
+          keyframes instanceof Map ? new Map(keyframes) : { ...keyframes };
 
         const baseClone: MaskData = sourceData ? { ...sourceData } : {};
         baseClone.lassoPoints = [...shiftedPoints];
@@ -177,9 +207,9 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
 
         const currentMasks = (targetClip as any).masks || [];
         const updatedMasks = currentMasks.map((m: MaskClipProps) =>
-          m.id === mask.id ? { ...m, keyframes: updatedKeyframes } : m
+          m.id === mask.id ? { ...m, keyframes: updatedKeyframes } : m,
         );
-        
+
         clipStoreState.updateClip(mask.clipId, { masks: updatedMasks });
       }
     }
@@ -187,7 +217,10 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
     group.position({ x: 0, y: 0 });
 
     // Add suppression period after drag
-    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    const now =
+      typeof performance !== "undefined" && performance.now
+        ? performance.now()
+        : Date.now();
     suppressUntilRef.current = now + 250;
   }, [mask, focusFrame]);
 
@@ -196,74 +229,76 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
     const tr = transformerRef.current;
     const rect = rectRef.current;
     if (!tr || !rect) return;
-    
+
     tr.nodes([rect]);
     tr.getLayer()?.batchDraw();
   }, [isSelected, canInteract]);
-  
+
   // Deselect when clicking outside
   React.useEffect(() => {
     if (!isSelected) return;
-    
+
     const handleClickOutside = (e: MouseEvent) => {
       // Check suppression period
-      const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      const now =
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : Date.now();
       if (now < suppressUntilRef.current) return;
-      
+
       const stage = groupRef.current?.getStage();
       if (!stage) return;
-      
+
       const container = stage.container();
       if (!container.contains(e.target as Node)) return;
-      
+
       const pointerPos = stage.getPointerPosition();
       if (!pointerPos) return;
-      
+
       const rect = rectRef.current;
       if (!rect) return;
-      
+
       const rectPos = rect.getClientRect();
-      const isInside = 
-        pointerPos.x >= rectPos.x && 
+      const isInside =
+        pointerPos.x >= rectPos.x &&
         pointerPos.x <= rectPos.x + rectPos.width &&
-        pointerPos.y >= rectPos.y && 
+        pointerPos.y >= rectPos.y &&
         pointerPos.y <= rectPos.y + rectPos.height;
-      
+
       if (!isInside) {
         setSelectedMaskId(null);
       }
     };
-    
-    window.addEventListener('click', handleClickOutside);
-    return () => window.removeEventListener('click', handleClickOutside);
+
+    window.addEventListener("click", handleClickOutside);
+    return () => window.removeEventListener("click", handleClickOutside);
   }, [isSelected, setSelectedMaskId]);
 
   useEffect(() => {
     const stopDraggingIfNeeded = () => {
       const group = groupRef.current;
       if (!group) return;
-      if (typeof group.isDragging === 'function' && group.isDragging()) {
+      if (typeof group.isDragging === "function" && group.isDragging()) {
         group.stopDrag();
         setIsMaskDragging(false);
       }
     };
 
-    window.addEventListener('mouseup', stopDraggingIfNeeded);
-    window.addEventListener('pointerup', stopDraggingIfNeeded);
-    window.addEventListener('touchend', stopDraggingIfNeeded);
-    window.addEventListener('touchcancel', stopDraggingIfNeeded);
+    window.addEventListener("mouseup", stopDraggingIfNeeded);
+    window.addEventListener("pointerup", stopDraggingIfNeeded);
+    window.addEventListener("touchend", stopDraggingIfNeeded);
+    window.addEventListener("touchcancel", stopDraggingIfNeeded);
 
     return () => {
-      window.removeEventListener('mouseup', stopDraggingIfNeeded);
-      window.removeEventListener('pointerup', stopDraggingIfNeeded);
-      window.removeEventListener('touchend', stopDraggingIfNeeded);
-      window.removeEventListener('touchcancel', stopDraggingIfNeeded);
+      window.removeEventListener("mouseup", stopDraggingIfNeeded);
+      window.removeEventListener("pointerup", stopDraggingIfNeeded);
+      window.removeEventListener("touchend", stopDraggingIfNeeded);
+      window.removeEventListener("touchcancel", stopDraggingIfNeeded);
     };
   }, [setIsMaskDragging]);
 
-
   return (
-    <Group 
+    <Group
       ref={groupRef}
       draggable={canInteract && isSelected}
       onDragStart={handleDragStart}
@@ -298,18 +333,18 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
           const stage = groupRef.current?.getStage();
           if (stage) {
             const container = stage.container();
-            container.style.cursor = isSelected ? 'move' : 'pointer';
+            container.style.cursor = isSelected ? "move" : "pointer";
           }
         }}
         onMouseLeave={() => {
           const stage = groupRef.current?.getStage();
           if (stage) {
             const container = stage.container();
-            container.style.cursor = 'crosshair';
+            container.style.cursor = "crosshair";
           }
         }}
       />
-      
+
       {/* White stripe background */}
       <KonvaLine
         points={points}
@@ -321,7 +356,7 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
         listening={false}
         fill="rgba(0, 127, 245, 0.4)"
       />
-      
+
       {/* Black stripe foreground with animation */}
       <KonvaLine
         points={points}
@@ -334,7 +369,7 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
         closed={true}
         listening={false}
       />
-      
+
       {/* Transformer for visual feedback (drag only, no anchors) */}
       {canInteract && isSelected && !isFullscreen && (
         <Transformer

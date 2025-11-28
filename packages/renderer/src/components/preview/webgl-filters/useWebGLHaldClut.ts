@@ -3,8 +3,8 @@
  * Ensures the same instance is used throughout the app for efficient resource management
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { WebGLHaldClut } from './hald-clut';
+import { useEffect, useRef, useState } from "react";
+import { WebGLHaldClut } from "./hald-clut";
 
 // Module-level singleton instance
 let haldClutInstance: WebGLHaldClut | null = null;
@@ -14,9 +14,11 @@ let referenceCount = 0;
  * Hook that provides access to a shared WebGLHaldClut instance
  * The instance is created on first use and cleaned up when all components unmount
  */
-export function useWebGLHaldClut(){
+export function useWebGLHaldClut() {
   const isInitializedRef = useRef(false);
-  const [instance, setInstance] = useState<WebGLHaldClut | null>(haldClutInstance);
+  const [instance, setInstance] = useState<WebGLHaldClut | null>(
+    haldClutInstance,
+  );
 
   useEffect(() => {
     // Initialize instance on first mount
@@ -34,14 +36,14 @@ export function useWebGLHaldClut(){
     return () => {
       if (isInitializedRef.current) {
         referenceCount--;
-        
+
         // Only dispose when no components are using it
         if (referenceCount === 0 && haldClutInstance) {
           haldClutInstance.dispose();
           haldClutInstance = null;
           setInstance(null);
         }
-        
+
         isInitializedRef.current = false;
       }
     };

@@ -5,7 +5,7 @@ import {
   onWsUpdate,
   onWsStatus,
   onWsError,
-} from '@app/preload';
+} from "@app/preload";
 
 type Unsubscribe = () => void;
 
@@ -14,13 +14,17 @@ export class WsClient {
 
   async connect(key: string, pathOrUrl: string): Promise<void> {
     const res = await wsConnect(key, pathOrUrl);
-    if (!res.success) throw new Error(res.error || 'Failed to connect');
+    if (!res.success) throw new Error(res.error || "Failed to connect");
   }
 
   async disconnect(key: string): Promise<void> {
     try {
       const list = this.unsubscribersByKey.get(key) || [];
-      list.forEach((fn) => { try { fn(); } catch {} });
+      list.forEach((fn) => {
+        try {
+          fn();
+        } catch {}
+      });
       this.unsubscribersByKey.delete(key);
     } catch {}
     await wsDisconnect(key).catch(() => {});
@@ -57,5 +61,3 @@ export class WsClient {
 }
 
 export const wsClient = new WsClient();
-
-

@@ -3,7 +3,7 @@
  * Uses a two-pass approach (horizontal then vertical) for optimal performance
  */
 
-import { WebGLFilterBase } from './WebGLFilterBase';
+import { WebGLFilterBase } from "./WebGLFilterBase";
 
 const vertexShader = `
   attribute vec2 a_position;
@@ -100,11 +100,14 @@ export class WebGLBlur extends WebGLFilterBase {
       return;
     }
 
-    this.horizontalProgram = this.createProgram(vertexShader, horizontalBlurShader);
+    this.horizontalProgram = this.createProgram(
+      vertexShader,
+      horizontalBlurShader,
+    );
     this.verticalProgram = this.createProgram(vertexShader, verticalBlurShader);
     this.frameBuffer = gl.createFramebuffer();
     if (!this.frameBuffer) {
-      console.error('Failed to create framebuffer for blur filter');
+      console.error("Failed to create framebuffer for blur filter");
     }
     this.tempTexture = null;
   }
@@ -122,7 +125,12 @@ export class WebGLBlur extends WebGLFilterBase {
     this.initResources();
   }
 
-  private applyPass(program: WebGLProgram, texture: WebGLTexture, radius: number, outputToScreen: boolean) {
+  private applyPass(
+    program: WebGLProgram,
+    texture: WebGLTexture,
+    radius: number,
+    outputToScreen: boolean,
+  ) {
     const gl = this.ensureContext();
     if (!gl) return;
 
@@ -132,7 +140,10 @@ export class WebGLBlur extends WebGLFilterBase {
     if (!outputToScreen && !this.frameBuffer) {
       return;
     }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, outputToScreen ? null : this.frameBuffer);
+    gl.bindFramebuffer(
+      gl.FRAMEBUFFER,
+      outputToScreen ? null : this.frameBuffer,
+    );
 
     // Set up attributes using base class method
     this.setupAttributes(program);
@@ -140,17 +151,29 @@ export class WebGLBlur extends WebGLFilterBase {
     // Set uniforms
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.uniform1i(gl.getUniformLocation(program, 'u_image'), 0);
-    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), this.canvas.width, this.canvas.height);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_radius'), radius);
+    gl.uniform1i(gl.getUniformLocation(program, "u_image"), 0);
+    gl.uniform2f(
+      gl.getUniformLocation(program, "u_resolution"),
+      this.canvas.width,
+      this.canvas.height,
+    );
+    gl.uniform1f(gl.getUniformLocation(program, "u_radius"), radius);
 
     // Draw
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  public apply(sourceCanvas: HTMLCanvasElement, radius: number): HTMLCanvasElement {
+  public apply(
+    sourceCanvas: HTMLCanvasElement,
+    radius: number,
+  ): HTMLCanvasElement {
     const gl = this.ensureContext();
-    if (!gl || !this.horizontalProgram || !this.verticalProgram || radius <= 0) {
+    if (
+      !gl ||
+      !this.horizontalProgram ||
+      !this.verticalProgram ||
+      radius <= 0
+    ) {
       return sourceCanvas;
     }
 
@@ -162,7 +185,11 @@ export class WebGLBlur extends WebGLFilterBase {
       return sourceCanvas;
     }
 
-    if (!this.tempTexture || this.canvas.width !== sourceCanvas.width || this.canvas.height !== sourceCanvas.height) {
+    if (
+      !this.tempTexture ||
+      this.canvas.width !== sourceCanvas.width ||
+      this.canvas.height !== sourceCanvas.height
+    ) {
       if (this.tempTexture) {
         gl.deleteTexture(this.tempTexture);
       }
@@ -172,11 +199,27 @@ export class WebGLBlur extends WebGLFilterBase {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.canvas.width, this.canvas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        this.canvas.width,
+        this.canvas.height,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null,
+      );
 
       // Attach to framebuffer
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.tempTexture, 0);
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT0,
+        gl.TEXTURE_2D,
+        this.tempTexture,
+        0,
+      );
     }
 
     // Create texture from source

@@ -1,8 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { ProgressBar } from '@/components/common/ProgressBar';
-import { fetchRayJobs, cancelRayJob, RayJobStatus } from '@/lib/jobs/api';
-import { LuLoader, LuTrash2 } from 'react-icons/lu';
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { ProgressBar } from "@/components/common/ProgressBar";
+import { fetchRayJobs, cancelRayJob, RayJobStatus } from "@/lib/jobs/api";
+import { LuLoader, LuTrash2 } from "react-icons/lu";
 import { GrTasks } from "react-icons/gr";
 
 const POLL_MS = 2000;
@@ -14,16 +18,15 @@ type TrackedJob = RayJobStatus & {
 };
 
 const statusLabel = (status: string | undefined): string => {
-  if (!status) return 'unknown';
+  if (!status) return "unknown";
   const s = status.toLowerCase();
-  if (s === 'queued') return 'Queued';
-  if (s === 'running' || s === 'processing') return 'Running';
-  if (s === 'complete' || s === 'completed') return 'Completed';
-  if (s === 'error' || s === 'failed') return 'Error';
-  if (s === 'cancelled' || s === 'canceled') return 'Cancelled';
+  if (s === "queued") return "Queued";
+  if (s === "running" || s === "processing") return "Running";
+  if (s === "complete" || s === "completed") return "Completed";
+  if (s === "error" || s === "failed") return "Error";
+  if (s === "cancelled" || s === "canceled") return "Cancelled";
   return status;
 };
-
 
 const JobsMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
@@ -46,9 +49,13 @@ const JobsMenu: React.FC = () => {
           const existing = next[id];
           const latest = (job as any).latest ?? existing?.latest ?? null;
           const rawProgress =
-            (latest && typeof latest.progress === 'number' ? latest.progress : null) ??
-            (typeof (job as any).progress === 'number' ? (job as any).progress : null) ??
-            (typeof existing?.progress === 'number' ? existing.progress : null);
+            (latest && typeof latest.progress === "number"
+              ? latest.progress
+              : null) ??
+            (typeof (job as any).progress === "number"
+              ? (job as any).progress
+              : null) ??
+            (typeof existing?.progress === "number" ? existing.progress : null);
 
           next[id] = {
             ...(existing || {}),
@@ -62,8 +69,15 @@ const JobsMenu: React.FC = () => {
         // Optionally prune very old completed/cancelled jobs to keep the list tidy
         const cutoffMs = now - 60_000;
         for (const [id, j] of Object.entries(next)) {
-          const s = (j.status || '').toLowerCase();
-          if ((s === 'complete' || s === 'completed' || s === 'cancelled' || s === 'canceled' || s === 'error') && j.updatedAt < cutoffMs) {
+          const s = (j.status || "").toLowerCase();
+          if (
+            (s === "complete" ||
+              s === "completed" ||
+              s === "cancelled" ||
+              s === "canceled" ||
+              s === "error") &&
+            j.updatedAt < cutoffMs
+          ) {
             delete next[id];
           }
         }
@@ -97,7 +111,7 @@ const JobsMenu: React.FC = () => {
             ...prev,
             [jobId]: {
               ...existing,
-              status: 'canceled',
+              status: "canceled",
               updatedAt: now,
             },
           };
@@ -108,14 +122,17 @@ const JobsMenu: React.FC = () => {
     };
 
     try {
-      window.addEventListener('jobs-menu-reload', handler as EventListener);
+      window.addEventListener("jobs-menu-reload", handler as EventListener);
     } catch {
       // In non-browser environments this may fail; ignore.
     }
 
     return () => {
       try {
-        window.removeEventListener('jobs-menu-reload', handler as EventListener);
+        window.removeEventListener(
+          "jobs-menu-reload",
+          handler as EventListener,
+        );
       } catch {
         // ignore
       }
@@ -126,9 +143,15 @@ const JobsMenu: React.FC = () => {
     const all = Object.values(jobsById);
     return all
       .filter((j) => {
-        const s = (j.status || '').toLowerCase();
+        const s = (j.status || "").toLowerCase();
         // Consider any non-terminal job as active (includes queued + running/processing)
-        return !['complete', 'completed', 'cancelled', 'canceled', 'error'].includes(s);
+        return ![
+          "complete",
+          "completed",
+          "cancelled",
+          "canceled",
+          "error",
+        ].includes(s);
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }, [jobsById]);
@@ -147,7 +170,7 @@ const JobsMenu: React.FC = () => {
           ...prev,
           [jobId]: {
             ...existing,
-            status: 'canceled',
+            status: "canceled",
           },
         };
       });
@@ -162,18 +185,22 @@ const JobsMenu: React.FC = () => {
 
   const renderJobRow = (job: TrackedJob) => {
     const showProgress = (() => {
-      const s = (job.status || '').toLowerCase();
-      return s === 'running' || s === 'processing';
+      const s = (job.status || "").toLowerCase();
+      return s === "running" || s === "processing";
     })();
     const pct = showProgress
-      ? Math.round(((typeof job.progress === 'number' ? job.progress : 0) || 0) * 100)
+      ? Math.round(
+          ((typeof job.progress === "number" ? job.progress : 0) || 0) * 100,
+        )
       : 0;
     const msg =
-      (job.latest && typeof job.latest.message === 'string' && job.latest.message) ||
+      (job.latest &&
+        typeof job.latest.message === "string" &&
+        job.latest.message) ||
       job.message ||
-      '';
+      "";
     const isCancelling = busyIds.has(job.job_id);
-    const fullJobId = job.job_id || '';
+    const fullJobId = job.job_id || "";
     const shortJobId =
       fullJobId.length > 8 ? `${fullJobId.slice(0, 8)}…` : fullJobId;
 
@@ -208,7 +235,7 @@ const JobsMenu: React.FC = () => {
               title={fullJobId}
             >
               <span className="font-mono tracking-wide bg-brand-light/10 px-1 py-0.5 rounded">
-                {shortJobId || '—'}
+                {shortJobId || "—"}
               </span>
             </span>
             <div className="flex flex-row items-center justify-between gap-1 w-full mt-1">
@@ -267,7 +294,7 @@ const JobsMenu: React.FC = () => {
             Running Jobs
           </span>
           <span className="text-[11px] text-brand-light/60">
-            {activeCount === 0 ? 'Idle' : `${activeCount} active`}
+            {activeCount === 0 ? "Idle" : `${activeCount} active`}
           </span>
         </div>
         {activeCount > 0 ? (
@@ -275,7 +302,9 @@ const JobsMenu: React.FC = () => {
             {activeJobs.map(renderJobRow)}
           </div>
         ) : (
-          <div className="text-[11.5px] text-brand-light/70 py-0.5 font-medium">No running jobs.</div>
+          <div className="text-[11.5px] text-brand-light/70 py-0.5 font-medium">
+            No running jobs.
+          </div>
         )}
         <div className="mt-2 text-[10px] text-brand-light/40 flex items-center justify-between">
           <span>Updates every 2s</span>
@@ -286,5 +315,3 @@ const JobsMenu: React.FC = () => {
 };
 
 export default JobsMenu;
-
-

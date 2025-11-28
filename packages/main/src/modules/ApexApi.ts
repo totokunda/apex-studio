@@ -1,23 +1,25 @@
-import {AppModule} from '../AppModule.js';
-import {ModuleContext} from '../ModuleContext.js';
-import {  App, ipcMain, shell } from 'electron';
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import inspector from 'node:inspector';
-import { fileURLToPath } from 'node:url';
-import { WebSocketManager } from './WebSocketManager.js';
-import os from 'node:os';
-import { FormData as NodeFormData } from 'formdata-node';
-import { fileFromPath } from 'formdata-node/file-from-path';
-import { FormDataEncoder } from 'form-data-encoder';
-import { Readable } from 'node:stream';
+import { AppModule } from "../AppModule.js";
+import { ModuleContext } from "../ModuleContext.js";
+import { App, ipcMain, shell } from "electron";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import inspector from "node:inspector";
+import { fileURLToPath } from "node:url";
+import { WebSocketManager } from "./WebSocketManager.js";
+import os from "node:os";
+import { FormData as NodeFormData } from "formdata-node";
+import { fileFromPath } from "formdata-node/file-from-path";
+import { FormDataEncoder } from "form-data-encoder";
+import { Readable } from "node:stream";
 
 const session = new inspector.Session();
 session.connect();
 
-const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8765';
-const MAX_UPLOAD_BYTES = Number(process.env.APEX_MAX_UPLOAD_BYTES || 1_073_741_824); // 1 GiB default
+const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
+const MAX_UPLOAD_BYTES = Number(
+  process.env.APEX_MAX_UPLOAD_BYTES || 1_073_741_824,
+); // 1 GiB default
 
 interface ConfigResponse<T> {
   success: boolean;
@@ -31,10 +33,17 @@ interface ApexSettings {
 
 export class ApexApi implements AppModule {
   private app: App | null = null;
-  private settingsPath: string = '';
+  private settingsPath: string = "";
   private backendUrl: string = DEFAULT_BACKEND_URL;
   private wsManager: WebSocketManager | null = null;
-  private activeMaskStreams: Map<string, { controller: AbortController; reader: ReadableStreamDefaultReader<Uint8Array> | null; id: string } > = new Map();
+  private activeMaskStreams: Map<
+    string,
+    {
+      controller: AbortController;
+      reader: ReadableStreamDefaultReader<Uint8Array> | null;
+      id: string;
+    }
+  > = new Map();
   private uploadCache: Map<string, string> = new Map(); // localAbsPath -> remoteAbsPath
   private remoteCachePath: string | null = null; // backend-reported cache path
   private loopbackAppearsRemote: boolean = false; // true when localhost is actually a tunnel to a remote backend
@@ -43,7 +52,6 @@ export class ApexApi implements AppModule {
     this.backendUrl = backendUrl;
     this.wsManager = new WebSocketManager(this.backendUrl);
   }
-
 
   async enable(_context: ModuleContext): Promise<void> {
     this.app = _context.app;
@@ -63,7 +71,10 @@ export class ApexApi implements AppModule {
 
     // Defer app-dependent initialization until the app is ready
     await this.app.whenReady();
-    this.settingsPath = path.join(this.app.getPath('userData'), 'apex-settings.json');
+    this.settingsPath = path.join(
+      this.app.getPath("userData"),
+      "apex-settings.json",
+    );
     await this.loadSettings();
     this.wsManager?.setBaseUrl(this.backendUrl);
     await this.#probeBackendLocality();
@@ -72,12 +83,12 @@ export class ApexApi implements AppModule {
   private async loadSettings(): Promise<void> {
     try {
       if (fs.existsSync(this.settingsPath)) {
-        const data = await fs.promises.readFile(this.settingsPath, 'utf-8');
+        const data = await fs.promises.readFile(this.settingsPath, "utf-8");
         const settings: ApexSettings = JSON.parse(data);
         this.backendUrl = settings.backendUrl || DEFAULT_BACKEND_URL;
       }
     } catch (error) {
-      console.error('Failed to load settings:', error);
+      console.error("Failed to load settings:", error);
       this.backendUrl = DEFAULT_BACKEND_URL;
     }
   }
@@ -87,22 +98,26 @@ export class ApexApi implements AppModule {
       const settings: ApexSettings = {
         backendUrl: this.backendUrl,
       };
-      await fs.promises.writeFile(this.settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+      await fs.promises.writeFile(
+        this.settingsPath,
+        JSON.stringify(settings, null, 2),
+        "utf-8",
+      );
     } catch (error) {
-      console.error('Failed to save settings:', error);
+      console.error("Failed to save settings:", error);
       throw error;
     }
   }
 
   private registerBackendUrlHandlers(): void {
-    ipcMain.handle('backend:get-url', async () => {
+    ipcMain.handle("backend:get-url", async () => {
       return {
         success: true,
         data: { url: this.backendUrl },
       };
     });
 
-    ipcMain.handle('backend:set-url', async (_event, url: string) => {
+    ipcMain.handle("backend:set-url", async (_event, url: string) => {
       try {
         // Validate URL format
         new URL(url);
@@ -117,342 +132,533 @@ export class ApexApi implements AppModule {
       } catch (error) {
         return {
           success: false,
-          error: error instanceof Error ? error.message : 'Invalid URL format',
+          error: error instanceof Error ? error.message : "Invalid URL format",
         };
       }
     });
 
     // Expose a definitive remote/loopback-tunneled status computed in main
-    ipcMain.handle('backend:is-remote', async () => {
-      try { await this.#probeBackendLocality(); } catch {}
+    ipcMain.handle("backend:is-remote", async () => {
+      try {
+        await this.#probeBackendLocality();
+      } catch {}
       try {
         const isRemote = this.#isRemoteBackend();
         return { success: true, data: { isRemote } };
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : 'Failed to determine remote status' };
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to determine remote status",
+        };
       }
     });
 
     // Determine if a given input path would trigger an upload when sent to backend
-    ipcMain.handle('files:should-upload', async (_event, inputPath: string) => {
+    ipcMain.handle("files:should-upload", async (_event, inputPath: string) => {
       try {
-        if (!this.#isRemoteBackend()) return { success: true, data: { shouldUpload: false } };
-        const abs = this.#resolveLocalPath(String(inputPath || ''));
+        if (!this.#isRemoteBackend())
+          return { success: true, data: { shouldUpload: false } };
+        const abs = this.#resolveLocalPath(String(inputPath || ""));
         if (!abs) return { success: true, data: { shouldUpload: false } };
         const cached = this.uploadCache.get(abs);
         return { success: true, data: { shouldUpload: !cached } };
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : 'Failed to check upload necessity' };
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to check upload necessity",
+        };
       }
     });
 
     // Check if the given local file has already been uploaded this session (cache hit)
-    ipcMain.handle('files:is-uploaded', async (_event, inputPath: string) => {
+    ipcMain.handle("files:is-uploaded", async (_event, inputPath: string) => {
       try {
-        const abs = this.#resolveLocalPath(String(inputPath || ''));
+        const abs = this.#resolveLocalPath(String(inputPath || ""));
         if (!abs) return { success: true, data: { isUploaded: false } };
         const cached = this.uploadCache.get(abs);
         return { success: true, data: { isUploaded: !!cached } };
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : 'Failed to check upload cache' };
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to check upload cache",
+        };
       }
     });
   }
 
   private registerConfigHandlers(): void {
     // Home directory handlers
-    ipcMain.handle('config:get-home-dir', async () => {
-      return this.makeRequest<{home_dir: string}>('GET', '/config/home-dir');
+    ipcMain.handle("config:get-home-dir", async () => {
+      return this.makeRequest<{ home_dir: string }>("GET", "/config/home-dir");
     });
 
-    ipcMain.handle('config:set-home-dir', async (_event, homeDir: string) => {
-      return this.makeRequest<{home_dir: string}>('POST', '/config/home-dir', { home_dir: homeDir });
+    ipcMain.handle("config:set-home-dir", async (_event, homeDir: string) => {
+      return this.makeRequest<{ home_dir: string }>(
+        "POST",
+        "/config/home-dir",
+        { home_dir: homeDir },
+      );
     });
 
     // Components path handlers
-    ipcMain.handle('config:get-components-path', async () => {
-      return this.makeRequest<{components_path: string}>('GET', '/config/components-path');
+    ipcMain.handle("config:get-components-path", async () => {
+      return this.makeRequest<{ components_path: string }>(
+        "GET",
+        "/config/components-path",
+      );
     });
 
-    ipcMain.handle('config:set-components-path', async (_event, componentsPath: string) => {
-      return this.makeRequest<{components_path: string}>('POST', '/config/components-path', { components_path: componentsPath });
-    });
+    ipcMain.handle(
+      "config:set-components-path",
+      async (_event, componentsPath: string) => {
+        return this.makeRequest<{ components_path: string }>(
+          "POST",
+          "/config/components-path",
+          { components_path: componentsPath },
+        );
+      },
+    );
 
     // Torch device handlers
-    ipcMain.handle('config:get-torch-device', async () => {
-      return this.makeRequest<{device: string}>('GET', '/config/torch-device');
+    ipcMain.handle("config:get-torch-device", async () => {
+      return this.makeRequest<{ device: string }>(
+        "GET",
+        "/config/torch-device",
+      );
     });
 
-    ipcMain.handle('config:set-torch-device', async (_event, device: string) => {
-      return this.makeRequest<{device: string}>('POST', '/config/torch-device', { device });
-    });
+    ipcMain.handle(
+      "config:set-torch-device",
+      async (_event, device: string) => {
+        return this.makeRequest<{ device: string }>(
+          "POST",
+          "/config/torch-device",
+          { device },
+        );
+      },
+    );
 
     // Cache path handlers
-    ipcMain.handle('config:get-cache-path', async () => {
-      return this.makeRequest<{cache_path: string}>('GET', '/config/cache-path');
+    ipcMain.handle("config:get-cache-path", async () => {
+      return this.makeRequest<{ cache_path: string }>(
+        "GET",
+        "/config/cache-path",
+      );
     });
 
-    ipcMain.handle('config:set-cache-path', async (_event, cachePath: string) => {
-      return this.makeRequest<{cache_path: string}>('POST', '/config/cache-path', { cache_path: cachePath });
+    ipcMain.handle(
+      "config:set-cache-path",
+      async (_event, cachePath: string) => {
+        return this.makeRequest<{ cache_path: string }>(
+          "POST",
+          "/config/cache-path",
+          { cache_path: cachePath },
+        );
+      },
+    );
+
+    // Electron userData path (for local cache directories, etc.)
+    ipcMain.handle("config:get-user-data-path", async () => {
+      try {
+        const dir = this.app ? this.app.getPath("userData") : "";
+        const res: ConfigResponse<{ user_data: string }> = {
+          success: true,
+          data: { user_data: dir },
+        };
+        return res;
+      } catch (e: any) {
+        const res: ConfigResponse<{ user_data: string }> = {
+          success: false,
+          error: e?.message || "Failed to resolve userData path",
+        };
+        return res;
+      }
     });
   }
 
   private registerMaskHandlers(): void {
-    ipcMain.handle('mask:create', async (_event, request: {
-      input_path: string;
-      frame_number?: number;
-      tool: string;
-      points?: Array<{x: number, y: number}>;
-      point_labels?: Array<number>;
-      box?: {x1: number, y1: number, x2: number, y2: number};
-      multimask_output?: boolean;
-      simplify_tolerance?: number;
-      model_type?: string;
-    }) => {
-      const payload = await this.#prepareMaskRequest(request);
-      return this.makeRequest<{status: string; contours?: Array<Array<number>>; message?: string}>('POST', '/mask/create', payload);
-    });
-
-    ipcMain.handle('mask:track', async (event, request: {
-      id: string;
-      input_path: string;
-      frame_start: number;
-      anchor_frame?: number;
-      frame_end: number;
-      direction?: 'forward' | 'backward' | 'both';
-      model_type?: string;
-    }) => {
-      const streamId = crypto.randomUUID();
-
-      const controller = new AbortController();
-      const payload = await this.#prepareMaskRequest(request);
-      const response = await fetch(`${this.backendUrl}/mask/track`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/x-ndjson',
+    ipcMain.handle(
+      "mask:create",
+      async (
+        _event,
+        request: {
+          input_path: string;
+          frame_number?: number;
+          tool: string;
+          points?: Array<{ x: number; y: number }>;
+          point_labels?: Array<number>;
+          box?: { x1: number; y1: number; x2: number; y2: number };
+          multimask_output?: boolean;
+          simplify_tolerance?: number;
+          model_type?: string;
         },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+      ) => {
+        const payload = await this.#prepareMaskRequest(request);
+        return this.makeRequest<{
+          status: string;
+          contours?: Array<Array<number>>;
+          message?: string;
+        }>("POST", "/mask/create", payload);
+      },
+    );
 
-      if (!response.ok || !response.body) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
-      }
+    ipcMain.handle(
+      "mask:track",
+      async (
+        event,
+        request: {
+          id: string;
+          input_path: string;
+          frame_start: number;
+          anchor_frame?: number;
+          frame_end: number;
+          direction?: "forward" | "backward" | "both";
+          model_type?: string;
+        },
+      ) => {
+        const streamId = crypto.randomUUID();
 
-      const reader = response.body.getReader();
-      this.activeMaskStreams.set(streamId, { controller, reader, id: (payload as any).id });
-
-      const decoder = new TextDecoder();
-      let buffered = '';
-
-      const pump = (): void => {
-        reader.read().then(({ value, done }) => {
-          try {
-            if (done) {
-              const last = buffered.trim();
-              if (last) {
-                const line = last.startsWith('data:') ? last.slice(5) : last;
-                const data = JSON.parse(line);
-                event.sender.send(`mask:track:chunk:${streamId}`, data);
-              }
-              event.sender.send(`mask:track:end:${streamId}`);
-              this.activeMaskStreams.delete(streamId);
-              return;
-            }
-
-            if (value) {
-              buffered += decoder.decode(value, { stream: true });
-            }
-
-            let newlineIdx = buffered.indexOf('\n');
-            while (newlineIdx !== -1) {
-              const rawLine = buffered.slice(0, newlineIdx);
-              buffered = buffered.slice(newlineIdx + 1);
-              const trimmed = rawLine.trim();
-              if (trimmed && trimmed !== '[DONE]') {
-                const line = trimmed.startsWith('data:') ? trimmed.slice(5) : trimmed;
-                const data = JSON.parse(line);
-                event.sender.send(`mask:track:chunk:${streamId}`, data);
-              }
-              newlineIdx = buffered.indexOf('\n');
-            }
-          } catch (err) {
-            event.sender.send(`mask:track:error:${streamId}`, { message: err instanceof Error ? err.message : 'Unknown error' });
-            try { reader.cancel().catch(() => {}); } catch {}
-            this.activeMaskStreams.delete(streamId);
-            return;
-          }
-          pump();
-        }).catch((err) => {
-          event.sender.send(`mask:track:error:${streamId}`, { message: err instanceof Error ? err.message : 'Unknown error' });
-          this.activeMaskStreams.delete(streamId);
+        const controller = new AbortController();
+        const payload = await this.#prepareMaskRequest(request);
+        const response = await fetch(`${this.backendUrl}/mask/track`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/x-ndjson",
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
         });
-      };
-      pump();
 
-      return { streamId };
+        if (!response.ok || !response.body) {
+          const errorData = await response
+            .json()
+            .catch(() => ({ detail: "Unknown error" }));
+          throw new Error(
+            errorData.detail ||
+              `HTTP ${response.status}: ${response.statusText}`,
+          );
+        }
 
-    });
+        const reader = response.body.getReader();
+        this.activeMaskStreams.set(streamId, {
+          controller,
+          reader,
+          id: (payload as any).id,
+        });
 
-    ipcMain.handle('mask:track:cancel', async (_event, streamId: string) => {
+        const decoder = new TextDecoder();
+        let buffered = "";
+
+        const pump = (): void => {
+          reader
+            .read()
+            .then(({ value, done }) => {
+              try {
+                if (done) {
+                  const last = buffered.trim();
+                  if (last) {
+                    const line = last.startsWith("data:")
+                      ? last.slice(5)
+                      : last;
+                    const data = JSON.parse(line);
+                    event.sender.send(`mask:track:chunk:${streamId}`, data);
+                  }
+                  event.sender.send(`mask:track:end:${streamId}`);
+                  this.activeMaskStreams.delete(streamId);
+                  return;
+                }
+
+                if (value) {
+                  buffered += decoder.decode(value, { stream: true });
+                }
+
+                let newlineIdx = buffered.indexOf("\n");
+                while (newlineIdx !== -1) {
+                  const rawLine = buffered.slice(0, newlineIdx);
+                  buffered = buffered.slice(newlineIdx + 1);
+                  const trimmed = rawLine.trim();
+                  if (trimmed && trimmed !== "[DONE]") {
+                    const line = trimmed.startsWith("data:")
+                      ? trimmed.slice(5)
+                      : trimmed;
+                    const data = JSON.parse(line);
+                    event.sender.send(`mask:track:chunk:${streamId}`, data);
+                  }
+                  newlineIdx = buffered.indexOf("\n");
+                }
+              } catch (err) {
+                event.sender.send(`mask:track:error:${streamId}`, {
+                  message: err instanceof Error ? err.message : "Unknown error",
+                });
+                try {
+                  reader.cancel().catch(() => {});
+                } catch {}
+                this.activeMaskStreams.delete(streamId);
+                return;
+              }
+              pump();
+            })
+            .catch((err) => {
+              event.sender.send(`mask:track:error:${streamId}`, {
+                message: err instanceof Error ? err.message : "Unknown error",
+              });
+              this.activeMaskStreams.delete(streamId);
+            });
+        };
+        pump();
+
+        return { streamId };
+      },
+    );
+
+    ipcMain.handle("mask:track:cancel", async (_event, streamId: string) => {
       const entry = this.activeMaskStreams.get(streamId);
       if (entry) {
         // Signal backend to stop processing this mask id, then abort local stream
         try {
-          await this.makeRequest<'ok' | any>('POST', `/mask/track/cancel/${encodeURIComponent(entry.id)}`);
+          await this.makeRequest<"ok" | any>(
+            "POST",
+            `/mask/track/cancel/${encodeURIComponent(entry.id)}`,
+          );
         } catch {}
-        try { entry.controller.abort(); } catch {}
-        try { entry.reader?.cancel().catch(() => {}); } catch {}
+        try {
+          entry.controller.abort();
+        } catch {}
+        try {
+          entry.reader?.cancel().catch(() => {});
+        } catch {}
         this.activeMaskStreams.delete(streamId);
       }
       return { success: true };
     });
 
     // Shapes tracking stream
-    ipcMain.handle('mask:track-shapes', async (event, request: {
-      id: string;
-      input_path: string;
-      frame_start: number;
-      anchor_frame?: number;
-      frame_end: number;
-      direction?: 'forward' | 'backward' | 'both';
-      model_type?: string;
-    }) => {
-      const streamId = crypto.randomUUID();
-
-      const controller = new AbortController();
-      const payload = await this.#prepareMaskRequest(request);
-      const response = await fetch(`${this.backendUrl}/mask/track/shapes`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/x-ndjson',
+    ipcMain.handle(
+      "mask:track-shapes",
+      async (
+        event,
+        request: {
+          id: string;
+          input_path: string;
+          frame_start: number;
+          anchor_frame?: number;
+          frame_end: number;
+          direction?: "forward" | "backward" | "both";
+          model_type?: string;
         },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+      ) => {
+        const streamId = crypto.randomUUID();
 
-      if (!response.ok || !response.body) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const reader = response.body.getReader();
-      this.activeMaskStreams.set(streamId, { controller, reader, id: (payload as any).id });
-
-      const decoder = new TextDecoder();
-      let buffered = '';
-
-      const pump = (): void => {
-        reader.read().then(({ value, done }) => {
-          try {
-            if (done) {
-              const last = buffered.trim();
-              if (last) {
-                const line = last.startsWith('data:') ? last.slice(5) : last;
-                const data = JSON.parse(line);
-                event.sender.send(`mask:track-shapes:chunk:${streamId}`, data);
-              }
-              event.sender.send(`mask:track-shapes:end:${streamId}`);
-              this.activeMaskStreams.delete(streamId);
-              return;
-            }
-
-            if (value) {
-              buffered += decoder.decode(value, { stream: true });
-            }
-
-            let newlineIdx = buffered.indexOf('\n');
-            while (newlineIdx !== -1) {
-              const rawLine = buffered.slice(0, newlineIdx);
-              buffered = buffered.slice(newlineIdx + 1);
-              const trimmed = rawLine.trim();
-              if (trimmed && trimmed !== '[DONE]') {
-                const line = trimmed.startsWith('data:') ? trimmed.slice(5) : trimmed;
-                const data = JSON.parse(line);
-                event.sender.send(`mask:track-shapes:chunk:${streamId}`, data);
-              }
-              newlineIdx = buffered.indexOf('\n');
-            }
-          } catch (err) {
-            event.sender.send(`mask:track-shapes:error:${streamId}`, { message: err instanceof Error ? err.message : 'Unknown error' });
-            try { reader.cancel().catch(() => {}); } catch {}
-            this.activeMaskStreams.delete(streamId);
-            return;
-          }
-          pump();
-        }).catch((err) => {
-          event.sender.send(`mask:track-shapes:error:${streamId}`, { message: err instanceof Error ? err.message : 'Unknown error' });
-          this.activeMaskStreams.delete(streamId);
+        const controller = new AbortController();
+        const payload = await this.#prepareMaskRequest(request);
+        const response = await fetch(`${this.backendUrl}/mask/track/shapes`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/x-ndjson",
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
         });
-      };
-      pump();
 
-      return { streamId };
-    });
-    
+        if (!response.ok || !response.body) {
+          const errorData = await response
+            .json()
+            .catch(() => ({ detail: "Unknown error" }));
+          throw new Error(
+            errorData.detail ||
+              `HTTP ${response.status}: ${response.statusText}`,
+          );
+        }
+
+        const reader = response.body.getReader();
+        this.activeMaskStreams.set(streamId, {
+          controller,
+          reader,
+          id: (payload as any).id,
+        });
+
+        const decoder = new TextDecoder();
+        let buffered = "";
+
+        const pump = (): void => {
+          reader
+            .read()
+            .then(({ value, done }) => {
+              try {
+                if (done) {
+                  const last = buffered.trim();
+                  if (last) {
+                    const line = last.startsWith("data:")
+                      ? last.slice(5)
+                      : last;
+                    const data = JSON.parse(line);
+                    event.sender.send(
+                      `mask:track-shapes:chunk:${streamId}`,
+                      data,
+                    );
+                  }
+                  event.sender.send(`mask:track-shapes:end:${streamId}`);
+                  this.activeMaskStreams.delete(streamId);
+                  return;
+                }
+
+                if (value) {
+                  buffered += decoder.decode(value, { stream: true });
+                }
+
+                let newlineIdx = buffered.indexOf("\n");
+                while (newlineIdx !== -1) {
+                  const rawLine = buffered.slice(0, newlineIdx);
+                  buffered = buffered.slice(newlineIdx + 1);
+                  const trimmed = rawLine.trim();
+                  if (trimmed && trimmed !== "[DONE]") {
+                    const line = trimmed.startsWith("data:")
+                      ? trimmed.slice(5)
+                      : trimmed;
+                    const data = JSON.parse(line);
+                    event.sender.send(
+                      `mask:track-shapes:chunk:${streamId}`,
+                      data,
+                    );
+                  }
+                  newlineIdx = buffered.indexOf("\n");
+                }
+              } catch (err) {
+                event.sender.send(`mask:track-shapes:error:${streamId}`, {
+                  message: err instanceof Error ? err.message : "Unknown error",
+                });
+                try {
+                  reader.cancel().catch(() => {});
+                } catch {}
+                this.activeMaskStreams.delete(streamId);
+                return;
+              }
+              pump();
+            })
+            .catch((err) => {
+              event.sender.send(`mask:track-shapes:error:${streamId}`, {
+                message: err instanceof Error ? err.message : "Unknown error",
+              });
+              this.activeMaskStreams.delete(streamId);
+            });
+        };
+        pump();
+
+        return { streamId };
+      },
+    );
   }
 
   private registerPreprocessorHandlers(): void {
     // List all preprocessors
-    ipcMain.handle('preprocessor:list', async (_event, checkDownloaded: boolean = true) => {
-      return this.makeRequest<any>('GET', `/preprocessor/list?check_downloaded=${checkDownloaded}`);
-    });
+    ipcMain.handle(
+      "preprocessor:list",
+      async (_event, checkDownloaded: boolean = true) => {
+        return this.makeRequest<any>(
+          "GET",
+          `/preprocessor/list?check_downloaded=${checkDownloaded}`,
+        );
+      },
+    );
 
     // Get preprocessor details
-    ipcMain.handle('preprocessor:get', async (_event, name: string) => {
-      return this.makeRequest<any>('GET', `/preprocessor/get/${encodeURIComponent(name)}`);
+    ipcMain.handle("preprocessor:get", async (_event, name: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/preprocessor/get/${encodeURIComponent(name)}`,
+      );
     });
 
     // Download preprocessor
-    ipcMain.handle('preprocessor:download', async (_event, name: string, jobId?: string) => {
-      const body = {
-        preprocessor_name: name,
-        job_id: jobId,
-      };
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/preprocessor/download', body);
-    });
+    ipcMain.handle(
+      "preprocessor:download",
+      async (_event, name: string, jobId?: string) => {
+        const body = {
+          preprocessor_name: name,
+          job_id: jobId,
+        };
+        return this.makeRequest<{
+          job_id: string;
+          status: string;
+          message?: string;
+        }>("POST", "/preprocessor/download", body);
+      },
+    );
 
     // Run preprocessor
-    ipcMain.handle('preprocessor:run', async (_event, request: {
-      preprocessor_name: string;
-      input_path: string;
-      job_id?: string;
-      download_if_needed?: boolean;
-      params?: Record<string, any>;
-      start_frame?: number;
-      end_frame?: number;
-    }) => {
-      const payload = await this.#preparePreprocessorRunRequest(request);
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/preprocessor/run', payload);
-    });
+    ipcMain.handle(
+      "preprocessor:run",
+      async (
+        _event,
+        request: {
+          preprocessor_name: string;
+          input_path: string;
+          job_id?: string;
+          download_if_needed?: boolean;
+          params?: Record<string, any>;
+          start_frame?: number;
+          end_frame?: number;
+        },
+      ) => {
+        const payload = await this.#preparePreprocessorRunRequest(request);
+        return this.makeRequest<{
+          job_id: string;
+          status: string;
+          message?: string;
+        }>("POST", "/preprocessor/run", payload);
+      },
+    );
 
     // Cancel preprocessor
-    ipcMain.handle('preprocessor:cancel', async (_event, jobId: string) => {
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/preprocessor/cancel/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("preprocessor:cancel", async (_event, jobId: string) => {
+      return this.makeRequest<{
+        job_id: string;
+        status: string;
+        message?: string;
+      }>("POST", `/preprocessor/cancel/${encodeURIComponent(jobId)}`);
     });
 
     // Get job status
-    ipcMain.handle('preprocessor:status', async (_event, jobId: string) => {
-      return this.makeRequest<any>('GET', `/preprocessor/status/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("preprocessor:status", async (_event, jobId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/preprocessor/status/${encodeURIComponent(jobId)}`,
+      );
     });
 
     // Get job result
-    ipcMain.handle('preprocessor:result', async (_event, jobId: string) => {
-      return this.makeRequest<any>('GET', `/preprocessor/result/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("preprocessor:result", async (_event, jobId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/preprocessor/result/${encodeURIComponent(jobId)}`,
+      );
     });
 
     // Delete preprocessor (remove downloaded files and unmark)
-    ipcMain.handle('preprocessor:delete', async (_event, name: string) => {
-      return this.makeRequest<any>('DELETE', `/preprocessor/delete/${encodeURIComponent(name)}`);
+    ipcMain.handle("preprocessor:delete", async (_event, name: string) => {
+      return this.makeRequest<any>(
+        "DELETE",
+        `/preprocessor/delete/${encodeURIComponent(name)}`,
+      );
     });
 
     // WebSocket handlers migrated to unified ws:* IPC
   }
 
-  async #preparePostprocessorRequest<T extends { input_path: string }>(request: T): Promise<T> {
+  async #preparePostprocessorRequest<T extends { input_path: string }>(
+    request: T,
+  ): Promise<T> {
     if (!this.#isRemoteBackend()) return request;
     const uploaded = await this.#uploadLocalFileIfNeeded(request.input_path);
     if (uploaded) {
@@ -463,110 +669,165 @@ export class ApexApi implements AppModule {
 
   private registerPostprocessorHandlers(): void {
     // Generic postprocessor runner based on method/task
-    ipcMain.handle('postprocessor:run', async (_event, request: any) => {
+    ipcMain.handle("postprocessor:run", async (_event, request: any) => {
       try {
         const { method } = request || {};
-        if (!method || typeof method !== 'string') {
-          return { success: false, error: 'Missing method' };
+        if (!method || typeof method !== "string") {
+          return { success: false, error: "Missing method" };
         }
 
         // Normalize file URL for local requests; remote upload handled in prepare step
-        if (request?.input_path?.startsWith?.('file://')) {
-          try { request.input_path = fileURLToPath(request.input_path); } catch {}
+        if (request?.input_path?.startsWith?.("file://")) {
+          try {
+            request.input_path = fileURLToPath(request.input_path);
+          } catch {}
         }
 
         // Map based on method
-        if (method === 'frame-interpolate') {
+        if (method === "frame-interpolate") {
           const payload = await this.#preparePostprocessorRequest({
-            input_path: String(request.input_path || ''),
+            input_path: String(request.input_path || ""),
             target_fps: Number(request.target_fps || 0),
             job_id: request.job_id,
             exp: request.exp,
             scale: request.scale,
           });
-          return this.makeRequest<{job_id: string; status: string; message?: string}>(
-            'POST',
-            '/postprocessor/frame-interpolate',
-            payload,
-          );
+          return this.makeRequest<{
+            job_id: string;
+            status: string;
+            message?: string;
+          }>("POST", "/postprocessor/frame-interpolate", payload);
         }
 
-        return { success: false, error: `Unknown postprocessor method: ${method}` };
+        return {
+          success: false,
+          error: `Unknown postprocessor method: ${method}`,
+        };
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : 'Failed to run postprocessor' };
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to run postprocessor",
+        };
       }
     });
   }
 
   private registerEngineHandlers(): void {
     // Run engine manifest
-    ipcMain.handle('engine:run', async (_event, request: {
-      manifest_id?: string;
-      yaml_path?: string;
-      inputs: Record<string, any>;
-      selected_components?: Record<string, any>;
-      job_id?: string;
-    }) => {
-      const payload = await this.#prepareEngineRunRequest(request);
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/engine/run', payload);
-    });
+    ipcMain.handle(
+      "engine:run",
+      async (
+        _event,
+        request: {
+          manifest_id?: string;
+          yaml_path?: string;
+          inputs: Record<string, any>;
+          selected_components?: Record<string, any>;
+          job_id?: string;
+        },
+      ) => {
+        const payload = await this.#prepareEngineRunRequest(request);
+        return this.makeRequest<{
+          job_id: string;
+          status: string;
+          message?: string;
+        }>("POST", "/engine/run", payload);
+      },
+    );
 
     // Cancel engine job
-    ipcMain.handle('engine:cancel', async (_event, jobId: string) => {
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/engine/cancel/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("engine:cancel", async (_event, jobId: string) => {
+      return this.makeRequest<{
+        job_id: string;
+        status: string;
+        message?: string;
+      }>("POST", `/engine/cancel/${encodeURIComponent(jobId)}`);
     });
 
     // Engine job status
-    ipcMain.handle('engine:status', async (_event, jobId: string) => {
-      return this.makeRequest<any>('GET', `/engine/status/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("engine:status", async (_event, jobId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/engine/status/${encodeURIComponent(jobId)}`,
+      );
     });
 
     // Engine job result
-    ipcMain.handle('engine:result', async (_event, jobId: string) => {
-      return this.makeRequest<any>('GET', `/engine/result/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("engine:result", async (_event, jobId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/engine/result/${encodeURIComponent(jobId)}`,
+      );
     });
   }
 
   private registerManifestHandlers(): void {
     // List model types
-    ipcMain.handle('manifest:types', async () => {
-      return this.makeRequest<any>('GET', '/manifest/types');
+    ipcMain.handle("manifest:types", async () => {
+      return this.makeRequest<any>("GET", "/manifest/types");
     });
 
     // List all manifests
-    ipcMain.handle('manifest:list', async () => {
-      return this.makeRequest<any>('GET', '/manifest/list');
+    ipcMain.handle("manifest:list", async () => {
+      return this.makeRequest<any>("GET", "/manifest/list");
     });
 
     // List manifests by model
-    ipcMain.handle('manifest:list-by-model', async (_event, model: string) => {
-      return this.makeRequest<any>('GET', `/manifest/list/model/${encodeURIComponent(model)}`);
+    ipcMain.handle("manifest:list-by-model", async (_event, model: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/manifest/list/model/${encodeURIComponent(model)}`,
+      );
     });
 
     // List manifests by model type
-    ipcMain.handle('manifest:list-by-type', async (_event, modelType: string) => {
-      return this.makeRequest<any>('GET', `/manifest/list/type/${encodeURIComponent(modelType)}`);
-    });
+    ipcMain.handle(
+      "manifest:list-by-type",
+      async (_event, modelType: string) => {
+        return this.makeRequest<any>(
+          "GET",
+          `/manifest/list/type/${encodeURIComponent(modelType)}`,
+        );
+      },
+    );
 
     // List manifests by model and type
-    ipcMain.handle('manifest:list-by-model-and-type', async (_event, model: string, modelType: string) => {
-      return this.makeRequest<any>('GET', `/manifest/list/model/${encodeURIComponent(model)}/model_type/${encodeURIComponent(modelType)}`);
-    });
+    ipcMain.handle(
+      "manifest:list-by-model-and-type",
+      async (_event, model: string, modelType: string) => {
+        return this.makeRequest<any>(
+          "GET",
+          `/manifest/list/model/${encodeURIComponent(model)}/model_type/${encodeURIComponent(modelType)}`,
+        );
+      },
+    );
 
     // Get manifest content by id
-    ipcMain.handle('manifest:get', async (_event, manifestId: string) => {
-      return this.makeRequest<any>('GET', `/manifest/${encodeURIComponent(manifestId)}`);
+    ipcMain.handle("manifest:get", async (_event, manifestId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/manifest/${encodeURIComponent(manifestId)}`,
+      );
     });
 
     // Get a specific part of a manifest by dot-path (e.g., spec.loras or spec.components.0.model_path)
-    ipcMain.handle('manifest:get-part', async (_event, manifestId: string, pathDot?: string) => {
-      const qp = pathDot ? `?path=${encodeURIComponent(pathDot)}` : '';
-      return this.makeRequest<any>('GET', `/manifest/${encodeURIComponent(manifestId)}/part${qp}`);
-    });
+    ipcMain.handle(
+      "manifest:get-part",
+      async (_event, manifestId: string, pathDot?: string) => {
+        const qp = pathDot ? `?path=${encodeURIComponent(pathDot)}` : "";
+        return this.makeRequest<any>(
+          "GET",
+          `/manifest/${encodeURIComponent(manifestId)}/part${qp}`,
+        );
+      },
+    );
 
     // Validate and register a custom model path for a manifest component
     ipcMain.handle(
-      'manifest:validate-custom-model-path',
+      "manifest:validate-custom-model-path",
       async (
         _event,
         request: {
@@ -577,17 +838,21 @@ export class ApexApi implements AppModule {
         },
       ) => {
         const body = {
-          manifest_id: String(request.manifest_id || ''),
+          manifest_id: String(request.manifest_id || ""),
           component_index: Number(request.component_index),
           name: request.name,
-          path: String(request.path || ''),
+          path: String(request.path || ""),
         };
-        return this.makeRequest<any>('POST', '/manifest/custom-model-path', body);
+        return this.makeRequest<any>(
+          "POST",
+          "/manifest/custom-model-path",
+          body,
+        );
       },
     );
 
     ipcMain.handle(
-      'manifest:delete-custom-model-path',
+      "manifest:delete-custom-model-path",
       async (
         _event,
         request: {
@@ -597,17 +862,21 @@ export class ApexApi implements AppModule {
         },
       ) => {
         const body = {
-          manifest_id: String(request.manifest_id || ''),
+          manifest_id: String(request.manifest_id || ""),
           component_index: Number(request.component_index),
-          path: String(request.path || ''),
+          path: String(request.path || ""),
         };
-        return this.makeRequest<any>('DELETE', '/manifest/custom-model-path', body);
+        return this.makeRequest<any>(
+          "DELETE",
+          "/manifest/custom-model-path",
+          body,
+        );
       },
     );
 
     // Update a single LoRA entry's scale inside a manifest YAML
     ipcMain.handle(
-      'manifest:update-lora-scale',
+      "manifest:update-lora-scale",
       async (
         _event,
         request: {
@@ -617,17 +886,17 @@ export class ApexApi implements AppModule {
         },
       ) => {
         const body = {
-          manifest_id: String(request.manifest_id || ''),
+          manifest_id: String(request.manifest_id || ""),
           lora_index: Number(request.lora_index),
           scale: Number(request.scale),
         };
-        return this.makeRequest<any>('POST', '/manifest/lora/scale', body);
+        return this.makeRequest<any>("POST", "/manifest/lora/scale", body);
       },
     );
 
     // Update a LoRA entry's name/label inside a manifest YAML
     ipcMain.handle(
-      'manifest:update-lora-name',
+      "manifest:update-lora-name",
       async (
         _event,
         request: {
@@ -637,17 +906,17 @@ export class ApexApi implements AppModule {
         },
       ) => {
         const body = {
-          manifest_id: String(request.manifest_id || ''),
+          manifest_id: String(request.manifest_id || ""),
           lora_index: Number(request.lora_index),
-          name: String(request.name || '').trim(),
+          name: String(request.name || "").trim(),
         };
-        return this.makeRequest<any>('POST', '/manifest/lora/name', body);
+        return this.makeRequest<any>("POST", "/manifest/lora/name", body);
       },
     );
 
     // Delete a LoRA entry (and best-effort remove its local path)
     ipcMain.handle(
-      'manifest:delete-lora',
+      "manifest:delete-lora",
       async (
         _event,
         request: {
@@ -656,34 +925,52 @@ export class ApexApi implements AppModule {
         },
       ) => {
         const body = {
-          manifest_id: String(request.manifest_id || ''),
+          manifest_id: String(request.manifest_id || ""),
           lora_index: Number(request.lora_index),
         };
-        return this.makeRequest<any>('DELETE', '/manifest/lora', body);
+        return this.makeRequest<any>("DELETE", "/manifest/lora", body);
       },
     );
   }
 
   private registerComponentsHandlers(): void {
     // Start components download
-    ipcMain.handle('components:download', async (_event, paths: string[], savePath?: string, jobId?: string) => {
-      const body = { paths, save_path: savePath, job_id: jobId };
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/components/download', body);
-    });
+    ipcMain.handle(
+      "components:download",
+      async (_event, paths: string[], savePath?: string, jobId?: string) => {
+        const body = { paths, save_path: savePath, job_id: jobId };
+        return this.makeRequest<{
+          job_id: string;
+          status: string;
+          message?: string;
+        }>("POST", "/components/download", body);
+      },
+    );
 
     // Delete a downloaded component (file or directory under components path)
-    ipcMain.handle('components:delete', async (_event, targetPath: string) => {
-      return this.makeRequest<{status: string; path: string}>('DELETE', '/components/delete', { path: targetPath });
+    ipcMain.handle("components:delete", async (_event, targetPath: string) => {
+      return this.makeRequest<{ status: string; path: string }>(
+        "DELETE",
+        "/components/delete",
+        { path: targetPath },
+      );
     });
 
     // Poll components download status
-    ipcMain.handle('components:status', async (_event, jobId: string) => {
-      return this.makeRequest<any>('GET', `/jobs/status/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("components:status", async (_event, jobId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/jobs/status/${encodeURIComponent(jobId)}`,
+      );
     });
 
     // Cancel components download
-    ipcMain.handle('components:cancel', async (_event, jobId: string) => {
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/jobs/cancel/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("components:cancel", async (_event, jobId: string) => {
+      return this.makeRequest<{
+        job_id: string;
+        status: string;
+        message?: string;
+      }>("POST", `/jobs/cancel/${encodeURIComponent(jobId)}`);
     });
 
     // WebSocket handlers migrated to unified ws:* IPC
@@ -691,199 +978,293 @@ export class ApexApi implements AppModule {
 
   private registerDownloadHandlers(): void {
     // Start unified download
-    ipcMain.handle('download:start', async (_event, request: {
-      item_type: 'component' | 'lora' | 'preprocessor';
-      source: string | string[];
-      save_path?: string;
-      job_id?: string;
-      manifest_id?: string;
-      lora_name?: string;
-    }) => {
-      const body = {
-        item_type: request.item_type,
-        source: request.source,
-        save_path: request.save_path,
-        job_id: request.job_id,
-        manifest_id: request.manifest_id,
-        lora_name: request.lora_name,
-      };
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', '/download', body);
-    });
+    ipcMain.handle(
+      "download:start",
+      async (
+        _event,
+        request: {
+          item_type: "component" | "lora" | "preprocessor";
+          source: string | string[];
+          save_path?: string;
+          job_id?: string;
+          manifest_id?: string;
+          lora_name?: string;
+        },
+      ) => {
+        const body = {
+          item_type: request.item_type,
+          source: request.source,
+          save_path: request.save_path,
+          job_id: request.job_id,
+          manifest_id: request.manifest_id,
+          lora_name: request.lora_name,
+        };
+        return this.makeRequest<{
+          job_id: string;
+          status: string;
+          message?: string;
+        }>("POST", "/download", body);
+      },
+    );
 
     // Resolve job id or check if already downloaded
-    ipcMain.handle('download:resolve', async (_event, request: {
-      item_type: 'component' | 'lora' | 'preprocessor';
-      source: string | string[];
-      save_path?: string;
-    }) => {
-      const body = {
-        item_type: request.item_type,
-        source: request.source,
-        save_path: request.save_path,
-      };
-      return this.makeRequest<{ job_id: string; exists: boolean; running: boolean; downloaded: boolean; bucket: string; save_dir: string }>('POST', '/download/resolve', body);
-    });
+    ipcMain.handle(
+      "download:resolve",
+      async (
+        _event,
+        request: {
+          item_type: "component" | "lora" | "preprocessor";
+          source: string | string[];
+          save_path?: string;
+        },
+      ) => {
+        const body = {
+          item_type: request.item_type,
+          source: request.source,
+          save_path: request.save_path,
+        };
+        return this.makeRequest<{
+          job_id: string;
+          exists: boolean;
+          running: boolean;
+          downloaded: boolean;
+          bucket: string;
+          save_dir: string;
+        }>("POST", "/download/resolve", body);
+      },
+    );
 
     // Resolve multiple sources at once
-    ipcMain.handle('download:resolve-batch', async (_event, request: {
-      item_type: 'component' | 'lora' | 'preprocessor';
-      sources: Array<string | string[]>;
-      save_path?: string;
-    }) => {
-      const body = {
-        item_type: request.item_type,
-        sources: request.sources,
-        save_path: request.save_path,
-      };
-      return this.makeRequest<{ results: Array<{ job_id: string; exists: boolean; running: boolean; downloaded: boolean; bucket: string; save_dir: string }> }>('POST', '/download/resolve/batch', body);
-    });
+    ipcMain.handle(
+      "download:resolve-batch",
+      async (
+        _event,
+        request: {
+          item_type: "component" | "lora" | "preprocessor";
+          sources: Array<string | string[]>;
+          save_path?: string;
+        },
+      ) => {
+        const body = {
+          item_type: request.item_type,
+          sources: request.sources,
+          save_path: request.save_path,
+        };
+        return this.makeRequest<{
+          results: Array<{
+            job_id: string;
+            exists: boolean;
+            running: boolean;
+            downloaded: boolean;
+            bucket: string;
+            save_dir: string;
+          }>;
+        }>("POST", "/download/resolve/batch", body);
+      },
+    );
 
     // Poll unified download status
-    ipcMain.handle('download:status', async (_event, jobId: string) => {
-      return this.makeRequest<any>('GET', `/download/status/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("download:status", async (_event, jobId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/download/status/${encodeURIComponent(jobId)}`,
+      );
     });
 
     // Cancel unified download
-    ipcMain.handle('download:cancel', async (_event, jobId: string) => {
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/download/cancel/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("download:cancel", async (_event, jobId: string) => {
+      return this.makeRequest<{
+        job_id: string;
+        status: string;
+        message?: string;
+      }>("POST", `/download/cancel/${encodeURIComponent(jobId)}`);
     });
 
     // Delete a downloaded path (file or directory) from filesystem
-    ipcMain.handle('download:delete', async (_event, request: {
-      path: string;
-      item_type?: 'component' | 'lora' | 'preprocessor';
-      source?: string | string[];
-      save_path?: string;
-    }) => {
-      const body = {
-        path: String(request.path || ''),
-        item_type: request.item_type,
-        source: request.source,
-        save_path: request.save_path,
-      };
-      return this.makeRequest<{ path: string; status: string; removed_mapping?: boolean; unmarked?: boolean }>('DELETE', '/download/delete', body);
-    });
+    ipcMain.handle(
+      "download:delete",
+      async (
+        _event,
+        request: {
+          path: string;
+          item_type?: "component" | "lora" | "preprocessor";
+          source?: string | string[];
+          save_path?: string;
+        },
+      ) => {
+        const body = {
+          path: String(request.path || ""),
+          item_type: request.item_type,
+          source: request.source,
+          save_path: request.save_path,
+        };
+        return this.makeRequest<{
+          path: string;
+          status: string;
+          removed_mapping?: boolean;
+          unmarked?: boolean;
+        }>("DELETE", "/download/delete", body);
+      },
+    );
   }
 
   private registerSystemHandlers(): void {
     // System memory usage
-    ipcMain.handle('system:memory', async () => {
-      return this.makeRequest<any>('GET', '/system/memory');
+    ipcMain.handle("system:memory", async () => {
+      return this.makeRequest<any>("GET", "/system/memory");
     });
 
     // Reveal a file or folder in the OS file manager
-    ipcMain.handle('files:reveal-in-folder', async (_event, absPath: string) => {
-      try {
-        if (typeof absPath !== 'string' || !absPath) {
-          return { success: false, error: 'Invalid path' };
+    ipcMain.handle(
+      "files:reveal-in-folder",
+      async (_event, absPath: string) => {
+        try {
+          if (typeof absPath !== "string" || !absPath) {
+            return { success: false, error: "Invalid path" };
+          }
+          shell.showItemInFolder(absPath);
+          return { success: true, data: { path: absPath } };
+        } catch (error) {
+          return {
+            success: false,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Failed to reveal item in folder",
+          };
         }
-        shell.showItemInFolder(absPath);
-        return { success: true, data: { path: absPath } };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : 'Failed to reveal item in folder',
-        };
-      }
-    });
+      },
+    );
   }
 
   private registerJobHandlers(): void {
     // Unified job status
-    ipcMain.handle('jobs:status', async (_event, jobId: string) => {
-      return this.makeRequest<any>('GET', `/jobs/status/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("jobs:status", async (_event, jobId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/jobs/status/${encodeURIComponent(jobId)}`,
+      );
     });
 
     // Unified job cancel
-    ipcMain.handle('jobs:cancel', async (_event, jobId: string) => {
-      return this.makeRequest<{job_id: string; status: string; message?: string}>('POST', `/jobs/cancel/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("jobs:cancel", async (_event, jobId: string) => {
+      return this.makeRequest<{
+        job_id: string;
+        status: string;
+        message?: string;
+      }>("POST", `/jobs/cancel/${encodeURIComponent(jobId)}`);
     });
 
     // Ray job listing and management (aggregated view across subsystems)
-    ipcMain.handle('ray:jobs:list', async () => {
-      return this.makeRequest<any>('GET', '/ray/jobs');
+    ipcMain.handle("ray:jobs:list", async () => {
+      return this.makeRequest<any>("GET", "/ray/jobs");
     });
 
-    ipcMain.handle('ray:jobs:get', async (_event, jobId: string) => {
-      return this.makeRequest<any>('GET', `/ray/jobs/${encodeURIComponent(jobId)}`);
+    ipcMain.handle("ray:jobs:get", async (_event, jobId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/ray/jobs/${encodeURIComponent(jobId)}`,
+      );
     });
 
-    ipcMain.handle('ray:jobs:cancel', async (_event, jobId: string) => {
-      return this.makeRequest<any>('POST', `/ray/jobs/${encodeURIComponent(jobId)}/cancel`);
+    ipcMain.handle("ray:jobs:cancel", async (_event, jobId: string) => {
+      return this.makeRequest<any>(
+        "POST",
+        `/ray/jobs/${encodeURIComponent(jobId)}/cancel`,
+      );
     });
 
-    ipcMain.handle('ray:jobs:cancel-all', async () => {
-      return this.makeRequest<any>('POST', '/ray/jobs/cancel_all');
+    ipcMain.handle("ray:jobs:cancel-all", async () => {
+      return this.makeRequest<any>("POST", "/ray/jobs/cancel_all");
     });
   }
 
   private registerWebSocketHandlers(): void {
     // Unified connect: expects { key, pathOrUrl }
-    ipcMain.handle('ws:connect', async (event, request: { key: string; pathOrUrl: string }) => {
-      const { key, pathOrUrl } = request;
-      const result = this.wsManager!.connect(key, pathOrUrl, {
-        onOpen: () => {
-          event.sender.send(`ws-status:${key}`, { status: 'connected' });
-        },
-        onMessage: (data) => {
-          try {
-            const message = JSON.parse(data);
-            event.sender.send(`ws-update:${key}`, message);
-          } catch (error) {
-            // Forward as error if message is not JSON
-            event.sender.send(`ws-error:${key}`, { error: 'Invalid JSON message', raw: data });
-          }
-        },
-        onError: (error) => {
-          event.sender.send(`ws-error:${key}`, { error: error.message });
-        },
-        onClose: () => {
-          event.sender.send(`ws-status:${key}`, { status: 'disconnected' });
+    ipcMain.handle(
+      "ws:connect",
+      async (event, request: { key: string; pathOrUrl: string }) => {
+        const { key, pathOrUrl } = request;
+        const result = this.wsManager!.connect(key, pathOrUrl, {
+          onOpen: () => {
+            event.sender.send(`ws-status:${key}`, { status: "connected" });
+          },
+          onMessage: (data) => {
+            try {
+              const message = JSON.parse(data);
+              event.sender.send(`ws-update:${key}`, message);
+            } catch (error) {
+              // Forward as error if message is not JSON
+              event.sender.send(`ws-error:${key}`, {
+                error: "Invalid JSON message",
+                raw: data,
+              });
+            }
+          },
+          onError: (error) => {
+            event.sender.send(`ws-error:${key}`, { error: error.message });
+          },
+          onClose: () => {
+            event.sender.send(`ws-status:${key}`, { status: "disconnected" });
+          },
+        });
+        if (result.success) {
+          return { success: true, data: { key } };
         }
-      });
-      if (result.success) {
-        return { success: true, data: { key } };
-      }
-      return { success: false, error: result.error || 'Failed to connect to WebSocket' };
-    });
+        return {
+          success: false,
+          error: result.error || "Failed to connect to WebSocket",
+        };
+      },
+    );
 
     // Unified disconnect: expects key
-    ipcMain.handle('ws:disconnect', async (_event, key: string) => {
+    ipcMain.handle("ws:disconnect", async (_event, key: string) => {
       const result = this.wsManager!.disconnect(key);
       if (result.success) {
-        return { success: true, data: { message: 'WebSocket disconnected' } };
+        return { success: true, data: { message: "WebSocket disconnected" } };
       }
-      return { success: false, error: result.error || 'WebSocket connection not found' };
+      return {
+        success: false,
+        error: result.error || "WebSocket connection not found",
+      };
     });
 
     // Optional: status check
-    ipcMain.handle('ws:status', async (_event, key: string) => {
+    ipcMain.handle("ws:status", async (_event, key: string) => {
       const connected = this.wsManager?.has(key) ?? false;
       return { success: true, data: { key, connected } };
     });
   }
-  
-  private async makeRequest<T>(method: 'GET' | 'POST' | 'DELETE', endpoint: string, body?: any): Promise<ConfigResponse<T>> {
+
+  private async makeRequest<T>(
+    method: "GET" | "POST" | "DELETE",
+    endpoint: string,
+    body?: any,
+  ): Promise<ConfigResponse<T>> {
     try {
       const options: RequestInit = {
         method,
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
       };
 
-
-      if (body && method !== 'GET') {
+      if (body && method !== "GET") {
         options.body = JSON.stringify(body);
       }
 
       const response = await fetch(`${this.backendUrl}${endpoint}`, options);
-      
+
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        const errorData = await response
+          .json()
+          .catch(() => ({ detail: "Unknown error" }));
         return {
           success: false,
-          error: errorData.detail || `HTTP ${response.status}: ${response.statusText}`,
+          error:
+            errorData.detail ||
+            `HTTP ${response.status}: ${response.statusText}`,
         };
       }
 
@@ -895,7 +1276,8 @@ export class ApexApi implements AppModule {
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
+        error:
+          error instanceof Error ? error.message : "Unknown error occurred",
       };
     }
   }
@@ -904,23 +1286,28 @@ export class ApexApi implements AppModule {
   async #probeBackendLocality(): Promise<void> {
     try {
       const u = new URL(this.backendUrl);
-      const host = (u.hostname || '').toLowerCase();
+      const host = (u.hostname || "").toLowerCase();
       // If not loopback, it's definitely remote
-      if (!(host === 'localhost' || host === '127.0.0.1' || host === '::1')) {
+      if (!(host === "localhost" || host === "127.0.0.1" || host === "::1")) {
         this.loopbackAppearsRemote = true;
         return;
       }
       // Attempt to detect if loopback is tunneling to a different machine
-      const resp = await fetch(`${this.backendUrl}/config/home-dir`, { method: 'GET', headers: { 'Content-Type': 'application/json' } });
+      const resp = await fetch(`${this.backendUrl}/config/home-dir`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
       if (!resp.ok) {
         this.loopbackAppearsRemote = false;
         return;
       }
-      const data = await resp.json().catch(() => ({} as any));
-      const remoteHome = typeof data?.home_dir === 'string' ? data.home_dir : '';
+      const data = await resp.json().catch(() => ({}) as any);
+      const remoteHome =
+        typeof data?.home_dir === "string" ? data.home_dir : "";
       const localHome = os.homedir();
-      const norm = (p: string) => p.replace(/\\/g, '/');
-      this.loopbackAppearsRemote = !!remoteHome && norm(remoteHome) !== norm(localHome);
+      const norm = (p: string) => p.replace(/\\/g, "/");
+      this.loopbackAppearsRemote =
+        !!remoteHome && norm(remoteHome) !== norm(localHome);
     } catch {
       // On failure to probe, keep previous value (default false)
     }
@@ -929,8 +1316,9 @@ export class ApexApi implements AppModule {
   #isRemoteBackend(): boolean {
     try {
       const u = new URL(this.backendUrl);
-      const host = (u.hostname || '').toLowerCase();
-      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return this.loopbackAppearsRemote;
+      const host = (u.hostname || "").toLowerCase();
+      if (host === "localhost" || host === "127.0.0.1" || host === "::1")
+        return this.loopbackAppearsRemote;
       return true;
     } catch {
       return false;
@@ -940,7 +1328,10 @@ export class ApexApi implements AppModule {
   async #ensureRemoteCachePath(): Promise<string | null> {
     if (!this.#isRemoteBackend()) return null;
     if (this.remoteCachePath) return this.remoteCachePath;
-    const res = await this.makeRequest<{cache_path: string}>('GET', '/config/cache-path');
+    const res = await this.makeRequest<{ cache_path: string }>(
+      "GET",
+      "/config/cache-path",
+    );
     if (res.success && res.data?.cache_path) {
       this.remoteCachePath = res.data.cache_path;
       return this.remoteCachePath;
@@ -962,7 +1353,7 @@ export class ApexApi implements AppModule {
 
   #resolveLocalPath(maybePath: string): string | null {
     try {
-      if (!maybePath || typeof maybePath !== 'string') return null;
+      if (!maybePath || typeof maybePath !== "string") return null;
       if (this.#looksLikeHttp(maybePath)) return null;
       if (this.#looksLikeFileUrl(maybePath)) {
         const p = fileURLToPath(maybePath);
@@ -971,11 +1362,13 @@ export class ApexApi implements AppModule {
       if (this.#looksLikeAppUrl(maybePath)) {
         // Support app://user-data/... and app://apex-cache/...
         const u = new URL(maybePath);
-        const pathname = decodeURIComponent(u.pathname || '');
-        const norm = pathname.startsWith('/') ? pathname.slice(1) : pathname;
-        if (u.hostname === 'user-data' && this.app) {
-          const base = this.app.getPath('userData');
-          const candidate = norm.startsWith(base) ? norm : path.join(base, norm);
+        const pathname = decodeURIComponent(u.pathname || "");
+        const norm = pathname.startsWith("/") ? pathname.slice(1) : pathname;
+        if (u.hostname === "user-data" && this.app) {
+          const base = this.app.getPath("userData");
+          const candidate = norm.startsWith(base)
+            ? norm
+            : path.join(base, norm);
           return fs.existsSync(candidate) ? candidate : null;
         }
         // For apex-cache, we do not know the local cache root reliably in remote mode; skip
@@ -989,7 +1382,9 @@ export class ApexApi implements AppModule {
     }
   }
 
-  async #uploadLocalFileIfNeeded(localPathOrUrl: string): Promise<string | null> {
+  async #uploadLocalFileIfNeeded(
+    localPathOrUrl: string,
+  ): Promise<string | null> {
     if (!this.#isRemoteBackend()) return null;
     const abs = this.#resolveLocalPath(localPathOrUrl);
     if (!abs) return null;
@@ -997,57 +1392,66 @@ export class ApexApi implements AppModule {
     if (cached) return cached;
 
     const remoteCacheBase = await this.#ensureRemoteCachePath();
-    if (!remoteCacheBase) throw new Error('Remote cache path unavailable');
+    if (!remoteCacheBase) throw new Error("Remote cache path unavailable");
 
     const fileName = path.basename(abs);
     const destRel = `uploads/${crypto.randomUUID()}-${fileName}`;
 
     const { size } = await fs.promises.stat(abs);
     if (size > MAX_UPLOAD_BYTES) {
-      const fileGiB = (size / (1024 ** 3)).toFixed(2);
-      const limitGiB = (MAX_UPLOAD_BYTES / (1024 ** 3)).toFixed(2);
-      throw new Error(`File is too large to upload automatically (${fileGiB} GiB > ${limitGiB} GiB). Place the file on the backend or raise APEX_MAX_UPLOAD_BYTES.`);
+      const fileGiB = (size / 1024 ** 3).toFixed(2);
+      const limitGiB = (MAX_UPLOAD_BYTES / 1024 ** 3).toFixed(2);
+      throw new Error(
+        `File is too large to upload automatically (${fileGiB} GiB > ${limitGiB} GiB). Place the file on the backend or raise APEX_MAX_UPLOAD_BYTES.`,
+      );
     }
 
     // Use query params for scope/dest to avoid multipart field name disagreements
     const url = `${this.backendUrl}/files/ingest?scope=apex-cache&dest=${encodeURIComponent(destRel)}`;
     const form = new NodeFormData();
-    form.set('file', await fileFromPath(abs, fileName));
+    form.set("file", await fileFromPath(abs, fileName));
     const encoder = new FormDataEncoder(form);
 
     const resp = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: encoder.headers as any,
       body: Readable.from(encoder) as any,
       // Required by Node's fetch for streaming request bodies
       // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       // @ts-ignore
-      duplex: 'half',
+      duplex: "half",
     });
     if (!resp.ok) {
-      const t = await resp.text().catch(() => '');
-      throw new Error(`Upload failed (${resp.status}): ${t || resp.statusText}`);
+      const t = await resp.text().catch(() => "");
+      throw new Error(
+        `Upload failed (${resp.status}): ${t || resp.statusText}`,
+      );
     }
     // Expect { path: string } relative to cache
     let relReturned: string = destRel;
     try {
       const j = await resp.json();
-      relReturned = (j && typeof j.path === 'string') ? j.path : destRel;
+      relReturned = j && typeof j.path === "string" ? j.path : destRel;
     } catch {
       relReturned = destRel;
     }
-    const remoteAbs = this.#joinRemote(remoteCacheBase as string, relReturned as string);
+    const remoteAbs = this.#joinRemote(
+      remoteCacheBase as string,
+      relReturned as string,
+    );
     this.uploadCache.set(abs, remoteAbs);
     return remoteAbs;
   }
 
   #joinRemote(base: string, rel: string): string {
-    const b = base.replace(/\\/g, '/').replace(/\/$/, '');
-    const r = rel.replace(/\\/g, '/').replace(/^\//, '');
+    const b = base.replace(/\\/g, "/").replace(/\/$/, "");
+    const r = rel.replace(/\\/g, "/").replace(/^\//, "");
     return `${b}/${r}`;
   }
 
-  async #prepareMaskRequest<T extends { input_path: string }>(request: T): Promise<T> {
+  async #prepareMaskRequest<T extends { input_path: string }>(
+    request: T,
+  ): Promise<T> {
     if (!this.#isRemoteBackend()) return request;
     const uploaded = await this.#uploadLocalFileIfNeeded(request.input_path);
     if (uploaded) {
@@ -1104,7 +1508,7 @@ export class ApexApi implements AppModule {
 
   async #transformValueForUpload(value: any): Promise<any> {
     if (value == null) return value;
-    if (typeof value === 'string') {
+    if (typeof value === "string") {
       const uploaded = await this.#uploadLocalFileIfNeeded(value);
       return uploaded || value;
     }
@@ -1112,12 +1516,16 @@ export class ApexApi implements AppModule {
       const out = [] as any[];
       for (const item of value) {
         // Only map strings or one-level nested arrays of strings
-        if (typeof item === 'string') {
+        if (typeof item === "string") {
           out.push((await this.#uploadLocalFileIfNeeded(item)) || item);
         } else if (Array.isArray(item)) {
           const inner: any[] = [];
           for (const s of item) {
-            inner.push(typeof s === 'string' ? ((await this.#uploadLocalFileIfNeeded(s)) || s) : s);
+            inner.push(
+              typeof s === "string"
+                ? (await this.#uploadLocalFileIfNeeded(s)) || s
+                : s,
+            );
           }
           out.push(inner);
         } else {
@@ -1126,23 +1534,23 @@ export class ApexApi implements AppModule {
       }
       return out;
     }
-    if (typeof value === 'object') {
+    if (typeof value === "object") {
       const keys = Object.keys(value);
-      const onlySrcKey = keys.length === 1 && keys[0] === 'src';
-      if (onlySrcKey && typeof value.src === 'string') {
+      const onlySrcKey = keys.length === 1 && keys[0] === "src";
+      if (onlySrcKey && typeof value.src === "string") {
         const uploaded = await this.#uploadLocalFileIfNeeded(value.src);
         return uploaded || value.src;
       }
       let mutated = false;
       let nextValue: any = value;
-      if (typeof value.input_path === 'string') {
+      if (typeof value.input_path === "string") {
         const uploaded = await this.#uploadLocalFileIfNeeded(value.input_path);
         if (uploaded) {
           nextValue = { ...nextValue, input_path: uploaded };
           mutated = true;
         }
       }
-      if (typeof value.src === 'string') {
+      if (typeof value.src === "string") {
         const uploaded = await this.#uploadLocalFileIfNeeded(value.src);
         if (uploaded) {
           if (!mutated) {
@@ -1156,7 +1564,6 @@ export class ApexApi implements AppModule {
     }
     return value;
   }
-
 }
 
 export function apexApi(...args: ConstructorParameters<typeof ApexApi>) {

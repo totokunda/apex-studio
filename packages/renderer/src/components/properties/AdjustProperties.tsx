@@ -1,6 +1,6 @@
-import React from 'react';
-import ColorCorrectionProperties from './ColorCorrectionProperties';
-import EffectsProperties from './EffectsProperties';
+import React from "react";
+import ColorCorrectionProperties from "./ColorCorrectionProperties";
+import EffectsProperties from "./EffectsProperties";
 
 interface AdjustPropertiesProps {
   clipId: string;
@@ -15,4 +15,4 @@ const AdjustProperties: React.FC<AdjustPropertiesProps> = ({ clipId }) => {
   );
 };
 
-    export default AdjustProperties;
+export default AdjustProperties;

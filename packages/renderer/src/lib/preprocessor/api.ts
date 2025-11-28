@@ -6,8 +6,8 @@ import {
   getPreprocessorStatus as getPreprocessorStatusPreload,
   getPreprocessorResult as getPreprocessorResultPreload,
   cancelPreprocessor as cancelPreprocessorPreload,
-} from '@app/preload';
-import { wsClient } from '../ws/client';
+} from "@app/preload";
+import { wsClient } from "../ws/client";
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -15,7 +15,7 @@ export interface ConfigResponse<T> {
   error?: string;
 }
 
-type PreprocessorParameterType = 'int' | 'float' | 'bool' | 'str' | 'category';
+type PreprocessorParameterType = "int" | "float" | "bool" | "str" | "category";
 
 interface ParameterOption {
   name: string;
@@ -40,7 +40,7 @@ export interface PreprocessorFile {
 }
 
 export interface Preprocessor {
-  type: 'preprocessor';
+  type: "preprocessor";
   name: string;
   id: string;
   description?: string;
@@ -88,14 +88,18 @@ export interface RunPreprocessorRequest {
 /**
  * List all available preprocessors
  */
-export async function listPreprocessors(checkDownloaded: boolean = true): Promise<ConfigResponse<PreprocessorList>> {
+export async function listPreprocessors(
+  checkDownloaded: boolean = true,
+): Promise<ConfigResponse<PreprocessorList>> {
   return await listPreprocessorsPreload(checkDownloaded);
 }
 
 /**
  * Get detailed information about a specific preprocessor
  */
-export async function getPreprocessor(name: string): Promise<ConfigResponse<Preprocessor>> {
+export async function getPreprocessor(
+  name: string,
+): Promise<ConfigResponse<Preprocessor>> {
   return await getPreprocessorPreload(name);
 }
 
@@ -103,7 +107,10 @@ export async function getPreprocessor(name: string): Promise<ConfigResponse<Prep
  * Download a preprocessor model
  * Returns a job_id that can be used to track download progress via WebSocket
  */
-export async function downloadPreprocessor(name: string, jobId?: string): Promise<ConfigResponse<JobResponse>> {
+export async function downloadPreprocessor(
+  name: string,
+  jobId?: string,
+): Promise<ConfigResponse<JobResponse>> {
   return await downloadPreprocessorPreload(name, jobId);
 }
 
@@ -111,28 +118,36 @@ export async function downloadPreprocessor(name: string, jobId?: string): Promis
  * Run a preprocessor on input media
  * Returns a job_id that can be used to track processing progress via WebSocket
  */
-export async function runPreprocessor(request: RunPreprocessorRequest): Promise<ConfigResponse<JobResponse>> {
+export async function runPreprocessor(
+  request: RunPreprocessorRequest,
+): Promise<ConfigResponse<JobResponse>> {
   return await runPreprocessorPreload(request);
 }
 
 /**
  * Get the current status of a preprocessing job
  */
-export async function getPreprocessorStatus(jobId: string): Promise<ConfigResponse<JobResult>> {
+export async function getPreprocessorStatus(
+  jobId: string,
+): Promise<ConfigResponse<JobResult>> {
   return await getPreprocessorStatusPreload(jobId);
 }
 
 /**
  * Get the result of a completed preprocessing job
  */
-export async function getPreprocessorResult(jobId: string): Promise<ConfigResponse<JobResult>> {
+export async function getPreprocessorResult(
+  jobId: string,
+): Promise<ConfigResponse<JobResult>> {
   return await getPreprocessorResultPreload(jobId);
 }
 
 /**
  * Connect to WebSocket for real-time job updates
  */
-export async function connectJobWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+export async function connectJobWebSocket(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   try {
     await wsClient.connect(`preprocessor:${jobId}`, `/ws/job/${jobId}`);
     return { success: true, data: { jobId } };
@@ -144,7 +159,9 @@ export async function connectJobWebSocket(jobId: string): Promise<ConfigResponse
 /**
  * Disconnect from WebSocket
  */
-export async function disconnectJobWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+export async function disconnectJobWebSocket(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   try {
     await wsClient.disconnect(`preprocessor:${jobId}`);
     return { success: true, data: { jobId } };
@@ -157,7 +174,10 @@ export async function disconnectJobWebSocket(jobId: string): Promise<ConfigRespo
  * Subscribe to WebSocket updates for a job
  * Returns an unsubscribe function
  */
-export function subscribeToJobUpdates(jobId: string, callback: (data: any) => void): () => void {
+export function subscribeToJobUpdates(
+  jobId: string,
+  callback: (data: any) => void,
+): () => void {
   return wsClient.onUpdate(`preprocessor:${jobId}`, callback);
 }
 
@@ -165,7 +185,10 @@ export function subscribeToJobUpdates(jobId: string, callback: (data: any) => vo
  * Subscribe to WebSocket connection status changes
  * Returns an unsubscribe function
  */
-export function subscribeToJobStatus(jobId: string, callback: (data: any) => void): () => void {
+export function subscribeToJobStatus(
+  jobId: string,
+  callback: (data: any) => void,
+): () => void {
   return wsClient.onStatus(`preprocessor:${jobId}`, callback);
 }
 
@@ -173,7 +196,10 @@ export function subscribeToJobStatus(jobId: string, callback: (data: any) => voi
  * Subscribe to WebSocket errors
  * Returns an unsubscribe function
  */
-export function subscribeToJobErrors(jobId: string, callback: (data: any) => void): () => void {
+export function subscribeToJobErrors(
+  jobId: string,
+  callback: (data: any) => void,
+): () => void {
   return wsClient.onError(`preprocessor:${jobId}`, callback);
 }
 
@@ -182,17 +208,22 @@ export function subscribeToJobErrors(jobId: string, callback: (data: any) => voi
 /**
  * Cancel a preprocessor job
  */
-export async function cancelPreprocessor(jobId: string): Promise<ConfigResponse<any>> {
+export async function cancelPreprocessor(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   return await cancelPreprocessorPreload(jobId);
 }
 
 /**
  * Delete a preprocessor and its downloaded files
  */
-export async function deletePreprocessor(name: string): Promise<ConfigResponse<any>> {
+export async function deletePreprocessor(
+  name: string,
+): Promise<ConfigResponse<any>> {
   // Invoke the preload API to hit ApexApi -> backend DELETE endpoint
   // @ts-ignore
-  const { deletePreprocessor: deletePreprocessorPreload } = await import('@app/preload');
+  const { deletePreprocessor: deletePreprocessorPreload } =
+    await import("@app/preload");
   return await deletePreprocessorPreload(name);
 }
 
@@ -213,7 +244,7 @@ export class PreprocessorJob {
   async connect(): Promise<void> {
     const result = await connectJobWebSocket(this.jobId);
     if (!result.success) {
-      throw new Error(result.error || 'Failed to connect to WebSocket');
+      throw new Error(result.error || "Failed to connect to WebSocket");
     }
   }
 
@@ -267,7 +298,7 @@ export class PreprocessorJob {
    */
   async disconnect(): Promise<void> {
     // Unsubscribe from all listeners
-    this.unsubscribers.forEach(unsubscribe => unsubscribe());
+    this.unsubscribers.forEach((unsubscribe) => unsubscribe());
     this.unsubscribers = [];
 
     // Disconnect WebSocket
@@ -276,7 +307,11 @@ export class PreprocessorJob {
 }
 
 // Export hooks for convenience
-export { usePreprocessorJob, useActiveJobs, useJobProgress, usePreprocessorJobActions } from './hooks';
-export { usePreprocessorJobStore } from './store';
-export type { JobProgress } from './store';
-
+export {
+  usePreprocessorJob,
+  useActiveJobs,
+  useJobProgress,
+  usePreprocessorJobActions,
+} from "./hooks";
+export { usePreprocessorJobStore } from "./store";
+export type { JobProgress } from "./store";

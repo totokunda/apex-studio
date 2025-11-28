@@ -1,6 +1,6 @@
-import { create } from 'zustand';
-import { fetchFilters } from '@app/preload';
-import { Filter } from '@/lib/types';
+import { create } from "zustand";
+import { fetchFilters } from "@app/preload";
+import { Filter } from "@/lib/types";
 
 interface FiltersStoreState {
   filters: Filter[] | null;
@@ -25,9 +25,7 @@ export const useFiltersStore = create<FiltersStoreState>((set, get) => ({
       const data = await fetchFilters();
       set({ filters: data ?? [], loading: false, loadedAt: Date.now() });
     } catch (e: any) {
-      set({ error: e?.message || 'Failed to load filters', loading: false });
+      set({ error: e?.message || "Failed to load filters", loading: false });
     }
   },
 }));
-
-

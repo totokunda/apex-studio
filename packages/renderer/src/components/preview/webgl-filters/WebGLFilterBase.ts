@@ -7,7 +7,7 @@ import {
   WebGLContextListener,
   WebGLContextManager,
   WebGLSharedContextHandle,
-} from '../webgl/WebGLContextManager';
+} from "../webgl/WebGLContextManager";
 
 export abstract class WebGLFilterBase {
   protected gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
@@ -17,9 +17,13 @@ export abstract class WebGLFilterBase {
 
   private readonly contextHandle: WebGLSharedContextHandle;
   private unsubscribeFromContext?: () => void;
-  private bufferContext: WebGLRenderingContext | WebGL2RenderingContext | null = null;
+  private bufferContext: WebGLRenderingContext | WebGL2RenderingContext | null =
+    null;
 
-  constructor(contextType: 'webgl' | 'webgl2' = 'webgl', contextKey = 'preview-webgl-filter') {
+  constructor(
+    contextType: "webgl" | "webgl2" = "webgl",
+    contextKey = "preview-webgl-filter",
+  ) {
     this.contextHandle = WebGLContextManager.acquire(contextKey, {
       contextType,
       attributes: {
@@ -32,7 +36,7 @@ export abstract class WebGLFilterBase {
     this.gl = this.contextHandle.ensureContext();
 
     if (!this.gl) {
-      console.error('Failed to initialize WebGL context');
+      console.error("Failed to initialize WebGL context");
     } else {
       this.initBuffers();
     }
@@ -57,7 +61,10 @@ export abstract class WebGLFilterBase {
     this.unsubscribeFromContext = this.contextHandle.subscribe(listener);
   }
 
-  protected ensureContext(): WebGLRenderingContext | WebGL2RenderingContext | null {
+  protected ensureContext():
+    | WebGLRenderingContext
+    | WebGL2RenderingContext
+    | null {
     const gl = this.contextHandle.ensureContext();
     if (gl && gl !== this.gl) {
       this.gl = gl;
@@ -108,7 +115,7 @@ export abstract class WebGLFilterBase {
     gl.compileShader(shader);
 
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-      console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+      console.error("Shader compile error:", gl.getShaderInfoLog(shader));
       gl.deleteShader(shader);
       return null;
     }
@@ -116,12 +123,18 @@ export abstract class WebGLFilterBase {
     return shader;
   }
 
-  protected createProgram(vertexSource: string, fragmentSource: string): WebGLProgram | null {
+  protected createProgram(
+    vertexSource: string,
+    fragmentSource: string,
+  ): WebGLProgram | null {
     const gl = this.ensureContext();
     if (!gl) return null;
 
     const vertexShader = this.createShader(gl.VERTEX_SHADER, vertexSource);
-    const fragmentShader = this.createShader(gl.FRAGMENT_SHADER, fragmentSource);
+    const fragmentShader = this.createShader(
+      gl.FRAGMENT_SHADER,
+      fragmentSource,
+    );
 
     if (!vertexShader || !fragmentShader) return null;
 
@@ -133,7 +146,7 @@ export abstract class WebGLFilterBase {
     gl.linkProgram(program);
 
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.error('Program link error:', gl.getProgramInfoLog(program));
+      console.error("Program link error:", gl.getProgramInfoLog(program));
       gl.deleteProgram(program);
       return null;
     }
@@ -146,7 +159,9 @@ export abstract class WebGLFilterBase {
     return program;
   }
 
-  protected createTextureFromCanvas(canvas: HTMLCanvasElement): WebGLTexture | null {
+  protected createTextureFromCanvas(
+    canvas: HTMLCanvasElement,
+  ): WebGLTexture | null {
     const gl = this.ensureContext();
     if (!gl) return null;
 
@@ -174,8 +189,8 @@ export abstract class WebGLFilterBase {
       return;
     }
 
-    const positionLocation = gl.getAttribLocation(program, 'a_position');
-    const texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
+    const positionLocation = gl.getAttribLocation(program, "a_position");
+    const texCoordLocation = gl.getAttribLocation(program, "a_texCoord");
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
     gl.enableVertexAttribArray(positionLocation);
@@ -221,5 +236,8 @@ export abstract class WebGLFilterBase {
   }
 
   // Abstract method that subclasses must implement
-  public abstract apply(sourceCanvas: HTMLCanvasElement, ...params: any[]): HTMLCanvasElement;
+  public abstract apply(
+    sourceCanvas: HTMLCanvasElement,
+    ...params: any[]
+  ): HTMLCanvasElement;
 }

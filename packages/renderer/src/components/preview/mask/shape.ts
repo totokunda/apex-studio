@@ -1,5 +1,5 @@
-import { WebGLMaskBase } from './base';
-import { ClipTransform, MaskClipProps, MaskShapeTool } from '@/lib/types';
+import { WebGLMaskBase } from "./base";
+import { ClipTransform, MaskClipProps, MaskShapeTool } from "@/lib/types";
 
 const vertexShader = `
   attribute vec2 a_position;
@@ -202,16 +202,20 @@ interface ShapeBounds {
   shapeType?: MaskShapeTool;
 }
 
-const applyClipTransform = (shapeBounds: ShapeBounds, clipTransform?: ClipTransform, maskTransform?: ClipTransform): ShapeBounds => {
+const applyClipTransform = (
+  shapeBounds: ShapeBounds,
+  clipTransform?: ClipTransform,
+  maskTransform?: ClipTransform,
+): ShapeBounds => {
   if (!clipTransform) return shapeBounds;
 
   let localX: number, localY: number, scaledWidth: number, scaledHeight: number;
 
   if (maskTransform) {
-  const baseScaleX = maskTransform.scaleX || 1;
-  const baseScaleY = maskTransform.scaleY || 1;
-  const scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
-  const scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
+    const baseScaleX = maskTransform.scaleX || 1;
+    const baseScaleY = maskTransform.scaleY || 1;
+    const scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
+    const scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
 
     localX = (shapeBounds.x - maskTransform.x) * scaleRatioX;
     localY = (shapeBounds.y - maskTransform.y) * scaleRatioY;
@@ -231,17 +235,19 @@ const applyClipTransform = (shapeBounds: ShapeBounds, clipTransform?: ClipTransf
     const cropW = clipTransform.crop.width;
     const cropH = clipTransform.crop.height;
 
-    const displayWidth = Math.abs((clipTransform.width || 0) * (clipTransform.scaleX || 1));
-    const displayHeight = Math.abs((clipTransform.height || 0) * (clipTransform.scaleY || 1));
-    localX = (cropX * displayWidth) + (localX * cropW);
-    localY = (cropY * displayHeight) + (localY * cropH);
+    const displayWidth = Math.abs(
+      (clipTransform.width || 0) * (clipTransform.scaleX || 1),
+    );
+    const displayHeight = Math.abs(
+      (clipTransform.height || 0) * (clipTransform.scaleY || 1),
+    );
+    localX = cropX * displayWidth + localX * cropW;
+    localY = cropY * displayHeight + localY * cropH;
     scaledWidth *= cropW;
     scaledHeight *= cropH;
-
-
   }
   const newBounds: ShapeBounds = {
-    x: localX ,
+    x: localX,
     y: localY,
     width: scaledWidth,
     height: scaledHeight,
@@ -257,16 +263,18 @@ const applyClipTransform = (shapeBounds: ShapeBounds, clipTransform?: ClipTransf
 const computeCanvasScale = (
   canvas: HTMLCanvasElement,
   clipTransform?: ClipTransform,
-  maskTransform?: ClipTransform
+  maskTransform?: ClipTransform,
 ): { scaleX: number; scaleY: number } => {
   const baseScaleX = clipTransform?.scaleX ?? maskTransform?.scaleX ?? 1;
   const baseScaleY = clipTransform?.scaleY ?? maskTransform?.scaleY ?? 1;
-  const baseWidth = (clipTransform?.width ?? maskTransform?.width ?? canvas.width) * baseScaleX;
-  const baseHeight = (clipTransform?.height ?? maskTransform?.height ?? canvas.height) * baseScaleY;
+  const baseWidth =
+    (clipTransform?.width ?? maskTransform?.width ?? canvas.width) * baseScaleX;
+  const baseHeight =
+    (clipTransform?.height ?? maskTransform?.height ?? canvas.height) *
+    baseScaleY;
 
   const scaleX = baseWidth !== 0 ? canvas.width / baseWidth : 1;
   const scaleY = baseHeight !== 0 ? canvas.height / baseHeight : 1;
-
 
   return { scaleX, scaleY };
 };
@@ -282,20 +290,20 @@ export class ShapeMask extends WebGLMaskBase {
     super(contextKey);
     this.initResources();
   }
-  
+
   private initResources() {
     const gl = this.ensureContext();
-    if (!gl || (typeof gl.isContextLost === 'function' && gl.isContextLost())) {
-      console.error('No WebGL context in ShapeMask or context is lost');
+    if (!gl || (typeof gl.isContextLost === "function" && gl.isContextLost())) {
+      console.error("No WebGL context in ShapeMask or context is lost");
       return;
     }
     this.program = this.createProgram(vertexShader, fragmentShader);
     if (!this.program) {
-      console.error('Failed to create shader program');
+      console.error("Failed to create shader program");
     }
     this.initQuadBuffers();
   }
-  
+
   protected onContextLost(): void {
     super.onContextLost();
     this.program = null;
@@ -312,18 +320,11 @@ export class ShapeMask extends WebGLMaskBase {
     if (!gl) return;
 
     // Full-screen quad in clip space for TRIANGLE_STRIP
-    const positions = new Float32Array([
-      -1, -1,
-       1, -1,
-      -1,  1,
-       1,  1,
-    ]);
+    const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
     const texcoords = new Float32Array([
       // Flip v in the buffer so the texture renders upright without shader/image flips
-      0, 1,
-      1, 1,
-      0, 0,
-      1, 0,
+      0,
+      1, 1, 1, 0, 0, 1, 0,
     ]);
 
     this.positionBuffer = gl.createBuffer();
@@ -341,58 +342,92 @@ export class ShapeMask extends WebGLMaskBase {
   private hexToRgb(hex: string): { r: number; g: number; b: number } {
     const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return m
-      ? { r: parseInt(m[1], 16) / 255, g: parseInt(m[2], 16) / 255, b: parseInt(m[3], 16) / 255 }
+      ? {
+          r: parseInt(m[1], 16) / 255,
+          g: parseInt(m[2], 16) / 255,
+          b: parseInt(m[3], 16) / 255,
+        }
       : { r: 0, g: 0, b: 0 };
   }
 
-  public apply(sourceCanvas: HTMLCanvasElement, mask: MaskClipProps, frame: number, clipTransform?: ClipTransform, maskTransform?: ClipTransform, debug?: { download?: boolean; annotateBounds?: boolean; filename?: string }): HTMLCanvasElement {
+  public apply(
+    sourceCanvas: HTMLCanvasElement,
+    mask: MaskClipProps,
+    frame: number,
+    clipTransform?: ClipTransform,
+    maskTransform?: ClipTransform,
+    debug?: { download?: boolean; annotateBounds?: boolean; filename?: string },
+  ): HTMLCanvasElement {
     if (!this.gl || !this.program) {
-        console.error('No GL context or program in apply');
-        return sourceCanvas;
+      console.error("No GL context or program in apply");
+      return sourceCanvas;
     }
-    
+
     // Check if context is lost
     if (this.gl.isContextLost()) {
-        console.error('WebGL context is lost!');
-        return sourceCanvas;
+      console.error("WebGL context is lost!");
+      return sourceCanvas;
     }
-    
+
     // Resolve keyframe to use
     let keyFrame = frame;
     if (Object.keys(mask.keyframes).length === 1) {
       keyFrame = Number(Object.keys(mask.keyframes)[0]);
     } else {
-      const ks = mask.keyframes instanceof Map
-        ? Array.from(mask.keyframes.keys()).sort((a, b) => a - b)
-        : Object.keys(mask.keyframes).map(Number).sort((a, b) => a - b);
+      const ks =
+        mask.keyframes instanceof Map
+          ? Array.from(mask.keyframes.keys()).sort((a, b) => a - b)
+          : Object.keys(mask.keyframes)
+              .map(Number)
+              .sort((a, b) => a - b);
       if (ks.length) {
-        keyFrame = frame < ks[0] ? ks[0] : (ks.filter(k => k <= frame).pop() ?? ks[ks.length - 1]);
+        keyFrame =
+          frame < ks[0]
+            ? ks[0]
+            : (ks.filter((k) => k <= frame).pop() ?? ks[ks.length - 1]);
       }
     }
 
-    const keyFrameData = mask.keyframes instanceof Map ? mask.keyframes.get(keyFrame) : mask.keyframes[keyFrame];
-  	if (!keyFrameData || !keyFrameData.shapeBounds) return sourceCanvas;
+    const keyFrameData =
+      mask.keyframes instanceof Map
+        ? mask.keyframes.get(keyFrame)
+        : mask.keyframes[keyFrame];
+    if (!keyFrameData || !keyFrameData.shapeBounds) return sourceCanvas;
 
     //const { x, y, width, height } = keyFrameData.shapeBounds;
-    const transformedBounds = applyClipTransform(keyFrameData.shapeBounds, clipTransform, maskTransform);
-    const { scaleX: canvasScaleX, scaleY: canvasScaleY } = computeCanvasScale(sourceCanvas, clipTransform, maskTransform);
+    const transformedBounds = applyClipTransform(
+      keyFrameData.shapeBounds,
+      clipTransform,
+      maskTransform,
+    );
+    const { scaleX: canvasScaleX, scaleY: canvasScaleY } = computeCanvasScale(
+      sourceCanvas,
+      clipTransform,
+      maskTransform,
+    );
     const x = transformedBounds.x * canvasScaleX;
     const y = transformedBounds.y * canvasScaleY;
     const width = transformedBounds.width * canvasScaleX;
     const height = transformedBounds.height * canvasScaleY;
- 
-    // Normalize inputs
-    const backgroundColorHex = mask.backgroundColor || '#000000';
-    const maskColorHex = mask.maskColor || '#ffffff';
 
-    const backgroundOpacity = Math.max(0, Math.min(1, (mask.backgroundOpacity ?? 100) / 100));
-    const maskOpacity = Math.max(0, Math.min(1, (mask.maskOpacity ?? 100) / 100));
+    // Normalize inputs
+    const backgroundColorHex = mask.backgroundColor || "#000000";
+    const maskColorHex = mask.maskColor || "#ffffff";
+
+    const backgroundOpacity = Math.max(
+      0,
+      Math.min(1, (mask.backgroundOpacity ?? 100) / 100),
+    );
+    const maskOpacity = Math.max(
+      0,
+      Math.min(1, (mask.maskOpacity ?? 100) / 100),
+    );
 
     const backgroundEnabled = !!(mask.backgroundColorEnabled ?? false);
     const maskEnabled = !!(mask.maskColorEnabled ?? false);
     // Resize the destination GL canvas and viewport
     this.resizeCanvas(sourceCanvas.width, sourceCanvas.height);
-    
+
     // Ensure we're rendering to the default framebuffer (the canvas)
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
     this.gl.viewport(0, 0, sourceCanvas.width, sourceCanvas.height);
@@ -400,31 +435,44 @@ export class ShapeMask extends WebGLMaskBase {
     // Source texture
     const texture = this.createTextureFromCanvas(sourceCanvas);
     if (!texture) {
-        console.error('Failed to create texture from source canvas');
-        return sourceCanvas;
+      console.error("Failed to create texture from source canvas");
+      return sourceCanvas;
     }
 
     this.gl.useProgram(this.program);
 
     // ---- attributes ----
-    this.aPositionLoc = this.gl.getAttribLocation(this.program, 'a_position');
-    this.aTexCoordLoc = this.gl.getAttribLocation(this.program, 'a_texCoord');
-    
+    this.aPositionLoc = this.gl.getAttribLocation(this.program, "a_position");
+    this.aTexCoordLoc = this.gl.getAttribLocation(this.program, "a_texCoord");
 
     if (this.aPositionLoc === -1 || this.aTexCoordLoc === -1) {
-        console.error('Failed to get attribute locations');
-        return sourceCanvas;
+      console.error("Failed to get attribute locations");
+      return sourceCanvas;
     }
 
     // position
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
     this.gl.enableVertexAttribArray(this.aPositionLoc);
-    this.gl.vertexAttribPointer(this.aPositionLoc, 2, this.gl.FLOAT, false, 0, 0);
+    this.gl.vertexAttribPointer(
+      this.aPositionLoc,
+      2,
+      this.gl.FLOAT,
+      false,
+      0,
+      0,
+    );
 
     // texcoord
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texcoordBuffer);
     this.gl.enableVertexAttribArray(this.aTexCoordLoc);
-    this.gl.vertexAttribPointer(this.aTexCoordLoc, 2, this.gl.FLOAT, false, 0, 0);
+    this.gl.vertexAttribPointer(
+      this.aTexCoordLoc,
+      2,
+      this.gl.FLOAT,
+      false,
+      0,
+      0,
+    );
 
     // ---- uniforms ----
     const bg = this.hexToRgb(backgroundColorHex);
@@ -433,60 +481,94 @@ export class ShapeMask extends WebGLMaskBase {
     // texture sampler
     this.gl.activeTexture(this.gl.TEXTURE0);
     this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_image'), 0);
+    this.gl.uniform1i(this.gl.getUniformLocation(this.program, "u_image"), 0);
 
     // bounds (pixels)
     this.gl.uniform4f(
-      this.gl.getUniformLocation(this.program, 'u_shapeBounds'),
-      x, y, width, height
+      this.gl.getUniformLocation(this.program, "u_shapeBounds"),
+      x,
+      y,
+      width,
+      height,
     );
 
+    this.gl.uniform3f(
+      this.gl.getUniformLocation(this.program, "u_backgroundColor"),
+      bg.r,
+      bg.g,
+      bg.b,
+    );
+    this.gl.uniform1f(
+      this.gl.getUniformLocation(this.program, "u_backgroundOpacity"),
+      backgroundOpacity,
+    );
 
-    this.gl.uniform3f(this.gl.getUniformLocation(this.program, 'u_backgroundColor'), bg.r, bg.g, bg.b);
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_backgroundOpacity'), backgroundOpacity);
-
-    this.gl.uniform3f(this.gl.getUniformLocation(this.program, 'u_maskColor'), mk.r, mk.g, mk.b);
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_maskOpacity'), maskOpacity);
+    this.gl.uniform3f(
+      this.gl.getUniformLocation(this.program, "u_maskColor"),
+      mk.r,
+      mk.g,
+      mk.b,
+    );
+    this.gl.uniform1f(
+      this.gl.getUniformLocation(this.program, "u_maskOpacity"),
+      maskOpacity,
+    );
 
     // flags
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_backgroundEnabled'), backgroundEnabled ? 1 : 0);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_maskEnabled'), maskEnabled ? 1 : 0);
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_backgroundEnabled"),
+      backgroundEnabled ? 1 : 0,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_maskEnabled"),
+      maskEnabled ? 1 : 0,
+    );
 
     // shape kind: 0 rectangle, 1 ellipse, 2 triangle (polygon), 3 star
     let shapeKind = 0;
-    if (keyFrameData.shapeBounds.shapeType === 'ellipse') {
+    if (keyFrameData.shapeBounds.shapeType === "ellipse") {
       shapeKind = 1;
-    } else if (keyFrameData.shapeBounds.shapeType === 'polygon') {
+    } else if (keyFrameData.shapeBounds.shapeType === "polygon") {
       shapeKind = 2;
-    } else if (keyFrameData.shapeBounds.shapeType === 'star') {
+    } else if (keyFrameData.shapeBounds.shapeType === "star") {
       shapeKind = 3;
     }
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_shapeKind'), shapeKind);
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_shapeKind"),
+      shapeKind,
+    );
 
     // rotation in radians (default 0). shapeBounds.rotation is in degrees? Assuming degrees, convert.
     const rotDeg = keyFrameData.shapeBounds.rotation ?? 0;
-    
+
     const rotRad = (rotDeg * Math.PI) / 180;
 
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_rotation'), rotRad);
+    this.gl.uniform1f(
+      this.gl.getUniformLocation(this.program, "u_rotation"),
+      rotRad,
+    );
 
     // per-shape scale (default 1). When provided, scales bounds about center in shader
     const sx = keyFrameData.shapeBounds.scaleX ?? 1;
     const sy = keyFrameData.shapeBounds.scaleY ?? 1;
-    this.gl.uniform2f(this.gl.getUniformLocation(this.program, 'u_shapeScale'), sx, sy);
+    this.gl.uniform2f(
+      this.gl.getUniformLocation(this.program, "u_shapeScale"),
+      sx,
+      sy,
+    );
 
     // canvas scaling (used to undo non-uniform scaling before rotation tests)
     this.gl.uniform2f(
-      this.gl.getUniformLocation(this.program, 'u_canvasScale'),
+      this.gl.getUniformLocation(this.program, "u_canvasScale"),
       canvasScaleX,
-      canvasScaleY
+      canvasScaleY,
     );
 
     // canvas size (pixels)
     this.gl.uniform2f(
-      this.gl.getUniformLocation(this.program, 'u_canvasSize'),
+      this.gl.getUniformLocation(this.program, "u_canvasSize"),
       sourceCanvas.width,
-      sourceCanvas.height
+      sourceCanvas.height,
     );
 
     // No origin flip needed anymore; pixel coords are derived from gl_FragCoord
@@ -495,21 +577,36 @@ export class ShapeMask extends WebGLMaskBase {
     // Enable blending so alpha from mask/background produces holes (transparent)
     this.gl.enable(this.gl.BLEND);
     this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
-    
+
     // Clear to transparent so holes reveal nothing behind
     this.gl.clearColor(0, 0, 0, 0);
     this.gl.clear(this.gl.COLOR_BUFFER_BIT);
-    
+
     // Read pixel after clear
     const clearPixels = new Uint8Array(4);
-    this.gl.readPixels(this.canvas.width / 2, this.canvas.height / 2, 1, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, clearPixels);
+    this.gl.readPixels(
+      this.canvas.width / 2,
+      this.canvas.height / 2,
+      1,
+      1,
+      this.gl.RGBA,
+      this.gl.UNSIGNED_BYTE,
+      clearPixels,
+    );
 
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-    
 
     // Read a pixel from the center to verify there's content
     const pixels = new Uint8Array(4);
-    this.gl.readPixels(this.canvas.width / 2, this.canvas.height / 2, 1, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
+    this.gl.readPixels(
+      this.canvas.width / 2,
+      this.canvas.height / 2,
+      1,
+      1,
+      this.gl.RGBA,
+      this.gl.UNSIGNED_BYTE,
+      pixels,
+    );
 
     if (debug?.annotateBounds) {
       // overlay a dashed red rectangle where the shader thinks the bounds are
@@ -543,6 +640,4 @@ export class ShapeMask extends WebGLMaskBase {
     this.texcoordBuffer = null;
     super.dispose();
   }
-
-
 }

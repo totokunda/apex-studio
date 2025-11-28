@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AnyClipProps } from '@/lib/types';
-import { getMediaInfo, getMediaInfoCached } from '@/lib/media/utils';
-import VideoPreview from './VideoPreview';
-import ImagePreview from './ImagePreview';
-import { BaseClipApplicator } from './apply/base';
-import { useClipStore } from '@/lib/clip';
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { AnyClipProps } from "@/lib/types";
+import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
+import VideoPreview from "./VideoPreview";
+import ImagePreview from "./ImagePreview";
+import { BaseClipApplicator } from "./apply/base";
+import { useClipStore } from "@/lib/clip";
 
 interface DynamicModelPreviewProps {
   clip: AnyClipProps;
@@ -14,8 +14,14 @@ interface DynamicModelPreviewProps {
   overlap: boolean;
 }
 
-const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({ clip, rectWidth, rectHeight, applicators, overlap }) => {
-  const src = (clip as any)?.src || '';
+const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
+  clip,
+  rectWidth,
+  rectHeight,
+  applicators,
+  overlap,
+}) => {
+  const src = (clip as any)?.src || "";
   const [tick, setTick] = useState(0);
   const [activeSrc, setActiveSrc] = useState(src);
   const lastAspectJobIdRef = useRef<string | undefined>(undefined);
@@ -25,27 +31,35 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({ clip, rectWid
 
   // Fallback type guess by file extension while media info is being resolved
   const typeGuess = useMemo(() => {
-    const normalized = (activeSrc || '').split('?')[0].split('#')[0].toLowerCase();
-    if (/\.(mp4|mov|webm|m4v|avi|mkv)$/.test(normalized)) return 'video';
-    if (/\.(png|jpg|jpeg|webp|bmp|gif)$/.test(normalized)) return 'image';
+    const normalized = (activeSrc || "")
+      .split("?")[0]
+      .split("#")[0]
+      .toLowerCase();
+    if (/\.(mp4|mov|webm|m4v|avi|mkv)$/.test(normalized)) return "video";
+    if (/\.(png|jpg|jpeg|webp|bmp|gif)$/.test(normalized)) return "image";
     return null;
   }, [activeSrc]);
 
   // When src changes, prefetch media info for the new src and switch only when ready
   useEffect(() => {
     let cancelled = false;
-    if (!src || src === activeSrc) return () => { cancelled = true };
+    if (!src || src === activeSrc)
+      return () => {
+        cancelled = true;
+      };
     const cached = getMediaInfoCached(src);
     if (cached) {
       if (!cancelled) {
         setActiveSrc(src);
         setTick((v) => v + 1);
       }
-      return () => { cancelled = true };
+      return () => {
+        cancelled = true;
+      };
     }
     (async () => {
       try {
-        await getMediaInfo(src, { sourceDir: 'apex-cache' });
+        await getMediaInfo(src, { sourceDir: "apex-cache" });
       } finally {
         if (!cancelled) {
           setActiveSrc(src);
@@ -70,17 +84,33 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({ clip, rectWid
         const targetSrc = (clip as any)?.src || activeSrc;
         let info = getMediaInfoCached(targetSrc);
         if (!info) {
-          try { info = await getMediaInfo(targetSrc, { sourceDir: 'apex-cache' }); } catch {}
+          try {
+            info = await getMediaInfo(targetSrc, { sourceDir: "apex-cache" });
+          } catch {}
         }
         if (cancelled) return;
         const dims = (() => {
           const v = (info as any)?.video;
           const im = (info as any)?.image;
-          if (v && typeof (v as any).displayWidth === 'number' && typeof (v as any).displayHeight === 'number') {
-            return { w: Math.max(0, (v as any).displayWidth || 0), h: Math.max(0, (v as any).displayHeight || 0) };
+          if (
+            v &&
+            typeof (v as any).displayWidth === "number" &&
+            typeof (v as any).displayHeight === "number"
+          ) {
+            return {
+              w: Math.max(0, (v as any).displayWidth || 0),
+              h: Math.max(0, (v as any).displayHeight || 0),
+            };
           }
-          if (im && typeof (im as any).width === 'number' && typeof (im as any).height === 'number') {
-            return { w: Math.max(0, (im as any).width || 0), h: Math.max(0, (im as any).height || 0) };
+          if (
+            im &&
+            typeof (im as any).width === "number" &&
+            typeof (im as any).height === "number"
+          ) {
+            return {
+              w: Math.max(0, (im as any).width || 0),
+              h: Math.max(0, (im as any).height || 0),
+            };
           }
           return { w: 0, h: 0 };
         })();
@@ -88,16 +118,24 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({ clip, rectWid
           const ar = dims.w / Math.max(1, dims.h);
           try {
             const updateClip = useClipStore.getState().updateClip;
-            updateClip(clip.clipId, { transform: undefined, originalTransform: undefined, mediaWidth: dims.w as any, mediaHeight: dims.h as any, mediaAspectRatio: ar as any } as any);
+            updateClip(clip.clipId, {
+              transform: undefined,
+              originalTransform: undefined,
+              mediaWidth: dims.w as any,
+              mediaHeight: dims.h as any,
+              mediaAspectRatio: ar as any,
+            } as any);
             lastAspectJobIdRef.current = jobId;
           } catch {}
         }
       } catch {}
     })();
-    return () => { cancelled = true };
+    return () => {
+      cancelled = true;
+    };
   }, [(clip as any)?.activeJobId, clip.clipId, activeSrc]);
 
-  if (info?.video || (!info && typeGuess === 'video' && activeSrc)) {
+  if (info?.video || (!info && typeGuess === "video" && activeSrc)) {
     return (
       <VideoPreview
         {...({ ...(clip as any), src: activeSrc } as any)}
@@ -108,7 +146,7 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({ clip, rectWid
       />
     );
   }
-  if (info?.image || (!info && typeGuess === 'image' && activeSrc)) {
+  if (info?.image || (!info && typeGuess === "image" && activeSrc)) {
     return (
       <ImagePreview
         {...({ ...(clip as any), src: activeSrc } as any)}
@@ -124,5 +162,3 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({ clip, rectWid
 };
 
 export default DynamicModelPreview;
-
-

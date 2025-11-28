@@ -3,7 +3,7 @@
  * Adjusts hue and saturation using GPU acceleration
  */
 
-import { WebGLFilterBase } from './WebGLFilterBase';
+import { WebGLFilterBase } from "./WebGLFilterBase";
 
 const vertexShader = `
   attribute vec2 a_position;
@@ -121,7 +121,11 @@ export class WebGLHueSaturation extends WebGLFilterBase {
     this.initProgram();
   }
 
-  public apply(sourceCanvas: HTMLCanvasElement, hue: number, saturation: number): HTMLCanvasElement {
+  public apply(
+    sourceCanvas: HTMLCanvasElement,
+    hue: number,
+    saturation: number,
+  ): HTMLCanvasElement {
     const gl = this.ensureContext();
     if (!gl || !this.program || (hue === 0 && saturation === 0)) {
       return sourceCanvas;
@@ -143,11 +147,17 @@ export class WebGLHueSaturation extends WebGLFilterBase {
     // Set uniforms
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.uniform1i(gl.getUniformLocation(this.program, 'u_image'), 0);
+    gl.uniform1i(gl.getUniformLocation(this.program, "u_image"), 0);
     // Normalize hue from -100..100 to degrees, then to 0..1 range
-    gl.uniform1f(gl.getUniformLocation(this.program, 'u_hue'), (hue * 3.6) / 360);
+    gl.uniform1f(
+      gl.getUniformLocation(this.program, "u_hue"),
+      (hue * 3.6) / 360,
+    );
     // Normalize saturation from -100..100 to -1..1
-    gl.uniform1f(gl.getUniformLocation(this.program, 'u_saturation'), saturation / 100);
+    gl.uniform1f(
+      gl.getUniformLocation(this.program, "u_saturation"),
+      saturation / 100,
+    );
 
     // Draw
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

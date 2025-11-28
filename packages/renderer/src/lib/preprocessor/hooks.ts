@@ -11,7 +11,9 @@ export function usePreprocessorJob(jobId: string | null, autoStart = true) {
   const startTracking = usePreprocessorJobStore((s) => s.startTracking);
   const stopTracking = usePreprocessorJobStore((s) => s.stopTracking);
   const clearJob = usePreprocessorJobStore((s) => s.clearJob);
-  const job = usePreprocessorJobStore((s) => jobId ? s.getJob(jobId) : undefined);
+  const job = usePreprocessorJobStore((s) =>
+    jobId ? s.getJob(jobId) : undefined,
+  );
   const hasStarted = useRef(false);
   const previousJobId = useRef<string | null>(null);
 
@@ -47,9 +49,9 @@ export function usePreprocessorJob(jobId: string | null, autoStart = true) {
 
   return {
     job,
-    isProcessing: job?.status === 'running' || job?.status === 'pending',
-    isComplete: job?.status === 'complete',
-    isFailed: job?.status === 'failed',
+    isProcessing: job?.status === "running" || job?.status === "pending",
+    isComplete: job?.status === "complete",
+    isFailed: job?.status === "failed",
     progress: job?.progress ?? 0,
     error: job?.error,
     result: job?.result ?? null,
@@ -77,7 +79,7 @@ export function useActiveJobs(): JobProgress[] {
  * @returns Job progress or undefined
  */
 export function useJobProgress(jobId: string | null): JobProgress | undefined {
-  return usePreprocessorJobStore((s) => jobId ? s.getJob(jobId) : undefined);
+  return usePreprocessorJobStore((s) => (jobId ? s.getJob(jobId) : undefined));
 }
 
 /**
@@ -89,7 +91,9 @@ export function usePreprocessorJobActions() {
   const stopTracking = usePreprocessorJobStore((s) => s.stopTracking);
   const fetchJobResult = usePreprocessorJobStore((s) => s.fetchJobResult);
   const clearJob = usePreprocessorJobStore((s) => s.clearJob);
-  const clearCompletedJobs = usePreprocessorJobStore((s) => s.clearCompletedJobs);
+  const clearCompletedJobs = usePreprocessorJobStore(
+    (s) => s.clearCompletedJobs,
+  );
 
   return {
     startTracking,
@@ -99,4 +103,3 @@ export function usePreprocessorJobActions() {
     clearCompletedJobs,
   };
 }
-

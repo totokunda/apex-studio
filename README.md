@@ -14,10 +14,12 @@ git clone https://github.com/totokunda/clut-filters.git filters
 ```
 
 The filters folder contains two versions:
+
 - `small/` - 512x512 PNG files for easy use and rendering
 - `full/` - 1728x1728 PNG files for full quality
 
 ## Current Progress
+
 Will be making progress on this as I go.
 
 ![Progress](packages/renderer/public/preview.png)

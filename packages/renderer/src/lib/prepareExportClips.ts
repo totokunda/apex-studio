@@ -1,11 +1,20 @@
-import _ from 'lodash';
+import _ from "lodash";
 
-import type { AnyClipProps, ClipTransform, MaskClipProps, TimelineProps } from '@/lib/types';
-import { BASE_LONG_SIDE } from '@/lib/settings';
-import { getMediaInfoCached, convertUserDataPath, convertApexCachePath } from '@/lib/media/utils';
-import type { Canvas, ExportClip } from '@app/export-renderer';
-import { sortClipsForStacking } from '@/lib/clipOrdering';
-import { remapMaskWithClipTransform } from '@/lib/mask/transformUtils';
+import type {
+  AnyClipProps,
+  ClipTransform,
+  MaskClipProps,
+  TimelineProps,
+} from "@/lib/types";
+import { BASE_LONG_SIDE } from "@/lib/settings";
+import {
+  getMediaInfoCached,
+  convertUserDataPath,
+  convertApexCachePath,
+} from "@/lib/media/utils";
+import type { Canvas, ExportClip } from "@app/export-renderer";
+import { sortClipsForStacking } from "@/lib/clipOrdering";
+import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
 
 export interface PrepareExportClipsContext {
   aspectRatio: { width: number; height: number };
@@ -21,11 +30,10 @@ type NormalizedTransform = {
   height?: number;
 };
 
-
 function ensureTransform(
   transform?: ClipTransform,
-  canvas?: Canvas
-): Required<Omit<ClipTransform, 'crop'>> & { crop?: ClipTransform['crop'] } {
+  canvas?: Canvas,
+): Required<Omit<ClipTransform, "crop">> & { crop?: ClipTransform["crop"] } {
   const defaultWidth = canvas?.width ?? 100;
   const defaultHeight = canvas?.height ?? 100;
   return {
@@ -45,8 +53,8 @@ function ensureTransform(
 function resolveTransformFromClip(
   transform: ClipTransform | undefined,
   normalizedTransform: NormalizedTransform | undefined,
-  canvas?: Canvas
-): Required<Omit<ClipTransform, 'crop'>> & { crop?: ClipTransform['crop'] } {
+  canvas?: Canvas,
+): Required<Omit<ClipTransform, "crop">> & { crop?: ClipTransform["crop"] } {
   const base = ensureTransform(transform, canvas);
   if (!canvas || !normalizedTransform) return base;
 
@@ -55,7 +63,7 @@ function resolveTransformFromClip(
 
   const toPx = (normVal: any, dim: number, fallback: number): number => {
     const n = Number(normVal);
-    
+
     if (!Number.isFinite(n)) return fallback;
     // Allow values outside [0, 1] so off‑canvas normalized positions/sizes
     // are preserved when mapped back into pixel space.
@@ -101,11 +109,11 @@ export interface PrepareExportClipsOptions {
    * - 'aspect': always derive width/height from the provided `aspectRatio`
    *   (canvas space), regardless of clip type.
    */
-  dimensionsFrom?: 'clip' | 'aspect';
-  target?:{
+  dimensionsFrom?: "clip" | "aspect";
+  target?: {
     width: number;
     height: number;
-  }
+  };
 }
 
 export interface PreparedExportClipsResult {
@@ -130,7 +138,7 @@ export const normalizeTransformForCanvas = (
   canvasWidth: number,
   canvasHeight: number,
 ) => {
-  if (!transform || typeof transform !== 'object') return transform;
+  if (!transform || typeof transform !== "object") return transform;
 
   const w = canvasWidth > 0 ? canvasWidth : 1;
   const h = canvasHeight > 0 ? canvasHeight : 1;
@@ -150,13 +158,13 @@ export const normalizeTransformForCanvas = (
   normalized.height = toNorm(normalized.height, h);
 
   return normalized;
-}
+};
 
 const hasAudio = (value: AnyClipProps): boolean => {
-    if (value.type !== 'video') return false;
-    const mediaInfo = getMediaInfoCached(value.src);
-    return mediaInfo?.audio !== null;
-}
+  if (value.type !== "video") return false;
+  const mediaInfo = getMediaInfoCached(value.src);
+  return mediaInfo?.audio !== null;
+};
 
 /**
  * Convert a single clip (which may be a group) into one or more `ExportClip`s,
@@ -178,12 +186,18 @@ export function prepareExportClipsForValue(
   ctx: PrepareExportClipsContext,
   options: PrepareExportClipsOptions = {},
 ): PreparedExportClipsResult {
-  const { aspectRatio, getClipsForGroup, getClipsByType, getClipPositionScore, timelines } = ctx;
+  const {
+    aspectRatio,
+    getClipsForGroup,
+    getClipsByType,
+    getClipPositionScore,
+    timelines,
+  } = ctx;
   const {
     clearMasks = false,
     applyCentering = true,
     useOriginalTransform = false,
-    dimensionsFrom = 'clip',
+    dimensionsFrom = "clip",
     useMediaDimensionsForExport = false,
     target,
   } = options;
@@ -202,21 +216,23 @@ export function prepareExportClipsForValue(
   } = { ...(rawValue as any) };
 
   // For map targets we clear masks at the root before any processing
-  if (clearMasks && Object.prototype.hasOwnProperty.call(value, 'masks')) {
+  if (clearMasks && Object.prototype.hasOwnProperty.call(value, "masks")) {
     value.masks = [];
   }
 
   // --- Infer width/height for this value (used for centering & normalization) ---
   let width = 0;
   let height = 0;
-  const isImage = value.type === 'image';
-  const isVideo = value.type === 'video';
+  const isImage = value.type === "image";
+  const isVideo = value.type === "video";
 
   if (isImage) {
     const mediaInfo = getMediaInfoCached(value.src);
     const filePath = convertUserDataPath(value.src as string);
     value.src = filePath;
-    const transform = useOriginalTransform ? (value as any).originalTransform : (value as any).transform;
+    const transform = useOriginalTransform
+      ? (value as any).originalTransform
+      : (value as any).transform;
 
     if (!mediaInfo) {
       // Mirror previous behavior: if media info is missing, skip this value
@@ -228,13 +244,15 @@ export function prepareExportClipsForValue(
       };
     }
 
-    if (dimensionsFrom === 'clip') {
+    if (dimensionsFrom === "clip") {
       width = transform?.width ?? mediaInfo?.image?.width ?? 0;
       height = transform?.height ?? mediaInfo?.image?.height ?? 0;
     }
   } else if (isVideo) {
     const mediaInfo = getMediaInfoCached(value.src);
-    const transform = useOriginalTransform ? (value as any).originalTransform : (value as any).transform;
+    const transform = useOriginalTransform
+      ? (value as any).originalTransform
+      : (value as any).transform;
 
     if (!mediaInfo) {
       return {
@@ -245,15 +263,15 @@ export function prepareExportClipsForValue(
       };
     }
 
-    if (dimensionsFrom === 'clip') {
-      width = transform?.width ?? mediaInfo?.video?.displayWidth ?? 0;  
+    if (dimensionsFrom === "clip") {
+      width = transform?.width ?? mediaInfo?.video?.displayWidth ?? 0;
       height = transform?.height ?? mediaInfo?.video?.displayHeight ?? 0;
     }
   }
 
   // If requested (or for non-image/video types), derive width/height from the
   // canvas aspect ratio instead of the clip's intrinsic dimensions.
-  if (dimensionsFrom === 'aspect' || (!isImage && !isVideo)) {
+  if (dimensionsFrom === "aspect" || (!isImage && !isVideo)) {
     const ratio = aspectRatio.width / aspectRatio.height;
     const baseShortSide = BASE_LONG_SIDE;
     if (Number.isFinite(ratio) && ratio > 0) {
@@ -269,7 +287,7 @@ export function prepareExportClipsForValue(
   let clips: AnyClipProps[] = [value as AnyClipProps];
   let offsetStart = 0;
 
-  if (value.type === 'group') {
+  if (value.type === "group") {
     const groupedClips = getClipsForGroup((value as any).children);
     const groupStart = value.startFrame ?? 0;
     offsetStart = groupStart;
@@ -285,22 +303,25 @@ export function prepareExportClipsForValue(
       newClip.startFrame = (c.startFrame ?? 0) - groupStart;
       newClip.endFrame = (c.endFrame ?? 0) - groupStart;
 
-      if (clearMasks && Object.prototype.hasOwnProperty.call(newClip, 'masks')) {
+      if (
+        clearMasks &&
+        Object.prototype.hasOwnProperty.call(newClip, "masks")
+      ) {
         newClip.masks = [];
       }
 
-      if (newClip.type === 'image') {
+      if (newClip.type === "image") {
         const mediaInfo = getMediaInfoCached(newClip.src as string);
         if (!mediaInfo) return newClip;
         const filePath = convertUserDataPath(newClip.src as string);
         newClip.src = filePath;
       }
 
-      if (newClip.type === 'video') {
+      if (newClip.type === "video") {
         newClip.audioSrc = hasAudio(newClip) ? newClip.src : null;
       }
 
-      if (Object.prototype.hasOwnProperty.call(newClip, 'preprocessors')) {
+      if (Object.prototype.hasOwnProperty.call(newClip, "preprocessors")) {
         (newClip as any).preprocessors =
           (c as any).preprocessors?.map((p: any) => ({
             ...p,
@@ -313,21 +334,21 @@ export function prepareExportClipsForValue(
     });
   } else {
     offsetStart = value.startFrame ?? 0;
-    if (value.type === 'video') {
+    if (value.type === "video") {
       value.audioSrc = hasAudio(value) ? value.src : null;
     }
     clips = [value as AnyClipProps];
   }
 
   // --- Attach filters as applicators based on clip position score ---
-  const filterClips = getClipsByType('filter');
+  const filterClips = getClipsByType("filter");
   clips = sortClipsForStacking(
-    clips.filter((c) => c.type !== 'filter'),
+    clips.filter((c) => c.type !== "filter"),
     timelines,
   );
 
   filterClips.forEach((c) => {
-    if (c.type === 'filter') {
+    if (c.type === "filter") {
       (c as any).score = getClipPositionScore(c.clipId);
     }
   });
@@ -340,19 +361,25 @@ export function prepareExportClipsForValue(
     // Normalize preprocessor src paths (use cache path once complete)
     if (Array.isArray((clipItem as any).preprocessors)) {
       newClip.preprocessors = (clipItem as any).preprocessors.map((p: any) => {
-        const convertedSrc = p?.status === 'complete' && p?.src ? convertApexCachePath(p.src) : p?.src;
+        const convertedSrc =
+          p?.status === "complete" && p?.src
+            ? convertApexCachePath(p.src)
+            : p?.src;
         return { ...p, src: convertedSrc };
       });
     }
 
     // Optionally clear masks for map targets
-    if (clearMasks && Object.prototype.hasOwnProperty.call(newClip, 'masks')) {
+    if (clearMasks && Object.prototype.hasOwnProperty.call(newClip, "masks")) {
       newClip.masks = [];
     }
 
     // Attach filters that are visually "under" this clip
     for (const filter of [...filterClips]) {
-      if (getClipPositionScore(filter.clipId) < getClipPositionScore(newClip.clipId)) {
+      if (
+        getClipPositionScore(filter.clipId) <
+        getClipPositionScore(newClip.clipId)
+      ) {
         if (!newClip.applicators) {
           newClip.applicators = [];
         }
@@ -363,7 +390,7 @@ export function prepareExportClipsForValue(
       }
     }
 
-    newClip.applicators = _.uniqBy(newClip.applicators ?? [], 'clipId');
+    newClip.applicators = _.uniqBy(newClip.applicators ?? [], "clipId");
 
     // Ensure a basic transform exists for renderable clips that may have been
     // added and exported before the preview had a chance to create one. This
@@ -371,7 +398,7 @@ export function prepareExportClipsForValue(
     // and the centering behavior in `TextPreview`.
     if (!useOriginalTransform) {
       // Images & video: fit into the rect while preserving intrinsic aspect
-      if (newClip.type === 'image' || newClip.type === 'video') {
+      if (newClip.type === "image" || newClip.type === "video") {
         const currentTransform = (newClip as any).transform as any | undefined;
         const hasTransform = !!currentTransform;
         const tw = Number(currentTransform?.width || 0);
@@ -381,7 +408,7 @@ export function prepareExportClipsForValue(
         if (needsInit) {
           // When dimensions come from the aspect ratio, fit the media inside the
           // canvas rect while preserving its intrinsic aspect ratio, and center it.
-          if (dimensionsFrom === 'aspect' && width > 0 && height > 0) {
+          if (dimensionsFrom === "aspect" && width > 0 && height > 0) {
             const mediaInfo = getMediaInfoCached(newClip.src as string);
             const originalWidth =
               (mediaInfo as any)?.image?.width ??
@@ -450,7 +477,7 @@ export function prepareExportClipsForValue(
 
       // Text: center a default rect in the editor canvas if no transform exists,
       // matching the initialization used by `TextPreview`.
-      if (newClip.type === 'text') {
+      if (newClip.type === "text") {
         const currentTransform = (newClip as any).transform as any | undefined;
         const tw = Number(currentTransform?.width || 0);
         const th = Number(currentTransform?.height || 0);
@@ -479,14 +506,22 @@ export function prepareExportClipsForValue(
     // Optional centering logic (used for model generation previews)
     if (applyCentering) {
       try {
-        const isRenderable = newClip.type === 'image' || newClip.type === 'video';
-        const isGroupChild = newClip?.groupId !== undefined && newClip?.groupId !== null;
+        const isRenderable =
+          newClip.type === "image" || newClip.type === "video";
+        const isGroupChild =
+          newClip?.groupId !== undefined && newClip?.groupId !== null;
         const originalTransform = (newClip?.transform ?? {}) as any;
         const t = { ...originalTransform } as any;
 
-        if (isRenderable && !isGroupChild && t && typeof width === 'number' && typeof height === 'number') {
-          const rawW = (Number(t.width) || 0) || width;
-          const rawH = (Number(t.height) || 0) || height;
+        if (
+          isRenderable &&
+          !isGroupChild &&
+          t &&
+          typeof width === "number" &&
+          typeof height === "number"
+        ) {
+          const rawW = Number(t.width) || 0 || width;
+          const rawH = Number(t.height) || 0 || height;
           const sx = Number.isFinite(t.scaleX) ? Number(t.scaleX) : 1;
           const sy = Number.isFinite(t.scaleY) ? Number(t.scaleY) : 1;
           const w = Math.max(0, rawW * sx);
@@ -495,9 +530,12 @@ export function prepareExportClipsForValue(
           const rad = (deg * Math.PI) / 180;
           const cCos = Math.cos(rad);
           const sSin = Math.sin(rad);
-          const x1 = w * cCos; const y1 = w * sSin;
-          const x2 = -h * sSin; const y2 = h * cCos;
-          const x3 = w * cCos - h * sSin; const y3 = w * sSin + h * cCos;
+          const x1 = w * cCos;
+          const y1 = w * sSin;
+          const x2 = -h * sSin;
+          const y2 = h * cCos;
+          const x3 = w * cCos - h * sSin;
+          const y3 = w * sSin + h * cCos;
           const minX = Math.min(0, x1, x2, x3);
           const maxX = Math.max(0, x1, x2, x3);
           const minY = Math.min(0, y1, y2, y3);
@@ -514,20 +552,35 @@ export function prepareExportClipsForValue(
     }
 
     if (useOriginalTransform && newClip.masks) {
-      newClip.masks = newClip.masks.map((mask: MaskClipProps) => remapMaskWithClipTransform(mask, newClip.transform, newClip.originalTransform));
+      newClip.masks = newClip.masks.map((mask: MaskClipProps) =>
+        remapMaskWithClipTransform(
+          mask,
+          newClip.transform,
+          newClip.originalTransform,
+        ),
+      );
     }
-
 
     // Attach a normalized (0–1) transform snapshot describing how this clip
     // occupies the output canvas. This leaves `transform` in pixel space for
     // existing exporters while providing a normalized view for new ones.
-    if (width > 0 && height > 0 && (newClip as any).transform && !useOriginalTransform) {
+    if (
+      width > 0 &&
+      height > 0 &&
+      (newClip as any).transform &&
+      !useOriginalTransform
+    ) {
       (newClip as any).normalizedTransform = normalizeTransformForCanvas(
         (newClip as any).transform,
         width,
         height,
       );
-    } else if (width > 0 && height > 0 && (newClip as any).originalTransform && useOriginalTransform) {
+    } else if (
+      width > 0 &&
+      height > 0 &&
+      (newClip as any).originalTransform &&
+      useOriginalTransform
+    ) {
       (newClip as any).normalizedTransform = normalizeTransformForCanvas(
         (newClip as any).originalTransform,
         width,
@@ -535,12 +588,11 @@ export function prepareExportClipsForValue(
       );
     }
 
-    
     if (useOriginalTransform) {
       newClip.transform = {
         ...newClip.originalTransform,
         crop: newClip.transform?.crop,
-      }
+      };
     }
 
     // Preserve bottom-to-top stacking order for the renderer:
@@ -550,16 +602,22 @@ export function prepareExportClipsForValue(
     if (useMediaDimensionsForExport && exportClips.length === 1) {
       const mediaInfo = getMediaInfoCached(newClip.src as string);
 
-      if (newClip.type === 'video') {
+      if (newClip.type === "video") {
         width = mediaInfo?.video?.displayWidth ?? 0;
         height = mediaInfo?.video?.displayHeight ?? 0;
-      } else if (newClip.type === 'image') {
+      } else if (newClip.type === "image") {
         width = mediaInfo?.image?.width ?? 0;
         height = mediaInfo?.image?.height ?? 0;
       }
     }
 
-    if (newClip.masks && newClip.transform && newClip.normalizedTransform && useOriginalTransform && target) {
+    if (
+      newClip.masks &&
+      newClip.transform &&
+      newClip.normalizedTransform &&
+      useOriginalTransform &&
+      target
+    ) {
       // When exporting with an explicit target canvas size while using the
       // original (editor) transform, we need clip, mask and canvas to live in
       // the same coordinate space. Previously we only remapped the masks to a
@@ -601,11 +659,7 @@ export function prepareExportClipsForValue(
         target.height,
       );
     }
-
-    
   }
 
   return { exportClips, width, height, offsetStart };
 }
-
-

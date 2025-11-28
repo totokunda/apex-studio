@@ -1,5 +1,5 @@
-import { ClipTransform, MaskClipProps } from '@/lib/types';
-import { WebGLMaskBase } from './base';
+import { ClipTransform, MaskClipProps } from "@/lib/types";
+import { WebGLMaskBase } from "./base";
 
 // Reuse the same fullscreen quad shaders as lasso, but support multiple contours
 const vertexShader = `
@@ -133,9 +133,8 @@ const fragmentShader = `
   }
 `;
 
-
 export const getCropOffset = (
-  transform?: ClipTransform | null
+  transform?: ClipTransform | null,
 ): { offsetX: number; offsetY: number } => {
   if (!transform) {
     return { offsetX: 0, offsetY: 0 };
@@ -157,8 +156,8 @@ export const getCropOffset = (
     return { offsetX: 0, offsetY: 0 };
   }
 
-  const cropW = (crop!.width && crop!.width > 0) ? crop!.width : 1;
-  const cropH = (crop!.height && crop!.height > 0) ? crop!.height : 1;
+  const cropW = crop!.width && crop!.width > 0 ? crop!.width : 1;
+  const cropH = crop!.height && crop!.height > 0 ? crop!.height : 1;
 
   const baseWidth = (transform.width as number) || 0;
   const baseHeight = (transform.height as number) || 0;
@@ -174,7 +173,7 @@ export const getCropOffset = (
 const applyClipTransformContours = (
   contours: number[][],
   clipTransform?: ClipTransform,
-  maskTransform?: ClipTransform
+  maskTransform?: ClipTransform,
 ): number[][] => {
   if (!clipTransform) return contours;
   if (!maskTransform) return contours;
@@ -186,9 +185,8 @@ const applyClipTransformContours = (
   const scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
   const scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
 
-
   const transformed: number[][] = [];
-  
+
   let hasCrop = false;
   let cropX = 0;
   let cropY = 0;
@@ -212,15 +210,15 @@ const applyClipTransformContours = (
     const contour = contours[c];
     const newPts: number[] = [];
     for (let i = 0; i < contour.length; i += 2) {
-      let x = (contour[i] + deltaX) - clipTransform.x
-      let y = (contour[i + 1] + deltaY) - clipTransform.y;
-      
+      let x = contour[i] + deltaX - clipTransform.x;
+      let y = contour[i + 1] + deltaY - clipTransform.y;
+
       x = x * scaleRatioX;
       y = y * scaleRatioY;
 
       if (hasCrop) {
-        x = (cropX * displayWidth) + (x * cropW);
-        y = (cropY * displayHeight) + (y * cropH);
+        x = cropX * displayWidth + x * cropW;
+        y = cropY * displayHeight + y * cropH;
       }
 
       newPts.push(x, y);
@@ -233,16 +231,18 @@ const applyClipTransformContours = (
 const computeCanvasScale = (
   canvas: HTMLCanvasElement,
   clipTransform?: ClipTransform,
-  maskTransform?: ClipTransform
+  maskTransform?: ClipTransform,
 ): { scaleX: number; scaleY: number } => {
   const baseScaleX = clipTransform?.scaleX ?? maskTransform?.scaleX ?? 1;
   const baseScaleY = clipTransform?.scaleY ?? maskTransform?.scaleY ?? 1;
-  const baseWidth = (clipTransform?.width ?? maskTransform?.width ?? canvas.width) * baseScaleX;
-  const baseHeight = (clipTransform?.height ?? maskTransform?.height ?? canvas.height) * baseScaleY;
+  const baseWidth =
+    (clipTransform?.width ?? maskTransform?.width ?? canvas.width) * baseScaleX;
+  const baseHeight =
+    (clipTransform?.height ?? maskTransform?.height ?? canvas.height) *
+    baseScaleY;
 
   const scaleX = baseWidth !== 0 ? canvas.width / baseWidth : 1;
   const scaleY = baseHeight !== 0 ? canvas.height / baseHeight : 1;
-
 
   return { scaleX, scaleY };
 };
@@ -261,13 +261,13 @@ export class TouchMask extends WebGLMaskBase {
 
   private initResources() {
     const gl = this.ensureContext();
-    if (!gl || (typeof gl.isContextLost === 'function' && gl.isContextLost())) {
-      console.error('No WebGL context in TouchMask or context is lost');
+    if (!gl || (typeof gl.isContextLost === "function" && gl.isContextLost())) {
+      console.error("No WebGL context in TouchMask or context is lost");
       return;
     }
     this.program = this.createProgram(vertexShader, fragmentShader);
     if (!this.program) {
-      console.error('Failed to create shader program');
+      console.error("Failed to create shader program");
     }
     this.initQuadBuffers();
   }
@@ -288,18 +288,11 @@ export class TouchMask extends WebGLMaskBase {
     if (!gl) return;
 
     // Full-screen quad in clip space for TRIANGLE_STRIP
-    const positions = new Float32Array([
-      -1, -1,
-       1, -1,
-      -1,  1,
-       1,  1,
-    ]);
+    const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
     const texcoords = new Float32Array([
       // Flip v in the buffer so the texture renders upright without shader/image flips
-      0, 1,
-      1, 1,
-      0, 0,
-      1, 0,
+      0,
+      1, 1, 1, 0, 0, 1, 0,
     ]);
 
     this.positionBuffer = gl.createBuffer();
@@ -317,7 +310,11 @@ export class TouchMask extends WebGLMaskBase {
   private hexToRgb(hex: string): { r: number; g: number; b: number } {
     const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return m
-      ? { r: parseInt(m[1], 16) / 255, g: parseInt(m[2], 16) / 255, b: parseInt(m[3], 16) / 255 }
+      ? {
+          r: parseInt(m[1], 16) / 255,
+          g: parseInt(m[2], 16) / 255,
+          b: parseInt(m[3], 16) / 255,
+        }
       : { r: 0, g: 0, b: 0 };
   }
 
@@ -340,15 +337,15 @@ export class TouchMask extends WebGLMaskBase {
     frame: number,
     clipTransform?: ClipTransform,
     maskTransform?: ClipTransform,
-    debug?: { download?: boolean; annotateBounds?: boolean; filename?: string }
+    debug?: { download?: boolean; annotateBounds?: boolean; filename?: string },
   ): HTMLCanvasElement {
     if (!this.gl || !this.program) {
-      console.error('No GL context or program in apply');
+      console.error("No GL context or program in apply");
       return sourceCanvas;
     }
 
     if (this.gl.isContextLost()) {
-      console.error('WebGL context is lost!');
+      console.error("WebGL context is lost!");
       return sourceCanvas;
     }
 
@@ -357,21 +354,43 @@ export class TouchMask extends WebGLMaskBase {
     if (Object.keys(mask.keyframes).length === 1) {
       keyFrame = Number(Object.keys(mask.keyframes)[0]);
     } else {
-      const ks = mask.keyframes instanceof Map
-        ? Array.from(mask.keyframes.keys()).sort((a, b) => a - b)
-        : Object.keys(mask.keyframes).map(Number).sort((a, b) => a - b);
+      const ks =
+        mask.keyframes instanceof Map
+          ? Array.from(mask.keyframes.keys()).sort((a, b) => a - b)
+          : Object.keys(mask.keyframes)
+              .map(Number)
+              .sort((a, b) => a - b);
       if (ks.length) {
-        keyFrame = frame < ks[0] ? ks[0] : (ks.filter(k => k <= frame).pop() ?? ks[ks.length - 1]);
+        keyFrame =
+          frame < ks[0]
+            ? ks[0]
+            : (ks.filter((k) => k <= frame).pop() ?? ks[ks.length - 1]);
       }
     }
 
-    const keyFrameData = mask.keyframes instanceof Map ? mask.keyframes.get(keyFrame) : (mask.keyframes as any)[keyFrame];
-    if (!keyFrameData || !keyFrameData.contours || keyFrameData.contours.length === 0) return sourceCanvas;
+    const keyFrameData =
+      mask.keyframes instanceof Map
+        ? mask.keyframes.get(keyFrame)
+        : (mask.keyframes as any)[keyFrame];
+    if (
+      !keyFrameData ||
+      !keyFrameData.contours ||
+      keyFrameData.contours.length === 0
+    )
+      return sourceCanvas;
 
     const rawContours: number[][] = keyFrameData.contours as number[][];
-    const transformedContours = applyClipTransformContours(rawContours, clipTransform, maskTransform);
+    const transformedContours = applyClipTransformContours(
+      rawContours,
+      clipTransform,
+      maskTransform,
+    );
 
-    const { scaleX: canvasScaleX, scaleY: canvasScaleY } = computeCanvasScale(sourceCanvas, clipTransform, maskTransform);
+    const { scaleX: canvasScaleX, scaleY: canvasScaleY } = computeCanvasScale(
+      sourceCanvas,
+      clipTransform,
+      maskTransform,
+    );
 
     // Flatten points and compute per-contour metadata
     const contours: number[][] = transformedContours
@@ -390,7 +409,10 @@ export class TouchMask extends WebGLMaskBase {
     const counts: number[] = [];
     const allPoints: number[] = [];
     let running = 0;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
     for (let ci = 0; ci < numContours; ci++) {
       const contour = contours[ci];
       const count = Math.floor(contour.length / 2);
@@ -413,10 +435,16 @@ export class TouchMask extends WebGLMaskBase {
     if (numPoints < 3) return sourceCanvas;
 
     // Normalize inputs
-    const backgroundColorHex = mask.backgroundColor || '#000000';
-    const maskColorHex = mask.maskColor || '#ffffff';
-    const backgroundOpacity = Math.max(0, Math.min(1, (mask.backgroundOpacity ?? 100) / 100));
-    const maskOpacity = Math.max(0, Math.min(1, (mask.maskOpacity ?? 100) / 100));
+    const backgroundColorHex = mask.backgroundColor || "#000000";
+    const maskColorHex = mask.maskColor || "#ffffff";
+    const backgroundOpacity = Math.max(
+      0,
+      Math.min(1, (mask.backgroundOpacity ?? 100) / 100),
+    );
+    const maskOpacity = Math.max(
+      0,
+      Math.min(1, (mask.maskOpacity ?? 100) / 100),
+    );
     const backgroundEnabled = !!(mask.backgroundColorEnabled ?? false);
     const maskEnabled = !!(mask.maskColorEnabled ?? false);
 
@@ -427,14 +455,14 @@ export class TouchMask extends WebGLMaskBase {
 
     const texture = this.createTextureFromCanvas(sourceCanvas);
     if (!texture) {
-      console.error('Failed to create texture from source canvas');
+      console.error("Failed to create texture from source canvas");
       return sourceCanvas;
     }
 
     // Build packed points texture (RGBA8, width=numPoints, height=1)
     const pointsTex = this.gl.createTexture();
     if (!pointsTex) {
-      console.error('Failed to create points texture');
+      console.error("Failed to create points texture");
       this.gl.deleteTexture(texture);
       return sourceCanvas;
     }
@@ -457,16 +485,42 @@ export class TouchMask extends WebGLMaskBase {
     }
     this.gl.bindTexture(this.gl.TEXTURE_2D, pointsTex);
     this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, false);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
-    this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, pointsTexWidth, 1, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pointsData);
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_S,
+      this.gl.CLAMP_TO_EDGE,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_T,
+      this.gl.CLAMP_TO_EDGE,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MIN_FILTER,
+      this.gl.NEAREST,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MAG_FILTER,
+      this.gl.NEAREST,
+    );
+    this.gl.texImage2D(
+      this.gl.TEXTURE_2D,
+      0,
+      this.gl.RGBA,
+      pointsTexWidth,
+      1,
+      0,
+      this.gl.RGBA,
+      this.gl.UNSIGNED_BYTE,
+      pointsData,
+    );
 
     // Build contours texture (RGBA8, width=numContours, height=1) with (start,count)
     const contoursTex = this.gl.createTexture();
     if (!contoursTex) {
-      console.error('Failed to create contours texture');
+      console.error("Failed to create contours texture");
       this.gl.deleteTexture(texture);
       this.gl.deleteTexture(pointsTex);
       return sourceCanvas;
@@ -478,25 +532,51 @@ export class TouchMask extends WebGLMaskBase {
       const count = Math.max(0, Math.min(65535, counts[ci] ?? 0));
       const o = ci * 4;
       contoursData[o + 0] = (start >> 8) & 0xff; // R high
-      contoursData[o + 1] = start & 0xff;        // G low
+      contoursData[o + 1] = start & 0xff; // G low
       contoursData[o + 2] = (count >> 8) & 0xff; // B high
-      contoursData[o + 3] = count & 0xff;        // A low
+      contoursData[o + 3] = count & 0xff; // A low
     }
     this.gl.bindTexture(this.gl.TEXTURE_2D, contoursTex);
     this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, false);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
-    this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, contoursTexWidth, 1, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, contoursData);
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_S,
+      this.gl.CLAMP_TO_EDGE,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_T,
+      this.gl.CLAMP_TO_EDGE,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MIN_FILTER,
+      this.gl.NEAREST,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MAG_FILTER,
+      this.gl.NEAREST,
+    );
+    this.gl.texImage2D(
+      this.gl.TEXTURE_2D,
+      0,
+      this.gl.RGBA,
+      contoursTexWidth,
+      1,
+      0,
+      this.gl.RGBA,
+      this.gl.UNSIGNED_BYTE,
+      contoursData,
+    );
 
     this.gl.useProgram(this.program);
 
     // attributes
-    this.aPositionLoc = this.gl.getAttribLocation(this.program, 'a_position');
-    this.aTexCoordLoc = this.gl.getAttribLocation(this.program, 'a_texCoord');
+    this.aPositionLoc = this.gl.getAttribLocation(this.program, "a_position");
+    this.aTexCoordLoc = this.gl.getAttribLocation(this.program, "a_texCoord");
     if (this.aPositionLoc === -1 || this.aTexCoordLoc === -1) {
-      console.error('Failed to get attribute locations');
+      console.error("Failed to get attribute locations");
       this.gl.deleteTexture(texture);
       this.gl.deleteTexture(pointsTex);
       this.gl.deleteTexture(contoursTex);
@@ -504,10 +584,24 @@ export class TouchMask extends WebGLMaskBase {
     }
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
     this.gl.enableVertexAttribArray(this.aPositionLoc);
-    this.gl.vertexAttribPointer(this.aPositionLoc, 2, this.gl.FLOAT, false, 0, 0);
+    this.gl.vertexAttribPointer(
+      this.aPositionLoc,
+      2,
+      this.gl.FLOAT,
+      false,
+      0,
+      0,
+    );
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texcoordBuffer);
     this.gl.enableVertexAttribArray(this.aTexCoordLoc);
-    this.gl.vertexAttribPointer(this.aTexCoordLoc, 2, this.gl.FLOAT, false, 0, 0);
+    this.gl.vertexAttribPointer(
+      this.aTexCoordLoc,
+      2,
+      this.gl.FLOAT,
+      false,
+      0,
+      0,
+    );
 
     const bg = this.hexToRgb(backgroundColorHex);
     const mk = this.hexToRgb(maskColorHex);
@@ -515,27 +609,71 @@ export class TouchMask extends WebGLMaskBase {
     // Bind samplers: 0=image, 1=points, 2=contours
     this.gl.activeTexture(this.gl.TEXTURE0);
     this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_image'), 0);
+    this.gl.uniform1i(this.gl.getUniformLocation(this.program, "u_image"), 0);
 
     this.gl.activeTexture(this.gl.TEXTURE1);
     this.gl.bindTexture(this.gl.TEXTURE_2D, pointsTex);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_pointsTex'), 1);
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_pointsTex"),
+      1,
+    );
 
     this.gl.activeTexture(this.gl.TEXTURE2);
     this.gl.bindTexture(this.gl.TEXTURE_2D, contoursTex);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_contoursTex'), 2);
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_contoursTex"),
+      2,
+    );
 
-    this.gl.uniform3f(this.gl.getUniformLocation(this.program, 'u_backgroundColor'), bg.r, bg.g, bg.b);
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_backgroundOpacity'), backgroundOpacity);
-    this.gl.uniform3f(this.gl.getUniformLocation(this.program, 'u_maskColor'), mk.r, mk.g, mk.b);
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_maskOpacity'), maskOpacity);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_backgroundEnabled'), backgroundEnabled ? 1 : 0);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_maskEnabled'), maskEnabled ? 1 : 0);
-    this.gl.uniform2f(this.gl.getUniformLocation(this.program, 'u_canvasSize'), sourceCanvas.width, sourceCanvas.height);
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_pointsTexWidth'), pointsTexWidth);
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_contoursTexWidth'), contoursTexWidth);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_numPoints'), numPoints);
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_numContours'), numContours);
+    this.gl.uniform3f(
+      this.gl.getUniformLocation(this.program, "u_backgroundColor"),
+      bg.r,
+      bg.g,
+      bg.b,
+    );
+    this.gl.uniform1f(
+      this.gl.getUniformLocation(this.program, "u_backgroundOpacity"),
+      backgroundOpacity,
+    );
+    this.gl.uniform3f(
+      this.gl.getUniformLocation(this.program, "u_maskColor"),
+      mk.r,
+      mk.g,
+      mk.b,
+    );
+    this.gl.uniform1f(
+      this.gl.getUniformLocation(this.program, "u_maskOpacity"),
+      maskOpacity,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_backgroundEnabled"),
+      backgroundEnabled ? 1 : 0,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_maskEnabled"),
+      maskEnabled ? 1 : 0,
+    );
+    this.gl.uniform2f(
+      this.gl.getUniformLocation(this.program, "u_canvasSize"),
+      sourceCanvas.width,
+      sourceCanvas.height,
+    );
+    this.gl.uniform1f(
+      this.gl.getUniformLocation(this.program, "u_pointsTexWidth"),
+      pointsTexWidth,
+    );
+    this.gl.uniform1f(
+      this.gl.getUniformLocation(this.program, "u_contoursTexWidth"),
+      contoursTexWidth,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_numPoints"),
+      numPoints,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_numContours"),
+      numContours,
+    );
 
     // Blend as in lasso
     this.gl.enable(this.gl.BLEND);
@@ -555,7 +693,9 @@ export class TouchMask extends WebGLMaskBase {
     }
 
     if (debug?.download) {
-      const safeName = debug.filename ?? `touch-mask-debug-f${frame}-nC${numContours}-nP${numPoints}.png`;
+      const safeName =
+        debug.filename ??
+        `touch-mask-debug-f${frame}-nC${numContours}-nP${numPoints}.png`;
       this.debugDownloadCanvas(safeName);
     }
 

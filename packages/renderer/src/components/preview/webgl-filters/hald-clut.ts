@@ -5,9 +5,9 @@
  * Implements caching to avoid reloading the same CLUT images
  */
 
-import { WebGLFilterBase } from './WebGLFilterBase';
-import { readFileBuffer } from '@app/preload';
-import * as twgl from 'twgl.js';
+import { WebGLFilterBase } from "./WebGLFilterBase";
+import { readFileBuffer } from "@app/preload";
+import * as twgl from "twgl.js";
 
 // Cache for loaded CLUT images
 const clutImageCache = new Map<string, HTMLImageElement>();
@@ -25,7 +25,7 @@ export class WebGLHaldClut extends WebGLFilterBase {
 
   constructor() {
     // Request dedicated WebGL2 context from base class
-    super('webgl2', 'preview-webgl-filter-hald');
+    super("webgl2", "preview-webgl-filter-hald");
     this.initShaders();
   }
 
@@ -33,13 +33,13 @@ export class WebGLHaldClut extends WebGLFilterBase {
     super.onContextLost();
     this.contextLost = true;
     this.program = null;
-    console.warn('[HaldClut] WebGL context lost');
+    console.warn("[HaldClut] WebGL context lost");
   }
 
   protected onContextRestored(): void {
     super.onContextRestored();
     this.contextLost = false;
-    console.info('[HaldClut] WebGL context restored, reinitializing resources');
+    console.info("[HaldClut] WebGL context restored, reinitializing resources");
     void this.reinitializeResources();
   }
 
@@ -47,7 +47,7 @@ export class WebGLHaldClut extends WebGLFilterBase {
     const gl = this.ensureContext();
     if (!gl) return;
     if (!(gl instanceof WebGL2RenderingContext)) {
-      console.error('WebGLHaldClut requires a WebGL2 context');
+      console.error("WebGLHaldClut requires a WebGL2 context");
       this.program = null;
       return;
     }
@@ -144,14 +144,17 @@ export class WebGLHaldClut extends WebGLFilterBase {
 
     try {
       this.program = null;
-      this.program = twgl.createProgramFromSources(gl, [vertexShaderSource, fragmentShaderSource]);
+      this.program = twgl.createProgramFromSources(gl, [
+        vertexShaderSource,
+        fragmentShaderSource,
+      ]);
       if (!this.program) {
-        console.error('Failed to create shader program');
+        console.error("Failed to create shader program");
       } else {
-        console.log('Hald CLUT shader program created successfully');
+        console.log("Hald CLUT shader program created successfully");
       }
     } catch (error) {
-      console.error('Error creating shader program:', error);
+      console.error("Error creating shader program:", error);
     }
   }
 
@@ -168,7 +171,11 @@ export class WebGLHaldClut extends WebGLFilterBase {
       try {
         await this.preloadClut(p);
       } catch (e) {
-        console.error('[HaldClut] Failed to reload CLUT after context restore:', p, e);
+        console.error(
+          "[HaldClut] Failed to reload CLUT after context restore:",
+          p,
+          e,
+        );
       }
     }
   }
@@ -191,23 +198,23 @@ export class WebGLHaldClut extends WebGLFilterBase {
         const buffer = await readFileBuffer(imagePath);
         const blob = new Blob([buffer as unknown as ArrayBuffer]);
         const url = URL.createObjectURL(blob);
-        
+
         const img = new Image();
-        img.decoding = 'async';
+        img.decoding = "async";
         img.src = url;
-        
+
         await img.decode();
-        
+
         // Clean up the object URL after loading
         URL.revokeObjectURL(url);
-        
+
         clutImageCache.set(imagePath, img);
         loadingPromises.delete(imagePath);
-        
+
         return img;
       } catch (error) {
         loadingPromises.delete(imagePath);
-        console.error('Failed to load CLUT image:', { imagePath, error });
+        console.error("Failed to load CLUT image:", { imagePath, error });
         throw new Error(`Failed to load CLUT image: ${imagePath}`);
       }
     })();
@@ -215,8 +222,6 @@ export class WebGLHaldClut extends WebGLFilterBase {
     loadingPromises.set(imagePath, loadPromise);
     return loadPromise;
   }
-
-
 
   /**
    * Preload a CLUT image and upload it to GPU.
@@ -229,7 +234,8 @@ export class WebGLHaldClut extends WebGLFilterBase {
     this.loadedClutPaths.add(clutImagePath);
     if (
       this.contextLost ||
-      ((gl as WebGLRenderingContext).isContextLost && (gl as WebGLRenderingContext).isContextLost())
+      ((gl as WebGLRenderingContext).isContextLost &&
+        (gl as WebGLRenderingContext).isContextLost())
     ) {
       return;
     }
@@ -240,7 +246,7 @@ export class WebGLHaldClut extends WebGLFilterBase {
     }
 
     if (!(gl instanceof WebGL2RenderingContext)) {
-      console.error('WebGLHaldClut requires WebGL2 to preload CLUT textures');
+      console.error("WebGLHaldClut requires WebGL2 to preload CLUT textures");
       return;
     }
     const clutImage = await this.loadClutImage(clutImagePath);
@@ -252,25 +258,32 @@ export class WebGLHaldClut extends WebGLFilterBase {
       level++;
     }
     level = level * level; // ImageMagick squares the level
-    
+
     // Create texture for this CLUT
     const texture = gl.createTexture();
     if (!texture) {
-      console.error('Failed to create WebGL texture for CLUT:', clutImagePath);
+      console.error("Failed to create WebGL texture for CLUT:", clutImagePath);
       return;
     }
-    
+
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    
+
     // Set texture parameters BEFORE uploading data for better compatibility
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    
+
     // Upload texture with RGB8 format for better precision
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, gl.RGB, gl.UNSIGNED_BYTE, clutImage);
-    
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGB8,
+      gl.RGB,
+      gl.UNSIGNED_BYTE,
+      clutImage,
+    );
+
     // Store texture and metadata
     this.clutTextures.set(clutImagePath, texture);
     this.clutLevels.set(clutImagePath, level);
@@ -278,21 +291,22 @@ export class WebGLHaldClut extends WebGLFilterBase {
   }
 
   public apply(
-    sourceCanvas: HTMLCanvasElement, 
+    sourceCanvas: HTMLCanvasElement,
     clutImagePath: string,
-    intensity: number = 1.0
+    intensity: number = 1.0,
   ): HTMLCanvasElement {
     const gl = this.ensureContext();
     if (!gl || !this.program) return sourceCanvas;
     if (
-      ((gl as WebGLRenderingContext).isContextLost && (gl as WebGLRenderingContext).isContextLost())
+      (gl as WebGLRenderingContext).isContextLost &&
+      (gl as WebGLRenderingContext).isContextLost()
     ) {
       this.contextLost = true;
       return sourceCanvas;
     }
 
     if (!(gl instanceof WebGL2RenderingContext)) {
-      console.error('WebGLHaldClut requires WebGL2 to apply CLUT textures');
+      console.error("WebGLHaldClut requires WebGL2 to apply CLUT textures");
       return sourceCanvas;
     }
 
@@ -302,7 +316,11 @@ export class WebGLHaldClut extends WebGLFilterBase {
     const clutWidth = this.clutWidths.get(clutImagePath);
 
     if (!clutTexture || !level || !clutWidth) {
-      console.warn('[HaldClut] CLUT not preloaded:', clutImagePath, 'Call preloadClut() first.');
+      console.warn(
+        "[HaldClut] CLUT not preloaded:",
+        clutImagePath,
+        "Call preloadClut() first.",
+      );
       return sourceCanvas;
     }
 
@@ -313,11 +331,18 @@ export class WebGLHaldClut extends WebGLFilterBase {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA8,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      sourceCanvas,
+    );
 
     // Use the existing GL context's canvas for output
     this.resizeCanvas(sourceCanvas.width, sourceCanvas.height);
-    
+
     // Clear the canvas
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -327,17 +352,25 @@ export class WebGLHaldClut extends WebGLFilterBase {
 
     // Set up geometry (fullscreen quad)
     const positions = new Float32Array([
-      -1, -1,  // bottom left
-       1, -1,  // bottom right
-      -1,  1,  // top left
-       1,  1,  // top right
+      -1,
+      -1, // bottom left
+      1,
+      -1, // bottom right
+      -1,
+      1, // top left
+      1,
+      1, // top right
     ]);
 
     const texCoords = new Float32Array([
-      0, 1,  // bottom left (flipped Y)
-      1, 1,  // bottom right
-      0, 0,  // top left
-      1, 0,  // top right
+      0,
+      1, // bottom left (flipped Y)
+      1,
+      1, // bottom right
+      0,
+      0, // top left
+      1,
+      0, // top right
     ]);
 
     // Create and bind position buffer
@@ -345,7 +378,7 @@ export class WebGLHaldClut extends WebGLFilterBase {
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
 
-    const positionLoc = gl.getAttribLocation(this.program, 'a_position');
+    const positionLoc = gl.getAttribLocation(this.program, "a_position");
     gl.enableVertexAttribArray(positionLoc);
     gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
 
@@ -354,18 +387,21 @@ export class WebGLHaldClut extends WebGLFilterBase {
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
 
-    const texCoordLoc = gl.getAttribLocation(this.program, 'a_texCoord');
+    const texCoordLoc = gl.getAttribLocation(this.program, "a_texCoord");
     gl.enableVertexAttribArray(texCoordLoc);
     gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
 
     // Set uniforms
-    const sourceTextureLoc = gl.getUniformLocation(this.program, 'u_sourceTexture');
-    const clutTextureLoc = gl.getUniformLocation(this.program, 'u_clutTexture');
-    const clutSizeLoc = gl.getUniformLocation(this.program, 'u_clutSize');
-    const clutWidthLoc = gl.getUniformLocation(this.program, 'u_clutWidth');
-    const intensityLoc = gl.getUniformLocation(this.program, 'u_intensity');
+    const sourceTextureLoc = gl.getUniformLocation(
+      this.program,
+      "u_sourceTexture",
+    );
+    const clutTextureLoc = gl.getUniformLocation(this.program, "u_clutTexture");
+    const clutSizeLoc = gl.getUniformLocation(this.program, "u_clutSize");
+    const clutWidthLoc = gl.getUniformLocation(this.program, "u_clutWidth");
+    const intensityLoc = gl.getUniformLocation(this.program, "u_intensity");
 
-    console.log('intensity', intensity, clutImagePath);
+    console.log("intensity", intensity, clutImagePath);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, sourceTexture);
@@ -379,18 +415,20 @@ export class WebGLHaldClut extends WebGLFilterBase {
     gl.uniform1f(clutWidthLoc, clutWidth);
     gl.uniform1f(intensityLoc, intensity);
 
-
     // Draw
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    
+
     // Check for GL errors
     const error = gl.getError();
     if (error !== gl.NO_ERROR) {
-      if ((gl as any).CONTEXT_LOST_WEBGL && error === (gl as any).CONTEXT_LOST_WEBGL) {
+      if (
+        (gl as any).CONTEXT_LOST_WEBGL &&
+        error === (gl as any).CONTEXT_LOST_WEBGL
+      ) {
         this.contextLost = true;
-        console.warn('[HaldClut] WebGL context lost during draw');
+        console.warn("[HaldClut] WebGL context lost during draw");
       } else {
-        console.error('WebGL error after drawing:', error);
+        console.error("WebGL error after drawing:", error);
       }
     }
 

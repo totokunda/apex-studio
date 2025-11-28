@@ -9,7 +9,10 @@ export default defineConfig(async () => ({
   plugins: [react(), tailwindcss(), tsconfigPaths()],
   resolve: {
     alias: {
-      "@app/export-renderer": path.resolve(__dirname, "../export-renderer/src/index.ts"),
+      "@app/export-renderer": path.resolve(
+        __dirname,
+        "../export-renderer/src/index.ts",
+      ),
     },
   },
   server: {

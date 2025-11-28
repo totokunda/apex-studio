@@ -1,17 +1,17 @@
-import React, { useMemo, useState } from 'react'
-import type { Preprocessor } from '@/lib/preprocessor/api'
-import type { AnyClipProps } from '@/lib/types'
-import { PreprocessorItem } from '@/components/menus/PreprocessorMenu'
-import PreprocessorPage from '@/components/preprocessors/PreprocessorPage'
-import { Button } from '@/components/ui/button'
+import React, { useMemo, useState } from "react";
+import type { Preprocessor } from "@/lib/preprocessor/api";
+import type { AnyClipProps } from "@/lib/types";
+import { PreprocessorItem } from "@/components/menus/PreprocessorMenu";
+import PreprocessorPage from "@/components/preprocessors/PreprocessorPage";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { LuChevronDown } from 'react-icons/lu'
+} from "@/components/ui/dropdown-menu";
+import { LuChevronDown } from "react-icons/lu";
 
 interface PreprocessorPropertiesProps {
   preprocDetailId: string | null;
@@ -20,7 +20,9 @@ interface PreprocessorPropertiesProps {
   setPreprocQuery: (q: string) => void;
   compatiblePreprocessors: Preprocessor[];
   clip: AnyClipProps | undefined;
-  currentPreprocessors: Array<{ startFrame?: number; endFrame?: number }> | undefined;
+  currentPreprocessors:
+    | Array<{ startFrame?: number; endFrame?: number }>
+    | undefined;
   onAdd: (preproc: Preprocessor) => void;
 }
 
@@ -34,7 +36,7 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
   currentPreprocessors,
   onAdd,
 }) => {
-  const [selectedCategory, setSelectedCategory] = useState<string>('__all__');
+  const [selectedCategory, setSelectedCategory] = useState<string>("__all__");
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -45,14 +47,20 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
   }, [compatiblePreprocessors]);
 
   const filteredList = useMemo(() => {
-    if (!selectedCategory || selectedCategory === '__all__') return compatiblePreprocessors;
-    return compatiblePreprocessors.filter((p) => p.category === selectedCategory);
+    if (!selectedCategory || selectedCategory === "__all__")
+      return compatiblePreprocessors;
+    return compatiblePreprocessors.filter(
+      (p) => p.category === selectedCategory,
+    );
   }, [compatiblePreprocessors, selectedCategory]);
 
   return (
     <>
       {preprocDetailId ? (
-        <PreprocessorPage preprocessorId={preprocDetailId} onBack={() => setPreprocDetailId(null)} />
+        <PreprocessorPage
+          preprocessorId={preprocDetailId}
+          onBack={() => setPreprocDetailId(null)}
+        />
       ) : (
         <div className="flex flex-col">
           <div className="sticky top-0 z-10 bg-brand-background px-5 pt-3 pb-3 ">
@@ -68,16 +76,37 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
               </div>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="dark h-9 text-[10px] border-brand-light/5 bg-brand text-brand-light hover:bg-brand/80 rounded-[6px]">
-                    {selectedCategory === '__all__' ? 'All categories' : selectedCategory}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="dark h-9 text-[10px] border-brand-light/5 bg-brand text-brand-light hover:bg-brand/80 rounded-[6px]"
+                  >
+                    {selectedCategory === "__all__"
+                      ? "All categories"
+                      : selectedCategory}
                     <LuChevronDown className="!w-3.5 !h-3.5" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="bg-brand-background/95 backdrop-blur-sm text-brand-light border border-brand-light/10 font-poppins dark">
-                  <DropdownMenuRadioGroup value={selectedCategory} onValueChange={setSelectedCategory}>
-                    <DropdownMenuRadioItem value="__all__" className="text-[10.5px] font-medium">All</DropdownMenuRadioItem>
+                <DropdownMenuContent
+                  align="end"
+                  className="bg-brand-background/95 backdrop-blur-sm text-brand-light border border-brand-light/10 font-poppins dark"
+                >
+                  <DropdownMenuRadioGroup
+                    value={selectedCategory}
+                    onValueChange={setSelectedCategory}
+                  >
+                    <DropdownMenuRadioItem
+                      value="__all__"
+                      className="text-[10.5px] font-medium"
+                    >
+                      All
+                    </DropdownMenuRadioItem>
                     {categories.map((cat) => (
-                      <DropdownMenuRadioItem key={cat} value={cat} className="text-[10.5px] font-medium">
+                      <DropdownMenuRadioItem
+                        key={cat}
+                        value={cat}
+                        className="text-[10.5px] font-medium"
+                      >
                         {cat}
                       </DropdownMenuRadioItem>
                     ))}
@@ -87,7 +116,12 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
             </div>
           </div>
           <div className="px-5 py-3">
-            <div className="grid gap-2" style={{gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))'}}>
+            <div
+              className="grid gap-2"
+              style={{
+                gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))",
+              }}
+            >
               {filteredList.map((p) => (
                 <div key={p.id} className="flex justify-center">
                   <PreprocessorItem
@@ -95,14 +129,26 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
                     onMoreInfo={(id) => setPreprocDetailId(id)}
                     onAdd={onAdd}
                     addDisabled={(() => {
-                      if (!clip || (clip.type !== 'video' && clip.type !== 'image')) return true;
-                      const duration = Math.max(1, (clip.endFrame ?? 0) - (clip.startFrame ?? 0));
+                      if (
+                        !clip ||
+                        (clip.type !== "video" && clip.type !== "image")
+                      )
+                        return true;
+                      const duration = Math.max(
+                        1,
+                        (clip.endFrame ?? 0) - (clip.startFrame ?? 0),
+                      );
                       if (duration <= 0) return true;
-                      const intervals = (currentPreprocessors || []).map((pp: any) => {
-                        const s = Math.max(0, pp.startFrame ?? 0);
-                        const e = Math.max(s + 1, Math.min(duration, pp.endFrame ?? duration));
-                        return [s, e] as [number, number];
-                      }).sort((a, b) => a[0] - b[0]);
+                      const intervals = (currentPreprocessors || [])
+                        .map((pp: any) => {
+                          const s = Math.max(0, pp.startFrame ?? 0);
+                          const e = Math.max(
+                            s + 1,
+                            Math.min(duration, pp.endFrame ?? duration),
+                          );
+                          return [s, e] as [number, number];
+                        })
+                        .sort((a, b) => a[0] - b[0]);
                       let coverEnd = 0;
                       for (const [s, e] of intervals) {
                         if (s > coverEnd) {
@@ -114,14 +160,26 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
                       return coverEnd >= duration;
                     })()}
                     dimmed={(() => {
-                      if (!clip || (clip.type !== 'video' && clip.type !== 'image')) return false;
-                      const duration = Math.max(1, (clip.endFrame ?? 0) - (clip.startFrame ?? 0));
+                      if (
+                        !clip ||
+                        (clip.type !== "video" && clip.type !== "image")
+                      )
+                        return false;
+                      const duration = Math.max(
+                        1,
+                        (clip.endFrame ?? 0) - (clip.startFrame ?? 0),
+                      );
                       if (duration <= 0) return true;
-                      const intervals = (currentPreprocessors || []).map((pp: any) => {
-                        const s = Math.max(0, pp.startFrame ?? 0);
-                        const e = Math.max(s + 1, Math.min(duration, pp.endFrame ?? duration));
-                        return [s, e] as [number, number];
-                      }).sort((a, b) => a[0] - b[0]);
+                      const intervals = (currentPreprocessors || [])
+                        .map((pp: any) => {
+                          const s = Math.max(0, pp.startFrame ?? 0);
+                          const e = Math.max(
+                            s + 1,
+                            Math.min(duration, pp.endFrame ?? duration),
+                          );
+                          return [s, e] as [number, number];
+                        })
+                        .sort((a, b) => a[0] - b[0]);
                       let coverEnd = 0;
                       for (const [s, e] of intervals) {
                         if (s > coverEnd) {
@@ -136,7 +194,9 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
                 </div>
               ))}
               {compatiblePreprocessors.length === 0 && (
-                <div className="text-[11px] text-brand-light/60 p-2">No preprocessors found</div>
+                <div className="text-[11px] text-brand-light/60 p-2">
+                  No preprocessors found
+                </div>
               )}
             </div>
           </div>
@@ -147,5 +207,3 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
 };
 
 export default PreprocessorProperties;
-
-

@@ -9,11 +9,11 @@ import {
   onMaskTrackShapesChunk,
   onMaskTrackShapesError,
   onMaskTrackShapesEnd,
-} from '@app/preload';
-import { toast } from 'sonner';
-import {useEffect, useRef, useState, useCallback} from 'react';
-import type {ClipTransform, MediaInfo} from '../types';
-import { getCropOffset } from '@/components/preview/mask/touch';
+} from "@app/preload";
+import { toast } from "sonner";
+import { useEffect, useRef, useState, useCallback } from "react";
+import type { ClipTransform, MediaInfo } from "../types";
+import { getCropOffset } from "@/components/preview/mask/touch";
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -26,9 +26,9 @@ export interface MaskRequest {
   input_path: string;
   frame_number?: number;
   tool: string;
-  points?: Array<{x: number, y: number}>;
+  points?: Array<{ x: number; y: number }>;
   point_labels?: Array<number>;
-  box?: {x1: number, y1: number, x2: number, y2: number};
+  box?: { x1: number; y1: number; x2: number; y2: number };
   multimask_output?: boolean;
   simplify_tolerance?: number;
   model_type?: string;
@@ -40,14 +40,13 @@ export interface MaskResponse {
   message?: string;
 }
 
-
 const maskCache = new Map<string, MaskResponse>();
 
 function stableStringify(value: unknown): string {
   const seen = new WeakSet<object>();
 
   const helper = (input: unknown): unknown => {
-    if (input === null || typeof input !== 'object') {
+    if (input === null || typeof input !== "object") {
       return input;
     }
 
@@ -60,14 +59,14 @@ function stableStringify(value: unknown): string {
     seen.add(typedInput);
 
     if (Array.isArray(input)) {
-      return input.map(item => helper(item));
+      return input.map((item) => helper(item));
     }
 
     const result: Record<string, unknown> = {};
     const record = input as Record<string, unknown>;
     for (const key of Object.keys(record).sort()) {
       const nestedValue = record[key];
-      if (typeof nestedValue === 'undefined') {
+      if (typeof nestedValue === "undefined") {
         continue;
       }
       result[key] = helper(nestedValue);
@@ -84,18 +83,22 @@ function createMaskCacheKey(request: MaskRequest): string {
 }
 
 // Helper function to convert flat array [x1, y1, x2, y2, ...] to array of {x, y} objects
-export function flatArrayToPoints(flatArray: number[]): Array<{x: number, y: number}> {
-  const points: Array<{x: number, y: number}> = [];
+export function flatArrayToPoints(
+  flatArray: number[],
+): Array<{ x: number; y: number }> {
+  const points: Array<{ x: number; y: number }> = [];
   for (let i = 0; i < flatArray.length; i += 2) {
     if (i + 1 < flatArray.length) {
-      points.push({x: flatArray[i], y: flatArray[i + 1]});
+      points.push({ x: flatArray[i], y: flatArray[i + 1] });
     }
   }
   return points;
 }
 
 // Helper function to convert array of {x, y} objects to flat array [x1, y1, x2, y2, ...]
-export function pointsToFlatArray(points: Array<{x: number, y: number}>): number[] {
+export function pointsToFlatArray(
+  points: Array<{ x: number; y: number }>,
+): number[] {
   const flatArray: number[] = [];
   for (const point of points) {
     flatArray.push(point.x, point.y);
@@ -106,33 +109,40 @@ export function pointsToFlatArray(points: Array<{x: number, y: number}>): number
 // Helper function to normalize points from display coordinates to media coordinates
 // This accounts for aspect-fit letterboxing, user transforms, and optional crops
 export function normalizePoints(
-  points: Array<{x: number, y: number}>,
+  points: Array<{ x: number; y: number }>,
   displayWidth: number,
   displayHeight: number,
   mediaInfo: MediaInfo,
   filterOutOfBounds: boolean = true,
-  clipTransform?: ClipTransform
-): Array<{x: number, y: number}> {
-  
-  const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
-  const mediaHeight = mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
-  
+  clipTransform?: ClipTransform,
+): Array<{ x: number; y: number }> {
+  const mediaWidth =
+    mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
+  const mediaHeight =
+    mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
+
   if (!mediaWidth || !mediaHeight) {
-    console.warn('Media dimensions not available, using display dimensions');
+    console.warn("Media dimensions not available, using display dimensions");
     return points;
   }
-  
+
   // If clipTransform is provided, use it directly
   // Otherwise calculate aspect-fit dimensions within the rect
   let imageX, imageY, imageWidth, imageHeight;
-  
+
   if (clipTransform) {
     const sx = clipTransform.scaleX || 1;
     const sy = clipTransform.scaleY || 1;
-    const cropW = clipTransform.crop?.width && clipTransform.crop.width > 0 ? clipTransform.crop.width : 1;
-    const cropH = clipTransform.crop?.height && clipTransform.crop.height > 0 ? clipTransform.crop.height : 1;
-    const uncroppedWidth = clipTransform.width * sx / cropW;
-    const uncroppedHeight = clipTransform.height * sy / cropH;
+    const cropW =
+      clipTransform.crop?.width && clipTransform.crop.width > 0
+        ? clipTransform.crop.width
+        : 1;
+    const cropH =
+      clipTransform.crop?.height && clipTransform.crop.height > 0
+        ? clipTransform.crop.height
+        : 1;
+    const uncroppedWidth = (clipTransform.width * sx) / cropW;
+    const uncroppedHeight = (clipTransform.height * sy) / cropH;
     const cropX = clipTransform.crop?.x || 0;
     const cropY = clipTransform.crop?.y || 0;
 
@@ -145,7 +155,7 @@ export function normalizePoints(
     // Calculate aspect-fit dimensions (letterbox/pillarbox)
     const mediaAspect = mediaWidth / mediaHeight;
     const rectAspect = displayWidth / displayHeight;
-    
+
     if (rectAspect > mediaAspect) {
       // Letterbox (black bars on left/right)
       imageHeight = displayHeight;
@@ -160,55 +170,59 @@ export function normalizePoints(
       imageY = (displayHeight - imageHeight) / 2;
     }
   }
-  
+
   // Convert points from canvas coordinates to image-local coordinates
-  const normalizedPoints = points.map(point => {
+  const normalizedPoints = points.map((point) => {
     // First, translate to image-local coordinates
     const localX = point.x - imageX;
     const localY = point.y - imageY;
-    
+
     // Then scale to media dimensions
     const mediaX = (localX / imageWidth) * mediaWidth;
     const mediaY = (localY / imageHeight) * mediaHeight;
-    
-    return {x: mediaX, y: mediaY};
+
+    return { x: mediaX, y: mediaY };
   });
-  
+
   // Filter out points outside media bounds if requested
   if (filterOutOfBounds) {
-    return normalizedPoints.filter(point => 
-      point.x >= 0 && point.x <= mediaWidth &&
-      point.y >= 0 && point.y <= mediaHeight
+    return normalizedPoints.filter(
+      (point) =>
+        point.x >= 0 &&
+        point.x <= mediaWidth &&
+        point.y >= 0 &&
+        point.y <= mediaHeight,
     );
   }
-  
+
   return normalizedPoints;
 }
 
 // Helper function to normalize points AND their labels together
 // This ensures labels stay in sync when points are filtered
 export function normalizePointsWithLabels(
-  points: Array<{x: number, y: number}>,
+  points: Array<{ x: number; y: number }>,
   labels: Array<number>,
   displayWidth: number,
   displayHeight: number,
   mediaInfo: MediaInfo,
   filterOutOfBounds: boolean = true,
-  clipTransform?: ClipTransform
-): {points: Array<{x: number, y: number}>, labels: Array<number>} {
-  
-  const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
-  const mediaHeight = mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
-  
+  clipTransform?: ClipTransform,
+): { points: Array<{ x: number; y: number }>; labels: Array<number> } {
+  const mediaWidth =
+    mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
+  const mediaHeight =
+    mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
+
   if (!mediaWidth || !mediaHeight) {
-    console.warn('Media dimensions not available, using display dimensions');
-    return {points, labels};
+    console.warn("Media dimensions not available, using display dimensions");
+    return { points, labels };
   }
-  
+
   // If clipTransform is provided, use it directly
   // Otherwise calculate aspect-fit dimensions within the rect
   let imageX, imageY, imageWidth, imageHeight;
-  
+
   if (clipTransform) {
     imageX = clipTransform.x;
     imageY = clipTransform.y;
@@ -222,14 +236,11 @@ export function normalizePointsWithLabels(
       imageX -= imageXOffset;
       imageY -= imageYOffset;
     }
-    
-    
   } else {
     // Calculate aspect-fit dimensions (letterbox/pillarbox)
     const mediaAspect = mediaWidth / mediaHeight;
     const rectAspect = displayWidth / displayHeight;
 
-    
     if (rectAspect > mediaAspect) {
       // Letterbox (black bars on left/right)
       imageHeight = displayHeight;
@@ -244,65 +255,74 @@ export function normalizePointsWithLabels(
       imageY = (displayHeight - imageHeight) / 2;
     }
   }
-  
+
   // Convert points from canvas coordinates to image-local coordinates
   // and track which ones are in bounds
-  const normalizedData: Array<{point: {x: number, y: number}, label: number, inBounds: boolean}> = points.map((point, i) => {
+  const normalizedData: Array<{
+    point: { x: number; y: number };
+    label: number;
+    inBounds: boolean;
+  }> = points.map((point, i) => {
     // First, translate to image-local coordinates
     const localX = point.x - imageX;
     const localY = point.y - imageY;
-    
+
     // Then scale to media dimensions
     const mediaX = (localX / imageWidth) * mediaWidth;
     const mediaY = (localY / imageHeight) * mediaHeight;
 
-    const normalizedPoint = {x: mediaX, y: mediaY};
-    const inBounds = mediaX >= 0 && mediaX <= mediaWidth && mediaY >= 0 && mediaY <= mediaHeight;
+    const normalizedPoint = { x: mediaX, y: mediaY };
+    const inBounds =
+      mediaX >= 0 &&
+      mediaX <= mediaWidth &&
+      mediaY >= 0 &&
+      mediaY <= mediaHeight;
 
-    
     return {
       point: normalizedPoint,
       label: labels[i] !== undefined ? labels[i] : 1, // Default to positive if label missing
-      inBounds
+      inBounds,
     };
   });
-  
+
   // Filter out points outside media bounds if requested
   if (filterOutOfBounds) {
-    const filtered = normalizedData.filter(item => item.inBounds);
+    const filtered = normalizedData.filter((item) => item.inBounds);
     return {
-      points: filtered.map(item => item.point),
-      labels: filtered.map(item => item.label)
+      points: filtered.map((item) => item.point),
+      labels: filtered.map((item) => item.label),
     };
   }
-  
+
   return {
-    points: normalizedData.map(item => item.point),
-    labels: normalizedData.map(item => item.label)
+    points: normalizedData.map((item) => item.point),
+    labels: normalizedData.map((item) => item.label),
   };
 }
 
 // Helper function to normalize box from display coordinates to media coordinates
 // This accounts for aspect-fit letterboxing and user transforms
 export function normalizeBox(
-  box: {x1: number, y1: number, x2: number, y2: number},
+  box: { x1: number; y1: number; x2: number; y2: number },
   displayWidth: number,
   displayHeight: number,
   mediaInfo: MediaInfo,
-  clipTransform?: ClipTransform
-): {x1: number, y1: number, x2: number, y2: number} {
-  const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
-  const mediaHeight = mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
-  
+  clipTransform?: ClipTransform,
+): { x1: number; y1: number; x2: number; y2: number } {
+  const mediaWidth =
+    mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
+  const mediaHeight =
+    mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
+
   if (!mediaWidth || !mediaHeight) {
-    console.warn('Media dimensions not available, using display dimensions');
+    console.warn("Media dimensions not available, using display dimensions");
     return box;
   }
-  
+
   // If clipTransform is provided, use it directly
   // Otherwise calculate aspect-fit dimensions within the rect
   let imageX, imageY, imageWidth, imageHeight;
-  
+
   if (clipTransform) {
     imageX = clipTransform.x;
     imageY = clipTransform.y;
@@ -312,7 +332,7 @@ export function normalizeBox(
     // Calculate aspect-fit dimensions (letterbox/pillarbox)
     const mediaAspect = mediaWidth / mediaHeight;
     const rectAspect = displayWidth / displayHeight;
-    
+
     if (rectAspect > mediaAspect) {
       // Letterbox (black bars on left/right)
       imageHeight = displayHeight;
@@ -327,24 +347,24 @@ export function normalizeBox(
       imageY = (displayHeight - imageHeight) / 2;
     }
   }
-  
+
   // Convert box corners from canvas coordinates to image-local coordinates
   const local_x1 = box.x1 - imageX;
   const local_y1 = box.y1 - imageY;
   const local_x2 = box.x2 - imageX;
   const local_y2 = box.y2 - imageY;
-  
+
   // Scale to media dimensions
   const media_x1 = (local_x1 / imageWidth) * mediaWidth;
   const media_y1 = (local_y1 / imageHeight) * mediaHeight;
   const media_x2 = (local_x2 / imageWidth) * mediaWidth;
   const media_y2 = (local_y2 / imageHeight) * mediaHeight;
-  
+
   return {
     x1: Math.max(0, Math.min(media_x1, media_x2)),
     y1: Math.max(0, Math.min(media_y1, media_y2)),
     x2: Math.min(mediaWidth, Math.max(media_x1, media_x2)),
-    y2: Math.min(mediaHeight, Math.max(media_y1, media_y2))
+    y2: Math.min(mediaHeight, Math.max(media_y1, media_y2)),
   };
 }
 
@@ -355,19 +375,21 @@ export function denormalizeContours(
   displayWidth: number,
   displayHeight: number,
   mediaInfo: MediaInfo,
-  clipTransform?: ClipTransform
+  clipTransform?: ClipTransform,
 ): Array<Array<number>> {
-  const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
-  const mediaHeight = mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
-  
+  const mediaWidth =
+    mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
+  const mediaHeight =
+    mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
+
   if (!mediaWidth || !mediaHeight) {
     return contours;
   }
-  
+
   // If clipTransform is provided, use it directly
   // Otherwise calculate aspect-fit dimensions within the rect
   let imageX, imageY, imageWidth, imageHeight;
-  
+
   if (clipTransform) {
     imageX = clipTransform.x;
     imageY = clipTransform.y;
@@ -385,7 +407,7 @@ export function denormalizeContours(
     // Calculate aspect-fit dimensions (letterbox/pillarbox)
     const mediaAspect = mediaWidth / mediaHeight;
     const rectAspect = displayWidth / displayHeight;
-    
+
     if (rectAspect > mediaAspect) {
       // Letterbox (black bars on left/right)
       imageHeight = displayHeight;
@@ -400,17 +422,17 @@ export function denormalizeContours(
       imageY = (displayHeight - imageHeight) / 2;
     }
   }
-  
-  return contours.map(contour => {
+
+  return contours.map((contour) => {
     const denormalized: number[] = [];
     for (let i = 0; i < contour.length; i += 2) {
       // Scale from media to image-local coordinates
       const localX = (contour[i] / mediaWidth) * imageWidth;
       const localY = (contour[i + 1] / mediaHeight) * imageHeight;
 
-      const canvasX = localX + imageX
-      const canvasY = localY + imageY
-      
+      const canvasX = localX + imageX;
+      const canvasY = localY + imageY;
+
       denormalized.push(canvasX, canvasY);
     }
     return denormalized;
@@ -419,21 +441,41 @@ export function denormalizeContours(
 
 // Helper to denormalize a shape bounds dict from media coordinates to display coordinates
 export function denormalizeShapeBounds(
-  bounds: { x: number; y: number; width: number; height: number; rotation?: number; shapeType?: string; scaleX?: number; scaleY?: number },
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation?: number;
+    shapeType?: string;
+    scaleX?: number;
+    scaleY?: number;
+  },
   displayWidth: number,
   displayHeight: number,
   mediaInfo: MediaInfo,
-  clipTransform?: ClipTransform
-): { x: number; y: number; width: number; height: number; rotation?: number; shapeType?: string; scaleX?: number; scaleY?: number } {
-  const mediaWidth = mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
-  const mediaHeight = mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
+  clipTransform?: ClipTransform,
+): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  shapeType?: string;
+  scaleX?: number;
+  scaleY?: number;
+} {
+  const mediaWidth =
+    mediaInfo.video?.displayWidth || mediaInfo.image?.width || displayWidth;
+  const mediaHeight =
+    mediaInfo.video?.displayHeight || mediaInfo.image?.height || displayHeight;
 
   if (!mediaWidth || !mediaHeight) return bounds;
 
   // If rectangle comes from center-based bounds (backend), convert to top-left pivot
   // so WebGL rendering (which rotates around top-left) aligns with the intended shape.
   let pivotBounds = bounds;
-  if (bounds.shapeType === 'rectangle' && typeof bounds.rotation === 'number') {
+  if (bounds.shapeType === "rectangle" && typeof bounds.rotation === "number") {
     const cx = bounds.x + bounds.width / 2;
     const cy = bounds.y + bounds.height / 2;
     const w = Math.max(1, bounds.width);
@@ -479,8 +521,12 @@ export function denormalizeShapeBounds(
   }
 
   // Center-based shapes: ellipse, polygon (triangle), star
-  const type = (bounds.shapeType || '').toLowerCase();
-  const isCenterShape = type === 'ellipse' || type === 'polygon' || type === 'triangle' || type === 'star';
+  const type = (bounds.shapeType || "").toLowerCase();
+  const isCenterShape =
+    type === "ellipse" ||
+    type === "polygon" ||
+    type === "triangle" ||
+    type === "star";
 
   if (isCenterShape) {
     // Scale center position
@@ -490,12 +536,12 @@ export function denormalizeShapeBounds(
     let localW = (bounds.width / mediaWidth) * imageWidth;
     let localH = (bounds.height / mediaHeight) * imageHeight;
 
-    if (type === 'star') {
+    if (type === "star") {
       // Square bounds for star
       const s = Math.max(1, Math.min(localW, localH));
       localW = s;
       localH = s;
-    } else if (type === 'polygon' || type === 'triangle') {
+    } else if (type === "polygon" || type === "triangle") {
       // Enforce width/height ratio for triangle
       const ratio = 1.1543665517482078; // width / height
       // Fit the largest rect with this ratio inside the given box
@@ -545,9 +591,9 @@ export interface UseMaskOptions {
   inputPath: string;
   frameNumber?: number;
   tool: string;
-  points?: number[] | Array<{x: number, y: number}>;
+  points?: number[] | Array<{ x: number; y: number }>;
   pointLabels?: Array<number>;
-  box?: {x1: number, y1: number, x2: number, y2: number};
+  box?: { x1: number; y1: number; x2: number; y2: number };
   displayWidth?: number;
   displayHeight?: number;
   mediaInfo?: MediaInfo;
@@ -581,9 +627,9 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
     clipTransform,
     multimaskOutput = true,
     simplifyTolerance = 1.0,
-    modelType = 'sam2_base_plus',
+    modelType = "sam2_base_plus",
     enabled = true,
-    debounceMs = 250
+    debounceMs = 250,
   } = options;
 
   const [data, setData] = useState<MaskResponse | null>(null);
@@ -591,7 +637,7 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
   const [loading, setLoading] = useState(false);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  
+
   const fetchMask = useCallback(async () => {
     if (!enabled || !inputPath || !tool) {
       return;
@@ -607,37 +653,47 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
 
     try {
       // Convert and normalize points (and labels if provided)
-      let normalizedPoints: Array<{x: number, y: number}> | undefined;
+      let normalizedPoints: Array<{ x: number; y: number }> | undefined;
       let normalizedLabels: Array<number> | undefined;
-      
+
       if (points && points.length > 0) {
         // Convert flat array to point objects if needed
-        const pointObjects = Object.prototype.hasOwnProperty.call(points[0], 'x') 
-            && Object.prototype.hasOwnProperty.call(points[0], 'y') ? points as Array<{x: number, y: number}> : flatArrayToPoints(points as number[]); 
-        
+        const pointObjects =
+          Object.prototype.hasOwnProperty.call(points[0], "x") &&
+          Object.prototype.hasOwnProperty.call(points[0], "y")
+            ? (points as Array<{ x: number; y: number }>)
+            : flatArrayToPoints(points as number[]);
+
         // Normalize if mediaInfo and display dimensions are provided
         if (mediaInfo && displayWidth && displayHeight) {
           // If we have labels, normalize points and labels together to keep them in sync
           if (pointLabels && pointLabels.length > 0) {
             const result = normalizePointsWithLabels(
-              pointObjects, 
-              pointLabels, 
-              displayWidth, 
-              displayHeight, 
-              mediaInfo, 
-              true, 
-              clipTransform
+              pointObjects,
+              pointLabels,
+              displayWidth,
+              displayHeight,
+              mediaInfo,
+              true,
+              clipTransform,
             );
             normalizedPoints = result.points;
             normalizedLabels = result.labels;
           } else {
             // No labels, just normalize points
-            normalizedPoints = normalizePoints(pointObjects, displayWidth, displayHeight, mediaInfo, true, clipTransform);
+            normalizedPoints = normalizePoints(
+              pointObjects,
+              displayWidth,
+              displayHeight,
+              mediaInfo,
+              true,
+              clipTransform,
+            );
           }
-          
+
           // If all points were filtered out, don't make the request
           if (normalizedPoints.length === 0 && pointObjects.length > 0) {
-            setError('All points are outside the media bounds');
+            setError("All points are outside the media bounds");
             setLoading(false);
             return;
           }
@@ -646,11 +702,19 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
           normalizedLabels = pointLabels;
         }
       }
-      
+
       // Normalize box if provided
-      let normalizedBox: {x1: number, y1: number, x2: number, y2: number} | undefined;
+      let normalizedBox:
+        | { x1: number; y1: number; x2: number; y2: number }
+        | undefined;
       if (box && mediaInfo && displayWidth && displayHeight) {
-        normalizedBox = normalizeBox(box, displayWidth, displayHeight, mediaInfo, clipTransform);
+        normalizedBox = normalizeBox(
+          box,
+          displayWidth,
+          displayHeight,
+          mediaInfo,
+          clipTransform,
+        );
       } else {
         normalizedBox = box;
       }
@@ -665,11 +729,11 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
         box: normalizedBox,
         multimask_output: multimaskOutput,
         simplify_tolerance: simplifyTolerance,
-        model_type: modelType
+        model_type: modelType,
       };
 
       cacheKey = createMaskCacheKey(request);
-      
+
       const cachedResponse = maskCache.get(cacheKey);
       if (cachedResponse) {
         setData(cachedResponse);
@@ -694,14 +758,20 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
       if (controller?.signal.aborted) {
         return;
       }
-      
+
       if (response.success && response.data) {
         // Denormalize contours back to display coordinates if needed
         let finalData = response.data;
         if (finalData.contours && mediaInfo && displayWidth && displayHeight) {
           finalData = {
             ...finalData,
-            contours: denormalizeContours(finalData.contours, displayWidth, displayHeight, mediaInfo, clipTransform)
+            contours: denormalizeContours(
+              finalData.contours,
+              displayWidth,
+              displayHeight,
+              mediaInfo,
+              clipTransform,
+            ),
           };
         }
         if (cacheKey) {
@@ -710,13 +780,14 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
         setData(finalData);
         setError(null);
       } else {
-        const errorMessage = response.error || 'Failed to create mask';
+        const errorMessage = response.error || "Failed to create mask";
         setError(errorMessage);
         setData(null);
       }
     } catch (err) {
-      if ((err as Error).name !== 'AbortError') {
-        const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+      if ((err as Error).name !== "AbortError") {
+        const errorMessage =
+          err instanceof Error ? err.message : "Unknown error occurred";
         setError(errorMessage);
         setData(null);
       }
@@ -740,24 +811,24 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
     clipTransform,
     multimaskOutput,
     simplifyTolerance,
-    modelType
+    modelType,
   ]);
-  
+
   useEffect(() => {
     if (!enabled) {
       return;
     }
-    
+
     // Clear existing debounce timer
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
-    
+
     // Set new debounce timer
     debounceTimerRef.current = setTimeout(() => {
       fetchMask();
     }, debounceMs);
-    
+
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
@@ -767,26 +838,33 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
       }
     };
   }, [fetchMask, debounceMs, enabled]);
-  
+
   return {
     data,
     error,
     loading,
-    refetch: fetchMask
+    refetch: fetchMask,
   };
 }
 
 // Legacy function for backward compatibility
-export async function createMask(request: MaskRequest): Promise<ConfigResponse<MaskResponse>> {
+export async function createMask(
+  request: MaskRequest,
+): Promise<ConfigResponse<MaskResponse>> {
   try {
-    const { getBackendIsRemote, getFileShouldUpload } = await import('@app/preload');
+    const { getBackendIsRemote, getFileShouldUpload } =
+      await import("@app/preload");
     const remoteRes = await getBackendIsRemote();
-    const isRemote = !!(remoteRes && remoteRes.success && remoteRes.data?.isRemote);
+    const isRemote = !!(
+      remoteRes &&
+      remoteRes.success &&
+      remoteRes.data?.isRemote
+    );
     if (isRemote) {
-      const su = await getFileShouldUpload(String(request.input_path || ''));
+      const su = await getFileShouldUpload(String(request.input_path || ""));
       const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
       if (shouldUpload) {
-        toast.info('Uploading source media for mask…');
+        toast.info("Uploading source media for mask…");
       }
     }
   } catch {}
@@ -794,7 +872,7 @@ export async function createMask(request: MaskRequest): Promise<ConfigResponse<M
 }
 
 export interface StreamedMaskFrame {
-  stream_id:string;
+  stream_id: string;
   frame_number: number;
   contours: Array<Array<number>>;
 }
@@ -807,7 +885,7 @@ type MaskTrackSession = {
     frame_start: number;
     anchor_frame?: number;
     frame_end: number;
-    direction?: 'forward' | 'backward' | 'both';
+    direction?: "forward" | "backward" | "both";
     max_frames?: number;
   };
   seenFrames: Set<number>;
@@ -817,7 +895,9 @@ type MaskTrackSession = {
 
 const activeMaskTrackSessions: Map<string, MaskTrackSession> = new Map(); // key: mask id
 
-export function getActiveMaskTrackSession(maskId: string): MaskTrackSession | undefined {
+export function getActiveMaskTrackSession(
+  maskId: string,
+): MaskTrackSession | undefined {
   return activeMaskTrackSessions.get(maskId);
 }
 
@@ -827,7 +907,7 @@ export function attachToMaskTrack(
     onProgress?: (progress: number) => void;
     onFrame?: (frame: StreamedMaskFrame) => void;
     onEnd?: () => void;
-  }
+  },
 ): (() => void) | null {
   const session = activeMaskTrackSessions.get(maskId);
   if (!session || session.ended) return null;
@@ -835,11 +915,19 @@ export function attachToMaskTrack(
   const { onProgress, onFrame, onEnd } = options || {};
 
   const offChunk = onMaskTrackChunk(streamId, (evt: any) => {
-    if (evt && typeof evt.frame_number === 'number') {
+    if (evt && typeof evt.frame_number === "number") {
       session.seenFrames.add(evt.frame_number);
-      if (onFrame) onFrame({ frame_number: evt.frame_number, contours: Array.isArray(evt.contours) ? evt.contours : [], stream_id: streamId });
+      if (onFrame)
+        onFrame({
+          frame_number: evt.frame_number,
+          contours: Array.isArray(evt.contours) ? evt.contours : [],
+          stream_id: streamId,
+        });
       if (onProgress && session.totalFrames > 0) {
-        const progress = Math.min(1, session.seenFrames.size / session.totalFrames);
+        const progress = Math.min(
+          1,
+          session.seenFrames.size / session.totalFrames,
+        );
         onProgress(progress);
       }
     }
@@ -858,9 +946,15 @@ export function attachToMaskTrack(
 
   // Provide detach to unsubscribe without affecting the underlying stream
   return () => {
-    try { offChunk(); } catch {}
-    try { offError(); } catch {}
-    try { offEnd(); } catch {}
+    try {
+      offChunk();
+    } catch {}
+    try {
+      offError();
+    } catch {}
+    try {
+      offEnd();
+    } catch {}
   };
 }
 
@@ -871,7 +965,7 @@ export async function trackMask(
     frame_start: number;
     anchor_frame: number;
     frame_end: number;
-    direction?: 'forward' | 'backward' | 'both';
+    direction?: "forward" | "backward" | "both";
     model_type?: string;
     max_frames?: number;
   },
@@ -879,29 +973,34 @@ export async function trackMask(
     signal?: AbortSignal;
     onProgress?: (progress: number) => void;
     onFrame?: (frame: StreamedMaskFrame) => void;
-  }
+  },
 ): Promise<void> {
   const { signal, onProgress, onFrame } = options || {};
   // Inform user about potential upload delay
   try {
-    const { getBackendIsRemote, getFileShouldUpload } = await import('@app/preload');
+    const { getBackendIsRemote, getFileShouldUpload } =
+      await import("@app/preload");
     const remoteRes = await getBackendIsRemote();
-    const isRemote = !!(remoteRes && remoteRes.success && remoteRes.data?.isRemote);
+    const isRemote = !!(
+      remoteRes &&
+      remoteRes.success &&
+      remoteRes.data?.isRemote
+    );
     if (isRemote) {
-      const su = await getFileShouldUpload(String(request.input_path || ''));
+      const su = await getFileShouldUpload(String(request.input_path || ""));
       const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
       if (shouldUpload) {
-        toast.info('Uploading source media for mask tracking…');
+        toast.info("Uploading source media for mask tracking…");
       }
     }
   } catch {}
-  
+
   const { streamId } = await startMaskTrack(request as any);
   const anchor = request.anchor_frame ?? request.frame_start;
   const low = Math.min(request.frame_start, request.frame_end);
   const high = Math.max(request.frame_start, request.frame_end);
   let totalFrames: number;
-  if (request.direction === 'both') {
+  if (request.direction === "both") {
     let lowerBound = low;
     let upperBound = high;
     if (request.max_frames && request.max_frames > 0) {
@@ -911,7 +1010,10 @@ export async function trackMask(
     totalFrames = Math.max(1, upperBound - lowerBound + 1);
   } else {
     const rawSpan = Math.abs(request.frame_end - anchor);
-    const span = request.max_frames && request.max_frames > 0 ? Math.min(rawSpan, request.max_frames) : rawSpan;
+    const span =
+      request.max_frames && request.max_frames > 0
+        ? Math.min(rawSpan, request.max_frames)
+        : rawSpan;
     totalFrames = span + 1;
   }
   const seenFrames = new Set<number>();
@@ -940,24 +1042,28 @@ export async function trackMask(
   if (signal) {
     if (signal.aborted) {
       abortHandler();
-      throw new DOMException('Aborted', 'AbortError');
+      throw new DOMException("Aborted", "AbortError");
     }
-    signal.addEventListener('abort', abortHandler, { once: true });
+    signal.addEventListener("abort", abortHandler, { once: true });
   }
 
   try {
     await new Promise<void>((resolve, reject) => {
       const offChunk = onMaskTrackChunk(streamId, (evt: any) => {
-        if (evt && evt.status === 'error') {
+        if (evt && evt.status === "error") {
           offChunk();
           offError();
           offEnd();
-          reject(new Error(evt.error || 'Mask tracking error'));
+          reject(new Error(evt.error || "Mask tracking error"));
           return;
         }
-        if (evt && typeof evt.frame_number === 'number') {
+        if (evt && typeof evt.frame_number === "number") {
           if (onFrame) {
-            onFrame({ frame_number: evt.frame_number, contours: Array.isArray(evt.contours) ? evt.contours : [], stream_id:streamId});
+            onFrame({
+              frame_number: evt.frame_number,
+              contours: Array.isArray(evt.contours) ? evt.contours : [],
+              stream_id: streamId,
+            });
           }
           if (!seenFrames.has(evt.frame_number)) {
             seenFrames.add(evt.frame_number);
@@ -978,7 +1084,7 @@ export async function trackMask(
           sess.ended = true;
           activeMaskTrackSessions.delete(request.id);
         }
-        reject(new Error(err?.message || 'Mask tracking error'));
+        reject(new Error(err?.message || "Mask tracking error"));
       });
       const offEnd = onMaskTrackEnd(streamId, () => {
         offChunk();
@@ -999,11 +1105,10 @@ export async function trackMask(
     }
   } finally {
     if (signal) {
-      signal.removeEventListener('abort', abortHandler);
+      signal.removeEventListener("abort", abortHandler);
     }
   }
 }
-
 
 export async function cancelMaskTrack(streamId: string): Promise<void> {
   await cancelMaskTrackPreload(streamId);
@@ -1032,7 +1137,7 @@ export function attachToShapeTrack(
     onProgress?: (progress: number) => void;
     onFrame?: (frame: StreamedShapeFrame) => void;
     onEnd?: () => void;
-  }
+  },
 ): (() => void) | null {
   const session = activeMaskTrackSessions.get(maskId);
   if (!session || session.ended) return null;
@@ -1040,11 +1145,19 @@ export function attachToShapeTrack(
   const { onProgress, onFrame, onEnd } = options || {};
 
   const offChunk = onMaskTrackShapesChunk(streamId, (evt: any) => {
-    if (evt && typeof evt.frame_number === 'number') {
+    if (evt && typeof evt.frame_number === "number") {
       session.seenFrames.add(evt.frame_number);
-      if (onFrame) onFrame({ frame_number: evt.frame_number, shapeBounds: evt.shapeBounds, stream_id: streamId });
+      if (onFrame)
+        onFrame({
+          frame_number: evt.frame_number,
+          shapeBounds: evt.shapeBounds,
+          stream_id: streamId,
+        });
       if (onProgress && session.totalFrames > 0) {
-        const progress = Math.min(1, session.seenFrames.size / session.totalFrames);
+        const progress = Math.min(
+          1,
+          session.seenFrames.size / session.totalFrames,
+        );
         onProgress(progress);
       }
     }
@@ -1060,9 +1173,15 @@ export function attachToShapeTrack(
   });
 
   return () => {
-    try { offChunk(); } catch {}
-    try { offError(); } catch {}
-    try { offEnd(); } catch {}
+    try {
+      offChunk();
+    } catch {}
+    try {
+      offError();
+    } catch {}
+    try {
+      offEnd();
+    } catch {}
   };
 }
 
@@ -1073,7 +1192,7 @@ export async function trackShapes(
     frame_start: number;
     anchor_frame: number;
     frame_end: number;
-    direction?: 'forward' | 'backward' | 'both';
+    direction?: "forward" | "backward" | "both";
     model_type?: string;
     max_frames?: number;
     shape_type?: string;
@@ -1082,19 +1201,24 @@ export async function trackShapes(
     signal?: AbortSignal;
     onProgress?: (progress: number) => void;
     onFrame?: (frame: StreamedShapeFrame) => void;
-  }
+  },
 ): Promise<void> {
   const { signal, onProgress, onFrame } = options || {};
   // Inform user about potential upload delay
   try {
-    const { getBackendIsRemote, getFileShouldUpload } = await import('@app/preload');
+    const { getBackendIsRemote, getFileShouldUpload } =
+      await import("@app/preload");
     const remoteRes = await getBackendIsRemote();
-    const isRemote = !!(remoteRes && remoteRes.success && remoteRes.data?.isRemote);
+    const isRemote = !!(
+      remoteRes &&
+      remoteRes.success &&
+      remoteRes.data?.isRemote
+    );
     if (isRemote) {
-      const su = await getFileShouldUpload(String(request.input_path || ''));
+      const su = await getFileShouldUpload(String(request.input_path || ""));
       const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
       if (shouldUpload) {
-        toast.info('Uploading source media for mask tracking…');
+        toast.info("Uploading source media for mask tracking…");
       }
     }
   } catch {}
@@ -1104,7 +1228,7 @@ export async function trackShapes(
   const low = Math.min(request.frame_start, request.frame_end);
   const high = Math.max(request.frame_start, request.frame_end);
   let totalFrames: number;
-  if (request.direction === 'both') {
+  if (request.direction === "both") {
     let lowerBound = low;
     let upperBound = high;
     if (request.max_frames && request.max_frames > 0) {
@@ -1114,7 +1238,10 @@ export async function trackShapes(
     totalFrames = Math.max(1, upperBound - lowerBound + 1);
   } else {
     const rawSpan = Math.abs(request.frame_end - anchor);
-    const span = request.max_frames && request.max_frames > 0 ? Math.min(rawSpan, request.max_frames) : rawSpan;
+    const span =
+      request.max_frames && request.max_frames > 0
+        ? Math.min(rawSpan, request.max_frames)
+        : rawSpan;
     totalFrames = span + 1;
   }
   const seenFrames = new Set<number>();
@@ -1142,24 +1269,28 @@ export async function trackShapes(
   if (signal) {
     if (signal.aborted) {
       abortHandler();
-      throw new DOMException('Aborted', 'AbortError');
+      throw new DOMException("Aborted", "AbortError");
     }
-    signal.addEventListener('abort', abortHandler, { once: true });
+    signal.addEventListener("abort", abortHandler, { once: true });
   }
 
   try {
     await new Promise<void>((resolve, reject) => {
       const offChunk = onMaskTrackShapesChunk(streamId, (evt: any) => {
-        if (evt && evt.status === 'error') {
+        if (evt && evt.status === "error") {
           offChunk();
           offError();
           offEnd();
-          reject(new Error(evt.error || 'Shape tracking error'));
+          reject(new Error(evt.error || "Shape tracking error"));
           return;
         }
-        if (evt && typeof evt.frame_number === 'number') {
+        if (evt && typeof evt.frame_number === "number") {
           if (onFrame) {
-            onFrame({ frame_number: evt.frame_number, shapeBounds: evt.shapeBounds, stream_id: streamId });
+            onFrame({
+              frame_number: evt.frame_number,
+              shapeBounds: evt.shapeBounds,
+              stream_id: streamId,
+            });
           }
           if (!seenFrames.has(evt.frame_number)) {
             seenFrames.add(evt.frame_number);
@@ -1179,7 +1310,7 @@ export async function trackShapes(
           sess.ended = true;
           activeMaskTrackSessions.delete(request.id);
         }
-        reject(new Error(err?.message || 'Shape tracking error'));
+        reject(new Error(err?.message || "Shape tracking error"));
       });
       const offEnd = onMaskTrackShapesEnd(streamId, () => {
         offChunk();
@@ -1196,7 +1327,7 @@ export async function trackShapes(
 
     if (onProgress && totalFrames > 0) onProgress(1);
   } finally {
-    if (signal) signal.removeEventListener('abort', abortHandler);
+    if (signal) signal.removeEventListener("abort", abortHandler);
   }
 }
 
@@ -1210,7 +1341,7 @@ export async function createThenTrackMask(
       frame_start: number;
       anchor_frame: number;
       frame_end: number;
-      direction?: 'forward' | 'backward' | 'both';
+      direction?: "forward" | "backward" | "both";
       model_type?: string;
       max_frames?: number;
     };
@@ -1219,15 +1350,20 @@ export async function createThenTrackMask(
     signal?: AbortSignal;
     onProgress?: (progress: number) => void;
     onFrame?: (frame: StreamedMaskFrame) => void;
-  }
+  },
 ): Promise<void> {
   const { create, track } = args;
 
   // Step 1: create the initial mask (lasso: polygon; shape: box)
   const createResp = await createMask(create);
 
-  if (!createResp.success || !createResp.data || createResp.data.status !== 'success') {
-    const msg = createResp.error || createResp.data?.message || 'Mask creation failed';
+  if (
+    !createResp.success ||
+    !createResp.data ||
+    createResp.data.status !== "success"
+  ) {
+    const msg =
+      createResp.error || createResp.data?.message || "Mask creation failed";
     throw new Error(msg);
   }
 
@@ -1247,6 +1383,6 @@ export async function createThenTrackMask(
       signal: options?.signal,
       onProgress: options?.onProgress,
       onFrame: options?.onFrame,
-    }
+    },
   );
 }

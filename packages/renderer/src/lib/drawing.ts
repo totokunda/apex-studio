@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type DrawingTool = 'brush' | 'highlighter' | 'eraser';
+export type DrawingTool = "brush" | "highlighter" | "eraser";
 
 interface DrawingState {
   tool: DrawingTool;
@@ -27,12 +27,12 @@ interface DrawingState {
 }
 
 export const useDrawingStore = create<DrawingState>((set, get) => ({
-  tool: 'brush',
+  tool: "brush",
   brushSize: 8,
   highlighterSize: 20,
   eraserSize: 10,
   smoothing: 0.5, // Default to medium smoothing
-  color: '#FF0000',
+  color: "#FF0000",
   opacity: 100, // Default to fully opaque
   isDrawing: false,
   currentLineId: null,
@@ -50,15 +50,14 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   getCurrentSize: () => {
     const state = get();
     switch (state.tool) {
-      case 'brush':
+      case "brush":
         return state.brushSize;
-      case 'highlighter':
+      case "highlighter":
         return state.highlighterSize;
-      case 'eraser':
+      case "eraser":
         return state.eraserSize;
       default:
         return state.brushSize;
     }
   },
 }));
-

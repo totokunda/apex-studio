@@ -12,7 +12,9 @@ interface LayoutState {
   handleHeight: number;
   containerRect: ContainerRect | null;
   isDragging: boolean;
-  setConstraints: (opts: Partial<Pick<LayoutState, 'minBottom' | 'minTop' | 'handleHeight'>>) => void;
+  setConstraints: (
+    opts: Partial<Pick<LayoutState, "minBottom" | "minTop" | "handleHeight">>,
+  ) => void;
   setContainerRect: (rect: ContainerRect) => void;
   setBottomHeight: (height: number) => void;
   startDragging: () => void;
@@ -43,8 +45,14 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       set({ bottomHeight: Math.max(minBottom, Math.round(height)) });
       return;
     }
-    const maxBottom = Math.max(minBottom, containerRect.height - handleHeight - minTop);
-    const clamped = Math.min(Math.max(Math.round(height), minBottom), maxBottom);
+    const maxBottom = Math.max(
+      minBottom,
+      containerRect.height - handleHeight - minTop,
+    );
+    const clamped = Math.min(
+      Math.max(Math.round(height), minBottom),
+      maxBottom,
+    );
     set({ bottomHeight: clamped });
   },
   startDragging: () => set({ isDragging: true }),
@@ -59,5 +67,3 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     get().setBottomHeight(newBottom);
   },
 }));
-
-

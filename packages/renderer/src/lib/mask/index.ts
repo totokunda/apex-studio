@@ -1,9 +1,9 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 
-export type MaskTool = 'lasso' | 'shape' | 'draw' | 'touch';
-export type TouchDrawMode = 'point' | 'draw'; // For touch tool: point clicking or lasso drawing
-export type MaskShapeTool = 'rectangle' | 'ellipse' | 'polygon' | 'star';
-export type TouchLabel = 'positive' | 'negative';
+export type MaskTool = "lasso" | "shape" | "draw" | "touch";
+export type TouchDrawMode = "point" | "draw"; // For touch tool: point clicking or lasso drawing
+export type MaskShapeTool = "rectangle" | "ellipse" | "polygon" | "star";
+export type TouchLabel = "positive" | "negative";
 
 interface MaskState {
   tool: MaskTool;
@@ -35,16 +35,16 @@ interface MaskState {
 }
 
 export const useMaskStore = create<MaskState>((set) => ({
-  tool: 'touch',
-  shape: 'rectangle',
+  tool: "touch",
+  shape: "rectangle",
   brushSize: 10,
   featherAmount: 2,
   isTracking: false,
   trackingEnabled: false,
   activeMaskId: null,
   autoMask: false,
-  touchLabel: 'positive',
-  touchDrawMode: 'point',
+  touchLabel: "positive",
+  touchDrawMode: "point",
   isMaskDragging: false,
   isOverMask: false,
   touchMaskRefetchToken: null,
@@ -60,7 +60,8 @@ export const useMaskStore = create<MaskState>((set) => ({
   setTouchDrawMode: (touchDrawMode) => set({ touchDrawMode }),
   setIsMaskDragging: (isMaskDragging) => set({ isMaskDragging }),
   setIsOverMask: (isOverMask) => set({ isOverMask }),
-  setTouchMaskRefetchToken: (touchMaskRefetchToken) => set({ touchMaskRefetchToken }),
+  setTouchMaskRefetchToken: (touchMaskRefetchToken) =>
+    set({ touchMaskRefetchToken }),
 }));
 
 // Export API functions and types
@@ -77,6 +78,5 @@ export {
   type MaskResponse,
   type ConfigResponse,
   type UseMaskOptions,
-  type UseMaskResult
-} from './api';
-
+  type UseMaskResult,
+} from "./api";

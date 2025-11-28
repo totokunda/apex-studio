@@ -1,41 +1,65 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ManifestComponent, ManifestComponentModelPathItem } from '@/lib/manifest/api';
-import { validateAndRegisterCustomModelPath, deleteCustomModelPath } from '@/lib/manifest/api';
-import { cn } from '@/lib/utils';
-import { formatDownloadProgress, formatSpeed, formatBytes } from '@/lib/components-download/format';
-import { LuChevronDown, LuChevronRight, LuDownload, LuCheck, LuTrash, LuLoader, LuPlus } from 'react-icons/lu';
-import { useDownloadStore } from '@/lib/download/store';
-import { ProgressBar } from '@/components/common/ProgressBar';
-import { useManifestStore } from '@/lib/manifest/store';
-import { toast } from 'sonner';
-import { cancelRayJob } from '@/lib/jobs/api';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type {
+  ManifestComponent,
+  ManifestComponentModelPathItem,
+} from "@/lib/manifest/api";
+import {
+  validateAndRegisterCustomModelPath,
+  deleteCustomModelPath,
+} from "@/lib/manifest/api";
+import { cn } from "@/lib/utils";
+import {
+  formatDownloadProgress,
+  formatSpeed,
+  formatBytes,
+} from "@/lib/components-download/format";
+import {
+  LuChevronDown,
+  LuChevronRight,
+  LuDownload,
+  LuCheck,
+  LuTrash,
+  LuLoader,
+  LuPlus,
+} from "react-icons/lu";
+import { useDownloadStore } from "@/lib/download/store";
+import { ProgressBar } from "@/components/common/ProgressBar";
+import { useManifestStore } from "@/lib/manifest/store";
+import { toast } from "sonner";
+import { cancelRayJob } from "@/lib/jobs/api";
 
 const getComponentTypeLabel = (type: string): string => {
   const labels: Record<string, string> = {
-    'transformer': 'Transformer',
-    'text_encoder': 'Text Encoder',
-    'vae': 'Variational Autoencoder',
-    'scheduler': 'Scheduler',
-    'helper': 'Helper'
+    transformer: "Transformer",
+    text_encoder: "Text Encoder",
+    vae: "Variational Autoencoder",
+    scheduler: "Scheduler",
+    helper: "Helper",
   };
   return labels[type] || type.charAt(0).toUpperCase() + type.slice(1);
 };
 
 const formatComponentName = (name: string): string => {
   return name
-    .replace(/\./g, ' ')
-    .replace(/_/g, ' ')
-    .replace(/-/g, ' ')
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
+    .replace(/\./g, " ")
+    .replace(/_/g, " ")
+    .replace(/-/g, " ")
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 };
 
-const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string; index: number }> = ({
-  component: originalComponent,
-  manifestId,
-  index,
-}) => {
+const ComponentCard: React.FC<{
+  component: ManifestComponent;
+  manifestId: string;
+  index: number;
+}> = ({ component: originalComponent, manifestId, index }) => {
   const { refreshManifestPart, getLoadedManifest } = useManifestStore();
   const [isExpanded, setIsExpanded] = useState(false);
   const {
@@ -48,14 +72,18 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   } = useDownloadStore();
   const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
   const schedulersConfigDownloading = false;
-  const [downloadedPaths, setDownloadedPaths] = useState<Set<string>>(new Set());
+  const [downloadedPaths, setDownloadedPaths] = useState<Set<string>>(
+    new Set(),
+  );
   const [pathToJobId, setPathToJobId] = useState<Record<string, string>>({});
-  const liveComponent = getLoadedManifest(manifestId)?.spec.components?.[index] as ManifestComponent | undefined;
+  const liveComponent = getLoadedManifest(manifestId)?.spec.components?.[
+    index
+  ] as ManifestComponent | undefined;
   const component = liveComponent || originalComponent;
   const [schedulerIsDownloading, setSchedulerIsDownloading] = useState(false);
   const [isAddingModelPath, setIsAddingModelPath] = useState(false);
-  const [newModelPath, setNewModelPath] = useState('');
-  const [newModelName, setNewModelName] = useState('');
+  const [newModelPath, setNewModelPath] = useState("");
+  const [newModelName, setNewModelName] = useState("");
   const [isValidatingModelPath, setIsValidatingModelPath] = useState(false);
 
   const relevantPaths = useMemo(() => {
@@ -66,38 +94,60 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
         ? [{ path: component.model_path }]
         : [];
     for (const it of modelPathsRaw) {
-      const p = typeof it === 'string' ? it : (it as any)?.path;
+      const p = typeof it === "string" ? it : (it as any)?.path;
       if (p) paths.push(p);
     }
     const baseConfig = (component as any)?.config_path;
-    if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
+    if (typeof baseConfig === "string" && baseConfig) paths.push(baseConfig);
     const optionConfigs = Array.isArray((component as any)?.scheduler_options)
-      ? (component as any).scheduler_options.map((o: any) => o?.config_path).filter(Boolean)
+      ? (component as any).scheduler_options
+          .map((o: any) => o?.config_path)
+          .filter(Boolean)
       : [];
-    for (const p of optionConfigs) if (typeof p === 'string') paths.push(p);
+    for (const p of optionConfigs) if (typeof p === "string") paths.push(p);
     const extraModelPathsRaw = (component as any)?.extra_model_paths;
     if (Array.isArray(extraModelPathsRaw)) {
       for (const it of extraModelPathsRaw) {
-        const p = typeof it === 'string' ? it : (it as any)?.path;
+        const p = typeof it === "string" ? it : (it as any)?.path;
         if (p) paths.push(p);
       }
-    } else if (typeof extraModelPathsRaw === 'string' && extraModelPathsRaw) {
+    } else if (typeof extraModelPathsRaw === "string" && extraModelPathsRaw) {
       paths.push(extraModelPathsRaw);
     }
     return Array.from(new Set(paths));
   }, [component]);
 
-  const onCompleteDownload = useCallback(async (_: string) => {
-    window.dispatchEvent(new CustomEvent('component-card-reload', { detail: { paths: relevantPaths, manifestId: manifestId, componentIndex: index } }));
-    await refreshManifestPart(manifestId, `spec.components.${index}`);
-    if (component.type === 'scheduler') {
-      setSchedulerIsDownloading(s => !s);
-    }
-  }, [manifestId, index, component.type]);
+  const onCompleteDownload = useCallback(
+    async (_: string) => {
+      window.dispatchEvent(
+        new CustomEvent("component-card-reload", {
+          detail: {
+            paths: relevantPaths,
+            manifestId: manifestId,
+            componentIndex: index,
+          },
+        }),
+      );
+      await refreshManifestPart(manifestId, `spec.components.${index}`);
+      if (component.type === "scheduler") {
+        setSchedulerIsDownloading((s) => !s);
+      }
+    },
+    [manifestId, index, component.type],
+  );
 
   const isComponentDownlading = useMemo(() => {
-    return relevantPaths.some((p) => downloadingPaths.has(p)) || relevantPaths.some((p) => wsFilesByPath[p] && Object.values(wsFilesByPath[p]).some((v) => v.status === 'processing' || v.status === 'pending')) || 
-     schedulerIsDownloading 
+    return (
+      relevantPaths.some((p) => downloadingPaths.has(p)) ||
+      relevantPaths.some(
+        (p) =>
+          wsFilesByPath[p] &&
+          Object.values(wsFilesByPath[p]).some(
+            (v) => v.status === "processing" || v.status === "pending",
+          ),
+      ) ||
+      schedulerIsDownloading
+    );
   }, [relevantPaths, wsFilesByPath, downloadingPaths]);
 
   const defaultPaths = useMemo(() => {
@@ -108,22 +158,29 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
         ? [{ path: component.model_path }]
         : [];
     for (const it of modelPathsRaw) {
-      const p = typeof it === 'string' ? it : (it as any)?.path;
-      if (p && (typeof it === 'string' || (it as any)?.variant?.toLowerCase() === 'default')) paths.push(p);
+      const p = typeof it === "string" ? it : (it as any)?.path;
+      if (
+        p &&
+        (typeof it === "string" ||
+          (it as any)?.variant?.toLowerCase() === "default")
+      )
+        paths.push(p);
     }
     const baseConfig = (component as any)?.config_path;
-    if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
+    if (typeof baseConfig === "string" && baseConfig) paths.push(baseConfig);
     const optionConfigs = Array.isArray((component as any)?.scheduler_options)
-      ? (component as any).scheduler_options.map((o: any) => o?.config_path).filter(Boolean)
+      ? (component as any).scheduler_options
+          .map((o: any) => o?.config_path)
+          .filter(Boolean)
       : [];
-    for (const p of optionConfigs) if (typeof p === 'string') paths.push(p);
+    for (const p of optionConfigs) if (typeof p === "string") paths.push(p);
     const extraModelPathsRaw = (component as any)?.extra_model_paths;
     if (Array.isArray(extraModelPathsRaw)) {
       for (const it of extraModelPathsRaw) {
-        const p = typeof it === 'string' ? it : (it as any)?.path;
+        const p = typeof it === "string" ? it : (it as any)?.path;
         if (p) paths.push(p);
       }
-    } else if (typeof extraModelPathsRaw === 'string' && extraModelPathsRaw) {
+    } else if (typeof extraModelPathsRaw === "string" && extraModelPathsRaw) {
       paths.push(extraModelPathsRaw);
     }
     return Array.from(new Set(paths));
@@ -139,12 +196,16 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
       try {
         // cleanup any previous subscriptions before re-running
         try {
-          (unsubsRef.current || []).forEach((fn) => { try { fn(); } catch {} });
+          (unsubsRef.current || []).forEach((fn) => {
+            try {
+              fn();
+            } catch {}
+          });
         } catch {}
         unsubsRef.current = [];
 
         const response = await resolveDownloadBatch({
-          item_type: 'component',
+          item_type: "component",
           sources: relevantPaths,
         });
         if (isUnmountedRef.current) return;
@@ -170,8 +231,16 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
           const src = relevantPaths[idx];
           if (r?.job_id && r.running && src) {
             try {
-              const off = await subscribeToJob(r.job_id, src, onCompleteDownload);
-              unsubsRef.current.push(() => { try { off(); } catch {} });
+              const off = await subscribeToJob(
+                r.job_id,
+                src,
+                onCompleteDownload,
+              );
+              unsubsRef.current.push(() => {
+                try {
+                  off();
+                } catch {}
+              });
             } catch {}
           }
         }
@@ -182,7 +251,11 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     return () => {
       isUnmountedRef.current = true;
       try {
-        (unsubsRef.current || []).forEach((fn) => { try { fn(); } catch {} });
+        (unsubsRef.current || []).forEach((fn) => {
+          try {
+            fn();
+          } catch {}
+        });
       } finally {
         unsubsRef.current = [];
       }
@@ -196,7 +269,8 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
         const paths: string[] | undefined = detail?.paths;
         const componentName: string | undefined = detail?.componentName;
         const componentIndex: number | undefined = detail?.componentIndex;
-        const compName = (component as any)?.name || (component as any)?.base || '';
+        const compName =
+          (component as any)?.name || (component as any)?.base || "";
         const windowManifestId = detail?.manifestId;
         if (windowManifestId && windowManifestId !== manifestId) return;
 
@@ -205,34 +279,56 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
           runRef.current?.();
           return;
         }
-        const intersects = Array.isArray(paths) ? paths.some((p) => relevantPaths.includes(p)) : false;
-        const matchesComponent = typeof componentName === 'string' && !!componentName && componentName === compName;
-        const matchesComponentIndex = typeof componentIndex === 'number' && !!componentIndex && componentIndex === index;
+        const intersects = Array.isArray(paths)
+          ? paths.some((p) => relevantPaths.includes(p))
+          : false;
+        const matchesComponent =
+          typeof componentName === "string" &&
+          !!componentName &&
+          componentName === compName;
+        const matchesComponentIndex =
+          typeof componentIndex === "number" &&
+          !!componentIndex &&
+          componentIndex === index;
         if (intersects || matchesComponent || matchesComponentIndex) {
           runRef.current?.();
         }
       } catch {}
     };
-    try { window.addEventListener('component-card-reload', handler as EventListener); } catch {}
+    try {
+      window.addEventListener(
+        "component-card-reload",
+        handler as EventListener,
+      );
+    } catch {}
     return () => {
-      try { window.removeEventListener('component-card-reload', handler as EventListener); } catch {}
+      try {
+        window.removeEventListener(
+          "component-card-reload",
+          handler as EventListener,
+        );
+      } catch {}
     };
   }, [component, relevantPaths]);
 
-  const modelPaths = Array.isArray(component.model_path) ? component.model_path : component.model_path ? [{ path: component.model_path }] : [];
+  const modelPaths = Array.isArray(component.model_path)
+    ? component.model_path
+    : component.model_path
+      ? [{ path: component.model_path }]
+      : [];
 
   const extraModelPaths = useMemo(() => {
     const items: ManifestComponentModelPathItem[] = [];
     const raw = (component as any)?.extra_model_paths;
     if (Array.isArray(raw)) {
       for (const it of raw) {
-        if (typeof it === 'string') {
+        if (typeof it === "string") {
           items.push({ path: it } as ManifestComponentModelPathItem);
-        } else if (it && typeof (it as any)?.path === 'string') {
+        } else if (it && typeof (it as any)?.path === "string") {
           items.push(it as ManifestComponentModelPathItem);
         }
       }
-    } else if (typeof raw === 'string' && raw) {
+    } else if (typeof raw === "string" && raw) {
       items.push({ path: raw } as ManifestComponentModelPathItem);
     }
     const seen = new Set<string>();
@@ -247,43 +343,58 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   const schedulerConfigPaths = useMemo(() => {
     const paths: string[] = [];
     const baseConfig = component?.config_path;
-    if (typeof baseConfig === 'string' && baseConfig) paths.push(baseConfig);
+    if (typeof baseConfig === "string" && baseConfig) paths.push(baseConfig);
     if (Array.isArray(component?.scheduler_options)) {
       for (const opt of component?.scheduler_options) {
         const cp = opt?.config_path;
-        if (typeof cp === 'string' && cp) paths.push(cp);
+        if (typeof cp === "string" && cp) paths.push(cp);
       }
     }
     return Array.from(new Set(paths));
   }, [component]);
 
-  const componentFlagDownloaded = !!(component)?.is_downloaded;
+  const componentFlagDownloaded = !!component?.is_downloaded;
 
   const isConfigOnly = useMemo(() => {
-    const hasNoModelPaths = (Array.isArray(modelPaths) ? modelPaths : []).length === 0;
+    const hasNoModelPaths =
+      (Array.isArray(modelPaths) ? modelPaths : []).length === 0;
     const baseConfig = component?.config_path;
     const schedulerOptions = component?.scheduler_options;
-    const schedulerConfigs = schedulerOptions?.map((option) => option.config_path).filter(Boolean);
+    const schedulerConfigs = schedulerOptions
+      ?.map((option) => option.config_path)
+      .filter(Boolean);
     return (
       hasNoModelPaths &&
-      ((typeof baseConfig === 'string' && !!baseConfig) || (schedulerConfigs && schedulerConfigs.length > 0))
+      ((typeof baseConfig === "string" && !!baseConfig) ||
+        (schedulerConfigs && schedulerConfigs.length > 0))
     );
   }, [component, modelPaths]);
   const baseConfigPath = useMemo(() => {
     const val = component?.config_path;
-    return typeof val === 'string' && val ? (val as string) : undefined;
+    return typeof val === "string" && val ? (val as string) : undefined;
   }, [component]);
 
   const handleDownload = async (path: string | string[]) => {
     if (!path) return;
-    window.dispatchEvent(new CustomEvent('component-card-reload', { detail: { paths: Array.isArray(path) ? path : [path], manifestId: manifestId, componentIndex: index } }));
-    const jobIds = await startAndTrackDownload({
-      item_type: 'component',
-      source: Array.isArray(path) ? path : [path],
-    }, onCompleteDownload);
+    window.dispatchEvent(
+      new CustomEvent("component-card-reload", {
+        detail: {
+          paths: Array.isArray(path) ? path : [path],
+          manifestId: manifestId,
+          componentIndex: index,
+        },
+      }),
+    );
+    const jobIds = await startAndTrackDownload(
+      {
+        item_type: "component",
+        source: Array.isArray(path) ? path : [path],
+      },
+      onCompleteDownload,
+    );
     if (jobIds.length > 0) {
       // add the path to each job id
-      let pathList:string[] = Array.isArray(path) ? path : [path];
+      let pathList: string[] = Array.isArray(path) ? path : [path];
       const nextPathToJobId: Record<string, string> = {};
       for (let idx = 0; idx < pathList.length; idx++) {
         const jobId = jobIds[idx];
@@ -293,17 +404,27 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
       }
       setPathToJobId(nextPathToJobId);
     }
-    if (component.type === 'scheduler') {
+    if (component.type === "scheduler") {
       setSchedulerIsDownloading(true);
     }
   };
 
   const handleCancel = async (jobId: string) => {
     await cancelRayJob(jobId);
-    // remove from downloading paths if 
+    // remove from downloading paths if
     try {
-      window.dispatchEvent(new CustomEvent('component-card-reload', { detail: { componentName: component.name, manifestId: manifestId, componentIndex: index } }));
-      window.dispatchEvent(new CustomEvent('jobs-menu-reload', { detail: { jobId: jobId } }));
+      window.dispatchEvent(
+        new CustomEvent("component-card-reload", {
+          detail: {
+            componentName: component.name,
+            manifestId: manifestId,
+            componentIndex: index,
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent("jobs-menu-reload", { detail: { jobId: jobId } }),
+      );
     } catch {}
   };
 
@@ -311,28 +432,42 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
     setDeletingPaths((s) => new Set([...s, path]));
     await deleteDownload({
       path,
-      item_type: 'component',
+      item_type: "component",
     });
     try {
-      window.dispatchEvent(new CustomEvent('component-card-reload', { detail: { paths: [path], manifestId: manifestId, componentIndex: index } }));
+      window.dispatchEvent(
+        new CustomEvent("component-card-reload", {
+          detail: {
+            paths: [path],
+            manifestId: manifestId,
+            componentIndex: index,
+          },
+        }),
+      );
     } catch {}
     await refreshManifestPart(manifestId, `spec.components.${index}`);
     setDeletingPaths((s) => new Set(Array.from(s).filter((p) => p !== path)));
   };
 
-  const handleDeleteCustomPath = async (pathItem: ManifestComponentModelPathItem) => {
+  const handleDeleteCustomPath = async (
+    pathItem: ManifestComponentModelPathItem,
+  ) => {
     const path = pathItem.path;
     if (!path) return;
     setDeletingPaths((s) => new Set([...s, path]));
     try {
       const res = await deleteCustomModelPath(manifestId, index, path);
       if (!res?.success) {
-        (toast as any).error(res && typeof res.error === 'string' ? res.error : 'Failed to remove custom model path');
+        (toast as any).error(
+          res && typeof res.error === "string"
+            ? res.error
+            : "Failed to remove custom model path",
+        );
         return;
       }
       try {
         window.dispatchEvent(
-          new CustomEvent('component-card-reload', {
+          new CustomEvent("component-card-reload", {
             detail: { manifestId, componentIndex: index },
           }),
         );
@@ -344,22 +479,34 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
   };
 
   const handleDownloadAll = async () => {
-    await startAndTrackDownload({
-      item_type: 'component',
-      source: defaultPaths,
-    }, onCompleteDownload);
-    
-    if (component.type === 'scheduler') {
+    await startAndTrackDownload(
+      {
+        item_type: "component",
+        source: defaultPaths,
+      },
+      onCompleteDownload,
+    );
+
+    if (component.type === "scheduler") {
       setSchedulerIsDownloading(true);
     }
   };
 
   const typeLabel = getComponentTypeLabel(component.type);
-  const displayName = component.label || (component.name ? formatComponentName(component.name) : component.base ? formatComponentName(component.base) : typeLabel);
+  const displayName =
+    component.label ||
+    (component.name
+      ? formatComponentName(component.name)
+      : component.base
+        ? formatComponentName(component.base)
+        : typeLabel);
   const componentCarRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div ref={componentCarRef} className="bg-brand border border-brand-light/10 rounded-md text-start">
+    <div
+      ref={componentCarRef}
+      className="bg-brand border border-brand-light/10 rounded-md text-start"
+    >
       <ComponentCardHeader
         component={component}
         componentFlagDownloaded={componentFlagDownloaded}
@@ -402,7 +549,7 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
               wsFilesByPath={wsFilesByPath}
             />
           )}
-          {isConfigOnly && component.type !== 'scheduler' && baseConfigPath && (
+          {isConfigOnly && component.type !== "scheduler" && baseConfigPath && (
             <ConfigOnlySection
               baseConfigPath={baseConfigPath}
               componentCarRef={componentCarRef}
@@ -415,22 +562,24 @@ const ComponentCard: React.FC<{ component: ManifestComponent; manifestId: string
               wsFilesByPath={wsFilesByPath}
             />
           )}
-          {component.type === 'scheduler' && component.scheduler_options && component.scheduler_options.length > 0 && (
-            <SchedulerSection
-              component={component}
-              componentCarRef={componentCarRef}
-              componentFlagDownloaded={componentFlagDownloaded}
-              deletingPaths={deletingPaths}
-              downloadingPaths={downloadingPaths}
-              onCancel={handleCancel}
-              onDelete={handleDelete}
-              onDownload={handleDownload}
-              schedulerConfigPaths={schedulerConfigPaths}
-              schedulerIsDownloading={schedulerIsDownloading}
-              schedulersConfigDownloading={schedulersConfigDownloading}
-              wsFilesByPath={wsFilesByPath}
-            />
-          )}
+          {component.type === "scheduler" &&
+            component.scheduler_options &&
+            component.scheduler_options.length > 0 && (
+              <SchedulerSection
+                component={component}
+                componentCarRef={componentCarRef}
+                componentFlagDownloaded={componentFlagDownloaded}
+                deletingPaths={deletingPaths}
+                downloadingPaths={downloadingPaths}
+                onCancel={handleCancel}
+                onDelete={handleDelete}
+                onDownload={handleDownload}
+                schedulerConfigPaths={schedulerConfigPaths}
+                schedulerIsDownloading={schedulerIsDownloading}
+                schedulersConfigDownloading={schedulersConfigDownloading}
+                wsFilesByPath={wsFilesByPath}
+              />
+            )}
         </div>
       )}
     </div>
@@ -466,8 +615,11 @@ const ComponentCardHeader: React.FC<ComponentCardHeaderProps> = ({
     ? component.model_path.length > 0
     : !!component.model_path;
   const hasSchedulerOptions =
-    component.type === 'scheduler' && component.scheduler_options && component.scheduler_options.length > 0;
-  const hasExpandableContent = hasModelPaths || hasSchedulerOptions || !!isConfigOnly;
+    component.type === "scheduler" &&
+    component.scheduler_options &&
+    component.scheduler_options.length > 0;
+  const hasExpandableContent =
+    hasModelPaths || hasSchedulerOptions || !!isConfigOnly;
 
   if (!hasExpandableContent) {
     return (
@@ -476,8 +628,10 @@ const ComponentCardHeader: React.FC<ComponentCardHeaderProps> = ({
           <div className="flex items-center gap-x-2.5">
             <div
               className={cn(
-                'flex items-center justify-center w-4.5 h-4.5 rounded-full border',
-                componentFlagDownloaded ? 'bg-green-500/20 border-green-500/40' : 'bg-brand-background border-brand-light/20',
+                "flex items-center justify-center w-4.5 h-4.5 rounded-full border",
+                componentFlagDownloaded
+                  ? "bg-green-500/20 border-green-500/40"
+                  : "bg-brand-background border-brand-light/20",
               )}
             >
               {componentFlagDownloaded ? (
@@ -486,7 +640,9 @@ const ComponentCardHeader: React.FC<ComponentCardHeaderProps> = ({
                 <LuDownload className="w-2.5 h-2.5 text-brand-light/50" />
               )}
             </div>
-            <span className="text-brand-light text-[12px] font-medium">{displayName}</span>
+            <span className="text-brand-light text-[12px] font-medium">
+              {displayName}
+            </span>
           </div>
           <span className="text-brand-light/60 text-[10px] font-mono bg-brand-background px-2 py-0.5 rounded">
             {typeLabel}
@@ -511,12 +667,12 @@ const ComponentCardHeader: React.FC<ComponentCardHeaderProps> = ({
               await onDownloadAll();
             }}
             className={cn(
-              'flex items-center justify-center w-4.5 h-4.5 rounded-full border',
+              "flex items-center justify-center w-4.5 h-4.5 rounded-full border",
               componentFlagDownloaded
-                ? 'bg-green-500/20 border-green-500/40'
+                ? "bg-green-500/20 border-green-500/40"
                 : isComponentDownlading
-                  ? 'bg-brand-background border-brand-light/20'
-                  : 'bg-brand-background border-brand-light/20 hover:bg-brand-background/30 cursor-pointer',
+                  ? "bg-brand-background border-brand-light/20"
+                  : "bg-brand-background border-brand-light/20 hover:bg-brand-background/30 cursor-pointer",
             )}
           >
             {componentFlagDownloaded ? (
@@ -527,7 +683,9 @@ const ComponentCardHeader: React.FC<ComponentCardHeaderProps> = ({
               <LuDownload className="w-2.5 h-2.5 text-brand-light/50" />
             )}
           </button>
-          <span className="text-brand-light text-[12px] font-medium">{displayName}</span>
+          <span className="text-brand-light text-[12px] font-medium">
+            {displayName}
+          </span>
         </div>
         <span className="text-brand-light/60 text-[10px] font-mono bg-brand-background px-2 py-0.5 rounded">
           {typeLabel}
@@ -558,7 +716,9 @@ interface ModelPathsSectionProps {
   newModelPath: string;
   onCancel: (jobId: string) => Promise<void>;
   onDelete: (path: string) => Promise<void>;
-  onDeleteCustomPath: (pathItem: ManifestComponentModelPathItem) => Promise<void>;
+  onDeleteCustomPath: (
+    pathItem: ManifestComponentModelPathItem,
+  ) => Promise<void>;
   onDownload: (path: string | string[]) => Promise<void>;
   pathToJobId: Record<string, string>;
   refreshManifestPart: (manifestId: string, path: string) => Promise<void>;
@@ -597,11 +757,17 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
   return (
     <div className="space-y-2 mt-3">
       {modelPaths.map((item, idx) => {
-        const pathItem = (typeof item === 'string' ? { path: item } : item) as ManifestComponentModelPathItem;
+        const pathItem = (
+          typeof item === "string" ? { path: item } : item
+        ) as ManifestComponentModelPathItem;
 
-        const isDownloaded = pathItem.path ? downloadedPaths.has(pathItem.path) : false;
+        const isDownloaded = pathItem.path
+          ? downloadedPaths.has(pathItem.path)
+          : false;
 
-        const wsFilesObj = pathItem.path ? wsFilesByPath[pathItem.path] || {} : {};
+        const wsFilesObj = pathItem.path
+          ? wsFilesByPath[pathItem.path] || {}
+          : {};
         const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
           filename,
           downloadedBytes: (v as any).downloadedBytes,
@@ -615,16 +781,22 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
         const isDownloading = wsFiles.length > 0;
 
         return (
-          <div key={idx} className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full">
+          <div
+            key={idx}
+            className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full"
+          >
             {(pathItem.variant || pathItem.custom) && (
               <div className="flex flex-row justify-between items-center mb-2.5">
                 <div className="flex items-center gap-x-1.5">
                   {pathItem.variant && (
                     <div className="text-brand-light text-[11px] break-all font-semibold">
-                      {pathItem.variant.toLowerCase().includes('default')
-                        ? 'Default'
-                        : pathItem.variant.toLowerCase().includes('gguf')
-                          ? pathItem.variant.replace('GGUF_', '').replace('Q', 'q').toUpperCase()
+                      {pathItem.variant.toLowerCase().includes("default")
+                        ? "Default"
+                        : pathItem.variant.toLowerCase().includes("gguf")
+                          ? pathItem.variant
+                              .replace("GGUF_", "")
+                              .replace("Q", "q")
+                              .toUpperCase()
                           : pathItem.variant}
                     </div>
                   )}
@@ -634,34 +806,49 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
                     </span>
                   )}
                 </div>
-                {typeof (pathItem as any).file_size === 'number' && (pathItem as any).file_size > 0 && (
-                  <div className="flex-shrink-0 ml-2 text-[10px] text-brand-light/80 font-mono whitespace-nowrap">
-                    {formatBytes((pathItem as any).file_size, 1)}
-                  </div>
-                )}
+                {typeof (pathItem as any).file_size === "number" &&
+                  (pathItem as any).file_size > 0 && (
+                    <div className="flex-shrink-0 ml-2 text-[10px] text-brand-light/80 font-mono whitespace-nowrap">
+                      {formatBytes((pathItem as any).file_size, 1)}
+                    </div>
+                  )}
               </div>
             )}
             <div className="flex items-start justify-between gap-x-2 ">
               <div className="flex-1 min-w-0 flex-row items-center gap-x-2">
-                <div className="text-brand-light text-[10.5px] font-medium mb-1">Model Path</div>
-                <div className="text-brand-light text-[10px] font-mono break-all">{pathItem.path}</div>
+                <div className="text-brand-light text-[10.5px] font-medium mb-1">
+                  Model Path
+                </div>
+                <div className="text-brand-light text-[10px] font-mono break-all">
+                  {pathItem.path}
+                </div>
               </div>
             </div>
             {(pathItem.type || pathItem.precision) && (
               <div className="flex flex-col items-start  mt-2 justify-start border-t border-brand-light/5  pt-2">
-                <h4 className="text-brand-light text-[10.5px] font-medium mb-1">Model specifications</h4>
+                <h4 className="text-brand-light text-[10.5px] font-medium mb-1">
+                  Model specifications
+                </h4>
                 {pathItem.type && (
                   <div className="text-[10px] flex flex-row items-center gap-x-1 ">
-                    <span className="text-brand-light/60 font-medium">Model Type </span>
+                    <span className="text-brand-light/60 font-medium">
+                      Model Type{" "}
+                    </span>
                     <span className="text-brand-light/80 font-mono">
-                      {pathItem.type === 'gguf' ? 'GGUF' : formatComponentName(pathItem.type)}
+                      {pathItem.type === "gguf"
+                        ? "GGUF"
+                        : formatComponentName(pathItem.type)}
                     </span>
                   </div>
                 )}
                 {pathItem.precision && (
                   <div className="text-[10px] flex flex-row items-center gap-x-1 ">
-                    <span className="text-brand-light/60 font-medium">Precision </span>
-                    <span className="text-brand-light/90 font-mono">{pathItem.precision.toUpperCase()}</span>
+                    <span className="text-brand-light/60 font-medium">
+                      Precision{" "}
+                    </span>
+                    <span className="text-brand-light/90 font-mono">
+                      {pathItem.precision.toUpperCase()}
+                    </span>
                   </div>
                 )}
               </div>
@@ -669,17 +856,25 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
 
             {pathItem.resource_requirements && (
               <div className="mt-2 pt-2 border-t border-brand-light/5">
-                <div className="text-brand-light text-[10.5px] font-medium mb-1">Resource Requirements</div>
+                <div className="text-brand-light text-[10.5px] font-medium mb-1">
+                  Resource Requirements
+                </div>
                 <div className="flex flex-col ">
                   {pathItem.resource_requirements.min_vram_gb && (
                     <div className="text-[10px]">
-                      <span className="text-brand-light/60 font-medium">Min VRAM </span>
-                      <span className="text-brand-light/90">{pathItem.resource_requirements.min_vram_gb}GB</span>
+                      <span className="text-brand-light/60 font-medium">
+                        Min VRAM{" "}
+                      </span>
+                      <span className="text-brand-light/90">
+                        {pathItem.resource_requirements.min_vram_gb}GB
+                      </span>
                     </div>
                   )}
                   {pathItem.resource_requirements.recommended_vram_gb && (
                     <div className="text-[10px]">
-                      <span className="text-brand-light/60 font-medium">Recommended VRAM </span>
+                      <span className="text-brand-light/60 font-medium">
+                        Recommended VRAM{" "}
+                      </span>
                       <span className="text-brand-light/90">
                         {pathItem.resource_requirements.recommended_vram_gb}GB
                       </span>
@@ -687,8 +882,12 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
                   )}
                   {pathItem.resource_requirements.compute_capability && (
                     <div className="text-[10px]">
-                      <span className="text-brand-light/60">Compute Capability: </span>
-                      <span className="text-brand-light/90">{pathItem.resource_requirements.compute_capability}</span>
+                      <span className="text-brand-light/60">
+                        Compute Capability:{" "}
+                      </span>
+                      <span className="text-brand-light/90">
+                        {pathItem.resource_requirements.compute_capability}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -709,13 +908,17 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
                 <DownloadProgressSection
                   componentCarRef={componentCarRef}
                   files={wsFiles}
-                  onCancel={() => onCancel(pathToJobId[pathItem.path || ''])}
+                  onCancel={() => onCancel(pathToJobId[pathItem.path || ""])}
                 />
               ) : (
                 <button
                   onClick={() => {
-                    const extraPaths = extraModelPaths.map((it) => it.path).filter(Boolean) as string[];
-                    const allPaths = [pathItem.path, ...extraPaths].filter(Boolean) as string[];
+                    const extraPaths = extraModelPaths
+                      .map((it) => it.path)
+                      .filter(Boolean) as string[];
+                    const allPaths = [pathItem.path, ...extraPaths].filter(
+                      Boolean,
+                    ) as string[];
                     if (allPaths.length > 0) {
                       onDownload(allPaths);
                     }
@@ -791,7 +994,9 @@ const ExtraModelPathsSection: React.FC<ExtraModelPathsSectionProps> = ({
 }) => {
   return (
     <div className="mt-2 pt-2 border-t border-brand-light/5">
-      <div className="text-brand-light text-[10.5px] font-medium mb-1">Extra Model Paths</div>
+      <div className="text-brand-light text-[10.5px] font-medium mb-1">
+        Extra Model Paths
+      </div>
       <div className="flex flex-col space-y-2">
         {extraModelPaths.map((extra, extraIdx) => {
           const extraPath = extra.path;
@@ -813,64 +1018,77 @@ const ExtraModelPathsSection: React.FC<ExtraModelPathsSectionProps> = ({
 
           return (
             <div key={extraIdx} className="flex flex-col gap-y-1.5">
-              <div className="text-brand-light text-[10px] font-mono break-all">{extraPath}</div>
-              {!extraDownloaded &&
-                isExtraDownloading && (
-                  <div className="w-full">
-                    <div className="flex flex-col gap-y-2">
-                      {wsFiles.map((f: any) => (
-                        <div key={f.filename} className="flex flex-col gap-y-1">
-                          <div className="flex items-center justify-between gap-x-2 w-full">
-                            <div className="flex-1 min-w-0">
-                              <div
-                                style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
-                                className="text-[10px] text-brand-light/80 font-mono truncate break-all"
-                              >
-                                {f.filename}
-                              </div>
-                            </div>
-                            <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
-                              {(() => {
-                                const pct = f.totalBytes
-                                  ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                                  : typeof f.progress === 'number'
-                                    ? f.progress * 100
-                                    : 0;
-                                return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
-                              })()}
+              <div className="text-brand-light text-[10px] font-mono break-all">
+                {extraPath}
+              </div>
+              {!extraDownloaded && isExtraDownloading && (
+                <div className="w-full">
+                  <div className="flex flex-col gap-y-2">
+                    {wsFiles.map((f: any) => (
+                      <div key={f.filename} className="flex flex-col gap-y-1">
+                        <div className="flex items-center justify-between gap-x-2 w-full">
+                          <div className="flex-1 min-w-0">
+                            <div
+                              style={{
+                                maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px`,
+                              }}
+                              className="text-[10px] text-brand-light/80 font-mono truncate break-all"
+                            >
+                              {f.filename}
                             </div>
                           </div>
-                          <ProgressBar
-                            percent={(() => {
+                          <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                            {(() => {
                               const pct = f.totalBytes
-                                ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                                : typeof f.progress === 'number'
+                                ? ((f.downloadedBytes || 0) / f.totalBytes) *
+                                  100
+                                : typeof f.progress === "number"
                                   ? f.progress * 100
                                   : 0;
-                              return Math.max(0, Math.min(100, pct));
+                              return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
                             })()}
-                          />
-                          <div className="flex items-center justify-between">
-                            {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
-                              <div className="text-[10px] text-brand-light/90">
-                                {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
-                              </div>
-                            ) : (
-                              <div />
-                            )}
-                            {f.status === 'completed' || f.status === 'complete' ? (
-                              <div className="text-[10px] text-green-400">Completed</div>
-                            ) : (
-                              <div className="text-[9px] text-brand-light/60">
-                                {f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : ''}
-                              </div>
-                            )}
                           </div>
                         </div>
-                      ))}
-                    </div>
+                        <ProgressBar
+                          percent={(() => {
+                            const pct = f.totalBytes
+                              ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
+                              : typeof f.progress === "number"
+                                ? f.progress * 100
+                                : 0;
+                            return Math.max(0, Math.min(100, pct));
+                          })()}
+                        />
+                        <div className="flex items-center justify-between">
+                          {typeof f.downloadedBytes === "number" &&
+                          typeof f.totalBytes === "number" ? (
+                            <div className="text-[10px] text-brand-light/90">
+                              {formatDownloadProgress(
+                                f.downloadedBytes,
+                                f.totalBytes,
+                              )}
+                            </div>
+                          ) : (
+                            <div />
+                          )}
+                          {f.status === "completed" ||
+                          f.status === "complete" ? (
+                            <div className="text-[10px] text-green-400">
+                              Completed
+                            </div>
+                          ) : (
+                            <div className="text-[9px] text-brand-light/60">
+                              {f.downloadSpeed != null && f.downloadSpeed > 0
+                                ? formatSpeed(f.downloadSpeed)
+                                : ""}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -885,7 +1103,11 @@ interface DownloadProgressSectionProps {
   onCancel: () => void;
 }
 
-const DownloadProgressSection: React.FC<DownloadProgressSectionProps> = ({ componentCarRef, files, onCancel }) => {
+const DownloadProgressSection: React.FC<DownloadProgressSectionProps> = ({
+  componentCarRef,
+  files,
+  onCancel,
+}) => {
   if (!files.length) return null;
 
   return (
@@ -896,7 +1118,9 @@ const DownloadProgressSection: React.FC<DownloadProgressSectionProps> = ({ compo
             <div className="flex items-center justify-between gap-x-2 w-full">
               <div className="flex-1 min-w-0">
                 <div
-                  style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
+                  style={{
+                    maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px`,
+                  }}
                   className="text-[10px] text-brand-light/80 font-mono truncate break-all"
                 >
                   {f.filename}
@@ -906,7 +1130,7 @@ const DownloadProgressSection: React.FC<DownloadProgressSectionProps> = ({ compo
                 {(() => {
                   const pct = f.totalBytes
                     ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                    : typeof f.progress === 'number'
+                    : typeof f.progress === "number"
                       ? f.progress * 100
                       : 0;
                   return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
@@ -917,25 +1141,28 @@ const DownloadProgressSection: React.FC<DownloadProgressSectionProps> = ({ compo
               percent={(() => {
                 const pct = f.totalBytes
                   ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                  : typeof f.progress === 'number'
+                  : typeof f.progress === "number"
                     ? f.progress * 100
                     : 0;
                 return Math.max(0, Math.min(100, pct));
               })()}
             />
             <div className="flex items-center justify-between">
-              {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
+              {typeof f.downloadedBytes === "number" &&
+              typeof f.totalBytes === "number" ? (
                 <div className="text-[10px] text-brand-light/90">
                   {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
                 </div>
               ) : (
                 <div />
               )}
-              {f.status === 'completed' || f.status === 'complete' ? (
+              {f.status === "completed" || f.status === "complete" ? (
                 <div className="text-[10px] text-green-400">Completed</div>
               ) : (
                 <div className="text-[9px] text-brand-light/60">
-                  {f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : ''}
+                  {f.downloadSpeed != null && f.downloadSpeed > 0
+                    ? formatSpeed(f.downloadSpeed)
+                    : ""}
                 </div>
               )}
             </div>
@@ -946,7 +1173,7 @@ const DownloadProgressSection: React.FC<DownloadProgressSectionProps> = ({ compo
         <button
           onClick={onCancel}
           className={cn(
-            'text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2',
+            "text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2",
           )}
         >
           Cancel
@@ -961,7 +1188,9 @@ interface DownloadedModelActionsProps {
   extraModelPaths: ManifestComponentModelPathItem[];
   modelPaths: (string | ManifestComponentModelPathItem)[];
   onDelete: (path: string) => Promise<void>;
-  onDeleteCustomPath: (pathItem: ManifestComponentModelPathItem) => Promise<void>;
+  onDeleteCustomPath: (
+    pathItem: ManifestComponentModelPathItem,
+  ) => Promise<void>;
   pathItem: ManifestComponentModelPathItem;
 }
 
@@ -1009,10 +1238,10 @@ const DownloadedModelActions: React.FC<DownloadedModelActionsProps> = ({
         )}
         <span>
           {pathItem.path && deletingPaths.has(pathItem.path)
-            ? 'Deleting...'
+            ? "Deleting..."
             : pathItem.custom
-              ? 'Remove Path'
-              : 'Delete Model'}
+              ? "Remove Path"
+              : "Delete Model"}
         </span>
       </button>
     </div>
@@ -1047,7 +1276,9 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
   return (
     <div className="mt-2.5 w-full bg-brand-background border border-brand-light/15 rounded-md px-3 py-3.5 space-y-2.5">
       <div className="flex flex-col gap-y-1.5">
-        <label className="text-[10px] text-brand-light/90 font-medium">Model Name</label>
+        <label className="text-[10px] text-brand-light/90 font-medium">
+          Model Name
+        </label>
         <p className="text-[9.5px] text-brand-light/55">
           A friendly label used in the UI for this model; this can be any text.
         </p>
@@ -1060,9 +1291,12 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
         />
       </div>
       <div className="flex flex-col gap-y-1.5">
-        <label className="text-[10px] text-brand-light/90 font-medium">Model Path</label>
+        <label className="text-[10px] text-brand-light/90 font-medium">
+          Model Path
+        </label>
         <p className="text-[9.5px] text-brand-light/55">
-          Local path on this machine. Can be a file or a directory and will be checked before use.
+          Local path on this machine. Can be a file or a directory and will be
+          checked before use.
         </p>
         <input
           type="text"
@@ -1077,8 +1311,8 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
           type="button"
           onClick={() => {
             setIsAddingModelPath(false);
-            setNewModelName('');
-            setNewModelPath('');
+            setNewModelName("");
+            setNewModelPath("");
           }}
           className="text-[10px] font-medium text-brand-light/70 hover:text-brand-light/90 px-2 py-1 rounded-md transition-colors"
         >
@@ -1093,11 +1327,18 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
             if (!path || isValidatingModelPath) return;
             try {
               setIsValidatingModelPath(true);
-              const res = await validateAndRegisterCustomModelPath(manifestId, index, name || undefined, path);
+              const res = await validateAndRegisterCustomModelPath(
+                manifestId,
+                index,
+                name || undefined,
+                path,
+              );
 
               if (!res?.success) {
                 (toast as any).error(
-                  res && typeof res.error === 'string' ? res.error : 'Failed to validate model path',
+                  res && typeof res.error === "string"
+                    ? res.error
+                    : "Failed to validate model path",
                 );
                 return;
               }
@@ -1105,15 +1346,15 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
               await refreshManifestPart(manifestId, `spec.components.${index}`);
               try {
                 window.dispatchEvent(
-                  new CustomEvent('component-card-reload', {
+                  new CustomEvent("component-card-reload", {
                     detail: { manifestId, componentIndex: index },
                   }),
                 );
               } catch {}
               setIsAddingModelPath(false);
-              setNewModelName('');
-              setNewModelPath('');
-              toast.success('Model path validated and registered successfully');
+              setNewModelName("");
+              setNewModelPath("");
+              toast.success("Model path validated and registered successfully");
             } catch {
             } finally {
               setIsValidatingModelPath(false);
@@ -1177,8 +1418,12 @@ const ConfigOnlySection: React.FC<ConfigOnlySectionProps> = ({
   return (
     <div className="space-y-2 mt-3">
       <div className="bg-brand-background border border-brand-light/10 rounded-md p-3 w-full">
-        <div className="text-brand-light text-[10.5px] font-medium mb-1.5">Config Path</div>
-        <div className="text-[10px] text-brand-light/80 font-mono break-all">{baseConfigPath}</div>
+        <div className="text-brand-light text-[10.5px] font-medium mb-1.5">
+          Config Path
+        </div>
+        <div className="text-[10px] text-brand-light/80 font-mono break-all">
+          {baseConfigPath}
+        </div>
         {!componentFlagDownloaded ? (
           isDownloading ? (
             <div className="w-full mt-3">
@@ -1188,7 +1433,9 @@ const ConfigOnlySection: React.FC<ConfigOnlySectionProps> = ({
                     <div className="flex items-center justify-between gap-x-2 w-full">
                       <div className="flex-1 min-w-0">
                         <div
-                          style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
+                          style={{
+                            maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px`,
+                          }}
                           className="text-[10px] text-brand-light/80 font-mono truncate break-all"
                         >
                           {f.filename}
@@ -1198,7 +1445,7 @@ const ConfigOnlySection: React.FC<ConfigOnlySectionProps> = ({
                         {(() => {
                           const pct = f.totalBytes
                             ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                            : typeof f.progress === 'number'
+                            : typeof f.progress === "number"
                               ? f.progress * 100
                               : 0;
                           return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
@@ -1209,7 +1456,7 @@ const ConfigOnlySection: React.FC<ConfigOnlySectionProps> = ({
                       percent={(() => {
                         const pct = f.totalBytes
                           ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                          : typeof f.progress === 'number'
+                          : typeof f.progress === "number"
                             ? f.progress * 100
                             : 0;
                         return Math.max(0, Math.min(100, pct));
@@ -1237,7 +1484,11 @@ const ConfigOnlySection: React.FC<ConfigOnlySectionProps> = ({
               ) : (
                 <LuDownload className="w-3.5 h-3.5" />
               )}
-              <span>{downloadingPaths.has(baseConfigPath) ? 'Downloading...' : 'Download Config'}</span>
+              <span>
+                {downloadingPaths.has(baseConfigPath)
+                  ? "Downloading..."
+                  : "Download Config"}
+              </span>
             </button>
           )
         ) : (
@@ -1256,7 +1507,11 @@ const ConfigOnlySection: React.FC<ConfigOnlySectionProps> = ({
               ) : (
                 <LuTrash className="w-3.5 h-3.5" />
               )}
-              <span>{deletingPaths.has(baseConfigPath) ? 'Deleting...' : 'Delete Config'}</span>
+              <span>
+                {deletingPaths.has(baseConfigPath)
+                  ? "Deleting..."
+                  : "Delete Config"}
+              </span>
             </button>
           </div>
         )}
@@ -1296,30 +1551,41 @@ const SchedulerSection: React.FC<SchedulerSectionProps> = ({
 }) => {
   return (
     <div className="mt-3">
-      <div className="text-brand-light/80 text-[11px] font-medium mb-2">Scheduler Options</div>
+      <div className="text-brand-light/80 text-[11px] font-medium mb-2">
+        Scheduler Options
+      </div>
       <div
         className={cn(
-          'space-y-0 bg-brand-background border  border-b-0 border-brand-light/10 rounded-t-[6px] divide-y divide-brand-light/10',
+          "space-y-0 bg-brand-background border  border-b-0 border-brand-light/10 rounded-t-[6px] divide-y divide-brand-light/10",
           {
-            'rounded-b-[6px] border-b': componentFlagDownloaded,
+            "rounded-b-[6px] border-b": componentFlagDownloaded,
           },
         )}
       >
         {component.scheduler_options?.map((option, idx) => (
-          <div key={idx} className={cn(' border-brand-light/10 border-t-border-x px-3.5 py-2')}>
+          <div
+            key={idx}
+            className={cn(
+              " border-brand-light/10 border-t-border-x px-3.5 py-2",
+            )}
+          >
             <div className="mb-1">
-              <span className="text-brand-light text-[11px] font-medium">{option.label || option.name}</span>
+              <span className="text-brand-light text-[11px] font-medium">
+                {option.label || option.name}
+              </span>
             </div>
             {option.description && (
-              <div className="text-[10px] text-brand-light/70 mt-1 mb-1.5 ">{option.description}</div>
+              <div className="text-[10px] text-brand-light/70 mt-1 mb-1.5 ">
+                {option.description}
+              </div>
             )}
           </div>
         ))}
       </div>
       {schedulerConfigPaths.length > 0 && (
         <div
-          className={cn('bg-brand-background p-3 rounded-b-[6px]', {
-            'p-0': !schedulersConfigDownloading,
+          className={cn("bg-brand-background p-3 rounded-b-[6px]", {
+            "p-0": !schedulersConfigDownloading,
           })}
         >
           {schedulerConfigPaths.map((p) => {
@@ -1338,7 +1604,9 @@ const SchedulerSection: React.FC<SchedulerSectionProps> = ({
             if (!(files.length > 0)) return null;
             return (
               <div key={p} className="w-full">
-                <div className="text-brand-light text-[10.5px] font-medium mb-2.5">Config Download</div>
+                <div className="text-brand-light text-[10.5px] font-medium mb-2.5">
+                  Config Download
+                </div>
                 {files.length > 0 ? (
                   <div className="flex flex-col gap-y-2">
                     {files.map((f: any) => (
@@ -1346,7 +1614,9 @@ const SchedulerSection: React.FC<SchedulerSectionProps> = ({
                         <div className="flex flex-col justify-start gap-y-2 w-full">
                           <div className="flex-1 min-w-0">
                             <div
-                              style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px` }}
+                              style={{
+                                maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px`,
+                              }}
                               className="text-[10px] text-brand-light/80 font-mono truncate break-all"
                             >
                               {f.filename}
@@ -1354,32 +1624,45 @@ const SchedulerSection: React.FC<SchedulerSectionProps> = ({
                           </div>
                           <div className="text-[10px] text-brand-light/80 font-mono flex items-center gap-x-1">
                             <LuLoader className="w-3 h-3 text-brand-light/60 animate-spin" />
-                            <span>{typeof f.message === 'string' && f.message ? f.message : 'Preparing...'}</span>
+                            <span>
+                              {typeof f.message === "string" && f.message
+                                ? f.message
+                                : "Preparing..."}
+                            </span>
                           </div>
                         </div>
                         <ProgressBar
                           percent={(() => {
                             const pct = f.totalBytes
                               ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                              : typeof f.progress === 'number'
+                              : typeof f.progress === "number"
                                 ? f.progress * 100
                                 : 0;
                             return Math.max(0, Math.min(100, pct));
                           })()}
                         />
                         <div className="flex items-center justify-between">
-                          {typeof f.downloadedBytes === 'number' && typeof f.totalBytes === 'number' ? (
+                          {typeof f.downloadedBytes === "number" &&
+                          typeof f.totalBytes === "number" ? (
                             <div className="text-[10px] text-brand-light/90">
-                              {formatDownloadProgress(f.downloadedBytes, f.totalBytes)}
+                              {formatDownloadProgress(
+                                f.downloadedBytes,
+                                f.totalBytes,
+                              )}
                             </div>
                           ) : (
                             <div />
                           )}
-                          {f.status === 'completed' || f.status === 'complete' ? (
-                            <div className="text-[10px] text-green-400">Completed</div>
+                          {f.status === "completed" ||
+                          f.status === "complete" ? (
+                            <div className="text-[10px] text-green-400">
+                              Completed
+                            </div>
                           ) : (
                             <div className="text-[9px] text-brand-light/60">
-                              {f.downloadSpeed != null && f.downloadSpeed > 0 ? formatSpeed(f.downloadSpeed) : ''}
+                              {f.downloadSpeed != null && f.downloadSpeed > 0
+                                ? formatSpeed(f.downloadSpeed)
+                                : ""}
                             </div>
                           )}
                         </div>
@@ -1390,7 +1673,9 @@ const SchedulerSection: React.FC<SchedulerSectionProps> = ({
                   <div className="flex flex-col items-start justify-start gap-y-2 w-full">
                     <div className="flex-1 min-w-0">
                       <div
-                        style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 40}px` }}
+                        style={{
+                          maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 40}px`,
+                        }}
                         className="text-[10px] text-brand-light/80 font-mono truncate break-all"
                       >
                         {p}
@@ -1421,15 +1706,17 @@ const SchedulerSection: React.FC<SchedulerSectionProps> = ({
             onClick={() => onDownload(schedulerConfigPaths)}
             className="w-full text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light  hover:bg-brand/70 border border-brand-light/10 rounded-[6px] bg-brand px-3 py-2 transition-all"
           >
-            {schedulerConfigPaths.some((p) => downloadingPaths.has(p)) || schedulerIsDownloading ? (
+            {schedulerConfigPaths.some((p) => downloadingPaths.has(p)) ||
+            schedulerIsDownloading ? (
               <LuLoader className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <LuDownload className="w-3.5 h-3.5" />
             )}
             <span>
-              {schedulerConfigPaths.some((p) => downloadingPaths.has(p)) || schedulerIsDownloading
-                ? 'Downloading...'
-                : 'Download Config'}
+              {schedulerConfigPaths.some((p) => downloadingPaths.has(p)) ||
+              schedulerIsDownloading
+                ? "Downloading..."
+                : "Download Config"}
             </span>
           </button>
         </div>
@@ -1438,11 +1725,18 @@ const SchedulerSection: React.FC<SchedulerSectionProps> = ({
         <div className="bg-brand-background rounded-[6px] mt-2 py-1 border  border-brand-light/10">
           <div className="space-y-2 divide-y divide-brand-light/10">
             {schedulerConfigPaths.map((p) => (
-              <div key={p} className="flex flex-col items-start justify-start gap-y-2 w-full py-2 px-3">
+              <div
+                key={p}
+                className="flex flex-col items-start justify-start gap-y-2 w-full py-2 px-3"
+              >
                 <div className="flex-1 min-w-0">
-                  <p className="text-[10px] text-brand-light font-medium mb-1">Config Path</p>
+                  <p className="text-[10px] text-brand-light font-medium mb-1">
+                    Config Path
+                  </p>
                   <div
-                    style={{ maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 60}px` }}
+                    style={{
+                      maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 60}px`,
+                    }}
                     className="text-[10px] text-brand-light/80 font-mono truncate break-all"
                   >
                     {p}
@@ -1462,7 +1756,9 @@ const SchedulerSection: React.FC<SchedulerSectionProps> = ({
                     ) : (
                       <LuTrash className="w-3 h-3" />
                     )}
-                    <span>{deletingPaths.has(p) ? 'Deleting...' : 'Delete'}</span>
+                    <span>
+                      {deletingPaths.has(p) ? "Deleting..." : "Delete"}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -1473,5 +1769,3 @@ const SchedulerSection: React.FC<SchedulerSectionProps> = ({
     </div>
   );
 };
-
-

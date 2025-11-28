@@ -1,18 +1,20 @@
-import React from 'react'
+import React from "react";
 
-type LayoutType = 'default' | 'media' | 'properties'
+type LayoutType = "default" | "media" | "properties";
 
 interface LayoutIconProps {
-  type: LayoutType
-  className?: string
+  type: LayoutType;
+  className?: string;
 }
 
-const rectClass = ' h-full w-full  border-brand-light'
+const rectClass = " h-full w-full  border-brand-light";
 
 export const LayoutIcon: React.FC<LayoutIconProps> = ({ type, className }) => {
   return (
-    <div className={`h-5 w-5 rounded-[2px] border-[1.5px] border-brand-light overflow-hidden ${className ?? 'scale-75'}`}>
-      {type === 'default' && (
+    <div
+      className={`h-5 w-5 rounded-[2px] border-[1.5px] border-brand-light overflow-hidden ${className ?? "scale-75"}`}
+    >
+      {type === "default" && (
         <>
           <div className="grid grid-cols-3 grid-rows-3 gap-0 h-full w-full">
             <div className="row-span-2">
@@ -30,7 +32,7 @@ export const LayoutIcon: React.FC<LayoutIconProps> = ({ type, className }) => {
           </div>
         </>
       )}
-      {type === 'media' && (
+      {type === "media" && (
         <>
           <div className="grid grid-cols-3 grid-rows-3 gap-0 h-full w-full">
             <div className="col-start-1 col-span-1 row-start-1 row-span-3">
@@ -48,7 +50,7 @@ export const LayoutIcon: React.FC<LayoutIconProps> = ({ type, className }) => {
           </div>
         </>
       )}
-      {type === 'properties' && (
+      {type === "properties" && (
         <>
           <div className="grid grid-cols-3 grid-rows-3 gap-0 h-full w-full">
             <div className="col-start-3 col-span-1 row-start-1 row-span-3">
@@ -67,9 +69,7 @@ export const LayoutIcon: React.FC<LayoutIconProps> = ({ type, className }) => {
         </>
       )}
     </div>
-  )
-}
+  );
+};
 
-export default LayoutIcon
-
-
+export default LayoutIcon;

@@ -2,8 +2,8 @@ import {
   runPostprocessor as runPostprocessorPreload,
   getPostprocessorStatus as getPostprocessorStatusPreload,
   cancelPostprocessor as cancelPostprocessorPreload,
-} from '@app/preload';
-import { wsClient } from '../ws/client';
+} from "@app/preload";
+import { wsClient } from "../ws/client";
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -11,7 +11,7 @@ export interface ConfigResponse<T> {
   error?: string;
 }
 
-export type PostprocessorMethod = 'frame-interpolate';
+export type PostprocessorMethod = "frame-interpolate";
 
 export interface RunPostprocessorRequestBase {
   method: PostprocessorMethod;
@@ -20,7 +20,7 @@ export interface RunPostprocessorRequestBase {
 }
 
 export interface RunFrameInterpolateRequest extends RunPostprocessorRequestBase {
-  method: 'frame-interpolate';
+  method: "frame-interpolate";
   target_fps: number;
   exp?: number;
   scale?: number;
@@ -43,20 +43,28 @@ export interface JobResult {
   [key: string]: any;
 }
 
-export async function runPostprocessor(request: RunPostprocessorRequest): Promise<ConfigResponse<JobResponse>> {
+export async function runPostprocessor(
+  request: RunPostprocessorRequest,
+): Promise<ConfigResponse<JobResponse>> {
   return await runPostprocessorPreload(request as any);
 }
 
-export async function getPostprocessorStatus(jobId: string): Promise<ConfigResponse<{ status: string; result?: JobResult }>> {
+export async function getPostprocessorStatus(
+  jobId: string,
+): Promise<ConfigResponse<{ status: string; result?: JobResult }>> {
   return await getPostprocessorStatusPreload(jobId);
 }
 
-export async function cancelPostprocessor(jobId: string): Promise<ConfigResponse<any>> {
+export async function cancelPostprocessor(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   // Unified cancel
   return await cancelPostprocessorPreload(jobId);
 }
 
-export async function connectJobWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+export async function connectJobWebSocket(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   try {
     await wsClient.connect(`postprocessor:${jobId}`, `/ws/job/${jobId}`);
     return { success: true, data: { jobId } };
@@ -65,7 +73,9 @@ export async function connectJobWebSocket(jobId: string): Promise<ConfigResponse
   }
 }
 
-export async function disconnectJobWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+export async function disconnectJobWebSocket(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   try {
     await wsClient.disconnect(`postprocessor:${jobId}`);
     return { success: true, data: { jobId } };
@@ -74,16 +84,23 @@ export async function disconnectJobWebSocket(jobId: string): Promise<ConfigRespo
   }
 }
 
-export function subscribeToJobUpdates(jobId: string, callback: (data: any) => void): () => void {
+export function subscribeToJobUpdates(
+  jobId: string,
+  callback: (data: any) => void,
+): () => void {
   return wsClient.onUpdate(`postprocessor:${jobId}`, callback);
 }
 
-export function subscribeToJobStatus(jobId: string, callback: (data: any) => void): () => void {
+export function subscribeToJobStatus(
+  jobId: string,
+  callback: (data: any) => void,
+): () => void {
   return wsClient.onStatus(`postprocessor:${jobId}`, callback);
 }
 
-export function subscribeToJobErrors(jobId: string, callback: (data: any) => void): () => void {
+export function subscribeToJobErrors(
+  jobId: string,
+  callback: (data: any) => void,
+): () => void {
   return wsClient.onError(`postprocessor:${jobId}`, callback);
 }
-
-

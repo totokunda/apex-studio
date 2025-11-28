@@ -3,7 +3,7 @@
  * Adjusts image contrast using GPU acceleration
  */
 
-import { WebGLFilterBase } from './WebGLFilterBase';
+import { WebGLFilterBase } from "./WebGLFilterBase";
 
 const vertexShader = `
   attribute vec2 a_position;
@@ -59,7 +59,10 @@ export class WebGLContrast extends WebGLFilterBase {
     this.initProgram();
   }
 
-  public apply(sourceCanvas: HTMLCanvasElement, contrast: number): HTMLCanvasElement {
+  public apply(
+    sourceCanvas: HTMLCanvasElement,
+    contrast: number,
+  ): HTMLCanvasElement {
     const gl = this.ensureContext();
     if (!gl || !this.program || contrast === 0) {
       return sourceCanvas;
@@ -81,9 +84,12 @@ export class WebGLContrast extends WebGLFilterBase {
     // Set uniforms
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.uniform1i(gl.getUniformLocation(this.program, 'u_image'), 0);
+    gl.uniform1i(gl.getUniformLocation(this.program, "u_image"), 0);
     // Normalize contrast from -100..100 to -1..1
-    gl.uniform1f(gl.getUniformLocation(this.program, 'u_contrast'), contrast / 100);
+    gl.uniform1f(
+      gl.getUniformLocation(this.program, "u_contrast"),
+      contrast / 100,
+    );
 
     // Draw
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

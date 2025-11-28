@@ -3,7 +3,7 @@ import {
   getRayJob as getRayJobPreload,
   cancelRayJob as cancelRayJobPreload,
   cancelAllRayJobs as cancelAllRayJobsPreload,
-} from '@app/preload';
+} from "@app/preload";
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -21,7 +21,7 @@ export type RayJobLatest = {
 export type RayJobStatus = {
   job_id: string;
   status: string;
-  category?: 'download' | 'processor' | 'engine' | 'other' | string;
+  category?: "download" | "processor" | "engine" | "other" | string;
   message?: string;
   error?: string;
   result?: any;
@@ -45,12 +45,12 @@ export async function fetchRayJob(jobId: string): Promise<RayJobStatus | null> {
   return res.data as RayJobStatus;
 }
 
-export async function cancelRayJob(jobId: string): Promise<ConfigResponse<any>> {
+export async function cancelRayJob(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   return await cancelRayJobPreload(jobId);
 }
 
 export async function cancelAllRayJobs(): Promise<ConfigResponse<any>> {
   return await cancelAllRayJobsPreload();
 }
-
-

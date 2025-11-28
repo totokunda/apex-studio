@@ -1,7 +1,11 @@
-import { cn } from '@/lib/utils';
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { LuDice5, LuInfo } from 'react-icons/lu';
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { cn } from "@/lib/utils";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { LuDice5, LuInfo } from "react-icons/lu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface RandomInputProps<T> {
   className?: string;
@@ -16,33 +20,49 @@ interface RandomInputProps<T> {
   emptyLabel?: boolean;
 }
 
-const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, label, description, className, startLogo, min, max, step = 1, emptyLabel }) => {
-  const isAuto = String(value) === '-1';
-  const [tempValue, setTempValue] = useState(isAuto ? 'Auto' : String(value ?? ''));
+const RandomInput: React.FC<RandomInputProps<string>> = ({
+  value,
+  onChange,
+  label,
+  description,
+  className,
+  startLogo,
+  min,
+  max,
+  step = 1,
+  emptyLabel,
+}) => {
+  const isAuto = String(value) === "-1";
+  const [tempValue, setTempValue] = useState(
+    isAuto ? "Auto" : String(value ?? ""),
+  );
   const lastValueRef = useRef(value);
-  const lastManualValueRef = useRef<string>('');
+  const lastManualValueRef = useRef<string>("");
 
   // remember last manual value so we can restore when leaving Auto
   useEffect(() => {
     const strVal = String(value);
-    if (strVal !== '-1') {
+    if (strVal !== "-1") {
       lastManualValueRef.current = strVal;
     }
   }, [value]);
 
   useEffect(() => {
     if (isAuto) {
-      setTempValue('Auto');
+      setTempValue("Auto");
     } else {
-      setTempValue(String(value ?? ''));
+      setTempValue(String(value ?? ""));
     }
     lastValueRef.current = value;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, isAuto]);
 
-  const minBound = useMemo(() => (typeof min === 'number' ? min : 0), [min]);
-  const maxBound = useMemo(() => (typeof max === 'number' ? max : 100), [max]);
-  const stepSize = useMemo(() => (typeof step === 'number' && step > 0 ? step : 1), [step]);
+  const minBound = useMemo(() => (typeof min === "number" ? min : 0), [min]);
+  const maxBound = useMemo(() => (typeof max === "number" ? max : 100), [max]);
+  const stepSize = useMemo(
+    () => (typeof step === "number" && step > 0 ? step : 1),
+    [step],
+  );
 
   const clampToRange = (n: number) => Math.min(Math.max(n, minBound), maxBound);
 
@@ -59,7 +79,10 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
     // avoid -0 for negative ranges
     const fixed = Math.abs(clamped) === 0 ? 0 : clamped;
     // stringify without trailing decimals if integer step
-    const isIntegerStep = Number.isInteger(stepSize) && Number.isInteger(minBound) && Number.isInteger(maxBound);
+    const isIntegerStep =
+      Number.isInteger(stepSize) &&
+      Number.isInteger(minBound) &&
+      Number.isInteger(maxBound);
     return isIntegerStep ? String(Math.round(fixed)) : String(fixed);
   };
 
@@ -79,7 +102,7 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (isAuto) return;
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       if (tempValue !== value) {
         const oldValue = lastValueRef.current;
         onChange(tempValue);
@@ -92,18 +115,18 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
         });
       }
       e.currentTarget.blur();
-    } else if (e.key === 'Escape') {
-      setTempValue(String(value ?? ''));
+    } else if (e.key === "Escape") {
+      setTempValue(String(value ?? ""));
       e.currentTarget.blur();
     }
   };
 
   const switchToAuto = () => {
-    onChange('-1');
+    onChange("-1");
   };
 
   const switchToManual = () => {
-    const fallback = String(typeof min === 'number' ? min : 0);
+    const fallback = String(typeof min === "number" ? min : 0);
     const next = lastManualValueRef.current || fallback;
     onChange(next);
   };
@@ -111,15 +134,23 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
   return (
     <div className="flex flex-col items-start w-full gap-y-1 min-w-0">
       <div className="flex items-center gap-1.5 w-full">
-        <label className="text-brand-light  text-[10px] font-medium text-start">{label}</label>
+        <label className="text-brand-light  text-[10px] font-medium text-start">
+          {label}
+        </label>
         {description && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <button type="button" className="text-brand-light/70 hover:text-brand-light focus:outline-none">
+              <button
+                type="button"
+                className="text-brand-light/70 hover:text-brand-light focus:outline-none"
+              >
                 <LuInfo className="w-3 h-3" />
               </button>
             </TooltipTrigger>
-            <TooltipContent sideOffset={6} className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10">
+            <TooltipContent
+              sideOffset={6}
+              className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+            >
               {description}
             </TooltipContent>
           </Tooltip>
@@ -131,7 +162,9 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
             onClick={switchToManual}
             className={cn(
               "px-2 py-0.5 text-[10px] font-medium transition-all duration-200",
-              !isAuto ? "bg-brand-light/[0.075] text-brand-lighter" : "bg-brand text-brand-light/70 hover:bg-brand-light/5"
+              !isAuto
+                ? "bg-brand-light/[0.075] text-brand-lighter"
+                : "bg-brand text-brand-light/70 hover:bg-brand-light/5",
             )}
           >
             Manual
@@ -141,7 +174,9 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
             onClick={switchToAuto}
             className={cn(
               "px-2 py-0.5 text-[10px] font-medium transition-all duration-200 border-l border-brand-light/10",
-              isAuto ? "bg-brand-light/[0.075] text-brand-lighter" : "bg-brand text-brand-light/70 hover:bg-brand-light/5"
+              isAuto
+                ? "bg-brand-light/[0.075] text-brand-lighter"
+                : "bg-brand text-brand-light/70 hover:bg-brand-light/5",
             )}
           >
             Auto
@@ -151,11 +186,18 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
       {emptyLabel && <span className="mb-3"></span>}
 
       <div className="relative w-full flex flex-row items-center min-w-0">
-        {startLogo && <span className="text-brand-light/50 font-medium text-[11px] absolute left-2 top-1/2 -translate-y-1/2">{startLogo}</span>}
+        {startLogo && (
+          <span className="text-brand-light/50 font-medium text-[11px] absolute left-2 top-1/2 -translate-y-1/2">
+            {startLogo}
+          </span>
+        )}
         <input
-          className={cn(`w-full h-7 px-2 text-brand-light text-[11px] rounded-l font-normal items-center border border-brand-light/5  bg-brand ${className}`, {
-            'pl-6': startLogo,
-          })}
+          className={cn(
+            `w-full h-7 px-2 text-brand-light text-[11px] rounded-l font-normal items-center border border-brand-light/5  bg-brand ${className}`,
+            {
+              "pl-6": startLogo,
+            },
+          )}
           value={tempValue}
           onChange={(e) => setTempValue(e.target.value)}
           onBlur={handleBlur}
@@ -176,9 +218,7 @@ const RandomInput: React.FC<RandomInputProps<string>> = ({ value, onChange, labe
         </div>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default RandomInput
-
-
+export default RandomInput;

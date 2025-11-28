@@ -3,7 +3,7 @@
  * Adds random noise to the image using GPU acceleration
  */
 
-import { WebGLFilterBase } from './WebGLFilterBase';
+import { WebGLFilterBase } from "./WebGLFilterBase";
 
 const vertexShader = `
   attribute vec2 a_position;
@@ -66,7 +66,10 @@ export class WebGLNoise extends WebGLFilterBase {
     this.initProgram();
   }
 
-  public apply(sourceCanvas: HTMLCanvasElement, amount: number): HTMLCanvasElement {
+  public apply(
+    sourceCanvas: HTMLCanvasElement,
+    amount: number,
+  ): HTMLCanvasElement {
     const gl = this.ensureContext();
     if (!gl || !this.program || amount <= 0) {
       return sourceCanvas;
@@ -91,9 +94,9 @@ export class WebGLNoise extends WebGLFilterBase {
     // Set uniforms
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.uniform1i(gl.getUniformLocation(this.program, 'u_image'), 0);
-    gl.uniform1f(gl.getUniformLocation(this.program, 'u_noise'), amount / 100); // Normalize to 0..1
-    gl.uniform1f(gl.getUniformLocation(this.program, 'u_seed'), this.seed);
+    gl.uniform1i(gl.getUniformLocation(this.program, "u_image"), 0);
+    gl.uniform1f(gl.getUniformLocation(this.program, "u_noise"), amount / 100); // Normalize to 0..1
+    gl.uniform1f(gl.getUniformLocation(this.program, "u_seed"), this.seed);
 
     // Draw
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

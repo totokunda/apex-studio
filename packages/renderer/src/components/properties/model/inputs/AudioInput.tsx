@@ -1,35 +1,52 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useDndMonitor } from '@dnd-kit/core';
-import Droppable from '@/components/dnd/Droppable';
-import { MdAudiotrack } from 'react-icons/md';
-import { cn } from '@/lib/utils';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@radix-ui/react-tabs';
-import { LuPause, LuPlay, LuSearch, LuUpload } from 'react-icons/lu';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { MediaItem, MediaThumb } from '@/components/media/Item';
-import { getMediaInfo } from '@/lib/media/utils';
-import { getPathForFile, listConvertedMedia } from '@app/preload';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import TimelineSearch from './timeline/TimelineSearch';
-import { useClipStore } from '@/lib/clip';
-import { useAssetControlsStore } from '@/lib/assetControl';
-import { AnyClipProps, AudioClipProps } from '@/lib/types';
-import { AUDIO_EXTS, DEFAULT_FPS } from '@/lib/settings';
-import { getLowercaseExtension, importMediaPaths, pickMediaPaths } from '@app/preload';
-import { useViewportStore } from '@/lib/viewport';
-import { useMediaLibraryVersion, bumpMediaLibraryVersion } from '@/lib/media/library';
-import { useInputControlsStore } from '@/lib/inputControl';
-import { useControlsStore } from '@/lib/control';
-import AudioPreview from '@/components/preview/clips/AudioPreview';
-import { VIDEO_EXTS } from '@/lib/settings';
-import { TbEdit } from 'react-icons/tb';
-import { MediaDialog } from '@/components/dialogs/MediaDialog';
-import { CircularAudioVisualizer } from './CircularAudioVisualizer';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useDndMonitor } from "@dnd-kit/core";
+import Droppable from "@/components/dnd/Droppable";
+import { MdAudiotrack } from "react-icons/md";
+import { cn } from "@/lib/utils";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@radix-ui/react-tabs";
+import { LuPause, LuPlay, LuSearch, LuUpload } from "react-icons/lu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { MediaItem, MediaThumb } from "@/components/media/Item";
+import { getMediaInfo } from "@/lib/media/utils";
+import { getPathForFile, listConvertedMedia } from "@app/preload";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import TimelineSearch from "./timeline/TimelineSearch";
+import { useClipStore } from "@/lib/clip";
+import { useAssetControlsStore } from "@/lib/assetControl";
+import { AnyClipProps, AudioClipProps } from "@/lib/types";
+import { AUDIO_EXTS, DEFAULT_FPS } from "@/lib/settings";
+import {
+  getLowercaseExtension,
+  importMediaPaths,
+  pickMediaPaths,
+} from "@app/preload";
+import { useViewportStore } from "@/lib/viewport";
+import {
+  useMediaLibraryVersion,
+  bumpMediaLibraryVersion,
+} from "@/lib/media/library";
+import { useInputControlsStore } from "@/lib/inputControl";
+import { useControlsStore } from "@/lib/control";
+import AudioPreview from "@/components/preview/clips/AudioPreview";
+import { VIDEO_EXTS } from "@/lib/settings";
+import { TbEdit } from "react-icons/tb";
+import { MediaDialog } from "@/components/dialogs/MediaDialog";
+import { CircularAudioVisualizer } from "./CircularAudioVisualizer";
 
 const isVideo = (path: string) => {
   const ext = getLowercaseExtension(path);
   return VIDEO_EXTS.includes(ext);
-}
+};
 
 export type AudioSelection = AudioClipProps | null;
 
@@ -49,21 +66,29 @@ interface PopoverAudioProps {
   clipId: string | null;
 }
 
-const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) => {
+const PopoverAudio: React.FC<PopoverAudioProps> = ({
+  value,
+  onChange,
+  clipId,
+}) => {
   const isUserInteractingRef = useRef(false);
-  const [selectedTab, setSelectedTab] = useState<'timeline' | 'library'>('library');
+  const [selectedTab, setSelectedTab] = useState<"timeline" | "library">(
+    "library",
+  );
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState("");
   const [filteredMediaItems, setFilteredMediaItems] = useState<MediaItem[]>([]);
   const { clips } = useClipStore();
   const getClipById = useClipStore((s) => s.getClipById);
   const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
-  const setSelectedAssetChangeHandler = useAssetControlsStore((s) => s.setSelectedAssetChangeHandler);
+  const setSelectedAssetChangeHandler = useAssetControlsStore(
+    (s) => s.setSelectedAssetChangeHandler,
+  );
   const mediaLibraryVersion = useMediaLibraryVersion();
-  const {fps} = useControlsStore();
+  const { fps } = useControlsStore();
   useEffect(() => {
     const next = mediaItems.filter((media) =>
-      media.name.toLowerCase().includes(searchQuery.toLowerCase())
+      media.name.toLowerCase().includes(searchQuery.toLowerCase()),
     );
     setFilteredMediaItems(next);
   }, [searchQuery, mediaItems]);
@@ -85,16 +110,18 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
             hasProxy: it.hasProxy,
           }))
           .filter((media) => {
-            if (media.type === 'audio') return true;
+            if (media.type === "audio") return true;
             const mediaInfo = media.mediaInfo;
             // if has audio track, return true
             if (mediaInfo?.audio) {
-              void getMediaInfo(media.assetUrl + '#audio');
+              void getMediaInfo(media.assetUrl + "#audio");
               return true;
             }
             return false;
           })
-          .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+          .sort((a, b) =>
+            a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+          );
         setMediaItems(results);
       } catch {
         // Swallow errors; UI handles toasts elsewhere.
@@ -103,17 +130,22 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
   }, [mediaLibraryVersion]);
 
   const numEligibleTimelineAssets = useMemo(() => {
-    return clips.filter((clip) => clip.type === 'audio' && clip.clipId !== clipId && !clip.hidden).length;
+    return clips.filter(
+      (clip) => clip.type === "audio" && clip.clipId !== clipId && !clip.hidden,
+    ).length;
   }, [clips, clipId]);
-  
 
   const handleUpload = useCallback(async () => {
     try {
-      const filters = [
-        { name: 'Audio Files', extensions: AUDIO_EXTS },
-      ];
-      const picked = await pickMediaPaths({ directory: false, filters, title: 'Choose audio file(s) to import' });
-      const paths = (picked ?? []).filter((p) => AUDIO_EXTS.includes(getLowercaseExtension(p)));
+      const filters = [{ name: "Audio Files", extensions: AUDIO_EXTS }];
+      const picked = await pickMediaPaths({
+        directory: false,
+        filters,
+        title: "Choose audio file(s) to import",
+      });
+      const paths = (picked ?? []).filter((p) =>
+        AUDIO_EXTS.includes(getLowercaseExtension(p)),
+      );
       if (paths.length === 0) return;
       const before = await listConvertedMedia();
       const existingNames = new Set(before.map((it) => it.name));
@@ -131,22 +163,27 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
           mediaInfo: infos[idx],
           hasProxy: it.hasProxy,
         }))
-        .filter((media) => media.type === 'audio')
-        .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+        .filter((media) => media.type === "audio")
+        .sort((a, b) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+        );
       setMediaItems(results);
 
       const newlyAdded = results.filter((it) => !existingNames.has(it.name));
       if (newlyAdded.length > 0) {
         const first = newlyAdded[0];
-        const durationFrames = Math.max(1, Math.floor((first.mediaInfo?.duration || 0) * fps));
+        const durationFrames = Math.max(
+          1,
+          Math.floor((first.mediaInfo?.duration || 0) * fps),
+        );
         clearSelectedAsset();
         const clip: AudioClipProps = {
-          type: 'audio',
+          type: "audio",
           clipId: `media:${first.assetUrl}`,
-          src: first.assetUrl + (isVideo(first.assetUrl) ? '#audio' : ''),
+          src: first.assetUrl + (isVideo(first.assetUrl) ? "#audio" : ""),
           startFrame: 0,
           endFrame: Math.max(1, durationFrames),
-        }
+        };
         onChange(clip);
       }
       bumpMediaLibraryVersion();
@@ -155,20 +192,36 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
     }
   }, [clearSelectedAsset, onChange, fps]);
 
-  const assetSelectionHandler = React.useCallback((selectedClipId: string | null) => {
-    if (!selectedClipId) {
-      onChange(null);
-      return;
-    }
-    const clip = getClipById(selectedClipId) as AnyClipProps | undefined;
-    if (!clip) return;
-    const clipDuration = Math.max(1, (clip.endFrame ?? 0) - (clip.startFrame ?? 0));
-    if (clip.type === 'audio') {
-      onChange({ ...(clip as AnyClipProps), startFrame: 0, endFrame: clipDuration, type: 'audio' } as AudioClipProps);
-      return;
-    }
-    onChange({ ...clip, startFrame: 0, endFrame: clipDuration, type: 'audio' } as AudioClipProps);
-  }, [getClipById, onChange]);
+  const assetSelectionHandler = React.useCallback(
+    (selectedClipId: string | null) => {
+      if (!selectedClipId) {
+        onChange(null);
+        return;
+      }
+      const clip = getClipById(selectedClipId) as AnyClipProps | undefined;
+      if (!clip) return;
+      const clipDuration = Math.max(
+        1,
+        (clip.endFrame ?? 0) - (clip.startFrame ?? 0),
+      );
+      if (clip.type === "audio") {
+        onChange({
+          ...(clip as AnyClipProps),
+          startFrame: 0,
+          endFrame: clipDuration,
+          type: "audio",
+        } as AudioClipProps);
+        return;
+      }
+      onChange({
+        ...clip,
+        startFrame: 0,
+        endFrame: clipDuration,
+        type: "audio",
+      } as AudioClipProps);
+    },
+    [getClipById, onChange],
+  );
 
   const renderMediaLibrary = () => (
     <div className="w-full h-full flex flex-col py-2 gap-y-2 outline-none">
@@ -188,7 +241,10 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
         <div className="w-full h-full grid grid-cols-2 gap-3">
           {filteredMediaItems.map((media) => {
             const isSelected = value?.clipId === `media:${media.assetUrl}`;
-            const durationFrames = Math.max(1, Math.floor((media.mediaInfo?.duration || 0) * fps));
+            const durationFrames = Math.max(
+              1,
+              Math.floor((media.mediaInfo?.duration || 0) * fps),
+            );
             return (
               <div
                 key={media.name}
@@ -198,9 +254,11 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
                     onChange(null);
                   } else {
                     const clip: AudioClipProps = {
-                      type: 'audio',
+                      type: "audio",
                       clipId: `media:${media.assetUrl}`,
-                      src: media.assetUrl + (isVideo(media.assetUrl) ? '#audio' : ''),
+                      src:
+                        media.assetUrl +
+                        (isVideo(media.assetUrl) ? "#audio" : ""),
                       startFrame: 0,
                       endFrame: durationFrames,
                     } as any;
@@ -208,23 +266,23 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
                   }
                 }}
                 className={cn(
-                  'w-full flex flex-col items-center justify-center gap-y-1.5 cursor-pointer group relative'
+                  "w-full flex flex-col items-center justify-center gap-y-1.5 cursor-pointer group relative",
                 )}
               >
                 <div className="relative">
                   <div
                     className={cn(
-                      'absolute top-0 left-0 w-full h-full bg-brand-background-light/50 backdrop-blur-sm rounded-md z-20 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center',
-                      isSelected ? 'opacity-100' : 'opacity-0'
+                      "absolute top-0 left-0 w-full h-full bg-brand-background-light/50 backdrop-blur-sm rounded-md z-20 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center",
+                      isSelected ? "opacity-100" : "opacity-0",
                     )}
                   >
                     <div
                       className={cn(
-                        'rounded-full py-1 px-3 bg-brand-light/10 flex items-center justify-center font-medium text-[10.5px] w-fit',
-                        isSelected ? 'bg-brand-light/20' : ''
+                        "rounded-full py-1 px-3 bg-brand-light/10 flex items-center justify-center font-medium text-[10.5px] w-fit",
+                        isSelected ? "bg-brand-light/20" : "",
                       )}
                     >
-                      {isSelected ? 'Selected' : 'Use as Input'}
+                      {isSelected ? "Selected" : "Use as Input"}
                     </div>
                   </div>
                   <MediaThumb key={media.name} item={media} />
@@ -246,8 +304,8 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
       align="start"
       sideOffset={20}
       className={cn(
-        'p-2 z-[90] dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-150',
-        selectedTab === 'timeline' ? 'w-[600px]' : 'w-96'
+        "p-2 z-[90] dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-150",
+        selectedTab === "timeline" ? "w-[600px]" : "w-96",
       )}
       onOpenAutoFocus={() => {
         isUserInteractingRef.current = true;
@@ -258,20 +316,33 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
         setSelectedAssetChangeHandler(null);
       }}
     >
-      <Tabs value={selectedTab} onValueChange={(val) => setSelectedTab(val as 'timeline' | 'library')}>
-        <div className={cn('w-full flex flex-row items-center gap-x-2 justify-between')}>
+      <Tabs
+        value={selectedTab}
+        onValueChange={(val) => setSelectedTab(val as "timeline" | "library")}
+      >
+        <div
+          className={cn(
+            "w-full flex flex-row items-center gap-x-2 justify-between",
+          )}
+        >
           <TabsList
             className={cn(
-              'w-full text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row shadow overflow-hidden',
-              numEligibleTimelineAssets === 0 ? 'justify-start' : 'justify-between cursor-pointer bg-brand-background-light'
+              "w-full text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row shadow overflow-hidden",
+              numEligibleTimelineAssets === 0
+                ? "justify-start"
+                : "justify-between cursor-pointer bg-brand-background-light",
             )}
           >
             <TabsTrigger
               value="library"
               className={cn(
-                'w-full py-1.5 flex items-center',
-                selectedTab === 'library' && numEligibleTimelineAssets > 0 ? 'bg-brand-accent-shade' : '',
-                numEligibleTimelineAssets === 0 ? 'cursor-default justify-start px-2.5' : 'cursor-pointer justify-center px-4'
+                "w-full py-1.5 flex items-center",
+                selectedTab === "library" && numEligibleTimelineAssets > 0
+                  ? "bg-brand-accent-shade"
+                  : "",
+                numEligibleTimelineAssets === 0
+                  ? "cursor-default justify-start px-2.5"
+                  : "cursor-pointer justify-center px-4",
               )}
             >
               Media Library
@@ -280,8 +351,8 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
               hidden={numEligibleTimelineAssets === 0}
               value="timeline"
               className={cn(
-                'px-4 w-full py-1.5 cursor-pointer flex items-center justify-center',
-                selectedTab === 'timeline' ? 'bg-brand-accent-shade' : ''
+                "px-4 w-full py-1.5 cursor-pointer flex items-center justify-center",
+                selectedTab === "timeline" ? "bg-brand-accent-shade" : "",
               )}
             >
               Timeline Assets
@@ -290,54 +361,74 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({ value, onChange, clipId }) 
           <button
             onClick={handleUpload}
             className={cn(
-              'w-fit h-full mr-2 flex flex-row items-center justify-center gap-x-1.5 bg-brand-background-light hover:bg-brand-light/10 transition-all duration-200 cursor-pointer rounded py-1.5',
-              numEligibleTimelineAssets === 0 ? 'px-5' : 'px-3'
+              "w-fit h-full mr-2 flex flex-row items-center justify-center gap-x-1.5 bg-brand-background-light hover:bg-brand-light/10 transition-all duration-200 cursor-pointer rounded py-1.5",
+              numEligibleTimelineAssets === 0 ? "px-5" : "px-3",
             )}
           >
             <LuUpload className="w-3.5 h-3.5 text-brand-light" />
-            <span className="text-brand-light text-[10.5px] font-medium">Upload</span>
+            <span className="text-brand-light text-[10.5px] font-medium">
+              Upload
+            </span>
           </button>
         </div>
         <TabsContent value="library">{renderMediaLibrary()}</TabsContent>
         <TabsContent value="timeline" className="outline-none">
-          <TimelineSearch types={['audio']} excludeClipId={clipId || undefined} />
+          <TimelineSearch
+            types={["audio"]}
+            excludeClipId={clipId || undefined}
+          />
         </TabsContent>
       </Tabs>
     </PopoverContent>
   );
 };
 
-const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, value, onChange, clipId, panelSize }) => {
-
+const AudioInput: React.FC<AudioInputProps> = ({
+  label,
+  description,
+  inputId,
+  value,
+  onChange,
+  clipId,
+  panelSize,
+}) => {
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
-  const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const [stageSize, setStageSize] = useState<{ w: number; h: number }>({
+    w: 0,
+    h: 0,
+  });
   const [mediaClip, setMediaClip] = useState<AnyClipProps | null>(null);
   const [isOverDropZone, setIsOverDropZone] = useState(false);
   const externalDragCounterRef = useRef(0);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
-  
-  const {
-    clearSelectedAsset,
-  } = useAssetControlsStore();
 
+  const { clearSelectedAsset } = useAssetControlsStore();
 
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
 
-
-  
   const setInputFocusFrame = useInputControlsStore((s) => s.setFocusFrame);
   // Simplified: no programmatic range writes; selector manages its own range
   const getClipById = useClipStore((s) => s.getClipById);
   const setInputFps = useInputControlsStore((s) => s.setFps);
-  const { fpsByInputId, focusFrameByInputId, selectedRangeByInputId, setFocusFrame, setSelectedRange, play, pause } = useInputControlsStore();
-  const isPlaying = useInputControlsStore((s) => !!s.isPlayingByInputId[inputId]);
+  const {
+    fpsByInputId,
+    focusFrameByInputId,
+    selectedRangeByInputId,
+    setFocusFrame,
+    setSelectedRange,
+    play,
+    pause,
+  } = useInputControlsStore();
+  const isPlaying = useInputControlsStore(
+    (s) => !!s.isPlayingByInputId[inputId],
+  );
 
   const fpsForInput = fpsByInputId[inputId] ?? DEFAULT_FPS;
   const selectedRangeTuple = selectedRangeByInputId[inputId] ?? [0, 1];
   const focusFrameForInput = focusFrameByInputId[inputId] ?? 0;
 
-  const {fps} = useControlsStore();
+  const { fps } = useControlsStore();
   const playbackStartTimestampRef = useRef<number | null>(null);
   const playbackLastFrameRef = useRef<number>(0);
   const [isScrubbing, setIsScrubbing] = useState(false);
@@ -349,21 +440,23 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
   }, [fps, inputId, setInputFps]);
 
   const selectionKey = useMemo(() => {
-    if (!value) return 'null';
+    if (!value) return "null";
     return value.clipId;
   }, [value]);
 
   // Simplified: no non-range signature; preview reads latest from store as needed
 
-
   const viewportRatio = useMemo(() => {
-    const r = 16/9
+    const r = 16 / 9;
     return Number.isFinite(r) && r > 0 ? r : 1;
   }, [aspectRatio.width, aspectRatio.height]);
 
-  const emitSelection = useCallback((next: AudioSelection) => {
-    onChange(next);
-  }, [onChange]);
+  const emitSelection = useCallback(
+    (next: AudioSelection) => {
+      onChange(next);
+    },
+    [onChange],
+  );
   useEffect(() => {
     const el = stageContainerRef.current;
     if (!el) return;
@@ -376,7 +469,6 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     return () => obs.disconnect();
   }, [panelSize, viewportRatio]);
 
-
   useEffect(() => {
     setStageSize((prev) => ({
       w: Math.max(1, panelSize),
@@ -384,9 +476,14 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     }));
   }, [panelSize, viewportRatio]);
 
-  const [rangeStartForInput, rangeEndForInput] = useMemo<[number, number]>(() => {
+  const [rangeStartForInput, rangeEndForInput] = useMemo<
+    [number, number]
+  >(() => {
     const start = Math.max(0, Math.round(selectedRangeTuple?.[0] ?? 0));
-    const endRaw = Math.max(start + 1, Math.round(selectedRangeTuple?.[1] ?? start + 1));
+    const endRaw = Math.max(
+      start + 1,
+      Math.round(selectedRangeTuple?.[1] ?? start + 1),
+    );
     return [start, endRaw];
   }, [selectedRangeTuple?.[0], selectedRangeTuple?.[1]]);
 
@@ -404,8 +501,8 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
       const minutes = Math.floor((totalSeconds % 3600) / 60);
       const seconds = Math.floor(totalSeconds % 60);
       return hours > 0
-        ? `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
-        : `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        ? `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+        : `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
     };
     const startTime = start / Math.max(1, fpsForInput);
     const endTime = endDisplay / Math.max(1, fpsForInput);
@@ -417,8 +514,8 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
       rangeStartForInput,
       Math.min(
         Math.max(rangeStartForInput, rangeEndForInput - 1),
-        Math.round(focusFrameForInput ?? rangeStartForInput)
-      )
+        Math.round(focusFrameForInput ?? rangeStartForInput),
+      ),
     );
     const span = Math.max(1, rangeEndForInput - rangeStartForInput);
     if (span <= 1) return 0;
@@ -439,7 +536,7 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
           : rangeStartForInput + Math.round(ratio * (span - 1));
       setInputFocusFrame(nextFrame, inputId);
     },
-    [inputId, rangeStartForInput, rangeEndForInput, setInputFocusFrame]
+    [inputId, rangeStartForInput, rangeEndForInput, setInputFocusFrame],
   );
 
   useEffect(() => {
@@ -450,11 +547,11 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     const handleUp = () => {
       setIsScrubbing(false);
     };
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleUp);
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
     return () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleUp);
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
     };
   }, [isScrubbing, scrubToClientX]);
 
@@ -463,7 +560,6 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     playbackStartTimestampRef.current = null;
   }, [rangeStartForInput, selectionKey]);
 
-
   useDndMonitor({
     onDragStart: () => {
       setIsOverDropZone(false);
@@ -471,8 +567,13 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     onDragMove: (event) => {
       const data = event.active?.data?.current as MediaItem | undefined;
       const overId = event.over?.id as string | undefined;
-      const isValid = !!data && (data.type === 'audio' || (data.type === 'video' && data.mediaInfo?.audio !== undefined && data.mediaInfo?.audio !== null));
-      setIsOverDropZone(isValid && overId === 'audio-input');
+      const isValid =
+        !!data &&
+        (data.type === "audio" ||
+          (data.type === "video" &&
+            data.mediaInfo?.audio !== undefined &&
+            data.mediaInfo?.audio !== null));
+      setIsOverDropZone(isValid && overId === "audio-input");
     },
     onDragCancel: () => {
       setIsOverDropZone(false);
@@ -480,30 +581,40 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     onDragEnd: (event) => {
       const data = event.active?.data?.current as MediaItem | undefined;
       const overId = event.over?.id as string | undefined;
-      const isValid = !!data && (data.type === 'audio' || (data.type === 'video' && data.mediaInfo?.audio !== undefined && data.mediaInfo?.audio !== null));
+      const isValid =
+        !!data &&
+        (data.type === "audio" ||
+          (data.type === "video" &&
+            data.mediaInfo?.audio !== undefined &&
+            data.mediaInfo?.audio !== null));
       if (!isValid) return;
-      if (isValid && overId === 'audio-input') {
+      if (isValid && overId === "audio-input") {
         clearSelectedAsset();
         void (async () => {
           try {
-            const info = data.mediaInfo ?? await getMediaInfo(data.assetUrl);
-            const durationFrames = Math.max(1, Math.floor((info?.duration || 0) * fps));
+            const info = data.mediaInfo ?? (await getMediaInfo(data.assetUrl));
+            const durationFrames = Math.max(
+              1,
+              Math.floor((info?.duration || 0) * fps),
+            );
             const clip: AudioClipProps = {
-              type: 'audio',
+              type: "audio",
               clipId: `media:${data.assetUrl}`,
-              src: data.assetUrl + (isVideo(data.assetUrl) ? '#audio' : ''),
+              src: data.assetUrl + (isVideo(data.assetUrl) ? "#audio" : ""),
               startFrame: 0,
               endFrame: durationFrames,
-            }
+            };
             emitSelection(clip);
           } catch {
             const clip: AudioClipProps = {
-              type: 'audio',
-              clipId: `media:${data?.assetUrl || ''}`,
-              src: (data?.assetUrl || '') + (isVideo(data?.assetUrl || '') ? '#audio' : ''),
+              type: "audio",
+              clipId: `media:${data?.assetUrl || ""}`,
+              src:
+                (data?.assetUrl || "") +
+                (isVideo(data?.assetUrl || "") ? "#audio" : ""),
               startFrame: 0,
               endFrame: 1,
-            }
+            };
             emitSelection(clip);
           }
         })();
@@ -511,8 +622,6 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
       setIsOverDropZone(false);
     },
   });
-
-
 
   const handleExternalDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -545,7 +654,7 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     if (files.length !== 1) return;
     let path: string | undefined;
     try {
-      path = getPathForFile(files[0]);  
+      path = getPathForFile(files[0]);
     } catch {}
     if (!path) return;
     const ext = getLowercaseExtension(path);
@@ -567,22 +676,27 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
           mediaInfo: infos[idx],
           hasProxy: it.hasProxy,
         }))
-        .filter((media) => media.type === 'audio')
-        .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+        .filter((media) => media.type === "audio")
+        .sort((a, b) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+        );
       const newlyAdded = results.filter((it) => !existingNames.has(it.name));
       if (newlyAdded.length > 0) {
         const first = newlyAdded[0];
-        
-        const durationFrames = Math.max(1, Math.floor((first.mediaInfo?.duration || 0) * fps));
+
+        const durationFrames = Math.max(
+          1,
+          Math.floor((first.mediaInfo?.duration || 0) * fps),
+        );
 
         clearSelectedAsset();
         const clip: AudioClipProps = {
-          type: 'audio',
+          type: "audio",
           clipId: `media:${first.assetUrl}`,
-          src: first.assetUrl + (isVideo(first.assetUrl) ? '#audio' : ''),
+          src: first.assetUrl + (isVideo(first.assetUrl) ? "#audio" : ""),
           startFrame: 0,
           endFrame: durationFrames,
-        }
+        };
         emitSelection(clip);
       }
       bumpMediaLibraryVersion();
@@ -591,7 +705,6 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     }
   };
 
-
   // Simplified preview: set mediaClip from store for timeline clips, or compute media asset duration once
   useEffect(() => {
     if (!value) {
@@ -599,8 +712,8 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
       return;
     }
     const clip = value as AnyClipProps;
-    const cid = String(clip.clipId || '');
-    if (!cid.startsWith('media:')) {
+    const cid = String(clip.clipId || "");
+    if (!cid.startsWith("media:")) {
       const live = getClipById(cid) as AnyClipProps | undefined;
       setMediaClip(live ?? null);
       return;
@@ -610,25 +723,45 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     (async () => {
       try {
         const info = await getMediaInfo((clip as any).src as string);
-        const durationFrames = Math.max(1, Math.floor((info?.duration || 0) * fps));
-        if (!cancelled) setMediaClip({ ...clip, endFrame: durationFrames, startFrame: 0 } as AnyClipProps);
+        const durationFrames = Math.max(
+          1,
+          Math.floor((info?.duration || 0) * fps),
+        );
+        if (!cancelled)
+          setMediaClip({
+            ...clip,
+            endFrame: durationFrames,
+            startFrame: 0,
+          } as AnyClipProps);
       } catch {
         if (!cancelled) setMediaClip(clip);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [value, getClipById, fps]);
-
 
   // No emission of start/end from range changes; we fetch latest clip from store when needed
 
   useEffect(() => {
     const [rangeStart, rangeEnd] = selectedRangeTuple;
-    const clampedFocus = Math.max(rangeStart, Math.min(rangeEnd, Math.round(focusFrameForInput ?? rangeStart)));
+    const clampedFocus = Math.max(
+      rangeStart,
+      Math.min(rangeEnd, Math.round(focusFrameForInput ?? rangeStart)),
+    );
     if (clampedFocus !== focusFrameForInput && !isPlaying) {
       setInputFocusFrame(clampedFocus, inputId);
     }
-  }, [selectedRangeTuple?.[0], selectedRangeTuple?.[1], focusFrameForInput, inputId, setInputFocusFrame, isPlaying, mediaClip?.clipId]);
+  }, [
+    selectedRangeTuple?.[0],
+    selectedRangeTuple?.[1],
+    focusFrameForInput,
+    inputId,
+    setInputFocusFrame,
+    isPlaying,
+    mediaClip?.clipId,
+  ]);
 
   const previewClip = useMemo<AnyClipProps | null>(() => {
     if (!value) return null;
@@ -638,14 +771,14 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
   // Clear selection if referenced timeline clip is deleted
   const liveTimelineClip = useClipStore((s) => {
     if (!value) return null;
-    const cid = String(value.clipId || '');
-    if (cid.startsWith('media:')) return null;
+    const cid = String(value.clipId || "");
+    if (cid.startsWith("media:")) return null;
     return (s.getClipById(cid) as AnyClipProps | undefined) ?? null;
   });
   useEffect(() => {
     if (!value) return;
-    const cid = String(value.clipId || '');
-    if (cid.startsWith('media:')) return;
+    const cid = String(value.clipId || "");
+    if (cid.startsWith("media:")) return;
     if (!liveTimelineClip) {
       emitSelection(null);
       return;
@@ -661,14 +794,17 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
   useEffect(() => {
     if (!previewClip) return;
     const clipStart = Math.max(0, Math.round(previewClip.startFrame ?? 0));
-    const clipEnd = Math.max(clipStart + 1, Math.round(previewClip.endFrame ?? (clipStart + 1)));
+    const clipEnd = Math.max(
+      clipStart + 1,
+      Math.round(previewClip.endFrame ?? clipStart + 1),
+    );
     const span = Math.max(1, clipEnd - clipStart);
-    const currentClipId = String(previewClip.clipId || '');
+    const currentClipId = String(previewClip.clipId || "");
 
     // Persist previous clipId per input across unmounts so navigation does not force a reset
     let sameClipAsBefore = false;
     try {
-      const store: any = (window as any);
+      const store: any = window as any;
       if (!store.__apexPrevClipIdByInput) {
         store.__apexPrevClipIdByInput = new Map<string, string>();
       }
@@ -689,36 +825,61 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     if (!isAlreadyFull) {
       setSelectedRange(0, span, inputId);
     }
-  }, [previewClip?.clipId, previewClip?.startFrame, previewClip?.endFrame, inputId, setSelectedRange, selectedRangeTuple?.[0], selectedRangeTuple?.[1]]);
+  }, [
+    previewClip?.clipId,
+    previewClip?.startFrame,
+    previewClip?.endFrame,
+    inputId,
+    setSelectedRange,
+    selectedRangeTuple?.[0],
+    selectedRangeTuple?.[1],
+  ]);
 
   // Ensure selectedRange is always valid (min 1 frame, within [clip.start, clip.end])
   useEffect(() => {
     if (!previewClip) return;
     const clipStart = Math.max(0, Math.round(previewClip.startFrame ?? 0));
-    const clipEnd = Math.max(clipStart + 1, Math.round(previewClip.endFrame ?? (clipStart + 1)));
+    const clipEnd = Math.max(
+      clipStart + 1,
+      Math.round(previewClip.endFrame ?? clipStart + 1),
+    );
     const span = Math.max(1, clipEnd - clipStart);
     let curStart = Math.round(selectedRangeTuple?.[0] ?? 0);
-    let curEnd = Math.round(selectedRangeTuple?.[1] ?? (curStart + 1));
+    let curEnd = Math.round(selectedRangeTuple?.[1] ?? curStart + 1);
     const desiredStart = Math.max(0, Math.min(span - 1, curStart));
     const desiredEnd = Math.max(desiredStart + 1, Math.min(span, curEnd));
     if (desiredStart !== curStart || desiredEnd !== curEnd) {
       setSelectedRange(desiredStart, desiredEnd, inputId);
     }
-  }, [previewClip, selectedRangeTuple?.[0], selectedRangeTuple?.[1], setSelectedRange, inputId]);
+  }, [
+    previewClip,
+    selectedRangeTuple?.[0],
+    selectedRangeTuple?.[1],
+    setSelectedRange,
+    inputId,
+  ]);
 
   // Default selectedRange to the full duration on first load (store default [0,1])
   useEffect(() => {
     if (!previewClip) return;
     if (!Array.isArray(selectedRangeTuple)) return;
-    const isDefault = (selectedRangeTuple[0] === 0 && selectedRangeTuple[1] === 1);
+    const isDefault =
+      selectedRangeTuple[0] === 0 && selectedRangeTuple[1] === 1;
     if (!isDefault) return;
     const clipStart = Math.max(0, Math.round(previewClip.startFrame ?? 0));
-    const clipEnd = Math.max(clipStart + 1, Math.round(previewClip.endFrame ?? (clipStart + 1)));
+    const clipEnd = Math.max(
+      clipStart + 1,
+      Math.round(previewClip.endFrame ?? clipStart + 1),
+    );
     const span = Math.max(1, clipEnd - clipStart);
     setSelectedRange(0, span, inputId);
-  }, [previewClip, selectedRangeTuple?.[0], selectedRangeTuple?.[1], setSelectedRange, inputId]);
-
-
+  }, [
+    previewClip,
+    selectedRangeTuple?.[0],
+    selectedRangeTuple?.[1],
+    setSelectedRange,
+    inputId,
+  ]);
 
   const handleTogglePlayback = useCallback(() => {
     if (!previewClip) return;
@@ -733,9 +894,19 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     }
 
     store.play(inputId);
-  }, [previewClip, isPlaying, rangeStartForInput, rangeEndForInput, inputId, setFocusFrame]);
+  }, [
+    previewClip,
+    isPlaying,
+    rangeStartForInput,
+    rangeEndForInput,
+    inputId,
+    setFocusFrame,
+  ]);
 
-  const showTimeline = Boolean(previewClip && (previewClip.type === 'audio' || previewClip.type === 'group'));
+  const showTimeline = Boolean(
+    previewClip &&
+    (previewClip.type === "audio" || previewClip.type === "group"),
+  );
 
   const playDisabled = !previewClip || rangeEndForInput <= rangeStartForInput;
 
@@ -751,20 +922,27 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
     }) => {
       // Audio does not currently apply spatial transforms; selection range is edited via TimelineSelector inside MediaDialog.
     },
-    []
+    [],
   );
 
   return (
-    <Droppable className="w-full h-full" id="audio-input" accepts={['media']}>
+    <Droppable className="w-full h-full" id="audio-input" accepts={["media"]}>
       <div className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px] border border-brand-light/5 h-auto">
         <div className="w-full h-full flex flex-col items-start justify-start p-3">
           <div className="w-full flex flex-col items-start justify-start mb-3">
             <div className="w-full flex flex-col">
               <div className="flex flex-col items-start justify-start">
-                {label && <label className="text-brand-light text-[10.5px] w-full font-medium text-start">{label}</label>}
-                {description && <span className="text-brand-light/80 text-[9.5px] w-full text-start">{description}</span>}
+                {label && (
+                  <label className="text-brand-light text-[10.5px] w-full font-medium text-start">
+                    {label}
+                  </label>
+                )}
+                {description && (
+                  <span className="text-brand-light/80 text-[9.5px] w-full text-start">
+                    {description}
+                  </span>
+                )}
               </div>
-
             </div>
           </div>
           <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
@@ -785,9 +963,11 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
                 onDrop={handleExternalDrop}
                 style={{ height: value ? Math.max(1, stageSize.h) : undefined }}
                 className={cn(
-                  'w-full flex flex-col items-center justify-center gap-y-3 shadow-accent cursor-pointer relative overflow-hidden group',
-                  value ? '' : 'border-dashed',
-                  value ? '' : 'p-4 border-brand-light/10 border bg-brand-background-light/50 rounded'
+                  "w-full flex flex-col items-center justify-center gap-y-3 shadow-accent cursor-pointer relative overflow-hidden group",
+                  value ? "" : "border-dashed",
+                  value
+                    ? ""
+                    : "p-4 border-brand-light/10 border bg-brand-background-light/50 rounded",
                 )}
               >
                 {isOverDropZone && (
@@ -800,7 +980,9 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
                         <AudioPreview
                           key={previewClip.clipId}
                           {...(previewClip as AudioClipProps)}
-                          overrideClip={previewClip as AnyClipProps as AudioClipProps}
+                          overrideClip={
+                            previewClip as AnyClipProps as AudioClipProps
+                          }
                           inputMode={true}
                           inputId={inputId}
                           overlap={true}
@@ -808,7 +990,12 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
                           rectHeight={stageSize.h}
                           disabled={isDialogOpen}
                         />
-                        <CircularAudioVisualizer inputId={inputId} width={stageSize.w} height={stageSize.h} active={isPlaying} />
+                        <CircularAudioVisualizer
+                          inputId={inputId}
+                          width={stageSize.w}
+                          height={stageSize.h}
+                          active={isPlaying}
+                        />
                       </>
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-brand-light/70 text-[12px]">
@@ -821,7 +1008,10 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
                     </div>
                   )
                 ) : (
-                  <div style={{height: Math.max(1, stageSize.h - 40) }} className='flex flex-col items-center justify-center gap-y-2'>
+                  <div
+                    style={{ height: Math.max(1, stageSize.h - 40) }}
+                    className="flex flex-col items-center justify-center gap-y-2"
+                  >
                     <MdAudiotrack className="w-1/4 h-1/4 text-brand-light " />
                     <span className="text-brand-light text-[11px] w-full text-center font-medium">
                       Click or drag and drop a audio file here.
@@ -836,9 +1026,7 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
                         className="z-30 duration-150 flex items-center gap-x-2 px-6 py-2 w-40 bg-brand-light hover:bg-brand-light/90 shadow-md justify-center rounded text-[10.5px] font-poppins font-medium text-brand-accent-two-shade transition-colors"
                       >
                         <MdAudiotrack className="w-4 h-4" />
-                        <span>
-                          Select Media
-                        </span>
+                        <span>Select Media</span>
                       </button>
                       <button
                         onClick={() => setIsDialogOpen(true)}
@@ -852,7 +1040,11 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
                 )}
               </div>
             </PopoverTrigger>
-            <PopoverAudio value={value} onChange={emitSelection} clipId={clipId} />
+            <PopoverAudio
+              value={value}
+              onChange={emitSelection}
+              clipId={clipId}
+            />
           </Popover>
           {showTimeline && value && (
             <div className="w-full flex flex-col gap-y-3 mt-3">
@@ -860,8 +1052,10 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
                 <div
                   ref={scrubberTrackRef}
                   className={cn(
-                    'relative w-full h-1.5 rounded-full bg-brand-background-light/70',
-                    playDisabled ? 'opacity-60 cursor-default' : 'cursor-pointer'
+                    "relative w-full h-1.5 rounded-full bg-brand-background-light/70",
+                    playDisabled
+                      ? "opacity-60 cursor-default"
+                      : "cursor-pointer",
                   )}
                   onMouseDown={(e) => {
                     if (playDisabled) return;
@@ -886,16 +1080,22 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
                   onClick={handleTogglePlayback}
                   disabled={playDisabled}
                   className={cn(
-                    'flex items-center gap-x-1.5 px-3 py-1.5 rounded bg-brand-background-light text-[10.5px] font-medium text-brand-light transition-colors',
+                    "flex items-center gap-x-1.5 px-3 py-1.5 rounded bg-brand-background-light text-[10.5px] font-medium text-brand-light transition-colors",
                     playDisabled
-                      ? 'opacity-50 cursor-not-allowed'
-                      : 'hover:bg-brand-light/10 cursor-pointer'
+                      ? "opacity-50 cursor-not-allowed"
+                      : "hover:bg-brand-light/10 cursor-pointer",
                   )}
                 >
-                  {isPlaying ? <LuPause className="w-3.5 h-3.5" /> : <LuPlay className="w-3.5 h-3.5" />}
-                  {isPlaying ? 'Pause' : 'Play'}
+                  {isPlaying ? (
+                    <LuPause className="w-3.5 h-3.5" />
+                  ) : (
+                    <LuPlay className="w-3.5 h-3.5" />
+                  )}
+                  {isPlaying ? "Pause" : "Play"}
                 </button>
-                <span className="text-brand-light/70 text-[10px] font-medium">{rangeSummary}</span>
+                <span className="text-brand-light/70 text-[10px] font-medium">
+                  {rangeSummary}
+                </span>
               </div>
             </div>
           )}
@@ -904,7 +1104,7 @@ const AudioInput: React.FC<AudioInputProps> = ({ label, description, inputId, va
             onClose={() => setIsDialogOpen(false)}
             onConfirm={handleDialogConfirm}
             clipOverride={mediaClip}
-            timelineSelectorProps={{ mode: 'range', inputId }}
+            timelineSelectorProps={{ mode: "range", inputId }}
             focusFrame={focusFrameForInput}
             setFocusFrame={(frame) => setInputFocusFrame(frame, inputId)}
             canCrop={false}

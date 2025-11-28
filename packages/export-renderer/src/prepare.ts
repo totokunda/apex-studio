@@ -1,20 +1,42 @@
-import { createApplicatorFromClip, getApplicableClips, type AnyClipProps, type TimelineLike, type ClipType, type FilterClipProps } from './applicators/utils';
-import type { ExportClip, ExportApplicatorClip, ExportImageClip, ExportVideoClip, ExportTextClip, ExportShapeClip, ExportDrawClip } from './exporter';
-import type { ExportAudioClip } from './exporter';
+import {
+  createApplicatorFromClip,
+  getApplicableClips,
+  type AnyClipProps,
+  type TimelineLike,
+  type ClipType,
+  type FilterClipProps,
+} from "./applicators/utils";
+import type {
+  ExportClip,
+  ExportApplicatorClip,
+  ExportImageClip,
+  ExportVideoClip,
+  ExportTextClip,
+  ExportShapeClip,
+  ExportDrawClip,
+} from "./exporter";
+import type { ExportAudioClip } from "./exporter";
 
 type ClipId = string;
 
 function isGroup(clip: AnyClipProps): boolean {
-  return clip.type === 'group';
+  return clip.type === "group";
 }
 
 function isApplicator(clip: AnyClipProps): boolean {
-  const applicatorTypes: ClipType[] = ['filter'];
+  const applicatorTypes: ClipType[] = ["filter"];
   return applicatorTypes.includes(clip.type);
 }
 
 function isRenderableContent(clip: AnyClipProps): boolean {
-  return clip.type === 'image' || clip.type === 'video' || clip.type === 'text' || clip.type === 'shape' || clip.type === 'draw' || clip.type === 'audio';
+  return (
+    clip.type === "image" ||
+    clip.type === "video" ||
+    clip.type === "text" ||
+    clip.type === "shape" ||
+    clip.type === "draw" ||
+    clip.type === "audio"
+  );
 }
 
 function buildUngroupedView(
@@ -22,7 +44,7 @@ function buildUngroupedView(
   timelines: TimelineLike[],
   includeHiddenChildrenInGroups: boolean,
 ): { content: AnyClipProps[]; applicators: AnyClipProps[] } {
-  const byId = new Map(allClips.map(c => [c.clipId, c] as const));
+  const byId = new Map(allClips.map((c) => [c.clipId, c] as const));
   const content: AnyClipProps[] = [];
   const applicators: AnyClipProps[] = [];
   const seen = new Set<string>();
@@ -56,52 +78,66 @@ function buildUngroupedView(
   return { content, applicators };
 }
 
-function getEffectiveTimelineY(clips: AnyClipProps[], timelines: TimelineLike[], clip: AnyClipProps): number {
-  const own = timelines.find(t => t.timelineId === clip.timelineId);
+function getEffectiveTimelineY(
+  clips: AnyClipProps[],
+  timelines: TimelineLike[],
+  clip: AnyClipProps,
+): number {
+  const own = timelines.find((t) => t.timelineId === clip.timelineId);
   if (own) return own.timelineY ?? 0;
   if (clip.groupId) {
-    const group = clips.find(c => c.clipId === clip.groupId);
+    const group = clips.find((c) => c.clipId === clip.groupId);
     if (group) {
-      const gt = timelines.find(t => t.timelineId === group.timelineId);
+      const gt = timelines.find((t) => t.timelineId === group.timelineId);
       if (gt) return gt.timelineY ?? 0;
     }
   }
   return 0;
 }
 
-function isTimelineHidden(timelines: TimelineLike[], timelineId?: string): boolean {
+function isTimelineHidden(
+  timelines: TimelineLike[],
+  timelineId?: string,
+): boolean {
   if (!timelineId) return false;
-  const tl = timelines.find(t => t.timelineId === timelineId);
+  const tl = timelines.find((t) => t.timelineId === timelineId);
   return !!tl?.hidden;
 }
 
-function flattenGroupChildrenBottomToTop(group: AnyClipProps | undefined, clips: AnyClipProps[], timelines: TimelineLike[]): ClipId[] {
+function flattenGroupChildrenBottomToTop(
+  group: AnyClipProps | undefined,
+  clips: AnyClipProps[],
+  timelines: TimelineLike[],
+): ClipId[] {
   if (!group) return [];
   const nested: string[][] = (group as any)?.children || [];
   if (!Array.isArray(nested) || nested.length === 0) return [];
 
   // Attach timelineY to each subarray via first present child
   const yForSub = (ids: string[]): number => {
-    const first = ids.map(id => clips.find(c => c.clipId === id)).find(Boolean) as AnyClipProps | undefined;
-    if (first) return getEffectiveTimelineY(clips, timelines, first as AnyClipProps);
+    const first = ids
+      .map((id) => clips.find((c) => c.clipId === id))
+      .find(Boolean) as AnyClipProps | undefined;
+    if (first)
+      return getEffectiveTimelineY(clips, timelines, first as AnyClipProps);
     // fallback to group's own Y if no child found
     return getEffectiveTimelineY(clips, timelines, group);
   };
 
   // Sort subarrays by timelineY descending (bottom first), then within each by startFrame ascending
   const orderedSubs = [...nested]
-    .map(sub => ({ ids: sub.slice(), y: yForSub(sub) }))
+    .map((sub) => ({ ids: sub.slice(), y: yForSub(sub) }))
     .sort((a, b) => b.y - a.y)
     .map(({ ids }) => ids);
 
-  const mapById = new Map(clips.map(c => [c.clipId, c] as const));
+  const mapById = new Map(clips.map((c) => [c.clipId, c] as const));
   const result: string[] = [];
   for (const sub of orderedSubs) {
     const sortedWithin = [...sub].sort((ida, idb) => {
       const a = mapById.get(ida);
       const b = mapById.get(idb);
-      const sa = (a?.startFrame ?? 0);
-      const sb = (b?.startFrame ?? 0);
+      const sa = a?.startFrame ?? 0;
+      const sb = b?.startFrame ?? 0;
       return sa - sb;
     });
     result.push(...sortedWithin);
@@ -109,14 +145,24 @@ function flattenGroupChildrenBottomToTop(group: AnyClipProps | undefined, clips:
   return result;
 }
 
-function buildGroupOrderIndex(group: AnyClipProps | undefined, clips: AnyClipProps[], timelines: TimelineLike[]): Map<string, number> {
+function buildGroupOrderIndex(
+  group: AnyClipProps | undefined,
+  clips: AnyClipProps[],
+  timelines: TimelineLike[],
+): Map<string, number> {
   const flat = flattenGroupChildrenBottomToTop(group, clips, timelines);
   const idx = new Map<string, number>();
   flat.forEach((id, i) => idx.set(id, i));
   return idx;
 }
 
-function compareForRender(a: AnyClipProps, b: AnyClipProps, clips: AnyClipProps[], timelines: TimelineLike[], groupIndexCache: Map<string, Map<string, number>>): number {
+function compareForRender(
+  a: AnyClipProps,
+  b: AnyClipProps,
+  clips: AnyClipProps[],
+  timelines: TimelineLike[],
+  groupIndexCache: Map<string, Map<string, number>>,
+): number {
   const ya = getEffectiveTimelineY(clips, timelines, a);
   const yb = getEffectiveTimelineY(clips, timelines, b);
   if (ya !== yb) return yb - ya; // bottom (larger y) first
@@ -126,7 +172,7 @@ function compareForRender(a: AnyClipProps, b: AnyClipProps, clips: AnyClipProps[
     const gid = a.groupId;
     let indexer = groupIndexCache.get(gid);
     if (!indexer) {
-      const groupClip = clips.find(c => c.clipId === gid);
+      const groupClip = clips.find((c) => c.clipId === gid);
       if (groupClip) {
         indexer = buildGroupOrderIndex(groupClip, clips, timelines);
         groupIndexCache.set(gid, indexer);
@@ -147,14 +193,14 @@ function compareForRender(a: AnyClipProps, b: AnyClipProps, clips: AnyClipProps[
 function toExportApplicatorClip(clip: FilterClipProps): ExportApplicatorClip {
   return {
     clipId: clip.clipId,
-    type: 'filter',
+    type: "filter",
     startFrame: clip.startFrame,
     endFrame: clip.endFrame,
     timelineId: clip.timelineId,
     // Pass through any known filter fields, ignore unknown
-    ...(clip.smallPath ? { smallPath: clip.smallPath } as any : {}),
-    ...(clip.fullPath ? { fullPath: clip.fullPath } as any : {}),
-    ...(clip.category ? { category: clip.category } as any : {}),
+    ...(clip.smallPath ? ({ smallPath: clip.smallPath } as any) : {}),
+    ...(clip.fullPath ? ({ fullPath: clip.fullPath } as any) : {}),
+    ...(clip.category ? ({ category: clip.category } as any) : {}),
   } as ExportApplicatorClip;
 }
 
@@ -169,12 +215,12 @@ function toExportClip(base: AnyClipProps): ExportClip | null {
     originalTransform: (base as any).originalTransform,
   } as any;
 
-  if (base.type === 'image') {
+  if (base.type === "image") {
     const src = (base as any).src as string | undefined;
     if (!src) return null;
     const out: ExportImageClip = {
       ...common,
-      type: 'image',
+      type: "image",
       src,
       brightness: (base as any).brightness,
       contrast: (base as any).contrast,
@@ -190,12 +236,12 @@ function toExportClip(base: AnyClipProps): ExportClip | null {
     } as any;
     return out as ExportClip;
   }
-  if (base.type === 'video') {
+  if (base.type === "video") {
     const src = (base as any).src as string | undefined;
     if (!src) return null;
     const out: ExportVideoClip = {
       ...common,
-      type: 'video',
+      type: "video",
       src,
       speed: (base as any).speed,
       trimStart: (base as any).trimStart,
@@ -212,12 +258,12 @@ function toExportClip(base: AnyClipProps): ExportClip | null {
     } as any;
     return out as ExportClip;
   }
-  if (base.type === 'audio') {
+  if (base.type === "audio") {
     const src = (base as any).src as string | undefined;
     if (!src) return null;
     const out: ExportAudioClip = {
       ...common,
-      type: 'audio',
+      type: "audio",
       src,
       volume: (base as any).volume,
       fadeIn: (base as any).fadeIn,
@@ -228,18 +274,18 @@ function toExportClip(base: AnyClipProps): ExportClip | null {
     } as any;
     return out as ExportClip;
   }
-  if (base.type === 'text') {
+  if (base.type === "text") {
     const out: ExportTextClip = {
       ...common,
-      type: 'text',
+      type: "text",
       text: (base as any).text,
     } as any;
     return out as ExportClip;
   }
-  if (base.type === 'shape') {
+  if (base.type === "shape") {
     const out: ExportShapeClip = {
       ...common,
-      type: 'shape',
+      type: "shape",
       shapeType: (base as any).shapeType,
       fill: (base as any).fill,
       fillOpacity: (base as any).fillOpacity,
@@ -251,10 +297,10 @@ function toExportClip(base: AnyClipProps): ExportClip | null {
     } as any;
     return out as ExportClip;
   }
-  if (base.type === 'draw') {
+  if (base.type === "draw") {
     const out: ExportDrawClip = {
       ...common,
-      type: 'draw',
+      type: "draw",
       lines: (base as any).lines || [],
     } as any;
     return out as ExportClip;
@@ -277,10 +323,15 @@ function flattenSelection(
   timelines: TimelineLike[],
   includeHiddenChildrenInGroups: boolean,
 ): AnyClipProps[] {
-  const byId = new Map(allClips.map(c => [c.clipId, c] as const));
+  const byId = new Map(allClips.map((c) => [c.clipId, c] as const));
   const out: AnyClipProps[] = [];
   const seen = new Set<string>();
-  const add = (c: AnyClipProps) => { if (!seen.has(c.clipId)) { out.push(c); seen.add(c.clipId); } };
+  const add = (c: AnyClipProps) => {
+    if (!seen.has(c.clipId)) {
+      out.push(c);
+      seen.add(c.clipId);
+    }
+  };
 
   for (const item of selection) {
     if (isGroup(item)) {
@@ -303,18 +354,33 @@ function flattenSelection(
 
 export function prepareExportClips(input: PrepareExportInput): ExportClip[] {
   const { clips, timelines, includeHiddenChildrenInGroups = true } = input;
-  const universe = Array.isArray(input.allClips) && input.allClips.length > 0 ? input.allClips : clips;
+  const universe =
+    Array.isArray(input.allClips) && input.allClips.length > 0
+      ? input.allClips
+      : clips;
 
   // Build ungrouped view (content + applicators), ignoring group containers entirely
-  const { content: universeContent, applicators } = buildUngroupedView(universe, timelines, includeHiddenChildrenInGroups);
+  const { content: universeContent, applicators } = buildUngroupedView(
+    universe,
+    timelines,
+    includeHiddenChildrenInGroups,
+  );
 
   // Determine target content set from selection by flattening groups against the universe
-  const targetContent = flattenSelection(clips, universe, timelines, includeHiddenChildrenInGroups)
-    .filter(c => isRenderableContent(c) && !isTimelineHidden(timelines, c.timelineId));
+  const targetContent = flattenSelection(
+    clips,
+    universe,
+    timelines,
+    includeHiddenChildrenInGroups,
+  ).filter(
+    (c) => isRenderableContent(c) && !isTimelineHidden(timelines, c.timelineId),
+  );
 
   // Sort content clips for rendering order (bottom to top by timelineY, then by startFrame)
   const groupIndexCache = new Map<string, Map<string, number>>();
-  targetContent.sort((a, b) => compareForRender(a, b, universe, timelines, groupIndexCache));
+  targetContent.sort((a, b) =>
+    compareForRender(a, b, universe, timelines, groupIndexCache),
+  );
 
   // Compute applicators per clip with ungrouped vertical logic:
   // Any applicator on a timeline above the target's effective Y applies
@@ -324,16 +390,16 @@ export function prepareExportClips(input: PrepareExportInput): ExportClip[] {
     if (!exportClip) continue;
     const targetY = getEffectiveTimelineY(universe, timelines, clip);
     const appClips: ExportApplicatorClip[] = applicators
-      .filter(a => getEffectiveTimelineY(universe, timelines, a) < targetY)
+      .filter((a) => getEffectiveTimelineY(universe, timelines, a) < targetY)
       .sort((aClip, bClip) => {
         const ya = getEffectiveTimelineY(universe, timelines, aClip);
         const yb = getEffectiveTimelineY(universe, timelines, bClip);
         if (ya !== yb) return ya - yb; // top to bottom order for applicators
-        const sa = (aClip.startFrame ?? 0);
-        const sb = (bClip.startFrame ?? 0);
+        const sa = aClip.startFrame ?? 0;
+        const sb = bClip.startFrame ?? 0;
         return sa - sb;
       })
-      .map(c => toExportApplicatorClip(c as FilterClipProps));
+      .map((c) => toExportApplicatorClip(c as FilterClipProps));
 
     // Attach applicators list
     (exportClip as any).applicators = appClips;
@@ -342,5 +408,3 @@ export function prepareExportClips(input: PrepareExportInput): ExportClip[] {
 
   return out;
 }
-
-

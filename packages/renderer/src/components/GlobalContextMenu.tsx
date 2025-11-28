@@ -1,23 +1,26 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { createPortal } from 'react-dom';
-import { useContextMenuStore } from '@/lib/context-menu';
-import { useClipStore } from '@/lib/clip';
-import { useControlsStore } from '@/lib/control';
-import { cn } from '@/lib/utils';
-import { useViewportStore } from '@/lib/viewport';
-import type { AnyClipProps } from '@/lib/types';
-import { prepareExportClipsForValue } from '@/lib/prepareExportClips';
-import { getMediaInfoCached } from '@/lib/media/utils';
-import { exportSequence, exportClip } from '@app/export-renderer';
-import { saveImageToPath } from '@app/preload';
-import ClipExportModal, { ClipExportSettings } from '@/components/dialogs/ClipExportModal';
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
+import { useContextMenuStore } from "@/lib/context-menu";
+import { useClipStore } from "@/lib/clip";
+import { useControlsStore } from "@/lib/control";
+import { cn } from "@/lib/utils";
+import { useViewportStore } from "@/lib/viewport";
+import type { AnyClipProps } from "@/lib/types";
+import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
+import { getMediaInfoCached } from "@/lib/media/utils";
+import { exportSequence, exportClip } from "@app/export-renderer";
+import { saveImageToPath } from "@app/preload";
+import ClipExportModal, {
+  ClipExportSettings,
+} from "@/components/dialogs/ClipExportModal";
 
 const Key: React.FC<{ text: string }> = ({ text }) => (
-  <span className=' text-[10px] text-brand-light/60'>{text}</span>
+  <span className=" text-[10px] text-brand-light/60">{text}</span>
 );
 
 const GlobalContextMenu: React.FC = () => {
-  const { open, position, items, groups, closeMenu, setPosition, target } = useContextMenuStore();
+  const { open, position, items, groups, closeMenu, setPosition, target } =
+    useContextMenuStore();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const clipsStore = useClipStore();
   const timelines = useClipStore((s) => s.timelines);
@@ -28,22 +31,26 @@ const GlobalContextMenu: React.FC = () => {
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
-  const [exportKind, setExportKind] = useState<'audio' | 'image' | 'video' | null>(null);
+  const [exportKind, setExportKind] = useState<
+    "audio" | "image" | "video" | null
+  >(null);
   const [exportClipId, setExportClipId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
 
-  const getDefaultNameForClip = (clip: AnyClipProps | null | undefined): string => {
-    if (!clip) return 'export';
+  const getDefaultNameForClip = (
+    clip: AnyClipProps | null | undefined,
+  ): string => {
+    if (!clip) return "export";
     try {
       const src = (clip as any)?.src as string | undefined;
-      if (!src) return 'export';
+      if (!src) return "export";
       const parts = src.split(/[\\/]/);
-      const last = parts[parts.length - 1] || '';
-      const stem = last.replace(/\.[^.]+$/, '');
-      return stem || 'export';
+      const last = parts[parts.length - 1] || "";
+      const stem = last.replace(/\.[^.]+$/, "");
+      return stem || "export";
     } catch {
-      return 'export';
+      return "export";
     }
   };
 
@@ -52,20 +59,26 @@ const GlobalContextMenu: React.FC = () => {
   useEffect(() => {
     if (!shouldShowMenu) return;
     const onAny = (e: Event) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) closeMenu();
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      )
+        closeMenu();
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenu(); };
-    document.addEventListener('pointerdown', onAny, true);
-    document.addEventListener('mousedown', onAny, true);
-    document.addEventListener('click', onAny, true);
-    document.addEventListener('contextmenu', onAny, true);
-    window.addEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeMenu();
+    };
+    document.addEventListener("pointerdown", onAny, true);
+    document.addEventListener("mousedown", onAny, true);
+    document.addEventListener("click", onAny, true);
+    document.addEventListener("contextmenu", onAny, true);
+    window.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener('pointerdown', onAny, true);
-      document.removeEventListener('mousedown', onAny, true);
-      document.removeEventListener('click', onAny, true);
-      document.removeEventListener('contextmenu', onAny, true);
-      window.removeEventListener('keydown', onKey);
+      document.removeEventListener("pointerdown", onAny, true);
+      document.removeEventListener("mousedown", onAny, true);
+      document.removeEventListener("click", onAny, true);
+      document.removeEventListener("contextmenu", onAny, true);
+      window.removeEventListener("keydown", onKey);
     };
   }, [shouldShowMenu, closeMenu]);
 
@@ -74,10 +87,12 @@ const GlobalContextMenu: React.FC = () => {
     if (!shouldShowMenu) return;
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    let nx = position.x, ny = position.y;
+    let nx = position.x,
+      ny = position.y;
     const BOTTOM_MARGIN = 10; // ensure some space from bottom edge
-    if (rect.right > window.innerWidth) nx -= (rect.right - window.innerWidth);
-    if (rect.bottom > window.innerHeight - BOTTOM_MARGIN) ny -= (rect.bottom - (window.innerHeight - BOTTOM_MARGIN));
+    if (rect.right > window.innerWidth) nx -= rect.right - window.innerWidth;
+    if (rect.bottom > window.innerHeight - BOTTOM_MARGIN)
+      ny -= rect.bottom - (window.innerHeight - BOTTOM_MARGIN);
     if (rect.left < 0) nx += -rect.left;
     if (rect.top < 0) ny += -rect.top;
     if (nx !== position.x || ny !== position.y) setPosition({ x: nx, y: ny });
@@ -86,52 +101,59 @@ const GlobalContextMenu: React.FC = () => {
   const handleExport = useCallback(
     async (settings: ClipExportSettings) => {
       if (!exportClipId || !exportKind) return;
-      const clip = clipsStore.getClipById(exportClipId) as AnyClipProps | undefined;
+      const clip = clipsStore.getClipById(exportClipId) as
+        | AnyClipProps
+        | undefined;
       if (!clip) return;
 
       const basePath = settings.path.trim();
       const baseName = settings.name.trim();
       if (!basePath || !baseName) return;
 
-      let extension = '';
-      if (settings.kind === 'audio' && settings.audioFormat) {
+      let extension = "";
+      if (settings.kind === "audio" && settings.audioFormat) {
         extension = settings.audioFormat;
-      } else if (settings.kind === 'image' && settings.imageFormat) {
-        extension = settings.imageFormat === 'jpeg' ? 'jpg' : settings.imageFormat;
-      } else if (settings.kind === 'video' && settings.videoFormat) {
+      } else if (settings.kind === "image" && settings.imageFormat) {
+        extension =
+          settings.imageFormat === "jpeg" ? "jpg" : settings.imageFormat;
+      } else if (settings.kind === "video" && settings.videoFormat) {
         extension = settings.videoFormat;
       }
-      const outpath = `${basePath}/${baseName}${extension ? `.${extension}` : ''}`;
+      const outpath = `${basePath}/${baseName}${extension ? `.${extension}` : ""}`;
 
       try {
         setExporting(true);
         setExportProgress(0);
 
-        if (settings.kind === 'audio') {
+        if (settings.kind === "audio") {
           const audioClip = { ...(clip as any) };
           await exportSequence({
-            mode: 'audio',
+            mode: "audio",
             clips: [audioClip as any],
             fps,
             filename: outpath,
             audioOptions: {
-              format: settings.audioFormat ?? 'mp3',
+              format: settings.audioFormat ?? "mp3",
             },
             onProgress: ({ ratio }) => {
-              setExportProgress(typeof ratio === 'number' ? ratio : 0);
+              setExportProgress(typeof ratio === "number" ? ratio : 0);
             },
           });
-        } else if (settings.kind === 'video') {
+        } else if (settings.kind === "video") {
           const baseH = settings.resolution ?? 1080;
           // Derive aspect ratio from the clip's native media dimensions when possible.
           let nativeW = 0;
           let nativeH = 0;
-          if (clip.type === 'image') {
-            const info = getMediaInfoCached((clip as any).src as string | undefined);
+          if (clip.type === "image") {
+            const info = getMediaInfoCached(
+              (clip as any).src as string | undefined,
+            );
             nativeW = info?.image?.width ?? 0;
             nativeH = info?.image?.height ?? 0;
-          } else if (clip.type === 'video') {
-            const info = getMediaInfoCached((clip as any).src as string | undefined);
+          } else if (clip.type === "video") {
+            const info = getMediaInfoCached(
+              (clip as any).src as string | undefined,
+            );
             nativeW = info?.video?.displayWidth ?? 0;
             nativeH = info?.video?.displayHeight ?? 0;
           }
@@ -159,62 +181,64 @@ const GlobalContextMenu: React.FC = () => {
               clearMasks: false,
               applyCentering: true,
               useOriginalTransform: true,
-              dimensionsFrom: 'clip',
+              dimensionsFrom: "clip",
               target: { width: targetW, height: targetH },
             },
           );
-          
+
           const { exportClips } = prepared;
-          
 
           const videoEncoderOptions: any = {
-            format: settings.videoFormat ?? 'mp4',
-            codec: (settings.videoFormat === 'webm' ? 'vp9' : 'h264') as any,
-            bitrate: '8000k',
+            format: settings.videoFormat ?? "mp4",
+            codec: (settings.videoFormat === "webm" ? "vp9" : "h264") as any,
+            bitrate: "8000k",
             resolution: { width: targetW, height: targetH },
           };
 
           if (exportClips.length === 1) {
-
             await exportClip({
-              mode: 'video',
+              mode: "video",
               clip: exportClips[0],
               fps,
               width: targetW,
               height: targetH,
               encoderOptions: videoEncoderOptions,
-              backgroundColor: '#000000',
+              backgroundColor: "#000000",
               filename: outpath,
               onProgress: ({ ratio }) => {
-                setExportProgress(typeof ratio === 'number' ? ratio : 0);
+                setExportProgress(typeof ratio === "number" ? ratio : 0);
               },
             });
           } else {
             await exportSequence({
-              mode: 'video',
+              mode: "video",
               clips: exportClips,
               fps,
               width: targetW,
               height: targetH,
               encoderOptions: videoEncoderOptions,
-              backgroundColor: '#000000',
+              backgroundColor: "#000000",
               filename: outpath,
               onProgress: ({ ratio }) => {
-                setExportProgress(typeof ratio === 'number' ? ratio : 0);
+                setExportProgress(typeof ratio === "number" ? ratio : 0);
               },
             });
           }
-        } else if (settings.kind === 'image') {
+        } else if (settings.kind === "image") {
           const baseH = settings.resolution ?? 1080;
           // Derive aspect ratio from the clip's native media dimensions when possible.
           let nativeW = 0;
           let nativeH = 0;
-          if (clip.type === 'image') {
-            const info = getMediaInfoCached((clip as any).src as string | undefined);
+          if (clip.type === "image") {
+            const info = getMediaInfoCached(
+              (clip as any).src as string | undefined,
+            );
             nativeW = info?.image?.width ?? 0;
             nativeH = info?.image?.height ?? 0;
-          } else if (clip.type === 'video') {
-            const info = getMediaInfoCached((clip as any).src as string | undefined);
+          } else if (clip.type === "video") {
+            const info = getMediaInfoCached(
+              (clip as any).src as string | undefined,
+            );
             nativeW = info?.video?.displayWidth ?? 0;
             nativeH = info?.video?.displayHeight ?? 0;
           }
@@ -242,34 +266,31 @@ const GlobalContextMenu: React.FC = () => {
               clearMasks: false,
               applyCentering: false,
               useOriginalTransform: true,
-              dimensionsFrom: 'clip',
+              dimensionsFrom: "clip",
               target: { width: targetW, height: targetH },
             },
           );
 
           const { exportClips } = prepared;
           const frame =
-            clip.type === 'video' || clip.type === 'group'
-              ? (clip as any).selectedFrame ?? 0
+            clip.type === "video" || clip.type === "group"
+              ? ((clip as any).selectedFrame ?? 0)
               : 0;
-
-            
-            
 
           if (exportClips.length === 1) {
             const result = await exportClip({
-              mode: 'image',
+              mode: "image",
               width: targetW,
               height: targetH,
               imageFrame: frame,
               clip: exportClips[0],
-              backgroundColor: '#000000',
+              backgroundColor: "#000000",
               encoderOptions: {
                 resolution: { width: targetW, height: targetH },
               },
               fps,
               onProgress: ({ ratio }) => {
-                setExportProgress(typeof ratio === 'number' ? ratio : 0);
+                setExportProgress(typeof ratio === "number" ? ratio : 0);
               },
             });
 
@@ -279,14 +300,14 @@ const GlobalContextMenu: React.FC = () => {
             }
           } else {
             const result = await exportSequence({
-              mode: 'image',
+              mode: "image",
               width: targetW,
               height: targetH,
               imageFrame: frame,
               clips: exportClips,
               fps,
               onProgress: ({ ratio }) => {
-                setExportProgress(typeof ratio === 'number' ? ratio : 0);
+                setExportProgress(typeof ratio === "number" ? ratio : 0);
               },
             });
 
@@ -320,23 +341,35 @@ const GlobalContextMenu: React.FC = () => {
   );
 
   const onSelect = (action: string) => {
-    if (target?.type === 'clip') {
+    if (target?.type === "clip") {
       const ids = target.clipIds;
-      if (action === 'copy') clipsStore.copyClips(ids);
-      else if (action === 'cut') { clipsStore.cutClips(ids); useControlsStore.getState().clearSelection(); }
-      else if (action === 'paste') clipsStore.pasteClips(useControlsStore.getState().focusFrame);
-      else if (action === 'delete') { ids.forEach(id => clipsStore.removeClip(id)); useControlsStore.getState().clearSelection(); }
-      else if (action === 'split') clipsStore.splitClip(useControlsStore.getState().focusFrame, target.primaryClipId);
-      else if (action === 'separateAudio' && target.isVideo) clipsStore.separateClip(target.primaryClipId);
-      else if (action === 'export') {
+      if (action === "copy") clipsStore.copyClips(ids);
+      else if (action === "cut") {
+        clipsStore.cutClips(ids);
+        useControlsStore.getState().clearSelection();
+      } else if (action === "paste")
+        clipsStore.pasteClips(useControlsStore.getState().focusFrame);
+      else if (action === "delete") {
+        ids.forEach((id) => clipsStore.removeClip(id));
+        useControlsStore.getState().clearSelection();
+      } else if (action === "split")
+        clipsStore.splitClip(
+          useControlsStore.getState().focusFrame,
+          target.primaryClipId,
+        );
+      else if (action === "separateAudio" && target.isVideo)
+        clipsStore.separateClip(target.primaryClipId);
+      else if (action === "export") {
         try {
           const primaryId = target.primaryClipId;
-          const clip = clipsStore.getClipById(primaryId) as AnyClipProps | undefined;
+          const clip = clipsStore.getClipById(primaryId) as
+            | AnyClipProps
+            | undefined;
           if (!clip) return;
-          let kind: 'audio' | 'image' | 'video' | null = null;
-          if (clip.type === 'audio') kind = 'audio';
-          else if (clip.type === 'image') kind = 'image';
-          else if (clip.type === 'video') kind = 'video';
+          let kind: "audio" | "image" | "video" | null = null;
+          if (clip.type === "audio") kind = "audio";
+          else if (clip.type === "image") kind = "image";
+          else if (clip.type === "video") kind = "video";
           if (!kind) return;
           setExportClipId(primaryId);
           setExportKind(kind);
@@ -344,12 +377,15 @@ const GlobalContextMenu: React.FC = () => {
         } catch {
           // swallow
         }
+      } else if (action === "group") {
+        clipsStore.groupClips(ids);
+      } else if (action === "ungroup") {
+        clipsStore.ungroupClips(target.primaryClipId);
+      } else if (action === "convertToMedia") {
+        clipsStore.convertToMedia(target.primaryClipId);
       }
-      else if (action === 'group') {  clipsStore.groupClips(ids);}
-      else if (action === 'ungroup') { clipsStore.ungroupClips(target.primaryClipId); }
-      else if (action === 'convertToMedia') { clipsStore.convertToMedia(target.primaryClipId); }
-    } else if (target?.type === 'timeline') {
-      if (action === 'paste') {
+    } else if (target?.type === "timeline") {
+      if (action === "paste") {
         const frame = useControlsStore.getState().focusFrame;
         clipsStore.pasteClips(frame, target.timelineId);
         // Attempt to fix any overlaps by resolving again (pasteClips already resolves overlaps globally)
@@ -359,50 +395,84 @@ const GlobalContextMenu: React.FC = () => {
     closeMenu();
   };
 
-  const content = groups && groups.length > 0 ? (
-    <div className='p-1'>
-      {groups.map((group, gi) => (
-        group.items.length > 0 && <div key={group.id}>
-          {group.label && <div className='px-2.5 py-1 text-[10px] uppercase tracking-wide text-brand-light/50'>{group.label}</div>}
-          {group.items.map(item => (
-            <button key={item.id} disabled={item.disabled} onClick={() => onSelect(item.action)} className={cn('w-full px-2.5 py-1.5 text-left text-[11.5px] flex items-center rounded justify-between hover:bg-brand-light/10 text-brand-light', item.disabled && 'opacity-50 !cursor-default hover:bg-brand')}>
-              <span>{item.label}</span>
-              {item.shortcut && <Key text={item.shortcut} />}
-            </button>
-          ))}
-          {gi < groups.length - 1 && <div className='my-1 h-px bg-brand-light/10 -mx-1' />}
-        </div>
-      ))}
-    </div>
-  ) : (
-    <div className='py-1'>
-      {items.map(item => (
-        <button key={item.id} disabled={item.disabled} onClick={() => onSelect(item.action)} className='w-full px-2.5 py-1.5 text-left text-[11px] flex items-center justify-between hover:bg-brand-light/10 disabled:opacity-50 text-brand-light'>
-          <span>{item.label}</span>
-          {item.shortcut && <Key text={item.shortcut} />}
-        </button>
-      ))}
-    </div>
-  );
+  const content =
+    groups && groups.length > 0 ? (
+      <div className="p-1">
+        {groups.map(
+          (group, gi) =>
+            group.items.length > 0 && (
+              <div key={group.id}>
+                {group.label && (
+                  <div className="px-2.5 py-1 text-[10px] uppercase tracking-wide text-brand-light/50">
+                    {group.label}
+                  </div>
+                )}
+                {group.items.map((item) => (
+                  <button
+                    key={item.id}
+                    disabled={item.disabled}
+                    onClick={() => onSelect(item.action)}
+                    className={cn(
+                      "w-full px-2.5 py-1.5 text-left text-[11.5px] flex items-center rounded justify-between hover:bg-brand-light/10 text-brand-light",
+                      item.disabled &&
+                        "opacity-50 !cursor-default hover:bg-brand",
+                    )}
+                  >
+                    <span>{item.label}</span>
+                    {item.shortcut && <Key text={item.shortcut} />}
+                  </button>
+                ))}
+                {gi < groups.length - 1 && (
+                  <div className="my-1 h-px bg-brand-light/10 -mx-1" />
+                )}
+              </div>
+            ),
+        )}
+      </div>
+    ) : (
+      <div className="py-1">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            disabled={item.disabled}
+            onClick={() => onSelect(item.action)}
+            className="w-full px-2.5 py-1.5 text-left text-[11px] flex items-center justify-between hover:bg-brand-light/10 disabled:opacity-50 text-brand-light"
+          >
+            <span>{item.label}</span>
+            {item.shortcut && <Key text={item.shortcut} />}
+          </button>
+        ))}
+      </div>
+    );
 
   return (
     <>
-      {shouldShowMenu && createPortal(
-        <div
-          ref={containerRef}
-          style={{ position: 'fixed', left: position.x, top: position.y, zIndex: 100 }}
-          className='w-52 font-poppins select-none rounded-md border border-brand-light/10 bg-brand-background-light shadow-lg'
-        >
-      {content}
-    </div>,
-        document.body,
-      )}
+      {shouldShowMenu &&
+        createPortal(
+          <div
+            ref={containerRef}
+            style={{
+              position: "fixed",
+              left: position.x,
+              top: position.y,
+              zIndex: 100,
+            }}
+            className="w-52 font-poppins select-none rounded-md border border-brand-light/10 bg-brand-background-light shadow-lg"
+          >
+            {content}
+          </div>,
+          document.body,
+        )}
       {exportKind && (
         <ClipExportModal
           open={exportModalOpen}
           kind={exportKind}
           defaultName={getDefaultNameForClip(
-            exportClipId ? (clipsStore.getClipById(exportClipId) as AnyClipProps | undefined) : undefined,
+            exportClipId
+              ? (clipsStore.getClipById(exportClipId) as
+                  | AnyClipProps
+                  | undefined)
+              : undefined,
           )}
           onOpenChange={setExportModalOpen}
           onExport={handleExport}
@@ -415,6 +485,3 @@ const GlobalContextMenu: React.FC = () => {
 };
 
 export default GlobalContextMenu;
-
-
-

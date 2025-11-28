@@ -1,7 +1,7 @@
-import KonvaLocal from 'konva';
+import KonvaLocal from "konva";
 
 declare namespace Konva {
-    export const Filters: {
-        Applicator: (imageData: ImageData) => void;
-    } & typeof KonvaLocal.Filters;
+  export const Filters: {
+    Applicator: (imageData: ImageData) => void;
+  } & typeof KonvaLocal.Filters;
 }

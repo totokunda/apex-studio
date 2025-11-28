@@ -1,24 +1,27 @@
-import { WebGLBlur } from '../../../renderer/src/components/preview/webgl-filters/blur';
-import { WebGLBrightness } from '../../../renderer/src/components/preview/webgl-filters/brightness';
-import { WebGLContrast } from '../../../renderer/src/components/preview/webgl-filters/contrast';
-import { WebGLHueSaturation } from '../../../renderer/src/components/preview/webgl-filters/hue-saturation';
-import { WebGLNoise } from '../../../renderer/src/components/preview/webgl-filters/noise';
-import { WebGLSharpness } from '../../../renderer/src/components/preview/webgl-filters/sharpness';
-import { WebGLVignette } from '../../../renderer/src/components/preview/webgl-filters/vignette';
+import { WebGLBlur } from "../../../renderer/src/components/preview/webgl-filters/blur";
+import { WebGLBrightness } from "../../../renderer/src/components/preview/webgl-filters/brightness";
+import { WebGLContrast } from "../../../renderer/src/components/preview/webgl-filters/contrast";
+import { WebGLHueSaturation } from "../../../renderer/src/components/preview/webgl-filters/hue-saturation";
+import { WebGLNoise } from "../../../renderer/src/components/preview/webgl-filters/noise";
+import { WebGLSharpness } from "../../../renderer/src/components/preview/webgl-filters/sharpness";
+import { WebGLVignette } from "../../../renderer/src/components/preview/webgl-filters/vignette";
 
 export interface FilterParams {
-  brightness?: number;  // -100 to 100
-  contrast?: number;    // -100 to 100
-  hue?: number;         // -100 to 100
-  saturation?: number;  // -100 to 100
-  blur?: number;        // 0 to 100
-  noise?: number;       // 0 to 100
-  sharpness?: number;   // 0 to 100
-  vignette?: number;    // 0 to 100
+  brightness?: number; // -100 to 100
+  contrast?: number; // -100 to 100
+  hue?: number; // -100 to 100
+  saturation?: number; // -100 to 100
+  blur?: number; // 0 to 100
+  noise?: number; // 0 to 100
+  sharpness?: number; // 0 to 100
+  vignette?: number; // 0 to 100
 }
 
-export function applyWebGLFilters(sourceCanvas: HTMLCanvasElement, params: FilterParams): HTMLCanvasElement {
-  const ctx = sourceCanvas.getContext('2d');
+export function applyWebGLFilters(
+  sourceCanvas: HTMLCanvasElement,
+  params: FilterParams,
+): HTMLCanvasElement {
+  const ctx = sourceCanvas.getContext("2d");
   if (!ctx) return sourceCanvas;
 
   let currentCanvas: HTMLCanvasElement = sourceCanvas;
@@ -54,10 +57,17 @@ export function applyWebGLFilters(sourceCanvas: HTMLCanvasElement, params: Filte
     }
 
     // Hue & Saturation
-    if ((params.hue && params.hue !== 0) || (params.saturation && params.saturation !== 0)) {
+    if (
+      (params.hue && params.hue !== 0) ||
+      (params.saturation && params.saturation !== 0)
+    ) {
       const filter = new WebGLHueSaturation();
       disposeFns.push(() => filter.dispose());
-      const result = filter.apply(currentCanvas, params.hue ?? 0, params.saturation ?? 0);
+      const result = filter.apply(
+        currentCanvas,
+        params.hue ?? 0,
+        params.saturation ?? 0,
+      );
       ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
       ctx.save();
       ctx.scale(1, -1);
@@ -124,5 +134,3 @@ export function applyWebGLFilters(sourceCanvas: HTMLCanvasElement, params: Filte
     for (const d of disposeFns) d();
   }
 }
-
-

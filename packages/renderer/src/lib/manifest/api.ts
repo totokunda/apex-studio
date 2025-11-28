@@ -11,8 +11,8 @@ import {
   updateManifestLoraScale as updateManifestLoraScalePreload,
   updateManifestLoraName as updateManifestLoraNamePreload,
   deleteManifestLora as deleteManifestLoraPreload,
-} from '@app/preload';
-import { ClipType } from '../types';
+} from "@app/preload";
+import { ClipType } from "../types";
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -55,7 +55,13 @@ export type ManifestComponentModelPathItem = {
 };
 
 export type ManifestComponent = {
-  type: 'scheduler' | 'vae' | 'text_encoder' | 'transformer' | 'helper' | string;
+  type:
+    | "scheduler"
+    | "vae"
+    | "text_encoder"
+    | "transformer"
+    | "helper"
+    | string;
   name?: string;
   label?: string;
   base?: string;
@@ -106,7 +112,7 @@ export type ManifestMetadata = {
 };
 
 // UI Schema (derived from manifest_updated YAML structure)
-export type UILayoutFlow = 'row' | 'column';
+export type UILayoutFlow = "row" | "column";
 
 export type UIFloatingRegion = {
   inputs: string[];
@@ -143,34 +149,34 @@ export type UIInputBase = {
 };
 
 export type UIInputText = UIInputBase & {
-  type: 'text';
+  type: "text";
   placeholder?: string;
 };
 
 export type UIInputNumber = UIInputBase & {
-  type: 'number';
-  value_type?: 'integer' | 'float' | string;
+  type: "number";
+  value_type?: "integer" | "float" | string;
   min?: number;
   max?: number;
   step?: number;
 };
 
 export type UIInputNumberSlider = UIInputBase & {
-  type: 'number+slider';
-  value_type?: 'integer' | 'float' | string;
+  type: "number+slider";
+  value_type?: "integer" | "float" | string;
   min?: number;
   max?: number;
   step?: number;
 };
 
 export type UIInputNumberList = UIInputBase & {
-  type: 'number_list';
-  value_type?: 'integer' | 'float' | string;
+  type: "number_list";
+  value_type?: "integer" | "float" | string;
   items?: UIInputNumber[];
 };
 
 export type UIInputRandom = UIInputBase & {
-  type: 'random';
+  type: "random";
   min?: number;
   max?: number;
   step?: number;
@@ -182,52 +188,58 @@ export type UIInputMapDimensions = {
   scale_by: string;
 };
 
-export type UIInputVideo = UIInputBase & UIInputMapDimensions & {
-  type: 'video';
-};
+export type UIInputVideo = UIInputBase &
+  UIInputMapDimensions & {
+    type: "video";
+  };
 
-export type UIInputVideoMask = UIInputBase & UIInputMapDimensions & {
-  type: 'video+mask';
-  map_to?: string;
-};
+export type UIInputVideoMask = UIInputBase &
+  UIInputMapDimensions & {
+    type: "video+mask";
+    map_to?: string;
+  };
 
-export type UIInputImagePreprocessor = UIInputBase & UIInputMapDimensions & {
-  type: 'image+preprocessor';
-  preprocessor_ref?: string;
-  preprocessor_kwargs?: Record<string, any>;
-};
+export type UIInputImagePreprocessor = UIInputBase &
+  UIInputMapDimensions & {
+    type: "image+preprocessor";
+    preprocessor_ref?: string;
+    preprocessor_kwargs?: Record<string, any>;
+  };
 
-export type UIInputVideoPreprocessor = UIInputBase & UIInputMapDimensions & {
-  type: 'video+preprocessor';
-  preprocessor_ref?: string;
-  preprocessor_kwargs?: Record<string, any>;
-};
+export type UIInputVideoPreprocessor = UIInputBase &
+  UIInputMapDimensions & {
+    type: "video+preprocessor";
+    preprocessor_ref?: string;
+    preprocessor_kwargs?: Record<string, any>;
+  };
 
-export type UIInputImage = UIInputBase & UIInputMapDimensions & {
-  type: 'image';
-};
+export type UIInputImage = UIInputBase &
+  UIInputMapDimensions & {
+    type: "image";
+  };
 
-export type UIInputImageMask = UIInputBase & UIInputMapDimensions & {
-  type: 'image+mask';
-  map_to?: string;
-};
+export type UIInputImageMask = UIInputBase &
+  UIInputMapDimensions & {
+    type: "image+mask";
+    map_to?: string;
+  };
 
-export type UIInputImageList = UIInputBase & UIInputMapDimensions & {
-  type: 'image_list';
-  items?: UIInputImage[];
-  min?: number;
-  max?: number;
-};
+export type UIInputImageList = UIInputBase &
+  UIInputMapDimensions & {
+    type: "image_list";
+    items?: UIInputImage[];
+    min?: number;
+    max?: number;
+  };
 
 export type UIInputAudio = UIInputBase & {
-  type: 'audio';
+  type: "audio";
 };
 
 export type UIInputSelect = UIInputBase & {
-  type: 'select';
+  type: "select";
   options?: { name: string; value: string }[];
 };
-
 
 export type UIInputOther = UIInputBase & {
   type: string;
@@ -261,7 +273,7 @@ export type UISchema = {
 export type ManifestSpec = {
   engine?: string;
   model_type?: string | string[];
-  engine_type?: 'torch' | 'mlx' | string;
+  engine_type?: "torch" | "mlx" | string;
   fps?: number;
   min_duration_secs?: number;
   default_duration_secs?: number;
@@ -284,24 +296,26 @@ export type ManifestSpec = {
 };
 
 export type ManifestWithType = ManifestDocument & {
-  type: ClipType
+  type: ClipType;
   category: string;
 };
 
-export type LoraType = {
-  source?: string;
-  remote_source?: string;
-  verified?: boolean;
-  scale?: number;
-  name?: string;
-  label?: string;
-  is_downloaded?: boolean;
-  required?: boolean; 
-} | string;
+export type LoraType =
+  | {
+      source?: string;
+      remote_source?: string;
+      verified?: boolean;
+      scale?: number;
+      name?: string;
+      label?: string;
+      is_downloaded?: boolean;
+      required?: boolean;
+    }
+  | string;
 
 export type ManifestDocument = {
   api_version: string;
-  kind: 'Model' | 'Pipeline' | string;
+  kind: "Model" | "Pipeline" | string;
   metadata: ManifestMetadata;
   spec: ManifestSpec;
   ui?: UISchema; // allow top-level UI per loader normalization
@@ -318,32 +332,53 @@ export type ManifestDocument = {
   downloaded: boolean;
 };
 
-export async function listModelTypes(): Promise<ConfigResponse<ModelTypeInfo[]>> {
+export async function listModelTypes(): Promise<
+  ConfigResponse<ModelTypeInfo[]>
+> {
   return await listManifestModelTypesPreload();
 }
 
-export async function listManifests(): Promise<ConfigResponse<ManifestDocument[]>> {
+export async function listManifests(): Promise<
+  ConfigResponse<ManifestDocument[]>
+> {
   return await listManifestsPreload();
 }
 
-export async function listManifestsByModel(model: string): Promise<ConfigResponse<ManifestDocument[]>> {
+export async function listManifestsByModel(
+  model: string,
+): Promise<ConfigResponse<ManifestDocument[]>> {
   return await listManifestsByModelPreload(model);
 }
 
-export async function listManifestsByType(modelType: string): Promise<ConfigResponse<ManifestDocument[]>> {
+export async function listManifestsByType(
+  modelType: string,
+): Promise<ConfigResponse<ManifestDocument[]>> {
   return await listManifestsByTypePreload(modelType);
 }
 
-export async function listManifestsByModelAndType(model: string, modelType: string): Promise<ConfigResponse<ManifestDocument[]>> {
+export async function listManifestsByModelAndType(
+  model: string,
+  modelType: string,
+): Promise<ConfigResponse<ManifestDocument[]>> {
   return await listManifestsByModelAndTypePreload(model, modelType);
 }
 
-export async function getManifest(manifestId: string): Promise<ConfigResponse<ManifestDocument>> {
-  return (await getManifestPreload(manifestId)) as ConfigResponse<ManifestDocument>;
+export async function getManifest(
+  manifestId: string,
+): Promise<ConfigResponse<ManifestDocument>> {
+  return (await getManifestPreload(
+    manifestId,
+  )) as ConfigResponse<ManifestDocument>;
 }
 
-export async function getManifestPart<T = any>(manifestId: string, pathDot?: string): Promise<ConfigResponse<T>> {
-  return (await getManifestPartPreload(manifestId, pathDot)) as ConfigResponse<T>;
+export async function getManifestPart<T = any>(
+  manifestId: string,
+  pathDot?: string,
+): Promise<ConfigResponse<T>> {
+  return (await getManifestPartPreload(
+    manifestId,
+    pathDot,
+  )) as ConfigResponse<T>;
 }
 
 export async function validateAndRegisterCustomModelPath(
@@ -405,6 +440,3 @@ export async function deleteManifestLora(
     loraIndex,
   )) as ConfigResponse<any>;
 }
-
-
-

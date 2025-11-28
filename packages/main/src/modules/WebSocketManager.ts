@@ -1,4 +1,4 @@
-import WebSocket from 'ws';
+import WebSocket from "ws";
 
 type WebSocketHandlers = {
   onOpen?: () => void;
@@ -21,16 +21,16 @@ export class WebSocketManager {
 
   private getBaseWsUrl(): string {
     return this.baseHttpUrl
-      .replace('http://', 'ws://')
-      .replace('https://', 'wss://');
+      .replace("http://", "ws://")
+      .replace("https://", "wss://");
   }
 
   private resolveUrl(pathOrUrl: string): string {
-    if (pathOrUrl.startsWith('ws://') || pathOrUrl.startsWith('wss://')) {
+    if (pathOrUrl.startsWith("ws://") || pathOrUrl.startsWith("wss://")) {
       return pathOrUrl;
     }
     const base = this.getBaseWsUrl();
-    if (pathOrUrl.startsWith('/')) {
+    if (pathOrUrl.startsWith("/")) {
       return `${base}${pathOrUrl}`;
     }
     return `${base}/${pathOrUrl}`;
@@ -40,12 +40,18 @@ export class WebSocketManager {
     return this.connections.has(key);
   }
 
-  public connect(key: string, pathOrUrl: string, handlers: WebSocketHandlers = {}): { success: boolean; error?: string } {
+  public connect(
+    key: string,
+    pathOrUrl: string,
+    handlers: WebSocketHandlers = {},
+  ): { success: boolean; error?: string } {
     try {
       // Close existing connection if any
       const existing = this.connections.get(key);
       if (existing && existing.readyState === WebSocket.OPEN) {
-        try { existing.close(); } catch {}
+        try {
+          existing.close();
+        } catch {}
       }
       if (existing) {
         this.connections.delete(key);
@@ -54,11 +60,11 @@ export class WebSocketManager {
       const url = this.resolveUrl(pathOrUrl);
       const ws = new WebSocket(url);
 
-      ws.on('open', () => {
+      ws.on("open", () => {
         handlers.onOpen?.();
       });
 
-      ws.on('message', (data) => {
+      ws.on("message", (data) => {
         try {
           const asString = data.toString();
           handlers.onMessage?.(asString);
@@ -67,12 +73,12 @@ export class WebSocketManager {
         }
       });
 
-      ws.on('error', (error) => {
+      ws.on("error", (error) => {
         handlers.onError?.(error as Error);
       });
 
-      ws.on('close', (code, reasonBuffer) => {
-        const reason = reasonBuffer?.toString?.() ?? '';
+      ws.on("close", (code, reasonBuffer) => {
+        const reason = reasonBuffer?.toString?.() ?? "";
         this.connections.delete(key);
         handlers.onClose?.(code, reason);
       });
@@ -88,7 +94,9 @@ export class WebSocketManager {
     try {
       const ws = this.connections.get(key);
       if (ws && ws.readyState === WebSocket.OPEN) {
-        try { ws.close(); } catch {}
+        try {
+          ws.close();
+        } catch {}
       }
       if (ws) {
         this.connections.delete(key);
@@ -99,5 +107,3 @@ export class WebSocketManager {
     }
   }
 }
-
-

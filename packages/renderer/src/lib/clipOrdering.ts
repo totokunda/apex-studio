@@ -1,4 +1,4 @@
-import type { AnyClipProps, TimelineProps } from '@/lib/types';
+import type { AnyClipProps, TimelineProps } from "@/lib/types";
 
 /**
  * Shared clip stacking order helper used by both the preview canvas and
@@ -17,13 +17,24 @@ export function sortClipsForStacking(
   clips: AnyClipProps[],
   timelines: TimelineProps[],
 ): AnyClipProps[] {
-  type GroupUnit = { kind: 'group'; id: string; y: number; start: number; children: AnyClipProps[] };
-  type SingleUnit = { kind: 'single'; y: number; start: number; clip: AnyClipProps };
+  type GroupUnit = {
+    kind: "group";
+    id: string;
+    y: number;
+    start: number;
+    children: AnyClipProps[];
+  };
+  type SingleUnit = {
+    kind: "single";
+    y: number;
+    start: number;
+    clip: AnyClipProps;
+  };
 
   const getTimelineY = (timelineId?: string) =>
-    (timelines.find((t) => t.timelineId === timelineId)?.timelineY) ?? 0;
+    timelines.find((t) => t.timelineId === timelineId)?.timelineY ?? 0;
 
-  const groups = clips.filter((c) => c.type === 'group') as AnyClipProps[];
+  const groups = clips.filter((c) => c.type === "group") as AnyClipProps[];
   const childrenSet = new Set<string>(
     groups.flatMap((g) => {
       const nested = ((g as any).children as string[][] | undefined) ?? [];
@@ -40,16 +51,16 @@ export function sortClipsForStacking(
     const children = childIdsFlat
       .map((id) => clips.find((c) => c.clipId === id))
       .filter(Boolean) as AnyClipProps[];
-    return { kind: 'group', id: g.clipId, y, start, children };
+    return { kind: "group", id: g.clipId, y, start, children };
   });
 
   // Build single units for non-group, non-child clips
   const singleUnits: SingleUnit[] = clips
-    .filter((c) => c.type !== 'group' && !childrenSet.has(c.clipId))
+    .filter((c) => c.type !== "group" && !childrenSet.has(c.clipId))
     .map((c) => {
       const y = getTimelineY(c.timelineId);
       const start = c.startFrame ?? 0;
-      return { kind: 'single', y, start, clip: c };
+      return { kind: "single", y, start, clip: c };
     });
 
   // Sort units: lower on screen first (higher y), then earlier start
@@ -61,7 +72,7 @@ export function sortClipsForStacking(
   // Flatten units back to clip list; for groups, expand children in their defined order
   const result: AnyClipProps[] = [];
   for (const u of units) {
-    if (u.kind === 'single') {
+    if (u.kind === "single") {
       result.push(u.clip);
     } else {
       // Ensure children are ordered as in group's children list (top-to-bottom)
@@ -71,5 +82,3 @@ export function sortClipsForStacking(
 
   return result;
 }
-
-

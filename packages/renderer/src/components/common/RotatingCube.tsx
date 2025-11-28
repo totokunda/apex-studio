@@ -24,7 +24,7 @@ const RotatingCube: React.FC<RotatingCubeProps> = ({
   x = 0,
   y = 0,
   opacity = 0.95,
-    stroke = "#ffffff",
+  stroke = "#ffffff",
   strokeWidth = 0.75,
   listening = false,
   baseColors,
@@ -57,11 +57,18 @@ const RotatingCube: React.FC<RotatingCubeProps> = ({
       [1, 2, 6, 5],
       [0, 3, 7, 4],
     ],
-    []
+    [],
   );
 
   const faceBaseColors = useMemo(() => {
-    const fallback = ["#4f83ff", "#6ee7b7", "#f87171", "#fbbf24", "#a78bfa", "#60a5fa"];
+    const fallback = [
+      "#4f83ff",
+      "#6ee7b7",
+      "#f87171",
+      "#fbbf24",
+      "#a78bfa",
+      "#60a5fa",
+    ];
     if (!baseColors || baseColors.length < 6) return fallback;
     return baseColors.slice(0, 6);
   }, [baseColors]);
@@ -87,7 +94,11 @@ const RotatingCube: React.FC<RotatingCubeProps> = ({
   const faceNormal = (a: Vec3, b: Vec3, c: Vec3): Vec3 => {
     const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
     const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
-    return { x: ab.y * ac.z - ab.z * ac.y, y: ab.z * ac.x - ab.x * ac.z, z: ab.x * ac.y - ab.y * ac.x };
+    return {
+      x: ab.y * ac.z - ab.z * ac.y,
+      y: ab.z * ac.x - ab.x * ac.z,
+      z: ab.x * ac.y - ab.y * ac.x,
+    };
   };
 
   const shadeHex = (hex: string, factor: number) => {
@@ -95,7 +106,8 @@ const RotatingCube: React.FC<RotatingCubeProps> = ({
     const r = parseInt(c.slice(0, 2), 16);
     const g = parseInt(c.slice(2, 4), 16);
     const b = parseInt(c.slice(4, 6), 16);
-    const mix = (v: number) => Math.round(v + (255 - v) * (factor - 0.3) / 0.7);
+    const mix = (v: number) =>
+      Math.round(v + ((255 - v) * (factor - 0.3)) / 0.7);
     const toHex = (v: number) => v.toString(16).padStart(2, "0");
     return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`;
   };
@@ -114,12 +126,15 @@ const RotatingCube: React.FC<RotatingCubeProps> = ({
     const anim = new Konva.Animation(() => {
       const tSec = (Date.now() - startEpochRef.current) / 1000;
       // Angular speeds (rad/sec) chosen to be incommensurate for a pleasing loop
-      const ax = tSec * 1.20;
+      const ax = tSec * 1.2;
       const ay = tSec * 1.62;
       const az = tSec * 1.02;
       const rv = verts.map((v) => rotate(v, ax, ay, az));
       const faceData = faces.map((idxs, i) => {
-        const a = rv[idxs[0]], b = rv[idxs[1]], c = rv[idxs[2]], d = rv[idxs[3]];
+        const a = rv[idxs[0]],
+          b = rv[idxs[1]],
+          c = rv[idxs[2]],
+          d = rv[idxs[3]];
         const n0 = faceNormal(a, b, c);
         const nLen = Math.hypot(n0.x, n0.y, n0.z) || 1;
         const n = { x: n0.x / nLen, y: n0.y / nLen, z: n0.z / nLen };
@@ -130,7 +145,12 @@ const RotatingCube: React.FC<RotatingCubeProps> = ({
         const pv = idxs.map((j) => project(rv[j]));
         const points = pv.flatMap((p) => [p.x, p.y]);
         const depth = (a.z + b.z + c.z + d.z) / 4;
-        return { i, points, depth, fill: shadeHex(faceBaseColors[i], brightness) };
+        return {
+          i,
+          points,
+          depth,
+          fill: shadeHex(faceBaseColors[i], brightness),
+        };
       });
       faceData.sort((a, b) => a.depth - b.depth);
       faceData.forEach((fd, order) => {
@@ -142,7 +162,7 @@ const RotatingCube: React.FC<RotatingCubeProps> = ({
     }, groupRef.current?.getLayer());
     anim.start();
     return () => {
-        anim.stop();
+      anim.stop();
     };
   }, [verts, faces, faceBaseColors]);
 
@@ -169,5 +189,3 @@ const RotatingCube: React.FC<RotatingCubeProps> = ({
 };
 
 export default RotatingCube;
-
-

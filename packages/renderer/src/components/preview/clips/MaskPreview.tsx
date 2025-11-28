@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Group } from 'react-konva';
-import Konva from 'konva';
-import { getLocalFrame, useClipStore } from '@/lib/clip';
-import { useControlsStore } from '@/lib/control';
+import React, { useEffect, useRef, useState } from "react";
+import { Group } from "react-konva";
+import Konva from "konva";
+import { getLocalFrame, useClipStore } from "@/lib/clip";
+import { useControlsStore } from "@/lib/control";
 import {
   AnyClipProps,
   ClipTransform,
@@ -10,14 +10,14 @@ import {
   MaskData,
   MaskShapeTool,
   PreprocessorClipType,
-} from '@/lib/types';
-import { useViewportStore } from '@/lib/viewport';
-import { useMaskStore } from '@/lib/mask';
-import { getCropOffset } from '@/components/preview/mask/touch';
+} from "@/lib/types";
+import { useViewportStore } from "@/lib/viewport";
+import { useMaskStore } from "@/lib/mask";
+import { getCropOffset } from "@/components/preview/mask/touch";
 
-import LassoMaskPreview from './LassoMaskPreview';
-import ShapeMaskPreview from './ShapeMaskPreview';
-import TouchMaskPreview from './TouchMaskPreview';
+import LassoMaskPreview from "./LassoMaskPreview";
+import ShapeMaskPreview from "./ShapeMaskPreview";
+import TouchMaskPreview from "./TouchMaskPreview";
 
 interface MaskPreviewProps {
   clips: AnyClipProps[];
@@ -44,7 +44,9 @@ interface MaskGroupTransforms {
   inner: GroupTransform;
 }
 
-const buildMaskGroupTransforms = (transform?: ClipTransform): MaskGroupTransforms => {
+const buildMaskGroupTransforms = (
+  transform?: ClipTransform,
+): MaskGroupTransforms => {
   if (!transform) {
     return { outer: {}, inner: {} };
   }
@@ -66,9 +68,6 @@ const buildMaskGroupTransforms = (transform?: ClipTransform): MaskGroupTransform
   const { offsetX: cropX, offsetY: cropY } = getCropOffset(transform);
   const innerOffsetX = -cropX;
   const innerOffsetY = -cropY;
-
-
-
 
   return {
     outer: { x, y, rotation },
@@ -102,7 +101,7 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
     let foundMasks = false;
 
     sortClips(filterClips(clips)).forEach((clip) => {
-      if (clip.type !== 'video' && clip.type !== 'image') return;
+      if (clip.type !== "video" && clip.type !== "image") return;
 
       const clipIsActive = clipWithinFrame(clip, focusFrame);
       if (!clipIsActive) return;
@@ -110,16 +109,26 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
       const masks = (clip as any).masks || [];
 
       masks.forEach((mask: MaskClipProps) => {
-        const keyframes = mask.keyframes instanceof Map ? mask.keyframes : (mask.keyframes as Record<number, any>);
+        const keyframes =
+          mask.keyframes instanceof Map
+            ? mask.keyframes
+            : (mask.keyframes as Record<number, any>);
 
-        const keyframeNumbers = keyframes instanceof Map
-          ? Array.from(keyframes.keys()).map(Number).sort((a, b) => a - b)
-          : Object.keys(keyframes).map(Number).sort((a, b) => a - b);
+        const keyframeNumbers =
+          keyframes instanceof Map
+            ? Array.from(keyframes.keys())
+                .map(Number)
+                .sort((a, b) => a - b)
+            : Object.keys(keyframes)
+                .map(Number)
+                .sort((a, b) => a - b);
 
         if (keyframeNumbers.length === 0) return;
 
         const startFrame = clip.startFrame ?? 0;
-        const trimStart = isFinite(clip.trimStart ?? 0) ? (clip.trimStart ?? 0) : 0;
+        const trimStart = isFinite(clip.trimStart ?? 0)
+          ? (clip.trimStart ?? 0)
+          : 0;
         const realStartFrame = startFrame + trimStart;
         const localFrame = focusFrame - realStartFrame;
 
@@ -131,10 +140,14 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
 
         const candidateLocal = nearestKeyframe(localFrame);
         const candidateGlobal = nearestKeyframe(focusFrame);
-        const activeKeyframe = clip.type === 'video' ? (candidateLocal ?? candidateGlobal) : 0;
+        const activeKeyframe =
+          clip.type === "video" ? (candidateLocal ?? candidateGlobal) : 0;
 
         if (activeKeyframe !== undefined) {
-          const maskData = keyframes instanceof Map ? keyframes.get(activeKeyframe) : keyframes[activeKeyframe];
+          const maskData =
+            keyframes instanceof Map
+              ? keyframes.get(activeKeyframe)
+              : keyframes[activeKeyframe];
 
           if (maskData) {
             masksData.push({
@@ -176,8 +189,10 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
     }
 
     if (isOverMask && prevMaskIdsRef.current.size > 0) {
-      const hadMaskRemoved = Array.from(prevMaskIdsRef.current).some((prevId) => !currentMaskIds.has(prevId));
-      if (hadMaskRemoved && tool === 'mask') {
+      const hadMaskRemoved = Array.from(prevMaskIdsRef.current).some(
+        (prevId) => !currentMaskIds.has(prevId),
+      );
+      if (hadMaskRemoved && tool === "mask") {
         setIsOverMask(false);
       }
     }
@@ -185,7 +200,7 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
     prevMaskIdsRef.current = currentMaskIds;
   }, [masksToRender, isOverMask, setIsOverMask, tool]);
 
-  if (tool !== 'mask') return null;
+  if (tool !== "mask") return null;
 
   return (
     <Group ref={ref}>
@@ -197,8 +212,16 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
         const { outer, inner } = buildMaskGroupTransforms(clipTransform);
         const localFrame = getLocalFrame(focusFrame, clip);
 
-        if (mask.tool === 'lasso' && maskData?.lassoPoints && maskData.lassoPoints.length >= 6) {
-          const closedPoints = [...maskData.lassoPoints, maskData.lassoPoints[0], maskData.lassoPoints[1]];
+        if (
+          mask.tool === "lasso" &&
+          maskData?.lassoPoints &&
+          maskData.lassoPoints.length >= 6
+        ) {
+          const closedPoints = [
+            ...maskData.lassoPoints,
+            maskData.lassoPoints[0],
+            maskData.lassoPoints[1],
+          ];
 
           return (
             <Group key={`mask-${mask.id}-${activeKeyframe}`} {...outer}>
@@ -215,9 +238,12 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
           );
         }
 
-        if ((mask.tool === 'shape' || (mask.tool as any) === 'rectangle') && maskData?.shapeBounds) {
+        if (
+          (mask.tool === "shape" || (mask.tool as any) === "rectangle") &&
+          maskData?.shapeBounds
+        ) {
           const bounds = maskData.shapeBounds;
-          const shapeType: MaskShapeTool = bounds?.shapeType || 'rectangle';
+          const shapeType: MaskShapeTool = bounds?.shapeType || "rectangle";
 
           return (
             <Group key={`mask-group-${mask.id}-${activeKeyframe}`} {...outer}>
@@ -242,36 +268,63 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
           );
         }
 
-        if (mask.tool === 'touch') {
+        if (mask.tool === "touch") {
           const activeDataKeyPoints =
-            localFrame === activeKeyframe || clip.type === 'image' ? maskData.touchPoints : [];
+            localFrame === activeKeyframe || clip.type === "image"
+              ? maskData.touchPoints
+              : [];
 
-          const handleDeletePoints = (pointsToDelete: Array<{ x: number; y: number; label: 1 | 0 }>) => {
-            const updatedTouchPoints = (maskData.touchPoints || []).filter((point: { x: number; y: number; label: 1 | 0 }) => {
-              return !pointsToDelete.some((p) => p.x === point.x && p.y === point.y && p.label === point.label);
-            });
+          const handleDeletePoints = (
+            pointsToDelete: Array<{ x: number; y: number; label: 1 | 0 }>,
+          ) => {
+            const updatedTouchPoints = (maskData.touchPoints || []).filter(
+              (point: { x: number; y: number; label: 1 | 0 }) => {
+                return !pointsToDelete.some(
+                  (p) =>
+                    p.x === point.x &&
+                    p.y === point.y &&
+                    p.label === point.label,
+                );
+              },
+            );
 
             const targetClip = clips.find((c) => c.clipId === mask.clipId);
 
             if (targetClip && mask.clipId) {
-              const currentMasks = (targetClip as PreprocessorClipType).masks || [];
+              const currentMasks =
+                (targetClip as PreprocessorClipType).masks || [];
 
               if (updatedTouchPoints.length === 0) {
-                const updatedMasks = currentMasks.filter((m) => m.id !== mask.id);
+                const updatedMasks = currentMasks.filter(
+                  (m) => m.id !== mask.id,
+                );
                 updateClip(mask.clipId, { masks: updatedMasks });
 
-                const { setSelectedMaskId, selectedMaskId } = useControlsStore.getState();
+                const { setSelectedMaskId, selectedMaskId } =
+                  useControlsStore.getState();
                 if (selectedMaskId === mask.id) {
                   setSelectedMaskId(null);
                 }
               } else {
-                const keyframes = mask.keyframes instanceof Map ? mask.keyframes : (mask.keyframes as Record<number, any>);
-                const updatedKeyframes = keyframes instanceof Map ? new Map(keyframes) : { ...keyframes };
+                const keyframes =
+                  mask.keyframes instanceof Map
+                    ? mask.keyframes
+                    : (mask.keyframes as Record<number, any>);
+                const updatedKeyframes =
+                  keyframes instanceof Map
+                    ? new Map(keyframes)
+                    : { ...keyframes };
 
                 if (updatedKeyframes instanceof Map) {
-                  updatedKeyframes.set(activeKeyframe, { ...maskData, touchPoints: updatedTouchPoints });
+                  updatedKeyframes.set(activeKeyframe, {
+                    ...maskData,
+                    touchPoints: updatedTouchPoints,
+                  });
                 } else {
-                  updatedKeyframes[activeKeyframe] = { ...maskData, touchPoints: updatedTouchPoints };
+                  updatedKeyframes[activeKeyframe] = {
+                    ...maskData,
+                    touchPoints: updatedTouchPoints,
+                  };
                 }
 
                 const updatedMasks = currentMasks.map((m: any) =>

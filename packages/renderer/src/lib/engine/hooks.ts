@@ -5,7 +5,7 @@ export function useEngineJob(jobId: string | null, autoStart = true) {
   const startTracking = useEngineJobStore((s) => s.startTracking);
   const stopTracking = useEngineJobStore((s) => s.stopTracking);
   const clearJob = useEngineJobStore((s) => s.clearJob);
-  const job = useEngineJobStore((s) => jobId ? s.getJob(jobId) : undefined);
+  const job = useEngineJobStore((s) => (jobId ? s.getJob(jobId) : undefined));
 
   const hasStarted = useRef(false);
   const previousJobId = useRef<string | null>(null);
@@ -36,13 +36,15 @@ export function useEngineJob(jobId: string | null, autoStart = true) {
     };
   }, [jobId, autoStart, startTracking, stopTracking, clearJob]);
 
-
-
   return {
     job,
-    isProcessing: (job?.status === 'running' || job?.status === 'pending' || job?.status === 'queued') && (job?.progress ?? 0) > 0,
-    isComplete: job?.status === 'complete',
-    isFailed: job?.status === 'failed',
+    isProcessing:
+      (job?.status === "running" ||
+        job?.status === "pending" ||
+        job?.status === "queued") &&
+      (job?.progress ?? 0) > 0,
+    isComplete: job?.status === "complete",
+    isFailed: job?.status === "failed",
     progress: job?.progress ?? 0,
     error: job?.error,
     result: job?.result ?? null,
@@ -60,7 +62,7 @@ export function useActiveJobs(): JobProgress[] {
 }
 
 export function useJobProgress(jobId: string | null): JobProgress | undefined {
-  return useEngineJobStore((s) => jobId ? s.getJob(jobId) : undefined);
+  return useEngineJobStore((s) => (jobId ? s.getJob(jobId) : undefined));
 }
 
 export function useEngineJobActions() {
@@ -78,5 +80,3 @@ export function useEngineJobActions() {
     clearCompletedJobs,
   };
 }
-
-

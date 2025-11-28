@@ -1,8 +1,6 @@
 import { create } from "zustand";
 import { Point, ViewTool, ShapeTool } from "./types";
 
-
-
 interface ViewportState {
   scale: number; // 1 = 100%
   minScale: number;
@@ -16,9 +14,18 @@ interface ViewportState {
   viewportSize: { width: number; height: number };
   setViewportSize: (size: { width: number; height: number }) => void;
   contentBounds: { x: number; y: number; width: number; height: number } | null;
-  setContentBounds: (bounds: { x: number; y: number; width: number; height: number }) => void;
+  setContentBounds: (bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => void;
   aspectRatio: { width: number; height: number; id: string };
-  setAspectRatio: (ratio: { width: number; height: number; id: string }) => void;
+  setAspectRatio: (ratio: {
+    width: number;
+    height: number;
+    id: string;
+  }) => void;
   isAspectEditing: boolean;
   setAspectEditing: (editing: boolean) => void;
   setTool: (tool: ViewTool) => void;
@@ -29,7 +36,10 @@ interface ViewportState {
   zoomAtScreenPoint: (nextScale: number, screenPoint: Point) => void;
   setPosition: (position: Point) => void;
   panBy: (deltaX: number, deltaY: number) => void;
-  centerOnWorldPoint: (worldPoint: Point, viewportSize: { width: number; height: number }) => void;
+  centerOnWorldPoint: (
+    worldPoint: Point,
+    viewportSize: { width: number; height: number },
+  ) => void;
   centerContentAt: (percent: number) => void;
 }
 
@@ -38,19 +48,20 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
   minScale: 0.1,
   maxScale: 4,
   position: { x: 0, y: 0 },
-  tool: 'pointer',
-  shape: 'rectangle',
+  tool: "pointer",
+  shape: "rectangle",
   viewportSize: { width: 0, height: 0 },
   clipPositions: {},
   getClipPosition: (clipId) => {
     const clipPositions = get().clipPositions;
     return clipPositions[clipId];
   },
-  setClipPosition: (clipId, position) => set({ clipPositions: { ...get().clipPositions, [clipId]: position } }),
+  setClipPosition: (clipId, position) =>
+    set({ clipPositions: { ...get().clipPositions, [clipId]: position } }),
   setViewportSize: (size) => set({ viewportSize: size }),
   contentBounds: null,
   setContentBounds: (bounds) => set({ contentBounds: bounds }),
-  aspectRatio: { width: 16, height: 9, id: '16:9' },
+  aspectRatio: { width: 16, height: 9, id: "16:9" },
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
   isAspectEditing: false,
   setAspectEditing: (editing) => set({ isAspectEditing: editing }),
@@ -65,7 +76,10 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
       set({ scale: next });
       return;
     }
-    const centerScreen = { x: viewportSize.width / 2, y: viewportSize.height / 2 };
+    const centerScreen = {
+      x: viewportSize.width / 2,
+      y: viewportSize.height / 2,
+    };
     const worldPoint = {
       x: (centerScreen.x - position.x) / scale,
       y: (centerScreen.y - position.y) / scale,
@@ -84,7 +98,11 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
   setScalePercentCentered: (percent) => {
     const { minScale, maxScale, contentBounds, viewportSize } = get();
     const scale = Math.max(minScale, Math.min(maxScale, (percent || 0) / 100));
-    if (!contentBounds || viewportSize.width === 0 || viewportSize.height === 0) {
+    if (
+      !contentBounds ||
+      viewportSize.width === 0 ||
+      viewportSize.height === 0
+    ) {
       set({ scale });
       return;
     }
@@ -92,7 +110,10 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
       x: contentBounds.x + contentBounds.width / 2,
       y: contentBounds.y + contentBounds.height / 2,
     };
-    const centerScreen = { x: viewportSize.width / 2, y: viewportSize.height / 2 };
+    const centerScreen = {
+      x: viewportSize.width / 2,
+      y: viewportSize.height / 2,
+    };
     const position = {
       x: centerScreen.x - worldCenter.x * scale,
       y: centerScreen.y - worldCenter.y * scale,
@@ -116,16 +137,23 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
     set({ scale: clampedScale, position: newPosition });
   },
   setPosition: (position) => set({ position }),
-  panBy: (deltaX, deltaY) => set((state) => ({ position: { x: state.position.x - deltaX, y: state.position.y - deltaY } })),
-  centerOnWorldPoint: (worldPoint, viewportSize) => set((state) => {
-    const { scale } = state;
-    const centerScreen = { x: viewportSize.width / 2, y: viewportSize.height / 2 };
-    const position = {
-      x: centerScreen.x - worldPoint.x * scale,
-      y: centerScreen.y - worldPoint.y * scale,
-    };
-    return { position };
-  }),
+  panBy: (deltaX, deltaY) =>
+    set((state) => ({
+      position: { x: state.position.x - deltaX, y: state.position.y - deltaY },
+    })),
+  centerOnWorldPoint: (worldPoint, viewportSize) =>
+    set((state) => {
+      const { scale } = state;
+      const centerScreen = {
+        x: viewportSize.width / 2,
+        y: viewportSize.height / 2,
+      };
+      const position = {
+        x: centerScreen.x - worldPoint.x * scale,
+        y: centerScreen.y - worldPoint.y * scale,
+      };
+      return { position };
+    }),
   centerContentAt: (percent) => {
     const { contentBounds, viewportSize } = get();
     if (!contentBounds) return;
@@ -134,7 +162,10 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
       y: contentBounds.y + contentBounds.height / 2,
     };
     const scale = percent / 100;
-    const centerScreen = { x: viewportSize.width / 2, y: viewportSize.height / 2 };
+    const centerScreen = {
+      x: viewportSize.width / 2,
+      y: viewportSize.height / 2,
+    };
     const position = {
       x: centerScreen.x - worldCenter.x * scale,
       y: centerScreen.y - worldCenter.y * scale,
@@ -144,4 +175,3 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
 }));
 
 export type { ViewTool };
-

@@ -3,8 +3,8 @@ import {
   getEngineStatus as getEngineStatusPreload,
   getEngineResult as getEngineResultPreload,
   cancelEngine as cancelEnginePreload,
-} from '@app/preload';
-import { wsClient } from '../ws/client';
+} from "@app/preload";
+import { wsClient } from "../ws/client";
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -35,24 +35,34 @@ export interface RunEngineRequest {
   job_id?: string;
 }
 
-export async function runEngine(request: RunEngineRequest): Promise<ConfigResponse<JobResponse>> {
+export async function runEngine(
+  request: RunEngineRequest,
+): Promise<ConfigResponse<JobResponse>> {
   return await runEnginePreload(request);
 }
 
-export async function getEngineStatus(jobId: string): Promise<ConfigResponse<JobResult>> {
+export async function getEngineStatus(
+  jobId: string,
+): Promise<ConfigResponse<JobResult>> {
   return await getEngineStatusPreload(jobId);
 }
 
-export async function getEngineResult(jobId: string): Promise<ConfigResponse<JobResult>> {
+export async function getEngineResult(
+  jobId: string,
+): Promise<ConfigResponse<JobResult>> {
   return await getEngineResultPreload(jobId);
 }
 
-export async function cancelEngine(jobId: string): Promise<ConfigResponse<any>> {
+export async function cancelEngine(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   return await cancelEnginePreload(jobId);
 }
 
 // Websocket helpers (reuse unified ws bridge with engine namespace key)
-export async function connectJobWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+export async function connectJobWebSocket(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   try {
     await wsClient.connect(`engine:${jobId}`, `/ws/job/${jobId}`);
     return { success: true, data: { jobId } };
@@ -61,7 +71,9 @@ export async function connectJobWebSocket(jobId: string): Promise<ConfigResponse
   }
 }
 
-export async function disconnectJobWebSocket(jobId: string): Promise<ConfigResponse<any>> {
+export async function disconnectJobWebSocket(
+  jobId: string,
+): Promise<ConfigResponse<any>> {
   try {
     await wsClient.disconnect(`engine:${jobId}`);
     return { success: true, data: { jobId } };
@@ -70,15 +82,24 @@ export async function disconnectJobWebSocket(jobId: string): Promise<ConfigRespo
   }
 }
 
-export function subscribeToJobUpdates(jobId: string, callback: (data: any) => void): () => void {
+export function subscribeToJobUpdates(
+  jobId: string,
+  callback: (data: any) => void,
+): () => void {
   return wsClient.onUpdate(`engine:${jobId}`, callback);
 }
 
-export function subscribeToJobStatus(jobId: string, callback: (data: any) => void): () => void {
+export function subscribeToJobStatus(
+  jobId: string,
+  callback: (data: any) => void,
+): () => void {
   return wsClient.onStatus(`engine:${jobId}`, callback);
 }
 
-export function subscribeToJobErrors(jobId: string, callback: (data: any) => void): () => void {
+export function subscribeToJobErrors(
+  jobId: string,
+  callback: (data: any) => void,
+): () => void {
   return wsClient.onError(`engine:${jobId}`, callback);
 }
 
@@ -93,7 +114,7 @@ export class EngineJob {
   async connect(): Promise<void> {
     const result = await connectJobWebSocket(this.jobId);
     if (!result.success) {
-      throw new Error(result.error || 'Failed to connect to WebSocket');
+      throw new Error(result.error || "Failed to connect to WebSocket");
     }
   }
 
@@ -131,8 +152,11 @@ export class EngineJob {
   }
 }
 
-export { useEngineJob, useActiveJobs, useJobProgress, useEngineJobActions } from './hooks';
-export { useEngineJobStore } from './store';
-export type { JobProgress } from './store';
-
-
+export {
+  useEngineJob,
+  useActiveJobs,
+  useJobProgress,
+  useEngineJobActions,
+} from "./hooks";
+export { useEngineJobStore } from "./store";
+export type { JobProgress } from "./store";

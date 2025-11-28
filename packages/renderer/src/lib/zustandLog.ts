@@ -9,7 +9,7 @@ import type { StateCreator, StoreApi } from "zustand";
  */
 export const withStackLog =
   <T extends object>(
-    config: StateCreator<T, [], []>
+    config: StateCreator<T, [], []>,
   ): StateCreator<T, [], []> =>
   (set, get, api) => {
     const setWithLog: typeof set = (partial, replace) => {

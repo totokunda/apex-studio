@@ -1,5 +1,5 @@
-import { getLocalFrame } from '@/lib/clip';
-import { AnyClipProps, MaskClipProps, MaskData } from '@/lib/types';
+import { getLocalFrame } from "@/lib/clip";
+import { AnyClipProps, MaskClipProps, MaskData } from "@/lib/types";
 
 type MaskKeyframes = Map<number, MaskData> | Record<number, MaskData>;
 
@@ -54,9 +54,10 @@ export const upsertMaskKeyframe = ({
   focusFrame,
   updater,
 }: UpsertMaskKeyframeArgs): UpsertMaskKeyframeResult | null => {
-  const keyframes = mask.keyframes instanceof Map
-    ? mask.keyframes
-    : (mask.keyframes as Record<number, MaskData>);
+  const keyframes =
+    mask.keyframes instanceof Map
+      ? mask.keyframes
+      : (mask.keyframes as Record<number, MaskData>);
 
   if (!keyframes) {
     return null;
@@ -64,7 +65,7 @@ export const upsertMaskKeyframe = ({
 
   const frames = getSortedFrames(keyframes);
   const hasExistingFrames = frames.length > 0;
-  const isVideoClip = clip?.type === 'video';
+  const isVideoClip = clip?.type === "video";
   const targetFrame = clip
     ? isVideoClip
       ? Math.max(0, Math.round(getLocalFrame(focusFrame, clip)))
@@ -73,19 +74,16 @@ export const upsertMaskKeyframe = ({
 
   const frameExists = hasFrame(keyframes, targetFrame);
   const fallbackFrame = hasExistingFrames
-    ? frames.filter((frame) => frame <= targetFrame).pop() ?? frames[0]
+    ? (frames.filter((frame) => frame <= targetFrame).pop() ?? frames[0])
     : undefined;
 
   const baseFrame = frameExists ? targetFrame : fallbackFrame;
-  const baseData = baseFrame !== undefined ? getFrameData(keyframes, baseFrame) : undefined;
+  const baseData =
+    baseFrame !== undefined ? getFrameData(keyframes, baseFrame) : undefined;
   const baseClone: MaskData = baseData ? { ...baseData } : {};
   const updatedData = updater(baseClone);
 
-  const finalFrame = clip
-    ? isVideoClip
-      ? targetFrame
-      : 0
-    : targetFrame;
+  const finalFrame = clip ? (isVideoClip ? targetFrame : 0) : targetFrame;
 
   const clonedKeyframes = cloneKeyframes(keyframes);
   if (clonedKeyframes instanceof Map) {

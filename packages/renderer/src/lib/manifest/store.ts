@@ -1,11 +1,11 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 import {
   listModelTypes,
   listManifests,
   getManifest,
   type ModelTypeInfo,
   ManifestDocument,
-} from './api';
+} from "./api";
 
 export interface ManifestStoreState {
   modelTypes: ModelTypeInfo[] | null;
@@ -37,12 +37,15 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
   modelTypes: null,
   manifests: null,
   selectedManifestId: null,
-  setSelectedManifestId: (manifestId: string) => set({ selectedManifestId: manifestId }),
+  setSelectedManifestId: (manifestId: string) =>
+    set({ selectedManifestId: manifestId }),
   clearSelectedManifestId: () => set({ selectedManifestId: null }),
   getLoadedManifest: (manifestId: string) => {
     const state = get();
     const manifests = state.manifests || [];
-    const manifest = manifests.find((manifest) => manifest.metadata?.id === manifestId);
+    const manifest = manifests.find(
+      (manifest) => manifest.metadata?.id === manifestId,
+    );
     if (manifest) return manifest as ManifestDocument;
     return null;
   },
@@ -58,23 +61,51 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     byId: {},
   },
 
-
   loadModelTypes: async (force = false) => {
     const state = get();
-    if (!force && (state.modelTypes !== null || state.loading.modelTypes)) return;
-    set((s) => ({ loading: { ...s.loading, modelTypes: true }, error: { ...s.error, modelTypes: null } }));
+    if (!force && (state.modelTypes !== null || state.loading.modelTypes))
+      return;
+    set((s) => ({
+      loading: { ...s.loading, modelTypes: true },
+      error: { ...s.error, modelTypes: null },
+    }));
     const res = await listModelTypes();
-    if (res.success) set((s) => ({ modelTypes: res.data || [], loading: { ...s.loading, modelTypes: false } }));
-    else set((s) => ({ loading: { ...s.loading, modelTypes: false }, error: { ...s.error, modelTypes: res.error || 'Failed to load model types' } }));
+    if (res.success)
+      set((s) => ({
+        modelTypes: res.data || [],
+        loading: { ...s.loading, modelTypes: false },
+      }));
+    else
+      set((s) => ({
+        loading: { ...s.loading, modelTypes: false },
+        error: {
+          ...s.error,
+          modelTypes: res.error || "Failed to load model types",
+        },
+      }));
   },
 
   loadManifests: async (force = false) => {
     const state = get();
     if (!force && (state.manifests !== null || state.loading.manifests)) return;
-    set((s) => ({ loading: { ...s.loading, manifests: true }, error: { ...s.error, manifests: null } }));
+    set((s) => ({
+      loading: { ...s.loading, manifests: true },
+      error: { ...s.error, manifests: null },
+    }));
     const res = await listManifests();
-    if (res.success) set((s) => ({ manifests: res.data || [], loading: { ...s.loading, manifests: false } }));
-    else set((s) => ({ loading: { ...s.loading, manifests: false }, error: { ...s.error, manifests: res.error || 'Failed to load manifests' } }));
+    if (res.success)
+      set((s) => ({
+        manifests: res.data || [],
+        loading: { ...s.loading, manifests: false },
+      }));
+    else
+      set((s) => ({
+        loading: { ...s.loading, manifests: false },
+        error: {
+          ...s.error,
+          manifests: res.error || "Failed to load manifests",
+        },
+      }));
   },
 
   loadManifest: async (manifestId: string, force = false) => {
@@ -82,21 +113,54 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     if (!manifestId) return;
     const already = state.getLoadedManifest(manifestId);
     if (!force && (already || state.loading.byId[manifestId])) return;
-    set((s) => ({ loading: { ...s.loading, byId: { ...s.loading.byId, [manifestId]: true } }, error: { ...s.error, byId: { ...s.error.byId, [manifestId]: null } } }));
+    set((s) => ({
+      loading: {
+        ...s.loading,
+        byId: { ...s.loading.byId, [manifestId]: true },
+      },
+      error: { ...s.error, byId: { ...s.error.byId, [manifestId]: null } },
+    }));
     const res = await getManifest(manifestId);
-    if (res.success) set((s) => {
-      const incoming = res.data as ManifestDocument | undefined;
-      if (!incoming) {
-        return { loading: { ...s.loading, byId: { ...s.loading.byId, [manifestId]: false } } };
-      }
-      const current = s.manifests || [];
-      const idx = current.findIndex((m) => (m.metadata?.id || m.id) === manifestId);
-      const next = [...current];
-      if (idx >= 0) next[idx] = incoming;
-      else next.push(incoming);
-      return { manifests: next, loading: { ...s.loading, byId: { ...s.loading.byId, [manifestId]: false } } };
-    });
-    else set((s) => ({ loading: { ...s.loading, byId: { ...s.loading.byId, [manifestId]: false } }, error: { ...s.error, byId: { ...s.error.byId, [manifestId]: res.error || 'Failed to load' } } }));
+    if (res.success)
+      set((s) => {
+        const incoming = res.data as ManifestDocument | undefined;
+        if (!incoming) {
+          return {
+            loading: {
+              ...s.loading,
+              byId: { ...s.loading.byId, [manifestId]: false },
+            },
+          };
+        }
+        const current = s.manifests || [];
+        const idx = current.findIndex(
+          (m) => (m.metadata?.id || m.id) === manifestId,
+        );
+        const next = [...current];
+        if (idx >= 0) next[idx] = incoming;
+        else next.push(incoming);
+        return {
+          manifests: next,
+          loading: {
+            ...s.loading,
+            byId: { ...s.loading.byId, [manifestId]: false },
+          },
+        };
+      });
+    else
+      set((s) => ({
+        loading: {
+          ...s.loading,
+          byId: { ...s.loading.byId, [manifestId]: false },
+        },
+        error: {
+          ...s.error,
+          byId: {
+            ...s.error.byId,
+            [manifestId]: res.error || "Failed to load",
+          },
+        },
+      }));
   },
 
   refreshManifestPart: async (manifestId: string, pathDot: string) => {
@@ -111,7 +175,9 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
         current = resFull.data;
         set((s) => {
           const list = s.manifests || [];
-          const idx = list.findIndex((m) => (m.metadata?.id || (m as any).id) === manifestId);
+          const idx = list.findIndex(
+            (m) => (m.metadata?.id || (m as any).id) === manifestId,
+          );
           const next = [...list];
           if (idx >= 0) next[idx] = current as ManifestDocument;
           else next.push(current as ManifestDocument);
@@ -124,14 +190,14 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     }
 
     // Fetch the part
-    const { getManifestPart } = await import('./api');
+    const { getManifestPart } = await import("./api");
     const res = await getManifestPart<any>(manifestId, pathDot);
     if (!res.success) return;
     const partValue = res.data;
 
     // Apply replacement at dot path in a cloned manifest object
     const clone: any = JSON.parse(JSON.stringify(current));
-    const tokens = pathDot.split('.').filter((t) => t.length > 0);
+    const tokens = pathDot.split(".").filter((t) => t.length > 0);
     let cursor: any = clone;
     for (let i = 0; i < tokens.length; i++) {
       const t = tokens[i];
@@ -161,13 +227,17 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
               // top-level replacement (unlikely for array)
               // no-op here; will assign at end
             } else {
-              const prevIdx = Number.isFinite(Number(prevToken)) ? Number(prevToken) : null;
+              const prevIdx = Number.isFinite(Number(prevToken))
+                ? Number(prevToken)
+                : null;
               if (prevIdx !== null) {
                 // parent was array
                 // Not easily re-bindable; bail out to avoid corrupting structure
               } else {
                 // parent was object
-                try { (clone as any)[prevToken] = arr; } catch {}
+                try {
+                  (clone as any)[prevToken] = arr;
+                } catch {}
               }
             }
             cursor = arr;
@@ -175,7 +245,7 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
           if (!cursor[idx]) cursor[idx] = {};
           cursor = cursor[idx];
         } else {
-          if (typeof cursor[t] !== 'object' || cursor[t] == null) {
+          if (typeof cursor[t] !== "object" || cursor[t] == null) {
             cursor[t] = {};
           }
           cursor = cursor[t];
@@ -186,7 +256,9 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     // update manifests list with the modified manifest
     set((s) => {
       const list = s.manifests || [];
-      const idx = list.findIndex((m) => (m.metadata?.id || (m as any).id) === manifestId);
+      const idx = list.findIndex(
+        (m) => (m.metadata?.id || (m as any).id) === manifestId,
+      );
       const next = [...list];
       if (idx >= 0) next[idx] = clone as ManifestDocument;
       else next.push(clone as ManifestDocument);
@@ -194,5 +266,3 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     });
   },
 }));
-
-

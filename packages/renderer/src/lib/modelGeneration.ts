@@ -1,11 +1,11 @@
-import { v4 as uuidv4 } from 'uuid';
-import _ from 'lodash';
-import type { AnyClipProps, ModelClipProps, TimelineProps } from '@/lib/types';
-import { getPreviewPath, savePreviewImage } from '@app/preload';
-import { getMediaInfoCached } from '@/lib/media/utils';
-import { exportClip, exportSequence } from '@app/export-renderer';
-import type { ManifestComponent } from '@/lib/manifest/api';
-import { prepareExportClipsForValue } from '@/lib/prepareExportClips';
+import { v4 as uuidv4 } from "uuid";
+import _ from "lodash";
+import type { AnyClipProps, ModelClipProps, TimelineProps } from "@/lib/types";
+import { getPreviewPath, savePreviewImage } from "@app/preload";
+import { getMediaInfoCached } from "@/lib/media/utils";
+import { exportClip, exportSequence } from "@app/export-renderer";
+import type { ManifestComponent } from "@/lib/manifest/api";
+import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
 
 export interface GenerateContext {
   clipId: any;
@@ -23,7 +23,11 @@ export interface GenerateContext {
   clearEngineJob: (jobId: any) => any;
   startEngineTracking: (jobId: any) => any;
   updateClip: (clipId: any, patch: any) => any;
-  toast: { info: (msg: string) => void; success: (msg: string) => void; error: (msg: string) => void };
+  toast: {
+    info: (msg: string) => void;
+    success: (msg: string) => void;
+    error: (msg: string) => void;
+  };
   setEngineJobId: (id: any) => void;
   setSelectedTab: (tab: string) => void;
 }
@@ -31,31 +35,56 @@ export interface GenerateContext {
 const buildSelectedComponentDefaults = (manifest: any): Record<string, any> => {
   const defaults: Record<string, any> = {};
   if (!manifest) return defaults;
-  const components: ManifestComponent[] = (manifest?.spec?.components || []) as ManifestComponent[];
+  const components: ManifestComponent[] = (manifest?.spec?.components ||
+    []) as ManifestComponent[];
 
   const normalizeModelPaths = (c: ManifestComponent): Array<any> => {
-    const raw = Array.isArray(c.model_path) ? c.model_path : (c.model_path ? [{ path: c.model_path }] : []);
-    return (raw as any[]).map((it) => (typeof it === 'string' ? { path: it } : it)).filter((it) => it && it.path);
+    const raw = Array.isArray(c.model_path)
+      ? c.model_path
+      : c.model_path
+        ? [{ path: c.model_path }]
+        : [];
+    return (raw as any[])
+      .map((it) => (typeof it === "string" ? { path: it } : it))
+      .filter((it) => it && it.path);
   };
-  const isItemDownloaded = (item: any): boolean => !!(item && item.is_downloaded === true);
+  const isItemDownloaded = (item: any): boolean =>
+    !!(item && item.is_downloaded === true);
 
   components.forEach((comp) => {
-    const key = String((comp as any).name || comp.type || 'component');
-    if (comp.type === 'scheduler' && Array.isArray(comp.scheduler_options) && comp.scheduler_options.length > 0) {
+    const key = String((comp as any).name || comp.type || "component");
+    if (
+      comp.type === "scheduler" &&
+      Array.isArray(comp.scheduler_options) &&
+      comp.scheduler_options.length > 0
+    ) {
       const first = comp.scheduler_options[0];
-      defaults[key] = { name: first.name, base: (first as any).base, config_path: (first as any).config_path };
+      defaults[key] = {
+        name: first.name,
+        base: (first as any).base,
+        config_path: (first as any).config_path,
+      };
     } else if (comp.model_path) {
-      const items = normalizeModelPaths(comp).filter((it) => isItemDownloaded(it));
+      const items = normalizeModelPaths(comp).filter((it) =>
+        isItemDownloaded(it),
+      );
       if (items.length > 0) {
-        const nameKey = String((comp as any).name || '');
+        const nameKey = String((comp as any).name || "");
         const matched = nameKey
           ? items.find((it: any) => {
-              const itemName = String(it?.name || it?.component_name || it?.id || '');
+              const itemName = String(
+                it?.name || it?.component_name || it?.id || "",
+              );
               return itemName && itemName === nameKey;
             })
           : undefined;
         const chosen = matched || items[0];
-        defaults[key] = { path: chosen.path, variant: chosen.variant, precision: chosen.precision, type: chosen.type };
+        defaults[key] = {
+          path: chosen.path,
+          variant: chosen.variant,
+          precision: chosen.precision,
+          type: chosen.type,
+        };
       }
     }
   });
@@ -84,7 +113,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
     setSelectedTab,
   } = ctx;
 
-  toast.info('Preparing inputs and starting generation...');
+  toast.info("Preparing inputs and starting generation...");
   const modelValues = getModelValues(clipId);
   if (!modelValues) return;
   const inputs = (clip as ModelClipProps)?.manifest?.spec.ui?.inputs || [];
@@ -92,8 +121,8 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
   const mapToTargets = new Set<string>();
   try {
     for (const uiInput of inputs as any[]) {
-      const t = String(uiInput?.type || '').toLowerCase();
-      if ((t === 'image+mask' || t === 'video+mask') && uiInput?.map_to) {
+      const t = String(uiInput?.type || "").toLowerCase();
+      if ((t === "image+mask" || t === "video+mask") && uiInput?.map_to) {
         mapToTargets.add(String(uiInput.map_to));
       }
     }
@@ -103,16 +132,25 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
   for (const input of inputs) {
     const typeStr = String(input.type);
-    if (typeStr === 'image_list') {
+    if (typeStr === "image_list") {
       const rawList = modelValues[input.id];
-      const arr = Array.isArray(rawList) ? rawList : (rawList ? [rawList] : []);
-      const exportedList: Array<{ type: 'image'; src: string }> = [];
+      const arr = Array.isArray(rawList) ? rawList : rawList ? [rawList] : [];
+      const exportedList: Array<{ type: "image"; src: string }> = [];
 
       for (const item of arr as any[]) {
         if (!item) continue;
-        const value = { ...(item as any) } as AnyClipProps & { selectedFrame?: number; selectedRange?: [number, number]; selection?: string };
+        const value = { ...(item as any) } as AnyClipProps & {
+          selectedFrame?: number;
+          selectedRange?: [number, number];
+          selection?: string;
+        };
         if (!value) continue;
-        if (Object.prototype.hasOwnProperty.call(value as any, 'selection') && ((value as any).selection === undefined || (value as any).selection === null || (value as any).selection === '')) {
+        if (
+          Object.prototype.hasOwnProperty.call(value as any, "selection") &&
+          ((value as any).selection === undefined ||
+            (value as any).selection === null ||
+            (value as any).selection === "")
+        ) {
           continue;
         }
 
@@ -134,25 +172,30 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         const { exportClips, width, height } = prepared;
 
         let absolutePath: string | null = null;
-        const frame = value.type === 'video' || value.type === 'group' ? (value as any).selectedFrame ?? 0 : 0;
+        const frame =
+          value.type === "video" || value.type === "group"
+            ? ((value as any).selectedFrame ?? 0)
+            : 0;
 
         if (exportClips.length === 1) {
           const result = await exportClip({
-            mode: 'image',
+            mode: "image",
             width,
             height,
             imageFrame: frame,
             clip: exportClips[0],
             fps,
-            backgroundColor: '#000000',
+            backgroundColor: "#000000",
           });
           if (result instanceof Blob) {
             const buf = new Uint8Array(await result.arrayBuffer());
-            absolutePath = await savePreviewImage(buf, { fileNameHint: `${clipId}_${input.id}_${frame}` });
+            absolutePath = await savePreviewImage(buf, {
+              fileNameHint: `${clipId}_${input.id}_${frame}`,
+            });
           }
         } else if (exportClips.length > 1) {
           const result = await exportSequence({
-            mode: 'image',
+            mode: "image",
             width,
             height,
             imageFrame: frame,
@@ -161,12 +204,14 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           });
           if (result instanceof Blob) {
             const buf = new Uint8Array(await result.arrayBuffer());
-            absolutePath = await savePreviewImage(buf, { fileNameHint: `${clipId}_${input.id}_${frame}` });
+            absolutePath = await savePreviewImage(buf, {
+              fileNameHint: `${clipId}_${input.id}_${frame}`,
+            });
           }
         }
 
         if (absolutePath) {
-          exportedList.push({ type: 'image', src: absolutePath });
+          exportedList.push({ type: "image", src: absolutePath });
         }
       }
 
@@ -174,7 +219,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
       continue;
     }
 
-    if (typeStr.startsWith('image') || typeStr.startsWith('video')) {
+    if (typeStr.startsWith("image") || typeStr.startsWith("video")) {
       const isMapTarget = mapToTargets.has(String(input.id));
       const rawValue = { ...modelValues[input.id] } as AnyClipProps & {
         selectedFrame?: number;
@@ -182,12 +227,19 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         selection?: string;
         apply_preprocessor?: boolean;
       };
-      const value = isMapTarget ? ({ ...rawValue, masks: [] } as typeof rawValue) : rawValue;
+      const value = isMapTarget
+        ? ({ ...rawValue, masks: [] } as typeof rawValue)
+        : rawValue;
       clipValues[input.id] = value;
       if (!value) continue;
-      if (Object.prototype.hasOwnProperty.call(value, 'selection') && (value.selection === undefined || value.selection === null || value.selection === '')) continue;
+      if (
+        Object.prototype.hasOwnProperty.call(value, "selection") &&
+        (value.selection === undefined ||
+          value.selection === null ||
+          value.selection === "")
+      )
+        continue;
 
-     
       const prepared = prepareExportClipsForValue(
         value as AnyClipProps,
         {
@@ -202,82 +254,89 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           useMediaDimensionsForExport: true,
           useOriginalTransform: true,
           applyCentering: true,
-          dimensionsFrom: 'clip',
+          dimensionsFrom: "clip",
         },
       );
-      
+
       const { exportClips, width, height } = prepared;
       let absolutePath: string | null = null;
 
-      if (String(input.type).startsWith('video')) {
+      if (String(input.type).startsWith("video")) {
         const frameRange = value.selectedRange ? value.selectedRange : [0, 1];
-        const filePath = await getPreviewPath(`${clipId}_${input.id}_${frameRange[0]}_${frameRange[1]}`);
+        const filePath = await getPreviewPath(
+          `${clipId}_${input.id}_${frameRange[0]}_${frameRange[1]}`,
+        );
         if (exportClips.length === 1) {
           const result = await exportClip({
-            mode: 'video',
+            mode: "video",
             width: width,
             height: height,
-            range: { start: frameRange[0], end: frameRange[1]},
+            range: { start: frameRange[0], end: frameRange[1] },
             clip: exportClips[0],
             fps: fps,
-            backgroundColor: '#000000',
+            backgroundColor: "#000000",
             filename: filePath,
             encoderOptions: {
-              format: 'webm',
-              codec: 'vp9',
-              preset: 'ultrafast',
+              format: "webm",
+              codec: "vp9",
+              preset: "ultrafast",
               crf: 23,
-              bitrate: '1000k',
+              bitrate: "1000k",
               resolution: { width: width, height: height },
               alpha: true,
             },
           });
-          if (typeof result === 'string') {
+          if (typeof result === "string") {
             absolutePath = result;
           }
         } else {
           const result = await exportSequence({
-            mode: 'video',
+            mode: "video",
             width: width,
             height: height,
-            range: { start: frameRange[0], end: frameRange[1]},
+            range: { start: frameRange[0], end: frameRange[1] },
             clips: exportClips,
             fps: fps,
-            backgroundColor: '#000000',
+            backgroundColor: "#000000",
             filename: filePath,
             encoderOptions: {
-              format: 'webm',
-              codec: 'vp9',
-              preset: 'ultrafast',
+              format: "webm",
+              codec: "vp9",
+              preset: "ultrafast",
               crf: 23,
-              bitrate: '1000k',
+              bitrate: "1000k",
               resolution: { width: width, height: height },
               alpha: true,
             },
           });
-          if (typeof result === 'string') {
+          if (typeof result === "string") {
             absolutePath = result;
           }
         }
       } else {
-        const frame = value.type === 'video' || value.type === 'group' ? (value as any).selectedFrame : 0;
+        const frame =
+          value.type === "video" || value.type === "group"
+            ? (value as any).selectedFrame
+            : 0;
         if (exportClips.length === 1) {
           const result = await exportClip({
-            mode: 'image',
+            mode: "image",
             width: width,
             height: height,
             imageFrame: frame,
             clip: exportClips[0],
             fps: fps,
-            backgroundColor: '#000000',
+            backgroundColor: "#000000",
           });
           if (result instanceof Blob) {
             const buf = new Uint8Array(await result.arrayBuffer());
-            absolutePath = await savePreviewImage(buf, { fileNameHint: `${clipId}_${input.id}_${frame}` });
+            absolutePath = await savePreviewImage(buf, {
+              fileNameHint: `${clipId}_${input.id}_${frame}`,
+            });
           }
         } else {
           const result = await exportSequence({
-            mode: 'image',
+            mode: "image",
             width: width,
             height: height,
             imageFrame: frame,
@@ -286,44 +345,51 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           });
           if (result instanceof Blob) {
             const buf = new Uint8Array(await result.arrayBuffer());
-            absolutePath = await savePreviewImage(buf, { fileNameHint: `${clipId}_${input.id}_${frame}` });
+            absolutePath = await savePreviewImage(buf, {
+              fileNameHint: `${clipId}_${input.id}_${frame}`,
+            });
           }
         }
       }
 
       (modelValues as any)[input.id] = {
-        type: 'image',
+        type: "image",
         src: absolutePath,
       };
-    } else if (String(input.type).startsWith('audio')) {
-      const value = { ...modelValues[input.id] } as AnyClipProps & {selectedFrame?: number, selectedRange?: [number, number]};
+    } else if (String(input.type).startsWith("audio")) {
+      const value = { ...modelValues[input.id] } as AnyClipProps & {
+        selectedFrame?: number;
+        selectedRange?: [number, number];
+      };
       if (!value) continue;
-      if (value.type === 'audio') {
+      if (value.type === "audio") {
         const mediaInfo = getMediaInfoCached(value.src);
         if (!mediaInfo) continue;
 
-        const filePath = await getPreviewPath(`${clipId}_${input.id}`, { ext: 'mp3' });
+        const filePath = await getPreviewPath(`${clipId}_${input.id}`, {
+          ext: "mp3",
+        });
         const frameRange = value.selectedRange ? value.selectedRange : [0, 1];
         value.startFrame = frameRange[0];
         value.endFrame = frameRange[1];
         const result = await exportClip({
-          mode: 'audio',
+          mode: "audio",
           clip: value as any,
           range: { start: frameRange[0], end: frameRange[1] },
           fps: fps,
           filename: filePath,
         });
 
-        if (typeof result === 'string') {
+        if (typeof result === "string") {
           (modelValues as any)[input.id] = {
             type: input.type,
             src: result,
           };
         }
       }
-    } else if (input.type === 'random') {
+    } else if (input.type === "random") {
       const value = (modelValues as any)[input.id];
-      if (value === -1 || value === '-1') {
+      if (value === -1 || value === "-1") {
         const min = input.min ?? 0;
         const max = input.max ?? Number.MAX_SAFE_INTEGER;
         const randomValue = Math.floor(Math.random() * (max - min + 1)) + min;
@@ -338,31 +404,41 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
       const raw = (modelValues as any)[input.id];
       const t = String(input.type);
       if (raw == null) continue;
-      if (t === 'image_list') {
+      if (t === "image_list") {
         const listVal = Array.isArray(raw) ? raw : [];
         const paths = listVal
           .map((item: any) => {
             if (!item) return null;
-            if (typeof item === 'string') return item;
-            if (item && typeof item === 'object' && typeof (item as any).src === 'string') return (item as any).src;
-            if (item && typeof item === 'object' && typeof (item as any).input_path === 'string') return (item as any).input_path;
+            if (typeof item === "string") return item;
+            if (
+              item &&
+              typeof item === "object" &&
+              typeof (item as any).src === "string"
+            )
+              return (item as any).src;
+            if (
+              item &&
+              typeof item === "object" &&
+              typeof (item as any).input_path === "string"
+            )
+              return (item as any).input_path;
             return null;
           })
-          .filter((p: any) => typeof p === 'string' && p.length > 0);
+          .filter((p: any) => typeof p === "string" && p.length > 0);
         if (paths.length > 0) {
           engineInputs[input.id] = paths;
         }
         continue;
       }
-      if (t.startsWith('image') || t.startsWith('video')) {
+      if (t.startsWith("image") || t.startsWith("video")) {
         const hasPreprocessor = Boolean((input as any)?.preprocessor_ref);
         const clipSource = clipValues[input.id];
         const resolveApplyPreprocessor = () => {
-          if (clipSource && typeof clipSource === 'object') {
-            if (typeof (clipSource as any).apply_preprocessor === 'boolean') {
+          if (clipSource && typeof clipSource === "object") {
+            if (typeof (clipSource as any).apply_preprocessor === "boolean") {
               return (clipSource as any).apply_preprocessor;
             }
-            if (typeof (clipSource as any).apply === 'boolean') {
+            if (typeof (clipSource as any).apply === "boolean") {
               return (clipSource as any).apply;
             }
           }
@@ -370,12 +446,12 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         };
         const applyPreprocessor = resolveApplyPreprocessor();
         let mediaPath: string | undefined;
-        if (typeof raw === 'string') {
+        if (typeof raw === "string") {
           mediaPath = raw;
-        } else if (raw && typeof raw === 'object') {
-          if (typeof (raw as any).input_path === 'string') {
+        } else if (raw && typeof raw === "object") {
+          if (typeof (raw as any).input_path === "string") {
             mediaPath = (raw as any).input_path;
-          } else if (typeof (raw as any).src === 'string') {
+          } else if (typeof (raw as any).src === "string") {
             mediaPath = (raw as any).src;
           }
         }
@@ -383,27 +459,31 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         if (hasPreprocessor) {
           engineInputs[input.id] = {
             input_path: mediaPath,
-            apply_preprocessor: typeof applyPreprocessor === 'boolean' ? applyPreprocessor : true,
+            apply_preprocessor:
+              typeof applyPreprocessor === "boolean" ? applyPreprocessor : true,
           };
         } else {
           engineInputs[input.id] = mediaPath;
         }
-      } else if (t.startsWith('audio')) {
-        if (typeof raw === 'string') {
+      } else if (t.startsWith("audio")) {
+        if (typeof raw === "string") {
           engineInputs[input.id] = raw;
-        } else if (raw && typeof raw === 'object' && (raw as any).src) {
+        } else if (raw && typeof raw === "object" && (raw as any).src) {
           engineInputs[input.id] = (raw as any).src;
         }
-      } else if (t === 'boolean') {
+      } else if (t === "boolean") {
         const v = (raw as any)?.value ?? raw;
-        engineInputs[input.id] = (String(v).toLowerCase() === 'true');
-      } else if (t === 'number' || t === 'number+slider' || t === 'random') {
+        engineInputs[input.id] = String(v).toLowerCase() === "true";
+      } else if (t === "number" || t === "number+slider" || t === "random") {
         const v = (raw as any)?.value ?? raw;
         const parsed = Number(v);
         engineInputs[input.id] = Number.isFinite(parsed) ? parsed : v;
-      } else if (t === 'number_list') {
+      } else if (t === "number_list") {
         const v = (raw as any)?.value ?? raw;
-        const arr = String(v).split(/[\s,]+/).map((s) => Number(s)).filter((n) => Number.isFinite(n));
+        const arr = String(v)
+          .split(/[\s,]+/)
+          .map((s) => Number(s))
+          .filter((n) => Number.isFinite(n));
         engineInputs[input.id] = arr;
       } else {
         engineInputs[input.id] = (raw as any)?.value ?? raw;
@@ -412,47 +492,70 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     let duration = (clip?.endFrame ?? 0) - (clip?.startFrame ?? 0);
     duration = Math.max(1, duration);
-    duration = Math.min(duration, ((clip as ModelClipProps)?.manifest?.spec?.max_duration_secs ?? Infinity) * fps);
+    duration = Math.min(
+      duration,
+      ((clip as ModelClipProps)?.manifest?.spec?.max_duration_secs ??
+        Infinity) * fps,
+    );
     const durationSeconds = duration / fps;
-    engineInputs['duration'] = `${durationSeconds}s`;
+    engineInputs["duration"] = `${durationSeconds}s`;
     const manifestId = (clip as ModelClipProps)?.manifest?.metadata?.id;
     const selectedExisting = (clip as ModelClipProps)?.selectedComponents || {};
-    const manifestForDefaults = manifestData || (clip as ModelClipProps)?.manifest;
-    const selectedDefaults = buildSelectedComponentDefaults(manifestForDefaults);
+    const manifestForDefaults =
+      manifestData || (clip as ModelClipProps)?.manifest;
+    const selectedDefaults =
+      buildSelectedComponentDefaults(manifestForDefaults);
     const selectedComponents = { ...selectedDefaults, ...selectedExisting };
 
     if (!selectedComponents.attention) {
-      selectedComponents.attention = { name: 'sdpa' };
+      selectedComponents.attention = { name: "sdpa" };
     }
 
     const activeJobId = uuidv4();
-    
-    const res = await runEngine({ manifest_id: manifestId, inputs: engineInputs, selected_components: selectedComponents, job_id: activeJobId });
+
+    const res = await runEngine({
+      manifest_id: manifestId,
+      inputs: engineInputs,
+      selected_components: selectedComponents,
+      job_id: activeJobId,
+    });
     if (res.success) {
-      toast.success(`Generation started for ${(clip as ModelClipProps)?.manifest?.metadata?.name}`);
+      toast.success(
+        `Generation started for ${(clip as ModelClipProps)?.manifest?.metadata?.name}`,
+      );
       const returnedJobId = (res.data as any)?.job_id || clipId;
       setEngineJobId(returnedJobId);
       if (returnedJobId) {
-        try { await clearEngineJob(returnedJobId); } catch {}
-        try { await startEngineTracking(returnedJobId); } catch {}
+        try {
+          await clearEngineJob(returnedJobId);
+        } catch {}
+        try {
+          await startEngineTracking(returnedJobId);
+        } catch {}
       }
       try {
         const persistedValues: Record<string, any> = {};
         for (const input of inputs) {
           const t = String(input.type);
-          if (t.startsWith('image') || t.startsWith('video')) {
+          if (t.startsWith("image") || t.startsWith("video")) {
             const uiSelection = (clipValues as any)?.[input.id];
-            persistedValues[input.id] = uiSelection !== undefined ? uiSelection : ((input as any)?.value ?? '');
+            persistedValues[input.id] =
+              uiSelection !== undefined
+                ? uiSelection
+                : ((input as any)?.value ?? "");
           } else {
             const engineVal = (engineInputs as any)[input.id];
-            persistedValues[input.id] = engineVal !== undefined ? engineVal : (input as any)?.value ?? '';
+            persistedValues[input.id] =
+              engineVal !== undefined
+                ? engineVal
+                : ((input as any)?.value ?? "");
           }
         }
-        const existingGenerations = ((clip as ModelClipProps)?.generations ?? []);
+        const existingGenerations = (clip as ModelClipProps)?.generations ?? [];
         const newGeneration = {
           jobId: activeJobId,
-          modelStatus: 'pending' as const,
-          src: '',
+          modelStatus: "pending" as const,
+          src: "",
           createdAt: Date.now(),
           selectedComponents: selectedComponents,
           values: getRawModelValues(clipId),
@@ -461,18 +564,18 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         if (clipId) {
           updateClip(clipId, {
             activeJobId: activeJobId,
-            modelStatus: 'pending',
+            modelStatus: "pending",
             generations: [...existingGenerations, newGeneration],
           } as any);
         }
       } catch {}
-      try { setSelectedTab('model-progress'); } catch {}
+      try {
+        setSelectedTab("model-progress");
+      } catch {}
     } else {
-      toast.error(res.error || 'Failed to start generation');
+      toast.error(res.error || "Failed to start generation");
     }
   } catch (err: any) {
-    toast.error(err?.message || 'Failed to start generation');
+    toast.error(err?.message || "Failed to start generation");
   }
 };
-
-

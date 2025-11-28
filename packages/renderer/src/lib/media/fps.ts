@@ -26,7 +26,7 @@ export function convertFrameRange(
   endFrame: number,
   srcFps: number,
   dstFps: number,
-  options: ConvertRangeOptions = {}
+  options: ConvertRangeOptions = {},
 ): { start: number; end: number } {
   if (srcFps <= 0 || dstFps <= 0) throw new Error("FPS must be positive.");
   if (!Number.isFinite(startFrame) || !Number.isFinite(endFrame)) {
@@ -41,7 +41,11 @@ export function convertFrameRange(
   } = options;
 
   const apply = (v: number, mode: Rounding) =>
-    mode === "floor" ? Math.floor(v) : mode === "ceil" ? Math.ceil(v) : Math.round(v);
+    mode === "floor"
+      ? Math.floor(v)
+      : mode === "ceil"
+        ? Math.ceil(v)
+        : Math.round(v);
 
   // Start time from start frame
   const startSec = startFrame / srcFps;
@@ -52,9 +56,8 @@ export function convertFrameRange(
   const derivedEndSec =
     (rangeMode === "closed" ? endFrame + 1 : endFrame) / srcFps;
 
-  const endSec = durationSeconds != null
-    ? startSec + durationSeconds
-    : derivedEndSec;
+  const endSec =
+    durationSeconds != null ? startSec + durationSeconds : derivedEndSec;
 
   // Map to destination frames with chosen rounding
   const startOut = apply(startSec * dstFps, startRounding);
@@ -68,12 +71,16 @@ export function convertFrameIndex(
   frame: number,
   srcFps: number,
   dstFps: number,
-  rounding: Rounding = "round"
+  rounding: Rounding = "round",
 ): number {
   if (srcFps <= 0 || dstFps <= 0) throw new Error("FPS must be positive.");
   const t = frame / srcFps;
   const f = t * dstFps;
-  return rounding === "floor" ? Math.floor(f) : rounding === "ceil" ? Math.ceil(f) : Math.round(f);
+  return rounding === "floor"
+    ? Math.floor(f)
+    : rounding === "ceil"
+      ? Math.ceil(f)
+      : Math.round(f);
 }
 
 export const toFrameRange = (
@@ -81,14 +88,13 @@ export const toFrameRange = (
   endFrame: number,
   srcFps: number,
   dstFps: number,
-  durationSeconds: number
+  durationSeconds: number,
 ): { start: number; end: number } => {
   const startSec = startFrame / srcFps;
   const endSec = endFrame / srcFps;
   const maxEnd = Math.round(durationSeconds * dstFps);
-  // we have it converted to seconds, 
+  // we have it converted to seconds,
   const startOut = Math.round(startSec * dstFps);
   const endOut = Math.min(Math.round(endSec * dstFps), maxEnd);
   return { start: startOut, end: endOut };
-
-}
+};

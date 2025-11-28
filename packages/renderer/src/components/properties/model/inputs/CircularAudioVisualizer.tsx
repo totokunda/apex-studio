@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from "react";
 
 interface CircularAudioVisualizerProps {
   inputId: string;
@@ -8,7 +8,9 @@ interface CircularAudioVisualizerProps {
 }
 
 // Visualizes current audio around a circle using analyser data keyed by inputId.
-export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = ({ inputId, width, height, active }) => {
+export const CircularAudioVisualizer: React.FC<
+  CircularAudioVisualizerProps
+> = ({ inputId, width, height, active }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -19,12 +21,16 @@ export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = (
 
   const attachAnalyser = useCallback(() => {
     try {
-      const store: any = (window as any);
-      const map = store.__apexAudioAnalysers as Map<string, { ctx: AudioContext; analyser: AnalyserNode }> | undefined;
+      const store: any = window as any;
+      const map = store.__apexAudioAnalysers as
+        | Map<string, { ctx: AudioContext; analyser: AnalyserNode }>
+        | undefined;
       if (map && map.has(inputId)) {
         const entry = map.get(inputId)!;
         analyserRef.current = entry.analyser;
-        dataRef.current = new Uint8Array(entry.analyser.frequencyBinCount) as unknown as Uint8Array;
+        dataRef.current = new Uint8Array(
+          entry.analyser.frequencyBinCount,
+        ) as unknown as Uint8Array;
         return true;
       }
     } catch {
@@ -39,15 +45,18 @@ export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = (
         const detail = (e as CustomEvent).detail;
         if (detail?.inputId === String(inputId)) attachAnalyser();
       };
-      window.addEventListener('apex:audio:analyser-ready', onReady as any, { once: true });
-      return () => window.removeEventListener('apex:audio:analyser-ready', onReady as any);
+      window.addEventListener("apex:audio:analyser-ready", onReady as any, {
+        once: true,
+      });
+      return () =>
+        window.removeEventListener("apex:audio:analyser-ready", onReady as any);
     }
   }, [attachAnalyser, inputId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
     canvas.width = Math.max(1, Math.floor(width * dpr));
@@ -60,7 +69,7 @@ export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = (
   useEffect(() => {
     const loop = () => {
       const canvas = canvasRef.current;
-      const ctx = canvas?.getContext('2d');
+      const ctx = canvas?.getContext("2d");
       let analyser = analyserRef.current;
       let data = dataRef.current;
       if (!analyser || !data) {
@@ -86,7 +95,10 @@ export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = (
         analyser.getByteFrequencyData(data as any);
         let zero = true;
         for (let i = 0; i < (data as Uint8Array).length; i++) {
-          if ((data as Uint8Array)[i] > 0) { zero = false; break; }
+          if ((data as Uint8Array)[i] > 0) {
+            zero = false;
+            break;
+          }
         }
         if (zero) {
           zeroFrameStreakRef.current++;
@@ -95,7 +107,10 @@ export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = (
         }
         if (zeroFrameStreakRef.current >= 3) {
           // fallback to time-domain RMS when freq bins are flat (e.g., small signals or platform quirks)
-          if (!timeDomainRef.current || timeDomainRef.current.length !== analyser.fftSize) {
+          if (
+            !timeDomainRef.current ||
+            timeDomainRef.current.length !== analyser.fftSize
+          ) {
             timeDomainRef.current = new Uint8Array(analyser.fftSize);
           }
           analyser.getByteTimeDomainData(timeDomainRef.current as any);
@@ -104,7 +119,10 @@ export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = (
             const v = (timeDomainRef.current[i] - 128) / 128; // -1..1
             sum += v * v;
           }
-          const rms = Math.min(1, Math.sqrt(sum / timeDomainRef.current.length) * 2);
+          const rms = Math.min(
+            1,
+            Math.sqrt(sum / timeDomainRef.current.length) * 2,
+          );
           for (let i = 0; i < barCount; i++) {
             const jitter = (Math.sin((i * 12.9898) % 6.283) * 0.5 + 0.5) * 0.08;
             const target = Math.max(0, Math.min(1, rms * (0.85 + jitter)));
@@ -113,7 +131,10 @@ export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = (
           }
         } else {
           for (let i = 0; i < barCount; i++) {
-            const idx = Math.min((data as Uint8Array).length - 1, Math.floor((i / barCount) * (data as Uint8Array).length));
+            const idx = Math.min(
+              (data as Uint8Array).length - 1,
+              Math.floor((i / barCount) * (data as Uint8Array).length),
+            );
             const amp = (data as Uint8Array)[idx] / 255;
             const target = Math.max(0, Math.min(1, amp));
             const smooth = 0.35;
@@ -146,7 +167,7 @@ export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = (
         ctx.stroke();
       }
       // inner ring for visual stability
-      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
       ctx.lineWidth = Math.max(1, Math.floor(minDim * 0.004));
       ctx.beginPath();
       ctx.arc(cx, cy, innerRadius - ctx.lineWidth * 0.5, 0, Math.PI * 2);
@@ -164,9 +185,10 @@ export const CircularAudioVisualizer: React.FC<CircularAudioVisualizerProps> = (
       className="relative bg-brand-background-light/80 rounded-[7px] border border-brand-light/5"
       style={{ width: Math.max(1, width), height: Math.max(1, height) }}
     >
-      <canvas ref={canvasRef} className="absolute inset-0 z-20 pointer-events-none" />
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 z-20 pointer-events-none"
+      />
     </div>
   );
 };
-
-

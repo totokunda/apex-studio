@@ -1,4 +1,4 @@
-import { WebGLHaldClut } from '../../../renderer/src/components/preview/webgl-filters/hald-clut';
+import { WebGLHaldClut } from "../../../renderer/src/components/preview/webgl-filters/hald-clut";
 
 let haldClutInstance: WebGLHaldClut | null = null;
 let referenceCount = 0;
@@ -36,5 +36,3 @@ export function disposeHaldClutSingleton(): void {
 export function getHaldClutReferenceCount(): number {
   return referenceCount;
 }
-
-

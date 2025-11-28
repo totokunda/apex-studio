@@ -9,10 +9,14 @@ import {
   deleteComponent as deleteComponentPreload,
   getComponentsStatus as getComponentsStatusPreload,
   cancelComponents as cancelComponentsPreload,
-} from '@app/preload';
-import { wsClient } from '../ws/client';
+} from "@app/preload";
+import { wsClient } from "../ws/client";
 
-export async function downloadComponents(paths: string[], savePath?: string, jobId?: string) {
+export async function downloadComponents(
+  paths: string[],
+  savePath?: string,
+  jobId?: string,
+) {
   return await downloadComponentsPreload(paths, savePath, jobId);
 }
 
@@ -46,15 +50,24 @@ export async function disconnectComponentsWebSocket(jobId: string) {
   }
 }
 
-export function onComponentsWebSocketUpdate(jobId: string, cb: (data: any) => void) {
+export function onComponentsWebSocketUpdate(
+  jobId: string,
+  cb: (data: any) => void,
+) {
   return wsClient.onUpdate(`components:${jobId}`, cb);
 }
 
-export function onComponentsWebSocketStatus(jobId: string, cb: (data: any) => void) {
+export function onComponentsWebSocketStatus(
+  jobId: string,
+  cb: (data: any) => void,
+) {
   return wsClient.onStatus(`components:${jobId}`, cb);
 }
 
-export function onComponentsWebSocketError(jobId: string, cb: (data: any) => void) {
+export function onComponentsWebSocketError(
+  jobId: string,
+  cb: (data: any) => void,
+) {
   return wsClient.onError(`components:${jobId}`, cb);
 }
 
@@ -79,7 +92,7 @@ export class ComponentsDownloadJob {
   async connect(): Promise<void> {
     const result = await connectComponentsWebSocket(this.jobId);
     if (!result.success) {
-      throw new Error(result.error || 'Failed to connect to WebSocket');
+      throw new Error(result.error || "Failed to connect to WebSocket");
     }
   }
 
@@ -107,7 +120,7 @@ export class ComponentsDownloadJob {
   }
 
   async disconnect(): Promise<void> {
-    this.unsubscribers.forEach(unsubscribe => unsubscribe());
+    this.unsubscribers.forEach((unsubscribe) => unsubscribe());
     this.unsubscribers = [];
     await disconnectComponentsWebSocket(this.jobId);
   }

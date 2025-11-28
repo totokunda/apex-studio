@@ -7,7 +7,7 @@ import {
   WebGLContextListener,
   WebGLContextManager,
   WebGLSharedContextHandle,
-} from '../webgl/WebGLContextManager';
+} from "../webgl/WebGLContextManager";
 
 export abstract class WebGLMaskBase {
   protected gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
@@ -17,23 +17,27 @@ export abstract class WebGLMaskBase {
 
   private readonly contextHandle: WebGLSharedContextHandle;
   private unsubscribeFromContext?: () => void;
-  private bufferContext: WebGLRenderingContext | WebGL2RenderingContext | null = null;
+  private bufferContext: WebGLRenderingContext | WebGL2RenderingContext | null =
+    null;
 
-  constructor(contextKey?: string, contextType: 'webgl' | 'webgl2' = 'webgl') {
+  constructor(contextKey?: string, contextType: "webgl" | "webgl2" = "webgl") {
     // Use a shared default key when not provided, or an instance-specific key for isolation
-    this.contextHandle = WebGLContextManager.acquire(contextKey || 'preview-webgl-mask', {
-      contextType,
-      attributes: {
-        premultipliedAlpha: false,
-        preserveDrawingBuffer: true,
+    this.contextHandle = WebGLContextManager.acquire(
+      contextKey || "preview-webgl-mask",
+      {
+        contextType,
+        attributes: {
+          premultipliedAlpha: false,
+          preserveDrawingBuffer: true,
+        },
       },
-    });
+    );
 
     this.canvas = this.contextHandle.canvas;
     this.gl = this.contextHandle.ensureContext();
 
     if (!this.gl) {
-      console.error('Failed to initialize WebGL context');
+      console.error("Failed to initialize WebGL context");
     } else {
       this.initBuffers();
     }
@@ -58,7 +62,10 @@ export abstract class WebGLMaskBase {
     this.unsubscribeFromContext = this.contextHandle.subscribe(listener);
   }
 
-  protected ensureContext(): WebGLRenderingContext | WebGL2RenderingContext | null {
+  protected ensureContext():
+    | WebGLRenderingContext
+    | WebGL2RenderingContext
+    | null {
     const gl = this.contextHandle.ensureContext();
     if (gl && gl !== this.gl) {
       this.gl = gl;
@@ -110,7 +117,7 @@ export abstract class WebGLMaskBase {
     gl.compileShader(shader);
 
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-      console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+      console.error("Shader compile error:", gl.getShaderInfoLog(shader));
       gl.deleteShader(shader);
       return null;
     }
@@ -118,12 +125,18 @@ export abstract class WebGLMaskBase {
     return shader;
   }
 
-  protected createProgram(vertexSource: string, fragmentSource: string): WebGLProgram | null {
+  protected createProgram(
+    vertexSource: string,
+    fragmentSource: string,
+  ): WebGLProgram | null {
     const gl = this.ensureContext();
     if (!gl) return null;
 
     const vertexShader = this.createShader(gl.VERTEX_SHADER, vertexSource);
-    const fragmentShader = this.createShader(gl.FRAGMENT_SHADER, fragmentSource);
+    const fragmentShader = this.createShader(
+      gl.FRAGMENT_SHADER,
+      fragmentSource,
+    );
 
     if (!vertexShader || !fragmentShader) return null;
 
@@ -135,7 +148,7 @@ export abstract class WebGLMaskBase {
     gl.linkProgram(program);
 
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.error('Program link error:', gl.getProgramInfoLog(program));
+      console.error("Program link error:", gl.getProgramInfoLog(program));
       gl.deleteProgram(program);
       return null;
     }
@@ -148,7 +161,9 @@ export abstract class WebGLMaskBase {
     return program;
   }
 
-  protected createTextureFromCanvas(canvas: HTMLCanvasElement): WebGLTexture | null {
+  protected createTextureFromCanvas(
+    canvas: HTMLCanvasElement,
+  ): WebGLTexture | null {
     const gl = this.ensureContext();
     if (!gl) return null;
 
@@ -178,8 +193,8 @@ export abstract class WebGLMaskBase {
       return;
     }
 
-    const positionLocation = gl.getAttribLocation(program, 'a_position');
-    const texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
+    const positionLocation = gl.getAttribLocation(program, "a_position");
+    const texCoordLocation = gl.getAttribLocation(program, "a_texCoord");
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
     gl.enableVertexAttribArray(positionLocation);
@@ -225,26 +240,29 @@ export abstract class WebGLMaskBase {
   }
 
   // Abstract method that subclasses must implement
-  public abstract apply(sourceCanvas: HTMLCanvasElement, ...params: any[]): HTMLCanvasElement;
+  public abstract apply(
+    sourceCanvas: HTMLCanvasElement,
+    ...params: any[]
+  ): HTMLCanvasElement;
 
-  protected debugDownloadCanvas(filename = 'shape-mask-debug.png') {
+  protected debugDownloadCanvas(filename = "shape-mask-debug.png") {
     if (!this.canvas) return;
     // Prefer toBlob (async, crisp); fallback to dataURL if not supported.
-    if ('toBlob' in this.canvas) {
+    if ("toBlob" in this.canvas) {
       (this.canvas as HTMLCanvasElement).toBlob((blob) => {
         if (!blob) return;
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
+        const a = document.createElement("a");
         a.href = url;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
-      }, 'image/png');
+      }, "image/png");
     } else {
-      const url = (this.canvas as HTMLCanvasElement).toDataURL('image/png');
-      const a = document.createElement('a');
+      const url = (this.canvas as HTMLCanvasElement).toDataURL("image/png");
+      const a = document.createElement("a");
       a.href = url;
       a.download = filename;
       document.body.appendChild(a);
@@ -260,13 +278,13 @@ export abstract class WebGLMaskBase {
    */
   protected debugAnnotateBoundsOnTop(
     srcCanvas: HTMLCanvasElement,
-    bounds: { x: number; y: number; width: number; height: number }
+    bounds: { x: number; y: number; width: number; height: number },
   ) {
     const { width: W, height: H } = srcCanvas;
-    const tmp = document.createElement('canvas');
+    const tmp = document.createElement("canvas");
     tmp.width = W;
     tmp.height = H;
-    const ctx = tmp.getContext('2d');
+    const ctx = tmp.getContext("2d");
     if (!ctx) return;
 
     // draw GL result first
@@ -276,12 +294,12 @@ export abstract class WebGLMaskBase {
     ctx.save();
     ctx.lineWidth = 2;
     ctx.setLineDash([8, 6]);
-    ctx.strokeStyle = 'rgba(255,0,0,0.9)';
+    ctx.strokeStyle = "rgba(255,0,0,0.9)";
     ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
     ctx.restore();
 
     // copy annotated back into our GL canvas
-    const gl2d = this.canvas.getContext('2d');
+    const gl2d = this.canvas.getContext("2d");
     if (gl2d) {
       gl2d.clearRect(0, 0, W, H);
       gl2d.drawImage(tmp, 0, 0);

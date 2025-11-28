@@ -1,28 +1,28 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 
 export type ContextMenuAction =
-  | 'copy'
-  | 'cut'
-  | 'paste'
-  | 'delete'
-  | 'split'
-  | 'separateAudio'
-  | 'convertToMedia'
-  | 'export'
-  | 'group'
-  | 'ungroup'
-  | 'extend'
-  | 'stabilize'
-  | 'animate'
-  | 'inpaint'
-  | 'outpaint'
-  | 'control'
-  | 'editImage'
-  | 'editVideo'
+  | "copy"
+  | "cut"
+  | "paste"
+  | "delete"
+  | "split"
+  | "separateAudio"
+  | "convertToMedia"
+  | "export"
+  | "group"
+  | "ungroup"
+  | "extend"
+  | "stabilize"
+  | "animate"
+  | "inpaint"
+  | "outpaint"
+  | "control"
+  | "editImage"
+  | "editVideo";
 
 export type ContextTarget =
-  | { type: 'clip'; clipIds: string[]; primaryClipId: string; isVideo: boolean }
-  | { type: 'timeline'; timelineId: string };
+  | { type: "clip"; clipIds: string[]; primaryClipId: string; isVideo: boolean }
+  | { type: "timeline"; timelineId: string };
 
 export interface ContextMenuItem {
   id: string;
@@ -44,7 +44,12 @@ interface ContextMenuState {
   items: ContextMenuItem[];
   groups: ContextMenuGroup[] | null;
   target: ContextTarget | null;
-  openMenu: (args: { position: { x: number; y: number }; items?: ContextMenuItem[]; groups?: ContextMenuGroup[]; target: ContextTarget }) => void;
+  openMenu: (args: {
+    position: { x: number; y: number };
+    items?: ContextMenuItem[];
+    groups?: ContextMenuGroup[];
+    target: ContextTarget;
+  }) => void;
   closeMenu: () => void;
   setPosition: (pos: { x: number; y: number }) => void;
 }
@@ -55,9 +60,8 @@ export const useContextMenuStore = create<ContextMenuState>((set) => ({
   items: [],
   groups: null,
   target: null,
-  openMenu: ({ position, items = [], groups, target }) => set({ open: true, position, items, groups: groups ?? null, target }),
+  openMenu: ({ position, items = [], groups, target }) =>
+    set({ open: true, position, items, groups: groups ?? null, target }),
   closeMenu: () => set({ open: false, items: [], groups: null, target: null }),
   setPosition: (position) => set({ position }),
 }));
-
-

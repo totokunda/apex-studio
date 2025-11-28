@@ -1,17 +1,25 @@
-import { v4 as uuidv4 } from 'uuid';
-import { getMediaInfoCached } from '@/lib/media/utils';
-import { toFrameRange } from '@/lib/media/fps';
-import type { AnyClipProps } from '@/lib/types';
-import { runPreprocessor } from '@/lib/preprocessor/api';
+import { v4 as uuidv4 } from "uuid";
+import { getMediaInfoCached } from "@/lib/media/utils";
+import { toFrameRange } from "@/lib/media/fps";
+import type { AnyClipProps } from "@/lib/types";
+import { runPreprocessor } from "@/lib/preprocessor/api";
 
 export interface PreprocessorRunContext {
   selectedPreprocessorId: string | null;
   fps: number;
   getPreprocessorById: (id: string) => any;
   getClipFromPreprocessorId: (id: string) => AnyClipProps | null;
-  updatePreprocessor: (clipId: string, preprocessorId: string, patch: any) => void;
+  updatePreprocessor: (
+    clipId: string,
+    preprocessorId: string,
+    patch: any,
+  ) => void;
   clearJob: (jobId: string) => void;
-  toast: { info: (msg: string) => void; success: (msg: string) => void; error: (msg: string) => void };
+  toast: {
+    info: (msg: string) => void;
+    success: (msg: string) => void;
+    error: (msg: string) => void;
+  };
   setIsPreparingPreprocessor: (v: boolean) => void;
 }
 
@@ -39,33 +47,55 @@ export const runPreprocessorJob = async (ctx: PreprocessorRunContext) => {
 
   setIsPreparingPreprocessor(true);
   try {
-    const { getBackendIsRemote, getFileShouldUpload } = await import('@app/preload');
+    const { getBackendIsRemote, getFileShouldUpload } =
+      await import("@app/preload");
     const remoteRes = await getBackendIsRemote();
-    const isRemote = !!(remoteRes && remoteRes.success && remoteRes.data?.isRemote);
+    const isRemote = !!(
+      remoteRes &&
+      remoteRes.success &&
+      remoteRes.data?.isRemote
+    );
     if (isRemote) {
-      const su = await getFileShouldUpload(String(clip.src || ''));
+      const su = await getFileShouldUpload(String(clip.src || ""));
       const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
       if (shouldUpload) {
-        toast.info('Uploading source media to server…');
+        toast.info("Uploading source media to server…");
       }
     }
   } catch {}
 
   const clipMediaInfo = getMediaInfoCached(clip.src);
   const clipFps = clipMediaInfo?.stats.video?.averagePacketRate ?? 24;
-  if (preprocessor.startFrame === undefined || preprocessor.endFrame === undefined) {
+  if (
+    preprocessor.startFrame === undefined ||
+    preprocessor.endFrame === undefined
+  ) {
     setIsPreparingPreprocessor(false);
     return;
   }
-  let { start: startFrameReal, end: endFrameReal } = toFrameRange(preprocessor.startFrame, preprocessor.endFrame, fps, clipFps, clipMediaInfo?.duration ?? 0);
+  let { start: startFrameReal, end: endFrameReal } = toFrameRange(
+    preprocessor.startFrame,
+    preprocessor.endFrame,
+    fps,
+    clipFps,
+    clipMediaInfo?.duration ?? 0,
+  );
 
-  const clipMediaStartFrame = Math.round(((clipMediaInfo?.startFrame ?? 0) / fps) * clipFps);
+  const clipMediaStartFrame = Math.round(
+    ((clipMediaInfo?.startFrame ?? 0) / fps) * clipFps,
+  );
 
   startFrameReal += clipMediaStartFrame;
   endFrameReal += clipMediaStartFrame;
 
   const activeJobId = uuidv4();
-  try { updatePreprocessor(clip.clipId, preprocessor.id, { status: 'running', activeJobId, jobIds: [...(preprocessor.jobIds || []), activeJobId] }); } catch {}
+  try {
+    updatePreprocessor(clip.clipId, preprocessor.id, {
+      status: "running",
+      activeJobId,
+      jobIds: [...(preprocessor.jobIds || []), activeJobId],
+    });
+  } catch {}
 
   const response = await runPreprocessor({
     start_frame: startFrameReal,
@@ -78,11 +108,11 @@ export const runPreprocessorJob = async (ctx: PreprocessorRunContext) => {
   });
   setIsPreparingPreprocessor(false);
   if (response.success) {
-    toast.success(`Preprocessor ${preprocessor.preprocessor.name} run started successfully`);
-    updatePreprocessor(clip.clipId, preprocessor.id, { status: 'running' });
+    toast.success(
+      `Preprocessor ${preprocessor.preprocessor.name} run started successfully`,
+    );
+    updatePreprocessor(clip.clipId, preprocessor.id, { status: "running" });
   } else {
     toast.error(`Failed to run preprocessor ${preprocessor.preprocessor.name}`);
   }
 };
-
-
