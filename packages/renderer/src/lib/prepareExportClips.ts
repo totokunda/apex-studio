@@ -14,7 +14,7 @@ import {
 } from "@/lib/media/utils";
 import type { Canvas, ExportClip } from "@app/export-renderer";
 import { sortClipsForStacking } from "@/lib/clipOrdering";
-import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
+import { remapMaskForMediaDialog } from "@/lib/mask/transformUtils";
 
 export interface PrepareExportClipsContext {
   aspectRatio: { width: number; height: number };
@@ -551,15 +551,6 @@ export function prepareExportClipsForValue(
       }
     }
 
-    if (useOriginalTransform && newClip.masks) {
-      newClip.masks = newClip.masks.map((mask: MaskClipProps) =>
-        remapMaskWithClipTransform(
-          mask,
-          newClip.transform,
-          newClip.originalTransform,
-        ),
-      );
-    }
 
     // Attach a normalized (0–1) transform snapshot describing how this clip
     // occupies the output canvas. This leaves `transform` in pixel space for
@@ -626,7 +617,6 @@ export function prepareExportClipsForValue(
       // then received mismatched `clipTransform` (editor space) and
       // `maskTransform` (export space), which caused mask bounds to be scaled
       // incorrectly for single‑clip exports (notably via `exportClip`).
-      //
       // Fix: resolve a unified export‑space transform and:
       //   1) remap masks into that space
       //   2) update clip transforms to match
@@ -638,9 +628,69 @@ export function prepareExportClipsForValue(
       );
 
       // Remap all mask keyframes into the resolved/export transform space.
-      newClip.masks = newClip.masks.map((mask: MaskClipProps) =>
-        remapMaskWithClipTransform(mask, mask.transform!, resolvedTransform),
-      );
+      if ((newClip as any).masks?.length > 0) {
+        const masks = [...(newClip as any).masks] as MaskClipProps[];
+        
+        const mappedMasks = masks.map((mask: MaskClipProps) => {
+          // Calculate native dimensions for intermediate transform
+          // @ts-ignore
+  
+          // Native transform at origin
+          const nativeTransform: ClipTransform = {
+            x: 0,
+            y: 0,
+            width: target.width,
+            height: target.height,
+            scaleX: 1,
+            scaleY: 1,
+            rotation: newClip.originalTransform?.rotation ?? 0,
+            opacity: 1,
+            cornerRadius: 0,
+          };
+
+          const currentTransform =
+            clipItem.transform ?? nativeTransform;
+          let xOffset = 0;
+          let yOffset = 0;
+          if (clipItem.transform?.crop) {
+            // determine how much to offsetX 
+            const fullWidth = (clipItem.transform.width ?? 0) / clipItem.transform.crop.width;
+            const fullHeight = (clipItem.transform.height ?? 0) / clipItem.transform.crop.height;
+            const offsetX = fullWidth * clipItem.transform.crop.x;
+            const offsetY = fullHeight * clipItem.transform.crop.y;
+            xOffset = offsetX;
+            yOffset = offsetY;
+          }
+
+          // Zeroed current transform (preserve scale/crop but move to origin)
+          
+          const zeroCurrentTransform: ClipTransform = {
+            ...currentTransform as ClipTransform,
+            x:xOffset,
+            y: yOffset,
+            crop: undefined
+          };
+  
+          // Map: Current(0,0) -> Native(0,0)
+          // We explicitly use the calculated zeroCurrentTransform as the source of truth
+          // for the current mask coordinate space, ignoring any potentially stale transform
+          // on the mask object itself.
+          const maskForRemap = { ...mask, transform: undefined };
+
+          const toOriginal = remapMaskForMediaDialog(
+            maskForRemap,
+            zeroCurrentTransform,
+            nativeTransform,
+          ); 
+
+          return toOriginal;
+        });
+
+        newClip.masks = mappedMasks;
+
+      }
+
+      
 
       // Keep clip transforms in the same coordinate system as the masks so
       // WebGL masks (Shape/Lasso/Touch) receive consistent inputs.

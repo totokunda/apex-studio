@@ -204,6 +204,7 @@ interface ShapeBounds {
 
 const applyClipTransform = (
   shapeBounds: ShapeBounds,
+  originalClipTransform?: ClipTransform,
   clipTransform?: ClipTransform,
   maskTransform?: ClipTransform,
 ): ShapeBounds => {
@@ -211,14 +212,30 @@ const applyClipTransform = (
 
   let localX: number, localY: number, scaledWidth: number, scaledHeight: number;
 
+
   if (maskTransform) {
     const baseScaleX = maskTransform.scaleX || 1;
     const baseScaleY = maskTransform.scaleY || 1;
     const scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
     const scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
+    let deltaX = maskTransform.x - (originalClipTransform?.x ?? 0)
+    let deltaY = maskTransform.y - (originalClipTransform?.y ?? 0);
+    if (maskTransform.crop) {
+      let fullWidth = maskTransform.width / maskTransform.crop.width;
+      let fullHeight = maskTransform.height / maskTransform.crop.height;
+      let cropX = fullWidth * maskTransform.crop.x;
+      let cropY = fullHeight * maskTransform.crop.y;
+      deltaX -= cropX;
+      deltaY -= cropY;
+    }
+    if (originalClipTransform) {
+       localX = (shapeBounds.x - maskTransform.x + deltaX) * scaleRatioX;
+       localY = (shapeBounds.y - maskTransform.y + deltaY) * scaleRatioY;
+    } else {
+      localX = (shapeBounds.x) * scaleRatioX;
+      localY = (shapeBounds.y) * scaleRatioY;
+    }
 
-    localX = (shapeBounds.x - maskTransform.x) * scaleRatioX;
-    localY = (shapeBounds.y - maskTransform.y) * scaleRatioY;
 
     scaledWidth = shapeBounds.width * scaleRatioX;
     scaledHeight = shapeBounds.height * scaleRatioY;
@@ -241,14 +258,15 @@ const applyClipTransform = (
     const displayHeight = Math.abs(
       (clipTransform.height || 0) * (clipTransform.scaleY || 1),
     );
+
     localX = cropX * displayWidth + localX * cropW;
     localY = cropY * displayHeight + localY * cropH;
     scaledWidth *= cropW;
     scaledHeight *= cropH;
   }
   const newBounds: ShapeBounds = {
-    x: localX,
-    y: localY,
+    x:localX,
+    y:localY,
     width: scaledWidth,
     height: scaledHeight,
     scaleX: shapeBounds.scaleX,
@@ -355,6 +373,7 @@ export class ShapeMask extends WebGLMaskBase {
     mask: MaskClipProps,
     frame: number,
     clipTransform?: ClipTransform,
+    originalClipTransform?: ClipTransform,
     maskTransform?: ClipTransform,
     debug?: { download?: boolean; annotateBounds?: boolean; filename?: string },
   ): HTMLCanvasElement {
@@ -397,6 +416,7 @@ export class ShapeMask extends WebGLMaskBase {
     //const { x, y, width, height } = keyFrameData.shapeBounds;
     const transformedBounds = applyClipTransform(
       keyFrameData.shapeBounds,
+      originalClipTransform,
       clipTransform,
       maskTransform,
     );

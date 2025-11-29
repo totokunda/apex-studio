@@ -124,6 +124,7 @@ export function applyMasksToCanvas(
           effectiveMask as any,
           frame,
           clip?.transform as any,
+          clip?.originalTransform as any,
           baseTransform as any,
           debug,
         );
@@ -133,6 +134,7 @@ export function applyMasksToCanvas(
           effectiveMask as any,
           frame,
           clip?.transform as any,
+          clip?.originalTransform as any,
           baseTransform as any,
           debug,
         );
@@ -142,6 +144,7 @@ export function applyMasksToCanvas(
           effectiveMask as any,
           frame,
           clip?.transform as any,
+          clip?.originalTransform as any,
           baseTransform as any,
           debug,
         );

@@ -524,7 +524,14 @@ const VideoInput: React.FC<VideoInputProps> = ({
       setContentRatio(null);
       return;
     }
-    const cached = ratioCacheByClipIdRef.current[clip.clipId];
+    const transform = (clip as any)?.transform as ClipTransform | undefined;
+    const crop = transform?.crop;
+    const cropKey = crop
+      ? `${crop.x.toFixed(4)},${crop.y.toFixed(4)},${crop.width.toFixed(4)},${crop.height.toFixed(4)}`
+      : "";
+    const cacheKey = cropKey ? `${clip.clipId}|${cropKey}` : clip.clipId;
+
+    const cached = ratioCacheByClipIdRef.current[cacheKey];
     if (typeof cached === "number" && cached > 0) {
       setContentRatio(cached);
       return;
@@ -538,11 +545,25 @@ const VideoInput: React.FC<VideoInputProps> = ({
     (async () => {
       try {
         const info = await getMediaInfo(src);
-        const w = info?.video?.displayWidth ?? info?.image?.width ?? 0;
-        const h = info?.video?.displayHeight ?? info?.image?.height ?? 0;
+        let w = info?.video?.displayWidth ?? info?.image?.width ?? 0;
+        let h = info?.video?.displayHeight ?? info?.image?.height ?? 0;
+
+        if (
+          crop &&
+          crop.width > 0 &&
+          crop.height > 0 &&
+          Number.isFinite(w) &&
+          Number.isFinite(h) &&
+          w > 0 &&
+          h > 0
+        ) {
+          w = w * crop.width;
+          h = h * crop.height;
+        }
+
         const r = w / h;
         if (!cancelled && Number.isFinite(r) && r > 0) {
-          ratioCacheByClipIdRef.current[clip.clipId] = r;
+          ratioCacheByClipIdRef.current[cacheKey] = r;
           setContentRatio(r);
         }
       } catch {

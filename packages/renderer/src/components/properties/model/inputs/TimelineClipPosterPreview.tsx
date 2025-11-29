@@ -31,6 +31,9 @@ import { getMediaInfo } from "@/lib/media/utils";
 //   return children;
 // }
 
+import { remapMaskForMediaDialog } from "@/lib/mask/transformUtils";
+import { ClipTransform, MaskClipProps } from "@/lib/types";
+
 const TimelineClipPosterPreview: React.FC<{
   clipId?: string;
   clip?: AnyClipProps;
@@ -107,7 +110,21 @@ const TimelineClipPosterPreview: React.FC<{
           (info as any)?.stats?.image?.height ??
           (info as any)?.height ??
           (info as any)?.streams?.[0]?.height;
-        const r = Number(w) / Number(h);
+        let r = Number(w) / Number(h);
+        const transform = (clip as any)?.transform as ClipTransform | undefined;
+        const crop = transform?.crop;
+        if (
+          crop &&
+          crop.width > 0 &&
+          crop.height > 0 &&
+          Number.isFinite(Number(w)) &&
+          Number.isFinite(Number(h)) &&
+          Number(w) > 0 &&
+          Number(h) > 0
+        ) {
+          r = (Number(w) * crop.width) / (Number(h) * crop.height);
+        }
+
         if (!cancelled && Number.isFinite(r) && r > 0) {
           ratioCacheByClipIdRef.current[clip.clipId] = r;
           setContentRatio(r);
@@ -313,31 +330,100 @@ const TimelineClipPosterPreview: React.FC<{
                     effectiveGlobalFrame,
                   );
                   // Use clipOverride only when an explicit override group is provided
-                  const overrideToUse = clipOverride ? clip : undefined;
+                  const overrideToUse = { ...clip };
                   if (
                     overrideToUse?.transform &&
                     !overrideToUse.groupId &&
                     overrideToUse.originalTransform
                   ) {
                     if (overrideToUse.transform.crop) {
-                      // multiply width and height by crop
-                      const cropWidth =
-                        overrideToUse.originalTransform.width *
-                        overrideToUse.transform.crop.width;
-                      const cropHeight =
-                        overrideToUse.originalTransform.height *
-                        overrideToUse.transform.crop.height;
-
                       overrideToUse.transform = {
                         ...overrideToUse.originalTransform,
-                        width: cropWidth,
-                        height: cropHeight,
+                        width: rectWidth,
+                        height: rectHeight,
+                        x: 0,
+                        y: 0,
+                        scaleX: 1,
+                        scaleY: 1,
+                        rotation: 0,
                         crop: overrideToUse.transform.crop,
+                        opacity: 100,
                       };
                     } else {
                       overrideToUse.transform = {
                         ...overrideToUse.originalTransform,
                       };
+                    }
+
+                    // Remap masks
+                    if ((overrideToUse as any).masks?.length > 0) {
+                      const masks = [
+                        ...(overrideToUse as any).masks,
+                      ] as MaskClipProps[];
+
+                      (overrideToUse as any).masks = masks.map(
+                        (mask: MaskClipProps) => {
+                          // Calculate native dimensions for intermediate transform
+                          // @ts-ignore
+                          const nW = clip.mediaWidth || clip.width || 0;
+                          // @ts-ignore
+                          const nH = clip.mediaHeight || clip.height || 0;
+
+                          // Native transform at origin
+                          const nativeTransform: ClipTransform = {
+                            x: 0,
+                            y: 0,
+                            width: nW,
+                            height: nH,
+                            scaleX: 1,
+                            scaleY: 1,
+                            rotation: clip.originalTransform?.rotation ?? 0,
+                            opacity: 1,
+                            cornerRadius: 0,
+                          };
+
+                          // Zeroed current transform (preserve scale/crop but move to origin)
+                          const currentTransform =
+                            clip.transform ?? nativeTransform;
+                          const zeroCurrentTransform: ClipTransform = {
+                            ...currentTransform,
+                            x: 0,
+                            y: 0,
+                          };
+
+                          // Zeroed override transform
+                          const overrideTransform = overrideToUse.transform!;
+                          const zeroOverrideTransform: ClipTransform = {
+                            ...overrideTransform,
+                            x: 0,
+                            y: 0,
+                          };
+
+                          // Map: Current(0,0) -> Native(0,0)
+                          // We explicitly use the calculated zeroCurrentTransform as the source of truth
+                          // for the current mask coordinate space, ignoring any potentially stale transform
+                          // on the mask object itself.
+                          const maskForRemap = { ...mask, transform: undefined };
+
+                          const toOriginal = remapMaskForMediaDialog(
+                            maskForRemap,
+                            zeroCurrentTransform,
+                            nativeTransform,
+                          );
+
+                          // Map: Native(0,0) -> Override(0,0)
+                          const toOverride = remapMaskForMediaDialog(
+                            toOriginal,
+                            nativeTransform,
+                            zeroOverrideTransform,
+                          );
+
+                          // Restore actual transform position
+                          toOverride.transform = { ...overrideTransform };
+
+                          return toOverride;
+                        },
+                      );
                     }
                   }
 

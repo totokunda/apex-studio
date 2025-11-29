@@ -147,10 +147,7 @@ const normalizeFlatPointsForRotation = (
   if (!transform || !points.length) {
     return points.slice();
   }
-  const rotation = getFiniteNumber(transform.rotation);
-  if (Math.abs(rotation) < 1e-6) {
-    return points.slice();
-  }
+
   const normalized: number[] = new Array(points.length);
   for (let i = 0; i < points.length; i += 2) {
     const x = points[i];

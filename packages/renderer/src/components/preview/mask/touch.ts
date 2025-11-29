@@ -172,21 +172,37 @@ export const getCropOffset = (
 
 const applyClipTransformContours = (
   contours: number[][],
+  originalClipTransform?: ClipTransform,
   clipTransform?: ClipTransform,
   maskTransform?: ClipTransform,
 ): number[][] => {
   if (!clipTransform) return contours;
   if (!maskTransform) return contours;
 
-  const deltaX = clipTransform.x - maskTransform.x;
-  const deltaY = clipTransform.y - maskTransform.y;
+  // Mirror ShapeMask semantics: compute a scale ratio and a delta
+  // between mask and original clip, then subtract any mask crop from that delta.
   const baseScaleX = maskTransform.scaleX || 1;
   const baseScaleY = maskTransform.scaleY || 1;
   const scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
   const scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
 
+  let deltaX = maskTransform.x - (originalClipTransform?.x ?? 0);
+  let deltaY = maskTransform.y - (originalClipTransform?.y ?? 0);
+
+  if (maskTransform.crop) {
+    const fullWidth =
+      (maskTransform.width || 0) / (maskTransform.crop.width || 1);
+    const fullHeight =
+      (maskTransform.height || 0) / (maskTransform.crop.height || 1);
+    const cropX = fullWidth * (maskTransform.crop.x || 0);
+    const cropY = fullHeight * (maskTransform.crop.y || 0);
+    deltaX -= cropX;
+    deltaY -= cropY;
+  }
+
   const transformed: number[][] = [];
 
+  // Clip crop (same style as ShapeMask.applyClipTransform)
   let hasCrop = false;
   let cropX = 0;
   let cropY = 0;
@@ -202,19 +218,24 @@ const applyClipTransformContours = (
     cropW = clipTransform.crop.width;
     cropH = clipTransform.crop.height;
 
-    displayWidth = (clipTransform.width || 0) * (clipTransform.scaleX || 1);
-    displayHeight = (clipTransform.height || 0) * (clipTransform.scaleY || 1);
+    displayWidth = Math.abs(
+      (clipTransform.width || 0) * (clipTransform.scaleX || 1),
+    );
+    displayHeight = Math.abs(
+      (clipTransform.height || 0) * (clipTransform.scaleY || 1),
+    );
   }
 
   for (let c = 0; c < contours.length; c++) {
     const contour = contours[c];
     const newPts: number[] = [];
     for (let i = 0; i < contour.length; i += 2) {
-      let x = contour[i] + deltaX - clipTransform.x;
-      let y = contour[i + 1] + deltaY - clipTransform.y;
+      let x: number;
+      let y: number;
 
-      x = x * scaleRatioX;
-      y = y * scaleRatioY;
+      // Local to mask, then shifted by delta into clip space and scaled
+      x = (contour[i] - maskTransform.x + deltaX) * scaleRatioX;
+      y = (contour[i + 1] - maskTransform.y + deltaY) * scaleRatioY;
 
       if (hasCrop) {
         x = cropX * displayWidth + x * cropW;
@@ -336,6 +357,7 @@ export class TouchMask extends WebGLMaskBase {
     mask: MaskClipProps,
     frame: number,
     clipTransform?: ClipTransform,
+    originalClipTransform?: ClipTransform,
     maskTransform?: ClipTransform,
     debug?: { download?: boolean; annotateBounds?: boolean; filename?: string },
   ): HTMLCanvasElement {
@@ -382,6 +404,7 @@ export class TouchMask extends WebGLMaskBase {
     const rawContours: number[][] = keyFrameData.contours as number[][];
     const transformedContours = applyClipTransformContours(
       rawContours,
+      originalClipTransform,
       clipTransform,
       maskTransform,
     );

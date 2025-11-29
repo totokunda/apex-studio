@@ -18,9 +18,6 @@ import { BaseClipApplicator } from "./apply/base";
 import { useClipStore, getLocalFrame } from "@/lib/clip";
 import { useWebGLMask } from "../mask/useWebGLMask";
 import { useInputControlsStore } from "@/lib/inputControl";
-import ShapeMaskPreview from "./ShapeMaskPreview";
-import { getCropOffset } from "@/components/preview/mask/touch";
-import { MaskClipProps, MaskShapeTool, MaskData } from "@/lib/types";
 
 const ImagePreview: React.FC<
   ImageClipProps & {
@@ -126,7 +123,7 @@ const ImagePreview: React.FC<
     focusFrame: focusFrame,
     masks: clip?.masks || [],
     disabled: tool === "mask" && !inputMode,
-    clip: clip,
+    clip: clip
   });
 
   const selectedSrc = useMemo(() => {
@@ -726,6 +723,7 @@ const ImagePreview: React.FC<
         });
       }
     };
+
     const persistTransform = () => {
       const node = imageRef.current;
       if (!node) return;
@@ -740,7 +738,7 @@ const ImagePreview: React.FC<
         scaleX: 1,
         scaleY: 1,
         rotation: node.rotation(),
-      });
+      }, true, true);
       node.width(newWidth);
       node.height(newHeight);
       node.scaleX(1);

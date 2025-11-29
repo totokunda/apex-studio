@@ -11,6 +11,7 @@ interface WebGLMaskProps {
   disabled: boolean;
   debug?: { download?: boolean; annotateBounds?: boolean; filename?: string };
   clip?: AnyClipProps;
+  useOriginalTransform?: boolean;
 }
 
 export function useWebGLMask({
@@ -19,6 +20,7 @@ export function useWebGLMask({
   disabled,
   debug,
   clip,
+  useOriginalTransform = true,
 }: WebGLMaskProps) {
   // Create an instance-specific WebGL context key so multiple previews don't share the same GL canvas
   const maskContextKeyRef = useRef<string>(
@@ -106,6 +108,7 @@ export function useWebGLMask({
             effectiveMask,
             frame,
             clip?.transform,
+            useOriginalTransform ? clip?.originalTransform : undefined,
             baseTransform,
             debug,
           );
@@ -127,6 +130,7 @@ export function useWebGLMask({
             effectiveMask,
             frame,
             clip?.transform,
+            useOriginalTransform ? clip?.originalTransform : undefined,
             baseTransform,
             debug,
           );
@@ -146,6 +150,7 @@ export function useWebGLMask({
             effectiveMask,
             frame,
             clip?.transform,
+            useOriginalTransform ? clip?.originalTransform : undefined,
             baseTransform,
             debug,
           );

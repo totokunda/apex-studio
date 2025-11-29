@@ -423,6 +423,7 @@ export function clipSignature(clip: AnyClipProps): string {
       n(clip.clipPadding),
       n(clip.width),
       n(clip.height),
+
       clip.hidden ? "1" : "0",
       clip.groupId ?? "",
       encodeTransform(clip.transform),
@@ -588,8 +589,21 @@ function encodeTransform(t: ClipTransform | undefined): string {
     n(t.rotation),
     n(t.cornerRadius),
     n(t.opacity),
+    encodeCrop(t.crop),
   ].join(",");
 }
+
+function encodeCrop(c: { x: number; y: number; width: number; height: number } | undefined): string {
+  if (!c) return "";
+  return [
+    n(c.x),
+    n(c.y),
+    n(c.width),
+    n(c.height),
+  ].join(",");
+}
+
+
 
 function encodeLineTransform(t: DrawingLineTransform | undefined): string {
   if (!t) return "";
@@ -658,6 +672,13 @@ function masksSignature(arr: MaskClipProps[] | undefined): string {
       m.tool,
       n(m.featherAmount),
       n(m.brushSize),
+      encodeTransform(m.transform),
+      m.backgroundColor ?? "",
+      n(m.backgroundOpacity),
+      m.backgroundColorEnabled ? "1" : "0",
+      m.maskColor ?? "",
+      n(m.maskOpacity),
+      m.maskColorEnabled ? "1" : "0",
       m.isTracked ? "1" : "0",
       m.inverted ? "1" : "0",
       kfCount.toString(),

@@ -1,7 +1,7 @@
 import React, { useMemo, useEffect, useState, useRef } from "react";
 import { Group, Circle, Line } from "react-konva";
 import { useMask, useMaskStore } from "@/lib/mask";
-import { PreprocessorClipType } from "@/lib/types";
+import { ClipTransform, PreprocessorClipType } from "@/lib/types";
 import { useControlsStore } from "@/lib/control";
 import { useClipStore } from "@/lib/clip";
 import { getMediaInfoCached } from "@/lib/media/utils";
@@ -9,6 +9,7 @@ import Konva from "konva";
 import { useViewportStore } from "@/lib/viewport";
 import _ from "lodash";
 import { getLocalFrame } from "@/lib/clip";
+import { getCropOffset } from "@/components/preview/mask/touch";
 
 interface TouchMaskPreviewProps {
   clip: PreprocessorClipType;
@@ -63,6 +64,73 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({
     () => (clip.masks || []).find((m) => m.tool === "touch"),
     [clip.masks],
   );
+
+  const getFiniteNumber = (value: number | undefined | null): number =>
+    Number.isFinite(value) ? (value as number) : 0;
+
+  const normalizeMaskPointForRotation = (
+    x: number,
+    y: number,
+    transform?: ClipTransform | null,
+  ): { x: number; y: number } => {
+    if (!transform) return { x, y };
+
+    const { offsetX, offsetY } = getCropOffset(transform);
+    const rotation = getFiniteNumber(transform.rotation);
+    const originX = getFiniteNumber(transform.x);
+    const originY = getFiniteNumber(transform.y);
+
+    // No rotation: encode only the crop offset into mask space
+    if (Math.abs(rotation) < 1e-6) {
+      return {
+        x: x - originX + offsetX,
+        y: y - originY + offsetY,
+      };
+    }
+
+    const angleRad = (rotation * Math.PI) / 180;
+    const dx = x - originX;
+    const dy = y - originY;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    const unrotatedX = cos * dx + sin * dy;
+    const unrotatedY = -sin * dx + cos * dy;
+
+    return {
+      x: unrotatedX + offsetX,
+      y: unrotatedY + offsetY,
+    };
+  };
+
+  const denormalizeMaskPointForRotation = (
+    x: number,
+    y: number,
+    transform?: ClipTransform | null,
+  ): { x: number; y: number } => {
+    if (!transform) return { x, y };
+
+    // Inverse of the normalization used when storing mask points:
+    // remove the crop offset in mask-space, then re-apply rotation
+    // about the clip origin.
+    const { offsetX, offsetY } = getCropOffset(transform);
+    const baseX = x - offsetX;
+    const baseY = y - offsetY;
+    const originX = getFiniteNumber(transform.x);
+    const originY = getFiniteNumber(transform.y);
+
+    const rotation = getFiniteNumber(transform.rotation);
+    if (Math.abs(rotation) < 1e-6) {
+      return { x: baseX + originX, y: baseY + originY };
+    }
+    const angleRad = (rotation * Math.PI) / 180;
+    const dx = baseX;
+    const dy = baseY;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    const rotatedX = originX + cos * dx - sin * dy;
+    const rotatedY = originY + sin * dx + cos * dy;
+    return { x: rotatedX, y: rotatedY };
+  };
 
   // Load existing stored contours and data on mount or when frame changes
   useEffect(() => {
@@ -136,9 +204,24 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({
   );
 
   const points = useMemo<Array<{ x: number; y: number }>>(() => {
-    if (!touchPoints) return [];
-    return touchPoints.map((point) => ({ x: point.x, y: point.y }));
-  }, [touchPoints]);
+    if (!touchPoints || touchPoints.length === 0) return [];
+
+    // Stored touch points are in the same normalized clip space as other masks.
+    // For the mask API we need display/canvas coordinates, so convert back to
+    // world space using the current clip transform.
+    if (!clipTransform) {
+      return touchPoints.map((point) => ({ x: point.x, y: point.y }));
+    }
+
+    return touchPoints.map((point) => {
+      const world = denormalizeMaskPointForRotation(
+        point.x,
+        point.y,
+        clipTransform,
+      );
+      return { x: world.x, y: world.y };
+    });
+  }, [touchPoints, clipTransform]);
 
   const pointLabels = useMemo<Array<number>>(() => {
     if (!touchPoints) return [];
@@ -205,11 +288,38 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({
       if (lastDataFrameRef.current !== currentFrame) {
         return;
       }
-      setContours(data.contours);
+
+      // Contours from the mask API are in display/canvas coordinates that
+      // already account for the clip transform. To keep all stored mask
+      // geometry in the same clip‑relative space as lasso/shape, project the
+      // contours back into mask space using the inverse of the clip transform.
+      const normalizedContours =
+        clipTransform && data.contours
+          ? data.contours.map((contour) => {
+              const out: number[] = [];
+              for (let i = 0; i < contour.length; i += 2) {
+                const x = contour[i];
+                const y = contour[i + 1];
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                  out.push(x, y);
+                  continue;
+                }
+                const p = normalizeMaskPointForRotation(
+                  x,
+                  y,
+                  clipTransform,
+                );
+                out.push(p.x, p.y);
+              }
+              return out;
+            })
+          : data.contours;
+
+      setContours(normalizedContours);
       setRenderedTouchPoints(touchPoints || []);
 
       try {
-        // Store contours, touch points, and lasso strokes in mask keyframes
+            // Store contours, touch points, and lasso strokes in mask keyframes
         const masks = clip.masks || [];
         const currentMask = masks.find((m) => m.tool === "touch");
 
@@ -285,7 +395,10 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({
               return; // Already stored, skip
             }
 
-            const contoursChanged = !_.isEqual(existingContours, data.contours);
+            const contoursChanged = !_.isEqual(
+              existingContours,
+              normalizedContours,
+            );
             const touchPointsChanged =
               targetKeyframe === currentFrame &&
               hasIncomingTouchPoints &&
@@ -300,13 +413,13 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({
               if (updatedKeyframes instanceof Map) {
                 updatedKeyframes.set(targetKeyframe, {
                   ...baseMaskData,
-                  contours: data.contours,
+                  contours: normalizedContours,
                   touchPoints: effectiveTouchPoints,
                 });
               } else {
                 updatedKeyframes[targetKeyframe] = {
                   ...baseMaskData,
-                  contours: data.contours,
+                  contours: normalizedContours,
                   touchPoints: effectiveTouchPoints,
                 };
               }

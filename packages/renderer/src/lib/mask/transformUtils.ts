@@ -383,3 +383,183 @@ export const projectTouchPointsBetweenTransforms = (
   }
   return transformTouchPoints(points, from, to);
 };
+
+/**
+ * Remap mask for MediaDialog - handles the case where the input media may have
+ * different dimensions than BASE_LONG_SIDE (600), while keeping the mask in the
+ * exact same relative visual position.
+ *
+ * This function:
+ * 1. Uses the mask's stored transform (or originalClipTransform) as the source coordinate system
+ * 2. Calculates the relative position of shape bounds within the source transform
+ * 3. Maps that relative position to the new transform's coordinate space
+ * 4. Scales dimensions proportionally to maintain visual coverage
+ */
+export const remapMaskForMediaDialog = (
+  mask: MaskClipProps,
+  originalClipTransform: ClipTransform,
+  newClipTransform: ClipTransform,
+): MaskClipProps => {
+  // Use the mask's stored transform if available, otherwise use the originalClipTransform
+  const sourceTransform = (mask.transform as ClipTransform) || originalClipTransform;
+
+  // If transforms are effectively the same, just update the mask's transform reference
+  if (transformsEqual(sourceTransform, newClipTransform)) {
+    return { ...mask, transform: { ...newClipTransform } };
+  }
+
+  // Get uncropped transforms for proper coordinate calculation
+  const fromUncropped = getUncroppedTransform(sourceTransform);
+  const toUncropped = getUncroppedTransform(newClipTransform);
+
+  // Calculate the actual rendered sizes of source and target
+  const fromScaleX = sanitizeScale(fromUncropped.scaleX);
+  const fromScaleY = sanitizeScale(fromUncropped.scaleY);
+  const fromWidth = (fromUncropped.width ?? 0) * fromScaleX;
+  const fromHeight = (fromUncropped.height ?? 0) * fromScaleY;
+
+  const toScaleX = sanitizeScale(toUncropped.scaleX);
+  const toScaleY = sanitizeScale(toUncropped.scaleY);
+  const toWidth = (toUncropped.width ?? fromUncropped.width ?? 0) * toScaleX;
+  const toHeight = (toUncropped.height ?? fromUncropped.height ?? 0) * toScaleY;
+
+  // Calculate scale ratios between source and target
+  const scaleRatioX = fromWidth > 0 ? toWidth / fromWidth : 1;
+  const scaleRatioY = fromHeight > 0 ? toHeight / fromHeight : 1;
+
+  // Transform shapeBounds for MediaDialog
+  const transformShapeBoundsForDialog = (
+    bounds: NonNullable<MaskData["shapeBounds"]>,
+  ): NonNullable<MaskData["shapeBounds"]> => {
+    // Calculate relative position within source transform (0-1 normalized)
+    const relX = fromWidth > 0 ? (bounds.x - (fromUncropped.x ?? 0)) / fromWidth : 0;
+    const relY = fromHeight > 0 ? (bounds.y - (fromUncropped.y ?? 0)) / fromHeight : 0;
+
+    // Map relative position to target transform coordinate space
+    const newX = (toUncropped.x ?? 0) + relX * toWidth;
+    const newY = (toUncropped.y ?? 0) + relY * toHeight;
+
+    // Scale dimensions proportionally
+    const newWidth = bounds.width * scaleRatioX;
+    const newHeight = bounds.height * scaleRatioY;
+
+    // Handle rotation delta
+    const fromRotation = isFiniteNumber(fromUncropped.rotation) ? fromUncropped.rotation : 0;
+    const toRotation = isFiniteNumber(toUncropped.rotation) ? toUncropped.rotation : 0;
+    const rotationDelta = toRotation - fromRotation;
+    const newRotation = (bounds.rotation ?? 0) + rotationDelta;
+
+    return {
+      ...bounds,
+      x: newX,
+      y: newY,
+      width: newWidth,
+      height: newHeight,
+      rotation: newRotation,
+    };
+  };
+
+  // Transform flat points (for lasso)
+  const transformFlatPointsForDialog = (points: number[]): number[] => {
+    if (!Array.isArray(points) || points.length === 0) return points.slice();
+
+    const next: number[] = new Array(points.length);
+    for (let i = 0; i < points.length; i += 2) {
+      const x = points[i];
+      const y = points[i + 1];
+      if (!isFiniteNumber(x) || !isFiniteNumber(y)) {
+        next[i] = x;
+        next[i + 1] = y;
+        continue;
+      }
+      // Calculate relative position and map to target space
+      const relX = fromWidth > 0 ? (x - (fromUncropped.x ?? 0)) / fromWidth : 0;
+      const relY = fromHeight > 0 ? (y - (fromUncropped.y ?? 0)) / fromHeight : 0;
+      next[i] = (toUncropped.x ?? 0) + relX * toWidth;
+      next[i + 1] = (toUncropped.y ?? 0) + relY * toHeight;
+    }
+    return next;
+  };
+
+  // Transform contours
+  const transformContoursForDialog = (contours: number[][]): number[][] => {
+    if (!Array.isArray(contours) || contours.length === 0) return contours.slice();
+    return contours.map((contour) => transformFlatPointsForDialog(contour ?? []));
+  };
+
+  // Transform touch points
+  const transformTouchPointsForDialog = (
+    points: Array<{ x: number; y: number; label: 0 | 1 }>,
+  ): Array<{ x: number; y: number; label: 0 | 1 }> => {
+    if (!Array.isArray(points) || points.length === 0) return points.slice();
+    return points.map((point) => {
+      if (!isFiniteNumber(point.x) || !isFiniteNumber(point.y)) return point;
+      const relX = fromWidth > 0 ? (point.x - (fromUncropped.x ?? 0)) / fromWidth : 0;
+      const relY = fromHeight > 0 ? (point.y - (fromUncropped.y ?? 0)) / fromHeight : 0;
+      return {
+        ...point,
+        x: (toUncropped.x ?? 0) + relX * toWidth,
+        y: (toUncropped.y ?? 0) + relY * toHeight,
+      };
+    });
+  };
+
+  // Transform MaskData for a single keyframe
+  const transformMaskDataForDialog = (data: MaskData): MaskData => {
+    const nextData: MaskData = { ...data };
+
+    if (data.shapeBounds) {
+      nextData.shapeBounds = transformShapeBoundsForDialog(data.shapeBounds);
+    }
+    if (data.lassoPoints) {
+      nextData.lassoPoints = transformFlatPointsForDialog(data.lassoPoints);
+    }
+    if (data.contours) {
+      nextData.contours = transformContoursForDialog(data.contours);
+    }
+    if (data.touchPoints) {
+      nextData.touchPoints = transformTouchPointsForDialog(data.touchPoints);
+    }
+    if (data.touchBox) {
+      const relX1 = fromWidth > 0 ? (data.touchBox.x1 - (fromUncropped.x ?? 0)) / fromWidth : 0;
+      const relY1 = fromHeight > 0 ? (data.touchBox.y1 - (fromUncropped.y ?? 0)) / fromHeight : 0;
+      const relX2 = fromWidth > 0 ? (data.touchBox.x2 - (fromUncropped.x ?? 0)) / fromWidth : 0;
+      const relY2 = fromHeight > 0 ? (data.touchBox.y2 - (fromUncropped.y ?? 0)) / fromHeight : 0;
+      nextData.touchBox = {
+        x1: (toUncropped.x ?? 0) + relX1 * toWidth,
+        y1: (toUncropped.y ?? 0) + relY1 * toHeight,
+        x2: (toUncropped.x ?? 0) + relX2 * toWidth,
+        y2: (toUncropped.y ?? 0) + relY2 * toHeight,
+      };
+    }
+
+    return nextData;
+  };
+
+  // Process all keyframes
+  let keyframes: MaskClipProps["keyframes"];
+  if (mask.keyframes instanceof Map) {
+    const updated = new Map<number, MaskData>();
+    mask.keyframes.forEach((value, key) => {
+      updated.set(key, transformMaskDataForDialog(value));
+    });
+    keyframes = updated;
+  } else {
+    const updated: Record<number, MaskData> = {};
+    Object.keys(mask.keyframes).forEach((key) => {
+      const numericKey = Number(key);
+      const frameData = (mask.keyframes as Record<number, MaskData>)[numericKey];
+      if (frameData) {
+        updated[numericKey] = transformMaskDataForDialog(frameData);
+      }
+    });
+    keyframes = updated;
+  }
+
+  return {
+    ...mask,
+    keyframes,
+    transform: { ...newClipTransform },
+    lastModified: mask.lastModified,
+  };
+};

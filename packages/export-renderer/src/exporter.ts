@@ -40,6 +40,12 @@ type TransformLike = {
   rotation?: number;
   cornerRadius?: number;
   opacity?: number;
+  crop?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 };
 
 type NormalizedTransformLike = {
@@ -758,7 +764,6 @@ export async function exportSequence(
           audioOptions?.format ?? "mp3",
           (filename ?? "temp_audio") + "." + (audioOptions?.format ?? "mp3"),
         );
-        console.log(outPath, "outPath");
         if (outPath) audioPath = outPath;
       }
     }
@@ -887,12 +892,11 @@ export async function exportClip(
   const w = Math.max(1, (inferredWidth || 1920) * cropWidthRatio);
   const h = Math.max(1, (inferredHeight || 1080) * cropHeightRatio);
 
+
   const renderer = new KonvaExportRenderer({
     width: w,
     height: h,
   });
-
-  console.log(w, h);
 
   // Local duration relative to this clip
   const clipStartGlobal = Number(workingClip.startFrame ?? 0);
@@ -1212,7 +1216,10 @@ export async function exportClip(
 
     const encoder = new FfmpegFrameEncoder({
       filename: filename ?? "output.mp4",
-      ...(encoderOptions ?? {}),
+      ...({
+        ...encoderOptions ? encoderOptions : {},
+        resolution: { width: w, height: h },
+      }),
     });
     if (!encoder)
       throw new Error(

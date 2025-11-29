@@ -44,7 +44,7 @@ import { CircularAudioVisualizer } from "../properties/model/inputs/CircularAudi
 import ShapePreview from "../preview/clips/ShapePreview";
 import TextPreview from "../preview/clips/TextPreview";
 import DrawingPreview from "../preview/clips/DrawingPreview";
-import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
+import { remapMaskForMediaDialog } from "@/lib/mask/transformUtils";
 
 interface PartialTimelineSelectorProps {
   mode: "frame" | "range";
@@ -1118,24 +1118,94 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                           overrideToUse.transform = t;
                         }
 
-                        if (
-                          (overrideToUse.type === "video" ||
-                            overrideToUse.type === "image") &&
-                          overrideToUse.transform &&
-                          clip.transform &&
-                          (overrideToUse as any).masks?.length > 0
-                        ) {
-                          const masks = (overrideToUse as any)
-                            .masks as MaskClipProps[];
-                          (overrideToUse as any).masks = masks.map(
-                            (mask: MaskClipProps) =>
-                              remapMaskWithClipTransform(
-                                mask,
-                                clip.transform!,
-                                overrideToUse.transform!,
-                              ),
-                          );
+                        if ((overrideToUse as any).masks?.length > 0) {
+                          const masks = [...(overrideToUse as any).masks] as MaskClipProps[];
+                          
+                          (overrideToUse as any).masks = masks.map((mask: MaskClipProps) => {
+                            // Calculate native dimensions for intermediate transform
+                            // @ts-ignore
+                            const nW = clip.mediaWidth || clip.width || 0;
+                            // @ts-ignore
+                            const nH = clip.mediaHeight || clip.height || 0;
+
+                            // Native transform at origin
+                            const nativeTransform: ClipTransform = {
+                              x: 0,
+                              y: 0,
+                              width: nW,
+                              height: nH,
+                              scaleX: 1,
+                              scaleY: 1,
+                              rotation: clip.originalTransform?.rotation ?? 0,
+                              opacity: 1,
+                              cornerRadius: 0,
+                            };
+
+                            // Zeroed current transform (preserve scale/crop but move to origin)
+                            const currentTransform =
+                              clip.transform ?? nativeTransform;
+                            const zeroCurrentTransform: ClipTransform = {
+                              ...currentTransform,
+                              x: 0,
+                              y: 0,
+                            };
+
+                            // Zeroed override transform
+                            const overrideTransform = overrideToUse.transform!;
+
+                            let xOffset = 0;
+                            let yOffset = 0;
+
+                            if (clip.transform?.crop) {
+                              // determine how much to offsetX 
+                              const fullWidth = clip.transform.width / clip.transform.crop.width;
+                              const fullHeight = clip.transform.height / clip.transform.crop.height;
+                              const offsetX = fullWidth * clip.transform.crop.x;
+                              const offsetY = fullHeight * clip.transform.crop.y;
+                              xOffset = -offsetX;
+                              yOffset = -offsetY;
+                            }
+
+                            
+                            
+                            const zeroOverrideTransform: ClipTransform = {
+                              ...overrideTransform,
+                              x: xOffset,
+                              y: yOffset,
+                                                            
+                            };
+
+                            // Map: Current(0,0) -> Native(0,0)
+                            // We explicitly use the calculated zeroCurrentTransform as the source of truth
+                            // for the current mask coordinate space, ignoring any potentially stale transform
+                            // on the mask object itself.
+                            const maskForRemap = { ...mask, transform: undefined };
+                            
+                            const toOriginal = remapMaskForMediaDialog(
+                              maskForRemap,
+                              zeroCurrentTransform,
+                              nativeTransform,
+                            );
+
+                            // Map: Native(0,0) -> Override(0,0)
+                            const toOverride = remapMaskForMediaDialog(
+                              toOriginal,
+                              nativeTransform,
+                              zeroOverrideTransform,
+                            );
+
+                            
+                            
+                            // Restore actual transform position
+                            toOverride.transform = { ...overrideTransform };
+                            toOverride.transform
+
+                            return toOverride;
+                          });
                         }
+
+
+                       
 
                         if (overrideToUse?.clipId?.startsWith("media:")) {
                           overrideToUse.transform = undefined;

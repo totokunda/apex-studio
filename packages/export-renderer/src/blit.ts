@@ -10,7 +10,6 @@ import { Shape } from "konva/lib/Shape.js";
 import { applyWebGLFilters } from "./webgl-filters/apply";
 import { applyMasksToCanvas } from "./masks/apply";
 import type { WrappedCanvas } from "mediabunny";
-import { remapMaskWithClipTransform } from "../../renderer/src/lib/mask/transformUtils";
 
 import Konva from "konva";
 //@ts-ignore

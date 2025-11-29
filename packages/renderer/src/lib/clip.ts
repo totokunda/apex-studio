@@ -22,9 +22,9 @@ import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS, IMAGE_EXTS } from "./settings";
 import { getMediaInfo } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
-import { remapMaskWithClipTransform } from "@/lib/mask/transformUtils";
 import { ManifestWithType, UIInput } from "./manifest/api";
 import { useInputControlsStore } from "./inputControl";
+import { remapMaskWithClipTransform } from "./mask/transformUtils";
 export const PREPROCESSOR_BAR_HEIGHT = 24;
 
 interface ClipStore {
@@ -40,7 +40,7 @@ interface ClipStore {
   getClipsByType: (type: ClipType) => AnyClipProps[];
   getClipTransform: (clipId: string) => ClipTransform | undefined;
   getUncroppedClipTransform: (clipId: string) => ClipTransform | undefined;
-  setClipTransform: (clipId: string, transform: Partial<ClipTransform>) => void;
+  setClipTransform: (clipId: string, transform: Partial<ClipTransform>, applyToMasks?: boolean, remapMasks?: boolean) => void;
   setClips: (clips: AnyClipProps[]) => void;
   addClip: (clip: AnyClipProps) => void;
   removeClip: (clipId: string) => void;
@@ -577,7 +577,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       opacity: clip.transform?.opacity ?? 100,
     };
   },
-  setClipTransform: (clipId: string, transform: Partial<ClipTransform>) =>
+  setClipTransform: (clipId: string, transform: Partial<ClipTransform>, applyToMasks: boolean = false, remapMasks: boolean = false) =>
     set((state) => {
       const index = state.clips.findIndex((c) => c.clipId === clipId);
       if (index === -1) return { clips: state.clips };
@@ -599,10 +599,25 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
       const updatedClip: AnyClipProps = { ...current, transform: next };
 
+      // give the transform to all masks if applyToMasks is true
+      if (applyToMasks && Object.keys(current).includes("masks")) {
+        let  masks = [...(current as VideoClipProps | ImageClipProps).masks];
+        masks = masks.map((mask: MaskClipProps) => {
+          if (remapMasks) {
+            mask = remapMaskWithClipTransform(mask, mask.transform as ClipTransform, next);
+          } else {
+            mask.transform = { ...next };
+          }
+          return mask;
+        });
+        (updatedClip as VideoClipProps | ImageClipProps).masks = masks;
+      }
+
       if (!current.originalTransform) {
         updatedClip.originalTransform = { ...next };
       }
 
+    
       const newClips = [...state.clips];
       newClips[index] = updatedClip;
       const resolvedClips = resolveOverlaps(newClips);

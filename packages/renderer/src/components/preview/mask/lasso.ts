@@ -107,29 +107,46 @@ const fragmentShader = `
 
 const applyClipTransform = (
   lassoPoints: number[],
+  originalClipTransform?: ClipTransform,
   clipTransform?: ClipTransform,
   maskTransform?: ClipTransform,
 ): number[] => {
   if (!clipTransform) return lassoPoints;
 
+  // Match the same coordinate handling as ShapeMask:
+  // - Derive a scale ratio between clip and mask
+  // - Compute a delta between maskTransform and originalClipTransform
+  // - Subtract any mask crop from that delta
+
   let scaleRatioX = 1;
   let scaleRatioY = 1;
-  let offsetX = 0;
-  let offsetY = 0;
+  let deltaX = 0;
+  let deltaY = 0;
 
   if (maskTransform) {
     const baseScaleX = maskTransform.scaleX || 1;
     const baseScaleY = maskTransform.scaleY || 1;
     scaleRatioX = (clipTransform.scaleX || 1) / baseScaleX;
     scaleRatioY = (clipTransform.scaleY || 1) / baseScaleY;
-    offsetX = maskTransform.x;
-    offsetY = maskTransform.y;
+
+    deltaX = maskTransform.x - (originalClipTransform?.x ?? 0);
+    deltaY = maskTransform.y - (originalClipTransform?.y ?? 0);
+
+    // If the mask itself is cropped, subtract that crop offset from the delta,
+    // same idea as in ShapeMask.applyClipTransform.
+    if (maskTransform.crop) {
+      const fullWidth =
+        (maskTransform.width || 0) / (maskTransform.crop.width || 1);
+      const fullHeight =
+        (maskTransform.height || 0) / (maskTransform.crop.height || 1);
+      const cropX = fullWidth * (maskTransform.crop.x || 0);
+      const cropY = fullHeight * (maskTransform.crop.y || 0);
+      deltaX -= cropX;
+      deltaY -= cropY;
+    }
   }
 
-  if (!maskTransform && !clipTransform.crop) {
-    return lassoPoints;
-  }
-
+  // Now account for clip cropping (like ShapeMask does at the end)
   let hasCrop = false;
   let cropX = 0;
   let cropY = 0;
@@ -145,8 +162,12 @@ const applyClipTransform = (
     cropW = clipTransform.crop.width;
     cropH = clipTransform.crop.height;
 
-    displayWidth = (clipTransform.width || 0) * (clipTransform.scaleX || 1);
-    displayHeight = (clipTransform.height || 0) * (clipTransform.scaleY || 1);
+    displayWidth = Math.abs(
+      (clipTransform.width || 0) * (clipTransform.scaleX || 1),
+    );
+    displayHeight = Math.abs(
+      (clipTransform.height || 0) * (clipTransform.scaleY || 1),
+    );
   }
 
   const newLassoPoints: number[] = [];
@@ -155,9 +176,11 @@ const applyClipTransform = (
     let y: number;
 
     if (maskTransform) {
-      x = (lassoPoints[i] - offsetX) * scaleRatioX;
-      y = (lassoPoints[i + 1] - offsetY) * scaleRatioY;
+      // Local point relative to the mask, plus our delta, then scaled into clip space
+      x = (lassoPoints[i] - maskTransform.x + deltaX) * scaleRatioX;
+      y = (lassoPoints[i + 1] - maskTransform.y + deltaY) * scaleRatioY;
     } else {
+      // Already in clip space; just use raw coordinates
       x = lassoPoints[i];
       y = lassoPoints[i + 1];
     }
@@ -281,6 +304,7 @@ export class LassoMask extends WebGLMaskBase {
     mask: MaskClipProps,
     frame: number,
     clipTransform?: ClipTransform,
+    originalClipTransform?: ClipTransform,
     maskTransform?: ClipTransform,
     debug?: { download?: boolean; annotateBounds?: boolean; filename?: string },
   ): HTMLCanvasElement {
@@ -323,6 +347,7 @@ export class LassoMask extends WebGLMaskBase {
     const lassoPoints = keyFrameData.lassoPoints as number[];
     const transformedLassoPoints = applyClipTransform(
       lassoPoints,
+      originalClipTransform,
       clipTransform,
       maskTransform,
     );

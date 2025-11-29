@@ -447,7 +447,7 @@ const CropButton = () => {
       height: data.transformHeight,
       x: data.transformX,
       y: data.transformY,
-    });
+    }, true);
   };
 
   return (
