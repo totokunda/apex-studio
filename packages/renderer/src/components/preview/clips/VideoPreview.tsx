@@ -1380,7 +1380,7 @@ const VideoPreview: React.FC<
         scaleX: 1,
         scaleY: 1,
         rotation: node.rotation(),
-      });
+      }, true, true);
       node.width(newWidth);
       node.height(newHeight);
       node.scaleX(1);
