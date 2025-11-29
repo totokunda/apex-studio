@@ -24,7 +24,7 @@ import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
 import { ManifestWithType, UIInput } from "./manifest/api";
 import { useInputControlsStore } from "./inputControl";
-import { remapMaskWithClipTransform } from "./mask/transformUtils";
+import { remapMaskWithClipTransformProportional } from "./mask/clipTransformUtils";
 export const PREPROCESSOR_BAR_HEIGHT = 24;
 
 interface ClipStore {
@@ -604,7 +604,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         let  masks = [...(current as VideoClipProps | ImageClipProps).masks];
         masks = masks.map((mask: MaskClipProps) => {
           if (remapMasks) {
-            mask = remapMaskWithClipTransform(mask, mask.transform as ClipTransform, next);
+            mask = remapMaskWithClipTransformProportional(mask, mask.transform as ClipTransform, next);
           } else {
             mask.transform = { ...next };
           }

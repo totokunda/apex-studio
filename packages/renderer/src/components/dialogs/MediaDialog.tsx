@@ -44,7 +44,7 @@ import { CircularAudioVisualizer } from "../properties/model/inputs/CircularAudi
 import ShapePreview from "../preview/clips/ShapePreview";
 import TextPreview from "../preview/clips/TextPreview";
 import DrawingPreview from "../preview/clips/DrawingPreview";
-import { remapMaskForMediaDialog } from "@/lib/mask/transformUtils";
+import { remapMaskWithClipTransformProportional } from "@/lib/mask/clipTransformUtils";
 
 interface PartialTimelineSelectorProps {
   mode: "frame" | "range";
@@ -1156,7 +1156,9 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                             let xOffset = 0;
                             let yOffset = 0;
 
-                            if (clip.transform?.crop) {
+                            const realCrop = clip.transform?.crop && (clip.transform.crop.width != 1 || clip.transform.crop.height != 1 || clip.transform.crop.x != 0 || clip.transform.crop.y != 0);
+
+                            if (realCrop && clip.transform?.crop) {
                               // determine how much to offsetX 
                               const fullWidth = clip.transform.width / clip.transform.crop.width;
                               const fullHeight = clip.transform.height / clip.transform.crop.height;
@@ -1170,7 +1172,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                             
                             const zeroOverrideTransform: ClipTransform = {
                               ...overrideTransform,
-                              x: xOffset,
+                              x: xOffset ,
                               y: yOffset,
                                                             
                             };
@@ -1181,14 +1183,14 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                             // on the mask object itself.
                             const maskForRemap = { ...mask, transform: undefined };
                             
-                            const toOriginal = remapMaskForMediaDialog(
+                            const toOriginal = remapMaskWithClipTransformProportional(
                               maskForRemap,
                               zeroCurrentTransform,
                               nativeTransform,
                             );
 
                             // Map: Native(0,0) -> Override(0,0)
-                            const toOverride = remapMaskForMediaDialog(
+                            const toOverride = remapMaskWithClipTransformProportional(
                               toOriginal,
                               nativeTransform,
                               zeroOverrideTransform,

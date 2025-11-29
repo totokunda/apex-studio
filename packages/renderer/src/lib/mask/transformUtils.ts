@@ -14,14 +14,15 @@ const transformsEqual = (a?: ClipTransform, b?: ClipTransform): boolean => {
     a.scaleY === b.scaleY &&
     a.rotation === b.rotation &&
     a.cornerRadius === b.cornerRadius &&
-    a.opacity === b.opacity
+    a.opacity === b.opacity && 
+    (a.crop?.x === b.crop?.x && a.crop?.y === b.crop?.y && a.crop?.width === b.crop?.width && a.crop?.height === b.crop?.height)
   );
 };
 
 const getSafeNumber = (value: number | undefined, fallback: number): number =>
   isFiniteNumber(value) ? value! : fallback;
 
-const sanitizeScale = (value: number | undefined): number => {
+export const sanitizeScale = (value: number | undefined): number => {
   if (!isFiniteNumber(value)) return 1;
   const v = value as number;
   if (Math.abs(v) < 1e-6) {
@@ -65,7 +66,7 @@ const rotate = (x: number, y: number, angleDeg: number) => {
   };
 };
 
-const transformPoint = (
+export const transformPoint = (
   x: number,
   y: number,
   from: ClipTransform,
@@ -123,7 +124,7 @@ const transformPoint = (
   };
 };
 
-const transformDimension = (
+export const transformDimension = (
   value: number,
   fromSize: number,
   toSize: number,
@@ -134,7 +135,7 @@ const transformDimension = (
   return (value * (toSize || fromSize)) / fromSize;
 };
 
-const transformFlatPoints = (
+export const transformFlatPoints = (
   points: number[],
   from: ClipTransform,
   to: ClipTransform,
@@ -160,7 +161,7 @@ const transformFlatPoints = (
   return next;
 };
 
-const transformContours = (
+export const transformContours = (
   contours: number[][],
   from: ClipTransform,
   to: ClipTransform,
@@ -173,7 +174,7 @@ const transformContours = (
   );
 };
 
-const transformTouchPoints = (
+export const transformTouchPoints = (
   points: Array<{ x: number; y: number; label: 0 | 1 }>,
   from: ClipTransform,
   to: ClipTransform,
@@ -192,7 +193,7 @@ const transformTouchPoints = (
   });
 };
 
-const transformRotation = (
+export const transformRotation = (
   rotation: number,
   from: ClipTransform,
   to: ClipTransform,

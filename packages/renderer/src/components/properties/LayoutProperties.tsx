@@ -16,10 +16,29 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
 
   const hasSides = clip?.type === "shape" && clip?.shapeType === "polygon";
   const hasPoints = clip?.type === "shape" && clip?.shapeType === "star";
-  const hasScale = clip?.type === "shape";
+  const hasScale = clip?.type === "image" || clip?.type === "video";
+  const hasWidthHeight = clip?.type === "shape";
 
   const [spinning, setSpinning] = useState(false);
   const [scaleLocked, setScaleLocked] = useState(true);
+
+  const getEffectiveScaleX = () => {
+    if (!clip?.transform) return 1;
+    const base = clip.originalTransform || clip.transform;
+    if (base.width && clip.transform.width) {
+      return clip.transform.width / base.width;
+    }
+    return clip.transform.scaleX ?? 1;
+  };
+
+  const getEffectiveScaleY = () => {
+    if (!clip?.transform) return 1;
+    const base = clip.originalTransform || clip.transform;
+    if (base.height && clip.transform.height) {
+      return clip.transform.height / base.height;
+    }
+    return clip.transform.scaleY ?? 1;
+  };
 
   const updateSides = (value: number) => {
     if (isNaN(value) || !isFinite(value)) return;
@@ -65,12 +84,43 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
 
     setClipTransform(clipId, { height: numValue });
   };
+  
 
   const handleScaleXChange = (value: string) => {
     if (!clip?.transform) return;
     const numValue = Number(value);
     if (isNaN(numValue) || !isFinite(numValue)) return;
 
+    // For image/video clips, interpret scale as changing width/height,
+    // and keep transform scale at 1 so we don't double‑scale.
+    if (hasScale) {
+      const base = clip.originalTransform || clip.transform;
+      if (!base) return;
+
+      if (scaleLocked) {
+        setClipTransform(clipId, {
+          width: base.width * numValue,
+          height: base.height * numValue,
+          scaleX: 1,
+          scaleY: 1,
+        });
+      } else {
+        const currentHeight = clip.transform.height;
+        const baseHeight = base.height;
+        const currentScaleY =
+          baseHeight && currentHeight ? currentHeight / baseHeight : 1;
+
+        setClipTransform(clipId, {
+          width: base.width * numValue,
+          height: base.height * currentScaleY,
+          scaleX: 1,
+          scaleY: 1,
+        });
+      }
+      return;
+    }
+
+    // Fallback behavior (if we ever show scale for other clip types)
     if (scaleLocked) {
       setClipTransform(clipId, { scaleX: numValue, scaleY: numValue });
     } else {
@@ -83,6 +133,36 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
     const numValue = Number(value);
     if (isNaN(numValue) || !isFinite(numValue)) return;
 
+    // For image/video clips, interpret scale as changing width/height,
+    // and keep transform scale at 1 so we don't double‑scale.
+    if (hasScale) {
+      const base = clip.originalTransform || clip.transform;
+      if (!base) return;
+
+      if (scaleLocked) {
+        setClipTransform(clipId, {
+          width: base.width * numValue,
+          height: base.height * numValue,
+          scaleX: 1,
+          scaleY: 1,
+        });
+      } else {
+        const currentWidth = clip.transform.width;
+        const baseWidth = base.width;
+        const currentScaleX =
+          baseWidth && currentWidth ? currentWidth / baseWidth : 1;
+
+        setClipTransform(clipId, {
+          width: base.width * currentScaleX,
+          height: base.height * numValue,
+          scaleX: 1,
+          scaleY: 1,
+        });
+      }
+      return;
+    }
+
+    // Fallback behavior (if we ever show scale for other clip types)
     if (scaleLocked) {
       setClipTransform(clipId, { scaleX: numValue, scaleY: numValue });
     } else {
@@ -109,7 +189,8 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
         </div>
 
         <div className="flex flex-col gap-y-3">
-          <div className="flex flex-row gap-x-2">
+          {hasWidthHeight && (
+            <div className="flex flex-row gap-x-2">
             <Input
               label="Size"
               value={clip?.transform?.width.toFixed(0).toString() ?? "0"}
@@ -122,7 +203,7 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
               onChange={handleHeightChange}
               startLogo="H"
             />
-          </div>
+          </div>)}
 
           {hasScale && (
             <div className="flex flex-col ">
@@ -144,7 +225,7 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
               <div className="flex flex-row gap-x-2">
                 <Input
                   value={
-                    clip?.transform?.scaleX.toFixed(2).toString() ?? "1.00"
+                    getEffectiveScaleX().toFixed(2).toString() ?? "1.00"
                   }
                   onChange={handleScaleXChange}
                   startLogo="X"
@@ -154,7 +235,7 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
                 />
                 <Input
                   value={
-                    clip?.transform?.scaleY.toFixed(2).toString() ?? "1.00"
+                    getEffectiveScaleY().toFixed(2).toString() ?? "1.00"
                   }
                   onChange={handleScaleYChange}
                   startLogo="Y"
