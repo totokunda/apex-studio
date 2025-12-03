@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 import { Rect, Line, Group } from "react-konva";
-import { ImageClipProps, TimelineProps, VideoClipProps } from "@/lib/types";
+import { ImageClipProps, ModelClipProps, TimelineProps, VideoClipProps } from "@/lib/types";
 import { useClipStore, getTimelineX } from "@/lib/clip";
 import TimelineClip from "./clips/TimelineClip";
 import GhostTimeline from "./clips/GhostTimeline";
@@ -43,7 +43,7 @@ const Timeline: React.FC<
     return clipsAll
       .filter((c) => c.clipId !== excludeClipId)
       .filter((c) =>
-        assetMode ? (c.type === "model" && !c.src ? false : true) : true,
+        assetMode ? (c.type === "model" && !(c as ModelClipProps).assetId ? false : true) : true,
       );
   }, [clipsAll, excludeClipId]);
   // Stable signature to detect only meaningful clip-set changes (global across all timelines)

@@ -1,4 +1,4 @@
-import { AnyClipProps } from "@/lib/types";
+import { AnyClipProps, FilterClipProps } from "@/lib/types";
 import { useControlsStore } from "@/lib/control";
 
 /**
@@ -17,7 +17,7 @@ import { useControlsStore } from "@/lib/control";
  * }
  */
 export abstract class BaseClipApplicator<
-  T extends AnyClipProps = AnyClipProps,
+  T extends FilterClipProps = FilterClipProps,
 > {
   protected clip: T;
   private focusFrameOverride?: number;
@@ -54,6 +54,10 @@ export abstract class BaseClipApplicator<
    */
   getClip(): T {
     return this.clip;
+  }
+
+  getIntensity(): number {
+    return this.clip.intensity ?? 1;
   }
 
   /**

@@ -2,6 +2,7 @@ import _ from "lodash";
 
 import type {
   AnyClipProps,
+  Asset,
   ClipTransform,
   MaskClipProps,
   TimelineProps,
@@ -20,6 +21,7 @@ export interface PrepareExportClipsContext {
   aspectRatio: { width: number; height: number };
   getClipsForGroup: (children: any) => AnyClipProps[];
   getClipsByType: (type: any) => AnyClipProps[];
+  getAssetById: (assetId: string) => Asset | undefined;
   getClipPositionScore: (clipId: any) => number;
   timelines: TimelineProps[];
 }
@@ -162,7 +164,7 @@ export const normalizeTransformForCanvas = (
 
 const hasAudio = (value: AnyClipProps): boolean => {
   if (value.type !== "video") return false;
-  const mediaInfo = getMediaInfoCached(value.src);
+  const mediaInfo = getMediaInfoCached(value.assetId);
   return mediaInfo?.audio !== null;
 };
 
@@ -192,6 +194,7 @@ export function prepareExportClipsForValue(
     getClipsByType,
     getClipPositionScore,
     timelines,
+    getAssetById,
   } = ctx;
   const {
     clearMasks = false,
@@ -227,8 +230,15 @@ export function prepareExportClipsForValue(
   const isVideo = value.type === "video";
 
   if (isImage) {
-    const mediaInfo = getMediaInfoCached(value.src);
-    const filePath = convertUserDataPath(value.src as string);
+    const asset = getAssetById(value.assetId);
+    if (!asset) return {
+      exportClips: [],
+      width: 0,
+      height: 0,
+      offsetStart: value.startFrame ?? 0,
+    };
+    const mediaInfo = getMediaInfoCached(asset.path);
+    const filePath = convertUserDataPath(asset.path);
     value.src = filePath;
     const transform = useOriginalTransform
       ? (value as any).originalTransform
@@ -249,10 +259,22 @@ export function prepareExportClipsForValue(
       height = transform?.height ?? mediaInfo?.image?.height ?? 0;
     }
   } else if (isVideo) {
-    const mediaInfo = getMediaInfoCached(value.src);
+    const asset = getAssetById(value.assetId);
+    const mediaInfo = getMediaInfoCached(value.assetId);
     const transform = useOriginalTransform
       ? (value as any).originalTransform
       : (value as any).transform;
+    
+    if (!asset) {
+      return {
+        exportClips: [],
+        width: 0,
+        height: 0,
+        offsetStart: value.startFrame ?? 0,
+      };
+    }
+    
+    value.src = asset.path;
 
     if (!mediaInfo) {
       return {
@@ -311,10 +333,18 @@ export function prepareExportClipsForValue(
       }
 
       if (newClip.type === "image") {
+        const asset = getAssetById(newClip.assetId);
+        if (!asset) return newClip;
+        newClip.src = asset.path;
         const mediaInfo = getMediaInfoCached(newClip.src as string);
         if (!mediaInfo) return newClip;
         const filePath = convertUserDataPath(newClip.src as string);
         newClip.src = filePath;
+      }
+      if (newClip.type === "video") {
+        const asset = getAssetById(newClip.assetId);
+        if (!asset) return newClip;
+        newClip.src = asset.path;
       }
 
       if (newClip.type === "video") {
@@ -323,11 +353,21 @@ export function prepareExportClipsForValue(
 
       if (Object.prototype.hasOwnProperty.call(newClip, "preprocessors")) {
         (newClip as any).preprocessors =
-          (c as any).preprocessors?.map((p: any) => ({
-            ...p,
-            startFrame: (p.startFrame ?? 0) - groupStart,
-            endFrame: (p.endFrame ?? 0) - groupStart,
-          })) ?? [];
+          (c as any).preprocessors?.map((p: any) => {
+            const asset = getAssetById(p.assetId);
+            if (!asset) return p;
+            p.src = asset.path;
+            const convertedSrc =
+              p?.status === "complete" && p?.src
+                ? convertApexCachePath(p.src)
+                : p?.src;
+            return {
+              ...p,
+              src: convertedSrc,
+              startFrame: (p.startFrame ?? 0) - groupStart,
+              endFrame: (p.endFrame ?? 0) - groupStart,
+            };
+          }) ?? [];
       }
 
       return newClip;
@@ -335,7 +375,17 @@ export function prepareExportClipsForValue(
   } else {
     offsetStart = value.startFrame ?? 0;
     if (value.type === "video") {
-      value.audioSrc = hasAudio(value) ? value.src : null;
+      const asset = getAssetById(value.assetId);
+      if (!asset) {
+        return {
+          exportClips: [],
+          width: 0,
+          height: 0,
+          offsetStart: value.startFrame ?? 0,
+        };
+      }
+      value.src = asset.path;
+      value.audioSrc = hasAudio(value) ? asset.path : null;
     }
     clips = [value as AnyClipProps];
   }
@@ -361,6 +411,9 @@ export function prepareExportClipsForValue(
     // Normalize preprocessor src paths (use cache path once complete)
     if (Array.isArray((clipItem as any).preprocessors)) {
       newClip.preprocessors = (clipItem as any).preprocessors.map((p: any) => {
+        const asset = getAssetById(p.assetId);
+        if (!asset) return p;
+        p.src = asset.path;
         const convertedSrc =
           p?.status === "complete" && p?.src
             ? convertApexCachePath(p.src)
@@ -710,6 +763,8 @@ export function prepareExportClipsForValue(
       );
     }
   }
+
+  console.log("exportClips", exportClips);
 
   return { exportClips, width, height, offsetStart };
 }

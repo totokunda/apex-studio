@@ -3,7 +3,7 @@ import { useClipStore } from "@/lib/clip";
 import { VideoClipProps } from "@/lib/types";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import PropertiesSlider from "./PropertiesSlider";
-import { LuInfo, LuPlay, LuX } from "react-icons/lu";
+import { LuInfo, LuPlay } from "react-icons/lu";
 import {
   Tooltip,
   TooltipContent,
@@ -28,6 +28,8 @@ import { getPreviewPath } from "@app/preload";
 import { exportClip } from "@app/export-renderer";
 import { v4 as uuidv4 } from "uuid";
 import { cn } from "@/lib/utils";
+import { TbCancel } from "react-icons/tb";
+import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
 
 interface FrameInterpolatePropertiesProps {
   clipId: string;
@@ -37,14 +39,21 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
   clipId,
 }) => {
   const clip = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps;
+  const getAssetById = useClipStore((s) => s.getAssetById);
+  const asset = useMemo(() => getAssetById(clip.assetId), [clip.assetId]);
+  if (!asset) return null;
   const sourceFps = useMemo(() => {
-    if (!clip?.src) return 24;
-    const info = getMediaInfoCached(clip.src);
+    if (!asset.path) return 24;
+    const info = getMediaInfoCached(asset.path);
     const fps = info?.stats?.video?.averagePacketRate;
     return typeof fps === "number" && isFinite(fps) && fps > 0 ? fps : 24;
-  }, [clip?.src]);
+  }, [asset.path]);
 
   const [jobId, setJobId] = useState<string | null>(null);
+  const getClipsForGroup = useClipStore((s) => s.getClipsForGroup);
+  const getClipsByType = useClipStore((s) => s.getClipsByType);
+  const getClipPositionScore = useClipStore((s) => s.getClipPositionScore);
+  const timelines = useClipStore((s) => s.timelines);
   const { progress, isComplete, isFailed, error } = usePostprocessorJob(jobId);
   const updateClip = useClipStore((s) => s.updateClip);
   const fps = useControlsStore((s) => s.fps);
@@ -53,11 +62,12 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
     () => Math.round(sourceFps * multiplier),
     [sourceFps, multiplier],
   );
-  const originalSrc = (clip as any)?.originalSrc as string | undefined;
+  const originalAssetId = clip.assetIdHistory?.[clip.assetIdHistory?.length - 1];
   const hasInterpolated = Boolean(
-    originalSrc && clip?.src && clip.src !== originalSrc,
+    originalAssetId && clip.assetId !== originalAssetId,
   );
   const [scale, setScale] = useState<number>(1);
+  const addAsset = useClipStore((s) => s.addAsset);
   const [isPreparing, setIsPreparing] = useState<boolean>(false);
   const allowedScales = useMemo(() => [0.25, 0.5, 1.0, 2.0, 4.0], []);
   const snapScale = (value: number) => {
@@ -73,13 +83,13 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
   };
 
   const handleRunPostProcessor = async () => {
-    if (!clip?.src || isPreparing) return;
+    if (!asset.path || isPreparing) return;
     setIsPreparing(true);
     try {
       // Prefer original source if present (pre-interpolation), else current clip src
-      const baseInputPath = (clip as any).originalSrc ?? clip.src;
+      const baseInputPath = originalAssetId ? (getAssetById(originalAssetId)?.path || asset.path) : asset.path;
       const mediaInfo =
-        getMediaInfoCached(baseInputPath) || getMediaInfoCached(clip.src);
+        getMediaInfoCached(baseInputPath) || getMediaInfoCached(asset.path);
 
       let inputPathForProcessing = baseInputPath;
 
@@ -125,12 +135,22 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
         const endSource = Math.max(startSource + 1, endSourceRaw);
         clipToExport.startFrame = startSource;
         clipToExport.endFrame = endSource;
+        const prepared = prepareExportClipsForValue(clipToExport, {
+          getClipsForGroup,
+          getClipsByType,
+          getClipPositionScore,
+          timelines,
+          getAssetById,
+          aspectRatio: { width: exportWidth || 0, height: exportHeight || 0 },
+        });
+
+        const { exportClips } = prepared;
         const result = await exportClip({
           mode: "video",
           width: exportWidth || 0,
           height: exportHeight || 0,
           range: { start: startSource, end: endSource },
-          clip: clipToExport,
+          clip: exportClips[0],
           fps: sourceFps,
           includeAudio: true,
           filename,
@@ -181,11 +201,12 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
             await getMediaInfo(fileUrl, {
               sourceDir: "apex-cache",
             });
-            if (clip.src !== fileUrl) {
+            let newAsset = addAsset({ path: fileUrl });
+            if (asset.id !== newAsset.id) {
               updateClip(clip.clipId, {
-                src: fileUrl,
-                originalSrc: (clip as any).originalSrc ?? clip.src,
-              } as any);
+                assetId: newAsset.id,
+                assetIdHistory: [...(clip.assetIdHistory || []), originalAssetId || asset.id],
+              });
             }
             break;
           }
@@ -252,7 +273,7 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
                     onValueChange={(v) => setMultiplier(parseInt(v, 10))}
                   >
                     <SelectTrigger
-                      className="!h-7 w-full rounded-l rounded-r-none text-[11px] bg-brand-light/10 border text-brand-light border-brand-light/10 font-medium"
+                      className="h-7! w-full rounded-l rounded-r-none text-[11px] bg-brand-light/10 border text-brand-light border-brand-light/10 font-medium"
                       size="sm"
                     >
                       <SelectValue placeholder="2x" />
@@ -339,7 +360,7 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
 
         {jobId && !isComplete && !isFailed ? (
           <button
-            className="w-full mt-2 py-2 border border-brand-light/10 px-6 rounded-[6px] font-medium text-[11px] flex items-center justify-center gap-x-1 transition-all duration-200 shadow bg-red-500 text-brand-lighter hover:opacity-90"
+            className="w-full mt-2 py-2 px-6 text-[11px] flex items-center justify-center gap-x-1 transition-all duration-200 shadow font-medium rounded-[6px] bg-red-500/50 hover:bg-red-500/60 border border-red-500/30  text-brand-lighter hover:opacity-90"
             onClick={async () => {
               try {
                 await cancelPostprocessor(jobId);
@@ -348,18 +369,20 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
               setJobId(null);
             }}
           >
-            <LuX className="w-3.5 h-3.5" />
+            <TbCancel className="w-3.5 h-3.5" />
             Cancel
           </button>
         ) : hasInterpolated ? (
           <button
             className="w-full mt-2 py-2 border border-brand-light/10 px-6 rounded-[6px] font-medium text-[11px] flex items-center justify-center gap-x-2 transition-all duration-200 shadow bg-brand-light/10 text-brand-lighter hover:opacity-90"
             onClick={async () => {
-              if (!clip?.clipId || !originalSrc) return;
+              if (!clip?.clipId || !originalAssetId) return;
+              const originalAsset = getAssetById(originalAssetId);
+              if (!originalAsset) return;
               try {
-                await getMediaInfo(originalSrc, { sourceDir: "apex-cache" });
+                await getMediaInfo(originalAsset.path, { sourceDir: "apex-cache" });
               } catch {}
-              updateClip(clip.clipId, { src: originalSrc } as any);
+              updateClip(clip.clipId, { assetId: clip.assetIdHistory[clip.assetIdHistory.length - 1] } as any);
               setJobId(null);
             }}
           >
@@ -368,7 +391,7 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
         ) : (
           <button
             className="w-full mt-2 py-2 border border-brand-light/10 px-6 rounded-[6px] font-medium text-[11px] flex items-center justify-center gap-x-1 transition-all duration-200 shadow bg-brand text-brand-lighter hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
-            disabled={!clip?.src || hasInterpolated || isPreparing}
+            disabled={!asset.path || hasInterpolated || isPreparing}
             onClick={handleRunPostProcessor}
           >
             <LuPlay className="w-3.5 h-3.5" />

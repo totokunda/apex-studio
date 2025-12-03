@@ -386,7 +386,7 @@ const SeparateButton = () => {
   }, [selectedClipIds, getClipById]);
   const hasAudio = useMemo(() => {
     if (selectedClip?.type === "video") {
-      const mediaInfo = getMediaInfoCached(selectedClip.src);
+      const mediaInfo = getMediaInfoCached(selectedClip.assetId);
       return mediaInfo?.audio !== null;
     }
     return false;

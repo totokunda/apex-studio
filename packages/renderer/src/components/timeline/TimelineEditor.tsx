@@ -26,6 +26,7 @@ import { MediaItem } from "../media/Item";
 import { v4 as uuidv4 } from "uuid";
 import {
   AnyClipProps,
+  Asset,
   Filter,
   FilterClipProps,
   ImageClipProps,
@@ -268,6 +269,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
     snapGuideX,
     setSelectedPreprocessorId,
     setIsDragging,
+    addAsset
   } = useClipStore();
   // const scrollBarRef = useRef<any>(null);
   // const isSyncingScrollRef = useRef(false);
@@ -316,7 +318,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
       if (!data) return;
 
       if (data.type === "preprocessor") {
-        const clipFrames = controlStore.fps * 5;
+        const clipFrames = controlStore.fps * controlStore.defaultClipLength;
         setGhostStartEndFrame(0, clipFrames);
         return;
       }
@@ -326,7 +328,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
       if (data.type === "model") {
         const clipFrames =
           (data as ManifestWithType).spec?.default_duration_secs ??
-          5 * controlStore.fps;
+          controlStore.defaultClipLength * controlStore.fps;
         setGhostStartEndFrame(0, clipFrames);
         return;
       }
@@ -335,7 +337,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
       setActiveMediaItem(data as MediaItem);
       const clipFrames = (() => {
         const fps = controlStore.fps;
-        if (data.type === "image") return fps * 5;
+        if (data.type === "image") return fps * controlStore.defaultClipLength;
         if (data.type === "video") {
           const realFps = mediaInfo?.stats.video?.averagePacketRate ?? fps;
           const realEnd = (mediaInfo?.duration ?? 0) * realFps;
@@ -351,7 +353,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
           return Math.round((mediaInfo?.duration ?? 0) * fps);
         }
         if (data.type === "filter") {
-          return fps * 5;
+          return fps * controlStore.defaultClipLength;
         }
         return 0;
       })();
@@ -752,27 +754,23 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
         const fps = controlStore.fps;
         numFrames = Math.round(duration * fps);
       } else if (data.type === "image") {
-        numFrames = controlStore.fps * 5;
+        numFrames = controlStore.fps * controlStore.defaultClipLength;
         trimEnd = -Infinity;
         trimStart = Infinity;
         height = mediaInfo?.image?.height;
         width = mediaInfo?.image?.width;
       } else if (data.type === "filter") {
-        numFrames = controlStore.fps * 5;
+        numFrames = controlStore.fps * controlStore.defaultClipLength;
         trimEnd = -Infinity;
         trimStart = Infinity;
-        height = 540; // Does not matter
-        width = 540; // Does not matter
         // Start with smallPath
         void haldClutRef?.preloadClut((data as unknown as Filter).smallPath);
       } else if (data.type === "model") {
         numFrames =
           (data as ManifestWithType).metadata?.desired_duration ??
-          5 * controlStore.fps;
+          controlStore.defaultClipLength * controlStore.fps;
         trimEnd = -Infinity;
         trimStart = Infinity;
-        height = 540; // Does not matter
-        width = 540; // Does not matter
       }
 
       // Use validated ghost position to compute frames
@@ -891,21 +889,29 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
           : placementStart;
       endFrame = startFrame + clipLen;
 
+
+      let asset: Asset | null = null
+
+      if (data.type === 'audio' || data.type === 'video' || data.type === 'image') {
+        asset = addAsset({ path: (data as MediaItem)?.assetUrl });
+      }
+
       // @ts-ignore
       const newClip: AnyClipProps = {
         timelineId: dropTimelineId,
         clipId: uuidv4(),
         startFrame: existingClips.length === 0 ? startFrame : startFrame,
         endFrame,
-        src: (data as MediaItem)?.assetUrl,
         // @ts-ignore
         type: data.type,
         trimEnd: trimEnd,
         trimStart: trimStart,
-        height: height,
-        width: width,
         speed: 1.0,
       };
+
+      if (asset) {
+        (newClip as VideoClipProps | ImageClipProps).assetId = asset.id;
+      }
 
       // Ensure intrinsic media dimensions are captured for image/video clips
       if (data.type === "image" || data.type === "video") {
@@ -1370,6 +1376,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
         largestGapSize,
         clipDuration - relativeStartFrame,
       );
+      
       const relativeEndFrame = Math.min(
         relativeStartFrame + actualDuration,
         clipDuration,
@@ -1742,6 +1749,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
         if (controlStore.isPlaying) controlStore.pause();
         controlStore.setFocusAnchorRatio(Math.max(0, Math.min(1, progress)));
         controlStore.setFocusFrame(targetFrame, false);
+        controlStore.setIsAccurateSeekNeeded(true);
       }
     },
     [controlStore, setSelectedPreprocessorId],

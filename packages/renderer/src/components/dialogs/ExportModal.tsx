@@ -23,6 +23,7 @@ import { pickMediaPaths, resolvePath } from "@app/preload";
 import { TbCancel, TbMovie } from "react-icons/tb";
 import { ProgressBar } from "@/components/common/ProgressBar";
 import { LuLoaderCircle } from "react-icons/lu";
+import { VideoClipProps } from "@/lib/types";
 type ResolutionOption = {
   label: string;
   value: number;
@@ -143,6 +144,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     AUDIO_FORMAT_OPTIONS[0]?.value ?? "mp3",
   );
 
+  
+
   const [preserveAlpha, setPreserveAlpha] = useState<boolean>(false);
 
   const [hasAnyAudio, setHasAnyAudio] = useState<boolean>(false);
@@ -173,7 +176,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           if ((clip as any).hidden) return false;
           if (clip.type === "audio") return true;
           if (clip.type === "video") {
-            const info = getMediaInfoCached((clip as any).src);
+            const info = getMediaInfoCached((clip as VideoClipProps).assetId);
             return info?.audio !== null;
           }
           return false;
@@ -387,6 +390,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                         const picked = await pickMediaPaths({
                           directory: true,
                           title: "Choose export folder",
+                          defaultPath:
+                            path && path.trim().length > 0
+                              ? path.trim()
+                              : undefined,
                         });
                         const dir =
                           Array.isArray(picked) && picked.length > 0
@@ -652,7 +659,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             {!isExporting && (
               <Button
                 type="button"
-                className="h-7 px-5 bg-brand-accent hover:bg-brand-accent-two-shade text-white text-[11px] font-medium rounded-[6px] border border-brand-accent-two-shade"
+                className="h-7 px-5 bg-brand-accent  disabled:cursor-not-allowed hover:bg-brand-accent-two-shade text-white text-[11px] font-medium rounded-[6px] border border-brand-accent-two-shade"
                 onClick={handleExportClick}
               >
                 Export

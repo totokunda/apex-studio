@@ -1,6 +1,16 @@
-import React, { useState } from "react";
-import { LuChevronDown, LuChevronUp, LuCheck } from "react-icons/lu";
-
+import React, { useMemo, useState } from "react";
+import {
+  LuChevronDown,
+  LuChevronUp,
+  LuCheck,
+  LuFolder,
+  LuFolderPlus,
+  LuSearch,
+  LuPlus,
+  LuSettings,
+} from "react-icons/lu";
+import { useProjectsStore } from "@/lib/projects";
+import { createProject } from "@app/preload";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,13 +35,18 @@ import {
 } from "@app/export-renderer";
 import { useClipStore } from "@/lib/clip";
 import { useControlsStore } from "@/lib/control";
-import type { AnyClipProps } from "@/lib/types";
+import type { AnyClipProps, ModelClipProps, GroupClipProps } from "@/lib/types";
 import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
 import { sortClipsForStacking } from "@/lib/clipOrdering";
 import { toast } from "sonner";
 import { revealPathInFolder } from "@app/preload";
+import { DEFAULT_FPS } from "@/lib/settings";
+import { cn } from "@/lib/utils";
+import { SettingsModal } from "../dialogs/SettingsModal";
 
-interface TopBarProps {}
+interface TopBarProps {
+
+}
 
 const Keycap: React.FC<{ label: string }> = ({ label }) => (
   <span className="inline-flex items-center justify-center px-1.5 h-5 min-w-[20px] shadow-sm rounded-[4px] bg-brand-light/[0.075] border border-brand-light/20 text-[10.5px]  text-brand-light/80">
@@ -73,6 +88,17 @@ const TopBar: React.FC<TopBarProps> = () => {
   const [exportOpen, setExportOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
+  const projects = useProjectsStore((s) => s.projects);
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+  const getAssetById = useClipStore((s) => s.getAssetById);
+  const activeProject = useProjectsStore((s) => s.getActiveProject());
+  const updateProject = useProjectsStore((s) => s.updateProject);
+  const setActiveProjectId = useProjectsStore((s) => s.setActiveProjectId);
+
+  const [projectNameDraft, setProjectNameDraft] = useState("");
+  const [isEditingProjectName, setIsEditingProjectName] = useState(false);
+  const [projectSearch, setProjectSearch] = useState("");
+
   const [cancelExportFn, setCancelExportFn] = useState<(() => void) | null>(
     null,
   );
@@ -88,6 +114,47 @@ const TopBar: React.FC<TopBarProps> = () => {
   const getClipsByType = useClipStore((s) => s.getClipsByType);
   const getClipPositionScore = useClipStore((s) => s.getClipPositionScore);
   const fps = useControlsStore((s) => s.fps);
+  const controlsFps = fps;
+
+  const getNextDefaultProjectName = () => {
+    const usedNumbers = projects
+      .map((p) => {
+        const match = /^Project\s+(\d+)$/i.exec(p.name || "");
+        return match ? Number(match[1]) : null;
+      })
+      .filter((n): n is number => n !== null);
+
+    let candidate = 1;
+    while (usedNumbers.includes(candidate)) {
+      candidate += 1;
+    }
+    return `Project ${candidate}`;
+  };
+
+  const handleCreateProject = async () => {
+    const name = getNextDefaultProjectName();
+    const newFps = controlsFps || DEFAULT_FPS;
+    try {
+      await createProject({ name, fps: newFps });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to create project", e);
+    }
+  };
+
+  const handleCommitProjectName = async () => {
+    if (!activeProject) return;
+    const trimmed = projectNameDraft.trim();
+    if (!trimmed || trimmed === activeProject.name) {
+      return;
+    }
+    try {
+      await updateProject(activeProject.id, { name: trimmed });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to update project name", e);
+    }
+  };
   const handleExport = async (settings: ExportSettings) => {
     const outpath = `${settings.path}/${settings.name}.${settings.format}`;
 
@@ -109,6 +176,7 @@ const TopBar: React.FC<TopBarProps> = () => {
 
     setIsExporting(true);
     setExportProgress(0);
+    
 
     try {
       // Prepare export-ready clips (attach filters, preprocessors, normalize paths, etc.).
@@ -131,6 +199,7 @@ const TopBar: React.FC<TopBarProps> = () => {
           clip as AnyClipProps,
           {
             aspectRatio,
+            getAssetById,
             getClipsForGroup,
             getClipsByType,
             getClipPositionScore,
@@ -202,10 +271,180 @@ const TopBar: React.FC<TopBarProps> = () => {
     }
   };
 
+  const filteredProjects = projects.filter((project) => {
+    const query = projectSearch.trim().toLowerCase();
+    if (!query) return true;
+    return (project.name ?? "").toLowerCase().includes(query);
+  });
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const canExport = useMemo(() => {
+    if (!clips || clips.length === 0) return false;
+
+    // Only consider clips that are on a visible (non-hidden) timeline
+    const visibleTimelineIds = new Set(
+      timelines.filter((t) => !t.hidden).map((t) => t.timelineId),
+    );
+
+    const hasExportableMedia = (clip: AnyClipProps): boolean => {
+      // Group clips may contain exportable children; for groups we ignore the
+      // group's own timeline/hidden status and instead inspect their children.
+      if (clip.type === "group") {
+        const group = clip as GroupClipProps;
+        const children = getClipsForGroup(group.children) || [];
+        for (const child of children) {
+          if (hasExportableMedia(child as AnyClipProps)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      if (clip.hidden && !clip.groupId) return false;
+      if (!clip.timelineId || !visibleTimelineIds.has(clip.timelineId)) {
+        return false;
+      }
+
+      // Basic media clips must have an assetId
+      if (clip.type === "image" || clip.type === "audio" || clip.type === "video") {
+        return Boolean((clip as AnyClipProps & { assetId?: string }).assetId);
+      }
+
+      // Model clips are exportable only once they have a concrete media result
+      if (clip.type === "model") {
+        const modelClip = clip as ModelClipProps;
+        const hasAsset = !!modelClip.assetId;
+        const hasSrcGeneration =
+          Array.isArray(modelClip.generations) &&
+          modelClip.generations.some((g: any) => !!g?.src);
+        return hasAsset || hasSrcGeneration;
+      }
+
+      return false;
+    };
+
+    return clips.some((clip) => hasExportableMedia(clip));
+  }, [clips, timelines, getClipsForGroup]);
+
   return (
-    <div className="w-full relative h-8 mt-2 px-6 flex items-center justify-end space-x-2">
+    <div className="w-full relative h-8 mt-2 px-6 pl-4 flex items-center justify-between space-x-2">
+      {/* Project name editor */}
+      <div className="flex flex-row items-center gap-1.5 min-w-0">
+        {/* Projects dropdown (top-left) */}
+        <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
+        <DropdownMenu>
+          <DropdownMenuTrigger className="text-brand-light/90 dark max-w-[220px] h-[34px] flex items-center space-x-2 px-3 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
+            <LuFolder className="w-4 h-4 shrink-0" />
+            <span className="text-[11px] truncate">
+              Projects
+            </span>
+            <div className="ml-1">
+              <LuChevronDown className="w-3.5 h-3.5" />
+            </div>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            className="dark w-60 font-poppins bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] p-0 gap-0"
+          >
+            
+            <div className=" relative">
+              <LuSearch className="w-3.5 h-3.5 text-brand-light/60 absolute left-2 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={projectSearch}
+                onChange={(e) => setProjectSearch(e.target.value)}
+                placeholder="Search by name..."
+                className="w-full h-8 rounded-[5px] pl-7  px-2 text-[11px] text-brand-light/90 placeholder:text-brand-light/40 focus:outline-none focus:border-brand-light/30 "
+              />
+            </div>
+            <DropdownMenuSeparator className="my-0" />
+            <div className="max-h-64 overflow-y-auto px-1 gap-y-1">
+              {filteredProjects.length === 0 && (
+                <DropdownMenuItem
+                  disabled
+                  className="dark text-[11px] text-brand-light/60 px-2"
+                >
+                  {projects.length === 0
+                    ? "No projects yet"
+                    : "No matching projects"}
+                </DropdownMenuItem>
+              )}
+              {filteredProjects.map((project, index) => (
+                <>
+                <DropdownMenuItem
+                  key={project.id}
+                  className={cn("dark text-[11px] font-medium flex items-center gap-x-2 cursor-pointer", index === 0 && "mt-1")}
+                  onClick={() => {
+                    setActiveProjectId(project.id);
+                  }}
+                >
+                  <LuFolder className="w-3.5 h-3.5 text-brand-light/70" />
+                  <span className="truncate">{project.name}</span>
+                  {activeProjectId === project.id && (
+                    <LuCheck className="w-4 h-4 ml-auto text-brand-light" />
+                  )}
+                </DropdownMenuItem>
+                {index !== filteredProjects.length - 1 && (
+                  <DropdownMenuSeparator />
+                )}
+                </>
+              ))}
+            
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="dark text-[11px] font-medium flex items-center gap-x-2 cursor-pointer mb-1"
+              onClick={() => {
+                void handleCreateProject();
+              }}
+            >
+              <LuFolderPlus className="w-3.5 h-3.5 text-brand-light/80" />
+              <span>New Project</span>
+            </DropdownMenuItem>
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {/* Project name input */}
+        {activeProject && (
+        <input
+          type="text"
+          value={
+            activeProject
+              ? isEditingProjectName
+                ? projectNameDraft
+                : activeProject.name
+              : ""
+          }
+          onFocus={() => {
+            if (!activeProject) return;
+            setIsEditingProjectName(true);
+            setProjectNameDraft(activeProject.name ?? "");
+          }}
+          onChange={(e) => {
+            if (!activeProject) return;
+            setProjectNameDraft(e.target.value);
+          }}
+          onBlur={async () => {
+            if (!activeProject) return;
+            await handleCommitProjectName();
+            setIsEditingProjectName(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.currentTarget as HTMLInputElement).blur();
+            }
+          }}
+          disabled={!activeProject}
+          placeholder="Project 1"
+          className="max-w-xs w-[220px] h-[34px] focus:border transition-all border border-transparent font-medium duration-150 focus:bg-brand-light/10 hover:bg-brand-background/80  focus:border-brand-light/10 focus:outline-none rounded-[6px] px-3 flex items-center justify-between text-[12px] text-brand-light/90 placeholder:text-brand-light/40 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+        />
+        )}
+      </div>
+      <div className="flex items-center justify-end gap-2">
       {/* Exit Custom button when in aspect editing mode */}
-      {isAspectEditing && (
+        {isAspectEditing && (
         <button
           onClick={() => setIsAspectEditing(false)}
           className="text-brand-light/90 dark h-[34px] px-4 flex items-center gap-x-2 font-medium border border-red-500/30 hover:border-red-500/50 bg-red-500/10 hover:bg-red-500/20 rounded-[6px] transition-all duration-300 cursor-pointer"
@@ -226,9 +465,9 @@ const TopBar: React.FC<TopBarProps> = () => {
             <line x1="6" y1="6" x2="18" y2="18"></line>
           </svg>
         </button>
-      )}
-      <SystemMemoryMenu />
-      <JobsMenu />
+        )}
+        <SystemMemoryMenu />
+        <JobsMenu />
       <DropdownMenu open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
         <DropdownMenuTrigger className="text-brand-light/90 dark w-32 h-[34px] relative flex items-center space-x-2 px-2 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
           <span className="text-[11px] inline-flex items-center space-x-1 w-full">
@@ -475,8 +714,9 @@ const TopBar: React.FC<TopBarProps> = () => {
       <div className="flex items-center gap-2">
         {!isExporting ? (
           <button
+            disabled={!canExport} 
             type="button"
-            className="text-brand-light space-x-1.5 flex items-center justify-center px-5 font-medium h-[34px] hover:text-brand-light bg-brand-accent border border-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer"
+            className="text-brand-light space-x-1.5 flex items-center justify-center px-5 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-brand disabled:border-brand font-medium h-[34px] hover:text-brand-light bg-brand-accent border border-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer"
             onClick={() => setExportOpen(true)}
           >
             <TbPackageExport size={16} />
@@ -506,6 +746,7 @@ const TopBar: React.FC<TopBarProps> = () => {
             </span>
           </button>
         )}
+      </div>
       </div>
 
       <ExportModal

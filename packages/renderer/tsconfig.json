@@ -26,7 +26,7 @@
       "@app/*": ["../*"]
     }
   },
-  "include": ["src"],
+  "include": ["src", "../../../project-persistence"],
 
   "references": [{ "path": "./tsconfig.node.json" }]
 }

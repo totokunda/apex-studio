@@ -95,11 +95,11 @@ const MaskPropertiesPanel: React.FC<MaskPropertiesPanelProps> = ({
 
   if (!mask || clip?.masks.length === 0 || activeMasks.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full p-12 gap-y-1">
-        <p className="text-brand-light/90 font-medium text-[14px] text-center">
+      <div className="flex flex-col items-center justify-center h-full p-9 gap-y-1">
+        <p className="text-brand-light/90 font-medium text-[13px] text-center">
           No masks currently active in this clip.
         </p>
-        <p className="text-brand-light/60 text-[13px] text-center">
+        <p className="text-brand-light/60 text-[12px] text-center">
           Use the mask tool to create one.
         </p>
       </div>

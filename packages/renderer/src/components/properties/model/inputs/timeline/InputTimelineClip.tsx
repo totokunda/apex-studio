@@ -22,6 +22,7 @@ import {
   GroupClipProps,
   ModelClipProps,
   AnyClipProps,
+  AudioClipProps,
 } from "@/lib/types";
 import {
   generateAudioWaveformCanvas,
@@ -372,15 +373,15 @@ const TimelineClip: React.FC<
     document.createElement("canvas"),
   );
   const mediaInfoRef = useRef<MediaInfo | undefined>(
-    getMediaInfoCached(currentClip?.src!),
+    getMediaInfoCached((currentClip as VideoClipProps | ImageClipProps).assetId!),
   );
   useEffect(() => {
-    if (!currentClip?.src) {
+    if (!(currentClip as VideoClipProps | ImageClipProps)?.assetId) {
       mediaInfoRef.current = undefined;
       return;
     }
-    mediaInfoRef.current = getMediaInfoCached(currentClip.src);
-  }, [currentClip?.src]);
+    mediaInfoRef.current = getMediaInfoCached((currentClip as VideoClipProps | ImageClipProps).assetId!);
+  }, [(currentClip as VideoClipProps | ImageClipProps)?.assetId]);
   const thumbnailClipWidth = useRef<number>(0);
   const maxTimelineWidth = useMemo(
     () => timelineWidth,
@@ -394,6 +395,7 @@ const TimelineClip: React.FC<
   const [textWidth, setTextWidth] = useState(0);
   const modelNameRef = useRef<Konva.Text>(null);
   const [modelNameWidth, setModelNameWidth] = useState(0);
+  const getAssetById = useClipStore((s) => s.getAssetById);
   // global context menu used instead of local state
   const { applyFilters } = useWebGLFilters();
   const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
@@ -539,12 +541,12 @@ const TimelineClip: React.FC<
   ]);
 
   useEffect(() => {
-    if (!currentClip) return;
+    if (!currentClip || !(currentClip as VideoClipProps | ImageClipProps | AudioClipProps)?.assetId) return;
 
     if (clipType === "audio") {
       generateTimelineThumbnailAudio(
         clipType,
-        currentClip,
+        currentClip as AudioClipProps,
         currentClip.clipId,
         mediaInfoRef.current ?? null,
         imageCanvas,
@@ -559,7 +561,7 @@ const TimelineClip: React.FC<
     } else if (clipType === "image") {
       generateTimelineThumbnailImage(
         clipType,
-        currentClip,
+        currentClip as ImageClipProps,
         currentClip.clipId,
         mediaInfoRef.current ?? null,
         imageCanvas,
@@ -672,24 +674,30 @@ const TimelineClip: React.FC<
           childrenToUse.map(async (child) => {
             if (
               child?.type === "video" ||
-              (child?.type === "image" && child?.src)
+              (child?.type === "image" && (child as ImageClipProps).assetId)
             ) {
-              const mediaInfo = getMediaInfoCached(child.src);
+              const asset = getAssetById((child as VideoClipProps | ImageClipProps).assetId);
+              const src = asset?.path;
+              if (!src) return null;
+              const mediaInfo = getMediaInfoCached(src);
               if (!mediaInfo) return null;
               const masks =
                 (child as VideoClipProps | ImageClipProps).masks || [];
               const preprocessors =
                 (child as VideoClipProps | ImageClipProps).preprocessors || [];
               const poster = await generatePosterCanvas(
-                child.src,
+                src,
                 undefined,
                 undefined,
                 { mediaInfo, masks, preprocessors },
               );
               if (!poster) return null;
               return poster;
-            } else if (child?.type === "audio" && child?.src) {
-              const mediaInfo = getMediaInfoCached(child.src);
+            } else if (child?.type === "audio" && (child as AudioClipProps).assetId) {
+              const asset = getAssetById((child as AudioClipProps).assetId);
+              const src = asset?.path;
+              if (!src) return null;
+              const mediaInfo = getMediaInfoCached(src);
               if (!mediaInfo) return null;
               const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
               const cssWidth = 64;
@@ -698,7 +706,7 @@ const TimelineClip: React.FC<
               const height = cssHeight * dpr;
               // make the height and width small like max and use that ratio to scale the width and height
               const waveform = await generateAudioWaveformCanvas(
-                child.src,
+                src,
                 width,
                 height,
                 { color: "#7791C4", mediaInfo: mediaInfo },

@@ -351,6 +351,7 @@ export class TouchMask extends WebGLMaskBase {
     this.texcoordBuffer = null;
     super.dispose();
   }
+  
 
   public apply(
     sourceCanvas: HTMLCanvasElement,
@@ -370,6 +371,7 @@ export class TouchMask extends WebGLMaskBase {
       console.error("WebGL context is lost!");
       return sourceCanvas;
     }
+
 
     // Resolve keyframe
     let keyFrame = frame;

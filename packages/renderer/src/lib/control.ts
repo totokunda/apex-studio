@@ -68,6 +68,9 @@ interface ControlStore {
   resetTimelineDuration: () => void;
   fps: number;
   setFps: (fps: number) => void;
+  setFpsWithRescale: (fps: number) => void;
+  defaultClipLength: number;
+  setDefaultClipLength: (length: number) => void;
   focusFrame: number;
   setFocusFrame: (frame: number, pause?: boolean) => void;
   focusAnchorRatio: number; // 0..1 position of scrubber within viewport width
@@ -86,6 +89,10 @@ interface ControlStore {
   setIsFullscreen: (isFullscreen: boolean) => void;
   selectedMaskId: string | null;
   setSelectedMaskId: (maskId: string | null) => void;
+  possibleKeyFocusFrames: number[];
+  setPossibleKeyFocusFrames: (frames: number[]) => void;
+  isAccurateSeekNeeded: boolean;
+  setIsAccurateSeekNeeded: (needed: boolean) => void;
 }
 
 export const useControlsStore = create<ControlStore>((set, get) => ({
@@ -199,7 +206,44 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     set({ timelineDuration: [0, TIMELINE_DURATION_SECONDS * DEFAULT_FPS] }),
   // FPS State
   fps: DEFAULT_FPS,
-  setFps: (fps) => set({ fps: fps }),
+  setFps: (fps) => set({ fps }),
+  setFpsWithRescale: (fps) => {
+    const oldFps = get().fps || DEFAULT_FPS;
+    const newFps = Math.max(1, fps || DEFAULT_FPS);
+    if (oldFps === newFps) {
+      set({ fps: newFps });
+      return;
+    }
+    // First update clips/preprocessors to preserve timing
+    useClipStore.getState().rescaleForFpsChange(oldFps, newFps);
+    // Then update control fps and timeline duration bounds
+    set((state) => {
+      const scale = newFps / Math.max(1, oldFps);
+      const [start, end] = state.timelineDuration;
+      const newStart = Math.round(start * scale);
+      const newEnd = Math.round(end * scale);
+      const totalFrames = Math.max(
+        0,
+        Math.round(state.totalTimelineFrames * scale),
+      );
+      const newFocus = Math.max(
+        0,
+        Math.min(
+          Math.max(0, totalFrames - 1),
+          Math.round((state.focusFrame || 0) * scale),
+        ),
+      );
+      return {
+        fps: newFps,
+        totalTimelineFrames: totalFrames,
+        timelineDuration: [newStart, newEnd],
+        focusFrame: newFocus,
+      };
+    });
+  },
+  defaultClipLength: 5,
+  setDefaultClipLength: (length: number) =>
+    set({ defaultClipLength: Math.max(1, Math.round(length || 1)) }),
   // Focus State
   focusFrame: 0,
   setFocusFrame: (frame, pause = true) => {
@@ -285,4 +329,8 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
   setIsFullscreen: (isFullscreen) => set({ isFullscreen }),
   selectedMaskId: null,
   setSelectedMaskId: (maskId) => set({ selectedMaskId: maskId }),
+  possibleKeyFocusFrames: [],
+  setPossibleKeyFocusFrames: (frames) => set({ possibleKeyFocusFrames: frames }),
+  isAccurateSeekNeeded: false,
+  setIsAccurateSeekNeeded: (needed) => set({ isAccurateSeekNeeded: needed }),
 }));

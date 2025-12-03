@@ -23,6 +23,8 @@ export const ScrubControl: React.FC<ScrubControlProps> = ({
     pause,
     play,
     isFullscreen,
+    setPossibleKeyFocusFrames,
+    setIsAccurateSeekNeeded,
   } = useControlsStore();
   const [isDragging, setIsDragging] = useState(false);
   const [position, setPosition] = useState(18);
@@ -36,6 +38,7 @@ export const ScrubControl: React.FC<ScrubControlProps> = ({
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(true);
+    setIsAccurateSeekNeeded(false);
     if (isPlaying) {
       setWasPlaying(true);
       pause();
@@ -132,6 +135,8 @@ export const ScrubControl: React.FC<ScrubControlProps> = ({
     // Update focus frame and anchor to snapped values
     const progress = (clampedCenterX - startPadding) / stageWidth;
     const framePosition = startFrame + progress * (endFrame - startFrame);
+    
+    setIsAccurateSeekNeeded(true);
     setFocusFrame(Math.round(framePosition));
 
     setFocusAnchorRatio(progress);
@@ -169,6 +174,34 @@ export const ScrubControl: React.FC<ScrubControlProps> = ({
       };
     }
   }, [isDragging, timelineDuration, stageWidth, currentFrame]);
+
+  useEffect(() => {
+    // Only calculate if we have valid dimensions
+    if (stageWidth <= 0) return;
+
+    const [startFrame, endFrame] = timelineDuration;
+    // We can interact with at most stageWidth pixels (assuming 1px resolution)
+    // The startPadding determines where the timeline effectively starts in the coordinate system
+    // The handle movement is clamped between startPadding and stageWidth - startPadding (roughly)
+    // However, the mouse move logic maps [startPadding, startPadding + stageWidth] to [startFrame, endFrame]
+    // See handleMouseMove: progress = (centerX - startPadding) / stageWidth
+    
+    // We want to simulate every possible integer pixel position for centerX
+    // The range of valid centerX values in handleMouseMove is effectively constrained by the container
+    // But conceptually, the progress goes from 0 to 1 across 'stageWidth' pixels
+    
+    const frames = new Set<number>();
+    
+    // Iterate through every possible pixel offset relative to the start of the timeline area
+    for (let pixelOffset = 0; pixelOffset <= stageWidth; pixelOffset++) {
+        const progress = pixelOffset / stageWidth;
+        const framePosition = startFrame + progress * (endFrame - startFrame);
+        const snapped = Math.round(framePosition);
+        frames.add(snapped);
+    }
+    
+    setPossibleKeyFocusFrames(Array.from(frames).sort((a, b) => a - b));
+  }, [timelineDuration, stageWidth, setPossibleKeyFocusFrames]);
 
   if (isFullscreen) return null;
 

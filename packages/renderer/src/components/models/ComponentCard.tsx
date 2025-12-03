@@ -68,7 +68,7 @@ const ComponentCard: React.FC<{
     deleteDownload,
     subscribeToJob,
     downloadingPaths,
-    wsFilesByPath,
+    wsFilesByPath
   } = useDownloadStore();
   const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
   const schedulersConfigDownloading = false;
@@ -411,6 +411,7 @@ const ComponentCard: React.FC<{
 
   const handleCancel = async (jobId: string) => {
     await cancelRayJob(jobId);
+    
     // remove from downloading paths if
     try {
       window.dispatchEvent(
@@ -928,7 +929,7 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
                   {pathItem.path && downloadingPaths.has(pathItem.path) ? (
                     <>
                       <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                      <span>Downloading...</span>
+                      <span>Downloading</span>
                     </>
                   ) : (
                     <>
@@ -1486,7 +1487,7 @@ const ConfigOnlySection: React.FC<ConfigOnlySectionProps> = ({
               )}
               <span>
                 {downloadingPaths.has(baseConfigPath)
-                  ? "Downloading..."
+                  ? "Downloading... "
                   : "Download Config"}
               </span>
             </button>

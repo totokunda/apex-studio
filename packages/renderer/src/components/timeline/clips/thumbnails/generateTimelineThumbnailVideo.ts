@@ -3,7 +3,7 @@ import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
 import { useControlsStore } from "@/lib/control";
 import { MediaInfo, VideoClipProps } from "@/lib/types";
 import { getClipWidth } from "@/lib/clip";
-
+import { useClipStore } from "@/lib/clip";
 const THUMBNAIL_TILE_SIZE = 36;
 
 export const generateTimelineThumbnailVideo = async (
@@ -162,9 +162,12 @@ export const generateTimelineThumbnailVideo = async (
   }
 
   // 1) Immediate draw using nearest cached frames (synchronous)
+  const getAssetById = useClipStore.getState().getAssetById;
+  const asset = getAssetById(currentClip.assetId);
+  if (!asset) return;
 
   const nearest = getNearestCachedCanvasSamples(
-    currentClip?.src!,
+    asset.path,
     frameIndices,
     thumbnailWidth,
     timelineHeight,
@@ -285,7 +288,7 @@ export const generateTimelineThumbnailVideo = async (
       }
       const exactSamples = await generateTimelineSamples(
         currentClipId,
-        currentClip?.src!,
+        asset.path,
         frameIndices,
         thumbnailWidth,
         timelineHeight,

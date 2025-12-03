@@ -30,6 +30,7 @@ import {
   PreprocessorClipType,
   GroupClipProps,
   ModelClipProps,
+  AudioClipProps,
 } from "@/lib/types";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -144,6 +145,7 @@ const TimelineClip: React.FC<
   const setSelectedPreprocessorId = useClipStore(
     (s) => s.setSelectedPreprocessorId,
   );
+  const getAssetById = useClipStore((s) => s.getAssetById);
   const setIsDraggingGlobal = useClipStore((s) => s.setIsDragging);
   const ctrlFocusFrame = useControlsStore((s) => s.focusFrame);
   const tool = useViewportStore((s) => s.tool);
@@ -243,7 +245,7 @@ const TimelineClip: React.FC<
     document.createElement("canvas"),
   );
   const mediaInfoRef = useRef<MediaInfo | undefined>(
-    getMediaInfoCached(currentClip?.src!),
+    getMediaInfoCached((currentClip as VideoClipProps | ImageClipProps)?.assetId!),
   );
   const dragInitialWindowRef = useRef<[number, number] | null>(null);
   const thumbnailClipWidth = useRef<number>(0);
@@ -299,12 +301,12 @@ const TimelineClip: React.FC<
   // (moved) image positioning is computed after clipPosition is defined
 
   useEffect(() => {
-    if (!currentClip?.src) {
+    if (!(currentClip as VideoClipProps | ImageClipProps)?.assetId) {
       mediaInfoRef.current = undefined;
       return;
     }
-    mediaInfoRef.current = getMediaInfoCached(currentClip.src);
-  }, [currentClip?.src]);
+    mediaInfoRef.current = getMediaInfoCached((currentClip as VideoClipProps | ImageClipProps)?.assetId!);
+  }, [(currentClip as VideoClipProps | ImageClipProps)?.assetId]);
 
   useEffect(() => {
     imageCanvas.width = Math.min(clipWidth, maxTimelineWidth);
@@ -502,7 +504,7 @@ const TimelineClip: React.FC<
     if (clipType === "audio") {
       generateTimelineThumbnailAudio(
         clipType,
-        currentClip,
+        currentClip as AudioClipProps,
         currentClipId,
         mediaInfoRef.current ?? null,
         imageCanvas,
@@ -517,7 +519,7 @@ const TimelineClip: React.FC<
     } else if (clipType === "image") {
       generateTimelineThumbnailImage(
         clipType,
-        currentClip,
+        currentClip as ImageClipProps,
         currentClipId,
         mediaInfoRef.current ?? null,
         imageCanvas,
@@ -1186,12 +1188,14 @@ const TimelineClip: React.FC<
       const isSeparated = (() => {
         if (!clip || clip.type !== "video") return false;
         try {
-          const url = new URL(clip.src);
+          const asset = clipsState.getAssetById(clip.assetId);
+          if (!asset) return false;
+          const url = new URL(asset.path);
           if ((url.hash || "").replace("#", "") === "video") return true;
-          const audioURL = new URL(clip.src);
+          const audioURL = new URL(asset.path);
           audioURL.hash = "audio";
           return (clipsState.clips || []).some(
-            (c) => c.type === "audio" && c.src === audioURL.toString(),
+            (c) => c.type === "audio" && c.assetId === asset.id,
           );
         } catch {
           return false;
@@ -1244,7 +1248,7 @@ const TimelineClip: React.FC<
 
       const isGroup = clip?.type === "group";
       const isModelWithSrc =
-        clip?.type === "model" && typeof clip.src === "string";
+        clip?.type === "model" && typeof clip.assetId === "string";
 
       const otherCommands: ContextMenuItem[] = [];
 
@@ -1265,7 +1269,7 @@ const TimelineClip: React.FC<
             action: "export",
           });
         }
-      } else if (clip?.type === "audio" && clip.src) {
+      } else if (clip?.type === "audio" && clip.assetId) {
         otherCommands.push({
           id: "export",
           label: "Export as Audio",
@@ -1711,24 +1715,28 @@ const TimelineClip: React.FC<
           childrenToUse.map(async (child) => {
             if (
               child?.type === "video" ||
-              (child?.type === "image" && child?.src)
+              (child?.type === "image" && child?.assetId)
             ) {
-              const mediaInfo = getMediaInfoCached(child.src);
+              const asset = getAssetById(child.assetId);
+              if (!asset) return null;
+              const mediaInfo = getMediaInfoCached(asset.path);
               if (!mediaInfo) return null;
               const masks =
                 (child as VideoClipProps | ImageClipProps).masks || [];
               const preprocessors =
                 (child as VideoClipProps | ImageClipProps).preprocessors || [];
               const poster = await generatePosterCanvas(
-                child.src,
+                asset.path,
                 undefined,
                 undefined,
                 { mediaInfo, masks, preprocessors },
               );
               if (!poster) return null;
               return poster;
-            } else if (child?.type === "audio" && child?.src) {
-              const mediaInfo = getMediaInfoCached(child.src);
+            } else if (child?.type === "audio" && child?.assetId) {
+              const asset = getAssetById(child.assetId);
+              if (!asset) return null;
+              const mediaInfo = getMediaInfoCached(asset.path);
               if (!mediaInfo) return null;
               const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
               const cssWidth = 64;
@@ -1737,7 +1745,7 @@ const TimelineClip: React.FC<
               const height = cssHeight * dpr;
               // make the height and width small like max and use that ratio to scale the width and height
               const waveform = await generateAudioWaveformCanvas(
-                child.src,
+                asset.path,
                 width,
                 height,
                 { color: "#7791C4", mediaInfo: mediaInfo },

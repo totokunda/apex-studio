@@ -4,6 +4,7 @@ import { CanvasSink, WrappedCanvas } from "mediabunny";
 import { getMediaInfo, nowMs } from "./utils";
 import { MediaCache } from "./cache";
 import { videoDecoders, pruneStaleDecoders } from "./utils";
+import { fileURLToPath, pathToFileURL, resolveOriginalPath } from "@app/preload";
 
 function getOrCreateVideoDecoder(
   path: string,
@@ -30,6 +31,7 @@ function getOrCreateVideoDecoder(
       fit: "contain", // In case the video changes dimensions over time
       alpha: canBeTransparent,
     });
+
 
     const ctx: VideoDecoderContext = {
       sink,
@@ -107,14 +109,38 @@ export const getVideoFrameIterator = async (
     endIndex?: number; // last project frame index to render (exclusive)
     speed?: number; // playback speed multiplier (e.g., 0.5x, 1x, 2x)
     isolationKey?: string; // ensure per-consumer decoder isolation
+    useOriginal?: boolean; // swap proxy for original source
   },
 ): Promise<AsyncIterable<WrappedCanvas | null>> => {
-  let mediaInfo = options?.mediaInfo || MediaCache.getState().getMedia(path);
-  if (!mediaInfo) {
+  let mediaInfo = options?.mediaInfo;
+
+  if (!mediaInfo && !options.useOriginal) {
+    mediaInfo = MediaCache.getState().getMedia(path);
+  }
+
+  if (options?.useOriginal) {
+    try {
+      const fsPath = fileURLToPath(path);
+      const originalFsPath = await resolveOriginalPath(fsPath);
+      console.log("originalFsPath", originalFsPath, fsPath);
+      if (originalFsPath !== fsPath) {
+        console.log(path, originalFsPath, pathToFileURL(originalFsPath));
+        path = pathToFileURL(originalFsPath);
+      }
+      console.log("path", path);
+    } catch (e) {
+      console.error("Error resolving original path", e);
+      // ignore path parsing errors
+    }
+  }
+
+  if (!mediaInfo ) {
     // fetch media info
     mediaInfo = await getMediaInfo(path);
-    MediaCache.getState().setMedia(path, mediaInfo);
   }
+
+  // Ensure we use the resolved path (e.g. if swapped to original)
+  path = mediaInfo.path;
 
   if (!mediaInfo.video) throw new Error("Media info not found");
 
@@ -150,10 +176,11 @@ export const getVideoFrameIterator = async (
           : undefined;
 
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      const stream = await (decoder.sink as any).canvases(
+      const stream = await decoder.sink.canvases(
         startTimestamp,
         endTimestamp,
       );
+      
       const it = (stream as AsyncIterable<WrappedCanvas | null>)[
         Symbol.asyncIterator
       ]();
@@ -174,6 +201,7 @@ export const getVideoFrameIterator = async (
         ) {
           prev = next.value;
           next = await it.next();
+         
         }
 
         let out: WrappedCanvas | null = null;

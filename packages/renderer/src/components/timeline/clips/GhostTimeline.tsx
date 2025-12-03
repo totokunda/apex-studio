@@ -17,7 +17,10 @@ const GhostTimeline: React.FC<TimelineProps> = ({
     ghostTimelineId,
     getClipsForTimeline,
     draggingClipId,
+    ghostInStage,
   } = useClipStore();
+
+  
   const { timelineDuration } = useControlsStore();
   const ghostWidth = useMemo(
     () =>
@@ -40,7 +43,7 @@ const GhostTimeline: React.FC<TimelineProps> = ({
   }, [currentClip?.type]);
 
   const computedGuideLines = useMemo(() => {
-    if (ghostTimelineId !== timelineId) return null;
+    if (!ghostInStage || ghostTimelineId !== timelineId) return null;
     const [tStart, tEnd] = timelineDuration;
     const stageWidth = timelineWidth || 0;
     // Build merged occupied intervals in px (inner coordinates)
@@ -113,6 +116,7 @@ const GhostTimeline: React.FC<TimelineProps> = ({
     timelineDuration,
     timelineWidth,
     draggingClipId,
+    ghostInStage,
   ]);
 
   // For preprocessor timelines, use ghostGuideLines from store; for media timelines, use computed guidelines
@@ -120,7 +124,7 @@ const GhostTimeline: React.FC<TimelineProps> = ({
 
   return (
     <React.Fragment>
-      {ghostTimelineId == timelineId && guideLines && (
+      {ghostInStage && ghostTimelineId === timelineId && guideLines && (
         <>
           {/* Highlight the valid drop gap */}
           <Rect
@@ -134,7 +138,7 @@ const GhostTimeline: React.FC<TimelineProps> = ({
           />
         </>
       )}
-      {ghostTimelineId == timelineId && (
+      {ghostInStage && ghostTimelineId === timelineId && (
         <Rect
           x={ghostX + gapBoundaryPadding}
           y={timelineY! - timelineHeight!}
@@ -149,7 +153,7 @@ const GhostTimeline: React.FC<TimelineProps> = ({
           shadowOpacity={0.35}
         />
       )}
-      {ghostTimelineId == timelineId && guideLines && (
+      {ghostInStage && ghostTimelineId === timelineId && guideLines && (
         <>
           {/* Gap boundary guidelines - extend 10px above and below */}
           <Line

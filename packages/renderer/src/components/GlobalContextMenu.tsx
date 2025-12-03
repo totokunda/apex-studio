@@ -5,7 +5,7 @@ import { useClipStore } from "@/lib/clip";
 import { useControlsStore } from "@/lib/control";
 import { cn } from "@/lib/utils";
 import { useViewportStore } from "@/lib/viewport";
-import type { AnyClipProps } from "@/lib/types";
+import type { AnyClipProps, ImageClipProps, VideoClipProps } from "@/lib/types";
 import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
 import { getMediaInfoCached } from "@/lib/media/utils";
 import { exportSequence, exportClip } from "@app/export-renderer";
@@ -29,7 +29,7 @@ const GlobalContextMenu: React.FC = () => {
   const getClipPositionScore = useClipStore((s) => s.getClipPositionScore);
   const fps = useControlsStore((s) => s.fps);
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
-
+  const getAssetById = useClipStore((s) => s.getAssetById);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportKind, setExportKind] = useState<
     "audio" | "image" | "video" | null
@@ -43,9 +43,9 @@ const GlobalContextMenu: React.FC = () => {
   ): string => {
     if (!clip) return "export";
     try {
-      const src = (clip as any)?.src as string | undefined;
-      if (!src) return "export";
-      const parts = src.split(/[\\/]/);
+      const asset = getAssetById((clip as any)?.assetId);
+      if (!asset) return "export";
+      const parts = asset.path.split(/[\\/]/);
       const last = parts[parts.length - 1] || "";
       const stem = last.replace(/\.[^.]+$/, "");
       return stem || "export";
@@ -146,13 +146,13 @@ const GlobalContextMenu: React.FC = () => {
           let nativeH = 0;
           if (clip.type === "image") {
             const info = getMediaInfoCached(
-              (clip as any).src as string | undefined,
+              (clip as ImageClipProps).assetId,
             );
             nativeW = info?.image?.width ?? 0;
             nativeH = info?.image?.height ?? 0;
           } else if (clip.type === "video") {
             const info = getMediaInfoCached(
-              (clip as any).src as string | undefined,
+              (clip as VideoClipProps).assetId,
             );
             nativeW = info?.video?.displayWidth ?? 0;
             nativeH = info?.video?.displayHeight ?? 0;
@@ -172,6 +172,7 @@ const GlobalContextMenu: React.FC = () => {
             clip as AnyClipProps,
             {
               aspectRatio,
+              getAssetById,
               getClipsForGroup,
               getClipsByType,
               getClipPositionScore,
@@ -231,13 +232,13 @@ const GlobalContextMenu: React.FC = () => {
           let nativeH = 0;
           if (clip.type === "image") {
             const info = getMediaInfoCached(
-              (clip as any).src as string | undefined,
+              (clip as ImageClipProps).assetId,
             );
             nativeW = info?.image?.width ?? 0;
             nativeH = info?.image?.height ?? 0;
           } else if (clip.type === "video") {
             const info = getMediaInfoCached(
-              (clip as any).src as string | undefined,
+              (clip as VideoClipProps).assetId,
             );
             nativeW = info?.video?.displayWidth ?? 0;
             nativeH = info?.video?.displayHeight ?? 0;
@@ -257,6 +258,7 @@ const GlobalContextMenu: React.FC = () => {
             clip as AnyClipProps,
             {
               aspectRatio,
+              getAssetById,
               getClipsForGroup,
               getClipsByType,
               getClipPositionScore,

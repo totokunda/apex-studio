@@ -1,10 +1,10 @@
 import { generateTimelineSamples } from "@/lib/media/timeline";
-import { useControlsStore } from "@/lib/control";
-import { MediaInfo } from "@/lib/types";
+import { AudioClipProps, MediaInfo } from "@/lib/types";
+import { useClipStore } from "@/lib/clip";
 
 export const generateTimelineThumbnailAudio = async (
   clipType: string,
-  currentClip: any,
+  currentClip: AudioClipProps,
   currentClipId: string,
   mediaInfoRef: MediaInfo | null,
   imageCanvas: HTMLCanvasElement,
@@ -30,6 +30,7 @@ export const generateTimelineThumbnailAudio = async (
     Math.min(currentEndFrame, timelineDuration[1]) * speed;
   const duration = timelineDuration[1] - timelineDuration[0];
 
+  const getAssetById = useClipStore.getState().getAssetById;
   const pixelsPerFrame = timelineWidth / duration;
   const positionOffsetStart = Math.round(
     Math.max(0, (currentStartFrame - timelineDuration[0]) * pixelsPerFrame),
@@ -40,15 +41,19 @@ export const generateTimelineThumbnailAudio = async (
         (positionOffsetStart === 0 ? timelinePadding : 0),
     ) / speed;
 
+  
+    const asset = getAssetById(currentClip.assetId);
+    if (!asset) return;
+
   const samples = await generateTimelineSamples(
     currentClipId,
-    currentClip?.src!,
+    asset.path,
     [0],
     width,
     height,
     tClipWidth,
     {
-      mediaInfo: mediaInfoRef,
+      mediaInfo: mediaInfoRef ?? undefined,
       startFrame: visibleStartFrame - timelineShift,
       endFrame: visibleEndFrame - timelineShift,
       volume: (currentClip as any)?.volume,

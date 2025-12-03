@@ -17,6 +17,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import TimelineSearch from "./timeline/TimelineSearch";
 import { useClipStore } from "@/lib/clip";
 import { useAssetControlsStore } from "@/lib/assetControl";
+import { useProjectsStore } from "@/lib/projects";
 import TimelineClipPosterPreview from "./TimelineClipPosterPreview";
 import {
   AnyClipProps,
@@ -84,9 +85,11 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [filteredMediaItems, setFilteredMediaItems] = useState<MediaItem[]>([]);
   const { fps } = useControlsStore();
+  const addAsset = useClipStore((s) => s.addAsset);
   // media cache not needed for list sync here; we subscribe to library version instead
   const { clips } = useClipStore();
   const getClipById = useClipStore((s) => s.getClipById);
+  const getActiveProject = useProjectsStore((s) => s.getActiveProject);
   const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
   const setSelectedAssetChangeHandler = useAssetControlsStore(
     (s) => s.setSelectedAssetChangeHandler,
@@ -103,7 +106,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
 
   useEffect(() => {
     (async () => {
-      const list = await listConvertedMedia();
+      const list = await listConvertedMedia(getActiveProject()?.folderUuid);
       const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
       const infos = await Promise.all(infoPromises);
       let results: MediaItem[] = list.map((it, idx) => ({
@@ -145,8 +148,8 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
       });
       if (paths.length === 0) return;
       const existingNames = new Set(mediaItems.map((it) => it.name));
-      await importMediaPaths(paths);
-      const list = await listConvertedMedia();
+      await importMediaPaths(paths, undefined, getActiveProject()?.folderUuid);
+      const list = await listConvertedMedia(getActiveProject()?.folderUuid);
       const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
       const infos = await Promise.all(infoPromises);
       let results: MediaItem[] = list.map((it, idx) => ({
@@ -185,10 +188,11 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
             1,
             Math.floor((first.mediaInfo?.duration || 0) * fps),
           );
+          const asset = addAsset({ path: first.assetUrl, modelInputAsset: true });
           const clip: VideoClipProps = {
             type: "video",
             clipId: `media:${first.assetUrl}`,
-            src: first.assetUrl,
+            assetId: asset.id,
             startFrame: 0,
             endFrame: duration,
             mediaWidth: mw || undefined,
@@ -205,10 +209,14 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
           const iw = first.mediaInfo?.image?.width ?? 0;
           const ih = first.mediaInfo?.image?.height ?? 0;
           const iar = iw && ih ? iw / ih : undefined;
+          const asset = addAsset({
+            path: first.assetUrl,
+            modelInputAsset: true,
+          });
           const clip: ImageClipProps = {
             type: "image",
             clipId: `media:${first.assetUrl}`,
-            src: first.assetUrl,
+            assetId: asset.id,
             startFrame: 0,
             endFrame: 1,
             mediaWidth: iw || undefined,
@@ -383,10 +391,14 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
                         (media.mediaInfo as any)?.video?.height ??
                         0;
                       const mar = mw && mh ? mw / mh : undefined;
+                      const asset = addAsset({
+                        path: media.assetUrl,
+                        modelInputAsset: true,
+                      });
                       const clip: VideoClipProps = {
                         type: "video",
                         clipId: targetClipId,
-                        src: media.assetUrl,
+                        assetId: asset.id,
                         startFrame: 0,
                         endFrame: duration,
                         mediaWidth: mw || undefined,
@@ -403,10 +415,14 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
                       const iw = media.mediaInfo?.image?.width ?? 0;
                       const ih = media.mediaInfo?.image?.height ?? 0;
                       const iar = iw && ih ? iw / ih : undefined;
+                      const asset = addAsset({
+                        path: media.assetUrl,
+                        modelInputAsset: true,
+                      });
                       const clip: ImageClipProps = {
                         type: "image",
                         clipId: targetClipId,
-                        src: media.assetUrl,
+                        assetId: asset.id,
                         startFrame: 0,
                         endFrame: 1,
                         mediaWidth: iw || undefined,
@@ -502,6 +518,8 @@ const ImageInput: React.FC<ImageInputProps> = ({
   const { focusFrameByInputId } = useInputControlsStore();
   const focusFrameForInput = focusFrameByInputId[inputId] ?? 0;
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const getAssetById = useClipStore((s) => s.getAssetById);
+  const addAsset = useClipStore((s) => s.addAsset);
 
   const isClipOnTimeline = useMemo(() => {
     if (!value) return false;
@@ -611,9 +629,9 @@ const ImageInput: React.FC<ImageInputProps> = ({
             }
           }
           // Determine intrinsic media dimensions (fallback to mediaInfo if missing)
-          let src: string | undefined = (next as any)?.src;
-          let mw = Number((next as any)?.mediaWidth ?? 0);
-          let mh = Number((next as any)?.mediaHeight ?? 0);
+          let src: string | undefined = getAssetById((next as ImageClipProps | VideoClipProps).assetId)?.path;
+          let mw = Number((next as ImageClipProps | VideoClipProps)?.mediaWidth ?? 0);
+          let mh = Number((next as ImageClipProps | VideoClipProps)?.mediaHeight ?? 0);
           if ((!mw || !mh) && src) {
             try {
               const info = await getMediaInfo(src);
@@ -667,6 +685,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
 
   const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
+  const getActiveProject = useProjectsStore((s) => s.getActiveProject);
 
   const setInputTimelineDuration = useInputControlsStore(
     (s) => s.setTimelineDuration,
@@ -771,7 +790,8 @@ const ImageInput: React.FC<ImageInputProps> = ({
       return;
     }
 
-    const src = (clip as any)?.src as string | undefined;
+    const asset = getAssetById((clip as ImageClipProps | VideoClipProps).assetId);
+    const src = asset?.path;
     if (!src) {
       setContentRatio(null);
       return;
@@ -885,10 +905,14 @@ const ImageInput: React.FC<ImageInputProps> = ({
               (data.mediaInfo as any)?.video?.height ??
               0;
             const mar = mw && mh ? mw / mh : undefined;
+            const asset = addAsset({
+              path: data.assetUrl,
+              modelInputAsset: true,
+            });
             const clip: VideoClipProps = {
               type: "video",
               clipId: targetClipId,
-              src: assetUrl,
+              assetId: asset.id,
               startFrame: 0,
               endFrame: duration,
               mediaWidth: mw || undefined,
@@ -904,11 +928,15 @@ const ImageInput: React.FC<ImageInputProps> = ({
           } else {
             const iw = data.mediaInfo?.image?.width ?? 0;
             const ih = data.mediaInfo?.image?.height ?? 0;
-            const iar = iw && ih ? iw / ih : undefined;
+            const iar = iw && ih ? iw / ih : undefined; 
+            const asset = addAsset({
+              path: data.assetUrl,
+              modelInputAsset: true,
+            });
             const clip: ImageClipProps = {
               type: "image",
               clipId: targetClipId,
-              src: assetUrl,
+              assetId: asset.id,
               startFrame: 0,
               endFrame: 1,
               mediaWidth: iw || undefined,
@@ -1032,10 +1060,10 @@ const ImageInput: React.FC<ImageInputProps> = ({
     const isAllowed = VIDEO_EXTS.includes(ext) || IMAGE_EXTS.includes(ext);
     if (!isAllowed) return;
     try {
-      const before = await listConvertedMedia();
+      const before = await listConvertedMedia(getActiveProject()?.folderUuid);
       const existingNames = new Set(before.map((it) => it.name));
-      await importMediaPaths([path]);
-      const after = await listConvertedMedia();
+      await importMediaPaths([path], undefined, getActiveProject()?.folderUuid);
+      const after = await listConvertedMedia(getActiveProject()?.folderUuid);
       const newlyAdded = after
         .filter((it) => !existingNames.has(it.name))
         .filter((it) => it.type === "image" || it.type === "video");
@@ -1054,10 +1082,14 @@ const ImageInput: React.FC<ImageInputProps> = ({
             const mh =
               info?.video?.displayHeight ?? (info as any)?.video?.height ?? 0;
             const mar = mw && mh ? mw / mh : undefined;
+            const asset = addAsset({
+              path: first.assetUrl,
+              modelInputAsset: true,
+            });
             const clip: VideoClipProps = {
               type: "video",
               clipId: `media:${first.assetUrl}`,
-              src: first.assetUrl,
+              assetId: asset.id,
               startFrame: 0,
               endFrame: duration,
               mediaWidth: mw || undefined,
@@ -1075,10 +1107,14 @@ const ImageInput: React.FC<ImageInputProps> = ({
           const iw = (await getMediaInfo(first.assetUrl))?.image?.width ?? 0; // best effort
           const ih = (await getMediaInfo(first.assetUrl))?.image?.height ?? 0;
           const iar = iw && ih ? iw / ih : undefined;
+          const asset = addAsset({
+            path: first.assetUrl,
+            modelInputAsset: true,
+          });
           const clip: ImageClipProps = {
             type: "image",
             clipId: `media:${first.assetUrl}`,
-            src: first.assetUrl,
+            assetId: asset.id,
             startFrame: 0,
             endFrame: 1,
             mediaWidth: iw || undefined,

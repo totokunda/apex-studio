@@ -1135,6 +1135,38 @@ export class ApexApi implements AppModule {
         }
       },
     );
+
+    // Folder size (bytes) for a given path on the local filesystem
+    ipcMain.handle(
+      "system:get-folder-size",
+      async (_event, targetPath: string) => {
+        try {
+          const root = String(targetPath || "").trim();
+          if (!root) {
+            return {
+              success: false,
+              error: "Invalid path",
+            } as ConfigResponse<{ size_bytes: number }>;
+          }
+
+          const totalBytes = await this.#computeFolderSize(root);
+          const res: ConfigResponse<{ size_bytes: number }> = {
+            success: true,
+            data: { size_bytes: totalBytes },
+          };
+          return res;
+        } catch (error) {
+          const res: ConfigResponse<{ size_bytes: number }> = {
+            success: false,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Failed to compute folder size",
+          };
+          return res;
+        }
+      },
+    );
   }
 
   private registerJobHandlers(): void {
@@ -1563,6 +1595,45 @@ export class ApexApi implements AppModule {
       return mutated ? nextValue : value;
     }
     return value;
+  }
+
+  async #computeFolderSize(root: string): Promise<number> {
+    try {
+      const stat = await fs.promises.stat(root);
+      if (!stat.isDirectory()) {
+        return stat.size;
+      }
+    } catch {
+      return 0;
+    }
+
+    let total = 0;
+    const stack: string[] = [root];
+
+    while (stack.length > 0) {
+      const dir = stack.pop() as string;
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+        } else if (entry.isFile()) {
+          try {
+            const fileStat = await fs.promises.stat(fullPath);
+            total += fileStat.size;
+          } catch {
+            // ignore individual file errors
+          }
+        }
+      }
+    }
+
+    return total;
   }
 }
 

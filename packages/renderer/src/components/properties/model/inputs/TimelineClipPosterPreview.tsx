@@ -9,7 +9,7 @@ import { Stage, Layer, Group, Rect } from "react-konva";
 import { useClipStore } from "@/lib/clip";
 import { useViewportStore } from "@/lib/viewport";
 import { BASE_LONG_SIDE } from "@/lib/settings";
-import { AnyClipProps } from "@/lib/types";
+import { AnyClipProps, ImageClipProps, VideoClipProps } from "@/lib/types";
 import VideoPreview from "@/components/preview/clips/VideoPreview";
 import ImagePreview from "@/components/preview/clips/ImagePreview";
 import ShapePreview from "@/components/preview/clips/ShapePreview";
@@ -33,6 +33,214 @@ import { getMediaInfo } from "@/lib/media/utils";
 
 import { remapMaskForMediaDialog } from "@/lib/mask/transformUtils";
 import { ClipTransform, MaskClipProps } from "@/lib/types";
+import { BaseClipApplicator } from "@/components/preview/clips/apply/base";
+
+// 1. EXTRACTED COMPONENT TO HANDLE STABLE OVERRIDES
+const PosterClipItem = React.memo(({
+  clip,
+  rectWidth,
+  rectHeight,
+  focusFrame,
+  inputId,
+  getApplicators,
+  clipWithinFrame,
+  getClipById
+}: {
+  clip: AnyClipProps;
+  rectWidth: number;
+  rectHeight: number;
+  focusFrame: number;
+  inputId?: string;
+  getApplicators: (id: string, frame: number) => BaseClipApplicator[];
+  clipWithinFrame: (clip: AnyClipProps, frame: number, overlap: boolean, padding: number) => boolean;
+  getClipById: (id: string) => AnyClipProps | undefined;
+}) => {
+  const startFrame = clip.startFrame || 0;
+  const groupStart = clip.groupId
+    ? getClipById(clip.groupId)?.startFrame || 0
+    : 0;
+  const relativeStart = startFrame - groupStart;
+  const hasOverlap =
+    (clip.type === "video" || clip.type === "image") &&
+    (clip.groupId ? relativeStart : startFrame) > 0
+      ? true
+      : false;
+  
+  const effectiveGlobalFrame = clip.groupId
+    ? focusFrame + groupStart
+    : focusFrame;
+    
+  const clipAtFrame = clipWithinFrame(
+    clip,
+    effectiveGlobalFrame,
+    hasOverlap,
+    0,
+  );
+  
+  if (!clipAtFrame && clip.groupId) return null;
+
+  const applicators = getApplicators(
+    clip.clipId,
+    effectiveGlobalFrame,
+  );
+
+  // 2. MEMOIZE THE OVERRIDE CLIP TO PREVENT VIDEO PREVIEW RESETS
+  const overrideToUse = useMemo(() => {
+    const override = { ...clip };
+    if (
+        override?.transform &&
+        !override.groupId &&
+        override.originalTransform
+    ) {
+        if (override.transform.crop) {
+            override.transform = {
+                ...override.originalTransform,
+                width: rectWidth,
+                height: rectHeight,
+                x: 0,
+                y: 0,
+                scaleX: 1,
+                scaleY: 1,
+                rotation: 0,
+                crop: override.transform.crop,
+                opacity: 100,
+            };
+        } else {
+            override.transform = {
+                ...override.originalTransform,
+            };
+        }
+
+        // Remap masks
+        if ((override as any).masks?.length > 0) {
+            const masks = [
+                ...(override as any).masks,
+            ] as MaskClipProps[];
+
+            (override as any).masks = masks.map(
+                (mask: MaskClipProps) => {
+                    // @ts-ignore
+                    const nW = clip.mediaWidth || clip.width || 0;
+                    // @ts-ignore
+                    const nH = clip.mediaHeight || clip.height || 0;
+
+                    const nativeTransform: ClipTransform = {
+                        x: 0,
+                        y: 0,
+                        width: nW,
+                        height: nH,
+                        scaleX: 1,
+                        scaleY: 1,
+                        rotation: clip.originalTransform?.rotation ?? 0,
+                        opacity: 1,
+                        cornerRadius: 0,
+                    };
+
+                    const currentTransform = clip.transform ?? nativeTransform;
+                    const zeroCurrentTransform: ClipTransform = {
+                        ...currentTransform,
+                        x: 0,
+                        y: 0,
+                    };
+
+                    const overrideTransform = override.transform!;
+                    const zeroOverrideTransform: ClipTransform = {
+                        ...overrideTransform,
+                        x: 0,
+                        y: 0,
+                    };
+
+                    const maskForRemap = { ...mask, transform: undefined };
+
+                    const toOriginal = remapMaskForMediaDialog(
+                        maskForRemap,
+                        zeroCurrentTransform,
+                        nativeTransform,
+                    );
+
+                    const toOverride = remapMaskForMediaDialog(
+                        toOriginal,
+                        nativeTransform,
+                        zeroOverrideTransform,
+                    );
+
+                    toOverride.transform = { ...overrideTransform };
+                    return toOverride;
+                },
+            );
+        }
+    }
+    return override;
+  }, [clip, rectWidth, rectHeight]);
+
+  switch (clip.type) {
+    case "video":
+      return (
+        <VideoPreview
+          key={clip.clipId}
+          {...(clip as any)}
+          overrideClip={overrideToUse}
+          rectWidth={rectWidth}
+          rectHeight={rectHeight}
+          applicators={applicators}
+          overlap={true}
+          inputMode={true}
+          focusFrameOverride={focusFrame}
+          inputId={inputId}
+        />
+      );
+    case "image":
+      return (
+        <ImagePreview
+          key={clip.clipId}
+          {...(clip as any)}
+          overrideClip={overrideToUse}
+          rectWidth={rectWidth}
+          rectHeight={rectHeight}
+          applicators={applicators}
+          overlap={true}
+          inputMode={true}
+          inputId={inputId}
+          focusFrameOverride={focusFrame}
+        />
+      );
+    case "shape":
+      return (
+        <ShapePreview
+          key={clip.clipId}
+          {...(clip as any)}
+          rectWidth={rectWidth}
+          rectHeight={rectHeight}
+          applicators={applicators}
+          assetMode={true}
+        />
+      );
+    case "text":
+      return (
+        <TextPreview
+          key={clip.clipId}
+          {...(clip as any)}
+          rectWidth={rectWidth}
+          rectHeight={rectHeight}
+          applicators={applicators}
+          assetMode={true}
+        />
+      );
+    case "draw":
+      return (
+        <DrawingPreview
+          key={clip.clipId}
+          {...(clip as any)}
+          rectWidth={rectWidth}
+          rectHeight={rectHeight}
+          assetMode={true}
+          applicators={applicators}
+        />
+      );
+    default:
+      return null;
+  }
+});
 
 const TimelineClipPosterPreview: React.FC<{
   clipId?: string;
@@ -69,6 +277,7 @@ const TimelineClipPosterPreview: React.FC<{
 
   const ratioCacheByClipIdRef = useRef<Record<string, number>>({});
   const [contentRatio, setContentRatio] = useState<number | null>(null);
+  const getAssetById = useClipStore((s) => s.getAssetById);
 
   const rootClip = useMemo<AnyClipProps | null>(() => {
     if (clipOverride) return clipOverride as AnyClipProps;
@@ -91,7 +300,8 @@ const TimelineClipPosterPreview: React.FC<{
       setContentRatio(cached);
       return;
     }
-    const src = (clip as any)?.src as string | undefined;
+    const asset = getAssetById((clip as VideoClipProps | ImageClipProps).assetId);
+    const src = asset?.path;
     if (!src) {
       setContentRatio(null);
       return;
@@ -303,197 +513,21 @@ const TimelineClipPosterPreview: React.FC<{
               ? null
               : toRender.map((clip) => {
                   if (clip.type === "group") return null;
-                  const startFrame = clip.startFrame || 0;
-                  const groupStart = clip.groupId
-                    ? getClipById(clip.groupId)?.startFrame || 0
-                    : 0;
-                  const relativeStart = startFrame - groupStart;
-                  const hasOverlap =
-                    (clip.type === "video" || clip.type === "image") &&
-                    (clip.groupId ? relativeStart : startFrame) > 0
-                      ? true
-                      : false;
-                  // Use global frame for bounds/effects, but keep local focus for child playback math
-                  const effectiveGlobalFrame = clip.groupId
-                    ? focusFrame + groupStart
-                    : focusFrame;
-                  const clipAtFrame = clipWithinFrame(
-                    clip,
-                    effectiveGlobalFrame,
-                    hasOverlap,
-                    0,
+                  
+                  // 3. USE THE NEW MEMOIZED ITEM COMPONENT HERE
+                  return (
+                    <PosterClipItem
+                        key={clip.clipId}
+                        clip={clip}
+                        rectWidth={rectWidth}
+                        rectHeight={rectHeight}
+                        focusFrame={focusFrame}
+                        inputId={inputId}
+                        getApplicators={getApplicators}
+                        clipWithinFrame={clipWithinFrame}
+                        getClipById={getClipById}
+                    />
                   );
-                  if (!clipAtFrame && clip.groupId) return null;
-
-                  const applicators = getApplicators(
-                    clip.clipId,
-                    effectiveGlobalFrame,
-                  );
-                  // Use clipOverride only when an explicit override group is provided
-                  const overrideToUse = { ...clip };
-                  if (
-                    overrideToUse?.transform &&
-                    !overrideToUse.groupId &&
-                    overrideToUse.originalTransform
-                  ) {
-                    if (overrideToUse.transform.crop) {
-                      overrideToUse.transform = {
-                        ...overrideToUse.originalTransform,
-                        width: rectWidth,
-                        height: rectHeight,
-                        x: 0,
-                        y: 0,
-                        scaleX: 1,
-                        scaleY: 1,
-                        rotation: 0,
-                        crop: overrideToUse.transform.crop,
-                        opacity: 100,
-                      };
-                    } else {
-                      overrideToUse.transform = {
-                        ...overrideToUse.originalTransform,
-                      };
-                    }
-
-                    // Remap masks
-                    if ((overrideToUse as any).masks?.length > 0) {
-                      const masks = [
-                        ...(overrideToUse as any).masks,
-                      ] as MaskClipProps[];
-
-                      (overrideToUse as any).masks = masks.map(
-                        (mask: MaskClipProps) => {
-                          // Calculate native dimensions for intermediate transform
-                          // @ts-ignore
-                          const nW = clip.mediaWidth || clip.width || 0;
-                          // @ts-ignore
-                          const nH = clip.mediaHeight || clip.height || 0;
-
-                          // Native transform at origin
-                          const nativeTransform: ClipTransform = {
-                            x: 0,
-                            y: 0,
-                            width: nW,
-                            height: nH,
-                            scaleX: 1,
-                            scaleY: 1,
-                            rotation: clip.originalTransform?.rotation ?? 0,
-                            opacity: 1,
-                            cornerRadius: 0,
-                          };
-
-                          // Zeroed current transform (preserve scale/crop but move to origin)
-                          const currentTransform =
-                            clip.transform ?? nativeTransform;
-                          const zeroCurrentTransform: ClipTransform = {
-                            ...currentTransform,
-                            x: 0,
-                            y: 0,
-                          };
-
-                          // Zeroed override transform
-                          const overrideTransform = overrideToUse.transform!;
-                          const zeroOverrideTransform: ClipTransform = {
-                            ...overrideTransform,
-                            x: 0,
-                            y: 0,
-                          };
-
-                          // Map: Current(0,0) -> Native(0,0)
-                          // We explicitly use the calculated zeroCurrentTransform as the source of truth
-                          // for the current mask coordinate space, ignoring any potentially stale transform
-                          // on the mask object itself.
-                          const maskForRemap = { ...mask, transform: undefined };
-
-                          const toOriginal = remapMaskForMediaDialog(
-                            maskForRemap,
-                            zeroCurrentTransform,
-                            nativeTransform,
-                          );
-
-                          // Map: Native(0,0) -> Override(0,0)
-                          const toOverride = remapMaskForMediaDialog(
-                            toOriginal,
-                            nativeTransform,
-                            zeroOverrideTransform,
-                          );
-
-                          // Restore actual transform position
-                          toOverride.transform = { ...overrideTransform };
-
-                          return toOverride;
-                        },
-                      );
-                    }
-                  }
-
-                  switch (clip.type) {
-                    case "video":
-                      return (
-                        <VideoPreview
-                          key={clip.clipId}
-                          {...(clip as any)}
-                          overrideClip={overrideToUse}
-                          rectWidth={rectWidth}
-                          rectHeight={rectHeight}
-                          applicators={applicators}
-                          overlap={true}
-                          inputMode={true}
-                          focusFrameOverride={focusFrame}
-                          inputId={inputId}
-                        />
-                      );
-                    case "image":
-                      return (
-                        <ImagePreview
-                          key={clip.clipId}
-                          {...(clip as any)}
-                          overrideClip={overrideToUse}
-                          rectWidth={rectWidth}
-                          rectHeight={rectHeight}
-                          applicators={applicators}
-                          overlap={true}
-                          inputMode={true}
-                          inputId={inputId}
-                          focusFrameOverride={focusFrame}
-                        />
-                      );
-                    case "shape":
-                      return (
-                        <ShapePreview
-                          key={clip.clipId}
-                          {...(clip as any)}
-                          rectWidth={rectWidth}
-                          rectHeight={rectHeight}
-                          applicators={applicators}
-                          assetMode={true}
-                        />
-                      );
-                    case "text":
-                      return (
-                        <TextPreview
-                          key={clip.clipId}
-                          {...(clip as any)}
-                          rectWidth={rectWidth}
-                          rectHeight={rectHeight}
-                          applicators={applicators}
-                          assetMode={true}
-                        />
-                      );
-                    case "draw":
-                      return (
-                        <DrawingPreview
-                          key={clip.clipId}
-                          {...(clip as any)}
-                          rectWidth={rectWidth}
-                          rectHeight={rectHeight}
-                          assetMode={true}
-                          applicators={applicators}
-                        />
-                      );
-                    default:
-                      return null;
-                  }
                 })}
             {toRender.map((clip) => {
               if (clip.type !== "video" && clip.type !== "audio") return null;

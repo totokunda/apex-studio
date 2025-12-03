@@ -91,7 +91,7 @@ export const ModelItem: React.FC<{
   }, [manifest.metadata?.demo_path]);
 
   const getAllComponentPaths = useMemo(() => {
-    const paths = [];
+    const paths:string[] = [];
     const components = manifest?.spec?.components || [];
     for (const comp of components) {
       const modelPaths = Array.isArray(comp.model_path)
@@ -115,7 +115,13 @@ export const ModelItem: React.FC<{
       }
       // add extra_model_paths too
       if (Array.isArray(comp?.extra_model_paths)) {
-        paths.push(...comp.extra_model_paths);
+        for (const p of comp.extra_model_paths) {
+          if (typeof p === "string") {
+            paths.push(p);
+          } else {
+            paths.push(p.path);
+          }
+        }
       }
       for (const modelPath of modelPaths) {
         if (typeof modelPath === "string") {
@@ -209,7 +215,7 @@ export const ModelItem: React.FC<{
       ) ||
       Array.from(downloadingPaths).some((p) => getAllComponentPaths.includes(p))
     );
-  }, [getAllComponentPaths, wsFilesByPath, downloadingPaths]);
+  }, [getAllComponentPaths, wsFilesByPath, downloadingPaths, getAllLoraPaths]);
 
   const allDownloaded = useMemo(() => {
     return manifest.downloaded && !isDownloading;
@@ -460,7 +466,7 @@ export const ModelItem: React.FC<{
                 const focusFrame = Math.max(0, controls.focusFrame || 0);
                 const desiredFrames = Math.max(
                   1,
-                  (manifest as any)?.desired_duration ?? 5 * fps,
+                  (manifest as any)?.desired_duration ?? controls.defaultClipLength * fps,
                 );
                 const startFrame = focusFrame;
                 const endFrame = startFrame + desiredFrames;
@@ -550,7 +556,7 @@ export const ModelItem: React.FC<{
               allDownloaded
                 ? "Add clip at playhead"
                 : isStartingDownload || isDownloading
-                  ? "Downloading…"
+                  ? "Downloading"
                   : "Download default variant"
             }
           >
@@ -565,7 +571,7 @@ export const ModelItem: React.FC<{
               {allDownloaded
                 ? "Add Clip"
                 : isStartingDownload || isDownloading
-                  ? "Downloading…"
+                  ? "Downloading"
                   : "Download"}
             </span>
           </button>
@@ -952,7 +958,7 @@ const ModelMenu: React.FC = () => {
             }
           />
           <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="w-full p-3 flex-shrink-0">
+            <div className="w-full p-3 shrink-0">
               <div className="relative bg-brand text-brand-light rounded-md placeholder:text-brand-light/50 items-center flex w-full p-3 space-x-2 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all">
                 <LuSearch className="w-4 h-4 text-brand-light/60" />
                 <input

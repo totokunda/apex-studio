@@ -5,6 +5,7 @@ import {
   MaskData,
   MaskTrackingDirection,
   MediaInfo,
+  VideoClipProps,
 } from "@/lib/types";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { LuChevronDown, LuPlay } from "react-icons/lu";
@@ -44,12 +45,14 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
   mask,
   clipId,
 }) => {
-  const clip = useClipStore((s) => s.getClipById(clipId));
+  const clip = useClipStore((s) => s.getClipById(clipId)) as VideoClipProps;
+  const getAssetById = useClipStore((s) => s.getAssetById);
+  const asset = useMemo(() => getAssetById(clip?.assetId), [clip?.assetId]);
   const updateClip = useClipStore((s) => s.updateClip);
   const updateMaskKeyframes = useClipStore((s) => s.updateMaskKeyframes);
   const focusFrame = useControlsStore((s) => s.focusFrame);
   const mediaInfoRef = useRef<MediaInfo | null>(
-    getMediaInfoCached(clip?.src || ""),
+    getMediaInfoCached(asset?.path || ""),
   );
   const streamingIdRef = useRef<string | null>(null);
   const detachStreamListenersRef = useRef<(() => void) | null>(null);
@@ -144,9 +147,12 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
 
     const isVideo = clip.type === "video";
     const direction: MaskTrackingDirection = mask.trackingDirection ?? "both";
+    const asset = getAssetById(clip.assetId);
 
-    const clipPath = (clip as any).src as string | undefined;
-    if (!clipPath) {
+
+    const assetPath = asset?.path;
+
+    if (!assetPath) {
       setTrackingError("Clip source unavailable for mask tracking");
       return;
     }
@@ -239,7 +245,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
       await trackMaskApi(
         {
           id: mask.id,
-          input_path: clipPath as string,
+          input_path: assetPath as string,
           anchor_frame: task.anchor_frame,
           frame_start: task.frame_start,
           frame_end: task.frame_end,
@@ -349,8 +355,9 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
 
     const isVideo = clip.type === "video";
     const direction: MaskTrackingDirection = mask.trackingDirection ?? "both";
-    const clipPath = (clip as any).src as string | undefined;
-    if (!clipPath) {
+    const asset = getAssetById(clip.assetId);
+    const assetPath = asset?.path;
+    if (!assetPath) {
       setTrackingError("Clip source unavailable for mask tracking");
       return;
     }
@@ -465,7 +472,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
     // Build create request
     const createReq: any = {
       id: mask.id,
-      input_path: clipPath,
+      input_path: assetPath,
       frame_number: frameNumber,
       tool: mask.tool === "shape" ? "shape" : "lasso",
       simplify_tolerance: 1.0,
@@ -547,7 +554,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
         await trackShapes(
           {
             id: mask.id,
-            input_path: clipPath,
+            input_path: assetPath,
             anchor_frame: task.anchor_frame,
             frame_start: task.frame_start,
             frame_end: task.frame_end,
@@ -602,7 +609,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
             create: createReq,
             track: {
               id: mask.id,
-              input_path: clipPath,
+              input_path: assetPath,
               anchor_frame: task.anchor_frame,
               frame_start: task.frame_start,
               frame_end: task.frame_end,

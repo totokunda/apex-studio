@@ -139,6 +139,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
   const preprocessorEndFrame =
     preprocessor.endFrame ?? currentEndFrame - currentStartFrame;
   const textRef = useRef<Konva.Text>(null);
+  const addAsset = useClipStore((s) => s.addAsset);
 
   // Calculate parent clip dimensions
   const clipDuration = currentEndFrame - currentStartFrame;
@@ -199,7 +200,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     usePreprocessorJob(preprocessorJobId);
   const { clearJob, stopTracking } = usePreprocessorJobActions();
   const mediaInfoRef = useRef<MediaInfo | null>(
-    getMediaInfoCached(preprocessor.src ?? "") ?? null,
+    getMediaInfoCached(preprocessor.assetId ?? "") ?? null,
   );
   const [imageCanvas] = useState<HTMLCanvasElement>(() =>
     document.createElement("canvas"),
@@ -209,13 +210,14 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
   const exactVideoUpdateSeqRef = useRef<number>(0);
   const lastExactRequestKeyRef = useRef<string | null>(null);
   const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
-
+  const getAssetById = useClipStore((s) => s.getAssetById);
   const ctrlFps = useControlsStore((s) => s.fps);
   const ctrlFocusFrame = useControlsStore((s) => s.focusFrame);
   const assetFps = useAssetControlsStore((s) => s.fps);
   const assetFocusFrame = useAssetControlsStore((s) => s.focusFrame);
   const inputFps = useInputControlsStore((s) => s.fps);
   const inputFocusFrame = useInputControlsStore((s) => s.focusFrame);
+  const clipAsset = clip?.assetId ? getAssetById(clip.assetId) : null;
   const fps = inputMode ? inputFps : assetMode ? assetFps : ctrlFps;
   const focusFrame = inputMode
     ? inputFocusFrame
@@ -267,11 +269,12 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
       const resultPath = result.result_path;
       // convert to file url
       const fileUrl = pathToFileURLString(resultPath);
+      const asset = addAsset({ path: fileUrl });
       getMediaInfo(fileUrl, { sourceDir: "apex-cache" })
         .then((mediaInfo) => {
           mediaInfoRef.current = mediaInfo;
           updatePreprocessor(clipId, preprocessor.id, {
-            src: fileUrl,
+            assetId: asset.id,
             status: "complete",
           });
         })
@@ -301,8 +304,9 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
               sourceDir: "apex-cache",
             });
             mediaInfoRef.current = mediaInfo;
+            const asset = addAsset({ path: fileUrl });
             updatePreprocessor(clipId, preprocessor.id, {
-              src: fileUrl,
+              assetId: asset.id,
               status: "complete",
             });
           } else if (response.data?.status === "failed") {
@@ -327,8 +331,8 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
   ]);
 
   useEffect(() => {
-    mediaInfoRef.current = getMediaInfoCached(preprocessor.src ?? "") ?? null;
-  }, [preprocessor.src]);
+    mediaInfoRef.current = getMediaInfoCached(preprocessor.assetId ?? "") ?? null;
+  }, [preprocessor.assetId]);
 
   // Set canvas dimensions based on preprocessor width and height
   useEffect(() => {
@@ -946,7 +950,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     if (
       preprocessor.status !== "complete" ||
       !mediaInfoRef.current ||
-      !preprocessor.src
+      !preprocessor.assetId
     )
       return;
 
@@ -961,10 +965,12 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
         THUMBNAIL_TILE_SIZE,
       );
       const tClipWidth = Math.min(clipWidth, timelineWidth);
+      const asset = getAssetById(preprocessor.assetId!);
+      if (!asset) return;
 
       const samples = await generateTimelineSamples(
         preprocessor.id,
-        preprocessor.src!,
+        asset.path,
         [0],
         thumbnailWidth,
         timelineHeight,
@@ -1115,9 +1121,12 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
         return;
       }
 
+      const asset = getAssetById(preprocessor.assetId!);
+      if (!asset) return;
+
       // Immediate draw using nearest cached frames
       const nearest = getNearestCachedCanvasSamples(
-        preprocessor.src!,
+        asset.path,
         frameIndices,
         thumbnailWidth,
         timelineHeight,
@@ -1201,7 +1210,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
           }
           const exactSamples = await generateTimelineSamples(
             preprocessor.id,
-            preprocessor.src!,
+            asset.path,
             frameIndices,
             thumbnailWidth,
             timelineHeight,
@@ -1289,7 +1298,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     }
   }, [
     preprocessor.status,
-    preprocessor.src,
+    preprocessor.assetId,
     applyMask,
     preprocessorWidth,
     clipWidth,
@@ -1303,7 +1312,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
   const handleRunPreprocessor = useCallback(async () => {
     if (preprocessor.status === "running") return;
     const clip = getClipFromPreprocessorId(preprocessor.id);
-    if (!clip || !clip.src) return;
+    if (!clip || !clip.assetId) return;
 
     // Clear any existing job data for previous active job
     if (preprocessor.activeJobId) {
@@ -1321,7 +1330,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
         remoteRes.data?.isRemote
       );
       if (isRemote) {
-        const su = await getFileShouldUpload(String(clip.src || ""));
+        const su = await getFileShouldUpload(String(clipAsset?.path || ""));
         const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
         if (shouldUpload) {
           toast.info("Uploading source media to server…");
@@ -1330,7 +1339,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     } catch {}
 
     // need to convert our startFrame and endFrame back to where it would be with real FPS
-    const clipMediaInfo = getMediaInfoCached(clip.src);
+    const clipMediaInfo = getMediaInfoCached(clipAsset?.path ?? "");
     const clipFps = clipMediaInfo?.stats.video?.averagePacketRate ?? 24;
 
     if (
@@ -1357,7 +1366,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
 
     const response = await runPreprocessor({
       preprocessor_name: preprocessor.preprocessor.id,
-      input_path: clip.src,
+      input_path: clipAsset?.path ?? "",
       start_frame: startFrameReal,
       end_frame: endFrameReal,
       job_id: newJobId,

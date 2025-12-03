@@ -214,6 +214,8 @@ const Preview: React.FC<PreviewProps> = () => {
   const setContentBounds = useViewportStore((s) => s.setContentBounds);
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const isAspectEditing = useViewportStore((s) => s.isAspectEditing);
+  const shouldUpdateViewport = useViewportStore((s) => s.shouldUpdateViewport);
+  const setShouldUpdateViewport = useViewportStore((s) => s.setShouldUpdateViewport);
   const setAspectRatio = useViewportStore((s) => s.setAspectRatio);
   const {
     clips,
@@ -510,6 +512,9 @@ const Preview: React.FC<PreviewProps> = () => {
   // Center the rect initially and whenever aspect ratio or viewport changes
   useEffect(() => {
     if (!stageRef.current || isFullscreen || isAspectEditing) return;
+    if (!shouldUpdateViewport)  {
+      return;
+    }
     const rectBounds = { x: 0, y: 0, width: rectWidth, height: rectHeight };
     setContentBounds(rectBounds);
     const rectWorld = {
@@ -1783,6 +1788,7 @@ const Preview: React.FC<PreviewProps> = () => {
                 .updateClip(clipId, { lines: fullyMergedLines });
             }
           }
+
           setTempErased(null);
           activeDrawingToolRef.current = null;
           return;
@@ -1862,7 +1868,6 @@ const Preview: React.FC<PreviewProps> = () => {
         }
         const newClipId = uuidv4();
         const newClip: DrawingClipProps = {
-          src: null,
           clipId: newClipId,
           type: "draw" as const,
           timelineId: drawingTimeline.timelineId,
@@ -1927,7 +1932,6 @@ const Preview: React.FC<PreviewProps> = () => {
 
         const clipDuration = 3 * DEFAULT_FPS;
         const newClip: TextClipProps = {
-          src: null,
           clipId: uuidv4(),
           type: "text" as const,
           timelineId: textTimeline.timelineId,
@@ -2034,7 +2038,6 @@ const Preview: React.FC<PreviewProps> = () => {
           // Create shape clip with 3-second duration (72 frames at 24fps)
           const clipDuration = 3 * DEFAULT_FPS;
           const newClip: ShapeClipProps = {
-            src: null,
             clipId: uuidv4(),
             type: "shape" as const,
             timelineId: shapeTimeline.timelineId,

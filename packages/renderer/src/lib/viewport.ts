@@ -8,9 +8,6 @@ interface ViewportState {
   position: Point; // stage position in screen space
   tool: ViewTool;
   shape: ShapeTool;
-  clipPositions: Record<string, Point>;
-  getClipPosition: (clipId: string) => Point | undefined;
-  setClipPosition: (clipId: string, position: Point) => void;
   viewportSize: { width: number; height: number };
   setViewportSize: (size: { width: number; height: number }) => void;
   contentBounds: { x: number; y: number; width: number; height: number } | null;
@@ -41,6 +38,8 @@ interface ViewportState {
     viewportSize: { width: number; height: number },
   ) => void;
   centerContentAt: (percent: number) => void;
+  shouldUpdateViewport: boolean;
+  setShouldUpdateViewport: (shouldUpdate: boolean) => void;
 }
 
 export const useViewportStore = create<ViewportState>((set, get) => ({
@@ -50,19 +49,16 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
   position: { x: 0, y: 0 },
   tool: "pointer",
   shape: "rectangle",
+  shouldUpdateViewport: true,
+  setShouldUpdateViewport: (shouldUpdate) => set({ shouldUpdateViewport: shouldUpdate }),
   viewportSize: { width: 0, height: 0 },
-  clipPositions: {},
-  getClipPosition: (clipId) => {
-    const clipPositions = get().clipPositions;
-    return clipPositions[clipId];
-  },
-  setClipPosition: (clipId, position) =>
-    set({ clipPositions: { ...get().clipPositions, [clipId]: position } }),
   setViewportSize: (size) => set({ viewportSize: size }),
   contentBounds: null,
   setContentBounds: (bounds) => set({ contentBounds: bounds }),
   aspectRatio: { width: 16, height: 9, id: "16:9" },
-  setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
+  setAspectRatio: (ratio) => {
+    set({ aspectRatio: ratio, shouldUpdateViewport: true });
+  },
   isAspectEditing: false,
   setAspectEditing: (editing) => set({ isAspectEditing: editing }),
   setTool: (tool) => {

@@ -484,78 +484,106 @@ export async function exportSequence(
         // Treat this `startFrame` as an additional trim offset on top of the
         // clip's own `trimStart` so exports honor cut clips exactly as seen in
         // the timeline/preview.
+
         const { srcStartFrame } = getSrcFrameWindow(selectedSrc);
         const trimStartFrames = Math.max(0, Number(c?.trimStart) || 0);
-        const baseOffsetFrames =
-          selectedSrc === c.src
-            ? trimStartFrames + srcStartFrame
-            : srcStartFrame - Math.max(0, frameOffset || 0);
-        const clipStart = Number(c?.startFrame) || 0;
-        const clipEnd = Number(c?.endFrame);
-        const durationFrames = Number.isFinite(clipEnd)
-          ? Math.max(0, Math.floor(clipEnd - clipStart))
-          : undefined;
-        const providedRangeStart =
-          typeof range?.start === "number"
-            ? Math.max(0, Math.floor(range.start))
-            : undefined;
-        const providedRangeEnd =
-          typeof range?.end === "number"
-            ? Math.max(0, Math.floor(range.end))
-            : undefined;
-        let rangeStartLocal =
-          providedRangeStart !== undefined
-            ? providedRangeStart
-            : Math.max(0, baseOffsetFrames);
-        if (providedRangeStart !== undefined) {
-          rangeStartLocal += baseOffsetFrames;
-        }
-        let rangeEndLocal =
-          providedRangeEnd !== undefined
-            ? providedRangeEnd
-            : typeof durationFrames === "number"
-              ? rangeStartLocal + durationFrames
-              : undefined;
-        if (providedRangeEnd !== undefined && rangeEndLocal !== undefined) {
-          rangeEndLocal += baseOffsetFrames;
+
+        const clipStartFrame = Number(c?.startFrame) || 0;
+        const clipEndFrame = Number(c?.endFrame);
+        const localFrame = Math.max(0, frame - clipStartFrame);
+
+        let spanStartLocal = 0;
+        let spanEndLocal = Number.isFinite(clipEndFrame)
+          ? clipEndFrame - clipStartFrame
+          : Number.MAX_SAFE_INTEGER;
+
+        if (selectedSrc === c.src) {
+          const preprocessors = c.preprocessors || [];
+          // Find last preprocessor end before current frame
+          const prevP = preprocessors
+            .filter(
+              (p) =>
+                p.status === "complete" &&
+                p.src &&
+                (Number(p.endFrame) ?? Number(p.startFrame) ?? 0) < localFrame,
+            )
+            .sort(
+              (a, b) => (Number(b.endFrame) ?? 0) - (Number(a.endFrame) ?? 0),
+            )[0];
+          spanStartLocal = prevP ? (Number(prevP.endFrame) ?? 0) + 1 : 0;
+
+          // Find next preprocessor start after current frame
+          const nextP = preprocessors
+            .filter(
+              (p) =>
+                p.status === "complete" &&
+                p.src &&
+                (Number(p.startFrame) || 0) > localFrame,
+            )
+            .sort(
+              (a, b) => (Number(a.startFrame) || 0) - (Number(b.startFrame) || 0),
+            )[0];
+
+          if (nextP) {
+            spanEndLocal = Number(nextP.startFrame) || 0;
+          }
+        } else {
+          // Preprocessor
+          const p = (c.preprocessors || []).find((p) => p.src === selectedSrc);
+          spanStartLocal = p ? Number(p.startFrame) || 0 : 0;
+          const pEndLocal = p
+            ? Number(p.endFrame) ?? Number(p.startFrame) ?? 0
+            : 0;
+          spanEndLocal = pEndLocal + 1;
         }
 
-        const iterKey = `${selectedSrc}|s:${speed}|pfps:${fps}|rs:${rangeStartLocal}|re:${rangeEndLocal ?? "inf"}`;
+        const spanStartSourceIndex =
+          selectedSrc === c.src
+            ? trimStartFrames + srcStartFrame + Math.floor(spanStartLocal * speed)
+            : srcStartFrame;
+
+        const spanDuration = Math.max(0, spanEndLocal - spanStartLocal);
+        const spanEndSourceIndex =
+          spanStartSourceIndex + Math.floor(spanDuration * speed);
+
+        const currentSourceIndex =
+          selectedSrc === c.src
+            ? trimStartFrames + srcStartFrame + Math.floor(localFrame * speed)
+            : srcStartFrame +
+              Math.floor(Math.max(0, localFrame - spanStartLocal) * speed);
+
+        const iterKey = `${selectedSrc}|s:${speed}|pfps:${fps}|spanStart:${spanStartSourceIndex}|spanEnd:${spanEndSourceIndex}`;
 
         let ctxIter = videoIters.get(c.clipId) as IterCtx | undefined;
         const reusable = !!(
           ctxIter &&
           ctxIter.key === iterKey &&
-          ctxIter.currentProjectIndex <=
-            rangeStartLocal + Math.max(0, Math.floor(frame - startFrame))
+          ctxIter.currentProjectIndex <= currentSourceIndex
         );
-        if (
-          !reusable ||
-          (ctxIter &&
-            ctxIter.currentProjectIndex >
-              rangeStartLocal + Math.max(0, Math.floor(frame - startFrame)))
-        ) {
+
+        if (!reusable) {
           const asyncIterable = await getVideoFrameIterator(selectedSrc, {
             projectFps: Math.max(1, fps),
-            startIndex: rangeStartLocal,
-            endIndex: rangeEndLocal,
+            startIndex: currentSourceIndex,
+            endIndex: spanEndSourceIndex,
             speed,
+            useOriginal: true,
           });
           ctxIter = {
             key: iterKey,
             iter: asyncIterable[Symbol.asyncIterator](),
-            currentProjectIndex: rangeStartLocal,
+            currentProjectIndex: currentSourceIndex,
           };
           videoIters.set(c.clipId, ctxIter);
         }
 
-        if (mode === "image") {
-          // go to the target frame
-          while ((ctxIter as IterCtx).currentProjectIndex < frame) {
-            await (ctxIter as IterCtx).iter.next();
-            (ctxIter as IterCtx).currentProjectIndex++;
-          }
+        // Always advance if we are behind the target frame
+        while ((ctxIter as IterCtx).currentProjectIndex < currentSourceIndex) {
+          await (ctxIter as IterCtx).iter.next();
+          (ctxIter as IterCtx).currentProjectIndex++;
         }
+
+
         await renderer.blitVideo(
           c as unknown as BlitVideoClipProps,
           applicators,
@@ -918,6 +946,7 @@ export async function exportClip(
     iter: AsyncIterator<WrappedCanvas | null>;
     currentProjectIndex: number;
   };
+
   const videoIters: Map<string, IterCtx> = new Map<string, IterCtx>();
 
   const drawFrame = async (frame: number) => {
@@ -959,6 +988,7 @@ export async function exportClip(
         (x): x is NonNullable<ReturnType<typeof createApplicatorFromClip>> =>
           x !== null,
       );
+    
     const applicators = applicatorsRaw as unknown as Array<{
       apply: (c: HTMLCanvasElement) => HTMLCanvasElement;
       ensureResources?: () => Promise<void>;
@@ -984,72 +1014,102 @@ export async function exportClip(
         0,
         Number((workingClip as any)?.trimStart) || 0,
       );
-      const baseOffsetFrames =
+
+      // In exportClip, 'frame' is already local to the clip (0-based)
+      const localFrame = frame;
+      const clipDuration = localDuration;
+
+      let spanStartLocal = 0;
+      let spanEndLocal = clipDuration;
+
+      if (selectedSrc === (workingClip as ExportVideoClip).src) {
+        const preprocessors =
+          (workingClip as ExportVideoClip).preprocessors || [];
+        // Find last preprocessor end before current frame
+        const prevP = preprocessors
+          .filter(
+            (p) =>
+              p.status === "complete" &&
+              p.src &&
+              (Number(p.endFrame) ?? Number(p.startFrame) ?? 0) < localFrame,
+          )
+          .sort(
+            (a, b) => (Number(b.endFrame) ?? 0) - (Number(a.endFrame) ?? 0),
+          )[0];
+        spanStartLocal = prevP ? (Number(prevP.endFrame) ?? 0) + 1 : 0;
+
+        // Find next preprocessor start after current frame
+        const nextP = preprocessors
+          .filter(
+            (p) =>
+              p.status === "complete" &&
+              p.src &&
+              (Number(p.startFrame) || 0) > localFrame,
+          )
+          .sort(
+            (a, b) => (Number(a.startFrame) || 0) - (Number(b.startFrame) || 0),
+          )[0];
+
+        if (nextP) {
+          spanEndLocal = Number(nextP.startFrame) || 0;
+        }
+      } else {
+        // Preprocessor
+        const p = (
+          (workingClip as ExportVideoClip).preprocessors || []
+        ).find((p) => p.src === selectedSrc);
+        spanStartLocal = p ? Number(p.startFrame) || 0 : 0;
+        const pEndLocal = p
+          ? Number(p.endFrame) ?? Number(p.startFrame) ?? 0
+          : 0;
+        spanEndLocal = pEndLocal + 1;
+      }
+
+      const spanStartSourceIndex =
         selectedSrc === (workingClip as ExportVideoClip).src
-          ? trimStartFrames + srcStartFrame
-          : srcStartFrame - Math.max(0, frameOffset || 0);
-      const clipStart = 0; // local
-      const clipEnd = localDuration; // local
-      const durationFrames = Math.max(0, Math.floor(clipEnd - clipStart));
-      const providedRangeStart =
-        typeof range?.start === "number"
-          ? Math.max(0, Math.floor(range.start))
-          : undefined;
-      const providedRangeEnd =
-        typeof range?.end === "number"
-          ? Math.max(0, Math.floor(range.end))
-          : undefined;
-      let rangeStartLocal =
-        providedRangeStart !== undefined
-          ? providedRangeStart
-          : Math.max(0, baseOffsetFrames);
-      if (providedRangeStart !== undefined) {
-        rangeStartLocal += baseOffsetFrames;
-      }
-      let rangeEndLocal =
-        providedRangeEnd !== undefined
-          ? providedRangeEnd
-          : typeof durationFrames === "number"
-            ? rangeStartLocal + durationFrames
-            : undefined;
-      if (providedRangeEnd !== undefined && rangeEndLocal !== undefined) {
-        rangeEndLocal += baseOffsetFrames;
-      }
-      const iterKey = `${selectedSrc}|s:${speed}|pfps:${fps}|rs:${rangeStartLocal}|re:${rangeEndLocal ?? "inf"}`;
+          ? trimStartFrames + srcStartFrame + Math.floor(spanStartLocal * speed)
+          : srcStartFrame;
+
+      const spanDuration = Math.max(0, spanEndLocal - spanStartLocal);
+      const spanEndSourceIndex =
+        spanStartSourceIndex + Math.floor(spanDuration * speed);
+
+      const currentSourceIndex =
+        selectedSrc === (workingClip as ExportVideoClip).src
+          ? trimStartFrames + srcStartFrame + Math.floor(localFrame * speed)
+          : srcStartFrame +
+            Math.floor(Math.max(0, localFrame - spanStartLocal) * speed);
+
+      const iterKey = `${selectedSrc}|s:${speed}|pfps:${fps}|spanStart:${spanStartSourceIndex}|spanEnd:${spanEndSourceIndex}`;
 
       let ctxIter = videoIters.get(workingClip.clipId) as IterCtx | undefined;
       const reusable = !!(
         ctxIter &&
         ctxIter.key === iterKey &&
-        ctxIter.currentProjectIndex <=
-          rangeStartLocal + Math.max(0, Math.floor(frame - startFrame))
+        ctxIter.currentProjectIndex <= currentSourceIndex
       );
-      if (
-        !reusable ||
-        (ctxIter &&
-          ctxIter.currentProjectIndex >
-            rangeStartLocal + Math.max(0, Math.floor(frame - startFrame)))
-      ) {
+
+      if (!reusable) {
         const asyncIterable = await getVideoFrameIterator(selectedSrc, {
           projectFps: Math.max(1, fps),
-          startIndex: rangeStartLocal,
-          endIndex: rangeEndLocal,
+          startIndex: currentSourceIndex,
+          endIndex: spanEndSourceIndex,
           speed,
+          useOriginal: true,
         });
         ctxIter = {
           key: iterKey,
           iter: asyncIterable[Symbol.asyncIterator](),
-          currentProjectIndex: rangeStartLocal,
+          currentProjectIndex: currentSourceIndex,
         };
         videoIters.set(workingClip.clipId, ctxIter);
       }
-      if (mode === "image") {
-        // go to the target frame
-        while ((ctxIter as IterCtx).currentProjectIndex < frame) {
-          await (ctxIter as IterCtx).iter.next();
-          (ctxIter as IterCtx).currentProjectIndex++;
-        }
+
+      while ((ctxIter as IterCtx).currentProjectIndex < currentSourceIndex) {
+        await (ctxIter as IterCtx).iter.next();
+        (ctxIter as IterCtx).currentProjectIndex++;
       }
+      
       await renderer.blitVideo(
         workingClip as unknown as BlitVideoClipProps,
         applicators,

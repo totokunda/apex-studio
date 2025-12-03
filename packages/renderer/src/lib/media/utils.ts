@@ -20,8 +20,11 @@ import {
   getLowercaseExtension,
   readFileBuffer,
   fileURLToPath,
+  resolveOriginalPath,
+  pathToFileURL,
 } from "@app/preload";
 import { useControlsStore } from "../control";
+import { useClipStore } from "../clip";
 
 export function nowMs(): number {
   return typeof performance !== "undefined" && performance.now
@@ -33,12 +36,23 @@ export const videoDecoders = new Map<VideoDecoderKey, VideoDecoderContext>();
 export const audioDecoders = new Map<AudioDecoderKey, AudioDecoderContext>();
 export const canvasDecoders = new Map<CanvasDecoderKey, CanvasDecoderContext>();
 
+export const isUUID = (str: string): boolean => {
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str);
+};
+
 export const getMediaInfoCached = (
   path: string | undefined,
 ): MediaInfo | undefined => {
   const mediaCache = MediaCache.getState();
   if (path && mediaCache.isMediaCached(path)) {
     return mediaCache.getMedia(path)!;
+  }
+
+  // check if path is a uuid 
+  if (path && isUUID(path)) {
+    // get from assets 
+    const asset = useClipStore.getState().getAssetById(path);
+    return mediaCache.getMedia(asset?.path ?? "")!;
   }
 
   if (path && path.startsWith("app://user-data/")) {
@@ -87,8 +101,24 @@ export const convertApexCachePath = (path: string): string => {
 
 export const getMediaInfo = async (
   path: string,
-  options?: { fullStats?: boolean; sourceDir?: "user-data" | "apex-cache" },
+  options?: {
+    fullStats?: boolean;
+    sourceDir?: "user-data" | "apex-cache";
+    useOriginal?: boolean;
+  },
 ): Promise<MediaInfo> => {
+  if (options?.useOriginal) {
+    try {
+      const fsPath = fileURLToPath(path);
+      const originalFsPath = await resolveOriginalPath(fsPath);
+      if (originalFsPath !== fsPath) {
+        path = pathToFileURL(originalFsPath);
+      }
+    } catch (e) {
+      // ignore path parsing errors
+    }
+  }
+
   const pathUrl = new URL(path);
   const startFrame = pathUrl.searchParams.get("startFrame")
     ? Number(pathUrl.searchParams.get("startFrame"))
@@ -212,6 +242,7 @@ export const getMediaInfo = async (
     primarySourceDir === "user-data" ? "apex-cache" : "user-data";
   try {
     filePath = fileURLToPath(hasHashSuffix ? originalPath : path);
+    
     const url = new URL(`app://${primarySourceDir}/${filePath}`);
     input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
   } catch (e) {

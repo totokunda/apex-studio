@@ -78,7 +78,7 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
   const endFrameMin = startFrame + 1;
   const rawTotalFrames = Math.max(
     0,
-    Math.floor((getMediaInfoCached(clip?.src as string)?.duration ?? 0) * fps),
+    Math.floor((getMediaInfoCached(clip?.assetId as string)?.duration ?? 0) * fps),
   );
   const effectiveSpeed = Math.max(0.1, Math.min(5, Number(clip?.speed ?? 1)));
   const maxByMedia = Math.max(0, Math.floor(rawTotalFrames / effectiveSpeed));

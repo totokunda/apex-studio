@@ -45,6 +45,7 @@ import ShapePreview from "../preview/clips/ShapePreview";
 import TextPreview from "../preview/clips/TextPreview";
 import DrawingPreview from "../preview/clips/DrawingPreview";
 import { remapMaskWithClipTransformProportional } from "@/lib/mask/clipTransformUtils";
+import { BaseClipApplicator } from "@/components/preview/clips/apply/base";
 
 interface PartialTimelineSelectorProps {
   mode: "frame" | "range";
@@ -85,6 +86,354 @@ const ASPECT_RATIOS = [
   { label: "3:4", value: "3:4" },
   { label: "Custom", value: "custom" },
 ];
+
+// 1. EXTRACTED COMPONENT TO HANDLE STABLE OVERRIDES IN MEDIADIALOG
+const MediaDialogClipItem = React.memo(({
+  clip,
+  previewWidth,
+  previewHeight,
+  focusFrame,
+  inputId,
+  getApplicators,
+  clipWithinFrame,
+  getClipById,
+  groupCentering,
+}: {
+  clip: AnyClipProps;
+  previewWidth: number;
+  previewHeight: number;
+  focusFrame: number;
+  inputId?: string;
+  getApplicators: (id: string, frame: number) => BaseClipApplicator[];
+  clipWithinFrame: (clip: AnyClipProps, frame: number, overlap: boolean, padding: number) => boolean;
+  getClipById: (id: string) => AnyClipProps | undefined;
+  groupCentering: { groupId: string; dx: number; dy: number; scale: number } | null;
+}) => {
+  const startFrame = clip.startFrame || 0;
+  const groupStart = clip.groupId
+    ? getClipById(clip.groupId)?.startFrame || 0
+    : 0;
+  const relativeStart = startFrame - groupStart;
+  const hasOverlap =
+    (clip.type === "video" || clip.type === "image") &&
+    (clip.groupId ? relativeStart : startFrame) > 0
+      ? true
+      : false;
+  // Use global frame for bounds/effects, but keep local focus for child playback math
+  const effectiveGlobalFrame = clip.groupId
+    ? focusFrame + groupStart
+    : focusFrame;
+  const clipAtFrame = clipWithinFrame(
+    clip,
+    effectiveGlobalFrame,
+    hasOverlap,
+    0,
+  );
+  if (!clipAtFrame && clip.groupId) return null;
+
+  const applicators = getApplicators(
+    clip.clipId,
+    effectiveGlobalFrame,
+  );
+
+  // 2. MEMOIZE THE OVERRIDE CLIP
+  const overrideToUse = useMemo(() => {
+    const override = { ...clip };
+
+    if (
+        override &&
+        override.transform &&
+        (override.type === "image" ||
+        override.type === "video") &&
+        !override.clipId?.startsWith("media:") &&
+        !override.groupId
+    ) {
+        const t = { ...(override.transform ?? {}) };
+        t.rotation =
+        override.originalTransform?.rotation ?? 0;
+
+        // In the media dialog, always show the full underlying item for
+        // non-group clips, even if a crop was previously applied.
+        // Reset crop and base width/height to the native media dimensions.
+        // @ts-ignore - mediaWidth/mediaHeight exist on image/video clips
+        const nativeW =
+        override.mediaWidth ||
+        0;
+        // @ts-ignore
+        const nativeH =
+        override.mediaHeight ||
+        0;
+
+        if (nativeW > 0 && nativeH > 0) {
+        t.width = nativeW;
+        t.height = nativeH;
+        }
+
+        if ((t as any).crop) {
+        delete (t as any).crop;
+        }
+
+        // Use the logical preview rect as the "canvas" the input should fit inside
+        const canvasW = previewWidth;
+        const canvasH = previewHeight;
+
+        if (canvasW > 0 && canvasH > 0) {
+        const rawW = t.width ?? canvasW;
+        const rawH = t.height ?? canvasH;
+        const baseSx =
+            typeof t.scaleX === "number" ? t.scaleX : 1;
+        const baseSy =
+            typeof t.scaleY === "number" ? t.scaleY : 1;
+        const deg =
+            typeof t.rotation === "number" ? t.rotation : 0;
+        const rad = (deg * Math.PI) / 180;
+        const c = Math.cos(rad);
+        const s = Math.sin(rad);
+
+        // First, compute the axis-aligned bounding box of the current transform
+        const w0 = rawW * baseSx;
+        const h0 = rawH * baseSy;
+        const x1_0 = w0 * c;
+        const y1_0 = w0 * s;
+        const x2_0 = -h0 * s;
+        const y2_0 = h0 * c;
+        const x3_0 = w0 * c - h0 * s;
+        const y3_0 = w0 * s + h0 * c;
+        const minX0 = Math.min(0, x1_0, x2_0, x3_0);
+        const maxX0 = Math.max(0, x1_0, x2_0, x3_0);
+        const minY0 = Math.min(0, y1_0, y2_0, y3_0);
+        const maxY0 = Math.max(0, y1_0, y2_0, y3_0);
+        const aabbW0 = maxX0 - minX0;
+        const aabbH0 = maxY0 - minY0;
+
+        // If the bounding box is larger than the canvas, scale it down uniformly
+        let fitScale = 1;
+        if (
+            aabbW0 > 0 &&
+            aabbH0 > 0 &&
+            (aabbW0 > canvasW || aabbH0 > canvasH)
+        ) {
+            const scaleXFit = canvasW / aabbW0;
+            const scaleYFit = canvasH / aabbH0;
+            fitScale = Math.min(scaleXFit, scaleYFit, 1);
+        }
+
+        const sx = baseSx * fitScale;
+        const sy = baseSy * fitScale;
+        const w = rawW * sx;
+        const h = rawH * sy;
+
+        const x1 = w * c;
+        const y1 = w * s;
+        const x2 = -h * s;
+        const y2 = h * c;
+        const x3 = w * c - h * s;
+        const y3 = w * s + h * c;
+        const minX = Math.min(0, x1, x2, x3);
+        const maxX = Math.max(0, x1, x2, x3);
+        const minY = Math.min(0, y1, y2, y3);
+        const maxY = Math.max(0, y1, y2, y3);
+        const aabbW = maxX - minX;
+        const aabbH = maxY - minY;
+
+        t.scaleX = sx;
+        t.scaleY = sy;
+        t.x = (canvasW - aabbW) / 2 - minX;
+        t.y = (canvasH - aabbH) / 2 - minY;
+
+        override.transform = t;
+        }
+    }
+
+    if (
+        groupCentering &&
+        override?.groupId === groupCentering.groupId &&
+        override.transform &&
+        (override.type === "image" ||
+        override.type === "video" ||
+        override.type === "shape" ||
+        override.type === "text" ||
+        override.type === "draw")
+    ) {
+        const t = { ...(override.transform ?? {}) };
+        const baseX = t.x ?? 0;
+        const baseY = t.y ?? 0;
+        const existingScaleX =
+        typeof t.scaleX === "number" ? t.scaleX : 1;
+        const existingScaleY =
+        typeof t.scaleY === "number" ? t.scaleY : 1;
+        const scale =
+        typeof (groupCentering as any).scale === "number"
+            ? (groupCentering as any).scale
+            : 1;
+
+        t.x = baseX * scale + groupCentering.dx;
+        t.y = baseY * scale + groupCentering.dy;
+        t.scaleX = existingScaleX * scale;
+        t.scaleY = existingScaleY * scale;
+
+        override.transform = t;
+    }
+
+    if ((override as any).masks?.length > 0) {
+        const masks = [...(override as any).masks] as MaskClipProps[];
+        
+        (override as any).masks = masks.map((mask: MaskClipProps) => {
+        // Calculate native dimensions for intermediate transform
+        // @ts-ignore
+        const nW = clip.mediaWidth || clip.width || 0;
+        // @ts-ignore
+        const nH = clip.mediaHeight || clip.height || 0;
+
+        // Native transform at origin
+        const nativeTransform: ClipTransform = {
+            x: 0,
+            y: 0,
+            width: nW,
+            height: nH,
+            scaleX: 1,
+            scaleY: 1,
+            rotation: clip.originalTransform?.rotation ?? 0,
+            opacity: 1,
+            cornerRadius: 0,
+        };
+
+        // Zeroed current transform (preserve scale/crop but move to origin)
+        const currentTransform =
+            clip.transform ?? nativeTransform;
+        const zeroCurrentTransform: ClipTransform = {
+            ...currentTransform,
+            x: 0,
+            y: 0,
+        };
+
+        // Zeroed override transform
+        const overrideTransform = override.transform!;
+
+        let xOffset = 0;
+        let yOffset = 0;
+
+        const realCrop = clip.transform?.crop && (clip.transform.crop.width != 1 || clip.transform.crop.height != 1 || clip.transform.crop.x != 0 || clip.transform.crop.y != 0);
+
+        if (realCrop && clip.transform?.crop) {
+            // determine how much to offsetX 
+            const fullWidth = clip.transform.width / clip.transform.crop.width;
+            const fullHeight = clip.transform.height / clip.transform.crop.height;
+            const offsetX = fullWidth * clip.transform.crop.x;
+            const offsetY = fullHeight * clip.transform.crop.y;
+            xOffset = -offsetX;
+            yOffset = -offsetY;
+        }
+
+        const zeroOverrideTransform: ClipTransform = {
+            ...overrideTransform,
+            x: xOffset ,
+            y: yOffset,
+        };
+
+        // Map: Current(0,0) -> Native(0,0)
+        // We explicitly use the calculated zeroCurrentTransform as the source of truth
+        // for the current mask coordinate space, ignoring any potentially stale transform
+        // on the mask object itself.
+        const maskForRemap = { ...mask, transform: undefined };
+        
+        const toOriginal = remapMaskWithClipTransformProportional(
+            maskForRemap,
+            zeroCurrentTransform,
+            nativeTransform,
+        );
+
+        // Map: Native(0,0) -> Override(0,0)
+        const toOverride = remapMaskWithClipTransformProportional(
+            toOriginal,
+            nativeTransform,
+            zeroOverrideTransform,
+        );
+        
+        // Restore actual transform position
+        toOverride.transform = { ...overrideTransform };
+        toOverride.transform
+
+        return toOverride;
+        });
+    }
+
+    if (override?.clipId?.startsWith("media:")) {
+        override.transform = undefined;
+    }
+
+    return override;
+  }, [clip, previewWidth, previewHeight, groupCentering]);
+
+
+  switch (clip.type) {
+    case "video":
+      return (
+        <VideoPreview
+          key={clip.clipId}
+          {...(clip as any)}
+          overrideClip={overrideToUse}
+          rectWidth={previewWidth}
+          rectHeight={previewHeight}
+          applicators={applicators}
+          overlap={true}
+          inputMode={true}
+          focusFrameOverride={focusFrame}
+          inputId={inputId}
+        />
+      );
+    case "image":
+      return (
+        <ImagePreview
+          key={clip.clipId}
+          {...(clip as any)}
+          overrideClip={overrideToUse}
+          rectWidth={previewWidth}
+          rectHeight={previewHeight}
+          applicators={applicators}
+          overlap={true}
+          inputMode={true}
+          inputId={inputId}
+          focusFrameOverride={focusFrame}
+        />
+      );
+    case "shape":
+      return (
+        <ShapePreview
+          key={clip.clipId}
+          {...(clip as any)}
+          rectWidth={previewWidth}
+          rectHeight={previewHeight}
+          applicators={applicators}
+          assetMode={true}
+        />
+      );
+    case "text":
+      return (
+        <TextPreview
+          key={clip.clipId}
+          {...(clip as any)}
+          rectWidth={previewWidth}
+          rectHeight={previewHeight}
+          applicators={applicators}
+          assetMode={true}
+        />
+      );
+    case "draw":
+      return (
+        <DrawingPreview
+          key={clip.clipId}
+          {...(clip as any)}
+          rectWidth={previewWidth}
+          rectHeight={previewHeight}
+          assetMode={true}
+          applicators={applicators}
+        />
+      );
+    default:
+      return null;
+  }
+});
 
 export const MediaDialog: React.FC<MediaDialogProps> = ({
   isOpen,
@@ -952,334 +1301,21 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                       />
                       {toRender.map((clip) => {
                         if (clip.type === "group") return null;
-                        const startFrame = clip.startFrame || 0;
-                        const groupStart = clip.groupId
-                          ? getClipById(clip.groupId)?.startFrame || 0
-                          : 0;
-                        const relativeStart = startFrame - groupStart;
-                        const hasOverlap =
-                          (clip.type === "video" || clip.type === "image") &&
-                          (clip.groupId ? relativeStart : startFrame) > 0
-                            ? true
-                            : false;
-                        // Use global frame for bounds/effects, but keep local focus for child playback math
-                        const effectiveGlobalFrame = clip.groupId
-                          ? focusFrame + groupStart
-                          : focusFrame;
-                        const clipAtFrame = clipWithinFrame(
-                          clip,
-                          effectiveGlobalFrame,
-                          hasOverlap,
-                          0,
+                        // 3. USE THE NEW MEMOIZED ITEM COMPONENT HERE
+                        return (
+                          <MediaDialogClipItem
+                            key={clip.clipId}
+                            clip={clip}
+                            previewWidth={previewRect.width || size.width}
+                            previewHeight={previewRect.height || size.height}
+                            focusFrame={focusFrame}
+                            inputId={timelineSelectorProps?.inputId}
+                            getApplicators={getApplicators}
+                            clipWithinFrame={clipWithinFrame}
+                            getClipById={getClipById}
+                            groupCentering={groupCentering}
+                          />
                         );
-                        if (!clipAtFrame && clip.groupId) return null;
-
-                        const applicators = getApplicators(
-                          clip.clipId,
-                          effectiveGlobalFrame,
-                        );
-                        // Use clipOverride only when an explicit override group is provided
-                        const overrideToUse = { ...clip };
-
-                        if (
-                          overrideToUse &&
-                          overrideToUse.transform &&
-                          (overrideToUse.type === "image" ||
-                            overrideToUse.type === "video") &&
-                          !overrideToUse.clipId?.startsWith("media:") &&
-                          !overrideToUse.groupId
-                        ) {
-                          const t = { ...(overrideToUse.transform ?? {}) };
-                          t.rotation =
-                            overrideToUse.originalTransform?.rotation ?? 0;
-
-                          // In the media dialog, always show the full underlying item for
-                          // non-group clips, even if a crop was previously applied.
-                          // Reset crop and base width/height to the native media dimensions.
-                          // @ts-ignore - mediaWidth/mediaHeight exist on image/video clips
-                          const nativeW =
-                            overrideToUse.mediaWidth ||
-                            overrideToUse.width ||
-                            0;
-                          // @ts-ignore
-                          const nativeH =
-                            overrideToUse.mediaHeight ||
-                            overrideToUse.height ||
-                            0;
-
-                          if (nativeW > 0 && nativeH > 0) {
-                            t.width = nativeW;
-                            t.height = nativeH;
-                          }
-
-                          if ((t as any).crop) {
-                            delete (t as any).crop;
-                          }
-
-                          // Use the logical preview rect as the "canvas" the input should fit inside
-                          const canvasW = previewRect.width || size.width;
-                          const canvasH = previewRect.height || size.height;
-
-                          if (canvasW > 0 && canvasH > 0) {
-                            const rawW = t.width ?? canvasW;
-                            const rawH = t.height ?? canvasH;
-                            const baseSx =
-                              typeof t.scaleX === "number" ? t.scaleX : 1;
-                            const baseSy =
-                              typeof t.scaleY === "number" ? t.scaleY : 1;
-                            const deg =
-                              typeof t.rotation === "number" ? t.rotation : 0;
-                            const rad = (deg * Math.PI) / 180;
-                            const c = Math.cos(rad);
-                            const s = Math.sin(rad);
-
-                            // First, compute the axis-aligned bounding box of the current transform
-                            const w0 = rawW * baseSx;
-                            const h0 = rawH * baseSy;
-                            const x1_0 = w0 * c;
-                            const y1_0 = w0 * s;
-                            const x2_0 = -h0 * s;
-                            const y2_0 = h0 * c;
-                            const x3_0 = w0 * c - h0 * s;
-                            const y3_0 = w0 * s + h0 * c;
-                            const minX0 = Math.min(0, x1_0, x2_0, x3_0);
-                            const maxX0 = Math.max(0, x1_0, x2_0, x3_0);
-                            const minY0 = Math.min(0, y1_0, y2_0, y3_0);
-                            const maxY0 = Math.max(0, y1_0, y2_0, y3_0);
-                            const aabbW0 = maxX0 - minX0;
-                            const aabbH0 = maxY0 - minY0;
-
-                            // If the bounding box is larger than the canvas, scale it down uniformly
-                            let fitScale = 1;
-                            if (
-                              aabbW0 > 0 &&
-                              aabbH0 > 0 &&
-                              (aabbW0 > canvasW || aabbH0 > canvasH)
-                            ) {
-                              const scaleXFit = canvasW / aabbW0;
-                              const scaleYFit = canvasH / aabbH0;
-                              fitScale = Math.min(scaleXFit, scaleYFit, 1);
-                            }
-
-                            const sx = baseSx * fitScale;
-                            const sy = baseSy * fitScale;
-                            const w = rawW * sx;
-                            const h = rawH * sy;
-
-                            const x1 = w * c;
-                            const y1 = w * s;
-                            const x2 = -h * s;
-                            const y2 = h * c;
-                            const x3 = w * c - h * s;
-                            const y3 = w * s + h * c;
-                            const minX = Math.min(0, x1, x2, x3);
-                            const maxX = Math.max(0, x1, x2, x3);
-                            const minY = Math.min(0, y1, y2, y3);
-                            const maxY = Math.max(0, y1, y2, y3);
-                            const aabbW = maxX - minX;
-                            const aabbH = maxY - minY;
-
-                            t.scaleX = sx;
-                            t.scaleY = sy;
-                            t.x = (canvasW - aabbW) / 2 - minX;
-                            t.y = (canvasH - aabbH) / 2 - minY;
-
-                            overrideToUse.transform = t;
-                          }
-                        }
-
-                        if (
-                          groupCentering &&
-                          overrideToUse?.groupId === groupCentering.groupId &&
-                          overrideToUse.transform &&
-                          (overrideToUse.type === "image" ||
-                            overrideToUse.type === "video" ||
-                            overrideToUse.type === "shape" ||
-                            overrideToUse.type === "text" ||
-                            overrideToUse.type === "draw")
-                        ) {
-                          const t = { ...(overrideToUse.transform ?? {}) };
-                          const baseX = t.x ?? 0;
-                          const baseY = t.y ?? 0;
-                          const existingScaleX =
-                            typeof t.scaleX === "number" ? t.scaleX : 1;
-                          const existingScaleY =
-                            typeof t.scaleY === "number" ? t.scaleY : 1;
-                          const scale =
-                            typeof (groupCentering as any).scale === "number"
-                              ? (groupCentering as any).scale
-                              : 1;
-
-                          t.x = baseX * scale + groupCentering.dx;
-                          t.y = baseY * scale + groupCentering.dy;
-                          t.scaleX = existingScaleX * scale;
-                          t.scaleY = existingScaleY * scale;
-
-                          overrideToUse.transform = t;
-                        }
-
-                        if ((overrideToUse as any).masks?.length > 0) {
-                          const masks = [...(overrideToUse as any).masks] as MaskClipProps[];
-                          
-                          (overrideToUse as any).masks = masks.map((mask: MaskClipProps) => {
-                            // Calculate native dimensions for intermediate transform
-                            // @ts-ignore
-                            const nW = clip.mediaWidth || clip.width || 0;
-                            // @ts-ignore
-                            const nH = clip.mediaHeight || clip.height || 0;
-
-                            // Native transform at origin
-                            const nativeTransform: ClipTransform = {
-                              x: 0,
-                              y: 0,
-                              width: nW,
-                              height: nH,
-                              scaleX: 1,
-                              scaleY: 1,
-                              rotation: clip.originalTransform?.rotation ?? 0,
-                              opacity: 1,
-                              cornerRadius: 0,
-                            };
-
-                            // Zeroed current transform (preserve scale/crop but move to origin)
-                            const currentTransform =
-                              clip.transform ?? nativeTransform;
-                            const zeroCurrentTransform: ClipTransform = {
-                              ...currentTransform,
-                              x: 0,
-                              y: 0,
-                            };
-
-                            // Zeroed override transform
-                            const overrideTransform = overrideToUse.transform!;
-
-                            let xOffset = 0;
-                            let yOffset = 0;
-
-                            const realCrop = clip.transform?.crop && (clip.transform.crop.width != 1 || clip.transform.crop.height != 1 || clip.transform.crop.x != 0 || clip.transform.crop.y != 0);
-
-                            if (realCrop && clip.transform?.crop) {
-                              // determine how much to offsetX 
-                              const fullWidth = clip.transform.width / clip.transform.crop.width;
-                              const fullHeight = clip.transform.height / clip.transform.crop.height;
-                              const offsetX = fullWidth * clip.transform.crop.x;
-                              const offsetY = fullHeight * clip.transform.crop.y;
-                              xOffset = -offsetX;
-                              yOffset = -offsetY;
-                            }
-
-                            
-                            
-                            const zeroOverrideTransform: ClipTransform = {
-                              ...overrideTransform,
-                              x: xOffset ,
-                              y: yOffset,
-                                                            
-                            };
-
-                            // Map: Current(0,0) -> Native(0,0)
-                            // We explicitly use the calculated zeroCurrentTransform as the source of truth
-                            // for the current mask coordinate space, ignoring any potentially stale transform
-                            // on the mask object itself.
-                            const maskForRemap = { ...mask, transform: undefined };
-                            
-                            const toOriginal = remapMaskWithClipTransformProportional(
-                              maskForRemap,
-                              zeroCurrentTransform,
-                              nativeTransform,
-                            );
-
-                            // Map: Native(0,0) -> Override(0,0)
-                            const toOverride = remapMaskWithClipTransformProportional(
-                              toOriginal,
-                              nativeTransform,
-                              zeroOverrideTransform,
-                            );
-
-                            
-                            
-                            // Restore actual transform position
-                            toOverride.transform = { ...overrideTransform };
-                            toOverride.transform
-
-                            return toOverride;
-                          });
-                        }
-
-
-                       
-
-                        if (overrideToUse?.clipId?.startsWith("media:")) {
-                          overrideToUse.transform = undefined;
-                        }
-
-                        switch (clip.type) {
-                          case "video":
-                            return (
-                              <VideoPreview
-                                key={clip.clipId}
-                                {...(clip as any)}
-                                overrideClip={overrideToUse}
-                                rectWidth={previewRect.width || size.width}
-                                rectHeight={previewRect.height || size.height}
-                                applicators={applicators}
-                                overlap={true}
-                                inputMode={true}
-                                focusFrameOverride={focusFrame}
-                                inputId={timelineSelectorProps?.inputId}
-                              />
-                            );
-                          case "image":
-                            return (
-                              <ImagePreview
-                                key={clip.clipId}
-                                {...(clip as any)}
-                                overrideClip={overrideToUse}
-                                rectWidth={previewRect.width || size.width}
-                                rectHeight={previewRect.height || size.height}
-                                applicators={applicators}
-                                overlap={true}
-                                inputMode={true}
-                                inputId={timelineSelectorProps?.inputId}
-                                focusFrameOverride={focusFrame}
-                              />
-                            );
-                          case "shape":
-                            return (
-                              <ShapePreview
-                                key={clip.clipId}
-                                {...(clip as any)}
-                                rectWidth={previewRect.width || size.width}
-                                rectHeight={previewRect.height || size.height}
-                                applicators={applicators}
-                                assetMode={true}
-                              />
-                            );
-                          case "text":
-                            return (
-                              <TextPreview
-                                key={clip.clipId}
-                                {...(clip as any)}
-                                rectWidth={previewRect.width || size.width}
-                                rectHeight={previewRect.height || size.height}
-                                applicators={applicators}
-                                assetMode={true}
-                              />
-                            );
-                          case "draw":
-                            return (
-                              <DrawingPreview
-                                key={clip.clipId}
-                                {...(clip as any)}
-                                rectWidth={previewRect.width || size.width}
-                                rectHeight={previewRect.height || size.height}
-                                assetMode={true}
-                                applicators={applicators}
-                              />
-                            );
-                          default:
-                            return null;
-                        }
                       })}
                     </Group>
                     <Group y={32} x={16} visible={canCrop}>

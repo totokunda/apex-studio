@@ -181,7 +181,7 @@ const ModelComponentsProperties = ({
                   className={cn(
                     "w-full min-w-0 overflow-hidden text-left bg-brand/50 border duration-200 border-brand-light/5 rounded-[7px] px-3 py-2.5 transition-all",
                     "text-[10.5px] text-brand-light ",
-                    isSelected && "bg-brand-light/[0.075] border-brand-light/5",
+                    isSelected && "bg-brand-light/7.5 border-brand-light/5",
                     !isSelected && "hover:bg-brand",
                   )}
                 >

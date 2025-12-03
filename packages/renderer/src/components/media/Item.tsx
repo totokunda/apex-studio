@@ -89,6 +89,7 @@ export type MediaItem = {
   type: ClipType;
   absPath: string;
   assetUrl: string;
+  originalAssetUrl?: string;
   dateAddedMs?: number;
   mediaInfo?: MediaInfo;
   fillCanvas?: boolean;

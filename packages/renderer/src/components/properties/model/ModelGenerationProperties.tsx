@@ -23,17 +23,18 @@ export const ModelGenerationProperties: React.FC<
   const updateClip = useClipStore((s) => s.updateClip);
   const updateModelInput = useClipStore((s) => s.updateModelInput);
   const setClipTransform = useClipStore((s) => s.setClipTransform);
-
+  const getAssetById = useClipStore((s) => s.getAssetById);
   const generations = useMemo(
     () => clip?.generations ?? [],
     [clip?.generations],
   );
+
   const visibleGenerations = useMemo(() => {
     return (generations || [])
       .filter(
         (g) =>
           (g?.modelStatus === "complete" || g?.modelStatus === "running") &&
-          !!g?.src,
+          !!g?.assetId,
       )
       .sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0));
   }, [generations]);
@@ -52,16 +53,18 @@ export const ModelGenerationProperties: React.FC<
     [],
   );
 
-  const selectedFileUrl = String(clip?.src || "");
+  const selectedAssetId = String(clip?.assetId || "");
+  const selectedAsset = useMemo(() => getAssetById(selectedAssetId), [selectedAssetId]);
 
   const selectedIndex = useMemo(() => {
     if (!visibleGenerations || visibleGenerations.length === 0) return -1;
     const idx = visibleGenerations.findIndex((g) => {
-      const url = normalizeToFileUrl(g?.src);
-      return url && url === selectedFileUrl;
+      const asset = getAssetById(g?.assetId);
+      const url = normalizeToFileUrl(asset?.path);
+      return url && url === selectedAsset?.path;
     });
     return idx;
-  }, [visibleGenerations, normalizeToFileUrl, selectedFileUrl]);
+  }, [visibleGenerations, normalizeToFileUrl, selectedAsset?.path]);
 
   const onSelectGeneration = useCallback(
     async (index: number) => {
@@ -69,11 +72,12 @@ export const ModelGenerationProperties: React.FC<
       if (index === selectedIndex) return;
       const gen = visibleGenerations[index];
       if (!gen) return;
-      const fileUrl = normalizeToFileUrl(gen.src);
+      const asset = getAssetById(gen.assetId);
+      const fileUrl = normalizeToFileUrl(asset?.path);
       if (!fileUrl) return;
       try {
         // Persist current clip transform into the previously selected generation entry (if any)
-        let updates: any = { src: fileUrl };
+        let updates: Partial<ModelClipProps> = { assetId: gen.assetId };
         try {
           const prevIdx = selectedIndex;
           const currentTransform = clip?.transform;
@@ -207,12 +211,14 @@ const GenerationCard: React.FC<{
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [meta, setMeta] = useState<{ duration?: number } | null>(null);
+  const getAssetById = useClipStore((s) => s.getAssetById);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const el = canvasRef.current;
-      const src = generation?.src;
+      const asset = getAssetById(generation?.assetId);
+      const src = asset?.path;
       if (!el || !src) {
         return;
       }
@@ -243,7 +249,7 @@ const GenerationCard: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [generation?.src]);
+  }, [generation?.assetId]);
 
   const durationText = useMemo(() => {
     const dur = meta?.duration;

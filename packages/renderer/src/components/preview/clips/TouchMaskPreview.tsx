@@ -40,7 +40,9 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({
   const setTouchMaskRefetchToken = useMaskStore(
     (s) => s.setTouchMaskRefetchToken,
   );
-
+  const getAssetById = useClipStore((s) => s.getAssetById);
+  const asset = useMemo(() => getAssetById(clip.assetId), [clip.assetId]);
+  if (!asset) return null;
   const [renderedTouchPoints, setRenderedTouchPoints] = useState<
     Array<{ x: number; y: number; label: 1 | 0 }>
   >([]);
@@ -195,8 +197,8 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({
 
   // Get media info and clip transform
   const mediaInfo = useMemo(
-    () => getMediaInfoCached(clip.src) || null,
-    [clip.src],
+    () => getMediaInfoCached(asset.path) || null,
+    [asset.path],
   );
   const clipTransform = useMemo(
     () => getClipTransform(clip.clipId || ""),
@@ -240,7 +242,7 @@ const TouchMaskPreview: React.FC<TouchMaskPreviewProps> = ({
 
   const { data, loading } = useMask({
     id: currentMask?.id || "",
-    inputPath: clip.src,
+    inputPath: asset.path,
     tool: "touch",
     points: touchDrawMode === "point" && points.length > 0 ? points : undefined, // Only send points if we have touch points
     pointLabels:

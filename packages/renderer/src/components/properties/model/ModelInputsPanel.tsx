@@ -556,7 +556,7 @@ export const ModelInputsPanel: React.FC<{
                             return v;
                           if (
                             (v as any).clipId ||
-                            (v as any).src ||
+                            (v as any).assetId ||
                             (v as any).type
                           )
                             return v;
@@ -569,7 +569,7 @@ export const ModelInputsPanel: React.FC<{
                               (obj.kind === "media" || obj.kind === "clip")
                             )
                               return obj;
-                            if (obj && (obj.clipId || obj.src || obj.type))
+                            if (obj && (obj.clipId || obj.assetId || obj.type))
                               return obj;
                           } catch {}
                           return { kind: "media", assetUrl: v } as any;
@@ -637,7 +637,7 @@ export const ModelInputsPanel: React.FC<{
                               (obj.kind === "media" || obj.kind === "clip")
                             )
                               return { selection: obj } as any;
-                            if (obj && (obj.clipId || obj.src || obj.type))
+                            if (obj && (obj.clipId || obj.assetId || obj.type))
                               return { selection: obj } as any;
                           } catch {}
                           return {
@@ -652,7 +652,7 @@ export const ModelInputsPanel: React.FC<{
                             return { selection: v } as any;
                           if (
                             (v as any).clipId ||
-                            (v as any).src ||
+                            (v as any).assetId ||
                             (v as any).type
                           )
                             return { selection: v } as any;
@@ -822,7 +822,7 @@ export const ModelInputsPanel: React.FC<{
                                 obj.preprocessor_ref)
                             )
                               return obj as any;
-                            if (obj && (obj.clipId || obj.src || obj.type))
+                            if (obj && (obj.clipId || obj.assetId || obj.type))
                               return { selection: obj } as any;
                           } catch {}
                         }
@@ -957,7 +957,7 @@ export const ModelInputsPanel: React.FC<{
                             return v;
                           if (
                             (v as any).clipId ||
-                            (v as any).src ||
+                            (v as any).assetId ||
                             (v as any).type
                           )
                             return v;
@@ -970,7 +970,7 @@ export const ModelInputsPanel: React.FC<{
                               (obj.kind === "media" || obj.kind === "clip")
                             )
                               return obj;
-                            if (obj && (obj.clipId || obj.src || obj.type))
+                            if (obj && (obj.clipId || obj.assetId || obj.type))
                               return obj;
                           } catch {}
                           return { kind: "media", assetUrl: v } as any;
@@ -1008,7 +1008,7 @@ export const ModelInputsPanel: React.FC<{
                               return item;
                             if (
                               (item as any).clipId ||
-                              (item as any).src ||
+                              (item as any).assetId ||
                               (item as any).type
                             )
                               return item;
@@ -1022,7 +1022,7 @@ export const ModelInputsPanel: React.FC<{
                                 (obj.kind === "media" || obj.kind === "clip")
                               )
                                 return obj;
-                              if (obj && (obj.clipId || obj.src || obj.type))
+                              if (obj && (obj.clipId || obj.assetId || obj.type))
                                 return obj;
                             } catch {}
                             return { kind: "media", assetUrl: item } as any;
@@ -1097,7 +1097,7 @@ export const ModelInputsPanel: React.FC<{
                             return coerceRange(v);
                           if (
                             (v as any).clipId ||
-                            (v as any).src ||
+                            (v as any).assetId ||
                             (v as any).type
                           )
                             return coerceRange(v);
@@ -1113,7 +1113,7 @@ export const ModelInputsPanel: React.FC<{
                               return coerceRange(parsed);
                             if (
                               parsed &&
-                              (parsed.clipId || parsed.src || parsed.type)
+                              (parsed.clipId || parsed.assetId || parsed.type)
                             )
                               return coerceRange(parsed);
                           } catch {}
@@ -1162,7 +1162,7 @@ export const ModelInputsPanel: React.FC<{
                             return coerceRange(v);
                           if (
                             (v as any).clipId ||
-                            (v as any).src ||
+                            (v as any).assetId ||
                             (v as any).type
                           )
                             return coerceRange(v);
@@ -1178,7 +1178,7 @@ export const ModelInputsPanel: React.FC<{
                               return coerceRange(parsed);
                             if (
                               parsed &&
-                              (parsed.clipId || parsed.src || parsed.type)
+                              (parsed.clipId || parsed.assetId || parsed.type)
                             )
                               return coerceRange(parsed);
                           } catch {}
@@ -1247,7 +1247,7 @@ export const ModelInputsPanel: React.FC<{
                             return coerceRange(v);
                           if (
                             (v as any).clipId ||
-                            (v as any).src ||
+                            (v as any).assetId ||
                             (v as any).type
                           )
                             return coerceRange(v);
@@ -1263,8 +1263,8 @@ export const ModelInputsPanel: React.FC<{
                               return coerceRange(parsed);
                             if (
                               parsed &&
-                              (parsed.clipId || parsed.src || parsed.type)
-                            )
+                              (parsed.clipId || parsed.assetId || parsed.type)
+                            ) 
                               return coerceRange(parsed);
                           } catch {}
                           return null;

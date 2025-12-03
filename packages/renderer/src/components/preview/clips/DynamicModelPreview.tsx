@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AnyClipProps } from "@/lib/types";
+import { AnyClipProps, ModelClipProps } from "@/lib/types";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import VideoPreview from "./VideoPreview";
 import ImagePreview from "./ImagePreview";
@@ -21,13 +21,14 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
   applicators,
   overlap,
 }) => {
-  const src = (clip as any)?.src || "";
+  const src = (clip as ModelClipProps)?.previewPath || "";
   const [tick, setTick] = useState(0);
   const [activeSrc, setActiveSrc] = useState(src);
   const lastAspectJobIdRef = useRef<string | undefined>(undefined);
-
+  const assetIdRef = useRef<string | undefined>(undefined);
   // Resolve info for the active source only; keep showing previous src until new info is ready
   const info = useMemo(() => getMediaInfoCached(activeSrc), [activeSrc, tick]);
+  const addAsset = useClipStore((s) => s.addAsset);
 
   // Fallback type guess by file extension while media info is being resolved
   const typeGuess = useMemo(() => {
@@ -81,13 +82,16 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
     let cancelled = false;
     (async () => {
       try {
-        const targetSrc = (clip as any)?.src || activeSrc;
+        const targetSrc = (clip as ModelClipProps)?.previewPath || activeSrc;
+        
         let info = getMediaInfoCached(targetSrc);
         if (!info) {
           try {
             info = await getMediaInfo(targetSrc, { sourceDir: "apex-cache" });
           } catch {}
         }
+        const asset = addAsset({ path: targetSrc });
+        assetIdRef.current = asset.id;
         if (cancelled) return;
         const dims = (() => {
           const v = (info as any)?.video;
@@ -138,7 +142,7 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
   if (info?.video || (!info && typeGuess === "video" && activeSrc)) {
     return (
       <VideoPreview
-        {...({ ...(clip as any), src: activeSrc } as any)}
+        {...({ ...(clip as any), assetId: assetIdRef.current } as any)}
         rectWidth={rectWidth}
         rectHeight={rectHeight}
         applicators={applicators}
@@ -146,10 +150,11 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
       />
     );
   }
+  
   if (info?.image || (!info && typeGuess === "image" && activeSrc)) {
     return (
       <ImagePreview
-        {...({ ...(clip as any), src: activeSrc } as any)}
+        {...({ ...(clip as any), assetId: assetIdRef.current } as any)}
         rectWidth={rectWidth}
         rectHeight={rectHeight}
         applicators={applicators}

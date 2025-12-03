@@ -9,6 +9,7 @@ import { getMediaInfo } from "./utils";
 import { ShapeMask } from "@/components/preview/mask/shape";
 import { LassoMask } from "@/components/preview/mask/lasso";
 import { TouchMask } from "@/components/preview/mask/touch";
+import { useClipStore } from "../clip";
 
 export const createThumbnailKey = (
   id: string,
@@ -872,7 +873,7 @@ export const generatePosterCanvas = async (
       }
       const fidx = frameIndex ?? 0;
       const matched = options.preprocessors.find((p) => {
-        if (!p?.src) return false;
+        if (!p?.assetId) return false;
         const s = typeof p.startFrame === "number" ? p.startFrame : undefined;
         const e = typeof p.endFrame === "number" ? p.endFrame : s;
         if (s === undefined && e === undefined) return false;
@@ -880,8 +881,11 @@ export const generatePosterCanvas = async (
         if (s !== undefined) return fidx === s;
         return false;
       });
-      if (matched?.src) {
-        effectivePath = matched.src;
+      if (matched?.assetId) {
+        const asset = useClipStore.getState().getAssetById(matched.assetId);
+        if (asset) {
+          effectivePath = asset.path;
+        }
       }
     }
 

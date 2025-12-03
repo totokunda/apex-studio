@@ -30,7 +30,7 @@ const FilterProperties: React.FC<FilterPropertiesProps> = ({ clipId }) => {
   };
 
   return (
-    <div className="flex flex-col gap-y-2 min-w-0 p-4 px-5">
+    <div className="flex flex-col gap-y-2 min-w-0 p-4 px-5 border-b border-brand-light/5">
       <h4 className="text-brand-light text-[12px] font-medium text-start mb-4">
         Filter
       </h4>

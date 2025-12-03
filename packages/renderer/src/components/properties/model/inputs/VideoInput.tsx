@@ -23,6 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import TimelineSearch from "./timeline/TimelineSearch";
 import { useClipStore } from "@/lib/clip";
 import { useAssetControlsStore } from "@/lib/assetControl";
+import { useProjectsStore } from "@/lib/projects";
 import TimelineClipPosterPreview from "./TimelineClipPosterPreview";
 import {
   AnyClipProps,
@@ -96,6 +97,9 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
   );
   const mediaLibraryVersion = useMediaLibraryVersion();
   const { fps } = useControlsStore();
+  const getAssetById = useClipStore((s) => s.getAssetById);
+  const addAsset = useClipStore((s) => s.addAsset);
+  const getActiveProject = useProjectsStore((s) => s.getActiveProject);
   useEffect(() => {
     const next = mediaItems.filter((media) =>
       media.name.toLowerCase().includes(searchQuery.toLowerCase()),
@@ -106,7 +110,7 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
   useEffect(() => {
     (async () => {
       try {
-        const list = await listConvertedMedia();
+        const list = await listConvertedMedia(getActiveProject()?.folderUuid);
         const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
         const infos = await Promise.all(infoPromises);
         const results: MediaItem[] = list
@@ -151,10 +155,11 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
         VIDEO_EXTS.includes(getLowercaseExtension(p)),
       );
       if (paths.length === 0) return;
-      const before = await listConvertedMedia();
+      const before = await listConvertedMedia(getActiveProject()?.folderUuid);
       const existingNames = new Set(before.map((it) => it.name));
-      await importMediaPaths(paths);
-      const after = await listConvertedMedia();
+      console.log("before", before, paths);
+      await importMediaPaths(paths, undefined, getActiveProject()?.folderUuid);
+      const after = await listConvertedMedia(getActiveProject()?.folderUuid);
       const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
       const infos = await Promise.all(infoPromises);
       const results: MediaItem[] = after
@@ -190,10 +195,11 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
           (first.mediaInfo as any)?.video?.height ??
           0;
         const mar = mw && mh ? mw / mh : undefined;
+        const asset = addAsset({ path: first.assetUrl, modelInputAsset: true });
         const clip: VideoClipProps = {
           type: "video",
           clipId: `media:${first.assetUrl}`,
-          src: first.assetUrl,
+          assetId: asset.id,
           startFrame: 0,
           endFrame: Math.max(1, durationFrames),
           mediaWidth: mw || undefined,
@@ -273,10 +279,15 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
                       (media.mediaInfo as any)?.video?.height ??
                       0;
                     const mar = mw && mh ? mw / mh : undefined;
+                    const asset = addAsset({
+                      path: media.assetUrl,
+                      modelInputAsset: true,
+                    });
                     const clip: VideoClipProps = {
                       type: "video",
                       clipId: `media:${media.assetUrl}`,
-                      src: media.assetUrl,
+                      assetId: asset.id,
+                      assetIdHistory: [asset.id],
                       startFrame: 0,
                       endFrame: durationFrames,
                       mediaWidth: mw || undefined,
@@ -481,6 +492,8 @@ const VideoInput: React.FC<VideoInputProps> = ({
   const [contentRatio, setContentRatio] = useState<number | null>(null);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const scrubberTrackRef = useRef<HTMLDivElement | null>(null);
+  const getAssetById = useClipStore((s) => s.getAssetById);
+  const addAsset = useClipStore((s) => s.addAsset);
 
   // Initialize input fps synchronously before first render to avoid slow playback
   React.useLayoutEffect(() => {
@@ -494,6 +507,8 @@ const VideoInput: React.FC<VideoInputProps> = ({
     return value.clipId;
   }, [value]);
 
+  const getActiveProject = useProjectsStore((s) => s.getActiveProject);
+
   const viewportRatio = useMemo(() => {
     const r = aspectRatio.width / aspectRatio.height;
     return Number.isFinite(r) && r > 0 ? r : 1;
@@ -502,6 +517,9 @@ const VideoInput: React.FC<VideoInputProps> = ({
     if (!value) return null;
     return (mediaClip ?? (value as AnyClipProps)) || null;
   }, [value, mediaClip]);
+  const selectedClipRatioSignature = clipSignature(
+    selectedClipForRatio as AnyClipProps,
+  );
   const displayRatio = useMemo(() => {
     const clip = selectedClipForRatio;
     if (!clip) return viewportRatio;
@@ -513,7 +531,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
     )
       return contentRatio;
     return viewportRatio;
-  }, [selectedClipForRatio, contentRatio, viewportRatio]);
+  }, [selectedClipRatioSignature, contentRatio, viewportRatio]);
   useEffect(() => {
     const clip = selectedClipForRatio;
     if (!clip) {
@@ -536,7 +554,9 @@ const VideoInput: React.FC<VideoInputProps> = ({
       setContentRatio(cached);
       return;
     }
-    const src = clip?.src as string | undefined;
+    const asset = getAssetById(clip.assetId);
+    if (!asset) return;
+    const src = asset.path;
     if (!src) {
       setContentRatio(null);
       return;
@@ -573,7 +593,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [selectedClipForRatio]);
+  }, [selectedClipRatioSignature]);
 
   // Preprocessor toggle state and default
   const [applyPreprocessor, setApplyPreprocessor] = useState<boolean>(true);
@@ -664,9 +684,9 @@ const VideoInput: React.FC<VideoInputProps> = ({
             }
           }
           // Determine intrinsic media dimensions (fallback to mediaInfo if missing)
-          let src: string | undefined = (next as any)?.src;
-          let mw = Number((next as any)?.mediaWidth ?? 0);
-          let mh = Number((next as any)?.mediaHeight ?? 0);
+          let src: string | undefined = getAssetById((next as VideoClipProps).assetId)?.path;
+          let mw = Number((next as VideoClipProps)?.mediaWidth ?? 0);
+          let mh = Number((next as VideoClipProps)?.mediaHeight ?? 0);
           if ((!mw || !mh) && src) {
             try {
               const info = await getMediaInfo(src);
@@ -879,10 +899,14 @@ const VideoInput: React.FC<VideoInputProps> = ({
             const mh =
               info?.video?.displayHeight ?? (info as any)?.video?.height ?? 0;
             const mar = mw && mh ? mw / mh : undefined;
+            const asset = addAsset({
+              path: data.assetUrl,
+              modelInputAsset: true,
+            });
             const clip: VideoClipProps = {
               type: "video",
               clipId: `media:${data.assetUrl}`,
-              src: data.assetUrl,
+              assetId: asset.id,
               startFrame: 0,
               endFrame: durationFrames,
               mediaWidth: mw || undefined,
@@ -896,10 +920,14 @@ const VideoInput: React.FC<VideoInputProps> = ({
             } as any;
             emitSelection(clip as AnyClipProps);
           } catch {
+            const asset = addAsset({
+              path: data?.assetUrl || "",
+              modelInputAsset: true,
+            });
             const clip: VideoClipProps = {
               type: "video",
               clipId: `media:${data?.assetUrl || ""}`,
-              src: data?.assetUrl || "",
+              assetId: asset.id,
               startFrame: 0,
               endFrame: 1,
               preprocessors: [],
@@ -950,10 +978,10 @@ const VideoInput: React.FC<VideoInputProps> = ({
     const ext = getLowercaseExtension(path);
     if (!VIDEO_EXTS.includes(ext)) return;
     try {
-      const before = await listConvertedMedia();
+      const before = await listConvertedMedia(getActiveProject()?.folderUuid);
       const existingNames = new Set(before.map((it) => it.name));
-      await importMediaPaths([path]);
-      const after = await listConvertedMedia();
+      await importMediaPaths([path], undefined, getActiveProject()?.folderUuid);
+      const after = await listConvertedMedia(getActiveProject()?.folderUuid);
       const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
       const infos = await Promise.all(infoPromises);
       const results: MediaItem[] = after
@@ -987,10 +1015,14 @@ const VideoInput: React.FC<VideoInputProps> = ({
           (first.mediaInfo as any)?.video?.height ??
           0;
         const mar = mw && mh ? mw / mh : undefined;
+        const asset = addAsset({
+          path: first.assetUrl,
+          modelInputAsset: true,
+        });
         const clip: VideoClipProps = {
           type: "video",
           clipId: `media:${first.assetUrl}`,
-          src: first.assetUrl,
+          assetId: asset.id,
           startFrame: 0,
           endFrame: durationFrames,
           mediaWidth: mw || undefined,
@@ -1026,7 +1058,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
     let cancelled = false;
     (async () => {
       try {
-        const info = await getMediaInfo((clip as any).src as string);
+        const info = await getMediaInfo((clip as VideoClipProps).assetId);
         const durationFrames = Math.max(
           1,
           Math.floor((info?.duration || 0) * fps),
@@ -1084,6 +1116,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
       transformHeight?: number;
       transformX?: number;
       transformY?: number;
+      originalTransform?: ClipTransform;
     }) => {
       if (!mediaClip) return;
       const newTransform: ClipTransform = {
@@ -1095,10 +1128,13 @@ const VideoInput: React.FC<VideoInputProps> = ({
         ...(typeof data.transformX === "number" ? { x: data.transformX } : {}),
         ...(typeof data.transformY === "number" ? { y: data.transformY } : {}),
       } as ClipTransform;
-      const updatedClip = {
+      const updatedClip: AnyClipProps = {
         ...mediaClip,
         transform: newTransform,
-      } as AnyClipProps;
+      };
+      if (data.originalTransform) {
+        (updatedClip as any).originalTransform = { ...data.originalTransform };
+      }
       setMediaClip(updatedClip);
       emitSelection(updatedClip as AnyClipProps);
       if (liveTimelineClip) {
@@ -1191,8 +1227,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
     let curEnd = Math.round(selectedRangeTuple?.[1] ?? curStart + 1);
     const desiredStart = Math.max(0, Math.min(span - 1, curStart));
     const desiredEnd = Math.max(desiredStart + 1, Math.min(span, curEnd));
-    console.log("clipStart", clipStart);
-    console.log("clipEnd", clipEnd);
+  
     if (desiredStart !== curStart || desiredEnd !== curEnd) {
       setSelectedRange(desiredStart, desiredEnd, inputId);
     }

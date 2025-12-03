@@ -1,11 +1,11 @@
 import { generateTimelineSamples } from "@/lib/media/timeline";
 import { MediaInfo, ImageClipProps } from "@/lib/types";
-
+import { useClipStore } from "@/lib/clip";
 const THUMBNAIL_TILE_SIZE = 36;
 
 export const generateTimelineThumbnailImage = async (
   clipType: string,
-  currentClip: any,
+  currentClip: ImageClipProps,
   currentClipId: string,
   mediaInfoRef: MediaInfo | null,
   imageCanvas: HTMLCanvasElement,
@@ -23,14 +23,20 @@ export const generateTimelineThumbnailImage = async (
 ) => {
   if (clipType !== "image") return;
   const tClipWidth = Math.min(thumbnailClipWidth, maxTimelineWidth);
-  const width = mediaInfoRef?.image?.width ?? 1;
-  const height = mediaInfoRef?.image?.height ?? 1;
-  const ratio = width / height;
-  let thumbnailWidth = Math.max(timelineHeight * ratio, THUMBNAIL_TILE_SIZE);
+  let width = mediaInfoRef?.image?.width ?? 0;
+  let height = mediaInfoRef?.image?.height ?? 0;
+  let ratio = width / height;
+  let thumbnailWidth = timelineHeight * ratio;
+
+  thumbnailWidth = Math.max(thumbnailWidth, THUMBNAIL_TILE_SIZE);
+
+  const getAssetById = useClipStore.getState().getAssetById;
+  const asset = getAssetById(currentClip.assetId);
+  if (!asset) return;
 
   const samples = await generateTimelineSamples(
     currentClipId,
-    currentClip?.src!,
+    asset.path,
     [0],
     thumbnailWidth,
     timelineHeight,

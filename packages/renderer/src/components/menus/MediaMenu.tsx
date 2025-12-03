@@ -35,6 +35,7 @@ import {
   createProxy,
   removeProxy,
 } from "@app/preload";
+import { useProjectsStore } from "@/lib/projects";
 import { getMediaInfo } from "@/lib/media/utils";
 import { VIDEO_EXTS, IMAGE_EXTS, AUDIO_EXTS } from "@/lib/settings";
 import {
@@ -90,6 +91,7 @@ type SortOrder = "asc" | "desc";
 let cachedMediaItems: MediaItem[] | null = null;
 let cachedDurationCache: Record<string, number | undefined> = {};
 let lastMediaLibraryVersionLoaded: number | null = null;
+let lastFolderUuidLoaded: string | null = null;
 
 const filterMediaItems = (
   items: MediaItem[],
@@ -180,7 +182,10 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
   const [creatingProxies, setCreatingProxies] = useState<Set<string>>(
     new Set(),
   );
+
   const mediaLibraryVersion = useMediaLibraryVersion();
+  const activeProject = useProjectsStore((s) => s.getActiveProject());
+  const folderUuid = activeProject?.folderUuid;
 
   useEffect(() => {
     const el = uploadBarRef.current;
@@ -214,7 +219,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
   const loadMediaList = useCallback(async () => {
     try {
       setLoading(true);
-      const list = await listConvertedMedia();
+      const list = await listConvertedMedia(folderUuid);
       const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
       const infos = await Promise.all(infoPromises);
       const results: MediaItem[] = list.map((it, idx) => ({
@@ -229,31 +234,40 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
       results.sort((a, b) =>
         a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
       );
-      // Update local state and the module-level cache so subsequent mounts
-      // can hydrate from memory without refetching from disk.
       setItems(results);
       cachedMediaItems = results;
       lastMediaLibraryVersionLoaded = mediaLibraryVersion;
+      lastFolderUuidLoaded = folderUuid ?? null;
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
-  }, [mediaLibraryVersion]);
+  }, [mediaLibraryVersion, folderUuid]);
+
+  // When the active project's folder changes, clear the in-memory cache so we
+  // force a fresh load for the new folder instead of reusing the old folder's data.
+  useEffect(() => {
+    cachedMediaItems = null;
+    cachedDurationCache = {};
+    lastMediaLibraryVersionLoaded = null;
+    lastFolderUuidLoaded = null;
+  }, [folderUuid]);
 
   useEffect(() => {
     // If we've never loaded for this version (or have no cache), hit disk.
     // Otherwise, just hydrate the component state from the cached items.
     const shouldLoad =
       !cachedMediaItems ||
-      lastMediaLibraryVersionLoaded !== mediaLibraryVersion;
+      lastMediaLibraryVersionLoaded !== mediaLibraryVersion ||
+      lastFolderUuidLoaded !== folderUuid;
 
     if (shouldLoad) {
       void loadMediaList();
     } else if (cachedMediaItems) {
       setItems(cachedMediaItems);
     }
-  }, [loadMediaList, mediaLibraryVersion]);
+  }, [loadMediaList, mediaLibraryVersion, folderUuid]);
 
   const handleUpload = async (directory: boolean = false) => {
     try {
@@ -264,9 +278,10 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
       const loadingId = toast.loading(`Importing ${paths.length} item(s)…`, {
         position: "bottom-right",
       });
-      await importMediaPaths(paths);
+      const folderUuid = activeProject?.folderUuid;
+      await importMediaPaths(paths, undefined, folderUuid);
       toast.dismiss(loadingId);
-      const list = await listConvertedMedia();
+      const list = await listConvertedMedia(folderUuid);
       const newItemsToFetch = list.filter((it) => !existingNames.has(it.name));
       const infoPromises = newItemsToFetch.map((it) =>
         getMediaInfo(it.assetUrl),
@@ -329,9 +344,10 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
       const loadingId = toast.loading(`Importing ${paths.length} item(s)…`, {
         position: "bottom-right",
       });
-      await importMediaPaths(paths);
+      const folderUuid = activeProject?.folderUuid;
+      await importMediaPaths(paths, undefined, folderUuid);
       toast.dismiss(loadingId);
-      const list = await listConvertedMedia();
+      const list = await listConvertedMedia(folderUuid);
       const newItemsToFetch = list.filter((it) => !existingNames.has(it.name));
       const infoPromises = newItemsToFetch.map((it) =>
         getMediaInfo(it.assetUrl),
@@ -445,7 +461,8 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
     const unique = await ensureUniqueName(`${sanitizedBase}${ext}`);
     // const newRel = await join(BASE_MEDIA_DIR, '24', unique);
     try {
-      await renameMediaPair(originalName, unique);
+      const folderUuid = activeProject?.folderUuid;
+      await renameMediaPair(originalName, unique, folderUuid);
       toast.success(`Renamed to ${unique}`, {
         position: "bottom-right",
         duration: 3000,
@@ -505,7 +522,8 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
   const handleDelete = useCallback(
     async (name: string) => {
       try {
-        await deleteMediaPair(name);
+        const folderUuid = activeProject?.folderUuid;
+        await deleteMediaPair(name, folderUuid);
         toast.success(`Deleted ${name}`, {
           position: "bottom-right",
           duration: 3000,
@@ -537,7 +555,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         });
       }
     },
-    [items],
+    [items, activeProject?.folderUuid],
   );
 
   const handleCreateProxy = useCallback(
@@ -547,7 +565,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         const loadingId = toast.loading("Creating proxy...", {
           position: "bottom-right",
         });
-        await createProxy(item.name, "480p");
+        await createProxy(item.name, "480p", folderUuid ?? undefined);
         toast.dismiss(loadingId);
         toast.success("Proxy created", {
           position: "bottom-right",
@@ -571,13 +589,13 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         });
       }
     },
-    [loadMediaList],
+    [loadMediaList, folderUuid],
   );
 
   const handleRemoveProxy = useCallback(
     async (item: MediaItem) => {
       try {
-        await removeProxy(item.name);
+        await removeProxy(item.name, folderUuid ?? undefined);
         toast.success("Proxy removed", {
           position: "bottom-right",
           duration: 3000,
@@ -594,7 +612,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         });
       }
     },
-    [loadMediaList],
+    [loadMediaList, folderUuid],
   );
 
   // removed old inline thumbnail implementations in favor of memoized MediaThumb above

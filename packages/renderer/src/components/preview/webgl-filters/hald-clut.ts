@@ -401,7 +401,6 @@ export class WebGLHaldClut extends WebGLFilterBase {
     const clutWidthLoc = gl.getUniformLocation(this.program, "u_clutWidth");
     const intensityLoc = gl.getUniformLocation(this.program, "u_intensity");
 
-    console.log("intensity", intensity, clutImagePath);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, sourceTexture);

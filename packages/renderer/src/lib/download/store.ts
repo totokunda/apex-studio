@@ -220,6 +220,10 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
             setTimeout(() => {
               set((state) => {
                 const nextDownloading = new Set(state.downloadingPaths);
+                const pathJobId = state.jobIdToPath[jobId];
+                console.log("pathsArr", pathsArr);
+                console.log("nextDownloading", nextDownloading);
+                console.log("pathJobId", pathJobId);
                 for (const p of pathsArr) nextDownloading.delete(p);
                 const nextWsFilesByPath = { ...state.wsFilesByPath };
                 for (const p of pathsArr) {
@@ -338,6 +342,7 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
     const sources = Array.isArray(request.source)
       ? request.source
       : [request.source];
+
     set((state) => {
       const next = new Set(state.downloadingPaths);
       for (const s of sources) next.add(s);
@@ -355,11 +360,31 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
         });
         if (jobId) jobIds.push(jobId);
         try {
-          await get().resolveDownload({
+          const res = await get().resolveDownload({
             item_type: request.item_type,
             source: s,
             save_path: request.save_path,
           });
+
+          // If the source is already fully downloaded, clear local tracking
+          // and skip subscribing to WS updates for this source.
+          if (res?.downloaded) {
+            set((state) => {
+              const nextDownloading = new Set(state.downloadingPaths);
+              nextDownloading.delete(s);
+
+              const nextWsFilesByPath = { ...state.wsFilesByPath };
+              if (nextWsFilesByPath[s]) {
+                delete nextWsFilesByPath[s];
+              }
+
+              return {
+                downloadingPaths: nextDownloading,
+                wsFilesByPath: nextWsFilesByPath,
+              };
+            });
+            continue;
+          }
         } catch {}
         if (jobId) {
           await get().subscribeToJob(jobId, s, onComplete, onError);
@@ -425,9 +450,14 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
     return undefined;
   },
   cancelDownload: async (jobId: string) => {
-    const response = await cancelUnifiedDownload(jobId);
-    if (response.success) {
-      return response.data;
+    // Always clear local state for this jobId, regardless of backend response
+    try {
+      const response = await cancelUnifiedDownload(jobId);
+      if (response.success) {
+        return response.data;
+      }
+    } catch {
+      // Swallow errors: UI state has already been cleaned up locally
     }
     return undefined;
   },

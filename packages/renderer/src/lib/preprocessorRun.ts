@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getMediaInfoCached } from "@/lib/media/utils";
 import { toFrameRange } from "@/lib/media/fps";
-import type { AnyClipProps } from "@/lib/types";
+import type { AnyClipProps, Asset, ImageClipProps, VideoClipProps } from "@/lib/types";
 import { runPreprocessor } from "@/lib/preprocessor/api";
 
 export interface PreprocessorRunContext {
@@ -21,6 +21,7 @@ export interface PreprocessorRunContext {
     error: (msg: string) => void;
   };
   setIsPreparingPreprocessor: (v: boolean) => void;
+  getAssetById: (id: string) => Asset | undefined;
 }
 
 export const runPreprocessorJob = async (ctx: PreprocessorRunContext) => {
@@ -30,6 +31,7 @@ export const runPreprocessorJob = async (ctx: PreprocessorRunContext) => {
     getPreprocessorById,
     getClipFromPreprocessorId,
     updatePreprocessor,
+    getAssetById,
     clearJob,
     toast,
     setIsPreparingPreprocessor,
@@ -38,8 +40,9 @@ export const runPreprocessorJob = async (ctx: PreprocessorRunContext) => {
   if (!selectedPreprocessorId) return;
   const preprocessor = getPreprocessorById(selectedPreprocessorId);
   if (!preprocessor) return;
-  const clip = getClipFromPreprocessorId(selectedPreprocessorId);
-  if (!clip || !clip.src) return;
+  const clip = getClipFromPreprocessorId(selectedPreprocessorId) as VideoClipProps | ImageClipProps;
+  const asset = getAssetById(clip.assetId);
+  if (!asset || !asset.path) return;
 
   if (preprocessor?.activeJobId) {
     clearJob(preprocessor.activeJobId);
@@ -56,7 +59,7 @@ export const runPreprocessorJob = async (ctx: PreprocessorRunContext) => {
       remoteRes.data?.isRemote
     );
     if (isRemote) {
-      const su = await getFileShouldUpload(String(clip.src || ""));
+      const su = await getFileShouldUpload(String(asset.path || ""));
       const shouldUpload = !!(su && su.success && su.data?.shouldUpload);
       if (shouldUpload) {
         toast.info("Uploading source media to server…");
@@ -64,7 +67,7 @@ export const runPreprocessorJob = async (ctx: PreprocessorRunContext) => {
     }
   } catch {}
 
-  const clipMediaInfo = getMediaInfoCached(clip.src);
+  const clipMediaInfo = getMediaInfoCached(asset.path);
   const clipFps = clipMediaInfo?.stats.video?.averagePacketRate ?? 24;
   if (
     preprocessor.startFrame === undefined ||
@@ -101,7 +104,7 @@ export const runPreprocessorJob = async (ctx: PreprocessorRunContext) => {
     start_frame: startFrameReal,
     end_frame: endFrameReal,
     preprocessor_name: preprocessor.preprocessor.id,
-    input_path: clip.src,
+    input_path: asset.path,
     job_id: activeJobId,
     download_if_needed: true,
     params: preprocessor.values,

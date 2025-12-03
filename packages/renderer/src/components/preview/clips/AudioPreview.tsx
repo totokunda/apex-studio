@@ -1,17 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import { useControlsStore } from "@/lib/control";
 import { useInputControlsStore } from "@/lib/inputControl";
-import { AnyClipProps, MediaInfo, AudioClipProps } from "@/lib/types";
+import { MediaInfo, AudioClipProps } from "@/lib/types";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import { getAudioIterator } from "@/lib/media/audio";
 import { WrappedAudioBuffer } from "mediabunny";
 import type { BaseClipApplicator } from "./apply/base";
-
-type ClipWithSrc = Extract<AnyClipProps, { src: string }>;
+import { useClipStore } from "@/lib/clip";
 
 // Schedules audio playback for a clip in sync with the timeline. Renders nothing.
 const AudioPreview: React.FC<
-  ClipWithSrc & {
+  AudioClipProps & {
     framesToPrefetch?: number;
     rectWidth?: number;
     rectHeight?: number;
@@ -24,7 +23,7 @@ const AudioPreview: React.FC<
   }
 > = (props) => {
   const {
-    src,
+    assetId,
     startFrame = 0,
     trimStart,
     volume = 0,
@@ -38,7 +37,7 @@ const AudioPreview: React.FC<
     disabled = false,
   } = props as { inputMode?: boolean; inputId?: string; disabled?: boolean };
   const mediaInfoRef = useRef<MediaInfo | null>(
-    getMediaInfoCached(src) || null,
+    getMediaInfoCached(assetId) || null,
   );
   const fpsFromControls = useControlsStore((s) => s.fps);
   const fpsByInputId = useInputControlsStore((s) => s.fpsByInputId);
@@ -50,6 +49,7 @@ const AudioPreview: React.FC<
   );
   const focusFrameFromInputs = focusFrameByInputId[inputId || ""] ?? 0;
   const focusFrame = inputMode ? focusFrameFromInputs : focusFrameFromControls;
+  const getAssetById = useClipStore((s) => s.getAssetById);
   // In input mode, focusFrame is clip-local and the input timeline is [0, span],
   // so we must not subtract the absolute clip start. Use local focus + trimStart.
   const currentFrame = useMemo(() => {
@@ -81,7 +81,7 @@ const AudioPreview: React.FC<
     if (!wasPlaying && isPlaying) {
       try {
         const detail = {
-          src,
+          assetId,
           currentFrame,
           fps,
           timeSec: fps ? currentFrame / fps : 0,
@@ -96,7 +96,7 @@ const AudioPreview: React.FC<
     if (wasPlaying && !isPlaying) {
       try {
         const detail = {
-          src,
+          assetId,
           currentFrame,
           fps,
           timeSec: fps ? currentFrame / fps : 0,
@@ -109,7 +109,7 @@ const AudioPreview: React.FC<
       } catch {}
     }
     prevIsPlayingRef.current = isPlaying;
-  }, [isPlaying, src, currentFrame, fps, inputMode, inputId]);
+  }, [isPlaying, assetId, currentFrame, fps, inputMode, inputId]);
 
   const { ctx, gainNode } = useMemo<{
     ctx: AudioContext;
@@ -208,19 +208,19 @@ const AudioPreview: React.FC<
     let cancelled = false;
     (async () => {
       try {
-        const info = await getMediaInfo(src);
+        const info = await getMediaInfo(assetId);
         if (!cancelled) mediaInfoRef.current = info;
       } catch {}
     })();
     return () => {
       cancelled = true;
     };
-  }, [src]);
+  }, [assetId]);
 
   useEffect(() => {
     const onPlaying = async (
       e: CustomEvent<{
-        src: string;
+        assetId: string;
         currentFrame: number;
         fps: number;
         timeSec: number;
@@ -246,7 +246,7 @@ const AudioPreview: React.FC<
   useEffect(() => {
     const onPaused = (
       e: CustomEvent<{
-        src: string;
+        assetId: string;
         currentFrame: number;
         fps: number;
         timeSec: number;
@@ -456,7 +456,9 @@ const AudioPreview: React.FC<
     const endIndex = mediaInfoRef.current?.endFrame
       ? mediaInfoRef.current.endFrame
       : undefined;
-    iteratorRef.current = await getAudioIterator(src, {
+    const asset = getAssetById(assetId);
+    if (!asset) return;
+    iteratorRef.current = await getAudioIterator(asset.path, {
       mediaInfo: mediaInfoRef.current || undefined,
       fps,
       startIndex: mediaFrameIndex,
@@ -644,7 +646,7 @@ const AudioPreview: React.FC<
     ctx,
     mediaInfoRef.current,
     fps,
-    src,
+    assetId,
     gainNode,
     volume,
     fadeIn,
@@ -663,7 +665,7 @@ const AudioPreview: React.FC<
     isPlaying,
     ctx,
     mediaInfoRef.current,
-    src,
+    assetId,
     fps,
     startRendering,
     volume,

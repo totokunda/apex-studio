@@ -66,7 +66,7 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
   const setIsOverMask = useMaskStore((s) => s.setIsOverMask);
 
   const handleClick = useCallback(
-    (e: KonvaEventObject<MouseEvent>) => {
+    (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
       if (!canInteract) return;
       e.cancelBubble = true;
       e.evt?.preventDefault?.();
@@ -486,7 +486,7 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
         onClick: isWhite ? handleClick : undefined,
         onTap: isWhite ? handleClick : undefined,
         onMouseDown: isWhite
-          ? (e: KonvaEventObject<MouseEvent>) => {
+          ? (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
               if (!canInteract) return;
               // Only stop propagation if not selected (to prevent creating new mask)
               // If selected, allow event to bubble for dragging/transforming

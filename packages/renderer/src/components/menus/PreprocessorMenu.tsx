@@ -773,7 +773,7 @@ const PreprocessorMenu: React.FC = () => {
             }
           />
           <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="w-full p-3 flex-shrink-0">
+            <div className="w-full p-3 shrink-0">
               <div className="relative bg-brand text-brand-light rounded-md placeholder:text-brand-light/50 items-center flex w-full p-3 space-x-2 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all">
                 <LuSearch className="w-4 h-4 text-brand-light/60" />
                 <input

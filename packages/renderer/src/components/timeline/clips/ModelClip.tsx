@@ -79,6 +79,8 @@ const ModelClip: React.FC<Props> = ({
   const finalSrcSetRef = useRef(false);
   const [, setForceRerenderCounter] = useState(0);
   const { fps } = useControlsStore();
+  const addAsset = useClipStore((s) => s.addAsset);
+  const getAssetById = useClipStore((s) => s.getAssetById);
 
   useEffect(() => {
     const clip = getClipById(clipId) as ModelClipProps | undefined;
@@ -173,7 +175,7 @@ const ModelClip: React.FC<Props> = ({
 
   // Reset video thumbnail request state when src changes to avoid stale requestKey short-circuiting
   useEffect(() => {
-    if (!currentClip?.src) return;
+    if (!(currentClip as ModelClipProps)?.assetId) return;
     // Snapshot current canvas into fallback and display it during transition
     try {
       const ctx = fallbackCanvas.current.getContext("2d");
@@ -198,7 +200,7 @@ const ModelClip: React.FC<Props> = ({
     try {
       groupRef.current?.getLayer()?.batchDraw();
     } catch {}
-  }, [currentClip?.src]);
+  }, [(currentClip as ModelClipProps)?.assetId]);
 
   // Listen for preview frames and update src + thumbnail
   useEffect(() => {
@@ -210,8 +212,8 @@ const ModelClip: React.FC<Props> = ({
     if (!previewPath) return;
 
     const fileUrl = pathToFileURLString(previewPath);
-    if (currentClip.src !== fileUrl) {
-      updateClip(clipId, { src: fileUrl });
+    if ((currentClip as ModelClipProps)?.previewPath !== fileUrl) {
+      updateClip(clipId, { previewPath: fileUrl });
     }
 
     (async () => {
@@ -219,6 +221,7 @@ const ModelClip: React.FC<Props> = ({
         mediaInfoRef.current = await getMediaInfo(fileUrl, {
           sourceDir: "apex-cache",
         });
+        
         const clip = getClipById(clipId) as ModelClipProps | undefined;
         if (!clip) return;
         const isVideo = !!mediaInfoRef.current?.video;
@@ -323,10 +326,11 @@ const ModelClip: React.FC<Props> = ({
           const idx = gens.findIndex((g: any) => g?.jobId === activeId);
           if (idx >= 0) {
             const g = gens[idx] as any;
-            if (g.src !== previewPath || g.modelStatus !== "running") {
-              const updated = gens.map((it: any, i: number) =>
+            const asset = getAssetById(g.assetId);
+            if ((asset?.path !== previewPath || g.modelStatus !== "running" ) && asset?.id) {
+              const updated = gens.map((it, i: number) =>
                 i === idx
-                  ? { ...g, src: previewPath, modelStatus: "running" }
+                  ? { ...g, assetId: asset.id, modelStatus: "running" }
                   : it,
               );
               updateClip(clipId, { generations: updated } as any);
@@ -361,7 +365,9 @@ const ModelClip: React.FC<Props> = ({
     const resultPath = (job?.result as any)?.result_path as string | undefined;
     if (!resultPath) return;
     const fileUrl = pathToFileURLString(resultPath);
-    if (!finalSrcSetRef.current || currentClip?.src !== fileUrl) {
+    // now we add this to asset store
+    const asset = addAsset({ path: fileUrl });
+    if (!finalSrcSetRef.current || (currentClip as ModelClipProps)?.assetId !== asset.id) {
       finalSrcSetRef.current = true;
       const prevGenerations = Array.isArray(clip?.generations)
         ? (clip?.generations as any[])
@@ -386,7 +392,7 @@ const ModelClip: React.FC<Props> = ({
         ];
       }
       updateClip(clipId, {
-        src: fileUrl,
+        assetId: asset.id,
         modelStatus: "complete",
         generations: nextGenerations,
         activeJobId: undefined,
@@ -395,7 +401,7 @@ const ModelClip: React.FC<Props> = ({
   }, [
     isComplete,
     job?.result,
-    currentClip?.src,
+    (currentClip as ModelClipProps)?.assetId,
     clipId,
     updateClip,
     clip?.generations,
@@ -403,12 +409,11 @@ const ModelClip: React.FC<Props> = ({
 
   // When clip src changes (outside of job updates), regenerate the timeline thumbnail
   useEffect(() => {
-    if (!currentClip?.src) return;
-    const src = currentClip.src;
+    if (!(currentClip as ModelClipProps)?.assetId) return;
 
     (async () => {
       try {
-        mediaInfoRef.current = await getMediaInfo(src, {
+        mediaInfoRef.current = await getMediaInfo(currentClip?.assetId!, {
           sourceDir: "apex-cache",
         });
         const clip = getClipById(clipId) as ModelClipProps | undefined;
@@ -495,7 +500,7 @@ const ModelClip: React.FC<Props> = ({
       } catch {}
     })();
   }, [
-    currentClip?.src,
+    currentClip?.assetId,
     clipWidth,
     timelineHeight,
     fps,

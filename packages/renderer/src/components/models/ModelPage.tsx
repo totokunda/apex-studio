@@ -123,7 +123,7 @@ const ModelPage: React.FC<ModelPageProps> = ({ manifestId }) => {
                     const focusFrame = Math.max(0, controls.focusFrame || 0);
                     const desiredFrames = Math.max(
                       1,
-                      manifest.metadata?.desired_duration ?? 5 * fps,
+                      manifest.metadata?.desired_duration ?? controls.defaultClipLength * fps,
                     );
                     const startFrame = focusFrame;
                     const endFrame = startFrame + desiredFrames;
@@ -184,8 +184,6 @@ const ModelPage: React.FC<ModelPageProps> = ({ manifestId }) => {
                       type: "model",
                       trimEnd: -Infinity,
                       trimStart: Infinity,
-                      height: 540,
-                      width: 540,
                       speed: 1.0,
                       manifest: manifest,
                     };

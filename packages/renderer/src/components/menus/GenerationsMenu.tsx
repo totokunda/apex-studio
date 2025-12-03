@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { MediaItem, MediaThumb } from "@/components/media/Item";
 import { getMediaInfo } from "@/lib/media/utils";
 import { deleteFile, listGeneratedMedia } from "@app/preload";
+import { useProjectsStore } from "@/lib/projects";
 import Draggable from "@/components/dnd/Draggable";
 import { RiAiGenerate } from "react-icons/ri";
 import {
@@ -139,6 +140,7 @@ const GenerationsMenu: React.FC = () => {
   const [sortOpen, setSortOpen] = useState(false);
   const [deleteAlertOpen, setDeleteAlertOpen] = useState(false);
   const [deleteItem, setDeleteItem] = useState<MediaItem | null>(null);
+  const activeProject = useProjectsStore((s) => s.getActiveProject());
 
   // Track panel height to size the ScrollArea dynamically
   useEffect(() => {
@@ -158,7 +160,8 @@ const GenerationsMenu: React.FC = () => {
   const loadGenerations = useCallback(async () => {
     try {
       setLoading(true);
-      const list = await listGeneratedMedia();
+      const folderUuid = activeProject?.folderUuid;
+      const list = await listGeneratedMedia(folderUuid);
       const infoPromises = list.map((it) =>
         getMediaInfo(it.assetUrl, { sourceDir: "apex-cache" }),
       );
@@ -180,7 +183,7 @@ const GenerationsMenu: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeProject?.folderUuid]);
 
   useEffect(() => {
     // Only hit disk the first time (or after explicit refresh via delete),

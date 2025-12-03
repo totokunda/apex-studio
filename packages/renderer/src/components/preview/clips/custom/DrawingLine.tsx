@@ -147,10 +147,11 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
       return applicators
         .map((a) => {
           const type = a?.constructor?.name || "Unknown";
-          const start = (a as any)?.getStartFrame?.() ?? "u";
-          const end = (a as any)?.getEndFrame?.() ?? "u";
+          const start = (a)?.getStartFrame?.() ?? "u";
+          const end = (a)?.getEndFrame?.() ?? "u";
+          const intensity = (a)?.getIntensity?.() ?? "u";
           const owner = (a as any)?.getClip?.()?.clipId ?? "u";
-          return `${type}#${owner}@${start}-${end}`;
+          return `${type}#${owner}@${start}-${end}@${intensity}`;
         })
         .join("|");
     } catch {

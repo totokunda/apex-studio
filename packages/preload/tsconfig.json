@@ -6,8 +6,10 @@
     "sourceMap": false,
     "moduleResolution": "NodeNext",
     "skipLibCheck": true,
+    "noEmit": true,
     "strict": true,
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
     "types": ["node"],
     "baseUrl": ".",
     "paths": {

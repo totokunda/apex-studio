@@ -23,6 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import TimelineSearch from "./timeline/TimelineSearch";
 import { useClipStore } from "@/lib/clip";
 import { useAssetControlsStore } from "@/lib/assetControl";
+import { useProjectsStore } from "@/lib/projects";
 import { AnyClipProps, AudioClipProps } from "@/lib/types";
 import { AUDIO_EXTS, DEFAULT_FPS } from "@/lib/settings";
 import {
@@ -81,11 +82,13 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
   const { clips } = useClipStore();
   const getClipById = useClipStore((s) => s.getClipById);
   const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
+  const addAsset = useClipStore((s) => s.addAsset);
   const setSelectedAssetChangeHandler = useAssetControlsStore(
     (s) => s.setSelectedAssetChangeHandler,
   );
   const mediaLibraryVersion = useMediaLibraryVersion();
   const { fps } = useControlsStore();
+  const getActiveProject = useProjectsStore((s) => s.getActiveProject);
   useEffect(() => {
     const next = mediaItems.filter((media) =>
       media.name.toLowerCase().includes(searchQuery.toLowerCase()),
@@ -96,7 +99,7 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
   useEffect(() => {
     (async () => {
       try {
-        const list = await listConvertedMedia();
+        const list = await listConvertedMedia(getActiveProject()?.folderUuid);
         const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
         const infos = await Promise.all(infoPromises);
         const results: MediaItem[] = list
@@ -147,10 +150,10 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
         AUDIO_EXTS.includes(getLowercaseExtension(p)),
       );
       if (paths.length === 0) return;
-      const before = await listConvertedMedia();
+      const before = await listConvertedMedia(getActiveProject()?.folderUuid);
       const existingNames = new Set(before.map((it) => it.name));
-      await importMediaPaths(paths);
-      const after = await listConvertedMedia();
+      await importMediaPaths(paths, undefined, getActiveProject()?.folderUuid);
+      const after = await listConvertedMedia(getActiveProject()?.folderUuid);
       const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
       const infos = await Promise.all(infoPromises);
       const results: MediaItem[] = after
@@ -177,10 +180,12 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
           Math.floor((first.mediaInfo?.duration || 0) * fps),
         );
         clearSelectedAsset();
+        let url = first.assetUrl + (isVideo(first.assetUrl) ? "#audio" : "");
+        const asset = addAsset({ path: url, modelInputAsset: true });
         const clip: AudioClipProps = {
           type: "audio",
           clipId: `media:${first.assetUrl}`,
-          src: first.assetUrl + (isVideo(first.assetUrl) ? "#audio" : ""),
+          assetId: asset.id,
           startFrame: 0,
           endFrame: Math.max(1, durationFrames),
         };
@@ -253,12 +258,17 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
                   if (isSelected) {
                     onChange(null);
                   } else {
+                    const url =
+                      media.assetUrl +
+                      (isVideo(media.assetUrl) ? "#audio" : "");
+                    const asset = addAsset({
+                      path: url,
+                      modelInputAsset: true,
+                    });
                     const clip: AudioClipProps = {
                       type: "audio",
                       clipId: `media:${media.assetUrl}`,
-                      src:
-                        media.assetUrl +
-                        (isVideo(media.assetUrl) ? "#audio" : ""),
+                      assetId: asset.id,
                       startFrame: 0,
                       endFrame: durationFrames,
                     } as any;
@@ -402,7 +412,6 @@ const AudioInput: React.FC<AudioInputProps> = ({
   const externalDragCounterRef = useRef(0);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
-
   const { clearSelectedAsset } = useAssetControlsStore();
 
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
@@ -433,7 +442,8 @@ const AudioInput: React.FC<AudioInputProps> = ({
   const playbackLastFrameRef = useRef<number>(0);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const scrubberTrackRef = useRef<HTMLDivElement | null>(null);
-
+  const addAsset = useClipStore((s) => s.addAsset);
+  const getActiveProject = useProjectsStore((s) => s.getActiveProject);
   // Initialize input fps synchronously before first render to avoid slow playback
   React.useLayoutEffect(() => {
     setInputFps(fps, inputId);
@@ -597,21 +607,24 @@ const AudioInput: React.FC<AudioInputProps> = ({
               1,
               Math.floor((info?.duration || 0) * fps),
             );
+            let url = data.assetUrl + (isVideo(data.assetUrl) ? "#audio" : "");
+            const asset = addAsset({ path: url, modelInputAsset: true });
             const clip: AudioClipProps = {
               type: "audio",
               clipId: `media:${data.assetUrl}`,
-              src: data.assetUrl + (isVideo(data.assetUrl) ? "#audio" : ""),
+              assetId: asset.id,
               startFrame: 0,
               endFrame: durationFrames,
             };
             emitSelection(clip);
           } catch {
+            let url =
+              data?.assetUrl + (isVideo(data?.assetUrl || "") ? "#audio" : "");
+            const asset = addAsset({ path: url, modelInputAsset: true });
             const clip: AudioClipProps = {
               type: "audio",
               clipId: `media:${data?.assetUrl || ""}`,
-              src:
-                (data?.assetUrl || "") +
-                (isVideo(data?.assetUrl || "") ? "#audio" : ""),
+              assetId: asset.id,
               startFrame: 0,
               endFrame: 1,
             };
@@ -660,10 +673,10 @@ const AudioInput: React.FC<AudioInputProps> = ({
     const ext = getLowercaseExtension(path);
     if (!AUDIO_EXTS.includes(ext)) return;
     try {
-      const before = await listConvertedMedia();
+      const before = await listConvertedMedia(getActiveProject()?.folderUuid);
       const existingNames = new Set(before.map((it) => it.name));
-      await importMediaPaths([path]);
-      const after = await listConvertedMedia();
+      await importMediaPaths([path], undefined, getActiveProject()?.folderUuid);
+      const after = await listConvertedMedia(getActiveProject()?.folderUuid);
       const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
       const infos = await Promise.all(infoPromises);
       const results: MediaItem[] = after
@@ -690,10 +703,12 @@ const AudioInput: React.FC<AudioInputProps> = ({
         );
 
         clearSelectedAsset();
+        let url = first.assetUrl + (isVideo(first.assetUrl) ? "#audio" : "");
+        const asset = addAsset({ path: url, modelInputAsset: true });
         const clip: AudioClipProps = {
           type: "audio",
           clipId: `media:${first.assetUrl}`,
-          src: first.assetUrl + (isVideo(first.assetUrl) ? "#audio" : ""),
+          assetId: asset.id,
           startFrame: 0,
           endFrame: durationFrames,
         };
@@ -722,7 +737,7 @@ const AudioInput: React.FC<AudioInputProps> = ({
     let cancelled = false;
     (async () => {
       try {
-        const info = await getMediaInfo((clip as any).src as string);
+        const info = await getMediaInfo((clip as AudioClipProps).assetId as string); 
         const durationFrames = Math.max(
           1,
           Math.floor((info?.duration || 0) * fps),

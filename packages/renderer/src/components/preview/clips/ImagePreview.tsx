@@ -32,7 +32,7 @@ const ImagePreview: React.FC<
     currentLocalFrameOverride?: number;
   }
 > = ({
-  src,
+  assetId,
   clipId,
   rectWidth,
   rectHeight,
@@ -45,7 +45,7 @@ const ImagePreview: React.FC<
   currentLocalFrameOverride,
 }) => {
   const mediaInfoRef = useRef<MediaInfo | null>(
-    getMediaInfoCached(src) || null,
+    getMediaInfoCached(assetId) || null,
   );
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<Konva.Image>(null);
@@ -119,6 +119,37 @@ const ImagePreview: React.FC<
   ) as ImageClipProps;
   const clip = (overrideClip as ImageClipProps) || clipFromStore;
 
+  // Stable signature for masks so we don't retrigger effects on array identity changes
+  const masksSignature = useMemo(() => {
+    const masks = clip?.masks;
+    if (!masks || masks.length === 0) return "none";
+    try {
+      return masks
+        .map((m) => {
+          const keyframes = m.keyframes as
+            | Map<number, any>
+            | Record<number, any>
+            | undefined;
+          const keyframeKeys = keyframes
+            ? keyframes instanceof Map
+              ? Array.from(keyframes.keys()).join(",")
+              : Object.keys(keyframes).join(",")
+            : "none";
+          return [
+            m.id,
+            m.tool,
+            m.isTracked ? "tracked" : "static",
+            m.lastModified,
+            keyframeKeys,
+            m.inverted ? "inv" : "norm",
+          ].join("#");
+        })
+        .join("|");
+    } catch {
+      return `len:${masks?.length ?? 0}`;
+    }
+  }, [clip?.masks]);
+
   const { applyMask } = useWebGLMask({
     focusFrame: focusFrame,
     masks: clip?.masks || [],
@@ -126,11 +157,11 @@ const ImagePreview: React.FC<
     clip: clip
   });
 
-  const selectedSrc = useMemo(() => {
+  const selectedAssetId = useMemo(() => {
     return (
-      clip?.preprocessors?.find((p) => p.status === "complete")?.src ?? src
+      clip?.preprocessors?.find((p) => p.status === "complete")?.assetId ?? assetId
     );
-  }, [src, clip?.preprocessors]);
+  }, [assetId, clip?.preprocessors]);
 
   const aspectRatio = useMemo(() => {
     const originalWidth = mediaInfoRef.current?.image?.width;
@@ -158,6 +189,9 @@ const ImagePreview: React.FC<
   const [isInteracting, setIsInteracting] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
   const [isTransforming, setIsTransforming] = useState(false);
+  const getAssetById = useClipStore((s) => s.getAssetById);
+  const assets = useClipStore((s) => s.assets);
+
   const [, forceRerenderForMediaInfo] = useState(0);
 
   const updateGuidesAndMaybeSnap = useCallback(
@@ -357,7 +391,9 @@ const ImagePreview: React.FC<
     let cancelled = false;
     (async () => {
       try {
-        const info = await getMediaInfo(src);
+        const asset = getAssetById(assetId);
+        if (!asset) return;
+        const info = await getMediaInfo(asset.path);
         if (!cancelled) {
           mediaInfoRef.current = info;
           // Trigger a safe re-render so dimensions recompute, the draw effect will run then
@@ -370,7 +406,7 @@ const ImagePreview: React.FC<
     return () => {
       cancelled = true;
     };
-  }, [src]);
+  }, [assetId]);
 
   // Compute aspect-fit display size and offsets within the preview rect
   const { displayWidth, displayHeight, offsetX, offsetY } = useMemo(() => {
@@ -455,10 +491,11 @@ const ImagePreview: React.FC<
       return applicators
         .map((a) => {
           const type = a?.constructor?.name || "Unknown";
-          const start = (a as any)?.getStartFrame?.() ?? "u";
-          const end = (a as any)?.getEndFrame?.() ?? "u";
+          const start = (a)?.getStartFrame?.() ?? "u";
+          const end = (a)?.getEndFrame?.() ?? "u";
+          const intensity = (a)?.getIntensity?.() ?? "u";
           const owner = (a as any)?.getClip?.()?.clipId ?? "u";
-          return `${type}#${owner}@${start}-${end}`;
+          return `${type}#${owner}@${start}-${end}@${intensity}`;
         })
         .join("|");
     } catch {
@@ -484,6 +521,7 @@ const ImagePreview: React.FC<
     });
   }, [clipsState, focusFrame, applicatorsSignature]);
 
+
   // Stabilize applyMask across focusFrame changes; we'll pass frame explicitly when drawing
   const applyMaskRef = useRef<typeof applyMask | null>(applyMask);
   useEffect(() => {
@@ -498,7 +536,9 @@ const ImagePreview: React.FC<
     try {
       const height = mediaInfoRef.current.image?.height;
       const width = mediaInfoRef.current.image?.width;
-      const image = await fetchImage(selectedSrc, height, width, {
+      const asset = getAssetById(selectedAssetId);
+      if (!asset) return;
+      const image = await fetchImage(asset.path, height, width, {
         mediaInfo: mediaInfoRef.current,
       });
 
@@ -606,7 +646,7 @@ const ImagePreview: React.FC<
     }
   }, [
     mediaInfoRef,
-    selectedSrc,
+    selectedAssetId,
     displayWidth,
     displayHeight,
     clip?.brightness,
@@ -617,7 +657,7 @@ const ImagePreview: React.FC<
     clip?.sharpness,
     clip?.noise,
     clip?.vignette,
-    clip.masks,
+    masksSignature,
     applicatorsSignature,
     applicatorsActiveStore,
     applyFilters,

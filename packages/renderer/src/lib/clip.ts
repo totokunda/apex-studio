@@ -14,17 +14,20 @@ import {
   GroupClipProps,
   ModelClipProps,
   ClipType,
+  Asset,
 } from "./types";
 import { v4 as uuidv4 } from "uuid";
 import { useControlsStore } from "./control";
 import { MediaItem } from "@/components/media/Item";
 import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS, IMAGE_EXTS } from "./settings";
-import { getMediaInfo } from "./media/utils";
+import { getMediaInfo, getMediaInfoCached } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
 import { ManifestWithType, UIInput } from "./manifest/api";
 import { useInputControlsStore } from "./inputControl";
 import { remapMaskWithClipTransformProportional } from "./mask/clipTransformUtils";
+
+import _ from "lodash";
 export const PREPROCESSOR_BAR_HEIGHT = 24;
 
 interface ClipStore {
@@ -33,6 +36,13 @@ interface ClipStore {
   _setClipDuration: (duration: number) => void;
   clips: AnyClipProps[];
   convertToMedia: (clipId: string) => void;
+  getAssetById: (assetId: string) => Asset | undefined;
+  getAssetByPath: (path: string) => Asset | undefined;
+  assets: Record<string, Asset>;  
+  setAssets: (assets: Record<string, Asset>) => void;
+  addAsset: (asset: Partial<Asset> | string) => Asset;
+  removeAsset: (assetId: string) => void;
+  updateAsset: (assetId: string, assetToUpdate: Partial<Asset>) => void;
   getClipById: (
     clipId: string,
     timelineId?: string,
@@ -40,7 +50,12 @@ interface ClipStore {
   getClipsByType: (type: ClipType) => AnyClipProps[];
   getClipTransform: (clipId: string) => ClipTransform | undefined;
   getUncroppedClipTransform: (clipId: string) => ClipTransform | undefined;
-  setClipTransform: (clipId: string, transform: Partial<ClipTransform>, applyToMasks?: boolean, remapMasks?: boolean) => void;
+  setClipTransform: (
+    clipId: string,
+    transform: Partial<ClipTransform>,
+    applyToMasks?: boolean,
+    remapMasks?: boolean,
+  ) => void;
   setClips: (clips: AnyClipProps[]) => void;
   addClip: (clip: AnyClipProps) => void;
   removeClip: (clipId: string) => void;
@@ -129,6 +144,7 @@ interface ClipStore {
   // Higher score means visually "above" in stacking: lower timelines outrank above ones; within a timeline,
   // later layers (grouped upwards) outrank earlier ones; endFrame acts as final tiebreaker.
   getClipPositionScore: (clipId: string) => number;
+  rescaleForFpsChange: (oldFps: number, newFps: number) => void;
   // Timelines
   timelines: TimelineProps[];
   getClipsForTimeline: (timelineId: string) => AnyClipProps[];
@@ -164,6 +180,113 @@ interface ClipStore {
 const calculateTotalClipDuration = (clips: AnyClipProps[]): number => {
   const maxEndFrame = Math.max(...clips.map((clip) => clip.endFrame || 0));
   return maxEndFrame;
+};
+
+const rescaleFrame = (frame: any, oldFps: number, newFps: number): number | undefined => {
+  if (frame == null) return undefined;
+  const f = Number(frame);
+  if (!Number.isFinite(f) || f < 0) return undefined;
+  const safeOld = Math.max(1, Number(oldFps) || 1);
+  const safeNew = Math.max(1, Number(newFps) || 1);
+  if (safeOld === safeNew) return f;
+  const seconds = f / safeOld;
+  return Math.max(0, Math.round(seconds * safeNew));
+};
+
+// Helper to compute which assetIds are actually in use by current clips
+const collectUsedAssetIds = (clips: AnyClipProps[]): Set<string> => {
+  const used = new Set<string>();
+
+  for (const clip of clips) {
+    // Direct clip asset references
+    if (
+      (clip.type === "video" ||
+        clip.type === "image" ||
+        clip.type === "audio" ||
+        clip.type === "model") &&
+      (clip as any).assetId
+    ) {
+      used.add((clip as any).assetId as string);
+    }
+
+    if (clip.type === "image" || clip.type === "video") {
+      if (clip.preprocessors && Array.isArray(clip.preprocessors)) {
+        for (const p of clip.preprocessors as any[]) {
+          const id = p?.assetId;
+          if (typeof id === "string" && id) used.add(id);
+        }
+      }
+    }
+
+    // Asset history on media/model clips
+    if (
+      (clip.type === "video" || clip.type === "image") &&
+      Array.isArray((clip as any).assetIdHistory)
+    ) {
+      for (const id of (clip as any).assetIdHistory as string[]) {
+        if (typeof id === "string" && id) used.add(id);
+      }
+    }
+    if (
+      clip.type === "model" &&
+      Array.isArray((clip as any).assetIdHistory)
+    ) {
+      for (const id of (clip as any).assetIdHistory as string[]) {
+        if (typeof id === "string" && id) used.add(id);
+      }
+    }
+
+    // Model generations can reference assets as well
+    if (clip.type === "model" && Array.isArray((clip as any).generations)) {
+      for (const gen of (clip as any).generations as any[]) {
+        const id = gen?.assetId;
+        if (typeof id === "string" && id) used.add(id);
+      }
+    }
+
+    // Preprocessor assets nested under video/image clips
+    if (
+      (clip.type === "video" || clip.type === "image") &&
+      Array.isArray((clip as any).preprocessors)
+    ) {
+      for (const p of (clip as any).preprocessors as any[]) {
+        const id = p?.assetId;
+        if (typeof id === "string" && id) used.add(id);
+      }
+    }
+  }
+
+  return used;
+};
+
+// Given current clips, drop any assets that are no longer referenced by clips
+const pruneAssetsForClips = (
+  assets: Record<string, Asset>,
+  clips: AnyClipProps[],
+): Record<string, Asset> => {
+  if (!assets) return {};
+  const assetValues = Object.values(assets);
+  if (assetValues.length === 0) return assets;
+
+  const numModelClips = clips.filter((clip) => clip.type === "model").length;
+
+  const used = collectUsedAssetIds(clips);
+  const pruned: Record<string, Asset> = {};
+  for (const asset of assetValues) {
+    if (!asset || !asset.id) continue;
+    if (used.has(asset.id)) {
+      // Always key by asset id to keep lookups consistent with getAssetById
+      pruned[asset.id] = asset;
+    }
+  }
+  // ensure assets with persist are still in the pruned assets
+  for (const asset of assetValues) {
+    if (!asset || !asset.id) continue;
+    if (asset.modelInputAsset && numModelClips > 0) {
+      pruned[asset.id] = asset;
+    }
+  }
+  return pruned;
 };
 
 export const isValidTimelineForClip = (
@@ -300,11 +423,119 @@ export const resolveOverlapsTimelines = (
   return resolvedTimelines;
 };
 
-export const useClipStore = create<ClipStore>((set, get) => ({
+export const useClipStore = create<ClipStore>(((set, get) => ({
   clipDuration: 0,
   _setClipDuration: (duration) => set({ clipDuration: duration }),
   clips: [],
+  assets: {},
   timelines: [],
+  setAssets: (assets) => set({ assets }),
+  addAsset: (asset): Asset => {
+    if (typeof asset === "string") {
+      asset = { path: asset };
+    }
+
+    const path =
+      typeof asset === "object" && "path" in asset
+        ? (asset.path as string)
+        : (asset as string);
+
+    // Reuse existing asset for this path to avoid duplicates
+    const existingAssets = get().assets;
+    const existing = Object.values(existingAssets).find(
+      (a) => a.path === path,
+    );
+    if (existing) return existing;
+
+
+    const mediaInfo = getMediaInfoCached(path as string);
+
+    // Initial, best-effort values; will be refined asynchronously if needed
+    const inferredTypeFromMedia =
+      mediaInfo?.video
+        ? "video"
+        : mediaInfo?.audio
+          ? "audio"
+          : mediaInfo
+            ? "image"
+            : undefined;
+
+    let type =
+      asset.type ??
+      inferredTypeFromMedia;
+
+    if (!type) {
+      const ext = getLowercaseExtension(path ?? "");
+      if (VIDEO_EXTS.includes(ext)) type = "video";
+      else if (AUDIO_EXTS.includes(ext)) type = "audio";
+      else if (IMAGE_EXTS.includes(ext)) type = "image";
+      else type = "image";
+    }
+
+    const height =
+      asset.height ??
+      mediaInfo?.video?.displayHeight ??
+      mediaInfo?.image?.height;
+    const width =
+      asset.width ??
+      mediaInfo?.video?.displayWidth ??
+      mediaInfo?.image?.width;
+    const duration = asset.duration ?? mediaInfo?.duration ?? 0;
+
+    const newAsset: Asset = {
+      id: uuidv4(),
+      path: path,
+      type: type,
+      duration: duration,
+      width: height === undefined ? undefined : width,
+      height: height === undefined ? undefined : height,
+      modelInputAsset: asset.modelInputAsset ?? false,
+    };
+
+    const newAssets: Record<string, Asset> = {
+      ...get().assets,
+      [newAsset.id]: newAsset,
+    };
+
+    set({ assets: newAssets });
+    // If media info wasn't cached, fetch it asynchronously and update this asset
+    if (!mediaInfo) {
+      void getMediaInfo(path as string)
+        .then((info) => {
+          if (!info) return;
+
+          const updatedHeight =
+            info.video?.displayHeight ?? info.image?.height;
+          const updatedWidth =
+            info.video?.displayWidth ?? info.image?.width;
+          const updatedDuration = info.duration ?? 0;
+
+          let updatedType: Asset["type"] = newAsset.type;
+          if (info.video) updatedType = "video";
+          else if (info.audio) updatedType = "audio";
+          else if (info.image) updatedType = "image";
+
+          get().updateAsset(newAsset.id, {
+            height: newAsset.height ?? updatedHeight,
+            width: newAsset.width ?? updatedWidth,
+            duration:
+              newAsset.duration && newAsset.duration > 0
+                ? newAsset.duration
+                : updatedDuration,
+            type: newAsset.type ?? updatedType,
+          });
+        })
+        .catch((err) => {
+          console.error("Failed to load media info for asset", path, err);
+        });
+    }
+
+    return newAsset;
+  },
+  removeAsset: (assetId) => set((state) => ({ assets: _.omit(state.assets, assetId) })),
+  updateAsset: (assetId, assetToUpdate) => set((state) => ({ assets: _.set(state.assets, assetId, { ...state.assets[assetId], ...assetToUpdate }) })),
+  getAssetById: (assetId) => get().assets[assetId],
+  getAssetByPath: (path) => Object.values(get().assets).find((a) => a.path === path),
   convertToMedia: (clipId: string) =>
     set((state) => {
       const idx = state.clips.findIndex((c) => c.clipId === clipId);
@@ -314,15 +545,15 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       const modelClip = clip as ModelClipProps;
 
       // Choose source: prefer selected src; fallback to active job; else last completed/running generation
-      let chosenSrc: string | null = (modelClip.src as any) || null;
+      let chosenAssetId: string | null = (modelClip.assetId as any) || null;
       if (
-        !chosenSrc &&
+        !chosenAssetId &&
         Array.isArray(modelClip.generations) &&
         modelClip.generations.length > 0
       ) {
         const byActive = modelClip.activeJobId
           ? modelClip.generations.find(
-              (g) => g.jobId === modelClip.activeJobId && g.src,
+              (g) => g.jobId === modelClip.activeJobId && g.assetId,
             )
           : undefined;
         const byStatus = [...modelClip.generations]
@@ -330,14 +561,15 @@ export const useClipStore = create<ClipStore>((set, get) => ({
           .find(
             (g) =>
               (g.modelStatus === "complete" || g.modelStatus === "running") &&
-              g.src,
+              g.assetId,
           );
-        chosenSrc = (byActive?.src || byStatus?.src || null) as any;
+        chosenAssetId = (byActive?.assetId || byStatus?.assetId || null) as any;
       }
-      if (!chosenSrc) return { clips: state.clips };
+      if (!chosenAssetId) return { clips: state.clips };
 
       // Infer media type from extension; if unknown, we'll asynchronously refine via getMediaInfo
-      const ext = getLowercaseExtension(chosenSrc);
+      const asset = get().getAssetById(chosenAssetId);
+      const ext = getLowercaseExtension(asset?.path ?? "");
       const isVid = VIDEO_EXTS.includes(ext);
       const isImg = IMAGE_EXTS.includes(ext);
 
@@ -349,8 +581,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         trimStart: modelClip.trimStart,
         trimEnd: modelClip.trimEnd,
         clipPadding: modelClip.clipPadding,
-        width: modelClip.width,
-        height: modelClip.height,
         transform: modelClip.transform,
         originalTransform: modelClip.originalTransform,
         groupId: modelClip.groupId,
@@ -362,7 +592,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         converted = {
           ...(common as any),
           type: "video",
-          src: chosenSrc,
+          assetId: chosenAssetId,
           mediaWidth: undefined,
           mediaHeight: undefined,
           mediaAspectRatio: undefined,
@@ -381,7 +611,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         converted = {
           ...(common as any),
           type: "image",
-          src: chosenSrc,
+          assetId: chosenAssetId,
           mediaWidth: undefined,
           mediaHeight: undefined,
           mediaAspectRatio: undefined,
@@ -395,9 +625,10 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       newClips[idx] = converted;
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
 
       get()._updateZoomLevel(resolvedClips, clipDuration);
-      return { clips: resolvedClips, clipDuration };
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   isTimelineMuted: (timelineId) =>
     get().timelines.find((timeline) => timeline.timelineId === timelineId)
@@ -446,7 +677,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       );
       const resolvedTimelines = resolveOverlapsTimelines(newTimelines);
       return { timelines: resolvedTimelines };
-      return state;
     }),
   ghostStartEndFrame: [0, 0],
   activeMediaItem: null,
@@ -616,13 +846,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       if (!current.originalTransform) {
         updatedClip.originalTransform = { ...next };
       }
-
-    
       const newClips = [...state.clips];
       newClips[index] = updatedClip;
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
-      return { clips: resolvedClips, clipDuration };
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   getPreprocessorById: (preprocessorId: string) => {
     // get the clip that contains the preprocessor
@@ -670,7 +899,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       newClips[currentClipIndex] = newClip;
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
-      return { clips: resolvedClips, clipDuration };
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   addPreprocessorToClip: (
     clipId: string,
@@ -696,7 +926,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       newClips[currentClipIndex] = newClip;
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
-      return { clips: resolvedClips, clipDuration };
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   removePreprocessorFromClip: (
     clipId: string,
@@ -730,7 +961,13 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       ) {
         selectedPreprocessorId = null;
       }
-      return { clips: resolvedClips, clipDuration, selectedPreprocessorId };
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+      return {
+        clips: resolvedClips,
+        clipDuration,
+        selectedPreprocessorId,
+        assets: prunedAssets,
+      };
     }),
   getPreprocessorsForClip: (clipId: string) => {
     const clip = get().clips.find((c) => c.clipId === clipId);
@@ -796,9 +1033,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         (timelineId ? clip.timelineId === timelineId : true),
     ),
   setClips: (clips: AnyClipProps[]) => {
-    const resolvedClips = resolveOverlaps(clips);
-    const clipDuration = calculateTotalClipDuration(resolvedClips);
-    set({ clips: resolvedClips, clipDuration });
+    set((state) => {
+      const resolvedClips = resolveOverlaps(clips);
+      const clipDuration = calculateTotalClipDuration(resolvedClips);
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
+    });
   },
   addClip: (clip: AnyClipProps) =>
     set((state) => {
@@ -806,7 +1046,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
       get()._updateZoomLevel(resolvedClips, clipDuration);
-      return { clips: resolvedClips, clipDuration };
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   removeClip: (clipId: string) =>
     set((state) => {
@@ -866,8 +1107,9 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
       get()._updateZoomLevel(resolvedClips, clipDuration);
-      return { clips: resolvedClips, clipDuration };
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) =>
     set((state) => {
@@ -981,8 +1223,9 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       const resolvedClips = resolveOverlaps(newClips as AnyClipProps[]);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
       // update the zoom level
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
       get()._updateZoomLevel(resolvedClips, clipDuration);
-      return { clips: resolvedClips, clipDuration };
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   separateClip: (clipId) =>
     set((state) => {
@@ -1010,28 +1253,39 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         muted: false,
         hidden: false,
       };
-
-      const url1 = new URL(clip.src);
-      const url2 = new URL(clip.src);
+      const asset = get().getAssetById(clip.assetId);
+      const url1 = new URL(asset?.path ?? "");
+      const url2 = new URL(asset?.path ?? "");
 
       url1.hash = "video";
       url2.hash = "audio";
+      const asset1 = get().addAsset({ 
+        path: url1.toString(),
+        type: "video",
+        duration: asset?.duration ?? 0,
+        width: asset?.width ?? 0,
+        height: asset?.height ?? 0,
+      });
+      const asset2 = get().addAsset({ 
+        path: url2.toString(),
+        type: "audio",
+        duration: asset?.duration ?? 0,
+        width: asset?.width ?? 0,
+        height: asset?.height ?? 0,
+      });
 
       const clipVideo: AnyClipProps = {
         ...clip,
-        src: url1.toString(),
+        assetId: asset1.id,
         clipId: newClipId1,
       };
       const clipAudio: AnyClipProps = {
         ...clip,
         type: "audio",
-        src: url2.toString(),
+        assetId: asset2.id,
         clipId: newClipId2,
         timelineId: newAudioTimelineId,
       };
-      // Async run these two commands
-      getMediaInfo(clipVideo.src);
-      getMediaInfo(clipAudio.src);
 
       // Remove the original clip and add both new clips
       const newClips = [
@@ -1054,10 +1308,11 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       // Resolve overlaps and calculate duration
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
-
+      const prunedAssets = pruneAssetsForClips(get().assets, resolvedClips);
       return {
         clips: resolvedClips,
         clipDuration,
+        assets: prunedAssets,
         timelines: resolvedTimelines,
       };
     }),
@@ -1263,8 +1518,9 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
       get()._updateZoomLevel(resolvedClips, clipDuration);
-      return { clips: resolvedClips, clipDuration };
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   updateMaskKeyframes: (clipId, maskId, updater) =>
     set((state) => {
@@ -1300,7 +1556,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
-      return { clips: resolvedClips, clipDuration };
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   updateModelInput: (
     clipId: string,
@@ -1361,7 +1618,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
-      return { clips: resolvedClips, clipDuration };
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   getRawModelValues: (clipId: string) => {
     const clip = get().clips.find(
@@ -1605,8 +1863,9 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       });
 
       const finalClips = [...clipsToReplace, groupClip];
-      const clipDuration = calculateTotalClipDuration(finalClips);
       const resolvedClips = resolveOverlaps(finalClips);
+      const clipDuration = calculateTotalClipDuration(resolvedClips);
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
       get()._updateZoomLevel(resolvedClips, clipDuration);
       const resolvedTimelines = resolveOverlapsTimelines(timelines);
 
@@ -1619,6 +1878,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       return {
         clips: resolvedClips,
         clipDuration,
+        assets: prunedAssets,
         timelines: resolvedTimelines,
       };
     }),
@@ -1636,7 +1896,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         const resolvedClips = resolveOverlaps(remaining);
         const clipDuration = calculateTotalClipDuration(resolvedClips);
         get()._updateZoomLevel(resolvedClips, clipDuration);
-        return { clips: resolvedClips, clipDuration };
+        const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+        return { clips: resolvedClips, clipDuration, assets: prunedAssets };
       }
 
       // Determine ordering: always ungroup upwards
@@ -1831,6 +2092,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       return {
         clips: resolvedClips,
         clipDuration,
+        assets: pruneAssetsForClips(state.assets, resolvedClips),
         timelines: resolvedTimelines,
       };
     }),
@@ -1857,6 +2119,18 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       const newClipId2 = uuidv4();
       const infinitytrimEnd = !isFinite(clip.trimEnd || 0);
       const infinitytrimStart = !isFinite(clip.trimStart || 0);
+      const fps = useControlsStore.getState().fps;
+
+      const getDurationFromURL = (url:URL) => {
+        const currentStartFrame = url.searchParams.get("startFrame")
+          ? Number(url.searchParams.get("startFrame"))
+          : 0;
+        const currentEndFrame = url.searchParams.get("endFrame")
+          ? Number(url.searchParams.get("endFrame"))
+          : undefined;
+          if (isNaN(currentStartFrame) || isNaN(currentEndFrame ?? 0)) return undefined;
+        return ((currentEndFrame ?? 0) - (currentStartFrame ?? 0)) / fps;
+      }
 
       // First clip: from original start to cut frame
       // Keeps original trimStart, but can't extend past cut
@@ -1924,9 +2198,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
                 };
 
                 // Update src URLs to reflect the split in preprocessor media
-                if (preprocessor.src) {
-                  const url1 = new URL(preprocessor.src);
-                  const url2 = new URL(preprocessor.src);
+                if (preprocessor.assetId) {
+                  const asset = get().getAssetById(preprocessor.assetId);
+                  if (!asset) return;
+                   const url1 = new URL(asset.path);
+                  const url2 = new URL(asset.path);
+                 
                   const currentStartFrame = url1.searchParams.get("startFrame")
                     ? Number(url1.searchParams.get("startFrame"))
                     : 0;
@@ -1953,6 +2230,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
                       currentStartFrame + preprocessorMediaDurationBeforeCut,
                     ),
                   );
+
                   if (currentEndFrame !== undefined) {
                     url2.searchParams.set("endFrame", String(currentEndFrame));
                   } else {
@@ -1966,11 +2244,18 @@ export const useClipStore = create<ClipStore>((set, get) => ({
                     );
                   }
 
-                  preprocessor1.src = url1.toString();
-                  preprocessor2.src = url2.toString();
+                  // create new assets
+                  // get duration for both 
+                  const duration1 = getDurationFromURL(url1);
+                  const duration2 = getDurationFromURL(url2);
+                  const asset1 = get().addAsset({ ...asset, path: url1.toString(), duration: duration1 });
+                  const asset2 = get().addAsset({ ...asset, path: url2.toString(), duration: duration2 });
 
-                  void getMediaInfo(preprocessor1.src);
-                  void getMediaInfo(preprocessor2.src);
+                  preprocessor1.assetId = asset1.id;
+                  preprocessor2.assetId = asset2.id;
+
+                  void getMediaInfo(asset1.path);
+                  void getMediaInfo(asset2.path);
                 }
 
                 clip1Preprocessors.push(preprocessor1);
@@ -1990,7 +2275,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
           (clip as VideoClipProps | ImageClipProps).masks.length > 0
         ) {
           const originalMasks = (clip as VideoClipProps | ImageClipProps).masks;
-
           const masksForClip1: MaskClipProps[] = [];
           const masksForClip2: MaskClipProps[] = [];
 
@@ -2106,11 +2390,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         }
       }
 
+      const clipAsset = get().getAssetById((clip as VideoClipProps | ImageClipProps | AudioClipProps).assetId);
+
       if (
-        Object.prototype.hasOwnProperty.call(clip, "src") &&
-        clip.src &&
-        (AUDIO_EXTS.includes(getLowercaseExtension(clip.src)) ||
-          VIDEO_EXTS.includes(getLowercaseExtension(clip.src)))
+        clipAsset &&
+        (AUDIO_EXTS.includes(getLowercaseExtension(clipAsset.path)) ||
+          VIDEO_EXTS.includes(getLowercaseExtension(clipAsset.path)))
       ) {
         // one of audio or video
         let speed = 1;
@@ -2118,8 +2403,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
           speed = (clip as AudioClipProps).speed || 1;
         }
         const frameShift = (clip.startFrame || 0) - (clip.trimStart || 0);
-        const url1 = new URL(clip.src);
-        const url2 = new URL(clip.src);
+        const url1 = new URL(clipAsset.path);
+        const url2 = new URL(clipAsset.path);
         const startFrame1 = (clip.startFrame || 0) - frameShift;
         const endFrame1 = cutFrame * speed - frameShift;
         const startFrame2 = cutFrame * speed - frameShift;
@@ -2143,19 +2428,25 @@ export const useClipStore = create<ClipStore>((set, get) => ({
           "endFrame",
           String(endFrame2 + currentStartFrame),
         );
-        newClip1.src = url1.toString();
-        newClip2.src = url2.toString();
-        void getMediaInfo(newClip1.src);
-        void getMediaInfo(newClip2.src);
+
+        const duration1 = getDurationFromURL(url1);
+        const duration2 = getDurationFromURL(url2);   
+        const asset1 = get().addAsset({ ...clipAsset, path: url1.toString(), duration: duration1 });
+        const asset2 = get().addAsset({ ...clipAsset, path: url2.toString(), duration: duration2 });
+        (newClip1 as VideoClipProps | ImageClipProps | AudioClipProps).assetId = asset1.id;
+        (newClip2 as VideoClipProps | ImageClipProps | AudioClipProps).assetId = asset2.id;
+        void getMediaInfo(asset1.path);
+        void getMediaInfo(asset2.path);
       }
 
       const newClips = [...filteredClips, newClip1, newClip2];
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
+      const prunedAssets = pruneAssetsForClips(get().assets, resolvedClips);
       get()._updateZoomLevel(resolvedClips, clipDuration);
       const controlStore = useControlsStore.getState();
       controlStore.setSelectedClipIds([newClip1.clipId, newClip2.clipId]);
-      return { clips: resolvedClips, clipDuration };
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   mergeClips: (clipIds: string[]) =>
     set((state) => {
@@ -2199,7 +2490,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       const newClips = [...filteredClips, newClip];
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
-      return { clips: resolvedClips, clipDuration };
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   copyClips: (clipIds: string[]) =>
     set((state) => {
@@ -2246,10 +2538,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       const remaining = state.clips.filter((c) => !clipIds.includes(c.clipId));
       const resolvedClips = resolveOverlaps(remaining);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
       return {
         clips: resolvedClips,
         clipDuration,
         clipboard: toCut.map((c) => ({ ...c })),
+        assets: prunedAssets,
       };
     }),
   pasteClips: (atFrame?: number, targetTimelineId?: string) =>
@@ -2306,12 +2600,13 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       const newClips = [...state.clips, ...pasted];
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
       // Select newly pasted clips
       try {
         const controls = useControlsStore.getState();
         controls.setSelectedClipIds(newIds);
       } catch {}
-      return { clips: resolvedClips, clipDuration };
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     }),
   moveClipToEnd: (clipId: string) =>
     set((state) => {
@@ -2455,7 +2750,47 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     const end = Math.max(0, clip.endFrame ?? 0);
     return timelineIndex * TIMELINE_WEIGHT + layerRank * LAYER_WEIGHT + end;
   },
-}));
+  rescaleForFpsChange: (oldFps: number, newFps: number) => {
+    set((state) => {
+      const clips = (state.clips || []).map((clip) => {
+        const updated: any = { ...clip };
+
+        const sf = rescaleFrame(clip.startFrame, oldFps, newFps);
+        const ef = rescaleFrame(clip.endFrame, oldFps, newFps);
+        const ts = rescaleFrame((clip as any).trimStart, oldFps, newFps);
+        const te = rescaleFrame((clip as any).trimEnd, oldFps, newFps);
+
+        if (sf != null) updated.startFrame = sf;
+        if (ef != null) updated.endFrame = ef;
+        if (ts != null) (updated as any).trimStart = ts;
+        if (te != null) (updated as any).trimEnd = te;
+
+        if (
+          (clip.type === "video" || clip.type === "image") &&
+          Array.isArray((clip as any).preprocessors)
+        ) {
+          (updated as any).preprocessors = ((clip as any)
+            .preprocessors as any[]).map((p) => {
+            const up = { ...p };
+            const ps = rescaleFrame(p.startFrame, oldFps, newFps);
+            const pe = rescaleFrame(p.endFrame, oldFps, newFps);
+            if (ps != null) (up as any).startFrame = ps;
+            if (pe != null) (up as any).endFrame = pe;
+            return up;
+          });
+        }
+
+        return updated as AnyClipProps;
+      });
+
+      const resolvedClips = resolveOverlaps(clips);
+      const clipDuration = calculateTotalClipDuration(resolvedClips);
+      const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+
+      return { clips: resolvedClips, clipDuration, assets: prunedAssets };
+    });
+  },
+})));
 
 export const getClipWidth = (
   startFrame: number,

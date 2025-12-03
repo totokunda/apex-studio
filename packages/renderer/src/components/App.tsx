@@ -22,6 +22,7 @@ import { PreprocessorItem } from "./menus/PreprocessorMenu";
 import { ModelItem } from "./menus/ModelMenu";
 import type { ManifestDocument } from "@/lib/manifest";
 import GlobalContextMenu from "@/components/GlobalContextMenu";
+import { useProjectsStore } from "@/lib/projects";
 
 type ManifestWithType = ManifestDocument & {
   type: "model";
@@ -31,7 +32,8 @@ const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useLayoutConfigStore((s) => s.layout);
   const { ghostInStage, clips } = useClipStore();
-
+  const projectsLoaded = useProjectsStore((s) => (s as any).projectsLoaded);
+  const activeProject = useProjectsStore((s) => s.getActiveProject());
   const [activeDragItem, setActiveDragItem] = useState<
     MediaItem | Preprocessor | ManifestWithType | null
   >(null);
@@ -98,6 +100,32 @@ const App: React.FC = () => {
   const handleDragEnd = (_e: DragEndEvent) => {
     setActiveDragItem(null);
   };
+
+  const isBootstrapping = !projectsLoaded || !activeProject;
+
+  if (isBootstrapping) {
+    return (
+      <main className="w-full h-screen flex flex-col bg-black text-center font-poppins">
+        <div className="relative flex-1 overflow-hidden">
+          <div className="absolute inset-0 bg-linear-to-br from-slate-950 via-black to-slate-900" />
+          <div className="absolute inset-0 backdrop-blur-md bg-black/50" />
+          <div className="relative z-10 h-full w-full flex flex-col items-center justify-center gap-6">
+            <div className="text-xs uppercase tracking-[0.35em] text-slate-400">
+              Preparing workspace
+            </div>
+            <div className="text-3xl font-semibold tracking-tight text-slate-50">
+              Apex Studio
+            </div>
+            <div className="h-12 w-12 rounded-full border-2 border-slate-600 border-t-brand-accent-shade animate-spin" />
+            <p className="max-w-sm text-xs text-slate-400 leading-relaxed">
+              Loading projects and initializing timeline...
+            </p>
+          </div>
+        </div>
+        <Toaster />
+      </main>
+    );
+  }
 
   return (
     <DndContext

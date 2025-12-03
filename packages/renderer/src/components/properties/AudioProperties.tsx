@@ -28,10 +28,10 @@ const AudioProperties: React.FC<AudioPropertiesProps> = ({ clipId }) => {
   };
 
   const clipDuration = useMemo(() => {
-    if (!clip?.src) return 0;
-    const duration = getMediaInfoCached(clip?.src)?.duration;
+    if (!clip?.assetId) return 0;
+    const duration = getMediaInfoCached(clip?.assetId)?.duration;
     return duration ?? 0;
-  }, [clip?.src]);
+  }, [clip?.assetId]);
 
   return (
     <div className="flex flex-col gap-y-2 min-w-0">

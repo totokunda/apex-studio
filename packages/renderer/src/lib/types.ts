@@ -68,14 +68,12 @@ export interface ClipProps {
   hidden?: boolean;
   //
   timelineId?: string;
-  startFrame?: number;
-  endFrame?: number;
+  startFrame: number;
+  endFrame: number;
   trimEnd?: number;
   trimStart?: number;
   clipPadding?: number;
   clipId: string;
-  width?: number;
-  height?: number;
   // Persisted transform for preview canvas (position/size/scale/rotation)
   transform?: ClipTransform;
   originalTransform?: ClipTransform;
@@ -95,10 +93,22 @@ export interface TimelineProps {
 
 export type PreprocessorClipType = VideoClipProps | ImageClipProps;
 
+export type Asset = {
+  id: string;
+  type: 'video' | 'image' | 'audio';
+  path: string;
+  width?: number;
+  height?: number;
+  duration: number;
+  thumbnail?: string;
+  modelInputAsset?: boolean;
+}
+
 export type VideoClipProps = ClipProps &
   MediaAdjustments & {
-    src: string;
-    originalSrc?: string;
+    
+    assetId: string;
+    assetIdHistory: string[];
     type: "video";
     // Intrinsic media dimensions for consistent aspect ratio
     mediaWidth?: number;
@@ -114,8 +124,8 @@ export type VideoClipProps = ClipProps &
 
 export type ImageClipProps = ClipProps &
   MediaAdjustments & {
-    src: string;
-    originalSrc?: string;
+    assetId: string;
+    assetIdHistory: string[];
     type: "image";
     // Intrinsic media dimensions for consistent aspect ratio
     mediaWidth?: number;
@@ -126,7 +136,7 @@ export type ImageClipProps = ClipProps &
   };
 
 export type AudioClipProps = ClipProps & {
-  src: string;
+  assetId: string;
   type: "audio";
   volume?: number;
   fadeIn?: number;
@@ -135,7 +145,6 @@ export type AudioClipProps = ClipProps & {
 };
 
 export type ShapeClipProps = ClipProps & {
-  src: null | undefined;
   type: "shape";
   shapeType?: ShapeTool;
   fill?: string;
@@ -156,7 +165,6 @@ export type StarClipProps = ShapeClipProps & {
 };
 
 export type TextClipProps = ClipProps & {
-  src: null | undefined;
   type: "text";
   text?: string;
   fontSize?: number;
@@ -190,7 +198,6 @@ export type TextClipProps = ClipProps & {
 };
 
 export type FilterClipProps = ClipProps & {
-  src: null | undefined;
   name?: string;
   type: "filter";
   smallPath?: string;
@@ -222,7 +229,6 @@ export interface DrawingLine {
 }
 
 export type DrawingClipProps = ClipProps & {
-  src: null | undefined;
   type: "draw";
   lines: DrawingLine[];
 };
@@ -236,6 +242,13 @@ export type MaskTrackingDirection = "forward" | "backward" | "both";
 export interface MaskData {
   // For lasso tool - closed path points
   lassoPoints?: number[]; // [x1, y1, x2, y2, ...]
+  /**
+   * Optional path to an external Float32Array binary file containing the
+   * lasso points for this mask data. When present, the main process will
+   * have serialized the lassoPoints array into this .bin file to keep the
+   * JSON snapshot compact.
+   */
+  lassoPointsBinPath?: string;
   // For shape tool
   shapeBounds?: {
     x: number;
@@ -253,6 +266,13 @@ export interface MaskData {
   touchPoints?: Array<{ x: number; y: number; label: 1 | 0 }>; // positive/negative
   touchBox?: { x1: number; y1: number; x2: number; y2: number };
   contours?: number[][];
+  /**
+   * Optional path to an external Float32Array binary file containing the
+   * contours for this mask data. When present, the main process will have
+   * serialized the contours 2D number[][] into this .bin file to keep the
+   * JSON snapshot compact.
+   */
+  contoursBinPath?: string;
   // Generated mask data (binary mask as base64 encoded image or URL)
   maskImageData?: string;
 }
@@ -286,7 +306,7 @@ export type MaskClipProps = {
 };
 
 export type PreprocessorClipProps = {
-  src?: string;
+  assetId?: string;
   clipId?: string;
   id: string;
   preprocessor: Preprocessor;
@@ -299,15 +319,19 @@ export type PreprocessorClipProps = {
 };
 
 export type GroupClipProps = ClipProps & {
-  src?: null | undefined;
   type: "group";
   children: string[][]; // clipIds for the children of the group
 };
 
 export type ModelClipProps = ClipProps & {
-  src: string | null | undefined;
+  assetId?: string;
+  assetIdHistory?: string[];
+  previewPath?: string;
   type: "model";
   manifest: ManifestDocument;
+  // Persist only per-clip UI input values here; the manifest JSON
+  // saved to disk remains free of user-specific `value` fields.
+  modelInputValues?: Record<string, any>;
   speed?: number;
   modelStatus?: "pending" | "running" | "complete" | "failed";
   // Persist user selections for model components (e.g., scheduler, transformer, vae, text_encoder)
@@ -316,7 +340,7 @@ export type ModelClipProps = ClipProps & {
   generations?: {
     jobId: string;
     modelStatus: "pending" | "running" | "complete" | "failed";
-    src: string;
+    assetId: string;
     createdAt: number;
     selectedComponents?: Record<string, any>;
     values?: Record<string, any>;
@@ -337,6 +361,9 @@ export type AnyClipProps =
   | DrawingClipProps
   | GroupClipProps
   | ModelClipProps;
+
+// Persisted, type-specific properties for a clip, excluding the shared base ClipProps
+export type ClipSpecificProps = Omit<AnyClipProps, keyof ClipProps>;
 
 export type ZoomLevel = number;
 
@@ -421,9 +448,6 @@ export function clipSignature(clip: AnyClipProps): string {
       n(clip.trimStart),
       n(clip.trimEnd),
       n(clip.clipPadding),
-      n(clip.width),
-      n(clip.height),
-
       clip.hidden ? "1" : "0",
       clip.groupId ?? "",
       encodeTransform(clip.transform),
@@ -434,7 +458,7 @@ export function clipSignature(clip: AnyClipProps): string {
     switch (clip.type) {
       case "video": {
         parts.push(
-          (clip as any)?.src ?? "",
+          (clip as any)?.assetId ?? "",
           n(clip.mediaWidth),
           n(clip.mediaHeight),
           n(clip.mediaAspectRatio),
@@ -449,7 +473,7 @@ export function clipSignature(clip: AnyClipProps): string {
       }
       case "image": {
         parts.push(
-          (clip as any)?.src ?? "",
+          (clip as any)?.assetId ?? "",
           n(clip.mediaWidth),
           n(clip.mediaHeight),
           n(clip.mediaAspectRatio),
@@ -461,7 +485,7 @@ export function clipSignature(clip: AnyClipProps): string {
       case "audio": {
         const a = clip as any;
         parts.push(
-          a?.src ?? "",
+          a?.assetId ?? "",
           n(a?.volume),
           n(a?.fadeIn),
           n(a?.fadeOut),
@@ -541,7 +565,7 @@ export function clipSignature(clip: AnyClipProps): string {
       case "model": {
         const m = clip as any;
         parts.push(
-          m.src ?? "",
+          m.assetId ?? "",
           m.category ?? "",
           manifestIdSignature(m.manifest),
         );
@@ -563,7 +587,7 @@ function fallbackSignature(clip: AnyClipProps): string {
     const t = (clip as any)?.type ?? "";
     const id = (clip as any)?.clipId ?? "";
     const tl = (clip as any)?.timelineId ?? "";
-    const src = typeof (clip as any)?.src === "string" ? (clip as any).src : "";
+    const src = typeof (clip as any)?.assetId === "string" ? (clip as any).assetId : "";
     return [t, id, tl, src, "ERR"].join("|");
   } catch {
     return "CLIP|ERR";
