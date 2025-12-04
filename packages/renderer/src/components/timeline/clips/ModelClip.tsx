@@ -17,12 +17,9 @@ import { LuImages as LuImagesIcon } from "react-icons/lu";
 import { BiSolidVideos as BiSolidVideosIcon } from "react-icons/bi";
 import {
   useEngineJob,
-  useJobProgress,
-  useEngineJobActions,
 } from "@/lib/engine/api";
 import { useClipStore } from "@/lib/clip";
-import { getMediaInfo } from "@/lib/media/utils";
-import { pathToFileURLString } from "@app/preload";
+import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import {
   generateTimelineThumbnailImage,
   generateTimelineThumbnailVideo,
@@ -52,16 +49,15 @@ const ModelClip: React.FC<Props> = ({
 }) => {
   const updateClip = useClipStore((s) => s.updateClip);
   const getClipById = useClipStore((s) => s.getClipById);
+  const getAssetById = useClipStore((s) => s.getAssetById);
   const isRunState =
     currentClip?.modelStatus === "running" ||
     currentClip?.modelStatus === "pending";
   const clip = getClipById(clipId) as ModelClipProps | undefined;
-  const { progress, isProcessing, isComplete, isFailed } = useEngineJob(
+  const { progress } = useEngineJob(
     clip?.activeJobId ?? null,
     isRunState,
   );
-  const job = useJobProgress(clip?.activeJobId ?? null);
-  const { fetchJobResult } = useEngineJobActions();
   const targetFramesRef = useRef<number | null>(null);
   const initialStartRef = useRef<number | null>(null);
   const imageCanvas = useRef<HTMLCanvasElement>(
@@ -79,8 +75,6 @@ const ModelClip: React.FC<Props> = ({
   const finalSrcSetRef = useRef(false);
   const [, setForceRerenderCounter] = useState(0);
   const { fps } = useControlsStore();
-  const addAsset = useClipStore((s) => s.addAsset);
-  const getAssetById = useClipStore((s) => s.getAssetById);
 
   useEffect(() => {
     const clip = getClipById(clipId) as ModelClipProps | undefined;
@@ -107,21 +101,7 @@ const ModelClip: React.FC<Props> = ({
       targetFramesRef.current = null;
       initialStartRef.current = null;
     }
-  }, [progress, isProcessing, isComplete, clipId, getClipById, updateClip]);
-
-  // Reflect engine lifecycle into internal clip status
-  useEffect(() => {
-    if (!currentClip) return;
-    if (isProcessing && currentClip.modelStatus !== "running") {
-      updateClip(clipId, { modelStatus: "running" });
-    }
-    if (isComplete && currentClip.modelStatus !== "complete") {
-      updateClip(clipId, { modelStatus: "complete" });
-    }
-    if (isFailed && currentClip.modelStatus !== "failed") {
-      updateClip(clipId, { modelStatus: "failed" });
-    }
-  }, [clipId, currentClip, isProcessing, isComplete, isFailed, updateClip]);
+  }, [progress, clipId, getClipById, updateClip]);
 
   // Allow re-runs: when a new run starts, clear final-result guard and transient state
   useEffect(() => {
@@ -202,25 +182,19 @@ const ModelClip: React.FC<Props> = ({
     } catch {}
   }, [(currentClip as ModelClipProps)?.assetId]);
 
-  // Listen for preview frames and update src + thumbnail
+  // Listen for preview frames and update thumbnail
   useEffect(() => {
-    const updates = job?.updates || [];
-    if (!currentClip || updates.length === 0) return;
-    const last = updates[updates.length - 1];
-    const meta = (last as any)?.metadata || {};
-    const previewPath: string | undefined = meta?.preview_path;
-    if (!previewPath) return;
-
-    const fileUrl = pathToFileURLString(previewPath);
-    if ((currentClip as ModelClipProps)?.previewPath !== fileUrl) {
-      updateClip(clipId, { previewPath: fileUrl });
-    }
+    const asset = getAssetById(currentClip?.assetId ?? "");
 
     (async () => {
       try {
-        mediaInfoRef.current = await getMediaInfo(fileUrl, {
-          sourceDir: "apex-cache",
-        });
+        if (!asset) return;
+        mediaInfoRef.current = getMediaInfoCached(asset?.path);
+        if (!mediaInfoRef.current) {
+          mediaInfoRef.current = await getMediaInfo(asset?.path ?? currentClip?.previewPath ?? "", {
+            sourceDir: "apex-cache",
+          });
+        }
         
         const clip = getClipById(clipId) as ModelClipProps | undefined;
         if (!clip) return;
@@ -318,93 +292,19 @@ const ModelClip: React.FC<Props> = ({
           displayCanvasRef.current = imageCanvas.current;
           setForceRerenderCounter((v) => v + 1);
         }
-        // Update matching generation entry with preview src and running status
-        try {
-          const current = getClipById(clipId) as ModelClipProps | undefined;
-          const gens = current?.generations ?? [];
-          const activeId = current?.activeJobId ?? "";
-          const idx = gens.findIndex((g: any) => g?.jobId === activeId);
-          if (idx >= 0) {
-            const g = gens[idx] as any;
-            const asset = getAssetById(g.assetId);
-            if ((asset?.path !== previewPath || g.modelStatus !== "running" ) && asset?.id) {
-              const updated = gens.map((it, i: number) =>
-                i === idx
-                  ? { ...g, assetId: asset.id, modelStatus: "running" }
-                  : it,
-              );
-              updateClip(clipId, { generations: updated } as any);
-            }
-          }
-        } catch {}
         try {
           groupRef.current?.getLayer()?.batchDraw();
         } catch {}
       } catch {}
     })();
   }, [
-    job?.updates,
+    (currentClip as ModelClipProps)?.previewPath,
     clipWidth,
     timelineHeight,
-    currentClip,
     clipId,
     getClipById,
-  ]);
-
-  // On completion, ensure we fetch final result and set src to result_path once
-  useEffect(() => {
-    if (!clipId) return;
-    if (!isComplete) return;
-    // Kick a fetch to ensure result is populated
-    if (!clip?.activeJobId) return;
-    void fetchJobResult(clip.activeJobId);
-  }, [isComplete, clipId, fetchJobResult, clip?.activeJobId]);
-
-  useEffect(() => {
-    if (!isComplete) return;
-    const resultPath = (job?.result as any)?.result_path as string | undefined;
-    if (!resultPath) return;
-    const fileUrl = pathToFileURLString(resultPath);
-    // now we add this to asset store
-    const asset = addAsset({ path: fileUrl });
-    if (!finalSrcSetRef.current || (currentClip as ModelClipProps)?.assetId !== asset.id) {
-      finalSrcSetRef.current = true;
-      const prevGenerations = Array.isArray(clip?.generations)
-        ? (clip?.generations as any[])
-        : [];
-      const activeId = clip?.activeJobId ?? "";
-      const idx = prevGenerations.findIndex((g: any) => g?.jobId === activeId);
-      let nextGenerations: any[] = prevGenerations;
-      if (idx >= 0) {
-        const g = prevGenerations[idx] as any;
-        nextGenerations = prevGenerations.map((it: any, i: number) =>
-          i === idx ? { ...g, src: resultPath, modelStatus: "complete" } : it,
-        );
-      } else {
-        nextGenerations = [
-          ...prevGenerations,
-          {
-            jobId: activeId,
-            modelStatus: "complete",
-            src: resultPath,
-            createdAt: Date.now(),
-          },
-        ];
-      }
-      updateClip(clipId, {
-        assetId: asset.id,
-        modelStatus: "complete",
-        generations: nextGenerations,
-        activeJobId: undefined,
-      } as any);
-    }
-  }, [
-    isComplete,
-    job?.result,
-    (currentClip as ModelClipProps)?.assetId,
-    clipId,
     updateClip,
-    clip?.generations,
+    fps,
   ]);
 
   // When clip src changes (outside of job updates), regenerate the timeline thumbnail
@@ -413,9 +313,14 @@ const ModelClip: React.FC<Props> = ({
 
     (async () => {
       try {
-        mediaInfoRef.current = await getMediaInfo(currentClip?.assetId!, {
-          sourceDir: "apex-cache",
-        });
+        const asset = getAssetById(currentClip?.assetId ?? "");
+        if (!asset) return;
+        mediaInfoRef.current = getMediaInfoCached(asset?.path);
+        if (!mediaInfoRef.current) {
+          mediaInfoRef.current = await getMediaInfo(asset?.path ?? currentClip?.previewPath ?? "", {
+            sourceDir: "apex-cache",
+          });
+        }
         const clip = getClipById(clipId) as ModelClipProps | undefined;
         if (!clip) return;
         const isVideo = !!mediaInfoRef.current?.video;

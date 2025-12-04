@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AnyClipProps, ModelClipProps } from "@/lib/types";
+import { AnyClipProps, ImageClipProps, ModelClipProps, VideoClipProps } from "@/lib/types";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import VideoPreview from "./VideoPreview";
 import ImagePreview from "./ImagePreview";
 import { BaseClipApplicator } from "./apply/base";
 import { useClipStore } from "@/lib/clip";
+import { updateClip } from "@app/preload/src/projects";
+import _ from "lodash";
 
 interface DynamicModelPreviewProps {
   clip: AnyClipProps;
@@ -21,78 +23,36 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
   applicators,
   overlap,
 }) => {
-  const src = (clip as ModelClipProps)?.previewPath || "";
-  const [tick, setTick] = useState(0);
-  const [activeSrc, setActiveSrc] = useState(src);
+
+  const getAssetById = useClipStore((s) => s.getAssetById);
+  const src = useMemo(() => getAssetById((clip as ModelClipProps)?.assetId ?? "")?.path || "", [(clip as ModelClipProps)?.assetId, getAssetById]);
   const lastAspectJobIdRef = useRef<string | undefined>(undefined);
-  const assetIdRef = useRef<string | undefined>(undefined);
+  const {updateClip} = useClipStore();
   // Resolve info for the active source only; keep showing previous src until new info is ready
-  const info = useMemo(() => getMediaInfoCached(activeSrc), [activeSrc, tick]);
-  const addAsset = useClipStore((s) => s.addAsset);
+  const info = useMemo(() => getMediaInfoCached(src), [src]);
+
 
   // Fallback type guess by file extension while media info is being resolved
   const typeGuess = useMemo(() => {
-    const normalized = (activeSrc || "")
+    const normalized = (src || "")
       .split("?")[0]
       .split("#")[0]
       .toLowerCase();
     if (/\.(mp4|mov|webm|m4v|avi|mkv)$/.test(normalized)) return "video";
     if (/\.(png|jpg|jpeg|webp|bmp|gif)$/.test(normalized)) return "image";
     return null;
-  }, [activeSrc]);
-
-  // When src changes, prefetch media info for the new src and switch only when ready
-  useEffect(() => {
-    let cancelled = false;
-    if (!src || src === activeSrc)
-      return () => {
-        cancelled = true;
-      };
-    const cached = getMediaInfoCached(src);
-    if (cached) {
-      if (!cancelled) {
-        setActiveSrc(src);
-        setTick((v) => v + 1);
-      }
-      return () => {
-        cancelled = true;
-      };
-    }
-    (async () => {
-      try {
-        await getMediaInfo(src, { sourceDir: "apex-cache" });
-      } finally {
-        if (!cancelled) {
-          setActiveSrc(src);
-          setTick((v) => v + 1);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
   }, [src]);
+
 
   // When a new job becomes active, update aspect ratio and reset transforms once
   useEffect(() => {
-    const jobId = (clip as any)?.activeJobId as string | undefined;
+    const jobId = (clip as ModelClipProps)?.activeJobId as string | undefined;
     if (!jobId) return;
     if (lastAspectJobIdRef.current === jobId) return;
 
-    let cancelled = false;
-    (async () => {
-      try {
-        const targetSrc = (clip as ModelClipProps)?.previewPath || activeSrc;
-        
-        let info = getMediaInfoCached(targetSrc);
-        if (!info) {
-          try {
-            info = await getMediaInfo(targetSrc, { sourceDir: "apex-cache" });
-          } catch {}
-        }
-        const asset = addAsset({ path: targetSrc });
-        assetIdRef.current = asset.id;
-        if (cancelled) return;
+    try {
+       if (!info) return;
+
         const dims = (() => {
           const v = (info as any)?.video;
           const im = (info as any)?.image;
@@ -121,7 +81,6 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
         if (dims.w > 0 && dims.h > 0) {
           const ar = dims.w / Math.max(1, dims.h);
           try {
-            const updateClip = useClipStore.getState().updateClip;
             updateClip(clip.clipId, {
               transform: undefined,
               originalTransform: undefined,
@@ -133,16 +92,36 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
           } catch {}
         }
       } catch {}
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [(clip as any)?.activeJobId, clip.clipId, activeSrc]);
+    
+  }, [(clip as ModelClipProps)?.activeJobId, clip.clipId, src]);
 
-  if (info?.video || (!info && typeGuess === "video" && activeSrc)) {
+  useEffect(() => {
+    
+    if (info && info.video) {
+      let patches: Partial<ModelClipProps> = {};
+      if (!isFinite(clip.trimStart ?? 0)) {
+        patches.trimStart = 0;
+      } 
+      if (!isFinite(clip.trimEnd ?? 0)) {
+        patches.trimEnd = 0;
+      }
+      console.log("patches", patches);
+      if (!_.isEmpty(patches)) {
+        console.log("updating clip", patches);
+        updateClip(clip.clipId, patches);
+      }
+    }
+  }, [info, clip.clipId, updateClip]);
+
+
+
+
+  if (info?.video || (!info && typeGuess === "video" && src)) {
     return (
       <VideoPreview
-        {...({ ...(clip as any), assetId: assetIdRef.current } as any)}
+        {...({
+          ...(clip as VideoClipProps),
+        })}
         rectWidth={rectWidth}
         rectHeight={rectHeight}
         applicators={applicators}
@@ -150,11 +129,13 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
       />
     );
   }
-  
-  if (info?.image || (!info && typeGuess === "image" && activeSrc)) {
+
+  if (info?.image || (!info && typeGuess === "image" && src)) {
     return (
       <ImagePreview
-        {...({ ...(clip as any), assetId: assetIdRef.current } as any)}
+        {...({
+          ...(clip as ImageClipProps),
+        })}
         rectWidth={rectWidth}
         rectHeight={rectHeight}
         applicators={applicators}

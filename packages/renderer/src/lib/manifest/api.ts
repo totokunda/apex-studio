@@ -107,7 +107,6 @@ export type ManifestMetadata = {
   demo_path?: string;
   annotations?: Record<string, any>;
   examples?: ManifestExamplesItem[];
-  desired_duration?: number;
   categories?: string[];
 };
 

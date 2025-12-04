@@ -46,6 +46,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     preprocessorPath: preprocessorPathGlobal,
     postprocessorPath: postprocessorPathGlobal,
     hfToken: hfTokenGlobal,
+    civitaiApiKey: civitaiApiKeyGlobal,
     backendUrl: backendUrlGlobal,
     setCachePath: setCachePathGlobal,
     setComponentsPath: setComponentsPathGlobal,
@@ -54,6 +55,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setPreprocessorPath: setPreprocessorPathGlobal,
     setPostprocessorPath: setPostprocessorPathGlobal,
     setHfToken: setHfTokenGlobal,
+    setCivitaiApiKey: setCivitaiApiKeyGlobal,
     setBackendUrl: setBackendUrlGlobal,
   } = useSettingsStore();
 
@@ -71,6 +73,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [postprocessorPath, setPostprocessorPath] = useState<string>("");
   const [hfToken, setHfToken] = useState<string>("");
   const [hfTokenVisible, setHfTokenVisible] = useState<boolean>(false);
+  const [civitaiApiKey, setCivitaiApiKey] = useState<string>("");
+  const [civitaiApiKeyVisible, setCivitaiApiKeyVisible] =
+    useState<boolean>(false);
   const [projectFps, setProjectFps] = useState<string>(
     String(controlsFps || 24),
   );
@@ -101,6 +106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setPreprocessorPath(preprocessorPathGlobal ?? "");
     setPostprocessorPath(postprocessorPathGlobal ?? "");
     setHfToken(hfTokenGlobal ?? "");
+    setCivitaiApiKey(civitaiApiKeyGlobal ?? "");
     setBackendUrlLocal(backendUrlGlobal ?? "");
   }, [
     open,
@@ -111,6 +117,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     preprocessorPathGlobal,
     postprocessorPathGlobal,
     hfTokenGlobal,
+    civitaiApiKeyGlobal,
     backendUrlGlobal,
   ]);
 
@@ -336,6 +343,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
               </div>
+
+              <div className="flex flex-col gap-1">
+                <label className={fieldLabelClass}>
+                  <span>CivitAI API Key</span>
+                  <span className="text-[10px] text-brand-light/60 font-normal">
+                    Used for authenticated access to CivitAI when downloading
+                    models.
+                  </span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Input
+                      type={civitaiApiKeyVisible ? "text" : "password"}
+                      value={civitaiApiKey}
+                      onChange={(e) => setCivitaiApiKey(e.target.value)}
+                      placeholder="sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+                      className="h-7.5 text-[11.5px]! rounded-[6px] pr-8"
+                    />
+                    <button
+                      type="button"
+                      className="absolute inset-y-0 right-1 flex items-center px-1 text-brand-light/70 hover:text-brand-light"
+                      onClick={() =>
+                        setCivitaiApiKeyVisible((v) => !v)
+                      }
+                    >
+                      {civitaiApiKeyVisible ? (
+                        <LuEyeOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <LuEye className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </TabsContent>
           <TabsContent value="url">
@@ -375,7 +416,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     value={cachePath}
                     onChange={(e) => setCachePath(e.target.value)}
                     placeholder="/path/to/cache"
-                    disabled
                     className="h-7.5 text-[11px]! rounded-[6px] disabled:opacity-100 bg-brand! w-full truncate"
                   />
                   <Button
@@ -410,7 +450,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </label>
                 <div className="flex items-center gap-1.5 w-4/5">
                   <Input
-                    disabled
                     value={componentsPath}
                     onChange={(e) => setComponentsPath(e.target.value)}
                     placeholder="/path/to/components"
@@ -448,7 +487,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </label>
                 <div className="flex items-center gap-1.5 w-4/5">
                   <Input
-                    disabled
                     value={configPath}
                     onChange={(e) => setConfigPath(e.target.value)}
                     placeholder="/path/to/configs"
@@ -486,7 +524,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </label>
                 <div className="flex items-center gap-1.5 w-4/5">
                   <Input
-                    disabled
                     value={loraPath}
                     onChange={(e) => setLoraPath(e.target.value)}
                     placeholder="/path/to/lora"
@@ -524,7 +561,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </label>
                 <div className="flex items-center gap-1.5 w-4/5">
                   <Input
-                    disabled
                     value={preprocessorPath}
                     onChange={(e) => setPreprocessorPath(e.target.value)}
                     placeholder="/path/to/preprocessors"
@@ -562,7 +598,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </label>
                 <div className="flex items-center gap-1.5 w-4/5">
                   <Input
-                    disabled
                     value={postprocessorPath}
                     onChange={(e) => setPostprocessorPath(e.target.value)}
                     placeholder="/path/to/postprocessors"
@@ -617,6 +652,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               void setPreprocessorPathGlobal(preprocessorPath || null);
               void setPostprocessorPathGlobal(postprocessorPath || null);
               void setHfTokenGlobal(hfToken || null);
+              void setCivitaiApiKeyGlobal(civitaiApiKey || null);
               void setBackendUrlGlobal(backendUrl || null);
               onOpenChange(false);
             }}

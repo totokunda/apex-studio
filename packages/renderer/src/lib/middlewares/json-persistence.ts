@@ -660,6 +660,11 @@ const hydrateStoresFromProjectJson = async (
       for (const c of clipsJson) {
         if (!c) continue;
 
+        let videoModelWithSrc = false; 
+        if (c.type === "model" && (c as any).assetId && (c as any).assetId !== "") {
+         videoModelWithSrc = true;
+        }
+
         const baseStartFrame =
           (c as any).startTick != null
             ? tickToFrameForJson((c as any).startTick, fpsForJson)
@@ -669,11 +674,11 @@ const hydrateStoresFromProjectJson = async (
             ? tickToFrameForJson((c as any).endTick, fpsForJson)
             : Number((c as any).endFrame ?? 0);
         const baseTrimStart =
-          c.type !== "audio" && c.type !== "video" && c.type !== "group"
+          c.type !== "audio" && c.type !== "video" && c.type !== "group" && !videoModelWithSrc
             ? Infinity
             : tickToFrameForJson((c as any).trimStartTick, fpsForJson);
         const baseTrimEnd =
-          c.type !== "audio" && c.type !== "video" && c.type !== "group"
+          c.type !== "audio" && c.type !== "video" && c.type !== "group" && !videoModelWithSrc
             ? -Infinity
             : tickToFrameForJson((c as any).trimEndTick, fpsForJson);
 
@@ -834,7 +839,8 @@ const hydrateStoresFromProjectJson = async (
         (doc.assets as Record<string, Asset>) ?? {};
 
       const promises = Object.values(assetsRecord).map(async (asset) => {
-        return await getMediaInfo(asset.path);
+        let useCache = asset.path.includes('cache/engine_results');
+        return await getMediaInfo(asset.path, {sourceDir: useCache ? 'apex-cache' : 'user-data'});
       });
       await Promise.all(promises);
 
@@ -1191,6 +1197,7 @@ export const withJsonProjectPersistence =
     try {
       void loadActiveProjectFromJson();
       void useManifestStore.getState().loadManifests(true);
+      void useManifestStore.getState().loadModelTypes(true);
       void usePreprocessorsListStore.getState().load(true);
 
     } catch (err) {

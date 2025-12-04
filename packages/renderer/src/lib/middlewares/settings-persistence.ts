@@ -4,6 +4,8 @@ import {
   setAllPathsSetting,
   getHfTokenSetting,
   setHfTokenSetting,
+  getCivitaiApiKeySetting,
+  setCivitaiApiKeySetting,
 } from "@app/preload";
 import { getBackendApiUrl, setBackendApiUrl } from "@/lib/config";
 
@@ -23,6 +25,7 @@ export type SettingsState = {
 
   // Auth tokens
   hfToken: string | null;
+  civitaiApiKey: string | null;
 
   // Backend URL
   backendUrl: string | null;
@@ -36,6 +39,7 @@ export type SettingsState = {
   setPreprocessorPath: (value: string | null) => Promise<void>;
   setPostprocessorPath: (value: string | null) => Promise<void>;
   setHfToken: (value: string | null) => Promise<void>;
+  setCivitaiApiKey: (value: string | null) => Promise<void>;
   setBackendUrl: (value: string | null) => Promise<void>;
 };
 
@@ -51,10 +55,11 @@ export const withSettingsPersistence =
       if (state.initializing || state.initialized) return;
       set({ initializing: true, error: null } as Partial<T>);
       try {
-        const [paths, hfToken, backendRes] = await Promise.all([
+        const [paths, hfToken, backendRes, civitaiApiKey] = await Promise.all([
           getAllPathsSetting().catch(() => ({} as any)),
           getHfTokenSetting().catch(() => null),
           getBackendApiUrl().catch(() => null),
+          getCivitaiApiKeySetting().catch(() => null),
         ]);
 
         const backendUrl =
@@ -70,6 +75,7 @@ export const withSettingsPersistence =
           preprocessorPath: paths?.preprocessorPath ?? null,
           postprocessorPath: paths?.postprocessorPath ?? null,
           hfToken: hfToken ?? null,
+          civitaiApiKey: civitaiApiKey ?? null,
           backendUrl,
           initialized: true,
           initializing: false,
@@ -131,6 +137,13 @@ export const withSettingsPersistence =
           () => undefined,
         );
         void setHfTokenSetting(value ?? null).catch(() => undefined);
+      },
+      setCivitaiApiKey: async (value: string | null) => {
+        set({ civitaiApiKey: value ?? null } as Partial<T>);
+        void setAllPathsSetting({ civitaiApiKey: value ?? null }).catch(
+          () => undefined,
+        );
+        void setCivitaiApiKeySetting(value ?? null).catch(() => undefined);
       },
       setBackendUrl: async (value: string | null) => {
         const url = (value ?? "").trim() || null;

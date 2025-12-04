@@ -158,5 +158,5 @@ export {
   useJobProgress,
   useEngineJobActions,
 } from "./hooks";
-export { useEngineJobStore } from "./store";
-export type { JobProgress } from "./store";
+export { useEngineJobStore, useLoraJobStore } from "./store";
+export type { JobProgress, LoraJobProgress } from "./store";

@@ -168,6 +168,9 @@ const VideoPreview: React.FC<
     () => selectedClipIds.includes(clipId),
     [clipId, selectedClipIds],
   );
+
+  const setFocusFrame = useControlsStore((s) => s.setFocusFrame);
+  const getAssetById = useClipStore((s) => s.getAssetById);
   const lastSelectedAssetIdRef = useRef<string | null>(null);
   const cachedPreprocessorRangeRef = useRef<{
     startFrame: number;
@@ -614,7 +617,7 @@ const VideoPreview: React.FC<
     if (!info) {
       (async () => {
         try {
-          if (!info) info = await getMediaInfo(selectedAssetId);
+          if (!info) info = await getMediaInfo(selectedAssetId, { sourceDir:clip.type === "video" ? "apex-cache" : "user-data" });
           if (!cancelled) {
             mediaInfo.current = info;
             // Media info arrived; force immediate redraw
@@ -879,7 +882,6 @@ const VideoPreview: React.FC<
     // Cancel any ongoing paused seek operations (do not interfere with live decode token)
     const myToken = ++drawTokenRef.current;
 
-
     try {
       await videoFrameDecoderRef.current?.seek(timestamp, isAccurateSeekNeeded);
       if (myToken === drawTokenRef.current) {
@@ -892,6 +894,7 @@ const VideoPreview: React.FC<
 
   useEffect(() => {
     let active = true;
+
     const loadDecoders = async () => {
       const newlyCreatedIds = new Set<string>();
       const ids = new Set<string>();
@@ -913,9 +916,11 @@ const VideoPreview: React.FC<
         if (decodersRef.current.has(id)) continue;
         try {
           let info = getMediaInfoCached(id);
-          if (!info) info = await getMediaInfo(id);
+          const asset = getAssetById(id);
+        
+          if (!info) info = await getMediaInfo(asset?.path ?? "", { sourceDir: clip.type === "video" ? "apex-cache" : "user-data" });
           if (!active || !info) continue;
-
+  
           const config = await info.video?.getDecoderConfig();
           if (!active || !config) continue;
 
@@ -927,10 +932,12 @@ const VideoPreview: React.FC<
             onFrame: (data) =>
               drawWrappedCanvas(data, decoderMaskFrameRef.current),
             onError: (e) => console.error("[VideoFrameDecoder] Error", id, e),
+            onReady: async () => {
+              await seekToCurrentFrame();
+            },
           });
           decodersRef.current.set(id, decoder);
           newlyCreatedIds.add(id);
-          setTimeout(async () => await seekToCurrentFrame(), 250);
         } catch (e) {
           console.error("Error loading decoder for", id, e);
         }
@@ -962,10 +969,14 @@ const VideoPreview: React.FC<
         if (targetDecoder) {
            const info = getMediaInfoCached(selectedAssetId);
            if (info) mediaInfo.current = info;
-        }
+           
+           const hasChanged = videoFrameDecoderRef.current !== targetDecoder;
+           const needsRefresh = lastRenderedFrameRef.current === -1;
 
-        if (targetDecoder && (videoFrameDecoderRef.current !== targetDecoder || lastRenderedFrameRef.current === -1)) {
-          videoFrameDecoderRef.current = targetDecoder;
+           if (hasChanged || needsRefresh) {
+             videoFrameDecoderRef.current = targetDecoder;
+             await seekToCurrentFrame();
+           }
         }
       }
     };

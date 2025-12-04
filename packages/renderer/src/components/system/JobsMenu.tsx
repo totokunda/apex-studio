@@ -6,8 +6,18 @@ import {
 } from "@/components/ui/popover";
 import { ProgressBar } from "@/components/common/ProgressBar";
 import { fetchRayJobs, cancelRayJob, RayJobStatus } from "@/lib/jobs/api";
+import {
+  connectJobWebSocket,
+  disconnectJobWebSocket,
+  subscribeToJobUpdates,
+  subscribeToJobStatus,
+  subscribeToJobErrors,
+} from "@/lib/engine/api";
 import { LuLoader, LuTrash2 } from "react-icons/lu";
 import { GrTasks } from "react-icons/gr";
+import { useClipStore } from "@/lib/clip";
+import { ModelClipProps } from "@/lib/types";
+import { pathToFileURLString } from "@app/preload";
 
 const POLL_MS = 2000;
 
@@ -32,6 +42,8 @@ const JobsMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [jobsById, setJobsById] = useState<Record<string, TrackedJob>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const { updateClip, addAsset } = useClipStore();
+  const subscribedRef = React.useRef<Map<string, () => void>>(new Map());
 
   // Poll aggregated Ray jobs
   useEffect(() => {
@@ -93,6 +105,218 @@ const JobsMenu: React.FC = () => {
       clearInterval(id);
     };
   }, []);
+
+  // Sync jobs to clip store to ensure background updates
+  useEffect(() => {
+    const clips = useClipStore.getState().clips;
+    const activeJobs = Object.values(jobsById);
+
+    // Manage WebSocket subscriptions for active engine jobs
+    const activeEngineJobIds = new Set(
+      activeJobs
+        .filter((j) => {
+          const s = (j.status || "").toLowerCase();
+          const isActive = ![
+            "complete",
+            "completed",
+            "cancelled",
+            "canceled",
+            "error",
+            "failed",
+          ].includes(s);
+          return isActive && j.category === "engine" && j.job_id;
+        })
+        .map((j) => j.job_id),
+    );
+
+    // Connect to new jobs
+    activeEngineJobIds.forEach((jobId) => {
+      if (!subscribedRef.current.has(jobId)) {
+        const setup = async () => {
+          try {
+            await connectJobWebSocket(jobId);
+            
+            const unsubUpdate = subscribeToJobUpdates(jobId, (data) => {
+              setJobsById((prev) => {
+                const job = prev[jobId];
+                if (!job) return prev;
+                
+                const now = Date.now();
+                const latest = job.latest || {};
+                const newLatest = {
+                  ...latest,
+                  progress: typeof data.progress === 'number' ? data.progress : latest.progress,
+                  message: data.message || data.step || latest.message,
+                  status: data.status || latest.status,
+                  metadata: { ...latest.metadata, ...(data.metadata || {}) }
+                };
+
+                return {
+                  ...prev,
+                  [jobId]: {
+                    ...job,
+                    status: data.status || job.status,
+                    progress: typeof data.progress === 'number' ? data.progress : job.progress,
+                    message: data.message || job.message,
+                    latest: newLatest,
+                    updatedAt: now,
+                  },
+                };
+              });
+            });
+
+            const unsubStatus = subscribeToJobStatus(jobId, (data) => {
+              setJobsById((prev) => {
+                const job = prev[jobId];
+                if (!job) return prev;
+                return {
+                  ...prev,
+                  [jobId]: {
+                    ...job,
+                    status: data.status || job.status,
+                    updatedAt: Date.now(),
+                  },
+                };
+              });
+            });
+
+            const unsubError = subscribeToJobErrors(jobId, (data) => {
+              setJobsById((prev) => {
+                const job = prev[jobId];
+                if (!job) return prev;
+                return {
+                  ...prev,
+                  [jobId]: {
+                    ...job,
+                    status: "failed",
+                    error: data.error || data.message || "Unknown error",
+                    updatedAt: Date.now(),
+                  },
+                };
+              });
+            });
+
+            const cleanup = () => {
+              unsubUpdate();
+              unsubStatus();
+              unsubError();
+              disconnectJobWebSocket(jobId).catch(() => {});
+            };
+
+            subscribedRef.current.set(jobId, cleanup);
+          } catch (err) {
+            console.error(`Failed to connect to websocket for job ${jobId}`, err);
+          }
+        };
+        setup();
+      }
+    });
+
+    // Cleanup finished jobs
+    for (const [jobId, cleanup] of subscribedRef.current.entries()) {
+      if (!activeEngineJobIds.has(jobId)) {
+        cleanup();
+        subscribedRef.current.delete(jobId);
+      }
+    }
+
+    activeJobs.forEach((job) => {
+      if (!job.job_id) return;
+      
+      // Find model clips tracking this job
+      const clip = clips.find(
+        (c) =>
+          c.type === "model" &&
+          (c as ModelClipProps).activeJobId === job.job_id,
+      ) as ModelClipProps | undefined;
+
+      if (!clip) return;
+
+      const status = (job.status || "").toLowerCase();
+      let newStatus: "pending" | "running" | "complete" | "failed" | undefined;
+
+      if (status === "queued") newStatus = "pending";
+      else if (status === "running" || status === "processing" || status === "preview")
+        newStatus = "running";
+      else if (status === "complete" || status === "completed")
+        newStatus = "complete";
+      else if (status === "error" || status === "failed") newStatus = "failed";
+
+      const meta = job.latest?.metadata || {};
+      
+      
+      let fileUrl: string | undefined;
+      const previewPath = meta.preview_path;
+      if (previewPath) {
+        fileUrl = pathToFileURLString(previewPath);
+      }
+
+      const patch: Partial<ModelClipProps> = {};
+      let needsUpdate = false;
+
+      // Update basic status
+      if (newStatus && clip.modelStatus !== newStatus) {
+        patch.modelStatus = newStatus;
+        needsUpdate = true;
+      }
+
+      // Update preview path
+      if (fileUrl && clip.previewPath !== fileUrl) {
+        patch.previewPath = fileUrl;
+        needsUpdate = true;
+        const asset = addAsset({ path:fileUrl }, "apex-cache");
+        patch.assetId = asset.id;
+        patch.trimEnd = 0;
+        patch.trimStart = 0;
+      }
+
+      // Update generations
+      const gens = clip.generations || [];
+      const genIndex = gens.findIndex((g) => g.jobId === job.job_id);
+
+      if (genIndex >= 0) {
+        const gen = gens[genIndex];
+        let genUpdate = false;
+        const newGen = { ...gen };
+
+        if (newStatus && gen.modelStatus !== newStatus) {
+          newGen.modelStatus = newStatus;
+          genUpdate = true;
+        }
+
+        // On complete, handle result
+        console.log("newStatus", newStatus);
+        if (newStatus === "complete") {
+          const resultPath = (job.result as any)?.result_path;
+          console.log("resultPath", resultPath);
+          if (resultPath && gen.src !== resultPath) {
+            const resultUrl = pathToFileURLString(resultPath);
+            const asset = addAsset({ path: resultUrl }, "apex-cache");
+            newGen.src = resultPath;
+            newGen.assetId = asset.id;
+            newGen.modelStatus = "complete";
+            
+            // Also update the clip's main assetId if this was the active job
+            patch.assetId = asset.id;
+            patch.activeJobId = undefined; // Clear active job on completion
+            needsUpdate = true;
+            genUpdate = true;
+          }
+        } 
+        
+        if (genUpdate) {
+          const newGens = [...gens];
+          newGens[genIndex] = newGen;
+          patch.generations = newGens;
+          needsUpdate = true;
+        }
+      }
+
+      if (needsUpdate) {
+        updateClip(clip.clipId, patch);
+      }
+    });
+  }, [jobsById, updateClip, addAsset]);
 
   // When a component card cancels a download, it dispatches a `jobs-menu-reload`
   // event with the associated jobId. Mark that job as canceled locally so it

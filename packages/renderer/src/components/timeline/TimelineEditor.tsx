@@ -767,8 +767,8 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
         void haldClutRef?.preloadClut((data as unknown as Filter).smallPath);
       } else if (data.type === "model") {
         numFrames =
-          (data as ManifestWithType).metadata?.desired_duration ??
-          controlStore.defaultClipLength * controlStore.fps;
+          ((data as ManifestWithType).spec?.default_duration_secs ??
+          controlStore.defaultClipLength)  * controlStore.fps;
         trimEnd = -Infinity;
         trimStart = Infinity;
       }
@@ -1754,6 +1754,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
     },
     [controlStore, setSelectedPreprocessorId],
   );
+
 
   return (
     <div className="relative h-full flex flex-row overflow-hidden">

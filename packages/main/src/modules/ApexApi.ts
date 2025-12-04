@@ -12,11 +12,11 @@ import { FormData as NodeFormData } from "formdata-node";
 import { fileFromPath } from "formdata-node/file-from-path";
 import { FormDataEncoder } from "form-data-encoder";
 import { Readable } from "node:stream";
+import { getSettingsModule } from "./SettingsModule.js";
 
 const session = new inspector.Session();
 session.connect();
 
-const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
 const MAX_UPLOAD_BYTES = Number(
   process.env.APEX_MAX_UPLOAD_BYTES || 1_073_741_824,
 ); // 1 GiB default
@@ -27,14 +27,9 @@ interface ConfigResponse<T> {
   error?: string;
 }
 
-interface ApexSettings {
-  backendUrl: string;
-}
-
 export class ApexApi implements AppModule {
   private app: App | null = null;
-  private settingsPath: string = "";
-  private backendUrl: string = DEFAULT_BACKEND_URL;
+  private backendUrl: string = "http://127.0.0.1:8765";
   private wsManager: WebSocketManager | null = null;
   private activeMaskStreams: Map<
     string,
@@ -48,13 +43,26 @@ export class ApexApi implements AppModule {
   private remoteCachePath: string | null = null; // backend-reported cache path
   private loopbackAppearsRemote: boolean = false; // true when localhost is actually a tunnel to a remote backend
 
-  constructor(backendUrl: string = DEFAULT_BACKEND_URL) {
-    this.backendUrl = backendUrl;
+  constructor(backendUrl?: string) {
+    if (backendUrl) {
+      this.backendUrl = backendUrl;
+    }
     this.wsManager = new WebSocketManager(this.backendUrl);
   }
 
   async enable(_context: ModuleContext): Promise<void> {
     this.app = _context.app;
+    
+    // Connect to settings module
+    const settings = getSettingsModule();
+    this.backendUrl = settings.getBackendUrl();
+    
+    settings.on("backend-url-changed", (newUrl: string) => {
+      this.backendUrl = newUrl;
+      this.wsManager?.setBaseUrl(newUrl);
+      void this.#probeBackendLocality();
+    });
+
     // Register IPC handlers immediately so renderer can invoke them as soon as it loads
     this.registerConfigHandlers();
     this.registerBackendUrlHandlers();
@@ -71,42 +79,8 @@ export class ApexApi implements AppModule {
 
     // Defer app-dependent initialization until the app is ready
     await this.app.whenReady();
-    this.settingsPath = path.join(
-      this.app.getPath("userData"),
-      "apex-settings.json",
-    );
-    await this.loadSettings();
     this.wsManager?.setBaseUrl(this.backendUrl);
     await this.#probeBackendLocality();
-  }
-
-  private async loadSettings(): Promise<void> {
-    try {
-      if (fs.existsSync(this.settingsPath)) {
-        const data = await fs.promises.readFile(this.settingsPath, "utf-8");
-        const settings: ApexSettings = JSON.parse(data);
-        this.backendUrl = settings.backendUrl || DEFAULT_BACKEND_URL;
-      }
-    } catch (error) {
-      console.error("Failed to load settings:", error);
-      this.backendUrl = DEFAULT_BACKEND_URL;
-    }
-  }
-
-  private async saveSettings(): Promise<void> {
-    try {
-      const settings: ApexSettings = {
-        backendUrl: this.backendUrl,
-      };
-      await fs.promises.writeFile(
-        this.settingsPath,
-        JSON.stringify(settings, null, 2),
-        "utf-8",
-      );
-    } catch (error) {
-      console.error("Failed to save settings:", error);
-      throw error;
-    }
   }
 
   private registerBackendUrlHandlers(): void {
@@ -121,13 +95,13 @@ export class ApexApi implements AppModule {
       try {
         // Validate URL format
         new URL(url);
-        this.backendUrl = url;
-        this.wsManager?.setBaseUrl(url);
-        await this.#probeBackendLocality();
-        await this.saveSettings();
+        // Delegate storage to settings module
+        await getSettingsModule().setBackendUrl(url);
+        // Local state is updated via event listener
+        
         return {
           success: true,
-          data: { url: this.backendUrl },
+          data: { url },
         };
       } catch (error) {
         return {
@@ -1325,7 +1299,7 @@ export class ApexApi implements AppModule {
         return;
       }
       // Attempt to detect if loopback is tunneling to a different machine
-      const resp = await fetch(`${this.backendUrl}/config/home-dir`, {
+      const resp = await fetch(`${this.backendUrl}/hostname`, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
       });
@@ -1334,12 +1308,11 @@ export class ApexApi implements AppModule {
         return;
       }
       const data = await resp.json().catch(() => ({}) as any);
-      const remoteHome =
-        typeof data?.home_dir === "string" ? data.home_dir : "";
-      const localHome = os.homedir();
-      const norm = (p: string) => p.replace(/\\/g, "/");
+      const remoteHostname =
+        typeof data?.hostname === "string" ? data.hostname : "";
+      const localHostname = os.hostname();
       this.loopbackAppearsRemote =
-        !!remoteHome && norm(remoteHome) !== norm(localHome);
+        !!remoteHostname && remoteHostname !== localHostname;
     } catch {
       // On failure to probe, keep previous value (default false)
     }

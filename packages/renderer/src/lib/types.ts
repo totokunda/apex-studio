@@ -344,6 +344,7 @@ export type ModelClipProps = ClipProps & {
     createdAt: number;
     selectedComponents?: Record<string, any>;
     values?: Record<string, any>;
+    src?: string;
     // Persist the clip transform used when this generation was previewed/applied
     transform?: ClipTransform;
   }[];

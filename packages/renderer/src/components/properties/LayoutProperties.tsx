@@ -16,7 +16,7 @@ const LayoutProperties: React.FC<LayoutPropertiesProps> = ({ clipId }) => {
 
   const hasSides = clip?.type === "shape" && clip?.shapeType === "polygon";
   const hasPoints = clip?.type === "shape" && clip?.shapeType === "star";
-  const hasScale = clip?.type === "image" || clip?.type === "video";
+  const hasScale = clip?.type === "image" || clip?.type === "video" || clip?.type === "model";
   const hasWidthHeight = clip?.type === "shape";
 
   const [spinning, setSpinning] = useState(false);

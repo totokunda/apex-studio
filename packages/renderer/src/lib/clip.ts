@@ -40,7 +40,7 @@ interface ClipStore {
   getAssetByPath: (path: string) => Asset | undefined;
   assets: Record<string, Asset>;  
   setAssets: (assets: Record<string, Asset>) => void;
-  addAsset: (asset: Partial<Asset> | string) => Asset;
+  addAsset: (asset: Partial<Asset> | string, sourceDir?: "user-data" | "apex-cache") => Asset;
   removeAsset: (assetId: string) => void;
   updateAsset: (assetId: string, assetToUpdate: Partial<Asset>) => void;
   getClipById: (
@@ -430,7 +430,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
   assets: {},
   timelines: [],
   setAssets: (assets) => set({ assets }),
-  addAsset: (asset): Asset => {
+  addAsset: (asset, sourceDir: "user-data" | "apex-cache" = "user-data"): Asset => {
     if (typeof asset === "string") {
       asset = { path: asset };
     }
@@ -500,7 +500,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     set({ assets: newAssets });
     // If media info wasn't cached, fetch it asynchronously and update this asset
     if (!mediaInfo) {
-      void getMediaInfo(path as string)
+      void getMediaInfo(path as string, { sourceDir })
         .then((info) => {
           if (!info) return;
 

@@ -6,6 +6,7 @@ import type {
   ClipTransform,
   MaskClipProps,
   TimelineProps,
+  VideoClipProps,
 } from "@/lib/types";
 import { BASE_LONG_SIDE } from "@/lib/settings";
 import {
@@ -168,6 +169,24 @@ const hasAudio = (value: AnyClipProps): boolean => {
   return mediaInfo?.audio !== null;
 };
 
+const convertCoerceModelToMedia = (clip: AnyClipProps, getAssetById: (assetId: string) => Asset | undefined): AnyClipProps => {
+  if (clip.type == "model" && clip.assetId) {
+    // check if model has assetId and status is complete
+    const asset = getAssetById(clip.assetId);
+    // check if asset is a video or image
+    return {
+      ...clip,
+      type: asset?.type === "video" ? "video" : "image",
+      assetId: clip.assetId,
+      assetIdHistory: clip.assetIdHistory,
+      modelStatus: "complete",
+      preprocessors: [],
+      masks: [],
+    } as VideoClipProps;
+  }
+  return clip;
+}
+
 /**
  * Convert a single clip (which may be a group) into one or more `ExportClip`s,
  * applying:
@@ -216,7 +235,9 @@ export function prepareExportClipsForValue(
     startFrame?: number;
     audioSrc?: string | null;
     endFrame?: number;
-  } = { ...(rawValue as any) };
+  } = { ...(convertCoerceModelToMedia(rawValue, getAssetById)) };
+
+  console.log("value", value);
 
   // For map targets we clear masks at the root before any processing
   if (clearMasks && Object.prototype.hasOwnProperty.call(value, "masks")) {

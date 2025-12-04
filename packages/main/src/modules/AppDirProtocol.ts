@@ -120,6 +120,8 @@ class AppDirProtocol implements AppModule {
               return new Response(null, { status: 404, headers: baseCors });
             }
           }
+          // Best-effort: also expose downloads under apex-cache/<folder-uuid>/... via symlinks
+          await this.ensureProjectSymlinkForCache(rel, localPath);
         } catch {
           const ok = await this.ensureLocalFromRemote(rel, localPath).catch(
             () => false,
@@ -127,6 +129,10 @@ class AppDirProtocol implements AppModule {
           if (!ok) {
             return new Response(null, { status: 404, headers: baseCors });
           }
+          // Even if we had to refetch, try to set up the project-level symlink view
+          await this.ensureProjectSymlinkForCache(rel, localPath).catch(() => {
+            /* ignore */
+          });
         }
         // Serve from the mirrored local path we just ensured
         filePath = localPath;
@@ -481,6 +487,74 @@ class AppDirProtocol implements AppModule {
       }
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Ensure that each apex-cache download is also exposed under a per-project
+   * folder UUID view:
+   *
+   *   apex-cache/<folder-uuid>/...
+   *
+   * We infer the folder UUID from engine_results paths of the form:
+   *   engine_results/<folder-uuid>/...
+   *
+   * and create a symlink rooted at this.cachePath so that the app://apex-cache
+   * protocol can also serve files from app://apex-cache/<folder-uuid>/...
+   */
+  private async ensureProjectSymlinkForCache(
+    relPath: string,
+    localPath: string,
+  ): Promise<void> {
+    try {
+      if (!this.cachePath) return;
+
+      const normalizedRel = relPath.replace(/\\/g, "/");
+      const enginePrefix = "engine_results/";
+      if (!normalizedRel.startsWith(enginePrefix)) return;
+
+      // Strip the leading "engine_results/" so we get "<folder-uuid>/..."
+      const afterEngine = normalizedRel.slice(enginePrefix.length);
+      if (!afterEngine || afterEngine.startsWith("/")) return;
+
+      const segments = afterEngine.split("/").filter(Boolean);
+      if (segments.length === 0) return;
+
+      const symlinkPath = path.join(this.cachePath, ...segments);
+
+      // Ensure parent directory exists
+      await fs.promises.mkdir(path.dirname(symlinkPath), { recursive: true });
+
+      // If a symlink already exists, keep it when it points at the same target
+      try {
+        const st = await fs.promises.lstat(symlinkPath);
+        if (st.isSymbolicLink()) {
+          try {
+            const existingTarget = await fs.promises.readlink(symlinkPath);
+            if (existingTarget === localPath) {
+              return;
+            }
+          } catch {
+            // If we can't read the link, fall through and recreate it
+          }
+        }
+        // Remove any stale file/symlink so we can recreate it
+        try {
+          await fs.promises.unlink(symlinkPath);
+        } catch {
+          // ignore unlink failures
+        }
+      } catch {
+        // Path does not exist yet; that's fine
+      }
+
+      try {
+        await fs.promises.symlink(localPath, symlinkPath);
+      } catch {
+        // Best-effort only; ignore failures
+      }
+    } catch {
+      // Never let symlink setup break serving the main file
     }
   }
 }

@@ -173,6 +173,7 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
     const off = onUnifiedDownloadUpdate(
       jobId,
       (data: UnifiedDownloadWsUpdate) => {
+        console.log("data", data);
         try {
           const meta = (data && (data as any).metadata) || {};
           const filename =
@@ -220,10 +221,6 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
             setTimeout(() => {
               set((state) => {
                 const nextDownloading = new Set(state.downloadingPaths);
-                const pathJobId = state.jobIdToPath[jobId];
-                console.log("pathsArr", pathsArr);
-                console.log("nextDownloading", nextDownloading);
-                console.log("pathJobId", pathJobId);
                 for (const p of pathsArr) nextDownloading.delete(p);
                 const nextWsFilesByPath = { ...state.wsFilesByPath };
                 for (const p of pathsArr) {

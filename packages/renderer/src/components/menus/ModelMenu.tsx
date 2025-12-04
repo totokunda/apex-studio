@@ -67,6 +67,7 @@ export const ModelItem: React.FC<{
         }),
       );
       await refreshManifestPart(manifest.metadata?.id || "", `spec.components`);
+      await refreshManifestPart(manifest.metadata?.id || "", `downloaded`);
     },
     [manifest.metadata?.id],
   );
@@ -466,7 +467,7 @@ export const ModelItem: React.FC<{
                 const focusFrame = Math.max(0, controls.focusFrame || 0);
                 const desiredFrames = Math.max(
                   1,
-                  (manifest as any)?.desired_duration ?? controls.defaultClipLength * fps,
+                  (manifest.spec?.default_duration_secs ?? controls.defaultClipLength) * fps,
                 );
                 const startFrame = focusFrame;
                 const endFrame = startFrame + desiredFrames;
@@ -529,8 +530,6 @@ export const ModelItem: React.FC<{
                   type: "model",
                   trimEnd: -Infinity,
                   trimStart: Infinity,
-                  height: 540,
-                  width: 540,
                   speed: 1.0,
                   category,
                 };

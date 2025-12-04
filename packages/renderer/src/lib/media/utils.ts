@@ -242,11 +242,16 @@ export const getMediaInfo = async (
     primarySourceDir === "user-data" ? "apex-cache" : "user-data";
   try {
     filePath = fileURLToPath(hasHashSuffix ? originalPath : path);
-    
     const url = new URL(`app://${primarySourceDir}/${filePath}`);
     input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
   } catch (e) {
-    input = null;
+    try {
+      const url = new URL(`app://${secondarySourceDir}/${filePath}`);
+      input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
+    } catch (e) {
+      input = null;
+    }
+   
   }
 
   // If UrlSource creation failed for some reason, or if later reads fail, we'll fallback below

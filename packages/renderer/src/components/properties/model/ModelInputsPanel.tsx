@@ -343,9 +343,11 @@ export const ModelInputsPanel: React.FC<{
 
     const resOpt = getSelectedOption(resInput);
     const desiredHeight = Number((resOpt as any)?.height);
+
     const currentHeight = Number(
       heightInput?.value ?? heightInput?.default ?? NaN,
     );
+ 
     let nextHeight = currentHeight;
     if (Number.isFinite(desiredHeight)) {
       const snapped = snapToStep(
@@ -504,6 +506,7 @@ export const ModelInputsPanel: React.FC<{
               <AttentionPanel clipId={clipId} />
             </div>
           )}
+
           {panel.layout.rows.map((row) => {
             // Determine if we should override layout for small panels:
             // If each item's computed width would be too small, stack items vertically.
@@ -777,6 +780,7 @@ export const ModelInputsPanel: React.FC<{
                       const strVal = String(
                         input?.value ?? input?.default ?? "",
                       );
+
                       return (
                         <NumberInput
                           startLogo={

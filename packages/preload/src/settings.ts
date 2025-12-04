@@ -71,7 +71,10 @@ function getAllPathsSetting(): Promise<PathsPayload> {
 }
 
 function setAllPathsSetting(
-  payload: Partial<PathsPayload> & { hfToken?: string | null },
+  payload: Partial<PathsPayload> & {
+    hfToken?: string | null;
+    civitaiApiKey?: string | null;
+  },
 ): Promise<ConfigResponse<unknown>> {
   return ipcRenderer.invoke("settings:set-all-paths", payload);
 }
@@ -84,6 +87,16 @@ function setHfTokenSetting(
   token: string | null,
 ): Promise<{ success: boolean }> {
   return ipcRenderer.invoke("settings:set-hf-token", token);
+}
+
+function getCivitaiApiKeySetting(): Promise<string | null> {
+  return ipcRenderer.invoke("settings:get-civitai-api-key");
+}
+
+function setCivitaiApiKeySetting(
+  token: string | null,
+): Promise<{ success: boolean }> {
+  return ipcRenderer.invoke("settings:set-civitai-api-key", token);
 }
 
 export {
@@ -105,4 +118,6 @@ export {
   setAllPathsSetting,
   getHfTokenSetting,
   setHfTokenSetting,
+  getCivitaiApiKeySetting,
+  setCivitaiApiKeySetting,
 };

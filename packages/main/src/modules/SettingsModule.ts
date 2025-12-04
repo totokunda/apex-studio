@@ -4,6 +4,7 @@ import Store from "electron-store";
 import { ipcMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { EventEmitter } from "node:events";
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
 
@@ -24,6 +25,7 @@ interface Settings {
   preprocessorPath?: string | null;
   postprocessorPath?: string | null;
   hfToken?: string | null;
+  civitaiApiKey?: string | null;
 }
 
 interface ConfigResponse<T> {
@@ -42,19 +44,54 @@ type PathsPayload = Pick<
   | "postprocessorPath"
 >;
 
-export class SettingsModule implements AppModule {
+// Singleton instance
+let settingsInstance: SettingsModule | null = null;
+
+export class SettingsModule extends EventEmitter implements AppModule {
   private store: Store<Settings>;
   private backendUrl: string = DEFAULT_BACKEND_URL;
   private settingsPath: string | null = null;
 
   constructor() {
+    super();
     this.store = new Store<Settings>();
+    if (!settingsInstance) {
+      settingsInstance = this;
+    }
+    return settingsInstance;
   }
 
   enable({ app }: ModuleContext): void {
     this.settingsPath = path.join(app.getPath("userData"), "apex-settings.json");
     this.backendUrl = this.readBackendUrlFromDisk(this.settingsPath);
     this.registerHandlers();
+  }
+
+  getBackendUrl(): string {
+    return this.backendUrl;
+  }
+
+  async setBackendUrl(url: string): Promise<void> {
+    this.backendUrl = url;
+    this.saveBackendUrlToDisk();
+    this.emit("backend-url-changed", url);
+  }
+
+  private saveBackendUrlToDisk(): void {
+    if (!this.settingsPath) return;
+    try {
+      // Create simple object matching ApexApi's previous structure
+      const settings = {
+        backendUrl: this.backendUrl,
+      };
+      fs.writeFileSync(
+        this.settingsPath,
+        JSON.stringify(settings, null, 2),
+        "utf-8",
+      );
+    } catch (error) {
+      console.error("Failed to save backend URL settings:", error);
+    }
   }
 
   private readBackendUrlFromDisk(settingsPath: string | null): string {
@@ -111,6 +148,18 @@ export class SettingsModule implements AppModule {
           error instanceof Error ? error.message : "Unknown error occurred",
       };
     }
+  }
+
+  private async setCivitaiApiKeyAndUpdateApi(
+    token: string | null | undefined,
+  ): Promise<void> {
+    const trimmed = (token ?? "").trim();
+    this.store.set("civitaiApiKey", trimmed || null);
+    if (!trimmed) return;
+    // Forward to backend /config/civitai-api-key
+    void this.makeConfigRequest<any>("POST", "/config/civitai-api-key", {
+      token: trimmed,
+    });
   }
 
   private getPathConfig(key: PathKey): {
@@ -333,7 +382,10 @@ export class SettingsModule implements AppModule {
       "settings:set-all-paths",
       async (
         _event,
-        payload: Partial<PathsPayload> & { hfToken?: string | null },
+        payload: Partial<PathsPayload> & {
+          hfToken?: string | null;
+          civitaiApiKey?: string | null;
+        },
       ) => {
         const keys: PathKey[] = [
           "cachePath",
@@ -355,6 +407,12 @@ export class SettingsModule implements AppModule {
           await this.setHfTokenAndUpdateApi(payload.hfToken ?? null);
         }
 
+        if (Object.prototype.hasOwnProperty.call(payload, "civitaiApiKey")) {
+          await this.setCivitaiApiKeyAndUpdateApi(
+            payload.civitaiApiKey ?? null,
+          );
+        }
+
         return { success: true };
       },
     );
@@ -371,11 +429,34 @@ export class SettingsModule implements AppModule {
         return { success: true };
       },
     );
+
+    // CivitAI API key storage
+    ipcMain.handle("settings:get-civitai-api-key", () => {
+      return this.store.get("civitaiApiKey") ?? null;
+    });
+
+    ipcMain.handle(
+      "settings:set-civitai-api-key",
+      async (_event, token: string | null) => {
+        await this.setCivitaiApiKeyAndUpdateApi(token);
+        return { success: true };
+      },
+    );
   }
 }
 
 export function settingsModule(
   ...args: ConstructorParameters<typeof SettingsModule>
 ) {
-  return new SettingsModule(...args);
+  if (!settingsInstance) {
+    settingsInstance = new SettingsModule(...args);
+  }
+  return settingsInstance;
+}
+
+export function getSettingsModule() {
+  if (!settingsInstance) {
+    settingsInstance = new SettingsModule();
+  }
+  return settingsInstance;
 }

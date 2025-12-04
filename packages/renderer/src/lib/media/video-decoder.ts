@@ -15,11 +15,16 @@ interface VideoFrameDecoderOptions {
     }) => void;
     onError: (error: Error) => void;
     initialTimestamp?: number;
+    onReady?: () => void;
 }
 
 export class VideoFrameDecoder {
     private worker: Worker;
     private currentRequestId = 0;
+    private initialized = false;
+    private initializedPromise: Promise<void>;
+    private initializedResolve: (() => void) | null = null;
+    private onReadyCallback?: () => void;
     private onFrameCallback: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
     private onErrorCallback: (error: Error) => void;
 
@@ -35,6 +40,18 @@ export class VideoFrameDecoder {
     constructor(options: VideoFrameDecoderOptions) {
         this.onFrameCallback = options.onFrame;
         this.onErrorCallback = options.onError;
+        this.onReadyCallback = options.onReady;
+
+        // Setup "ready" tracking that resolves once the worker has finished
+        // initial configuration. Callers can await this or use the onReady
+        // callback; both are driven directly by worker messages.
+        this.initializedPromise = new Promise<void>((resolve) => {
+            this.initializedResolve = () => {
+                if (this.initialized) return;
+                this.initialized = true;
+                resolve();
+            };
+        });
 
         this.worker = new Worker(new URL("./video-decoder.worker.ts", import.meta.url), {
             type: "module",
@@ -42,6 +59,7 @@ export class VideoFrameDecoder {
 
         this.worker.onmessage = (e) => {
             const msg = e.data;
+
             if (msg.type === "frame") {
                 // Handle Iteration Frames
                 if (this.activeIteration && msg.requestId === this.activeIteration.requestId) {
@@ -102,6 +120,25 @@ export class VideoFrameDecoder {
                 });
                 msg.frame.close();
 
+            } else if (msg.type === "ready") {
+                // "ready" from the worker means the decoder is configured
+                // and ready for seeks. Notify both the promise and optional callback.
+                if (this.initializedResolve) {
+                    this.initializedResolve();
+                    this.initializedResolve = null;
+                }
+                if (this.onReadyCallback) {
+                    this.onReadyCallback();
+                    this.onReadyCallback = undefined;
+                }
+            } else if (msg.type === "seekDone") {
+                // Fallback: in case we ever have an older worker without "ready",
+                // treat the first seekDone as making the decoder ready for callers
+                // that are awaiting waitUntilReady().
+                if (this.initializedResolve) {
+                    this.initializedResolve();
+                    this.initializedResolve = null;
+                }
             } else if (msg.type === "error") {
                  if (this.activeIteration && msg.requestId === this.activeIteration.requestId) {
                      this.activeIteration.reject(new Error(msg.error));
@@ -203,6 +240,23 @@ export class VideoFrameDecoder {
             },
             requestId: ++this.currentRequestId,
         });
+    }
+
+    /**
+     * Returns true once the worker has fully configured the decoder
+     * and completed the initial seek.
+     */
+    public isReady(): boolean {
+        return this.initialized;
+    }
+
+    /**
+     * Await this to ensure the worker-side decoder is fully initialized
+     * (configure + initial seekDone) before issuing dependent operations.
+     */
+    public async waitUntilReady(): Promise<void> {
+        if (this.initialized) return;
+        return this.initializedPromise;
     }
 
     public async seek(timestamp: number, forceAccurate: boolean = false): Promise<void> {

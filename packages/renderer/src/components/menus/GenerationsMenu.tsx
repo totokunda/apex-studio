@@ -14,6 +14,9 @@ import { deleteFile, listGeneratedMedia } from "@app/preload";
 import { useProjectsStore } from "@/lib/projects";
 import Draggable from "@/components/dnd/Draggable";
 import { RiAiGenerate } from "react-icons/ri";
+import { useClipStore } from "@/lib/clip";
+import { useControlsStore } from "@/lib/control";
+import { ModelClipProps } from "@/lib/types";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -141,6 +144,10 @@ const GenerationsMenu: React.FC = () => {
   const [deleteAlertOpen, setDeleteAlertOpen] = useState(false);
   const [deleteItem, setDeleteItem] = useState<MediaItem | null>(null);
   const activeProject = useProjectsStore((s) => s.getActiveProject());
+  const selectedClipIds = useControlsStore((s) => s.selectedClipIds);
+  const getClipById = useClipStore((s) => s.getClipById);
+  const updateClip = useClipStore((s) => s.updateClip);
+  const addAsset = useClipStore((s) => s.addAsset);
 
   // Track panel height to size the ScrollArea dynamically
   useEffect(() => {
@@ -199,6 +206,51 @@ const GenerationsMenu: React.FC = () => {
     const filtered = filterItems(items, selectedTypes);
     return sortItems(filtered, sortKey, sortOrder);
   }, [items, selectedTypes, sortKey, sortOrder]);
+
+  const handleApplyToSelectedClip = useCallback(
+    (item: MediaItem) => {
+      try {
+        if (!selectedClipIds || selectedClipIds.length === 0) return;
+        const currentClipId = selectedClipIds[selectedClipIds.length - 1];
+        if (!currentClipId) return;
+
+        const clip = getClipById(currentClipId) as ModelClipProps | null;
+        if (!clip || clip.type !== "model") return;
+
+        const assetUrl = item.assetUrl;
+        if (!assetUrl) return;
+
+        const asset = addAsset({ path: assetUrl }, "apex-cache");
+        const prevAssetId = clip.assetId;
+        let assetIdHistory = Array.isArray(clip.assetIdHistory)
+          ? [...clip.assetIdHistory]
+          : [];
+
+        if (
+          typeof prevAssetId === "string" &&
+          prevAssetId &&
+          prevAssetId !== asset.id &&
+          !assetIdHistory.includes(prevAssetId)
+        ) {
+          assetIdHistory = [...assetIdHistory, prevAssetId];
+        }
+
+        const patch: Partial<ModelClipProps> = {
+          assetId: asset.id,
+          previewPath: assetUrl,
+        };
+
+        if (assetIdHistory.length > 0) {
+          patch.assetIdHistory = assetIdHistory;
+        }
+
+        updateClip(clip.clipId, patch as any);
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [selectedClipIds, getClipById, addAsset, updateClip],
+  );
 
   const handleDelete = useCallback(
     async (item: MediaItem) => {
@@ -412,6 +464,16 @@ const GenerationsMenu: React.FC = () => {
                           align="start"
                           className="dark w-40 flex flex-col text-brand-light bg-brand-background font-poppins"
                         >
+                          <DropdownMenuItem
+                            className="py-1 rounded"
+                            onClick={() => handleApplyToSelectedClip(item)}
+                          >
+                            <RiAiGenerate className="w-3.5 h-3.5" />
+                            <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11px]">
+                              Use in selected clip
+                            </span>
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
                           <DropdownMenuItem
                             className="py-1 rounded"
                             onClick={() => {

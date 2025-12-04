@@ -17,6 +17,7 @@ export const useSettingsStore = create<SettingsState>(
     preprocessorPath: null,
     postprocessorPath: null,
     hfToken: null,
+    civitaiApiKey: null,
     backendUrl: null,
 
     // These will be replaced by the middleware with real implementations.
@@ -28,6 +29,7 @@ export const useSettingsStore = create<SettingsState>(
     setPreprocessorPath: async () => {},
     setPostprocessorPath: async () => {},
     setHfToken: async () => {},
+    setCivitaiApiKey: async () => {},
     setBackendUrl: async () => {},
   })),
 );

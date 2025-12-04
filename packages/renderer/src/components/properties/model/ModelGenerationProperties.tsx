@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { generatePosterCanvas } from "@/lib/media/timeline";
 import { getMediaInfo } from "@/lib/media/utils";
 import { pathToFileURLString } from "@app/preload";
+import { BASE_LONG_SIDE } from "@/lib/settings";
 
 interface ModelGenerationPropertiesProps {
   clipId: string;
@@ -24,6 +25,7 @@ export const ModelGenerationProperties: React.FC<
   const updateModelInput = useClipStore((s) => s.updateModelInput);
   const setClipTransform = useClipStore((s) => s.setClipTransform);
   const getAssetById = useClipStore((s) => s.getAssetById);
+  const addAsset = useClipStore((s) => s.addAsset);
   const generations = useMemo(
     () => clip?.generations ?? [],
     [clip?.generations],
@@ -72,8 +74,10 @@ export const ModelGenerationProperties: React.FC<
       if (index === selectedIndex) return;
       const gen = visibleGenerations[index];
       if (!gen) return;
-      const asset = getAssetById(gen.assetId);
-      const fileUrl = normalizeToFileUrl(asset?.path);
+      let fileUrl = normalizeToFileUrl(gen.src);
+      if (!fileUrl) return;
+      const asset = addAsset({ path: fileUrl}, "apex-cache");
+
       if (!fileUrl) return;
       try {
         // Persist current clip transform into the previously selected generation entry (if any)
@@ -93,7 +97,71 @@ export const ModelGenerationProperties: React.FC<
             updates.generations = gens;
           }
         } catch {}
-        updates.transform = gen.transform ?? clip?.transform;
+
+        // When switching to a generation: derive width/height from the asset's
+        // intrinsic dimensions only, and clamp the long side to BASE_LONG_SIDE
+        // while preserving aspect ratio (asset is the single source of truth).
+        const baseTransform = (gen.transform ?? clip?.transform) || undefined;
+
+        if (baseTransform && asset) {
+          let assetW = asset.width;
+          let assetH = asset.height;
+
+          // If asset dimensions are missing, fall back to media info for this asset path.
+          if (
+            !assetW ||
+            !assetH ||
+            !Number.isFinite(assetW) ||
+            !Number.isFinite(assetH) ||
+            assetW <= 0 ||
+            assetH <= 0
+          ) {
+            try {
+              const mi = await getMediaInfo(fileUrl, {
+                sourceDir: "apex-cache",
+              });
+              const vw = mi?.video?.displayWidth;
+              const vh = mi?.video?.displayHeight;
+              const iw = mi?.image?.width;
+              const ih = mi?.image?.height;
+              assetW = (vw || iw || 0) as number;
+              assetH = (vh || ih || 0) as number;
+            } catch {
+              // If media info fails, leave assetW/assetH as-is (may be 0)
+            }
+          }
+
+          let width = baseTransform.width;
+          let height = baseTransform.height;
+
+          if (
+            assetW &&
+            assetH &&
+            Number.isFinite(assetW) &&
+            Number.isFinite(assetH) &&
+            assetW > 0 &&
+            assetH > 0
+          ) {
+            const ratio = assetW / assetH;
+            if (Number.isFinite(ratio) && ratio > 0) {
+              // Mirror the export/preview logic: keep the long side within BASE_LONG_SIDE
+            
+                // Portrait: height is long side
+                width = BASE_LONG_SIDE * ratio;
+                height = BASE_LONG_SIDE;
+              
+            }
+          }
+
+          updates.transform = {
+            ...baseTransform,
+            width,
+            height,
+          };
+        } else {
+          updates.transform = undefined;
+        }
+
         if (gen.selectedComponents) {
           updates.selectedComponents = gen.selectedComponents;
         }
@@ -227,19 +295,61 @@ const GenerationCard: React.FC<{
         const url = src.startsWith("file://") ? src : pathToFileURLString(src);
         const info = await getMediaInfo(url, { sourceDir: "apex-cache" });
         if (!cancelled) setMeta({ duration: info?.duration });
+
         const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
         const cssWidth = el.clientWidth || 240;
         const cssHeight = Math.round((cssWidth * 9) / 16);
+
+        // Backing canvas resolution in device pixels
         el.width = cssWidth * dpr;
         el.height = cssHeight * dpr;
-        const poster = await generatePosterCanvas(url, el.width, el.height, {
+
+        // Generate a poster at intrinsic resolution, then letterbox into 16:9
+        const poster = await generatePosterCanvas(url, undefined, undefined, {
           mediaInfo: info,
         });
         if (!poster || cancelled) return;
+
         const ctx = el.getContext("2d");
         if (!ctx || cancelled) return;
-        ctx.clearRect(0, 0, el.width, el.height);
-        ctx.drawImage(poster as CanvasImageSource, 0, 0);
+
+        const sourceWidth =
+          // Prefer the actual poster dimensions if available
+          (poster as any)?.width ??
+          info?.video?.displayWidth ??
+          info?.image?.width ??
+          asset?.width ??
+          el.width;
+        const sourceHeight =
+          (poster as any)?.height ??
+          info?.video?.displayHeight ??
+          info?.image?.height ??
+          asset?.height ??
+          el.height;
+
+        const targetW = el.width;
+        const targetH = el.height;
+
+        // Contain-fit into the 16:9 box with black bars (no stretching)
+        const scale = Math.min(targetW / sourceWidth, targetH / sourceHeight);
+        const drawW = sourceWidth * scale;
+        const drawH = sourceHeight * scale;
+        const offsetX = (targetW - drawW) / 2;
+        const offsetY = (targetH - drawH) / 2;
+
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, targetW, targetH);
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, targetW, targetH);
+        ctx.drawImage(
+          poster as CanvasImageSource,
+          offsetX,
+          offsetY,
+          drawW,
+          drawH,
+        );
+        ctx.restore();
       } catch {
         // ignore
       } finally {

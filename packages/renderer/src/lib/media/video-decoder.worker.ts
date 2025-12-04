@@ -52,7 +52,8 @@ export type WorkerResponse =
     }
   | { type: "error"; error: string; requestId?: number }
   | { type: "seekDone"; requestId: number }
-  | { type: "iterateDone"; requestId: number };
+  | { type: "iterateDone"; requestId: number }
+  | { type: "ready"; requestId?: number };
 
 // State
 let decoder: VideoDecoder | null = null;
@@ -73,6 +74,13 @@ let lastSeekTime = 0;
 let lastSeekTimestamp = 0;
 let showingPreview = false;
 let config: VideoDecoderConfig | null = null;
+
+// When performing a seek, remember the "best" decoded frame we've seen so far
+// so that if we never reach the target timestamp (e.g. near the very end of
+// the stream or sparse keyframes), we can still return *something* for the
+// initial seek instead of nothing.
+let pendingSeekFrame: VideoFrame | null = null;
+let pendingSeekFrameTime = 0;
 
 // Iteration flow control
 let iterationInFlight = 0;
@@ -117,12 +125,16 @@ async function cacheKeyPackets() {
 
 // Handler
 const onFrameHandler = (frame: VideoFrame) => {
+
+  //console.log("frame", frame, customOutputHandler);
+
   if (customOutputHandler) {
       customOutputHandler(frame);
       return;
   }
 
   const frameTime = frame.timestamp / 1e6;
+
 
   // 1. Cache
   cacheFrame(frame);
@@ -135,10 +147,24 @@ const onFrameHandler = (frame: VideoFrame) => {
 
   // 3. Check Target
   if (seekTargetTimestamp !== null) {
+    // Track closest frame to the desired seek position as a fallback.
+    const distance = Math.abs(frameTime - seekTargetTimestamp);
+    if (!pendingSeekFrame || distance < Math.abs(pendingSeekFrameTime - seekTargetTimestamp)) {
+      if (pendingSeekFrame) {
+        pendingSeekFrame.close();
+      }
+      pendingSeekFrame = frame.clone();
+      pendingSeekFrameTime = frameTime;
+    }
+
     if (frameTime >= seekTargetTimestamp - 0.04) {
       seekDone = true;
       postFrame(frame, currentRequestId);
       seekTargetTimestamp = null;
+      if (pendingSeekFrame) {
+        pendingSeekFrame.close();
+        pendingSeekFrame = null;
+      }
     }
   }
 
@@ -236,6 +262,7 @@ async function handleConfigure(cfg: {
   const videoTrack = await input.getPrimaryVideoTrack();
   if (!videoTrack) throw new Error("No video track found in worker");
 
+
   // 2. Setup Sink
   sink = new EncodedPacketSink(videoTrack);
 
@@ -253,18 +280,17 @@ async function handleConfigure(cfg: {
       postMessage({ type: "error", error: e.message });
     },
   });
-  
+
+
   decoder.configure(config);
   cacheKeyPackets();
-
-  if (requestId !== undefined) {
-    await handleSeek(cfg.initialTimestamp ?? 0, true, requestId);
-  }
+  postMessage({ type: "ready", requestId });
 }
 
 async function handleSeek(timestamp: number, forceAccurate: boolean, requestId: number) {
+
   if (!decoder || !sink) return;
-  
+
   // Cancel any active iteration handler to prevent hijacking seek output
   customOutputHandler = null;
   // Also resume any stuck flow control so iterate can exit cleanly
@@ -274,6 +300,13 @@ async function handleSeek(timestamp: number, forceAccurate: boolean, requestId: 
   }
 
   currentRequestId = requestId;
+
+  // Reset any previous seek fallback frame
+  if (pendingSeekFrame) {
+    pendingSeekFrame.close();
+    pendingSeekFrame = null;
+  }
+
   const now = performance.now();
   const timeSinceLast = now - lastSeekTime;
   const dist = Math.abs(timestamp - (lastSeekTimestamp || 0));
@@ -308,6 +341,7 @@ async function handleSeek(timestamp: number, forceAccurate: boolean, requestId: 
   decoder.reset();
   if (config) decoder.configure(config);
 
+  
   decoder.decode(currentPacket.toEncodedVideoChunk());
 
 
@@ -331,7 +365,19 @@ async function handleSeek(timestamp: number, forceAccurate: boolean, requestId: 
   if (forceAccurate) {
     await decoder.flush();
   }
-  
+
+  // If we never hit the seek threshold inside onFrameHandler (e.g. end of
+  // stream or sparse frames near the target), fall back to the closest frame
+  // we observed so the caller always gets something for an initial seek.
+  if (!seekDone && pendingSeekFrame) {
+    seekTargetTimestamp = null;
+    postFrame(pendingSeekFrame, requestId);
+    // @ts-ignore - VideoFrame is available at runtime, but TS's lib typing
+    // can treat it as `never` in some worker configs.
+    pendingSeekFrame.close();
+    pendingSeekFrame = null;
+  }
+
   // @ts-ignore
   postMessage({ type: "seekDone", requestId });
 }
@@ -387,6 +433,7 @@ async function handleIterate(startTime: number, endTime: number, requestId: numb
     // Use dynamic handler instead of recreating decoder
     customOutputHandler = iterationHandler;
 
+
     try {
         if ((decoder.state as string) === "closed") {
              // @ts-ignore
@@ -408,6 +455,7 @@ async function handleIterate(startTime: number, endTime: number, requestId: numb
                  if (currentRequestId !== requestId) break;
                  await new Promise<void>(r => iterationResume = r);
             }
+
 
             decoder.decode(packet.toEncodedVideoChunk());
             

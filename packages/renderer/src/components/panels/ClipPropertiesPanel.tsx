@@ -618,6 +618,11 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         toast.error(res.error || 'Failed to stop generation');
       } else {
         toast.info('Generation stopped');
+        // Dispatch event so JobsMenu can immediately mark it as canceled
+        const event = new CustomEvent("jobs-menu-reload", {
+          detail: { jobId: targetJobId },
+        });
+        window.dispatchEvent(event);
       }
     } catch (e: any) {
       // fallthrough
@@ -738,7 +743,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             <FrameInterpolateProperties clipId={clipId} />
           </TabsContent>}
           {(hasModel) && <TabsContent value="model-lora" className="min-w-0 m-0"> 
-            <LoraPanel clipId={clipId} />
+            <LoraPanel clipId={clipId} panelSize={panelSize} />
           </TabsContent>}
           </div>
         </ScrollArea>
