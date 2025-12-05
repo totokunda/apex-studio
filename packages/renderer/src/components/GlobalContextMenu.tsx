@@ -101,10 +101,30 @@ const GlobalContextMenu: React.FC = () => {
   const handleExport = useCallback(
     async (settings: ClipExportSettings) => {
       if (!exportClipId || !exportKind) return;
-      const clip = clipsStore.getClipById(exportClipId) as
+      let clip = {...(clipsStore.getClipById(exportClipId) as
         | AnyClipProps
-        | undefined;
+        | undefined)} as AnyClipProps;
       if (!clip) return;
+
+      let likeImage = clip.type === "image"
+      let likeVideo = clip.type === "video"
+
+      if (clip.type === "model") {
+        let asset = getAssetById(clip.assetId as string);
+        if (asset) {
+          likeImage = asset.type === "image";
+          likeVideo = asset.type === "video";
+        }
+        if (clip.originalTransform) {
+          clip.originalTransform.x = 0;
+          clip.originalTransform.y = 0;
+        }
+        if (clip.transform) {
+          clip.transform.x = 0;
+          clip.transform.y = 0;
+        }
+      }
+
 
       const basePath = settings.path.trim();
       const baseName = settings.name.trim();
@@ -144,13 +164,13 @@ const GlobalContextMenu: React.FC = () => {
           // Derive aspect ratio from the clip's native media dimensions when possible.
           let nativeW = 0;
           let nativeH = 0;
-          if (clip.type === "image") {
+          if (likeImage) {
             const info = getMediaInfoCached(
               (clip as ImageClipProps).assetId,
             );
             nativeW = info?.image?.width ?? 0;
             nativeH = info?.image?.height ?? 0;
-          } else if (clip.type === "video") {
+          } else if (likeVideo) {
             const info = getMediaInfoCached(
               (clip as VideoClipProps).assetId,
             );
@@ -230,13 +250,13 @@ const GlobalContextMenu: React.FC = () => {
           // Derive aspect ratio from the clip's native media dimensions when possible.
           let nativeW = 0;
           let nativeH = 0;
-          if (clip.type === "image") {
+          if (likeImage) {
             const info = getMediaInfoCached(
               (clip as ImageClipProps).assetId,
             );
             nativeW = info?.image?.width ?? 0;
             nativeH = info?.image?.height ?? 0;
-          } else if (clip.type === "video") {
+          } else if (likeVideo) {
             const info = getMediaInfoCached(
               (clip as VideoClipProps).assetId,
             );
@@ -275,7 +295,7 @@ const GlobalContextMenu: React.FC = () => {
 
           const { exportClips } = prepared;
           const frame =
-            clip.type === "video" || clip.type === "group"
+            likeVideo || clip.type === "group"
               ? ((clip as any).selectedFrame ?? 0)
               : 0;
 
@@ -372,6 +392,12 @@ const GlobalContextMenu: React.FC = () => {
           if (clip.type === "audio") kind = "audio";
           else if (clip.type === "image") kind = "image";
           else if (clip.type === "video") kind = "video";
+          else if (clip.type === "model") {
+            let asset = getAssetById(clip.assetId as string);
+            if (asset) {
+              kind = asset.type === "video" ? "video" : "image";
+            }
+          }
           if (!kind) return;
           setExportClipId(primaryId);
           setExportKind(kind);

@@ -6,6 +6,10 @@ import { getMediaInfoCached } from "@/lib/media/utils";
 import { exportClip, exportSequence } from "@app/export-renderer";
 import type { ManifestComponent } from "@/lib/manifest/api";
 import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
+type MediaItem = {
+  type: "image" | "video" | "audio";
+  src: string;
+};
 
 export interface GenerateContext {
   clipId: any;
@@ -20,6 +24,7 @@ export interface GenerateContext {
   getRawModelValues: (clipId?: any) => any;
   manifestData: any;
   runEngine: (args: any) => Promise<any>;
+  getAssetById: (assetId: string) => any;
   clearEngineJob: (jobId: any) => any;
   startEngineTracking: (jobId: any) => any;
   updateClip: (clipId: any, patch: any) => any;
@@ -103,6 +108,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
     timelines,
     getModelValues,
     getRawModelValues,
+    getAssetById,
     manifestData,
     runEngine,
     clearEngineJob,
@@ -159,6 +165,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           {
             aspectRatio,
             getClipsForGroup,
+            getAssetById,
             getClipsByType,
             getClipPositionScore,
             timelines,
@@ -245,6 +252,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         {
           aspectRatio,
           getClipsForGroup,
+          getAssetById,
           getClipsByType,
           getClipPositionScore,
           timelines,
@@ -334,6 +342,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
               fileNameHint: `${clipId}_${input.id}_${frame}`,
             });
           }
+
         } else {
           const result = await exportSequence({
             mode: "image",
@@ -363,7 +372,8 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
       };
       if (!value) continue;
       if (value.type === "audio") {
-        const mediaInfo = getMediaInfoCached(value.src);
+        const asset = getAssetById(value.assetId);
+        const mediaInfo = getMediaInfoCached(asset?.path);
         if (!mediaInfo) continue;
 
         const filePath = await getPreviewPath(`${clipId}_${input.id}`, {
@@ -407,15 +417,15 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
       if (t === "image_list") {
         const listVal = Array.isArray(raw) ? raw : [];
         const paths = listVal
-          .map((item: any) => {
+          .map((item: MediaItem) => {
             if (!item) return null;
             if (typeof item === "string") return item;
             if (
               item &&
               typeof item === "object" &&
-              typeof (item as any).src === "string"
+              typeof item.src === "string"
             )
-              return (item as any).src;
+              return item.src;
             if (
               item &&
               typeof item === "object" &&
@@ -451,8 +461,8 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         } else if (raw && typeof raw === "object") {
           if (typeof (raw as any).input_path === "string") {
             mediaPath = (raw as any).input_path;
-          } else if (typeof (raw as any).src === "string") {
-            mediaPath = (raw as any).src;
+          } else if (typeof (raw as MediaItem).src === "string") {
+            mediaPath = (raw as MediaItem).src;
           }
         }
         if (!mediaPath) continue;
@@ -468,8 +478,8 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
       } else if (t.startsWith("audio")) {
         if (typeof raw === "string") {
           engineInputs[input.id] = raw;
-        } else if (raw && typeof raw === "object" && (raw as any).src) {
-          engineInputs[input.id] = (raw as any).src;
+        } else if (raw && typeof raw === "object" && (raw as MediaItem).src) {
+          engineInputs[input.id] = (raw as MediaItem).src;
         }
       } else if (t === "boolean") {
         const v = (raw as any)?.value ?? raw;
@@ -513,6 +523,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     const activeJobId = uuidv4();
 
+
     const res = await runEngine({
       manifest_id: manifestId,
       inputs: engineInputs,
@@ -551,15 +562,16 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
                 : ((input as any)?.value ?? "");
           }
         }
+        
         const existingGenerations = (clip as ModelClipProps)?.generations ?? [];
         const newGeneration = {
           jobId: activeJobId,
           modelStatus: "pending" as const,
-          src: "",
+          assetId: undefined,
           createdAt: Date.now(),
+          src: undefined,
           selectedComponents: selectedComponents,
           values: getRawModelValues(clipId),
-          transform: (clip as AnyClipProps)?.transform,
         };
         if (clipId) {
           updateClip(clipId, {

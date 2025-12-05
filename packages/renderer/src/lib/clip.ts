@@ -40,6 +40,7 @@ interface ClipStore {
   getAssetByPath: (path: string) => Asset | undefined;
   assets: Record<string, Asset>;  
   setAssets: (assets: Record<string, Asset>) => void;
+  addAssetAsync: (asset: Partial<Asset> | string, sourceDir?: "user-data" | "apex-cache") => Promise<Asset>;
   addAsset: (asset: Partial<Asset> | string, sourceDir?: "user-data" | "apex-cache") => Asset;
   removeAsset: (assetId: string) => void;
   updateAsset: (assetId: string, assetToUpdate: Partial<Asset>) => void;
@@ -430,6 +431,98 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
   assets: {},
   timelines: [],
   setAssets: (assets) => set({ assets }),
+  addAssetAsync: async (asset, sourceDir: "user-data" | "apex-cache" = "user-data"): Promise<Asset> => {
+    if (typeof asset === "string") {
+      asset = { path: asset };
+    }
+
+    const path =
+      typeof asset === "object" && "path" in asset
+        ? (asset.path as string)
+        : (asset as string);
+
+    // Reuse existing asset for this path to avoid duplicates
+    const existingAssets = get().assets;
+    const existing = Object.values(existingAssets).find(
+      (a) => a.path === path,
+    );
+    if (existing) return existing;
+
+
+    const mediaInfo = getMediaInfoCached(path as string);
+
+    // Initial, best-effort values; will be refined asynchronously if needed
+    const inferredTypeFromMedia =
+      mediaInfo?.video
+        ? "video"
+        : mediaInfo?.audio
+          ? "audio"
+          : mediaInfo
+            ? "image"
+            : undefined;
+
+    let type =
+      asset.type ??
+      inferredTypeFromMedia;
+
+    if (!type) {
+      const ext = getLowercaseExtension(path ?? "");
+      if (VIDEO_EXTS.includes(ext)) type = "video";
+      else if (AUDIO_EXTS.includes(ext)) type = "audio";
+      else if (IMAGE_EXTS.includes(ext)) type = "image";
+      else type = "image";
+    }
+
+    const height =
+      asset.height ??
+      mediaInfo?.video?.displayHeight ??
+      mediaInfo?.image?.height;
+    const width =
+      asset.width ??
+      mediaInfo?.video?.displayWidth ??
+      mediaInfo?.image?.width;
+    const duration = asset.duration ?? mediaInfo?.duration ?? 0;
+
+    const newAsset: Asset = {
+      id: uuidv4(),
+      path: path,
+      type: type,
+      duration: duration,
+      width: height === undefined ? undefined : width,
+      height: height === undefined ? undefined : height,
+      modelInputAsset: asset.modelInputAsset ?? false,
+    };
+
+    const newAssets: Record<string, Asset> = {
+      ...get().assets,
+      [newAsset.id]: newAsset,
+    };
+
+    // If media info wasn't cached, fetch it asynchronously and update this asset
+    if (!mediaInfo) {
+      const info = await getMediaInfo(path as string, { sourceDir });
+        
+        if (!info) return newAsset;
+
+          const updatedHeight =
+            info.video?.displayHeight ?? info.image?.height;
+          const updatedWidth =
+            info.video?.displayWidth ?? info.image?.width;
+          const updatedDuration = info.duration ?? 0;
+
+          let updatedType: Asset["type"] = newAsset.type;
+          if (info.video) updatedType = "video";
+          else if (info.audio) updatedType = "audio";
+          else if (info.image) updatedType = "image";
+
+          newAsset.height = updatedHeight;
+          newAsset.width = updatedWidth;
+          newAsset.duration = updatedDuration;
+          newAsset.type = updatedType;
+    }
+    set({ assets: newAssets });
+    return newAsset;
+  },
   addAsset: (asset, sourceDir: "user-data" | "apex-cache" = "user-data"): Asset => {
     if (typeof asset === "string") {
       asset = { path: asset };
@@ -585,6 +678,9 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         originalTransform: modelClip.originalTransform,
         groupId: modelClip.groupId,
         hidden: modelClip.hidden,
+        mediaWidth: modelClip.mediaWidth,
+        mediaHeight: modelClip.mediaHeight,
+        mediaAspectRatio: modelClip.mediaAspectRatio,
       } as Partial<AnyClipProps>;
 
       let converted: AnyClipProps | null = null;
@@ -593,9 +689,6 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
           ...(common as any),
           type: "video",
           assetId: chosenAssetId,
-          mediaWidth: undefined,
-          mediaHeight: undefined,
-          mediaAspectRatio: undefined,
           volume: 1,
           fadeIn: 0,
           fadeOut: 0,
@@ -612,9 +705,6 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
           ...(common as any),
           type: "image",
           assetId: chosenAssetId,
-          mediaWidth: undefined,
-          mediaHeight: undefined,
-          mediaAspectRatio: undefined,
           preprocessors: [],
           masks: [],
         } as ImageClipProps as AnyClipProps;

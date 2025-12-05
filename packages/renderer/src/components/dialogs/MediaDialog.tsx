@@ -1508,7 +1508,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
         {timelineSelectorProps && (
           <div
             ref={divTimelineSelectorRef}
-            className="px-6 py-4 border-t border-brand-light/10 bg-brand-background flex-shrink-0 flex items-center justify-between"
+            className="px-6 py-4 border-t border-brand-light/10 bg-brand-background shrink-0 flex items-center justify-between"
           >
             <TimelineSelector
               clip={clipOverride ?? (selectedClip as AnyClipProps)}
@@ -1519,7 +1519,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
             />
           </div>
         )}
-        <div className="px-6 py-4 border-t border-brand-light/10 bg-brand-background flex-shrink-0 flex items-center justify-between">
+        <div className="px-6 py-4 border-t border-brand-light/10 bg-brand-background shrink-0 flex items-center justify-between">
           <div className="flex items-center gap-6 flex-1">
             {/* Aspect Ratio Control */}
             {canCrop && (
@@ -1558,14 +1558,14 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
               <Button
                 variant="ghost"
                 onClick={handleReset}
-                className="h-7 px-5 hover:bg-secondary/80 !text-[11.5px] font-medium bg-brand-light/10 rounded-[6px]"
+                className="h-7 px-5 hover:bg-secondary/80 text-[11.5px]! font-medium bg-brand-light/10 rounded-[6px]"
               >
                 Reset
               </Button>
             )}
             <Button
               onClick={canCrop ? handleConfirm : () => onClose()}
-              className="h-7 px-5 bg-brand-primary hover:bg-brand-primary/90 text-white !text-[11.5px] font-medium bg-brand-accent hover:bg-brand-accent-two-shade rounded-[6px]"
+              className="h-7 px-5 bg-brand-primary hover:bg-brand-primary/90 text-white text-[11.5px]! font-medium bg-brand-accent hover:bg-brand-accent-two-shade rounded-[6px]"
             >
               {canCrop ? "Confirm" : "Done"}
             </Button>

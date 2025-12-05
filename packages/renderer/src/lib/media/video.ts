@@ -122,12 +122,10 @@ export const getVideoFrameIterator = async (
     try {
       const fsPath = fileURLToPath(path);
       const originalFsPath = await resolveOriginalPath(fsPath);
-      console.log("originalFsPath", originalFsPath, fsPath);
       if (originalFsPath !== fsPath) {
         console.log(path, originalFsPath, pathToFileURL(originalFsPath));
         path = pathToFileURL(originalFsPath);
       }
-      console.log("path", path);
     } catch (e) {
       console.error("Error resolving original path", e);
       // ignore path parsing errors

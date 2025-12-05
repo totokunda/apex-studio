@@ -604,7 +604,6 @@ const VideoPreview: React.FC<
   }, [isSelected]);
 
   useEffect(() => {
-    let cancelled = false;
     if (lastSelectedAssetIdRef.current === selectedAssetId) return;
     lastSelectedAssetIdRef.current = selectedAssetId;
     // Force redraw on source switch: reset last rendered frame and clear cached original frame
@@ -615,32 +614,12 @@ const VideoPreview: React.FC<
     iteratorRef.current = null;
     let info = getMediaInfoCached(selectedAssetId);
     if (!info) {
-      (async () => {
-        try {
-          if (!info) info = await getMediaInfo(selectedAssetId, { sourceDir:clip.type === "video" ? "apex-cache" : "user-data" });
-          if (!cancelled) {
-            mediaInfo.current = info;
-            // Media info arrived; force immediate redraw
-            lastRenderedFrameRef.current = -1;
-            try {
-            
-            } catch {}
-          }
-        } catch (e) {
-          console.error(e);
-        }
-      })();
+      return;
     } else {
       mediaInfo.current = info;
       // Have cached info; force immediate redraw
       lastRenderedFrameRef.current = -1;
-      try {
-        
-      } catch {}
     }
-    return () => {
-      cancelled = true;
-    };
   }, [selectedAssetId]);
 
   // Compute aspect-fit display size and offsets within the preview rect
@@ -696,6 +675,37 @@ const VideoPreview: React.FC<
     displayHeight,
     offsetX,
     offsetY,
+    clipId,
+    setClipTransform,
+    overrideClip,
+  ]);
+
+  // Hard guarantee: clip transform width/height are never zero or negative.
+  // If we ever see an invalid size, immediately normalize it to a sane value.
+  useEffect(() => {
+    if (!clipTransform) return;
+    // Do not mutate store transforms when rendering an override-only clip.
+    if (overrideClip) return;
+
+    const currentWidth = clipTransform.width ?? 0;
+    const currentHeight = clipTransform.height ?? 0;
+
+    if (currentWidth > 0 && currentHeight > 0) return;
+
+    const fallbackWidth =
+      (displayWidth && displayWidth > 0 ? displayWidth : currentWidth) || 1;
+    const fallbackHeight =
+      (displayHeight && displayHeight > 0 ? displayHeight : currentHeight) || 1;
+
+    setClipTransform(clipId, {
+      ...clipTransform,
+      width: Math.max(fallbackWidth, 1),
+      height: Math.max(fallbackHeight, 1),
+    });
+  }, [
+    clipTransform,
+    displayWidth,
+    displayHeight,
     clipId,
     setClipTransform,
     overrideClip,
@@ -823,7 +833,7 @@ const VideoPreview: React.FC<
   }, [maskFrameForCurrentFocus]);
 
   const getTargetFrameInfo = useCallback(() => {
-    if (!mediaInfo.current || !displayWidth || !displayHeight) return null;
+    if (!mediaInfo.current) return null;
     const clipFps =
       mediaInfo.current.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
     const projectFps = fps || DEFAULT_FPS;
@@ -849,8 +859,6 @@ const VideoPreview: React.FC<
     return { timestamp: targetFrame / clipFps, targetFrame };
   }, [
     mediaInfo,
-    displayWidth,
-    displayHeight,
     fps,
     selectedAssetId,
     assetId,
@@ -861,7 +869,7 @@ const VideoPreview: React.FC<
     speed,
   ]);
 
-  const seekToCurrentFrame = useCallback(async () => {
+  const seekToCurrentFrame = useCallback(async (isAccurateSeekNeededInput: boolean = false) => {
     // Check store state directly to ensure we don't block seeking due to stale ref
     const currentlyPlaying = inputMode
       ? useInputControlsStore.getState().getIsPlaying(inputId)
@@ -871,9 +879,11 @@ const VideoPreview: React.FC<
     if (currentlyPlaying) return;
     
     const info = getTargetFrameInfo();
+    console.log("seekToCurrentFrame", info, "line 884");
     if (!info) return;
 
     const { timestamp, targetFrame } = info;
+    console.log("seekToCurrentFrame", timestamp, targetFrame, "line 889");
 
 
     // Update the mask frame ref immediately before seeking to ensure sync
@@ -881,9 +891,13 @@ const VideoPreview: React.FC<
 
     // Cancel any ongoing paused seek operations (do not interfere with live decode token)
     const myToken = ++drawTokenRef.current;
+    if (isAccurateSeekNeeded) {
+      isAccurateSeekNeededInput = true;
+    }
 
     try {
-      await videoFrameDecoderRef.current?.seek(timestamp, isAccurateSeekNeeded);
+      console.log("seekToCurrentFrame", timestamp, targetFrame, isAccurateSeekNeededInput);
+      await videoFrameDecoderRef.current?.seek(timestamp, isAccurateSeekNeededInput);
       if (myToken === drawTokenRef.current) {
          lastRenderedFrameRef.current = targetFrame;
       }
@@ -918,7 +932,7 @@ const VideoPreview: React.FC<
           let info = getMediaInfoCached(id);
           const asset = getAssetById(id);
         
-          if (!info) info = await getMediaInfo(asset?.path ?? "", { sourceDir: clip.type === "video" ? "apex-cache" : "user-data" });
+          if (!info && asset?.path) info = await getMediaInfo(asset.path, { sourceDir: clip.type === "video" ? "user-data" : "apex-cache" });
           if (!active || !info) continue;
   
           const config = await info.video?.getDecoderConfig();
@@ -933,7 +947,8 @@ const VideoPreview: React.FC<
               drawWrappedCanvas(data, decoderMaskFrameRef.current),
             onError: (e) => console.error("[VideoFrameDecoder] Error", id, e),
             onReady: async () => {
-              await seekToCurrentFrame();
+              console.log("onReady", id, "line 949");
+              await seekToCurrentFrame(true);
             },
           });
           decodersRef.current.set(id, decoder);
@@ -975,7 +990,7 @@ const VideoPreview: React.FC<
 
            if (hasChanged || needsRefresh) {
              videoFrameDecoderRef.current = targetDecoder;
-             await seekToCurrentFrame();
+             await seekToCurrentFrame(true);
            }
         }
       }
@@ -1552,8 +1567,16 @@ const VideoPreview: React.FC<
           image={imageSource || undefined}
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}
-          width={clipTransform?.width ?? displayWidth}
-          height={clipTransform?.height ?? displayHeight}
+          width={
+            clipTransform?.width && clipTransform.width > 0
+              ? clipTransform.width
+              : displayWidth || 1
+          }
+          height={
+            clipTransform?.height && clipTransform.height > 0
+              ? clipTransform.height
+              : displayHeight || 1
+          }
           scaleX={clipTransform?.scaleX ?? 1}
           scaleY={clipTransform?.scaleY ?? 1}
           rotation={clipTransform?.rotation ?? 0}

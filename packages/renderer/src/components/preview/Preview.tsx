@@ -2853,7 +2853,7 @@ const Preview: React.FC<PreviewProps> = () => {
                   // Get applicators for clips that support effects (video, image, etc.)
 
                   const applicators = getClipApplicators(clip.clipId);
-
+          
                   if (clipAtFrame) {
                     switch (clip.type) {
                       case "video":

@@ -237,8 +237,6 @@ export function prepareExportClipsForValue(
     endFrame?: number;
   } = { ...(convertCoerceModelToMedia(rawValue, getAssetById)) };
 
-  console.log("value", value);
-
   // For map targets we clear masks at the root before any processing
   if (clearMasks && Object.prototype.hasOwnProperty.call(value, "masks")) {
     value.masks = [];
@@ -695,6 +693,7 @@ export function prepareExportClipsForValue(
       //   1) remap masks into that space
       //   2) update clip transforms to match
       //   3) attach a normalized snapshot relative to the *target* canvas.
+      // ensure newClip.originalTransform x, y at 0,0
       const resolvedTransform = resolveTransformFromClip(
         newClip.originalTransform,
         newClip.normalizedTransform,
@@ -784,8 +783,5 @@ export function prepareExportClipsForValue(
       );
     }
   }
-
-  console.log("exportClips", exportClips);
-
   return { exportClips, width, height, offsetStart };
 }

@@ -68,7 +68,6 @@ class AppDirProtocol implements AppModule {
   private backendUrl: string = "http://127.0.0.1:8765";
   private loopbackAppearsRemote: boolean = false;
   private inflightDownloads: Map<string, Promise<boolean>> = new Map();
-  private remoteHomeDir: string | null = null;
 
   async enable({ app }: ModuleContext): Promise<void> {
     await app.whenReady();
@@ -225,13 +224,6 @@ class AppDirProtocol implements AppModule {
       if (this.loopbackAppearsRemote) {
         if (typeof data.cache_path === "string" && data.cache_path) {
           this.remoteCacheBasePath = data.cache_path;
-        } else if (!this.remoteCacheBasePath && this.remoteHomeDir) {
-          // Fallback guess when backend doesn't provide cache_path yet
-          this.remoteCacheBasePath = path.join(
-            this.remoteHomeDir,
-            "apex-diffusion",
-            "cache",
-          );
         }
         const mirror = path.join(app.getPath("userData"), "apex-cache-remote");
         try {
@@ -300,56 +292,30 @@ class AppDirProtocol implements AppModule {
     try {
       const u = new URL(this.backendUrl);
       const host = (u.hostname || "").toLowerCase();
+      // Non-loopback hosts are always treated as remote
       if (!(host === "localhost" || host === "127.0.0.1" || host === "::1")) {
         this.loopbackAppearsRemote = true;
         return;
       }
-      // Probe multiple signals concurrently; consider remote if any clear mismatch is found
-      const [homeRes, memRes] = await Promise.allSettled([
-        fetch(`${this.backendUrl}/config/home-dir`, { method: "GET" }),
-        fetch(`${this.backendUrl}/system/memory`, { method: "GET" }),
-      ]);
 
-      let appearsRemote = false;
-
-      // Heuristic 1: Compare reported APEX home directory vs local home directory
-      if (homeRes.status === "fulfilled" && homeRes.value.ok) {
-        try {
-          const data = await homeRes.value.json().catch(() => ({}) as any);
-          const remoteHome =
-            typeof data?.home_dir === "string" ? data.home_dir : "";
-          const localHome = os.homedir();
-          const norm = (p: string) => p.replace(/\\/g, "/");
-          if (remoteHome && norm(remoteHome) !== norm(localHome)) {
-            appearsRemote = true;
-          }
-          if (remoteHome) {
-            this.remoteHomeDir = remoteHome;
-          }
-        } catch {}
+      // For loopback hosts, rely solely on backend-reported hostname
+      const resp = await fetch(`${this.backendUrl}/config/hostname`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!resp.ok) {
+        // On failure, keep previous value (default false)
+        return;
       }
-
-      // Heuristic 2: Compare total system memory (very likely to differ across machines)
-      if (!appearsRemote && memRes.status === "fulfilled" && memRes.value.ok) {
-        try {
-          const m = await memRes.value.json().catch(() => ({}) as any);
-          const remoteTotal: number | null =
-            (m &&
-              m.unified &&
-              typeof m.unified.total === "number" &&
-              m.unified.total) ||
-            (m && m.cpu && typeof m.cpu.total === "number" && m.cpu.total) ||
-            null;
-          const localTotal = os.totalmem();
-          if (remoteTotal && Number(remoteTotal) !== Number(localTotal)) {
-            appearsRemote = true;
-          }
-        } catch {}
-      }
-
-      // Do not force false on probe failures; just set based on detected heuristics
-      this.loopbackAppearsRemote = appearsRemote;
-    } catch {}
+      const data = await resp.json().catch(() => ({} as any));
+      const remoteHostname =
+        typeof data?.hostname === "string" ? data.hostname : "";
+      const localHostname = os.hostname();
+      this.loopbackAppearsRemote =
+        !!remoteHostname && remoteHostname !== localHostname;
+    } catch {
+      // On failure to probe, keep previous value (default false)
+    }
   }
 
   private remoteRelFromNormalized(normalizedPathname: string): string {
@@ -358,8 +324,6 @@ class AppDirProtocol implements AppModule {
       // Known bases to strip
       const bases: string[] = [];
       if (this.remoteCacheBasePath) bases.push(this.remoteCacheBasePath);
-      if (this.remoteHomeDir)
-        bases.push(path.join(this.remoteHomeDir, "apex-diffusion", "cache"));
       // Normalize and attempt stripping
       for (const b of bases) {
         const base = b.replace(/\\/g, "/");

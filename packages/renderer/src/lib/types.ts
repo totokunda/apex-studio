@@ -323,9 +323,24 @@ export type GroupClipProps = ClipProps & {
   children: string[][]; // clipIds for the children of the group
 };
 
+export type GenerationModelClipProps = {
+  jobId: string;
+  modelStatus: "pending" | "running" | "complete" | "failed";
+  assetId: string;
+  createdAt: number;
+  selectedComponents?: Record<string, any>;
+  values?: Record<string, any>;
+  src?: string;
+  // Persist the clip transform used when this generation was previewed/applied
+  transform?: ClipTransform;
+};
+
 export type ModelClipProps = ClipProps & {
   assetId?: string;
   assetIdHistory?: string[];
+  mediaWidth?: number;
+  mediaHeight?: number;
+  mediaAspectRatio?: number;
   previewPath?: string;
   type: "model";
   manifest: ManifestDocument;
@@ -337,17 +352,7 @@ export type ModelClipProps = ClipProps & {
   // Persist user selections for model components (e.g., scheduler, transformer, vae, text_encoder)
   // Keyed by component type (e.g., 'scheduler', 'transformer'), value is a small descriptor object
   selectedComponents?: Record<string, any>;
-  generations?: {
-    jobId: string;
-    modelStatus: "pending" | "running" | "complete" | "failed";
-    assetId: string;
-    createdAt: number;
-    selectedComponents?: Record<string, any>;
-    values?: Record<string, any>;
-    src?: string;
-    // Persist the clip transform used when this generation was previewed/applied
-    transform?: ClipTransform;
-  }[];
+  generations?: GenerationModelClipProps[];
   activeJobId?: string;
 };
 

@@ -573,6 +573,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         fps: fps || 24,
         aspectRatio,
         getClipsForGroup,
+        getAssetById,
         getClipsByType,
         getClipPositionScore,
         timelines,
@@ -661,7 +662,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5  whitespace-nowrap">Progress</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-architecture" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Architecture</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-lora" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">LoRA</TabsTrigger>}
-            {(hasModel) && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Generations</TabsTrigger>}
+            {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus !== 'running' && (clip as ModelClipProps | undefined)?.modelStatus !== 'pending') && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Generations</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Text</TabsTrigger>}
             {(hasTransform) && <TabsTrigger value="transform" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Transform</TabsTrigger>}
@@ -730,7 +731,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasModel) && <TabsContent value="model-inputs" className="min-w-0 m-0">
             <ModelInputsProperties clipId={clipId} panelSize={panelSize} />
           </TabsContent>}
-          {(hasModel) && <TabsContent value="model-generation" className="min-w-0 m-0">
+          {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus !== 'running' && (clip as ModelClipProps | undefined)?.modelStatus !== 'pending') &&  <TabsContent value="model-generation" className="min-w-0 m-0">
             <ModelGenerationProperties clipId={clipId} />
           </TabsContent>}
           {(hasModel) && <TabsContent value="model-progress" className="min-w-0 m-0"> 

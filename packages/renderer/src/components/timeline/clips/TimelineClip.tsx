@@ -277,12 +277,7 @@ const TimelineClip: React.FC<
   > | null>(null);
 
   // Track engine job status for model clip to disable resizing while generating
-  const isModelRunning = useEngineJobStore((s) => {
-    if (!currentClip || currentClip.type !== "model") return false;
-    const j =
-      s.jobs[(currentClip as ModelClipProps)?.activeJobId ?? ""] ?? null;
-    return !!j && (j.status === "running" || j.status === "pending");
-  });
+  const isModelRunning = (currentClip as ModelClipProps | undefined)?.modelStatus === 'running' || (currentClip as ModelClipProps | undefined)?.modelStatus === 'pending';
 
   // Sizing for stacked canvases inside group clips
   const groupCardHeight = useMemo(
@@ -1169,7 +1164,7 @@ const TimelineClip: React.FC<
     ],
   );
 
-  const handleContextMenu = useCallback(
+  const handleContextMenu = 
     (e: Konva.KonvaEventObject<MouseEvent>) => {
       e.evt.preventDefault();
       const stage = e.target.getStage();
@@ -1252,6 +1247,14 @@ const TimelineClip: React.FC<
 
       const otherCommands: ContextMenuItem[] = [];
 
+      if (clip?.type === "model" && !isModelRunning && clip?.assetId) {
+        otherCommands.push({
+          id: "export",
+          label: "Export as Media",
+          action: "export",
+        });
+      }
+
       if (clip?.type === "image") {
         otherCommands.push({
           id: "export",
@@ -1299,6 +1302,7 @@ const TimelineClip: React.FC<
       }
 
       const clipActions: ContextMenuItem[] = [];
+
       if (clipType === "model" && isModelWithSrc) {
         clipActions.push({
           id: "convertToMedia",
@@ -1362,9 +1366,8 @@ const TimelineClip: React.FC<
           },
         ],
       });
-    },
-    [currentClipId],
-  );
+    }
+   
 
   useEffect(() => {
     if (isSelected) {
@@ -1583,6 +1586,7 @@ const TimelineClip: React.FC<
     timelineWidth,
     getClipsForTimeline,
     setSnapGuideX,
+    isModelRunning,
   ]);
 
   const handleDragStart = useCallback(

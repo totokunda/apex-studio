@@ -60,7 +60,9 @@ const ComponentCard: React.FC<{
   manifestId: string;
   index: number;
 }> = ({ component: originalComponent, manifestId, index }) => {
-  const { refreshManifestPart, getLoadedManifest } = useManifestStore();
+  const refreshManifestPart = useManifestStore(
+    (state) => state.refreshManifestPart,
+  );
   const [isExpanded, setIsExpanded] = useState(false);
   const {
     startAndTrackDownload,
@@ -76,9 +78,15 @@ const ComponentCard: React.FC<{
     new Set(),
   );
   const [pathToJobId, setPathToJobId] = useState<Record<string, string>>({});
-  const liveComponent = getLoadedManifest(manifestId)?.spec.components?.[
-    index
-  ] as ManifestComponent | undefined;
+  const liveComponent = useManifestStore(
+    useCallback(
+      (state) =>
+        state.getLoadedManifest(manifestId)?.spec.components?.[
+          index
+        ] as ManifestComponent | undefined,
+      [manifestId, index],
+    ),
+  );
   const component = liveComponent || originalComponent;
   const [schedulerIsDownloading, setSchedulerIsDownloading] = useState(false);
   const [isAddingModelPath, setIsAddingModelPath] = useState(false);
@@ -129,6 +137,7 @@ const ComponentCard: React.FC<{
         }),
       );
       await refreshManifestPart(manifestId, `spec.components.${index}`);
+      await refreshManifestPart(manifestId, `downloaded`);
       if (component.type === "scheduler") {
         setSchedulerIsDownloading((s) => !s);
       }
@@ -149,6 +158,7 @@ const ComponentCard: React.FC<{
       schedulerIsDownloading
     );
   }, [relevantPaths, wsFilesByPath, downloadingPaths]);
+
 
   const defaultPaths = useMemo(() => {
     const paths: string[] = [];
@@ -809,7 +819,7 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
                 </div>
                 {typeof (pathItem as any).file_size === "number" &&
                   (pathItem as any).file_size > 0 && (
-                    <div className="flex-shrink-0 ml-2 text-[10px] text-brand-light/80 font-mono whitespace-nowrap">
+                    <div className="shrink-0 ml-2 text-[10px] text-brand-light/80 font-mono whitespace-nowrap">
                       {formatBytes((pathItem as any).file_size, 1)}
                     </div>
                   )}

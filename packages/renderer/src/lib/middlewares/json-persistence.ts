@@ -842,7 +842,11 @@ const hydrateStoresFromProjectJson = async (
         let useCache = asset.path.includes('cache/engine_results');
         return await getMediaInfo(asset.path, {sourceDir: useCache ? 'apex-cache' : 'user-data'});
       });
-      await Promise.all(promises);
+      try { 
+         await Promise.all(promises);
+      } catch (err) {
+        console.error("jsonPersistence: failed to get media info", err);
+      }
 
       let clipDuration = 0;
       for (const clip of clips) {

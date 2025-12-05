@@ -1299,12 +1299,11 @@ export class ApexApi implements AppModule {
         return;
       }
       // Attempt to detect if loopback is tunneling to a different machine
-      const resp = await fetch(`${this.backendUrl}/hostname`, {
+      const resp = await fetch(`${this.backendUrl}/config/hostname`, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
       });
       if (!resp.ok) {
-        this.loopbackAppearsRemote = false;
         return;
       }
       const data = await resp.json().catch(() => ({}) as any);
@@ -1326,7 +1325,8 @@ export class ApexApi implements AppModule {
         return this.loopbackAppearsRemote;
       return true;
     } catch {
-      return false;
+      // Fall back to last known probe result
+      return this.loopbackAppearsRemote;
     }
   }
 
@@ -1403,6 +1403,7 @@ export class ApexApi implements AppModule {
     const destRel = `uploads/${crypto.randomUUID()}-${fileName}`;
 
     const { size } = await fs.promises.stat(abs);
+
     if (size > MAX_UPLOAD_BYTES) {
       const fileGiB = (size / 1024 ** 3).toFixed(2);
       const limitGiB = (MAX_UPLOAD_BYTES / 1024 ** 3).toFixed(2);
@@ -1410,6 +1411,7 @@ export class ApexApi implements AppModule {
         `File is too large to upload automatically (${fileGiB} GiB > ${limitGiB} GiB). Place the file on the backend or raise APEX_MAX_UPLOAD_BYTES.`,
       );
     }
+    
 
     // Use query params for scope/dest to avoid multipart field name disagreements
     const url = `${this.backendUrl}/files/ingest?scope=apex-cache&dest=${encodeURIComponent(destRel)}`;

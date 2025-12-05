@@ -105,6 +105,20 @@ const LoraDownloadItem: React.FC<{ job: LoraJobProgress, panelWidth: number }> =
     }
   }, [job.status, job.manifestId, job.jobId, clearJob, refreshManifestPart]);
 
+  useEffect(() => {
+    if (job.status === "failed") {
+      const manifestId = job.manifestId;
+      (async () => {
+        if (manifestId) {
+          try {
+            await refreshManifestPart(manifestId, "spec.loras");
+          } catch {}
+        }
+        clearJob(job.jobId);
+      })();
+    }
+  }, [job.status, job.manifestId, job.jobId, clearJob, refreshManifestPart]);
+
   const statusLabel =
     job.status === "complete"
       ? "Completed"
@@ -116,7 +130,7 @@ const LoraDownloadItem: React.FC<{ job: LoraJobProgress, panelWidth: number }> =
     <div className="w-fit bg-brand border border-brand-light/10 rounded-md px-3 py-2 flex flex-col gap-y-2" style={{ width: panelWidth - 36 }}>
       <div className="flex items-center justify-between gap-x-2 w-full">
         <div className="flex-1 min-w-0">
-          <div className="text-brand-light text-[11px] font-medium truncate break-all">
+          <div className="text-brand-light text-[11px] font-medium truncate break-all text-start">
             {label}
           </div>
         </div>
@@ -432,7 +446,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
   const { refreshManifestPart, getLoadedManifest } = useManifestStore();
   const [addingLoraJob, setAddingLoraJob] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"downloads" | "installed">(
-    "downloads",
+    "installed",
   );
   const sourceHelpShort = "Enter a CivitAI ID, URL, or local path.";
   if (!clip || !clip.manifest) return null;

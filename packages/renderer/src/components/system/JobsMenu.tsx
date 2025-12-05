@@ -12,12 +12,14 @@ import {
   subscribeToJobUpdates,
   subscribeToJobStatus,
   subscribeToJobErrors,
+  getEngineResult,
 } from "@/lib/engine/api";
 import { LuLoader, LuTrash2 } from "react-icons/lu";
 import { GrTasks } from "react-icons/gr";
 import { useClipStore } from "@/lib/clip";
-import { ModelClipProps } from "@/lib/types";
+import { ClipTransform, ModelClipProps, GenerationModelClipProps } from "@/lib/types";
 import { pathToFileURLString } from "@app/preload";
+import { BASE_LONG_SIDE } from "@/lib/settings";
 
 const POLL_MS = 2000;
 
@@ -42,7 +44,7 @@ const JobsMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [jobsById, setJobsById] = useState<Record<string, TrackedJob>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
-  const { updateClip, addAsset } = useClipStore();
+  const { updateClip, addAssetAsync } = useClipStore();
   const subscribedRef = React.useRef<Map<string, () => void>>(new Map());
 
   // Poll aggregated Ray jobs
@@ -109,6 +111,7 @@ const JobsMenu: React.FC = () => {
   // Sync jobs to clip store to ensure background updates
   useEffect(() => {
     const clips = useClipStore.getState().clips;
+    const getAssetById = useClipStore.getState().getAssetById;
     const activeJobs = Object.values(jobsById);
 
     // Manage WebSocket subscriptions for active engine jobs
@@ -129,6 +132,33 @@ const JobsMenu: React.FC = () => {
         .map((j) => j.job_id),
     );
 
+    // Helper: on-complete handler to eagerly fetch and attach engine result
+    const fetchAndStoreJobResult = async (jobId: string) => {
+      try {
+        const res = await getEngineResult(jobId);
+        console.log("res", res);
+        if (!res.success || !res.data) return;
+        const result = res.data;
+        setJobsById((prev) => {
+          const job = prev[jobId];
+          if (!job) return prev;
+          return {
+            ...prev,
+            [jobId]: {
+              ...job,
+              result,
+              latest: {
+                ...(job.latest || {}),
+                result,
+              },
+            } as any,
+          };
+        });
+      } catch {
+        // Swallow errors; polling will still eventually sync result if available
+      }
+    };
+
     // Connect to new jobs
     activeEngineJobIds.forEach((jobId) => {
       if (!subscribedRef.current.has(jobId)) {
@@ -137,6 +167,7 @@ const JobsMenu: React.FC = () => {
             await connectJobWebSocket(jobId);
             
             const unsubUpdate = subscribeToJobUpdates(jobId, (data) => {
+              const status = String(data?.status || "").toLowerCase();
               setJobsById((prev) => {
                 const job = prev[jobId];
                 if (!job) return prev;
@@ -163,6 +194,13 @@ const JobsMenu: React.FC = () => {
                   },
                 };
               });
+
+              // When the engine reports completion, eagerly fetch the final result so
+              // downstream clip updates (e.g. result_path handling in the jobs sync
+              // effect) can run immediately without waiting for polling.
+              if (status === "complete" || status === "completed") {
+                void fetchAndStoreJobResult(jobId);
+              }
             });
 
             const unsubStatus = subscribeToJobStatus(jobId, (data) => {
@@ -220,7 +258,7 @@ const JobsMenu: React.FC = () => {
       }
     }
 
-    activeJobs.forEach((job) => {
+    activeJobs.forEach(async (job) => {
       if (!job.job_id) return;
       
       // Find model clips tracking this job
@@ -243,20 +281,22 @@ const JobsMenu: React.FC = () => {
       else if (status === "error" || status === "failed") newStatus = "failed";
 
       const meta = job.latest?.metadata || {};
-      
-      
+
       let fileUrl: string | undefined;
       const previewPath = meta.preview_path;
+      
       if (previewPath) {
         fileUrl = pathToFileURLString(previewPath);
       }
 
       const patch: Partial<ModelClipProps> = {};
       let needsUpdate = false;
+      let needsOriginalTransformUpdate = false;
 
       // Update basic status
       if (newStatus && clip.modelStatus !== newStatus) {
         patch.modelStatus = newStatus;
+        if (newStatus === "running") needsOriginalTransformUpdate = true;
         needsUpdate = true;
       }
 
@@ -264,7 +304,7 @@ const JobsMenu: React.FC = () => {
       if (fileUrl && clip.previewPath !== fileUrl) {
         patch.previewPath = fileUrl;
         needsUpdate = true;
-        const asset = addAsset({ path:fileUrl }, "apex-cache");
+        const asset = await addAssetAsync({ path:fileUrl }, "apex-cache");
         patch.assetId = asset.id;
         patch.trimEnd = 0;
         patch.trimStart = 0;
@@ -272,51 +312,109 @@ const JobsMenu: React.FC = () => {
 
       // Update generations
       const gens = clip.generations || [];
+      let gen: GenerationModelClipProps | null = null;
+      let newGen: GenerationModelClipProps | null = null;
       const genIndex = gens.findIndex((g) => g.jobId === job.job_id);
+      let genUpdate = false;
 
       if (genIndex >= 0) {
-        const gen = gens[genIndex];
-        let genUpdate = false;
-        const newGen = { ...gen };
+        gen = gens[genIndex];
+        genUpdate = false;
+        newGen = { ...gen };
+      }
 
-        if (newStatus && gen.modelStatus !== newStatus) {
+        if (newStatus && gen && gen.modelStatus !== newStatus && newGen) {
           newGen.modelStatus = newStatus;
           genUpdate = true;
         }
 
-        // On complete, handle result
-        console.log("newStatus", newStatus);
-        if (newStatus === "complete") {
+        if (newStatus === "complete" && job.result?.result_path && newGen) {
           const resultPath = (job.result as any)?.result_path;
-          console.log("resultPath", resultPath);
-          if (resultPath && gen.src !== resultPath) {
             const resultUrl = pathToFileURLString(resultPath);
-            const asset = addAsset({ path: resultUrl }, "apex-cache");
-            newGen.src = resultPath;
+            // try get asset by id first
+            const asset = await addAssetAsync({ path: resultUrl }, "apex-cache");
             newGen.assetId = asset.id;
+            newGen.src = resultUrl;
             newGen.modelStatus = "complete";
-            
-            // Also update the clip's main assetId if this was the active job
             patch.assetId = asset.id;
             patch.activeJobId = undefined; // Clear active job on completion
             needsUpdate = true;
             genUpdate = true;
-          }
-        } 
-        
-        if (genUpdate) {
-          const newGens = [...gens];
-          newGens[genIndex] = newGen;
-          patch.generations = newGens;
-          needsUpdate = true;
+          
+        }
+
+
+      // Ensure newly completed clips have a sane transform/originalTransform so that
+      // downstream previews/layout tools don't see undefined transforms.
+
+      if (patch.assetId) {
+        const hasTransform = !!clip.transform;
+        const hasOriginalTransform = !!clip.originalTransform;
+        const asset = getAssetById(patch.assetId);
+
+        if (!hasTransform || !hasOriginalTransform || !gen?.transform) {
+          
+          let nativeW =
+            (asset && typeof asset.width === "number" ? asset.width : 0) ||
+            // @ts-ignore - mediaWidth may exist on model clips when set by DynamicModelPreview
+            (clip as any).mediaWidth ||
+            BASE_LONG_SIDE;
+          let nativeH =
+            (asset && typeof asset.height === "number" ? asset.height : 0) ||
+            // @ts-ignore - mediaHeight may exist on model clips when set by DynamicModelPreview
+            (clip as any).mediaHeight ||
+            BASE_LONG_SIDE;
+
+          if (!Number.isFinite(nativeW) || nativeW <= 0) nativeW = BASE_LONG_SIDE;
+          if (!Number.isFinite(nativeH) || nativeH <= 0) nativeH = BASE_LONG_SIDE;
+
+          const ratio =
+            nativeH > 0 && Number.isFinite(nativeW / nativeH)
+              ? nativeW / nativeH
+              : 1;
+
+          // Mirror the preview rect logic: keep the short side at BASE_LONG_SIDE and
+          // scale the long side by the aspect ratio.
+          const width = BASE_LONG_SIDE * ratio;
+          const height = BASE_LONG_SIDE;
+
+          const baseTransform: ClipTransform = {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            scaleX: 1,
+            scaleY: 1,
+            rotation: 0,
+            cornerRadius: 0,
+            opacity: 100,
+            crop: { x: 0, y: 0, width: 1, height: 1 },
+          };
+            (patch as any).transform = baseTransform;
+            (patch as any).originalTransform = { ...baseTransform };
+            patch.mediaWidth = nativeW;
+            patch.mediaHeight = nativeH;
+            patch.mediaAspectRatio = nativeW / nativeH;
+            if (newGen) newGen.transform = baseTransform;
+            genUpdate = true;
+            needsUpdate = true;
+            needsOriginalTransformUpdate = false;
         }
       }
 
-      if (needsUpdate) {
+      if (genUpdate && newGen) {
+        const newGens = [...gens];
+        newGens[genIndex] = newGen;
+        patch.generations = newGens;
+        needsUpdate = true;
+      }
+
+      if (needsUpdate || genUpdate) {
+        console.log("patch", patch);
         updateClip(clip.clipId, patch);
       }
     });
-  }, [jobsById, updateClip, addAsset]);
+  }, [jobsById, updateClip, addAssetAsync]);
 
   // When a component card cancels a download, it dispatches a `jobs-menu-reload`
   // event with the associated jobId. Mark that job as canceled locally so it

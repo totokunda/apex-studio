@@ -465,6 +465,37 @@ const ImagePreview: React.FC<
     overrideClip,
   ]);
 
+  // Hard guarantee: clip transform width/height are never zero or negative.
+  // If we ever see an invalid size, immediately normalize it to a sane value.
+  useEffect(() => {
+    if (!clipTransform) return;
+    // Do not mutate store transforms when rendering an override-only clip.
+    if (overrideClip) return;
+
+    const currentWidth = clipTransform.width ?? 0;
+    const currentHeight = clipTransform.height ?? 0;
+
+    if (currentWidth > 0 && currentHeight > 0) return;
+
+    const fallbackWidth =
+      (displayWidth && displayWidth > 0 ? displayWidth : currentWidth) || 1;
+    const fallbackHeight =
+      (displayHeight && displayHeight > 0 ? displayHeight : currentHeight) || 1;
+
+    setClipTransform(clipId, {
+      ...clipTransform,
+      width: Math.max(fallbackWidth, 1),
+      height: Math.max(fallbackHeight, 1),
+    });
+  }, [
+    clipTransform,
+    displayWidth,
+    displayHeight,
+    clipId,
+    setClipTransform,
+    overrideClip,
+  ]);
+
   // Ensure canvas matches display size for crisp rendering
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -893,8 +924,16 @@ const ImagePreview: React.FC<
           image={canvasRef.current || undefined}
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}
-          width={clipTransform?.width ?? displayWidth}
-          height={clipTransform?.height ?? displayHeight}
+          width={
+            clipTransform?.width && clipTransform.width > 0
+              ? clipTransform.width
+              : displayWidth || 1
+          }
+          height={
+            clipTransform?.height && clipTransform.height > 0
+              ? clipTransform.height
+              : displayHeight || 1
+          }
           scaleX={clipTransform?.scaleX ?? 1}
           scaleY={clipTransform?.scaleY ?? 1}
           rotation={clipTransform?.rotation ?? 0}

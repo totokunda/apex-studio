@@ -288,6 +288,7 @@ async function handleConfigure(cfg: {
 }
 
 async function handleSeek(timestamp: number, forceAccurate: boolean, requestId: number) {
+  console.log("handleSeek", timestamp, forceAccurate, requestId, decoder, sink, "line 291");
 
   if (!decoder || !sink) return;
 
@@ -317,6 +318,7 @@ async function handleSeek(timestamp: number, forceAccurate: boolean, requestId: 
 
   // 1. Cache Hit
   const cached = findCachedFrame(timestamp);
+  console.log("handleSeek", timestamp, cached, "line 320");
   if (cached) {
     postFrame(cached, requestId);
     // @ts-ignore
@@ -329,19 +331,23 @@ async function handleSeek(timestamp: number, forceAccurate: boolean, requestId: 
   showingPreview = false;
 
   const currentPacket = await sink.getKeyPacket(timestamp, { verifyKeyPackets: false });
+  console.log("handleSeek", timestamp, currentPacket, "line 333");
   if (!currentPacket) return;
 
   if (!keyPacketCache.has(currentPacket.timestamp)) {
     keyPacketCache.set(currentPacket.timestamp, currentPacket);
   }
-
+  console.log("handleSeek", timestamp, currentPacket, currentRequestId, requestId, "line 339");
   if (currentRequestId !== requestId) return;
 
   if ((decoder.state as string) === "closed") return;
+  console.log("handleSeek", timestamp, decoder.state, "line 343");
   decoder.reset();
+  console.log("handleSeek", timestamp, config);
   if (config) decoder.configure(config);
+  console.log("handleSeek", timestamp, decoder.state, "line 347");
 
-  
+  console.log("handleSeek", timestamp, decoder.state, "line 349");
   decoder.decode(currentPacket.toEncodedVideoChunk());
 
 
@@ -353,12 +359,17 @@ async function handleSeek(timestamp: number, forceAccurate: boolean, requestId: 
   }
 
   const packets = sink.packets(currentPacket);
-
+  console.log("handleSeek", timestamp, packets);
   for await (const packet of packets) {
     if ((decoder.state as string) === "closed") break;
+    console.log("handleSeek", timestamp, packet);
+    console.log("handleSeek", timestamp, packet.timestamp);
       decoder.decode(packet.toEncodedVideoChunk());
+    console.log("handleSeek", timestamp, decoder.state, "line 367");
     if (seekDone) break;
+    console.log("handleSeek", timestamp, seekDone);
     if (currentRequestId !== requestId) break;
+    console.log("handleSeek", timestamp, currentRequestId, requestId, "line 371");
     if (packet.timestamp > timestamp + 0.1) break;
   }
 
