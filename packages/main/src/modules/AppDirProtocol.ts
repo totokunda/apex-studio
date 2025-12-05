@@ -89,6 +89,11 @@ class AppDirProtocol implements AppModule {
         return new Response(null, { status: 204, headers: baseCors });
       }
       const u = new URL(request.url);
+      const rawFolderUuid = u.searchParams.get("folderUuid");
+      const folderUuid =
+        typeof rawFolderUuid === "string" && rawFolderUuid.length > 0
+          ? rawFolderUuid
+          : undefined;
 
       let basePath: string | null = null;
       if (u.hostname === "user-data") {
@@ -119,8 +124,9 @@ class AppDirProtocol implements AppModule {
               return new Response(null, { status: 404, headers: baseCors });
             }
           }
-          // Best-effort: also expose downloads under apex-cache/<folder-uuid>/... via symlinks
-          await this.ensureProjectSymlinkForCache(rel, localPath);
+          // Best-effort: also expose downloads under per-project engine_results
+          // views so that both global and project-specific paths are valid.
+          await this.ensureProjectSymlinkForCache(rel, localPath, folderUuid);
         } catch {
           const ok = await this.ensureLocalFromRemote(rel, localPath).catch(
             () => false,
@@ -129,7 +135,11 @@ class AppDirProtocol implements AppModule {
             return new Response(null, { status: 404, headers: baseCors });
           }
           // Even if we had to refetch, try to set up the project-level symlink view
-          await this.ensureProjectSymlinkForCache(rel, localPath).catch(() => {
+          await this.ensureProjectSymlinkForCache(
+            rel,
+            localPath,
+            folderUuid,
+          ).catch(() => {
             /* ignore */
           });
         }
@@ -144,6 +154,26 @@ class AppDirProtocol implements AppModule {
             ? decodedPathname.slice(1)
             : decodedPathname;
           filePath = rel.startsWith(basePath) ? rel : path.join(basePath, rel);
+        }
+
+        // Local backend: when serving from apex-cache, also create per-project
+        // engine_results symlinks so both global and folderUuid-scoped paths work.
+        if (u.hostname === "apex-cache") {
+          const cacheBase = this.cachePath;
+          if (cacheBase && filePath.startsWith(cacheBase)) {
+            try {
+              const relFromCache = path
+                .relative(cacheBase, filePath)
+                .replace(/\\/g, "/");
+              await this.ensureProjectSymlinkForCache(
+                relFromCache,
+                filePath,
+                folderUuid,
+              );
+            } catch {
+              // Best-effort only; ignore failures
+            }
+          }
         }
       }
       // Check if file exists and is readable
@@ -469,22 +499,31 @@ class AppDirProtocol implements AppModule {
   private async ensureProjectSymlinkForCache(
     relPath: string,
     localPath: string,
+    folderUuid?: string,
   ): Promise<void> {
     try {
       if (!this.cachePath) return;
+      if (!folderUuid) return;
 
       const normalizedRel = relPath.replace(/\\/g, "/");
       const enginePrefix = "engine_results/";
       if (!normalizedRel.startsWith(enginePrefix)) return;
 
-      // Strip the leading "engine_results/" so we get "<folder-uuid>/..."
+      // Strip the leading "engine_results/" so we get "<job-id>/..."
       const afterEngine = normalizedRel.slice(enginePrefix.length);
       if (!afterEngine || afterEngine.startsWith("/")) return;
 
-      const segments = afterEngine.split("/").filter(Boolean);
-      if (segments.length === 0) return;
+      // If the path is already scoped under this folderUuid, nothing to do
+      if (afterEngine.startsWith(`${folderUuid}/`)) return;
 
-      const symlinkPath = path.join(this.cachePath, ...segments);
+      // We want:
+      //   cachePath/engine_results/<folderUuid>/<job-id>/result_*.*
+      const symlinkPath = path.join(
+        this.cachePath,
+        enginePrefix,
+        folderUuid,
+        afterEngine,
+      );
 
       // Ensure parent directory exists
       await fs.promises.mkdir(path.dirname(symlinkPath), { recursive: true });

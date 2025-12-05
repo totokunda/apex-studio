@@ -61,8 +61,8 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const getClipPositionScore = useClipStore((s) => s.getClipPositionScore);
   const getClipsByType = useClipStore((s) => s.getClipsByType);
   const timelines = useClipStore((s) => s.timelines);
-
-  const clip = useClipStore((s) => s.getClipById(clipId))
+  const getClipById = useClipStore((s) => s.getClipById);
+  const clip = getClipById(clipId);
 
   const preprocessor = selectedPreprocessorId ? getPreprocessorById(selectedPreprocessorId) : null
   const clipType = clip?.type;

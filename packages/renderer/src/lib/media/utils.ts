@@ -25,6 +25,7 @@ import {
 } from "@app/preload";
 import { useControlsStore } from "../control";
 import { useClipStore } from "../clip";
+import { useProjectsStore } from "../projects";
 
 export function nowMs(): number {
   return typeof performance !== "undefined" && performance.now
@@ -119,6 +120,9 @@ export const getMediaInfo = async (
     }
   }
 
+  const folderUuid =
+    useProjectsStore.getState().getActiveProject()?.folderUuid || undefined;
+
   const pathUrl = new URL(path);
   const startFrame = pathUrl.searchParams.get("startFrame")
     ? Number(pathUrl.searchParams.get("startFrame"))
@@ -180,6 +184,9 @@ export const getMediaInfo = async (
     try {
       fsPathForImage = fileURLToPath(hasHashSuffix ? originalPath : path);
       const url = new URL(`app://${primarySourceDir}/${fsPathForImage}`);
+      if (folderUuid && primarySourceDir === "apex-cache") {
+        url.searchParams.set("folderUuid", folderUuid);
+      }
       imageReadUrl = url.toString();
     } catch {}
 
@@ -188,11 +195,14 @@ export const getMediaInfo = async (
     try {
       metadata = await readImageMetadataFast(imageReadUrl);
     } catch (e) {
-      // If reading via primary sourceDir fails (e.g., 404), try apex-cache as backup
+      // If reading via primary sourceDir fails (e.g., 404), try other sourceDir as backup
       if (fsPathForImage) {
         const fallbackUrl = new URL(
           `app://${secondarySourceDir}/${fsPathForImage}`,
         );
+        if (folderUuid && secondarySourceDir === "apex-cache") {
+          fallbackUrl.searchParams.set("folderUuid", folderUuid);
+        }
         metadata = await readImageMetadataFast(fallbackUrl.toString());
       } else {
         throw e;
@@ -243,15 +253,20 @@ export const getMediaInfo = async (
   try {
     filePath = fileURLToPath(hasHashSuffix ? originalPath : path);
     const url = new URL(`app://${primarySourceDir}/${filePath}`);
+    if (folderUuid && primarySourceDir === "apex-cache") {
+      url.searchParams.set("folderUuid", folderUuid);
+    }
     input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
   } catch (e) {
     try {
       const url = new URL(`app://${secondarySourceDir}/${filePath}`);
+      if (folderUuid && secondarySourceDir === "apex-cache") {
+        url.searchParams.set("folderUuid", folderUuid);
+      }
       input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
     } catch (e) {
       input = null;
     }
-   
   }
 
   // If UrlSource creation failed for some reason, or if later reads fail, we'll fallback below
@@ -295,10 +310,13 @@ export const getMediaInfo = async (
     if (!input) throw new Error("UrlSource init failed");
     infoBundle = await gatherInfo(input, quickLoad);
   } catch (e) {
-    // Try secondary sourceDir via UrlSource
+      // Try secondary sourceDir via UrlSource
     try {
       if (!filePath) throw new Error("Missing filePath");
       const fallbackUrl = new URL(`app://${secondarySourceDir}/${filePath}`);
+      if (folderUuid && secondarySourceDir === "apex-cache") {
+        fallbackUrl.searchParams.set("folderUuid", folderUuid);
+      }
       const input2 = new Input({
         formats: ALL_FORMATS,
         source: new UrlSource(fallbackUrl),
@@ -310,24 +328,30 @@ export const getMediaInfo = async (
       try {
         if (!filePath) throw new Error("Missing filePath");
         // Try primary app protocol first
-        const primaryUrlStr = new URL(
+        const primaryUrl = new URL(
           `app://${primarySourceDir}/${filePath}`,
-        ).toString();
-        const bufferPrimary = await readFileBuffer(primaryUrlStr);
+        );
+        if (folderUuid && primarySourceDir === "apex-cache") {
+          primaryUrl.searchParams.set("folderUuid", folderUuid);
+        }
+        const bufferPrimary = await readFileBuffer(primaryUrl.toString());
         const blobP = new Blob([bufferPrimary as unknown as ArrayBuffer]);
         const blobInputP = new Input({
           formats: ALL_FORMATS,
           source: new BlobSource(blobP),
         });
         infoBundle = await gatherInfo(blobInputP, quickLoad);
-      } catch (e3) {
+        } catch (e3) {
         try {
           if (!filePath) throw new Error("Missing filePath");
           // Try secondary app protocol next
-          const secondaryUrlStr = new URL(
+          const secondaryUrl = new URL(
             `app://${secondarySourceDir}/${filePath}`,
-          ).toString();
-          const bufferSecondary = await readFileBuffer(secondaryUrlStr);
+          );
+          if (folderUuid && secondarySourceDir === "apex-cache") {
+            secondaryUrl.searchParams.set("folderUuid", folderUuid);
+          }
+          const bufferSecondary = await readFileBuffer(secondaryUrl.toString());
           const blobS = new Blob([bufferSecondary as unknown as ArrayBuffer]);
           const blobInputS = new Input({
             formats: ALL_FORMATS,

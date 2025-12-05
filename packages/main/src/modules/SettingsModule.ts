@@ -14,7 +14,8 @@ type PathKey =
   | "configPath"
   | "loraPath"
   | "preprocessorPath"
-  | "postprocessorPath";
+  | "postprocessorPath"
+  | "maskModel";
 
 interface Settings {
   activeProjectId?: string | number | null;
@@ -26,6 +27,7 @@ interface Settings {
   postprocessorPath?: string | null;
   hfToken?: string | null;
   civitaiApiKey?: string | null;
+  maskModel?: string | null;
 }
 
 interface ConfigResponse<T> {
@@ -42,6 +44,7 @@ type PathsPayload = Pick<
   | "loraPath"
   | "preprocessorPath"
   | "postprocessorPath"
+  | "maskModel"
 >;
 
 // Singleton instance
@@ -211,6 +214,13 @@ export class SettingsModule extends EventEmitter implements AppModule {
           responseField: "postprocessor_path",
           requestField: "postprocessor_path",
         };
+      case "maskModel":
+        return {
+          getEndpoint: "/config/mask-model",
+          setEndpoint: "/config/mask-model",
+          responseField: "mask_model",
+          requestField: "mask_model",
+        };
       default:
         return null;
     }
@@ -263,6 +273,7 @@ export class SettingsModule extends EventEmitter implements AppModule {
       "loraPath",
       "preprocessorPath",
       "postprocessorPath",
+      "maskModel",
     ];
     const result: PathsPayload = {};
 
@@ -330,6 +341,12 @@ export class SettingsModule extends EventEmitter implements AppModule {
       return await this.fetchPathFromApi("postprocessorPath");
     });
 
+    ipcMain.handle("settings:get-mask-model", async () => {
+      const current = this.store.get("maskModel") as string | null;
+      if (current) return current;
+      return await this.fetchPathFromApi("maskModel");
+    });
+
     // Individual path setters (persist + update backend)
     ipcMain.handle(
       "settings:set-cache-path",
@@ -373,6 +390,13 @@ export class SettingsModule extends EventEmitter implements AppModule {
       },
     );
 
+    ipcMain.handle(
+      "settings:set-mask-model",
+      async (_event, maskModel: string | null) => {
+        await this.setPathAndUpdateApi("maskModel", maskModel);
+      },
+    );
+
     // Bulk getters/setters for all paths
     ipcMain.handle("settings:get-all-paths", async () => {
       return await this.getAllPathsEnsuringFromApi();
@@ -394,6 +418,7 @@ export class SettingsModule extends EventEmitter implements AppModule {
           "loraPath",
           "preprocessorPath",
           "postprocessorPath",
+          "maskModel",
         ];
 
         for (const key of keys) {

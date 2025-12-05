@@ -6,6 +6,8 @@ import {
   setHfTokenSetting,
   getCivitaiApiKeySetting,
   setCivitaiApiKeySetting,
+  getMaskModelSetting,
+  setMaskModelSetting,
 } from "@app/preload";
 import { getBackendApiUrl, setBackendApiUrl } from "@/lib/config";
 
@@ -30,6 +32,9 @@ export type SettingsState = {
   // Backend URL
   backendUrl: string | null;
 
+  // Mask model
+  maskModel: string | null;
+
   // Actions
   hydrate: () => Promise<void>;
   setCachePath: (value: string | null) => Promise<void>;
@@ -41,6 +46,7 @@ export type SettingsState = {
   setHfToken: (value: string | null) => Promise<void>;
   setCivitaiApiKey: (value: string | null) => Promise<void>;
   setBackendUrl: (value: string | null) => Promise<void>;
+  setMaskModel: (value: string | null) => Promise<void>;
 };
 
 export const withSettingsPersistence =
@@ -55,11 +61,12 @@ export const withSettingsPersistence =
       if (state.initializing || state.initialized) return;
       set({ initializing: true, error: null } as Partial<T>);
       try {
-        const [paths, hfToken, backendRes, civitaiApiKey] = await Promise.all([
+        const [paths, hfToken, backendRes, civitaiApiKey, maskModel] = await Promise.all([
           getAllPathsSetting().catch(() => ({} as any)),
           getHfTokenSetting().catch(() => null),
           getBackendApiUrl().catch(() => null),
           getCivitaiApiKeySetting().catch(() => null),
+          getMaskModelSetting().catch(() => null),
         ]);
 
         const backendUrl =
@@ -77,6 +84,7 @@ export const withSettingsPersistence =
           hfToken: hfToken ?? null,
           civitaiApiKey: civitaiApiKey ?? null,
           backendUrl,
+          maskModel: maskModel ?? null,
           initialized: true,
           initializing: false,
           error: null,
@@ -151,6 +159,12 @@ export const withSettingsPersistence =
         if (url) {
           void setBackendApiUrl(url).catch(() => undefined);
         }
+      },
+      setMaskModel: async (value: string | null) => {
+        set({ maskModel: value ?? null } as Partial<T>);
+        void setMaskModelSetting(value ?? null).catch(
+          () => undefined,
+        );
       },
     } as T;
 

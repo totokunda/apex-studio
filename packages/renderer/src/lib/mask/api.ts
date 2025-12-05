@@ -13,7 +13,6 @@ import {
 import { toast } from "sonner";
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { ClipTransform, MediaInfo } from "../types";
-import { getCropOffset } from "@/components/preview/mask/touch";
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -31,7 +30,6 @@ export interface MaskRequest {
   box?: { x1: number; y1: number; x2: number; y2: number };
   multimask_output?: boolean;
   simplify_tolerance?: number;
-  model_type?: string;
 }
 
 export interface MaskResponse {
@@ -600,7 +598,6 @@ export interface UseMaskOptions {
   clipTransform?: ClipTransform;
   multimaskOutput?: boolean;
   simplifyTolerance?: number;
-  modelType?: string;
   enabled?: boolean;
   debounceMs?: number;
 }
@@ -627,7 +624,6 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
     clipTransform,
     multimaskOutput = true,
     simplifyTolerance = 1.0,
-    modelType = "sam2_base_plus",
     enabled = true,
     debounceMs = 250,
   } = options;
@@ -729,7 +725,6 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
         box: normalizedBox,
         multimask_output: multimaskOutput,
         simplify_tolerance: simplifyTolerance,
-        model_type: modelType,
       };
 
       cacheKey = createMaskCacheKey(request);
@@ -811,7 +806,6 @@ export function useMask(options: UseMaskOptions): UseMaskResult {
     clipTransform,
     multimaskOutput,
     simplifyTolerance,
-    modelType,
   ]);
 
   useEffect(() => {

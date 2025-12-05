@@ -273,7 +273,6 @@ export class ApexApi implements AppModule {
           box?: { x1: number; y1: number; x2: number; y2: number };
           multimask_output?: boolean;
           simplify_tolerance?: number;
-          model_type?: string;
         },
       ) => {
         const payload = await this.#prepareMaskRequest(request);
@@ -296,7 +295,6 @@ export class ApexApi implements AppModule {
           anchor_frame?: number;
           frame_end: number;
           direction?: "forward" | "backward" | "both";
-          model_type?: string;
         },
       ) => {
         const streamId = crypto.randomUUID();
@@ -428,7 +426,6 @@ export class ApexApi implements AppModule {
           anchor_frame?: number;
           frame_end: number;
           direction?: "forward" | "backward" | "both";
-          model_type?: string;
         },
       ) => {
         const streamId = crypto.randomUUID();

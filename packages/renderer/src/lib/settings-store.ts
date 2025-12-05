@@ -9,7 +9,7 @@ export const useSettingsStore = create<SettingsState>(
     initialized: false,
     initializing: false,
     error: null,
-
+    maskModel: null,
     cachePath: null,
     componentsPath: null,
     configPath: null,
@@ -26,6 +26,7 @@ export const useSettingsStore = create<SettingsState>(
     setComponentsPath: async () => {},
     setConfigPath: async () => {},
     setLoraPath: async () => {},
+    setMaskModel: async () => {},
     setPreprocessorPath: async () => {},
     setPostprocessorPath: async () => {},
     setHfToken: async () => {},

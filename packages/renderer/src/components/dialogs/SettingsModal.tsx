@@ -48,6 +48,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     hfToken: hfTokenGlobal,
     civitaiApiKey: civitaiApiKeyGlobal,
     backendUrl: backendUrlGlobal,
+    maskModel: maskModelGlobal,
+    setMaskModel: setMaskModelGlobal,
     setCachePath: setCachePathGlobal,
     setComponentsPath: setComponentsPathGlobal,
     setConfigPath: setConfigPathGlobal,
@@ -89,6 +91,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [loraSizeLabel, setLoraSizeLabel] = useState<string | null>(null);
   const [preSizeLabel, setPreSizeLabel] = useState<string | null>(null);
   const [postSizeLabel, setPostSizeLabel] = useState<string | null>(null);
+  const [maskModel, setMaskModel] = useState<string>("sam2_base_plus");
+
 
   useEffect(() => {
     if (!initialized && !initializing) {
@@ -108,6 +112,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setHfToken(hfTokenGlobal ?? "");
     setCivitaiApiKey(civitaiApiKeyGlobal ?? "");
     setBackendUrlLocal(backendUrlGlobal ?? "");
+    setMaskModel(maskModelGlobal ?? "sam2_base_plus");
   }, [
     open,
     cachePathGlobal,
@@ -119,6 +124,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     hfTokenGlobal,
     civitaiApiKeyGlobal,
     backendUrlGlobal,
+    maskModelGlobal,
   ]);
 
   const formatBytes = (bytes: number | null | undefined): string | null => {
@@ -218,7 +224,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </TabsTrigger>
             <TabsTrigger
               className="data-[state=active]:bg-brand-light/10 data-[state=active]:text-brand-light text-[11px] rounded-[6px] px-2 py-1 w-full!"
-              value="url"
+              value="config"
             >
             API Config
             </TabsTrigger>
@@ -379,7 +385,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
           </TabsContent>
-          <TabsContent value="url">
+          <TabsContent value="config">
             <div className="flex flex-col gap-4 font-poppins text-brand-light h-full">
               <div className="flex flex-col gap-1">
                 <label className={fieldLabelClass}>
@@ -394,6 +400,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   placeholder="http://127.0.0.1:8765"
                   className="h-7.5 text-[11.5px]! rounded-[6px]"
                 />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className={fieldLabelClass}>
+                  <span>Mask Model</span>
+                  <span className="text-[10px] text-brand-light/60 font-normal">
+                    The model to use for mask generation.
+                  </span>
+                </label>
+                <Select
+                  value={maskModel}
+                  onValueChange={(value) => {
+                    setMaskModel(value);
+                  }}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="w-full h-7.5! text-[11px] bg-brand-background/70 rounded-[6px]"
+                  >
+                    <SelectValue placeholder="Select mask model" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                    <SelectItem value="sam2_tiny" className="text-[11px] font-medium">
+                      Sam2 Tiny  
+                    </SelectItem>
+                    <SelectItem value="sam2_small" className="text-[11px] font-medium">
+                      Sam2 Small
+                    </SelectItem>
+                    <SelectItem value="sam2_base_plus" className="text-[11px] font-medium">
+                      Sam2 Base Plus
+                    </SelectItem>
+                    <SelectItem value="sam2_large" className="text-[11px] font-medium">
+                      Sam2 Large
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </TabsContent>
@@ -654,6 +695,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               void setHfTokenGlobal(hfToken || null);
               void setCivitaiApiKeyGlobal(civitaiApiKey || null);
               void setBackendUrlGlobal(backendUrl || null);
+              void setMaskModelGlobal(maskModel || null);
               onOpenChange(false);
             }}
           >

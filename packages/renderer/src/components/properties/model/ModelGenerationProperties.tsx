@@ -101,67 +101,15 @@ export const ModelGenerationProperties: React.FC<
         // When switching to a generation: derive width/height from the asset's
         // intrinsic dimensions only, and clamp the long side to BASE_LONG_SIDE
         // while preserving aspect ratio (asset is the single source of truth).
-        const baseTransform = (gen.transform ?? clip?.transform) || undefined;
+        
+        if (gen.transform) {
+          updates.transform = {...gen.transform};
+        } 
+        // update the gen.transform to the current clip.transform
+        const generations = [...(clip?.generations || [])];        
 
-        if (baseTransform && asset) {
-          let assetW = asset.width;
-          let assetH = asset.height;
-
-          // If asset dimensions are missing, fall back to media info for this asset path.
-          if (
-            !assetW ||
-            !assetH ||
-            !Number.isFinite(assetW) ||
-            !Number.isFinite(assetH) ||
-            assetW <= 0 ||
-            assetH <= 0
-          ) {
-            try {
-              const mi = await getMediaInfo(fileUrl, {
-                sourceDir: "apex-cache",
-              });
-              const vw = mi?.video?.displayWidth;
-              const vh = mi?.video?.displayHeight;
-              const iw = mi?.image?.width;
-              const ih = mi?.image?.height;
-              assetW = (vw || iw || 0) as number;
-              assetH = (vh || ih || 0) as number;
-            } catch {
-              // If media info fails, leave assetW/assetH as-is (may be 0)
-            }
-          }
-
-          let width = baseTransform.width;
-          let height = baseTransform.height;
-
-          if (
-            assetW &&
-            assetH &&
-            Number.isFinite(assetW) &&
-            Number.isFinite(assetH) &&
-            assetW > 0 &&
-            assetH > 0
-          ) {
-            const ratio = assetW / assetH;
-            if (Number.isFinite(ratio) && ratio > 0) {
-              // Mirror the export/preview logic: keep the long side within BASE_LONG_SIDE
-            
-                // Portrait: height is long side
-                width = BASE_LONG_SIDE * ratio;
-                height = BASE_LONG_SIDE;
-              
-            }
-          }
-
-          updates.transform = {
-            ...baseTransform,
-            width,
-            height,
-          };
-        } else {
-          updates.transform = undefined;
-        }
-
+        generations[index].transform = clip?.transform;
+        updates.generations = generations;
         if (gen.selectedComponents) {
           updates.selectedComponents = gen.selectedComponents;
         }

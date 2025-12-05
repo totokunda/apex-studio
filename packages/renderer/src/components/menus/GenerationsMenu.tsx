@@ -6,7 +6,7 @@ import React, {
   useState,
 } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { LuFolder, LuArrowUpDown } from "react-icons/lu";
+import { LuFolder, LuArrowUpDown, LuRefreshCw } from "react-icons/lu";
 import { cn } from "@/lib/utils";
 import { MediaItem, MediaThumb } from "@/components/media/Item";
 import { getMediaInfo } from "@/lib/media/utils";
@@ -149,21 +149,6 @@ const GenerationsMenu: React.FC = () => {
   const updateClip = useClipStore((s) => s.updateClip);
   const addAsset = useClipStore((s) => s.addAsset);
 
-  // Track panel height to size the ScrollArea dynamically
-  useEffect(() => {
-    const el = panelRef.current;
-    if (!el) return;
-    const update = () => setPanelHeight(el.clientHeight);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    window.addEventListener("resize", update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, []);
-
   const loadGenerations = useCallback(async () => {
     try {
       setLoading(true);
@@ -191,6 +176,49 @@ const GenerationsMenu: React.FC = () => {
       setLoading(false);
     }
   }, [activeProject?.folderUuid]);
+
+  // Track panel height to size the ScrollArea dynamically
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const update = () => setPanelHeight(el.clientHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
+  // Refresh generations whenever an engine job completes
+  useEffect(() => {
+    const handler = async () => {
+      // Always reload from disk so we pick up any newly written engine_results
+      await loadGenerations();
+    };
+
+    try {
+      window.addEventListener(
+        "generations-menu-reload",
+        handler as EventListener,
+      );
+    } catch {
+      // In non-browser environments this may fail; ignore.
+    }
+
+    return () => {
+      try {
+        window.removeEventListener(
+          "generations-menu-reload",
+          handler as EventListener,
+        );
+      } catch {
+        // ignore
+      }
+    };
+  }, [loadGenerations]);
 
   useEffect(() => {
     // Only hit disk the first time (or after explicit refresh via delete),
@@ -400,6 +428,28 @@ const GenerationsMenu: React.FC = () => {
               </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <button
+            className={cn(
+              "px-2.5 py-1.5 rounded-md text-brand-light/90 text-[12px] flex bg-brand flex-row items-center gap-x-2 transition-colors",
+              "hover:bg-brand-light/10",
+              loading && "opacity-60 cursor-not-allowed",
+            )}
+            title="Refresh"
+            onClick={() => {
+              if (!loading) {
+                void loadGenerations();
+              }
+            }}
+            disabled={loading}
+          >
+            <LuRefreshCw
+              className={cn(
+                "w-[16px] h-[16px]",
+                loading && "animate-spin",
+              )}
+            />
+            <span>Refresh</span>
+          </button>
         </div>
       </div>
       <div className="overflow-y-auto relative">

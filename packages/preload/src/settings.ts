@@ -99,6 +99,14 @@ function setCivitaiApiKeySetting(
   return ipcRenderer.invoke("settings:set-civitai-api-key", token);
 }
 
+function getMaskModelSetting(): Promise<string | null> {
+  return ipcRenderer.invoke("settings:get-mask-model");
+}
+
+function setMaskModelSetting(model: string | null): Promise<void> {
+  return ipcRenderer.invoke("settings:set-mask-model", model);
+}
+
 export {
   getActiveProjectId,
   setActiveProjectId,
@@ -120,4 +128,6 @@ export {
   setHfTokenSetting,
   getCivitaiApiKeySetting,
   setCivitaiApiKeySetting,
+  getMaskModelSetting,
+  setMaskModelSetting,
 };

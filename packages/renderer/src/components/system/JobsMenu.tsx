@@ -46,6 +46,7 @@ const JobsMenu: React.FC = () => {
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const { updateClip, addAssetAsync } = useClipStore();
   const subscribedRef = React.useRef<Map<string, () => void>>(new Map());
+  const completedJobIdsRef = React.useRef<Set<string>>(new Set());
 
   // Poll aggregated Ray jobs
   useEffect(() => {
@@ -260,7 +261,9 @@ const JobsMenu: React.FC = () => {
 
     activeJobs.forEach(async (job) => {
       if (!job.job_id) return;
-      
+
+
+
       // Find model clips tracking this job
       const clip = clips.find(
         (c) =>
@@ -291,12 +294,10 @@ const JobsMenu: React.FC = () => {
 
       const patch: Partial<ModelClipProps> = {};
       let needsUpdate = false;
-      let needsOriginalTransformUpdate = false;
-
+  
       // Update basic status
       if (newStatus && clip.modelStatus !== newStatus) {
         patch.modelStatus = newStatus;
-        if (newStatus === "running") needsOriginalTransformUpdate = true;
         needsUpdate = true;
       }
 
@@ -340,7 +341,7 @@ const JobsMenu: React.FC = () => {
             patch.activeJobId = undefined; // Clear active job on completion
             needsUpdate = true;
             genUpdate = true;
-          
+            window.dispatchEvent(new CustomEvent("generations-menu-reload", { detail: { jobId: job.job_id } }));
         }
 
 
@@ -398,7 +399,6 @@ const JobsMenu: React.FC = () => {
             if (newGen) newGen.transform = baseTransform;
             genUpdate = true;
             needsUpdate = true;
-            needsOriginalTransformUpdate = false;
         }
       }
 
@@ -410,7 +410,6 @@ const JobsMenu: React.FC = () => {
       }
 
       if (needsUpdate || genUpdate) {
-        console.log("patch", patch);
         updateClip(clip.clipId, patch);
       }
     });
