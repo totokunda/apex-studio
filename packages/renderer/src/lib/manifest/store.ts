@@ -3,6 +3,7 @@ import {
   listModelTypes,
   listManifests,
   getManifest,
+  getManifestPart,
   type ModelTypeInfo,
   ManifestDocument,
 } from "./api";
@@ -190,7 +191,6 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     }
 
     // Fetch the part
-    const { getManifestPart } = await import("./api");
     const res = await getManifestPart<any>(manifestId, pathDot);
     if (!res.success) return;
     const partValue = res.data;

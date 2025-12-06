@@ -22,7 +22,11 @@ class WindowManager implements AppModule {
 
   async enable({ app }: ModuleContext): Promise<void> {
     await app.whenReady();
-    await this.restoreOrCreateWindow(true);
+    try {
+      await this.restoreOrCreateWindow(true);
+    } catch (error) {
+      console.error("[WindowManager] Failed to create/show window:", error);
+    }
     app.on("second-instance", () => this.restoreOrCreateWindow(true));
     app.on("activate", () => this.restoreOrCreateWindow(true));
   }
@@ -40,10 +44,14 @@ class WindowManager implements AppModule {
       },
     });
 
-    if (this.#renderer instanceof URL) {
-      await browserWindow.loadURL(this.#renderer.href);
-    } else {
-      await browserWindow.loadFile(this.#renderer.path);
+    try {
+      if (this.#renderer instanceof URL) {
+        await browserWindow.loadURL(this.#renderer.href);
+      } else {
+        await browserWindow.loadFile(this.#renderer.path);
+      }
+    } catch (error) {
+      console.error("[WindowManager] Failed to load renderer:", error);
     }
 
     return browserWindow;

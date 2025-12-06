@@ -273,6 +273,8 @@ const JobsMenu: React.FC = () => {
 
       if (!clip) return;
 
+      console.log(job);
+
       const status = (job.status || "").toLowerCase();
       let newStatus: "pending" | "running" | "complete" | "failed" | undefined;
 

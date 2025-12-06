@@ -222,6 +222,7 @@ export const getMediaInfo = async (
       metadata: undefined,
       mimeType: metadata.mime,
       format: undefined,
+      videoDecoderConfig: undefined,
     };
     mediaCache.setMedia(path, mediaInfo);
     return mediaInfo;
@@ -286,6 +287,8 @@ export const getMediaInfo = async (
     const mimeType = await inp.getMimeType();
     const format = await inp.getFormat();
 
+    const videoDecoderConfig = await videoTrack?.getDecoderConfig();
+
     if (audioTrack) {
       const sink = new AudioBufferSink(audioTrack);
       const sample = await sink.getBuffer(0);
@@ -301,6 +304,7 @@ export const getMediaInfo = async (
       metadata,
       mimeType,
       format,
+      videoDecoderConfig,
     };
   }
 
@@ -387,6 +391,7 @@ export const getMediaInfo = async (
     metadata,
     mimeType,
     format,
+    videoDecoderConfig,
   } = infoBundle;
   if (audioTrack && !(await audioTrack.canDecode())) {
     audioTrack = null;
@@ -412,6 +417,7 @@ export const getMediaInfo = async (
     startFrame: startFrame,
     endFrame: endFrame,
     originalInput: input ?? undefined,
+    videoDecoderConfig,
   };
 
   mediaCache.setMedia(path, mediaInfo);

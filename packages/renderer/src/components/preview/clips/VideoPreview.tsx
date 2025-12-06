@@ -19,7 +19,8 @@ import { BaseClipApplicator } from "./apply/base";
 import _ from "lodash";
 import { useWebGLMask } from "../mask/useWebGLMask";
 import { useInputControlsStore } from "@/lib/inputControl";
-import { VideoFrameDecoder } from "@/lib/media/video-decoder";
+import { useVideoDecoderManager } from "@/lib/media/VideoDecoderManagerContext";
+import { useProjectsStore } from "@/lib/projects";
 // (prefetch helper removed by request; timeline-driven rendering only)
 
 const calculateIterateRange = (
@@ -96,10 +97,12 @@ const VideoPreview: React.FC<
   offscreenFast = false,
 }) => {
   const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(assetId) || null);
+  const decoderManager = useVideoDecoderManager();
   const focusFrameFromControls = useControlsStore((state) => state.focusFrame);
   const focusFrameFromInputs = useInputControlsStore((s) =>
     s.getFocusFrame(inputId),
   );
+  const getActiveProject = useProjectsStore((s) => s.getActiveProject);
   const focusFrame =
     typeof focusFrameOverride === "number"
       ? focusFrameOverride
@@ -169,7 +172,7 @@ const VideoPreview: React.FC<
     [clipId, selectedClipIds],
   );
 
-  const setFocusFrame = useControlsStore((s) => s.setFocusFrame);
+  // const setFocusFrame = useControlsStore((s) => s.setFocusFrame);
   const getAssetById = useClipStore((s) => s.getAssetById);
   const lastSelectedAssetIdRef = useRef<string | null>(null);
   const cachedPreprocessorRangeRef = useRef<{
@@ -180,8 +183,13 @@ const VideoPreview: React.FC<
   } | null>(null);
   const addedTimestampRef = useRef<number | undefined>(undefined); // last timestamp rendered
 
-  const videoFrameDecoderRef = useRef<VideoFrameDecoder | null>(null);
-  const decodersRef = useRef<Map<string, VideoFrameDecoder>>(new Map());
+  const activeDecoderAssetIdRef = useRef<string | null>(null);
+  // Use a logical decoder id so multiple clips can share the same underlying
+  // asset while keeping independent decoder state and handlers.
+  const makeDecoderId = useCallback(
+    (id: string) => `${id}::${clipId}`,
+    [clipId],
+  );
   
   const { applyMask } = useWebGLMask({
     focusFrame: focusFrame,
@@ -879,12 +887,9 @@ const VideoPreview: React.FC<
     if (currentlyPlaying) return;
     
     const info = getTargetFrameInfo();
-    console.log("seekToCurrentFrame", info, "line 884");
     if (!info) return;
 
     const { timestamp, targetFrame } = info;
-    console.log("seekToCurrentFrame", timestamp, targetFrame, "line 889");
-
 
     // Update the mask frame ref immediately before seeking to ensure sync
     decoderMaskFrameRef.current = maskFrameForCurrentFocus;
@@ -896,107 +901,84 @@ const VideoPreview: React.FC<
     }
 
     try {
-      console.log("seekToCurrentFrame", timestamp, targetFrame, isAccurateSeekNeededInput);
-      await videoFrameDecoderRef.current?.seek(timestamp, isAccurateSeekNeededInput);
+      const targetAssetId = selectedAssetId;
+      if (!targetAssetId) return;
+
+      const logicalId = makeDecoderId(targetAssetId);
+
+      await decoderManager.seek(logicalId, timestamp, isAccurateSeekNeededInput);
+      activeDecoderAssetIdRef.current = logicalId;
+
       if (myToken === drawTokenRef.current) {
          lastRenderedFrameRef.current = targetFrame;
       }
     } catch (e) {
       console.warn("[video] seek failed", e);
     }
-  }, [getTargetFrameInfo, inputMode, maskFrameForCurrentFocus, isAccurateSeekNeeded]);
+  }, [decoderManager, getTargetFrameInfo, inputMode, maskFrameForCurrentFocus, isAccurateSeekNeeded, selectedAssetId, makeDecoderId]);
 
   useEffect(() => {
     let active = true;
 
-    const loadDecoders = async () => {
-      const newlyCreatedIds = new Set<string>();
+    const configureDecoders = async () => {
       const ids = new Set<string>();
       if (assetId) ids.add(assetId);
       clip?.preprocessors?.forEach((p) => {
         if (p.assetId) ids.add(p.assetId);
       });
 
-      // Cleanup old decoders
-      for (const [id, decoder] of decodersRef.current.entries()) {
-        if (!ids.has(id)) {
-          decoder.dispose();
-          decodersRef.current.delete(id);
-        }
-      }
-
-      // Create new decoders
       for (const id of ids) {
-        if (decodersRef.current.has(id)) continue;
         try {
           let info = getMediaInfoCached(id);
           const asset = getAssetById(id);
-        
-          if (!info && asset?.path) info = await getMediaInfo(asset.path, { sourceDir: clip.type === "video" ? "user-data" : "apex-cache" });
-          if (!active || !info) continue;
-  
-          const config = await info.video?.getDecoderConfig();
+
+          if (!info && asset?.path) {
+            info = await getMediaInfo(asset.path, {
+              sourceDir: clip.type === "video" ? "user-data" : "apex-cache",
+            });
+          }
+          
+          if (!active || !info || !asset) continue;
+
+          const config = info.videoDecoderConfig;
           if (!active || !config) continue;
 
-          if (decodersRef.current.has(id)) continue;
+          const logicalId = makeDecoderId(id);
 
-          const decoder = new VideoFrameDecoder({
-            mediaInfo: info,
-            videoDecoderConfig: config,
-            onFrame: (data) =>
-              drawWrappedCanvas(data, decoderMaskFrameRef.current),
-            onError: (e) => console.error("[VideoFrameDecoder] Error", id, e),
-            onReady: async () => {
-              console.log("onReady", id, "line 949");
-              await seekToCurrentFrame(true);
-            },
-          });
-          decodersRef.current.set(id, decoder);
-          newlyCreatedIds.add(id);
+          const onFrame = (data: {
+            canvas: VideoFrame;
+            timestamp: number;
+            duration: number;
+          }) => {
+            drawWrappedCanvas(data, decoderMaskFrameRef.current);
+          };
+
+          const onError = (e: Error) =>
+            console.error("[VideoDecoderManager] Error", id, e);
+
+          if (decoderManager.hasAsset(logicalId)) {
+            decoderManager.updateAssetHandlers(logicalId, { onFrame, onError });
+          } else {
+            const activeProject = getActiveProject();
+            decoderManager.addAsset(asset, {
+              mediaInfo: info,
+              videoDecoderConfig: config,
+              folderUuid: activeProject?.folderUuid,
+              onFrame,
+              onError,
+              logicalId,
+              onReady: async () => {
+                await seekToCurrentFrame(true);
+              },
+            });
+          }
         } catch (e) {
-          console.error("Error loading decoder for", id, e);
-        }
-      }
-
-      // After decoders are created, compute the current target timestamp once.
-      const targetInfo = getTargetFrameInfo();
-      if (!targetInfo) {
-        // Prereqs (mediaInfo / display size) not ready yet; effect will rerun later.
-        return;
-      }
-      const { timestamp } = targetInfo;
-
-      // For any newly created decoder, trigger an initial seek AFTER configure
-      // so that the worker decodes a preview frame as soon as it's ready.
-      for (const [id, decoder] of decodersRef.current.entries()) {
-        if (!newlyCreatedIds.has(id)) continue;
-        try {
-          await decoder.seek(timestamp, isAccurateSeekNeeded);
-        } catch (e) {
-          console.warn("[video] initial seek after configure failed", id, e);
-        }
-      }
-
-      // Switch active decoder if needed
-      if (active) {
-        const targetDecoder = decodersRef.current.get(selectedAssetId);
-        // Force update media info for sync logic immediately when switching
-        if (targetDecoder) {
-           const info = getMediaInfoCached(selectedAssetId);
-           if (info) mediaInfo.current = info;
-           
-           const hasChanged = videoFrameDecoderRef.current !== targetDecoder;
-           const needsRefresh = lastRenderedFrameRef.current === -1;
-
-           if (hasChanged || needsRefresh) {
-             videoFrameDecoderRef.current = targetDecoder;
-             await seekToCurrentFrame(true);
-           }
+          console.error("Error configuring decoder for", id, e);
         }
       }
     };
 
-    void loadDecoders();
+    void configureDecoders();
 
     return () => {
       active = false;
@@ -1004,19 +986,11 @@ const VideoPreview: React.FC<
   }, [
     assetId,
     clip?.preprocessors,
-    selectedAssetId,
+    decoderManager,
+    getAssetById,
     drawWrappedCanvas,
-    seekToCurrentFrame,
+    makeDecoderId
   ]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      decodersRef.current.forEach((d) => d.dispose());
-      decodersRef.current.clear();
-      videoFrameDecoderRef.current = null;
-    };
-  }, []);
 
   useEffect(() => {
     void seekToCurrentFrame();
@@ -1052,7 +1026,10 @@ const VideoPreview: React.FC<
     // @ts-ignore
     iteratorRef.current?.return?.();
 
-    if (!videoFrameDecoderRef.current) return;
+    const activeAssetId = selectedAssetId;
+    if (!activeAssetId) return;
+
+    const logicalId = makeDecoderId(activeAssetId);
 
     const checkCancel = () => {
         if (!offscreenFast && myToken !== drawTokenRef.current) return false;
@@ -1061,7 +1038,8 @@ const VideoPreview: React.FC<
     };
 
     try {
-      await videoFrameDecoderRef.current.iterate(
+      await decoderManager.iterate(
+        logicalId,
         startTime,
         endTime,
         async (ts) => {
@@ -1166,6 +1144,7 @@ const VideoPreview: React.FC<
     clip,
     isPlaying,
     inputMode,
+    makeDecoderId,
   ]);
 
   useEffect(() => {
@@ -1192,7 +1171,6 @@ const VideoPreview: React.FC<
     inputId,
     inputMode,
   ]);
-
 
   // If video is paused, reapply filters and applicators when they change
   useEffect(() => {

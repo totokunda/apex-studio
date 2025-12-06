@@ -15,6 +15,8 @@ export default /**
       formats: ["es"],
     },
     rollupOptions: {
+      // Do not bundle Electron preload bridge; it's provided at runtime
+      external: ["@app/preload"],
       output: {
         entryFileNames: "[name].js",
       },

@@ -398,6 +398,7 @@ export type MediaInfo = {
   startFrame?: number;
   endFrame?: number;
   originalInput?: Input; // Only used for converting media to 24 fps
+  videoDecoderConfig?: VideoDecoderConfig;
 };
 
 export type FrameBatch = {

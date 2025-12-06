@@ -1,8 +1,8 @@
 import { initApp } from "@app/main";
 import { fileURLToPath } from "node:url";
 
+// In CI and automated tests, fail fast on unhandled errors.
 if (
-  process.env.NODE_ENV === "development" ||
   process.env.PLAYWRIGHT_TEST === "true" ||
   !!process.env.CI
 ) {
@@ -13,6 +13,14 @@ if (
 
   process.on("uncaughtException", showAndExit);
   process.on("unhandledRejection", showAndExit);
+} else if (process.env.NODE_ENV === "development") {
+  // In interactive development, log unhandled errors but keep Electron running
+  function logError(...args) {
+    console.error("[unhandled]", ...args);
+  }
+
+  process.on("uncaughtException", logError);
+  process.on("unhandledRejection", logError);
 }
 
 // noinspection JSIgnoredPromiseFromCall

@@ -6,6 +6,7 @@ import {
   getPreprocessorStatus as getPreprocessorStatusPreload,
   getPreprocessorResult as getPreprocessorResultPreload,
   cancelPreprocessor as cancelPreprocessorPreload,
+  deletePreprocessor as deletePreprocessorPreload,
 } from "@app/preload";
 import { wsClient } from "../ws/client";
 
@@ -220,10 +221,6 @@ export async function cancelPreprocessor(
 export async function deletePreprocessor(
   name: string,
 ): Promise<ConfigResponse<any>> {
-  // Invoke the preload API to hit ApexApi -> backend DELETE endpoint
-  // @ts-ignore
-  const { deletePreprocessor: deletePreprocessorPreload } =
-    await import("@app/preload");
   return await deletePreprocessorPreload(name);
 }
 

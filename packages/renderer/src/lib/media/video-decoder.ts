@@ -1,5 +1,17 @@
-import { MediaInfo } from "../types";
-import { UrlSource, BlobSource, MP4, WEBM, QTFF, OGG, MATROSKA, MP3, WAVE, FLAC, ADTS } from "mediabunny";
+import { Asset, MediaInfo } from "../types";
+import {
+    UrlSource,
+    BlobSource,
+    MP4,
+    WEBM,
+    QTFF,
+    OGG,
+    MATROSKA,
+    MP3,
+    WAVE,
+    FLAC,
+    ADTS,
+} from "mediabunny";
 
 interface VideoFrameDecoderOptions {
     mediaInfo: MediaInfo;
@@ -59,6 +71,7 @@ export class VideoFrameDecoder {
 
         this.worker.onmessage = (e) => {
             const msg = e.data;
+
 
             if (msg.type === "frame") {
                 // Handle Iteration Frames
@@ -302,3 +315,462 @@ export class VideoFrameDecoder {
         this.worker.terminate();
     }
 }
+
+interface VideoDecoderManagerAssetState {
+    asset: Asset;
+    mediaInfo: MediaInfo;
+    videoDecoderConfig: VideoDecoderConfig;
+    onFrame?: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
+    onError?: (error: Error) => void;
+    onReady?: () => void;
+    initialized: boolean;
+    initializedPromise: Promise<void>;
+    initializedResolve: (() => void) | null;
+    currentRequestId: number;
+    activeIteration: {
+        requestId: number;
+        shouldDelay?: (timestamp: number) => Promise<void>;
+        checkCancel?: () => boolean;
+        resolve: () => void;
+        reject: (err: any) => void;
+        frameProcessingPromise: Promise<void>;
+    } | null;
+    pendingSeeks: Map<number, { resolve: () => void; reject: (err: any) => void }>;
+}
+
+export class VideoDecoderManager {
+    private worker: Worker;
+    private assets = new Map<string, VideoDecoderManagerAssetState>();
+
+    private createAssetState(params: {
+        asset: Asset;
+        mediaInfo: MediaInfo;
+        videoDecoderConfig: VideoDecoderConfig;
+        onFrame?: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
+        onError?: (error: Error) => void;
+        onReady?: () => void;
+    }): VideoDecoderManagerAssetState {
+        const state: VideoDecoderManagerAssetState = {
+            asset: params.asset,
+            mediaInfo: params.mediaInfo,
+            videoDecoderConfig: params.videoDecoderConfig,
+            onFrame: params.onFrame,
+            onError: params.onError,
+            onReady: params.onReady,
+            initialized: false,
+            initializedPromise: Promise.resolve() as Promise<void>, // overwritten below
+            initializedResolve: null,
+            currentRequestId: 0,
+            activeIteration: null,
+            pendingSeeks: new Map(),
+        };
+
+        state.initializedPromise = new Promise<void>((resolve) => {
+            state.initializedResolve = () => {
+                if (state.initialized) return;
+                state.initialized = true;
+                resolve();
+            };
+        });
+
+        return state;
+    }
+
+    constructor() {
+        let workerUrl = new URL("./video-decoder.worker.ts", import.meta.url);
+
+        this.worker = new Worker(workerUrl, {
+            type: "module",
+        });
+
+        // Make worker lifecycle issues extremely obvious in the renderer console.
+        this.worker.onerror = (err) => {
+            // eslint-disable-next-line no-console
+            console.error("[VideoDecoderManager] worker error", err.message || err);
+        };
+
+        this.worker.onmessageerror = (err) => {
+            // eslint-disable-next-line no-console
+            console.error("[VideoDecoderManager] worker message error", err);
+        };
+
+        this.worker.onmessage = (e: MessageEvent) => {
+            const msg = e.data;
+
+            
+            const assetId: string | undefined = msg.assetId;
+            const client = assetId ? this.assets.get(assetId) : undefined;
+
+            if (!client) {
+                // Best effort cleanup of stray frames
+                if (msg.type === "frame" && msg.frame) {
+                    try {
+                        msg.frame.close();
+                    } catch {
+                        // ignore
+                    }
+                }
+                return;
+            }
+
+            if (msg.type === "frame") {
+                // Iteration frames for this asset
+                if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
+                    const iteration = client.activeIteration;
+
+                    iteration.frameProcessingPromise = iteration.frameProcessingPromise
+                        .then(async () => {
+                            if (iteration.checkCancel && !iteration.checkCancel()) {
+                                msg.frame.close();
+                                return;
+                            }
+
+                            if (iteration.shouldDelay) {
+                                await iteration.shouldDelay(msg.timestamp);
+                            }
+
+                            if (iteration.checkCancel && !iteration.checkCancel()) {
+                                msg.frame.close();
+                                return;
+                            }
+
+                            if (client.onFrame) {
+                                client.onFrame({
+                                    canvas: msg.frame,
+                                    timestamp: msg.timestamp,
+                                    duration: msg.duration,
+                                });
+                            }
+
+                            msg.frame.close();
+
+                            // Ack this frame to allow the worker to resume iteration
+                            this.worker.postMessage({
+                                type: "ack",
+                                assetId,
+                                requestId: msg.requestId,
+                            });
+                        })
+                        .catch((err: any) => {
+                            console.error("Frame processing error (manager)", err);
+                            msg.frame.close();
+                        });
+
+                    return;
+                }
+
+                // Seek/preview frames for this asset
+                if (msg.requestId !== undefined && msg.requestId !== client.currentRequestId) {
+                    msg.frame.close();
+                    return;
+                }
+
+                if (client.onFrame) {
+                    client.onFrame({
+                        canvas: msg.frame,
+                        timestamp: msg.timestamp,
+                        duration: msg.duration,
+                    });
+                } else {
+                    // If no handler is registered yet, just close the frame.
+                }
+                msg.frame.close();
+
+            } else if (msg.type === "ready") {
+                if (!client.initialized) {
+                    client.initialized = true;
+                    if (client.initializedResolve) {
+                        client.initializedResolve();
+                        client.initializedResolve = null;
+                    }
+                    if (client.onReady) {
+                        client.onReady();
+                        client.onReady = undefined;
+                    }
+                }
+            } else if (msg.type === "seekDone") {
+                const pending = client.pendingSeeks.get(msg.requestId);
+                if (pending) {
+                    client.pendingSeeks.delete(msg.requestId);
+                    pending.resolve();
+                }
+                // Also treat first seekDone as "ready" fallback
+                if (!client.initialized) {
+                    client.initialized = true;
+                    if (client.initializedResolve) {
+                        client.initializedResolve();
+                        client.initializedResolve = null;
+                    }
+                    if (client.onReady) {
+                        client.onReady();
+                        client.onReady = undefined;
+                    }
+                }
+            } else if (msg.type === "error") {
+                // Route iteration-specific errors first
+                if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
+                    client.activeIteration.reject(new Error(msg.error));
+                    client.activeIteration = null;
+                } else {
+                    const pending = msg.requestId ? client.pendingSeeks.get(msg.requestId) : undefined;
+                    if (pending) {
+                        client.pendingSeeks.delete(msg.requestId);
+                        pending.reject(new Error(msg.error));
+                    } else {
+                        if (client.onError) {
+                            client.onError(new Error(msg.error));
+                        } else {
+                            console.error("[VideoDecoderManager] Unhandled error", msg.error);
+                        }
+                    }
+                }
+            } else if (msg.type === "iterateDone") {
+                if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
+                    const iteration = client.activeIteration;
+                    iteration.frameProcessingPromise.then(() => {
+                        iteration.resolve();
+                    });
+                    client.activeIteration = null;
+                }
+            }
+        };
+    }
+
+    /**
+     * Register a new asset with the shared worker-backed decoder.
+     */
+    public addAsset(
+        asset: Asset,
+        options: {
+            mediaInfo: MediaInfo;
+            videoDecoderConfig: VideoDecoderConfig;
+            folderUuid?: string;
+            initialTimestamp?: number;
+            onFrame?: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
+            onError?: (error: Error) => void;
+            onReady?: () => void;
+            /**
+             * Optional logical identifier that scopes the decoder instance.
+             * This allows multiple independent decoders to share the same
+             * underlying Asset (e.g. several clips using the same file) without
+             * overwriting each other's handlers or request state.
+             *
+             * When provided, this id is used as the manager/worker key, while
+             * the real Asset.id is still passed through in the asset metadata.
+             */
+            logicalId?: string;
+        },
+    ): void {
+
+        const decoderId = options.logicalId ?? asset.id;
+
+        // Normalize target dimensions (same logic as VideoFrameDecoder)
+        const { codedWidth, codedHeight } = options.videoDecoderConfig;
+        let targetWidth = codedWidth || 0;
+        let targetHeight = codedHeight || 0;
+
+        if (!targetWidth || !targetHeight) {
+            targetWidth = options.mediaInfo.video?.codedWidth || 0;
+            targetHeight = options.mediaInfo.video?.codedHeight || 0;
+        }
+
+        if (targetWidth && targetHeight) {
+            const isLandscape = targetWidth >= targetHeight;
+            const shortSide = isLandscape ? targetHeight : targetWidth;
+
+            if (shortSide > 720) {
+                const scale = 720 / shortSide;
+                targetWidth = Math.round(targetWidth * scale);
+                targetHeight = Math.round(targetHeight * scale);
+                targetWidth = targetWidth - (targetWidth % 2);
+                targetHeight = targetHeight - (targetHeight % 2);
+            }
+        }
+
+        const normalizedConfig: VideoDecoderConfig = {
+            ...options.videoDecoderConfig,
+            codedWidth: targetWidth,
+            codedHeight: targetHeight,
+        };
+
+        // Determine format string to speed up worker init
+        let formatStr: string | undefined;
+        const fmt = options.mediaInfo.format;
+        if (fmt) {
+            if (fmt === MP4) formatStr = "mp4";
+            else if (fmt === WEBM) formatStr = "webm";
+            else if (fmt === QTFF) formatStr = "mov";
+            else if (fmt === MATROSKA) formatStr = "mkv";
+            else if (fmt === OGG) formatStr = "ogg";
+            else if (fmt === MP3) formatStr = "mp3";
+            else if (fmt === WAVE) formatStr = "wav";
+            else if (fmt === FLAC) formatStr = "flac";
+            else if (fmt === ADTS) formatStr = "aac";
+        }
+
+        // Track per-asset (or per-logical-id) state in the manager
+        const assetClient = this.createAssetState({
+            asset,
+            mediaInfo: options.mediaInfo,
+            videoDecoderConfig: normalizedConfig,
+            onFrame: options.onFrame,
+            onError: options.onError,
+            onReady: options.onReady,
+        });
+
+        this.assets.set(decoderId, assetClient);
+
+        // Send configure to the shared worker
+        const reqId = ++assetClient.currentRequestId;
+
+        this.worker.postMessage({
+            type: "configure",
+            assetId: decoderId,
+            config: {
+                videoDecoderConfig: normalizedConfig,
+                asset: {
+                    // Preserve the real Asset identity in metadata so worker-side
+                    // path/format logic continues to function as before.
+                    id: asset.id,
+                    type: asset.type,
+                    path: asset.path,
+                },
+                folderUuid: options.folderUuid,
+                formatStr,
+                initialTimestamp: options.initialTimestamp ?? 0,
+            },
+            requestId: reqId,
+        });
+    }
+
+    /**
+     * Dispose a single asset and release any resources associated with it.
+     */
+    public disposeAsset(assetId: string): void {
+        const client = this.assets.get(assetId);
+        if (!client) return;
+
+        // Cancel any active iteration promises
+        if (client.activeIteration) {
+            client.activeIteration.reject(new Error("Asset disposed"));
+            client.activeIteration = null;
+        }
+        // Reject any pending seeks
+        for (const { reject } of client.pendingSeeks.values()) {
+            reject(new Error("Asset disposed"));
+        }
+        client.pendingSeeks.clear();
+
+        this.assets.delete(assetId);
+        this.worker.postMessage({ type: "dispose", assetId });
+    }
+
+    /**
+     * Returns true if an asset with the given id has already been registered.
+     */
+    public hasAsset(assetId: string): boolean {
+        return this.assets.has(assetId);
+    }
+
+    /**
+     * Update just the handlers (onFrame, onError, onReady) for an existing asset
+     * without reconfiguring the underlying decoder/worker state.
+     */
+    public updateAssetHandlers(
+        assetId: string,
+        handlers: {
+            onFrame?: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
+            onError?: (error: Error) => void;
+            onReady?: () => void;
+        },
+    ): void {
+        const client = this.assets.get(assetId);
+        if (!client) return;
+
+        if (handlers.onFrame) client.onFrame = handlers.onFrame;
+        if (handlers.onError) client.onError = handlers.onError;
+
+        if (handlers.onReady) {
+            if (client.initialized) {
+                // If the asset is already initialized, invoke immediately.
+                handlers.onReady();
+            } else {
+                client.onReady = handlers.onReady;
+            }
+        }
+    }
+
+    /**
+     * Perform a seek for a specific asset.
+     */
+    public async seek(assetId: string, timestamp: number, forceAccurate: boolean = false): Promise<void> {
+        const client = this.assets.get(assetId);
+        if (!client) {
+            return;
+        }
+
+        const reqId = ++client.currentRequestId;
+
+        return new Promise<void>((resolve, reject) => {
+            client.pendingSeeks.set(reqId, { resolve, reject });
+
+            
+            this.worker.postMessage({
+                type: "seek",
+                assetId,
+                timestamp,
+                forceAccurate,
+                requestId: reqId,
+            });
+        });
+    }
+
+    /**
+     * Iterate frames for a specific asset over a time range.
+     */
+    public async iterate(
+        assetId: string,
+        startTime: number,
+        endTime: number,
+        shouldDelay?: (timestamp: number) => Promise<void>,
+        checkCancel?: () => boolean,
+    ): Promise<void> {
+        const client = this.assets.get(assetId);
+        if (!client) {
+            return;
+        }
+
+        const reqId = ++client.currentRequestId;
+
+        return new Promise<void>((resolve, reject) => {
+            client.activeIteration = {
+                requestId: reqId,
+                shouldDelay,
+                checkCancel,
+                resolve,
+                reject,
+                frameProcessingPromise: Promise.resolve(),
+            };
+
+            this.worker.postMessage({
+                type: "iterate",
+                assetId,
+                startTime,
+                endTime,
+                requestId: reqId,
+            });
+        });
+    }
+
+    /**
+     * Dispose all assets and terminate the underlying worker.
+     */
+    public disposeAll(): void {
+        for (const id of this.assets.keys()) {
+            this.disposeAsset(id);
+        }
+        this.worker.terminate();
+        this.assets.clear();
+    }
+}
+

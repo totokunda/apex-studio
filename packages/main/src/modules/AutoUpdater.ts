@@ -24,7 +24,17 @@ export class AutoUpdater implements AppModule {
   }
 
   async enable(): Promise<void> {
-    await this.runAutoUpdater();
+    // Skip auto-updater in development; it's only meaningful in production
+    if (!import.meta.env.PROD) {
+      return;
+    }
+
+    try {
+      await this.runAutoUpdater();
+    } catch (error) {
+      // Auto-updater failures should never prevent the app from starting
+      console.warn("[AutoUpdater] Failed to run auto updater:", error);
+    }
   }
 
   getAutoUpdater(): AppUpdater {

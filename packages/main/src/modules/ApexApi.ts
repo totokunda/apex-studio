@@ -77,10 +77,11 @@ export class ApexApi implements AppModule {
     this.registerManifestHandlers();
     this.registerSystemHandlers();
 
-    // Defer app-dependent initialization until the app is ready
+    // Defer app-dependent initialization until the app is ready,
+    // but do not block startup on backend/network probes.
     await this.app.whenReady();
     this.wsManager?.setBaseUrl(this.backendUrl);
-    await this.#probeBackendLocality();
+    void this.#probeBackendLocality();
   }
 
   private registerBackendUrlHandlers(): void {

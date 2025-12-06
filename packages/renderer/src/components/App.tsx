@@ -1,6 +1,5 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useMemo } from "react";
 import "../styles/index.css";
-
 import {
   ResizableHandle,
   ResizablePanel,
@@ -23,20 +22,24 @@ import { ModelItem } from "./menus/ModelMenu";
 import type { ManifestDocument } from "@/lib/manifest";
 import GlobalContextMenu from "@/components/GlobalContextMenu";
 import { useProjectsStore } from "@/lib/projects";
+import { VideoDecoderManagerProvider } from "@/lib/media/VideoDecoderManagerContext";
 
 type ManifestWithType = ManifestDocument & {
   type: "model";
 };
 
+
+
 const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useLayoutConfigStore((s) => s.layout);
-  const { ghostInStage, clips } = useClipStore();
+  const { ghostInStage, clips} = useClipStore();
   const projectsLoaded = useProjectsStore((s) => (s as any).projectsLoaded);
   const activeProject = useProjectsStore((s) => s.getActiveProject());
   const [activeDragItem, setActiveDragItem] = useState<
     MediaItem | Preprocessor | ManifestWithType | null
   >(null);
+
 
   // Disable scrolling while dragging
   useEffect(() => {
@@ -128,6 +131,7 @@ const App: React.FC = () => {
   }
 
   return (
+    <VideoDecoderManagerProvider>
     <DndContext
       autoScroll={false}
       onDragStart={(event) => {
@@ -287,6 +291,7 @@ const App: React.FC = () => {
         ) : null}
       </DragOverlay>
     </DndContext>
+    </VideoDecoderManagerProvider>
   );
 };
 

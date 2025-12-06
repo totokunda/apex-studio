@@ -35,8 +35,22 @@ export class ChromeDevToolsExtension implements AppModule {
   }
 
   async enable({ app }: ModuleContext): Promise<void> {
+    // Only install extensions in development and never fail app startup
+    if (!import.meta.env.DEV) {
+      return;
+    }
+
     await app.whenReady();
-    await installExtension(extensionsDictionary[this.#extension]);
+
+    try {
+      await installExtension(extensionsDictionary[this.#extension]);
+    } catch (error) {
+      // Extensions are nice-to-have in dev; log and continue instead of crashing
+      console.warn(
+        "[ChromeDevToolsExtension] Failed to install devtools extension:",
+        error,
+      );
+    }
   }
 }
 

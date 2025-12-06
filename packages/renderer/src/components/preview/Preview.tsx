@@ -320,6 +320,7 @@ const Preview: React.FC<PreviewProps> = () => {
   const maskRectStartNormalizedRef = useRef<{ x: number; y: number } | null>(
     null,
   );
+  
   const resetMaskShapeDrawingRefs = useCallback(() => {
     maskShapeTargetClipRef.current = null;
     maskShapeTransformRef.current = null;

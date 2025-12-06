@@ -73,7 +73,8 @@ class AppDirProtocol implements AppModule {
     await app.whenReady();
 
     // Kick off non-blocking initialization (backend locality, remote cache path, etc.)
-    await this.initializeAsync(app);
+    // Do NOT block app startup on backend/network availability.
+    void this.initializeAsync(app);
 
     protocol.handle("app", async (request) => {
       // CORS/preflight handling for renderer -> app:// fetches
