@@ -12,6 +12,8 @@ export interface TimelineSelectorProps {
   width: number;
   mode: "frame" | "range";
   inputId: string;
+  // Optional max duration (in frames) for this input's selectable range
+  maxDuration?: number;
 }
 
 const TimelineSelector: React.FC<TimelineSelectorProps> = ({
@@ -20,6 +22,7 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   height,
   mode,
   inputId,
+  maxDuration,
 }) => {
   const setTotalTimelineFrames = useInputControlsStore(
     (s) => s.setTotalTimelineFrames,
@@ -70,6 +73,7 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
               mode={mode}
               hidden={false}
               type="media"
+              maxDuration={maxDuration}
             />
           </Group>
         </Layer>

@@ -61,7 +61,7 @@ import { useManifestStore } from "@/lib/manifest/store";
 import { MdPhotoFilter as MdFilterIcon } from "react-icons/md";
 import { ManifestDocument } from "@/lib/manifest/api";
 import ModelClip from "./ModelClip";
-import { useEngineJobStore } from "@/lib/engine/api";
+
 import {
   generateTimelineThumbnailAudio,
   generateTimelineThumbnailImage,
@@ -94,6 +94,7 @@ const TimelineClip: React.FC<
     scrollY: number;
     cornerRadius?: number;
     assetMode?: boolean;
+    isAssetSelected?: (clipId: string) => boolean;
   }
 > = ({
   timelineWidth = 0,
@@ -106,6 +107,7 @@ const TimelineClip: React.FC<
   scrollY,
   cornerRadius = 1,
   assetMode = false,
+  isAssetSelected = () => false,
 }) => {
   // Select only what we need to avoid unnecessary rerenders
   const ctrlTimelineDuration = useControlsStore((s) => s.timelineDuration);
@@ -124,6 +126,7 @@ const TimelineClip: React.FC<
   const setSelectedAssetClipId = useAssetControlsStore(
     (s) => s.setSelectedAssetClipId,
   );
+
   const timelineDuration = assetMode
     ? assetTimelineDuration
     : ctrlTimelineDuration;
@@ -382,7 +385,7 @@ const TimelineClip: React.FC<
   // Use global selection state instead of local state
   const currentClipId = clipId;
   const isSelected = assetMode
-    ? assetSelectedAssetClipId === currentClipId
+    ? isAssetSelected(currentClipId) || assetSelectedAssetClipId === currentClipId
     : ctrlSelectedClipIds.includes(currentClipId);
 
   const showMaskKeyframes = useMemo(() => {
@@ -2076,7 +2079,17 @@ const TimelineClip: React.FC<
                   modelUiCounts={modelUiCounts}
                   modelNameRef={modelNameRef}
                   modelNameWidth={modelNameWidth}
+                  clipPosition={clipPosition}
+                  resizeSide={resizeSide}
+                  timelineWidth={timelineWidth}
+                  imageWidth={imageWidth}
                   clipId={currentClipId}
+                  zoomLevel={zoomLevel}
+                  clipType={clipType as "video" | "image"}
+                  tool={tool as "move" | "resize" | null}
+                  thumbnailClipWidth={thumbnailClipWidth.current}
+                  maxTimelineWidth={timelineWidth}
+                  timelineDuration={timelineDuration}
                 />
               ) : (
                 <Image

@@ -57,6 +57,7 @@ export async function startUnifiedDownload(request: {
   job_id?: string;
   manifest_id?: string;
   lora_name?: string;
+  component?: string;
 }): Promise<
   ConfigResponse<{ job_id: string; status: string; message?: string }>
 > {

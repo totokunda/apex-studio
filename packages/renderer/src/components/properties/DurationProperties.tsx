@@ -18,6 +18,7 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
     | VideoClipProps
     | AudioClipProps
     | ModelClipProps;
+    
   const { updateClip } = useClipStore();
   const speed = useMemo(() => clip?.speed ?? 1.0, [clip?.speed]);
   const [spinning, setSpinning] = useState(false);
@@ -53,7 +54,6 @@ const DurationProperties: React.FC<DurationPropertiesProps> = ({ clipId }) => {
   const setEndFrame = (value: number) => {
     if (isNaN(value) || !isFinite(value)) return;
     if (!isValidResize(clipId, "right", value)) return;
-
     resizeClip(clipId, "right", value);
   };
 

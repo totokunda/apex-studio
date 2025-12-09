@@ -247,6 +247,7 @@ export function prepareExportClipsForValue(
   let height = 0;
   const isImage = value.type === "image";
   const isVideo = value.type === "video";
+  const isAudio = value.type === "audio";
 
   if (isImage) {
     const asset = getAssetById(value.assetId);
@@ -257,8 +258,7 @@ export function prepareExportClipsForValue(
       offsetStart: value.startFrame ?? 0,
     };
     const mediaInfo = getMediaInfoCached(asset.path);
-    const filePath = convertUserDataPath(asset.path);
-    value.src = filePath;
+    value.src = asset.path
     const transform = useOriginalTransform
       ? (value as any).originalTransform
       : (value as any).transform;
@@ -308,6 +308,15 @@ export function prepareExportClipsForValue(
       width = transform?.width ?? mediaInfo?.video?.displayWidth ?? 0;
       height = transform?.height ?? mediaInfo?.video?.displayHeight ?? 0;
     }
+  } else if (isAudio) {
+    const asset = getAssetById(value.assetId);
+    if (!asset) return {
+      exportClips: [],
+      width: 0,
+      height: 0,
+      offsetStart: value.startFrame ?? 0,
+    };
+    value.src = asset.path;
   }
 
   // If requested (or for non-image/video types), derive width/height from the
@@ -357,8 +366,6 @@ export function prepareExportClipsForValue(
         newClip.src = asset.path;
         const mediaInfo = getMediaInfoCached(newClip.src as string);
         if (!mediaInfo) return newClip;
-        const filePath = convertUserDataPath(newClip.src as string);
-        newClip.src = filePath;
       }
       if (newClip.type === "video") {
         const asset = getAssetById(newClip.assetId);
@@ -369,6 +376,7 @@ export function prepareExportClipsForValue(
       if (newClip.type === "video") {
         newClip.audioSrc = hasAudio(newClip) ? newClip.src : null;
       }
+
 
       if (Object.prototype.hasOwnProperty.call(newClip, "preprocessors")) {
         (newClip as any).preprocessors =
@@ -391,7 +399,7 @@ export function prepareExportClipsForValue(
 
       return newClip;
     });
-  } else {
+  }  else {
     offsetStart = value.startFrame ?? 0;
     if (value.type === "video") {
       const asset = getAssetById(value.assetId);
@@ -659,12 +667,11 @@ export function prepareExportClipsForValue(
     }
 
     // Preserve bottom-to-top stacking order for the renderer:
-    // earlier entries are drawn first, later ones on top.
+
     exportClips.push(newClip);
 
     if (useMediaDimensionsForExport && exportClips.length === 1) {
       const mediaInfo = getMediaInfoCached(newClip.src as string);
-
       if (newClip.type === "video") {
         width = mediaInfo?.video?.displayWidth ?? 0;
         height = mediaInfo?.video?.displayHeight ?? 0;
@@ -762,9 +769,6 @@ export function prepareExportClipsForValue(
         newClip.masks = mappedMasks;
 
       }
-
-      
-
       // Keep clip transforms in the same coordinate system as the masks so
       // WebGL masks (Shape/Lasso/Touch) receive consistent inputs.
       newClip.originalTransform = { ...(resolvedTransform as any) };

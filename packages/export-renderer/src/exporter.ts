@@ -9,6 +9,7 @@ import {
 import { KonvaExportRenderer } from "./export";
 import { Rect } from "konva/lib/shapes/Rect";
 import { getVideoFrameIterator } from "../../../packages/renderer/src/lib/media/video";
+import { getMediaInfo, getMediaInfoCached } from "../../renderer/src/lib/media/utils";
 import { renderAudioMixWithFfmpeg, deleteFile } from "@app/preload";
 import type { WrappedCanvas } from "mediabunny";
 import {
@@ -261,6 +262,15 @@ export interface ExportAudioClip extends ExportClipBase {
   speed?: number;
   trimStart?: number;
   trimEnd?: number;
+}
+
+
+const getAudioSrc = async (src:string): Promise<URL | null> => {
+  if (!src) return null;
+  let mediaInfo = await getMediaInfoCached(src);
+  if (!mediaInfo) mediaInfo = await getMediaInfo(src);
+  // @ts-ignore
+  return mediaInfo.audio?.input?.source?._url as URL;
 }
 
 /**
@@ -583,7 +593,6 @@ export async function exportSequence(
           (ctxIter as IterCtx).currentProjectIndex++;
         }
 
-
         await renderer.blitVideo(
           c as unknown as BlitVideoClipProps,
           applicators,
@@ -633,13 +642,35 @@ export async function exportSequence(
   ): Promise<string | null> => {
     try {
       if (!mixSpecs || mixSpecs.length === 0) return null;
-      const out = await renderAudioMixWithFfmpeg(mixSpecs as any, {
+      const audioSpecs = await Promise.all(
+        mixSpecs.map(async (spec) => {
+          return {
+            ...spec,
+            src: (await getAudioSrc(spec.src))?.toString(),
+          };
+        }),
+      );
+
+      let safeFilename = filename;
+      if (typeof safeFilename === "string" && safeFilename.length > 0) {
+        const desiredExt = `.${outFormat}`;
+        const lower = safeFilename.toLowerCase();
+        if (!lower.endsWith(desiredExt)) {
+          if (safeFilename.includes(".")) {
+            safeFilename = safeFilename.replace(/\.[^.]+$/, desiredExt);
+          } else {
+            safeFilename = `${safeFilename}${desiredExt}`;
+          }
+        }
+      }
+
+      const out = await renderAudioMixWithFfmpeg(audioSpecs as any, {
         fps: exportFps,
         exportStartFrame,
         exportEndFrame,
         outFormat,
         fileNameHint: nameHint,
-        filename: filename,
+        filename: safeFilename,
       });
       return out as string | null;
     } catch (e) {
@@ -1156,9 +1187,13 @@ export async function exportClip(
         0,
         Number((audioClip as any)?.trimStart) || 0,
       );
+
+      const audioSrc = await getAudioSrc(audioClip.src);
+      if (!audioSrc) return null;
+
       const effectiveTrimStart = baseTrimStart + srcStartFrame;
       const specs = {
-        src: (audioClip as any).src as string,
+        src: audioSrc.toString(),
         startFrame: Number(audioClip.startFrame) || 0,
         endFrame:
           typeof audioClip.endFrame === "number"
@@ -1175,16 +1210,31 @@ export async function exportClip(
             : 1;
         })(),
       };
+
+      let safeFilename = filename;
+      if (typeof safeFilename === "string" && safeFilename.length > 0) {
+        const desiredExt = `.${outFormat}`;
+        const lower = safeFilename.toLowerCase();
+        if (!lower.endsWith(desiredExt)) {
+          if (safeFilename.includes(".")) {
+            safeFilename = safeFilename.replace(/\.[^.]+$/, desiredExt);
+          } else {
+            safeFilename = `${safeFilename}${desiredExt}`;
+          }
+        }
+      }
+
       const out = await renderAudioMixWithFfmpeg([specs], {
         fps: exportFps,
         exportStartFrame,
         exportEndFrame,
         outFormat,
         fileNameHint: nameHint,
-        filename,
+        filename: safeFilename,
       });
       return out as string | null;
-    } catch {
+    } catch (e) {
+      console.error("Error rendering audio mix to file", e);
       return null;
     }
   };
@@ -1234,7 +1284,7 @@ export async function exportClip(
       checkCancelled();
       const spec = [
         {
-          src: String((workingClip as any).src),
+          src: String((workingClip as any).audioSrc),
           startFrame: Number(workingClip.startFrame) || 0,
           endFrame:
             typeof workingClip.endFrame === "number"
@@ -1262,16 +1312,11 @@ export async function exportClip(
         },
       ];
       try {
-        const out = await renderAudioMixWithFfmpeg(spec as any, {
-          fps,
-          exportStartFrame: startFrame,
-          exportEndFrame: endFrame,
-          outFormat: audioOptions?.format ?? "mp3",
-          fileNameHint:
-            (filename ?? "temp_audio") + "." + (audioOptions?.format ?? "mp3"),
-        });
+        const out = await renderAudioMixToFile(workingClip as unknown as ExportAudioClip, startFrame, endFrame, fps, audioOptions?.format ?? "mp3", filename ?? "output.mp3", filename);
         if (out) audioPath = String(out);
-      } catch {}
+      } catch (e) {
+        console.error("Error rendering audio mix to file", e);
+      }
     }
 
     const encoder = new FfmpegFrameEncoder({

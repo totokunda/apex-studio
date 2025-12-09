@@ -209,6 +209,7 @@ const GlobalContextMenu: React.FC = () => {
 
           const { exportClips } = prepared;
 
+
           const videoEncoderOptions: any = {
             format: settings.videoFormat ?? "mp4",
             codec: (settings.videoFormat === "webm" ? "vp9" : "h264") as any,
@@ -299,6 +300,7 @@ const GlobalContextMenu: React.FC = () => {
               ? ((clip as any).selectedFrame ?? 0)
               : 0;
 
+       
           if (exportClips.length === 1) {
             const result = await exportClip({
               mode: "image",
@@ -315,6 +317,8 @@ const GlobalContextMenu: React.FC = () => {
                 setExportProgress(typeof ratio === "number" ? ratio : 0);
               },
             });
+
+            console.log("result", result);
 
             if (result instanceof Blob) {
               const buf = new Uint8Array(await result.arrayBuffer());

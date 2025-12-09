@@ -384,6 +384,10 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
         <TabsContent value="library">{renderMediaLibrary()}</TabsContent>
         <TabsContent value="timeline" className="outline-none">
           <TimelineSearch
+            isAssetSelected={(clipId) => {
+              if (!value) return false;
+              return clipId === value.clipId;
+            }}
             types={["audio"]}
             excludeClipId={clipId || undefined}
           />
@@ -444,10 +448,15 @@ const AudioInput: React.FC<AudioInputProps> = ({
   const scrubberTrackRef = useRef<HTMLDivElement | null>(null);
   const addAsset = useClipStore((s) => s.addAsset);
   const getActiveProject = useProjectsStore((s) => s.getActiveProject);
-  // Initialize input fps synchronously before first render to avoid slow playback
+  // Initialize input fps synchronously before first render to avoid slow playback.
+  // Use a ref to avoid depending on the unstable setter reference.
+  const setInputFpsRef = React.useRef(setInputFps);
+  React.useEffect(() => {
+    setInputFpsRef.current = setInputFps;
+  }, [setInputFps]);
   React.useLayoutEffect(() => {
-    setInputFps(fps, inputId);
-  }, [fps, inputId, setInputFps]);
+    setInputFpsRef.current(fps, inputId);
+  }, [fps, inputId]);
 
   const selectionKey = useMemo(() => {
     if (!value) return "null";
@@ -902,13 +911,11 @@ const AudioInput: React.FC<AudioInputProps> = ({
       setFocusFrame(rangeStartForInput, inputId);
       return;
     }
-    const store = useInputControlsStore.getState();
     if (isPlaying) {
-      store.pause(inputId);
-      return;
+      pause(inputId);
+    } else {
+      play(inputId);
     }
-
-    store.play(inputId);
   }, [
     previewClip,
     isPlaying,
@@ -916,6 +923,8 @@ const AudioInput: React.FC<AudioInputProps> = ({
     rangeEndForInput,
     inputId,
     setFocusFrame,
+    play,
+    pause,
   ]);
 
   const showTimeline = Boolean(

@@ -22,6 +22,7 @@ const AudioPreview: React.FC<
     disabled?: boolean;
   }
 > = (props) => {
+
   const {
     assetId,
     startFrame = 0,
@@ -75,7 +76,7 @@ const AudioPreview: React.FC<
   const soundtouchUnavailableRef = useRef<boolean>(false);
   const soundtouchInitCtxRef = useRef<AudioContext | null>(null);
   const lastConfiguredSpeedRef = useRef<number | null>(null);
-
+  const asset = useMemo(() => getAssetById(assetId), [assetId]);
   useEffect(() => {
     const wasPlaying = prevIsPlayingRef.current;
     if (!wasPlaying && isPlaying) {
@@ -205,17 +206,19 @@ const AudioPreview: React.FC<
 
   // Load media info to detect audio track
   useEffect(() => {
+    if (!asset) return;
+    const info = getMediaInfoCached(asset.path);
+    if (info) {
+      mediaInfoRef.current = info;
+    }
     let cancelled = false;
     (async () => {
       try {
-        const info = await getMediaInfo(assetId);
+        const info = await getMediaInfo(asset?.path ?? "");
         if (!cancelled) mediaInfoRef.current = info;
       } catch {}
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [assetId]);
+  }, [asset]);
 
   useEffect(() => {
     const onPlaying = async (

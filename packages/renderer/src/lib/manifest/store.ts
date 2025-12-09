@@ -8,6 +8,8 @@ import {
   ManifestDocument,
 } from "./api";
 
+const MANIFESTS_POLL_INTERVAL_MS = 2000;
+
 export interface ManifestStoreState {
   modelTypes: ModelTypeInfo[] | null;
   manifests: ManifestDocument[] | null;
@@ -26,6 +28,9 @@ export interface ManifestStoreState {
     manifests: string | null;
     byId: Record<string, string | null>;
   };
+
+  // Whether we are actively polling for manifests when none are present
+  pollingManifests: boolean;
 
   // Loaders (idempotent; will not refetch if cached unless force=true)
   loadModelTypes: (force?: boolean) => Promise<void>;
@@ -61,6 +66,7 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     manifests: null,
     byId: {},
   },
+  pollingManifests: false,
 
   loadModelTypes: async (force = false) => {
     const state = get();
@@ -88,25 +94,68 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
 
   loadManifests: async (force = false) => {
     const state = get();
-    if (!force && (state.manifests !== null || state.loading.manifests)) return;
+    // If we already have manifests loaded and we're not forcing, do nothing.
+    if (!force && Array.isArray(state.manifests) && state.manifests.length > 0)
+      return;
+
+    // Avoid starting multiple concurrent polls / loads
+    if (state.loading.manifests || state.pollingManifests) return;
+
+    const pollOnce = async (): Promise<void> => {
+  
+      set((s) => ({
+        loading: { ...s.loading, manifests: true },
+        error: { ...s.error, manifests: null },
+      }));
+
+      const res = await listManifests();
+      if (res.success) {
+        const incoming = res.data || [];
+        if (incoming.length > 0) {
+          // Stop polling once we actually have manifests.
+          set((s) => ({
+            manifests: incoming,
+            loading: { ...s.loading, manifests: false },
+            pollingManifests: false,
+          }));
+          return;
+        }
+
+        // No manifests yet; keep waiting and poll again.
+        set((s) => ({
+          loading: { ...s.loading, manifests: false },
+        }));
+      } else {
+        set((s) => ({
+          loading: { ...s.loading, manifests: false },
+          error: {
+            ...s.error,
+            manifests: res.error || "Failed to load manifests",
+          },
+        }));
+      }
+
+      // Schedule next poll only if we still don't have manifests.
+      const nextState = get();
+      const hasManifests =
+        Array.isArray(nextState.manifests) && nextState.manifests.length > 0;
+      if (!hasManifests && nextState.pollingManifests) {
+        window.setTimeout(() => {
+          void pollOnce();
+        }, MANIFESTS_POLL_INTERVAL_MS);
+      } else {
+        // Safety: ensure polling flag is cleared if manifests appeared between polls.
+        set({ pollingManifests: false });
+      }
+    };
+
+    // Start polling loop
     set((s) => ({
-      loading: { ...s.loading, manifests: true },
+      pollingManifests: true,
+      // Clear any previous error before starting a new polling cycle
       error: { ...s.error, manifests: null },
     }));
-    const res = await listManifests();
-    if (res.success)
-      set((s) => ({
-        manifests: res.data || [],
-        loading: { ...s.loading, manifests: false },
-      }));
-    else
-      set((s) => ({
-        loading: { ...s.loading, manifests: false },
-        error: {
-          ...s.error,
-          manifests: res.error || "Failed to load manifests",
-        },
-      }));
+    void pollOnce();
   },
 
   loadManifest: async (manifestId: string, force = false) => {

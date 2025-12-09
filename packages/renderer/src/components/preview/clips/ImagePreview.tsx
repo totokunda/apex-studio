@@ -190,7 +190,6 @@ const ImagePreview: React.FC<
   const [isRotating, setIsRotating] = useState(false);
   const [isTransforming, setIsTransforming] = useState(false);
   const getAssetById = useClipStore((s) => s.getAssetById);
-  const assets = useClipStore((s) => s.assets);
 
   const [, forceRerenderForMediaInfo] = useState(0);
 
@@ -465,6 +464,7 @@ const ImagePreview: React.FC<
     overrideClip,
   ]);
 
+
   // Hard guarantee: clip transform width/height are never zero or negative.
   // If we ever see an invalid size, immediately normalize it to a sane value.
   useEffect(() => {
@@ -484,6 +484,10 @@ const ImagePreview: React.FC<
 
     setClipTransform(clipId, {
       ...clipTransform,
+      // When we normalize an invalid transform, also recenter the clip
+      // within the preview rect so it remains visually centered.
+      x: offsetX,
+      y: offsetY,
       width: Math.max(fallbackWidth, 1),
       height: Math.max(fallbackHeight, 1),
     });
@@ -491,6 +495,8 @@ const ImagePreview: React.FC<
     clipTransform,
     displayWidth,
     displayHeight,
+    offsetX,
+    offsetY,
     clipId,
     setClipTransform,
     overrideClip,

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
+import os from "node:os";
 import { basename, extname, join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ipcRenderer } from "electron";
@@ -201,17 +202,44 @@ async function listGeneratedMedia(
   folderUuid?: string,
 ): Promise<ConvertedMediaItem[]> {
   try {
-    const cacheRes = await getCachePath();
-    const cachePath =
-      cacheRes?.success && cacheRes.data?.cache_path
-        ? cacheRes.data.cache_path
-        : null;
+    // Prefer the cache path from the backend when available, but gracefully
+    // fall back to the local default so generations still show up when the
+    // API server is offline or unreachable.
+    let cachePath: string | null = null;
+    try {
+      const cacheRes = await getCachePath();
+      if (cacheRes?.success && cacheRes.data?.cache_path) {
+        cachePath = cacheRes.data.cache_path;
+      }
+    } catch {
+      // Swallow IPC/backend errors; we'll compute a local fallback below.
+    }
 
-    const userDataRes = await getUserDataPath();
-    const userDataDir =
-      userDataRes?.success && userDataRes.data?.user_data
-        ? userDataRes.data.user_data
-        : null;
+    if (!cachePath) {
+      try {
+        const envPath = process.env.APEX_CACHE_PATH;
+        if (typeof envPath === "string" && envPath.length > 0) {
+          cachePath = envPath;
+        } else {
+          const home = os.homedir?.();
+          if (home && typeof home === "string" && home.length > 0) {
+            cachePath = join(home, "apex-diffusion", "cache");
+          }
+        }
+      } catch {
+        cachePath = null;
+      }
+    }
+
+    let userDataDir: string | null = null;
+    try {
+      const userDataRes = await getUserDataPath();
+      if (userDataRes?.success && userDataRes.data?.user_data) {
+        userDataDir = userDataRes.data.user_data;
+      }
+    } catch {
+      userDataDir = null;
+    }
 
     const roots = new Set<string>();
     if (cachePath) {

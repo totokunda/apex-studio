@@ -77,6 +77,11 @@ const VideoPreview: React.FC<
     focusFrameOverride?: number;
     currentLocalFrameOverride?: number;
     offscreenFast?: boolean;
+    /**
+     * Optional logical key to scope decoder state so multiple previews of the same
+     * asset/clip (e.g. media dialog vs. timeline poster) don't override each other.
+     */
+    decoderKey?: string;
   }
 > = ({
   assetId,
@@ -95,12 +100,14 @@ const VideoPreview: React.FC<
   focusFrameOverride,
   currentLocalFrameOverride,
   offscreenFast = false,
+  decoderKey,
 }) => {
+
   const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(assetId) || null);
   const decoderManager = useVideoDecoderManager();
   const focusFrameFromControls = useControlsStore((state) => state.focusFrame);
   const focusFrameFromInputs = useInputControlsStore((s) =>
-    s.getFocusFrame(inputId),
+    s.getFocusFrame(inputId ?? ""),
   );
   const getActiveProject = useProjectsStore((s) => s.getActiveProject);
   const focusFrame =
@@ -187,8 +194,19 @@ const VideoPreview: React.FC<
   // Use a logical decoder id so multiple clips can share the same underlying
   // asset while keeping independent decoder state and handlers.
   const makeDecoderId = useCallback(
-    (id: string) => `${id}::${clipId}`,
-    [clipId],
+    (id: string) => {
+      const logicalClipKey = decoderKey ?? clipId;
+      // For input-mode previews (model inputs, media dialogs, etc.), scope the
+      // decoder id by inputId so they never override the main timeline's
+      // onFrame/onError handlers for the same clip.
+      if (inputMode && inputId) {
+        return `${id}::${logicalClipKey}::input::${inputId}`;
+      }
+      // For normal timeline playback, keep the legacy id so it matches the
+      // preconfigured decoders from VideoDecoderManagerProvider.
+      return `${id}::${logicalClipKey}`;
+    },
+    [clipId, decoderKey, inputMode, inputId],
   );
   
   const { applyMask } = useWebGLMask({
@@ -356,7 +374,7 @@ const VideoPreview: React.FC<
   const iteratorRef = useRef<AsyncIterable<WrappedCanvas | null> | null>(null);
   const isPlayingFromControls = useControlsStore((s) => s.isPlaying);
   const isPlayingFromInputs = useInputControlsStore((s) =>
-    s.getIsPlaying(inputId),
+    s.getIsPlaying(inputId ?? ""),
   );
   const isPlayingRef = useRef(
     inputMode ? isPlayingFromInputs : isPlayingFromControls,
@@ -372,19 +390,11 @@ const VideoPreview: React.FC<
     focusFrameRef.current = focusFrame;
   }, [focusFrame]);
   const fpsFromControls = useControlsStore((s) => s.fps);
-  const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId));
+  const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId ?? ""));
   const fps = inputMode ? fpsFromInputs : fpsFromControls;
   const currentStartFrameRef = useRef<number>(0);
   const lastRenderedFrameRef = useRef<number>(-1);
 
-  // Debounce focusFrame to avoid spinning up decoders on every scrub tick while paused
-  //useEffect(() => {
-  //  let t: any;
-  //  // Slightly tighter debounce for inputMode to keep inputs responsive
-  //  const delay = inputMode ? 50 : 100;
-  //  t = setTimeout(() => setStableFocusFrame(focusFrame), delay);
-  //  return () => clearTimeout(t);
-  //}, [focusFrame, inputMode]);
 
   // Update refs when values change
   useEffect(() => {
@@ -707,6 +717,10 @@ const VideoPreview: React.FC<
 
     setClipTransform(clipId, {
       ...clipTransform,
+      // When we normalize an invalid transform, also recenter the clip
+      // within the preview rect so it remains visually centered.
+      x: offsetX,
+      y: offsetY,
       width: Math.max(fallbackWidth, 1),
       height: Math.max(fallbackHeight, 1),
     });
@@ -714,6 +728,8 @@ const VideoPreview: React.FC<
     clipTransform,
     displayWidth,
     displayHeight,
+    offsetX,
+    offsetY,
     clipId,
     setClipTransform,
     overrideClip,
@@ -880,7 +896,7 @@ const VideoPreview: React.FC<
   const seekToCurrentFrame = useCallback(async (isAccurateSeekNeededInput: boolean = false) => {
     // Check store state directly to ensure we don't block seeking due to stale ref
     const currentlyPlaying = inputMode
-      ? useInputControlsStore.getState().getIsPlaying(inputId)
+      ? useInputControlsStore.getState().getIsPlaying(inputId ?? "")
       : useControlsStore.getState().isPlaying;
 
     // If playback has started, do not run paused seek rendering to avoid cancelling live decode
@@ -915,7 +931,9 @@ const VideoPreview: React.FC<
     } catch (e) {
       console.warn("[video] seek failed", e);
     }
-  }, [decoderManager, getTargetFrameInfo, inputMode, maskFrameForCurrentFocus, isAccurateSeekNeeded, selectedAssetId, makeDecoderId]);
+  }, [decoderManager, getTargetFrameInfo, inputMode, maskFrameForCurrentFocus, isAccurateSeekNeeded, selectedAssetId, makeDecoderId, focusFrameOverride]);
+
+
 
   useEffect(() => {
     let active = true;

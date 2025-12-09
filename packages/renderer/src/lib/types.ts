@@ -380,6 +380,7 @@ export type InputImageTrack = {
   size?: number; // bytes (if Blob/File provided or fetched)
   animated?: boolean; // GIF/WebP/AVIF (if ImageDecoder path)
   orientation?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8; // EXIF tag 0x0112 (JPEG only here)
+  input?: Blob | File | ArrayBuffer | Uint8Array | string,
 };
 
 export type MediaInfo = {

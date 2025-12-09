@@ -83,7 +83,19 @@ function ensureProjectJson(
       : ([] as any[]),
   };
 
+  const inputControls = {
+    selectedRangeByInputId: raw?.inputControls?.selectedRangeByInputId ?? {},
+    selectedInputClipIdByInputId: raw?.inputControls?.selectedInputClipIdByInputId ?? {},
+    totalTimelineFramesByInputId: raw?.inputControls?.totalTimelineFramesByInputId ?? {},
+    timelineDurationByInputId: raw?.inputControls?.timelineDurationByInputId ?? {},
+    fpsByInputId: raw?.inputControls?.fpsByInputId ?? {},
+    focusFrameByInputId: raw?.inputControls?.focusFrameByInputId ?? {},
+    focusAnchorRatioByInputId: raw?.inputControls?.focusAnchorRatioByInputId ?? {},
+    zoomLevelByInputId: raw?.inputControls?.zoomLevelByInputId ?? {},
+    isPlayingByInputId: raw?.inputControls?.isPlayingByInputId ?? {},
+  };
 
+  
   return {
     version,
     meta: {
@@ -98,6 +110,7 @@ function ensureProjectJson(
     editorState,
     assets,
     timeline,
+    inputControls,
   };
 }
 

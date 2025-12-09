@@ -736,7 +736,38 @@ const ModelMenu: React.FC = () => {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const { data: manifestsData } = useManifests();
   const { data: modelTypesData } = useManifestTypes();
-  const { selectedManifestId } = useManifestStore();
+  const { selectedManifestId, loadManifests } = useManifestStore();
+
+
+  // Fallback polling: if manifests are null or empty, keep trying to load them.
+  useEffect(() => {
+    const hasManifests =
+      Array.isArray(manifestsData) && manifestsData.length > 0;
+  
+    if (hasManifests) return;
+
+    let cancelled = false;
+    const POLL_INTERVAL_MS = 2000;
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        await loadManifests(true);
+        console.log(manifestsData, "manifestsData");
+      } catch (e) {
+        console.error("Error loading manifests", e);
+        // swallow errors; polling will retry
+      }
+    };
+
+    void poll();
+    const id = window.setInterval(poll, POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [manifestsData, loadManifests]);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);

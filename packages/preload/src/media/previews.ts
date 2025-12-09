@@ -3,6 +3,7 @@ import { promises as fsp } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { ipcRenderer } from "electron";
 import { getMediaRootAbsolute } from "./root.js";
 
 // Local helper mirror of ensurePreviewDir from the previous monolith.
@@ -280,6 +281,28 @@ async function hasAudioStream(path: string): Promise<boolean> {
   });
 }
 
+async function resolveFfmpegInputPath(src: string): Promise<string> {
+  let p = src;
+  try {
+    if (typeof p === "string" && p.startsWith("app://")) {
+      const resolved = await ipcRenderer.invoke("appdir:resolve-path", p);
+      if (typeof resolved === "string" && resolved.length > 0) {
+        return resolved;
+      }
+    }
+    if (typeof p === "string" && p.startsWith("file://")) {
+      try {
+        p = fileURLToPath(p);
+      } catch {
+        // fall through with original
+      }
+    }
+  } catch {
+    // fall back to original src on any IPC error
+  }
+  return p;
+}
+
 async function renderAudioMixWithFfmpeg(
   clips: AudioMixClipSpec[],
   options: {
@@ -330,13 +353,7 @@ async function renderAudioMixWithFfmpeg(
   const activeClips: ActiveClip[] = [];
   let nextInputIndex = 0;
   for (const c of clips) {
-    let p = c.src;
-    try {
-      if (typeof p === "string" && p.startsWith("file://"))
-        p = fileURLToPath(p);
-    } catch {
-      // keep original
-    }
+    const p = await resolveFfmpegInputPath(c.src);
     // eslint-disable-next-line no-await-in-loop
     const hasAudio = await hasAudioStream(p);
     if (!hasAudio) continue;
@@ -558,8 +575,15 @@ async function exportVideoOpen(
   ];
   const hasAudio =
     typeof options.audioPath === "string" && options.audioPath.length > 0;
+  let audioPath: string | undefined;
   if (hasAudio) {
-    args.push("-i", options.audioPath as string);
+    audioPath = await resolveFfmpegInputPath(options.audioPath as string);
+    if (audioPath === outAbs) {
+      throw new Error(
+        "Export failed: audio source path is the same as the output path. Please export to a different file than the source media.",
+      );
+    }
+    args.push("-i", audioPath);
   }
 
   const useCodec = codec;

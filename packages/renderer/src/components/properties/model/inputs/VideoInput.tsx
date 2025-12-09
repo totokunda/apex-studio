@@ -56,6 +56,7 @@ interface VideoInputProps {
   label?: string;
   description?: string;
   inputId: string;
+  maxDuration?: number;
   value: VideoSelection;
   onChange: (value: VideoSelection) => void;
   clipId: string;
@@ -97,7 +98,6 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
   );
   const mediaLibraryVersion = useMediaLibraryVersion();
   const { fps } = useControlsStore();
-  const getAssetById = useClipStore((s) => s.getAssetById);
   const addAsset = useClipStore((s) => s.addAsset);
   const getActiveProject = useProjectsStore((s) => s.getActiveProject);
   useEffect(() => {
@@ -231,11 +231,22 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
         1,
         (clip.endFrame ?? 0) - (clip.startFrame ?? 0),
       );
-      onChange({
+      // create a new asset for the clip
+      const newClip = {
         ...clip,
         startFrame: 0,
         endFrame: clipDuration,
-      } as AnyClipProps);
+      } as AnyClipProps;
+      if (clip.type === "video") {
+        const asset = addAsset({
+          path: clip.assetId,
+          modelInputAsset: true,
+        });
+        (newClip as VideoClipProps).assetId = asset.id;
+        console.log("asset", asset);
+      }
+      console.log("newClip", newClip);
+      onChange(newClip);
     },
     [getClipById, onChange],
   );
@@ -411,6 +422,10 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
         <TabsContent value="library">{renderMediaLibrary()}</TabsContent>
         <TabsContent value="timeline" className="outline-none">
           <TimelineSearch
+            isAssetSelected={(clipId) => {
+              if (!value) return false;
+              return clipId === value.clipId;
+            }}
             types={["image", "video", "group", "text", "shape", "draw"]}
             excludeClipId={clipId || undefined}
           />
@@ -432,6 +447,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
   preprocessorName,
   applyPreprocessorInitial,
   onChangeComposite,
+  maxDuration,
 }) => {
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const [stageSize, setStageSize] = useState<{ w: number; h: number }>({
@@ -480,6 +496,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
   );
 
   const fpsForInput = fpsByInputId[inputId] ?? DEFAULT_FPS;
+
   const selectedRangeTuple = selectedRangeByInputId[inputId] ?? [0, 1];
   const focusFrameForInput = focusFrameByInputId[inputId] ?? 0;
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -495,10 +512,16 @@ const VideoInput: React.FC<VideoInputProps> = ({
   const getAssetById = useClipStore((s) => s.getAssetById);
   const addAsset = useClipStore((s) => s.addAsset);
 
-  // Initialize input fps synchronously before first render to avoid slow playback
+  // Initialize input fps synchronously before first render to avoid slow playback.
+  // We intentionally do not depend on the unstable setter reference here to avoid
+  // triggering an infinite render loop; instead we keep the latest setter in a ref.
+  const setInputFpsRef = React.useRef(setInputFps);
+  React.useEffect(() => {
+    setInputFpsRef.current = setInputFps;
+  }, [setInputFps]);
   React.useLayoutEffect(() => {
-    setInputFps(fps, inputId);
-  }, [fps, inputId, setInputFps]);
+    setInputFpsRef.current(fps, inputId);
+  }, [fps, inputId]);
 
   // Simplified: requestedStart/end unused
 
@@ -654,7 +677,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
           const mapWId: string | undefined = self?.map_w;
           if (!mapHId && !mapWId) return;
           const scaleById: string | undefined = self?.scale_by;
-          let targetHeight: number | undefined;
+          let targetShortSide: number | undefined;
           if (scaleById) {
             const scaleInp = inputsArr.find(
               (inp: any) => String(inp?.id) === String(scaleById),
@@ -664,7 +687,8 @@ const VideoInput: React.FC<VideoInputProps> = ({
               const valStr = String(scaleInp?.value ?? scaleInp?.default ?? "");
               if (type === "number" || type === "number+slider") {
                 const n = Number(valStr);
-                if (Number.isFinite(n) && n > 0) targetHeight = Math.floor(n);
+                if (Number.isFinite(n) && n > 0)
+                  targetShortSide = Math.floor(n);
               } else if (type === "select") {
                 const opts: any[] = Array.isArray(scaleInp?.options)
                   ? scaleInp.options
@@ -672,14 +696,13 @@ const VideoInput: React.FC<VideoInputProps> = ({
                 const selected = opts.find(
                   (o: any) => String(o?.value) === valStr,
                 );
-                const hCandidate = Number(
-                  selected?.height ?? selected?.h ?? NaN,
-                );
-                if (Number.isFinite(hCandidate) && hCandidate > 0)
-                  targetHeight = Math.floor(hCandidate);
+                const resCandidate = Number(selected?.value ?? NaN);
+                if (Number.isFinite(resCandidate) && resCandidate > 0)
+                  targetShortSide = Math.floor(resCandidate);
               } else {
                 const n = Number(valStr);
-                if (Number.isFinite(n) && n > 0) targetHeight = Math.floor(n);
+                if (Number.isFinite(n) && n > 0)
+                  targetShortSide = Math.floor(n);
               }
             }
           }
@@ -703,14 +726,30 @@ const VideoInput: React.FC<VideoInputProps> = ({
             } catch {}
           }
           if (!mw || !mh) return;
-          const baseAR = mw / Math.max(1, mh);
-          const outH = Math.floor(
-            Number.isFinite(targetHeight as number) &&
-              (targetHeight as number) > 0
-              ? (targetHeight as number)
-              : mh,
-          );
-          const outW = Math.floor(Math.max(1, outH * baseAR));
+
+          let outW = mw;
+          let outH = mh;
+
+          if (
+            Number.isFinite(targetShortSide as number) &&
+            (targetShortSide as number) > 0
+          ) {
+            const res = targetShortSide as number;
+            // Treat the scale-by value (usually resolution) as the target
+            // for the *shorter* side, and scale the longer side to match AR.
+            if (mw >= mh) {
+              // Landscape: height is shorter
+              const scale = res / mh;
+              outH = res;
+              outW = Math.floor(Math.max(1, mw * scale));
+            } else {
+              // Portrait: width is shorter
+              const scale = res / mw;
+              outW = res;
+              outH = Math.floor(Math.max(1, mh * scale));
+            }
+          }
+
           // Prevent ModelInputsPanel resolution/aspect sync from overriding mapped values
           if (mapHId === "height" || mapWId === "width") {
             updateModelInput(clipId, "resolution", { value: "custom" } as any);
@@ -1052,7 +1091,11 @@ const VideoInput: React.FC<VideoInputProps> = ({
     const cid = String(clip.clipId || "");
     if (!cid.startsWith("media:")) {
       const live = getClipById(cid) as AnyClipProps | undefined;
-      setMediaClip(live ?? null);
+      
+      setMediaClip({
+        ...live,
+        masks: (value as VideoClipProps).masks ?? [],
+      } as AnyClipProps);
       return;
     }
     let cancelled = false;
@@ -1168,6 +1211,15 @@ const VideoInput: React.FC<VideoInputProps> = ({
     }
   }, [value, liveTimelineClip, emitSelection]);
 
+  const isClipOnTimeline = useMemo(() => {
+    if (!value) return false;
+    const cid = String(value.clipId || "");
+    if (cid.startsWith("media:")) return false;
+    return true;
+  }, [value, getClipById]);
+
+  
+
   // Reset selected range only when the selected clipId actually changes
   const lastClipSignatureRef = useRef<string | null>(null);
   useEffect(() => {
@@ -1177,7 +1229,10 @@ const VideoInput: React.FC<VideoInputProps> = ({
       clipStart + 1,
       Math.round(previewClip.endFrame ?? clipStart + 1),
     );
-    const span = Math.max(1, clipEnd - clipStart);
+    let span = Math.max(1, clipEnd - clipStart);
+    if (typeof maxDuration === "number" && maxDuration > 0) {
+      span = Math.min(span, Math.max(1, Math.floor(maxDuration)));
+    }
     const currentClipId = String(previewClip.clipId || "");
 
     // Persist previous clipId per input across unmounts so navigation does not force a reset
@@ -1200,8 +1255,8 @@ const VideoInput: React.FC<VideoInputProps> = ({
     if (sameClipAsBefore) return;
 
     const [curStart, curEnd] = selectedRangeTuple;
-    const isAlreadyFull = curStart === 0 && curEnd === span;
-    if (!isAlreadyFull) {
+    const isAlreadyDesired = curStart === 0 && curEnd === span;
+    if (!isAlreadyDesired) {
       setSelectedRange(0, span, inputId);
     }
   }, [
@@ -1225,9 +1280,17 @@ const VideoInput: React.FC<VideoInputProps> = ({
     const span = Math.max(1, clipEnd - clipStart);
     let curStart = Math.round(selectedRangeTuple?.[0] ?? 0);
     let curEnd = Math.round(selectedRangeTuple?.[1] ?? curStart + 1);
-    const desiredStart = Math.max(0, Math.min(span - 1, curStart));
-    const desiredEnd = Math.max(desiredStart + 1, Math.min(span, curEnd));
-  
+    let desiredStart = Math.max(0, Math.min(span - 1, curStart));
+    let desiredEnd = Math.max(desiredStart + 1, Math.min(span, curEnd));
+
+    if (typeof maxDuration === "number" && maxDuration > 0) {
+      const maxSpan = Math.max(1, Math.floor(maxDuration));
+      const currentSpan = desiredEnd - desiredStart;
+      if (currentSpan > maxSpan) {
+        desiredEnd = desiredStart + maxSpan;
+      }
+    }
+
     if (desiredStart !== curStart || desiredEnd !== curEnd) {
       setSelectedRange(desiredStart, desiredEnd, inputId);
     }
@@ -1237,23 +1300,25 @@ const VideoInput: React.FC<VideoInputProps> = ({
     selectedRangeTuple?.[1],
     setSelectedRange,
     inputId,
+    maxDuration,
   ]);
 
   // Default selectedRange to the full duration on first load (store default [0,1])
   useEffect(() => {
     if (!previewClip) return;
     if (!Array.isArray(selectedRangeTuple)) return;
-    const isDefault =
-      selectedRangeTuple[0] === 0 && selectedRangeTuple[1] === 1;
-    if (!isDefault) return;
+
     const clipStart = Math.max(0, Math.round(previewClip.startFrame ?? 0));
     const clipEnd = Math.max(
       clipStart + 1,
       Math.round(previewClip.endFrame ?? clipStart + 1),
     );
-    console.log("clipStart", clipStart);
-    console.log("clipEnd", clipEnd);
-    const span = Math.max(1, clipEnd - clipStart);
+
+    let span = Math.max(1, clipEnd - clipStart);
+    if (typeof maxDuration === "number" && maxDuration > 0) {
+      span = Math.min(span, Math.max(1, Math.floor(maxDuration)));
+    }
+    
     setSelectedRange(0, span, inputId);
   }, [
     previewClip,
@@ -1261,6 +1326,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
     selectedRangeTuple?.[1],
     setSelectedRange,
     inputId,
+    maxDuration,
   ]);
 
   // Simplified: do not mirror timeline changes by emitting; preview pulls latest from store via mediaClip
@@ -1271,12 +1337,11 @@ const VideoInput: React.FC<VideoInputProps> = ({
       setFocusFrame(rangeStartForInput, inputId);
       return;
     }
-    const store = useInputControlsStore.getState();
     if (isPlaying) {
-      store.pause(inputId);
-      return;
+      pause(inputId);
+    } else {
+      play(inputId);
     }
-    store.play(inputId);
   }, [
     previewClip,
     isPlaying,
@@ -1284,6 +1349,8 @@ const VideoInput: React.FC<VideoInputProps> = ({
     rangeEndForInput,
     inputId,
     setFocusFrame,
+    play,
+    pause,
   ]);
 
   const showTimeline = Boolean(
@@ -1351,6 +1418,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
                         height={stageSize.h}
                         inputId={inputId}
                         ratioOverride={displayRatio}
+                        isDialogOpen={isDialogOpen}
                       />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-brand-light/70 text-[12px]">
@@ -1485,14 +1553,16 @@ const VideoInput: React.FC<VideoInputProps> = ({
             timelineSelectorProps={{ mode: "range", inputId }}
             focusFrame={focusFrameForInput}
             setFocusFrame={(frame) => setInputFocusFrame(frame, inputId)}
+            maxDuration={
+              typeof maxDuration === "number"
+                ? maxDuration
+                : undefined
+            }
             isPlayingExternal={isPlaying}
             onPlay={() => play(inputId)}
             onPause={() => pause(inputId)}
             canCrop={
-              mediaClip &&
-              (mediaClip.type === "video" || mediaClip.type === "image")
-                ? true
-                : false
+              !isClipOnTimeline
             }
             selectionRange={selectedRangeTuple}
           />

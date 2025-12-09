@@ -12,6 +12,7 @@ import {
     FLAC,
     ADTS,
 } from "mediabunny";
+import { getUserDataPath as getUserDataPathPreload } from "@app/preload";
 
 interface VideoFrameDecoderOptions {
     mediaInfo: MediaInfo;
@@ -338,6 +339,34 @@ interface VideoDecoderManagerAssetState {
     pendingSeeks: Map<number, { resolve: () => void; reject: (err: any) => void }>;
 }
 
+// Cached Electron userData path, resolved once via preload and then reused for
+// all worker configurations. This lets the worker cheaply detect when an
+// incoming asset path already lives under the userData tree and prefer the
+// faster app://user-data host over app://apex-cache.
+let cachedUserDataPath: string | null = null;
+let userDataPathInitPromise: Promise<void> | null = null;
+
+async function ensureUserDataPathLoaded(): Promise<void> {
+    if (cachedUserDataPath || userDataPathInitPromise) {
+        return userDataPathInitPromise ?? Promise.resolve();
+    }
+    userDataPathInitPromise = (async () => {
+        try {
+            const res: any = await getUserDataPathPreload();
+            if (res?.success && res.data?.user_data) {
+                cachedUserDataPath = res.data.user_data;
+            }
+        } catch {
+            // Best-effort only; keep cachedUserDataPath as null on failure.
+        }
+    })();
+    return userDataPathInitPromise;
+}
+
+// Kick off userData resolution in the background; we don't block decoder usage
+// on this, and fall back to previous heuristics until it's available.
+void ensureUserDataPathLoaded();
+
 export class VideoDecoderManager {
     private worker: Worker;
     private assets = new Map<string, VideoDecoderManagerAssetState>();
@@ -561,7 +590,6 @@ export class VideoDecoderManager {
             logicalId?: string;
         },
     ): void {
-
         const decoderId = options.logicalId ?? asset.id;
 
         // Normalize target dimensions (same logic as VideoFrameDecoder)
@@ -623,22 +651,31 @@ export class VideoDecoderManager {
         // Send configure to the shared worker
         const reqId = ++assetClient.currentRequestId;
 
+        const config: any = {
+            videoDecoderConfig: normalizedConfig,
+            asset: {
+                // Preserve the real Asset identity in metadata so worker-side
+                // path/format logic continues to function as before.
+                id: asset.id,
+                type: asset.type,
+                path: asset.path,
+            },
+            folderUuid: options.folderUuid,
+            formatStr,
+            initialTimestamp: options.initialTimestamp ?? 0,
+        };
+
+        // If we've already resolved the Electron userData path via preload,
+        // pass it through so the worker can cheaply detect when an incoming
+        // asset path is rooted under userData and prefer app://user-data.
+        if (cachedUserDataPath) {
+            config.userDataPath = cachedUserDataPath;
+        }
+
         this.worker.postMessage({
             type: "configure",
             assetId: decoderId,
-            config: {
-                videoDecoderConfig: normalizedConfig,
-                asset: {
-                    // Preserve the real Asset identity in metadata so worker-side
-                    // path/format logic continues to function as before.
-                    id: asset.id,
-                    type: asset.type,
-                    path: asset.path,
-                },
-                folderUuid: options.folderUuid,
-                formatStr,
-                initialTimestamp: options.initialTimestamp ?? 0,
-            },
+            config,
             requestId: reqId,
         });
     }
@@ -735,6 +772,7 @@ export class VideoDecoderManager {
         shouldDelay?: (timestamp: number) => Promise<void>,
         checkCancel?: () => boolean,
     ): Promise<void> {
+
         const client = this.assets.get(assetId);
         if (!client) {
             return;

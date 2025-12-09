@@ -320,7 +320,7 @@ const Preview: React.FC<PreviewProps> = () => {
   const maskRectStartNormalizedRef = useRef<{ x: number; y: number } | null>(
     null,
   );
-  
+
   const resetMaskShapeDrawingRefs = useCallback(() => {
     maskShapeTargetClipRef.current = null;
     maskShapeTransformRef.current = null;
@@ -393,6 +393,17 @@ const Preview: React.FC<PreviewProps> = () => {
         }
         if (timeline?.hidden) {
           return false;
+        }
+        if (clip.groupId) {
+          const clipGroup = clips.find(
+            (c) => c.clipId === clip.groupId,
+          );
+          const groupTimeline = timelines.find(
+            (t) => t.timelineId === clipGroup?.timelineId,
+          );
+          if (groupTimeline?.hidden) {
+            return false;
+          }
         }
         return true;
       });
@@ -3074,7 +3085,7 @@ const Preview: React.FC<PreviewProps> = () => {
         <>
           {sortClips(filterClips(clips, true)).map((clip: AnyClipProps) => {
             const hasOverlap =
-              clip.type === "video" && (clip.startFrame || 0) > 0
+              (clip.type === "video" || clip.type === "model" && clip.assetId) && (clip.startFrame || 0) > 0
                 ? true
                 : false;
             const clipAtFrame = clipWithinFrame(
@@ -3084,7 +3095,7 @@ const Preview: React.FC<PreviewProps> = () => {
               1,
             );
             if (!clipAtFrame) return null;
-            if (clip.type === "audio" || clip.type === "video") {
+            if (clip.type === "audio" || clip.type === "video" || (clip.type === "model" && clip.assetId)) {
               return (
                 <AudioPreview key={`audio-${clip.clipId}`} {...(clip as any)} />
               );

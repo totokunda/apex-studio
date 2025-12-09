@@ -17,6 +17,8 @@ import AudioInput from "./inputs/AudioInput";
 import SchedulerPanel from "./SchedulerPanel";
 import AttentionPanel from "./AttentionPanel";
 import ImageInputList from "./inputs/ImageInputList";
+import { useControlsStore } from "@/lib/control";
+import { useResolutionAspectSync } from "./useResolutionAspectSync";
 
 export const ModelInputsPanel: React.FC<{
   panel: UIPanel;
@@ -28,6 +30,7 @@ export const ModelInputsPanel: React.FC<{
   const getClipById = useClipStore((s) => s.getClipById);
   const updateClip = useClipStore((s) => s.updateClip);
   const [iconEl, setIconEl] = useState<React.ReactNode>(null);
+  const { fps } = useControlsStore();
 
   const getInputById = useCallback(
     (id: string) => {
@@ -172,216 +175,14 @@ export const ModelInputsPanel: React.FC<{
       cancelled = true;
     };
   }, [panel.icon]);
-
-  // Helpers to support dependent updates (resolution/aspect_ratio -> height/width)
-  const getSelectedOption = useCallback(
-    (input: UIInput | undefined, valueOverride?: string) => {
-      const opts: any[] = (input as any)?.options || [];
-      const val =
-        valueOverride ??
-        String((input as any)?.value ?? (input as any)?.default ?? "");
-      return opts.find((o) => String(o?.value) === String(val));
-    },
-    [],
-  );
-
-  const snapToStep = useCallback(
-    (num: number, step?: number, min?: number, max?: number) => {
-      if (!Number.isFinite(num)) return num;
-      let out = num;
-      if (step && step > 0) {
-        out = Math.round(out / step) * step;
-      }
-      if (Number.isFinite(min)) out = Math.max(min as number, out);
-      if (Number.isFinite(max)) out = Math.min(max as number, out);
-      return out;
-    },
-    [],
-  );
-
-  const computeWidthFromAR = useCallback(
-    (heightVal: number, aspectOverride?: string) => {
-      const widthInput = getInputById("width") as any;
-      const arInput = getInputById("aspect_ratio") as any;
-      const arOpt: any = getSelectedOption(arInput, aspectOverride);
-      if ((aspectOverride ?? String(arInput?.value)) === "custom") {
-        const currentWidth = Number(
-          (widthInput as any)?.value ?? (widthInput as any)?.default ?? NaN,
-        );
-        return Number.isFinite(currentWidth)
-          ? Math.round(currentWidth)
-          : Math.round(heightVal);
-      }
-      const rw = Number(arOpt?.ratio_w ?? 16) || 16;
-      const rh = Number(arOpt?.ratio_h ?? 9) || 9;
-      const rawWidth = heightVal * (rw / rh);
-      const snapped = snapToStep(
-        rawWidth,
-        widthInput?.step,
-        widthInput?.min,
-        widthInput?.max,
-      );
-      return Math.max(1, Math.round(snapped));
-    },
-    [getInputById, getSelectedOption, snapToStep],
-  );
-
-  const handleResolutionChange = useCallback(
-    (newVal: string) => {
-      const resInput = getInputById("resolution") as any;
-      const heightInput = getInputById("height") as any;
-      const widthInput = getInputById("width") as any;
-      if (!heightInput || !widthInput) return;
-      const selected = getSelectedOption(resInput, newVal) as any;
-      const targetHeightRaw = Number(
-        selected?.height ?? newVal ?? heightInput?.default ?? 1024,
-      );
-      const targetHeight =
-        Number.isFinite(targetHeightRaw) && targetHeightRaw > 0
-          ? targetHeightRaw
-          : 1024;
-      const heightSnapped = snapToStep(
-        targetHeight,
-        heightInput?.step,
-        heightInput?.min,
-        heightInput?.max,
-      );
-      const heightInt = Math.max(1, Math.round(heightSnapped));
-      // Preserve current aspect ratio based on existing width/height values
-      const currentHeightRaw = Number(
-        heightInput?.value ?? heightInput?.default ?? NaN,
-      );
-      const currentWidthRaw = Number(
-        widthInput?.value ?? widthInput?.default ?? NaN,
-      );
-      const hasValidCurrentDims =
-        Number.isFinite(currentHeightRaw) &&
-        currentHeightRaw > 0 &&
-        Number.isFinite(currentWidthRaw) &&
-        currentWidthRaw > 0;
-      let widthInt: number;
-      if (hasValidCurrentDims) {
-        const ratio = currentWidthRaw / currentHeightRaw;
-        const rawWidth = heightInt * ratio;
-        const snapped = snapToStep(
-          rawWidth,
-          widthInput?.step,
-          widthInput?.min,
-          widthInput?.max,
-        );
-        widthInt = Math.max(1, Math.round(snapped));
-      } else {
-        // Fallback to aspect ratio select if current dims are not valid
-        widthInt = computeWidthFromAR(heightInt);
-      }
-      // Prevent auto-sync effect from overriding our maintained ratio
-      updateModelInput(clipId, "aspect_ratio", { value: "custom" });
-      updateModelInput(clipId, "height", { value: String(heightInt) });
-      updateModelInput(clipId, "width", { value: String(widthInt) });
-    },
-    [
+  const { handleResolutionChange, handleAspectRatioChange } =
+    useResolutionAspectSync({
       clipId,
-      computeWidthFromAR,
+      inputs,
       getInputById,
-      getSelectedOption,
-      snapToStep,
-      updateModelInput,
-    ],
-  );
-
-  const handleAspectRatioChange = useCallback(
-    (newVal: string) => {
-      const heightInput = getInputById("height") as any;
-      const resInput = getInputById("resolution") as any;
-      let heightNow = Number(
-        heightInput?.value ?? heightInput?.default ?? 1024,
-      );
-      if (!Number.isFinite(heightNow)) {
-        const resSelected = getSelectedOption(resInput);
-        heightNow =
-          Number(
-            (resSelected as any)?.height ??
-              resInput?.value ??
-              resInput?.default ??
-              1024,
-          ) || 1024;
-      }
-      const heightSnapped = snapToStep(
-        heightNow,
-        heightInput?.step,
-        heightInput?.min,
-        heightInput?.max,
-      );
-      const heightInt = Math.max(1, Math.round(heightSnapped));
-      // Ensure height is updated so the UI reflects recalculation alongside width
-      updateModelInput(clipId, "height", { value: String(heightInt) });
-      const widthInt = computeWidthFromAR(heightInt, newVal);
-      updateModelInput(clipId, "width", { value: String(widthInt) });
-    },
-    [
-      clipId,
-      computeWidthFromAR,
-      getInputById,
-      getSelectedOption,
-      snapToStep,
-      updateModelInput,
-    ],
-  );
-
-  // Sync effect: ensure height and width reflect selected resolution and aspect ratio
-  useEffect(() => {
-    const resInput = getInputById("resolution") as any;
-    const arInput = getInputById("aspect_ratio") as any;
-    const heightInput = getInputById("height") as any;
-    const widthInput = getInputById("width") as any;
-    if (!heightInput || !widthInput) return;
-
-    const resVal = String(resInput?.value ?? resInput?.default ?? "");
-    const arVal = String(arInput?.value ?? arInput?.default ?? "");
-    // If custom is selected, do not auto-sync; manual overrides are in effect
-    if (resVal === "custom" || arVal === "custom") return;
-
-    const resOpt = getSelectedOption(resInput);
-    const desiredHeight = Number((resOpt as any)?.height);
-
-    const currentHeight = Number(
-      heightInput?.value ?? heightInput?.default ?? NaN,
-    );
- 
-    let nextHeight = currentHeight;
-    if (Number.isFinite(desiredHeight)) {
-      const snapped = snapToStep(
-        desiredHeight,
-        heightInput?.step,
-        heightInput?.min,
-        heightInput?.max,
-      );
-      const snappedInt = Math.max(1, Math.round(snapped));
-      if (!Number.isFinite(currentHeight) || snappedInt !== currentHeight) {
-        nextHeight = snappedInt;
-        updateModelInput(clipId, "height", { value: String(snappedInt) });
-      }
-    }
-
-    const widthFromAR = computeWidthFromAR(
-      Number.isFinite(nextHeight) ? nextHeight : currentHeight,
-      arVal,
-    );
-    const currentWidth = Number(
-      widthInput?.value ?? widthInput?.default ?? NaN,
-    );
-    if (Number.isFinite(widthFromAR) && widthFromAR !== currentWidth) {
-      updateModelInput(clipId, "width", { value: String(widthFromAR) });
-    }
-  }, [
-    clipId,
-    computeWidthFromAR,
-    getInputById,
-    getSelectedOption,
-    snapToStep,
-    updateModelInput,
-    inputs,
-  ]);
+      updateModelInput: (cId, inputId, patch) =>
+        updateModelInput(cId, inputId, patch as any),
+    });
 
   // Scheduler dropdown (from manifest spec.components -> scheduler_options)
   const clip: any = getClipById(clipId);
@@ -860,6 +661,11 @@ export const ModelInputsPanel: React.FC<{
                         | string
                         | undefined;
                       const panelSizeToUse = perItemPanelSize;
+                      let maxDuration = (input )?.max_duration_secs;
+                      if (typeof maxDuration === "number" && maxDuration > 0) {
+                        // convert to frames
+                        maxDuration = Math.max(1, Math.floor(maxDuration * fps));
+                      }
                       return (
                         <VideoInput
                           inputId={inputId}
@@ -869,6 +675,7 @@ export const ModelInputsPanel: React.FC<{
                           description={input?.description}
                           value={selectionVal}
                           panelSize={panelSizeToUse}
+                          maxDuration={maxDuration}
                           preprocessorRef={preprocRef}
                           preprocessorName={preprocName}
                           applyPreprocessorInitial={
@@ -1127,11 +934,19 @@ export const ModelInputsPanel: React.FC<{
                       const currentVal: any = parseVideoValue(
                         input?.value ?? input?.default,
                       );
+                      let maxDuration = (input)?.max_duration_secs
                       const panelSizeToUse = perItemPanelSize;
+                      if (typeof maxDuration === "number" && maxDuration > 0) {
+                        // convert to frames
+                        maxDuration = Math.max(1, Math.floor(maxDuration * fps));
+                      }
+
+                     
                       return (
                         <VideoInput
                           inputId={inputId}
                           clipId={clipId}
+                          maxDuration={maxDuration}
                           label={input?.label || "Video"}
                           description={input?.description}
                           value={currentVal}
@@ -1196,6 +1011,11 @@ export const ModelInputsPanel: React.FC<{
                         | string
                         | undefined;
                       const panelSizeToUse = perItemPanelSize;
+                      let maxDuration = (input)?.max_duration_secs;
+                      if (typeof maxDuration === "number" && maxDuration > 0) {
+                        // convert to frames
+                        maxDuration = Math.max(1, Math.floor(maxDuration * fps));
+                      }
                       return (
                         <VideoInput
                           inputId={inputId}
@@ -1204,7 +1024,8 @@ export const ModelInputsPanel: React.FC<{
                           description={input?.description}
                           value={currentVal}
                           panelSize={panelSizeToUse}
-                          onChange={(v: any) => {
+                          maxDuration={maxDuration}
+                          onChange={(v) => {
                             updateModelInput(clipId, inputId, {
                               value: v ? JSON.stringify(v) : "",
                             });

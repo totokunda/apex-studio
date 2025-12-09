@@ -121,6 +121,7 @@ async function toBlob(
 export async function readImageMetadataFast(
   input: Blob | File | ArrayBuffer | Uint8Array | string,
 ): Promise<InputImageTrack> {
+
   const blob = await toBlob(input);
   const size = blob.size;
   const head = await blob.slice(0, 512).arrayBuffer();
@@ -148,6 +149,7 @@ export async function readImageMetadataFast(
       mime,
       size,
       animated: !!track?.animated,
+      input:input
     };
 
     if (mime === "image/jpeg") {
@@ -163,6 +165,7 @@ export async function readImageMetadataFast(
       height: bmp.height,
       mime,
       size,
+      input: blob,
     };
     bmp.close();
     if (mime === "image/jpeg")
@@ -182,7 +185,8 @@ export async function readImageMetadataFast(
       height: img.naturalHeight,
       mime,
       size,
-    };
+      input
+    }
     if (mime === "image/jpeg")
       meta.orientation = await readJpegOrientation(blob);
     return meta;

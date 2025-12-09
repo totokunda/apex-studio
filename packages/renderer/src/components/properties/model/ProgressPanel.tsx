@@ -12,17 +12,18 @@ interface ProgressPanelProps {
 const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
   const { getClipById } = useClipStore();
   const clip = getClipById(clipId ?? "") as ModelClipProps | undefined;
-  const job = useJobProgress(clip?.activeJobId ?? null);
+  const activeJobId = clip?.activeJobId ?? null;
+  const job = useJobProgress(activeJobId);
   const { startTracking, stopTracking, fetchJobResult } = useEngineJobActions();
   const [spinning, setSpinning] = useState(false);
 
   // Ensure tracking stays active even if this panel unmounts
   useEffect(() => {
-    if (!clipId) return;
+    if (!activeJobId) return;
     try {
-      startTracking(clipId);
+      startTracking(activeJobId);
     } catch {}
-  }, [clipId, startTracking]);
+  }, [activeJobId, startTracking]);
 
   // Build chronological (oldest -> newest) updates,
   // skipping preview frames and deduping while keeping the most recent duplicate
@@ -55,7 +56,7 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
   }, [displayUpdates.length]);
 
   const handleRefresh = async () => {
-    const id = (job?.jobId || clip?.activeJobId || clipId || "").toString();
+    const id = job?.jobId || activeJobId;
     if (!id) return;
     try {
       setSpinning(true);

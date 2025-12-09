@@ -182,8 +182,14 @@ export const getMediaInfo = async (
     const secondarySourceDir =
       primarySourceDir === "user-data" ? "apex-cache" : "user-data";
     try {
-      fsPathForImage = fileURLToPath(hasHashSuffix ? originalPath : path);
-      const url = new URL(`app://${primarySourceDir}/${fsPathForImage}`);
+      let url: URL | null = null;
+      if (path.startsWith("app://")) {
+        url = new URL(path);
+      } else {
+        fsPathForImage = fileURLToPath(hasHashSuffix ? originalPath : path);
+        url = new URL(`app://${primarySourceDir}/${fsPathForImage}`);
+      }
+
       if (folderUuid && primarySourceDir === "apex-cache") {
         url.searchParams.set("folderUuid", folderUuid);
       }

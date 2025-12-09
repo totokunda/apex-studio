@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import _ from "lodash";
 import type { AnyClipProps, ModelClipProps, TimelineProps } from "@/lib/types";
 import { getPreviewPath, savePreviewImage } from "@app/preload";
+import { getPathExists } from "@app/preload";
 import { getMediaInfoCached } from "@/lib/media/utils";
 import { exportClip, exportSequence } from "@app/export-renderer";
 import type { ManifestComponent } from "@/lib/manifest/api";
@@ -9,6 +10,85 @@ import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
 type MediaItem = {
   type: "image" | "video" | "audio";
   src: string;
+};
+
+type ExportMode = "image" | "video" | "audio";
+
+type ExportCacheEntry = {
+  mode: ExportMode;
+  src: string;
+};
+
+const EXPORT_CACHE_MAX_ENTRIES = 256;
+
+declare global {
+  interface Window {
+    __apexModelExportCache__?: Map<string, ExportCacheEntry>;
+  }
+}
+
+let fallbackExportResultCache:
+  | Map<string, ExportCacheEntry>
+  | undefined;
+
+const getExportCacheMap = (): Map<string, ExportCacheEntry> => {
+  if (typeof window !== "undefined") {
+    if (!window.__apexModelExportCache__) {
+      window.__apexModelExportCache__ = new Map<string, ExportCacheEntry>();
+    }
+    return window.__apexModelExportCache__;
+  }
+  if (!fallbackExportResultCache) {
+    fallbackExportResultCache = new Map<string, ExportCacheEntry>();
+  }
+  return fallbackExportResultCache;
+};
+
+const buildExportCacheKey = (params: {
+  mode: ExportMode;
+  exportClips: any[];
+  width?: number;
+  height?: number;
+  imageFrame?: number;
+  range?: { start: number; end: number };
+  fps?: number;
+  backgroundColor?: string;
+  encoderOptions?: any;
+  audioOptions?: any;
+}): string | null => {
+  try {
+    const { mode, exportClips, ...rest } = params;
+    return JSON.stringify({
+      mode,
+      exportClips,
+      opts: rest,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const getCachedExportResult = (key: string): string | undefined => {
+  const cache = getExportCacheMap();
+  const hit = cache.get(key);
+  return hit?.src;
+};
+
+const deleteCachedExportResult = (key: string): void => {
+  const cache = getExportCacheMap();
+  cache.delete(key);
+};
+
+const setCachedExportResult = (key: string, entry: ExportCacheEntry): void => {
+  const cache = getExportCacheMap();
+  if (!key) return;
+  if (cache.size >= EXPORT_CACHE_MAX_ENTRIES) {
+    const firstKey = cache.keys().next().value as string | undefined;
+    if (firstKey) {
+      cache.delete(firstKey);
+    }
+  }
+  cache.set(key, entry);
 };
 
 export interface GenerateContext {
@@ -171,6 +251,9 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
             timelines,
           },
           {
+            useMediaDimensionsForExport: true,
+            useOriginalTransform: true,
+            dimensionsFrom: "clip",
             clearMasks: false,
             applyCentering: true,
           },
@@ -184,7 +267,34 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
             ? ((value as any).selectedFrame ?? 0)
             : 0;
 
-        if (exportClips.length === 1) {
+        const cacheKey =
+          exportClips.length > 0
+            ? buildExportCacheKey({
+                mode: "image",
+                exportClips,
+                width,
+                height,
+                imageFrame: frame,
+                fps,
+                backgroundColor: "#000000",
+              })
+            : null;
+
+        const cached = cacheKey ? getCachedExportResult(cacheKey) : undefined;
+        if (cached && cacheKey) {
+          try {
+            const existsResp = await getPathExists(cached);
+            if (existsResp?.success && existsResp.data?.exists) {
+              absolutePath = cached;
+            } else {
+              deleteCachedExportResult(cacheKey);
+            }
+          } catch {
+            // On IPC error, fall back to re-export path
+          }
+        }
+
+        if (!absolutePath && exportClips.length === 1) {
           const result = await exportClip({
             mode: "image",
             width,
@@ -200,7 +310,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
               fileNameHint: `${clipId}_${input.id}_${frame}`,
             });
           }
-        } else if (exportClips.length > 1) {
+        } else if (!absolutePath && exportClips.length > 1) {
           const result = await exportSequence({
             mode: "image",
             width,
@@ -215,6 +325,13 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
               fileNameHint: `${clipId}_${input.id}_${frame}`,
             });
           }
+        }
+
+        if (absolutePath && cacheKey) {
+          setCachedExportResult(cacheKey, {
+            mode: "image",
+            src: absolutePath,
+          });
         }
 
         if (absolutePath) {
@@ -267,66 +384,141 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
       );
 
       const { exportClips, width, height } = prepared;
+
       let absolutePath: string | null = null;
 
       if (String(input.type).startsWith("video")) {
         const frameRange = value.selectedRange ? value.selectedRange : [0, 1];
-        const filePath = await getPreviewPath(
-          `${clipId}_${input.id}_${frameRange[0]}_${frameRange[1]}`,
-        );
-        if (exportClips.length === 1) {
-          const result = await exportClip({
-            mode: "video",
-            width: width,
-            height: height,
-            range: { start: frameRange[0], end: frameRange[1] },
-            clip: exportClips[0],
-            fps: fps,
-            backgroundColor: "#000000",
-            filename: filePath,
-            encoderOptions: {
-              format: "webm",
-              codec: "vp9",
-              preset: "ultrafast",
-              crf: 23,
-              bitrate: "1000k",
-              resolution: { width: width, height: height },
-              alpha: true,
-            },
-          });
-          if (typeof result === "string") {
-            absolutePath = result;
+
+        const cacheKey =
+          exportClips.length > 0
+            ? buildExportCacheKey({
+                mode: "video",
+                exportClips,
+                width,
+                height,
+                range: { start: frameRange[0], end: frameRange[1] },
+                fps,
+                backgroundColor: "#000000",
+                encoderOptions: {
+                  format: "webm",
+                  codec: "vp9",
+                  preset: "ultrafast",
+                  crf: 23,
+                  bitrate: "1000k",
+                  resolution: { width, height },
+                  alpha: true,
+                },
+              })
+            : null;
+
+        const cached = cacheKey ? getCachedExportResult(cacheKey) : undefined;
+        if (cached && cacheKey) {
+          try {
+            const existsResp = await getPathExists(cached);
+            if (existsResp?.success && existsResp.data?.exists) {
+              absolutePath = cached;
+            } else {
+              deleteCachedExportResult(cacheKey);
+            }
+          } catch {
+            // On IPC error, fall back to re-export path
           }
-        } else {
-          const result = await exportSequence({
-            mode: "video",
-            width: width,
-            height: height,
-            range: { start: frameRange[0], end: frameRange[1] },
-            clips: exportClips,
-            fps: fps,
-            backgroundColor: "#000000",
-            filename: filePath,
-            encoderOptions: {
-              format: "webm",
-              codec: "vp9",
-              preset: "ultrafast",
-              crf: 23,
-              bitrate: "1000k",
-              resolution: { width: width, height: height },
-              alpha: true,
-            },
-          });
-          if (typeof result === "string") {
-            absolutePath = result;
+        }
+
+        if (!absolutePath) {
+          const filePath = await getPreviewPath(
+            `${clipId}_${input.id}_${frameRange[0]}_${frameRange[1]}`,
+          );
+          if (exportClips.length === 1) {
+            const result = await exportClip({
+              mode: "video",
+              width: width,
+              height: height,
+              range: { start: frameRange[0], end: frameRange[1] },
+              clip: exportClips[0],
+              fps: fps,
+              backgroundColor: "#000000",
+              filename: filePath,
+              encoderOptions: {
+                format: "webm",
+                codec: "vp9",
+                preset: "ultrafast",
+                crf: 23,
+                bitrate: "1000k",
+                resolution: { width: width, height: height },
+                alpha: true,
+              },
+            });
+            if (typeof result === "string") {
+              absolutePath = result;
+            }
+          } else {
+            const result = await exportSequence({
+              mode: "video",
+              width: width,
+              height: height,
+              range: { start: frameRange[0], end: frameRange[1] },
+              clips: exportClips,
+              fps: fps,
+              backgroundColor: "#000000",
+              filename: filePath,
+              encoderOptions: {
+                format: "webm",
+                codec: "vp9",
+                preset: "ultrafast",
+                crf: 23,
+                bitrate: "1000k",
+                resolution: { width: width, height: height },
+                alpha: true,
+              },
+            });
+            if (typeof result === "string") {
+              absolutePath = result;
+            }
           }
+        }
+
+        if (absolutePath && cacheKey) {
+          setCachedExportResult(cacheKey, {
+            mode: "video",
+            src: absolutePath,
+          });
         }
       } else {
         const frame =
           value.type === "video" || value.type === "group"
             ? (value as any).selectedFrame
             : 0;
-        if (exportClips.length === 1) {
+
+        const cacheKey =
+          exportClips.length > 0
+            ? buildExportCacheKey({
+                mode: "image",
+                exportClips,
+                width,
+                height,
+                imageFrame: frame,
+                fps,
+                backgroundColor: "#000000",
+              })
+            : null;
+
+        const cached = cacheKey ? getCachedExportResult(cacheKey) : undefined;
+        if (cached && cacheKey) {
+          try {
+            const existsResp = await getPathExists(cached);
+            if (existsResp?.success && existsResp.data?.exists) {
+              absolutePath = cached;
+            } else {
+              deleteCachedExportResult(cacheKey);
+            }
+          } catch {
+            // On IPC error, fall back to re-export path
+          }
+        }
+
+        if (!absolutePath && exportClips.length === 1) {
           const result = await exportClip({
             mode: "image",
             width: width,
@@ -342,8 +534,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
               fileNameHint: `${clipId}_${input.id}_${frame}`,
             });
           }
-
-        } else {
+        } else if (!absolutePath && exportClips.length > 1) {
           const result = await exportSequence({
             mode: "image",
             width: width,
@@ -358,6 +549,13 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
               fileNameHint: `${clipId}_${input.id}_${frame}`,
             });
           }
+        }
+
+        if (absolutePath && cacheKey) {
+          setCachedExportResult(cacheKey, {
+            mode: "image",
+            src: absolutePath,
+          });
         }
       }
 
@@ -375,25 +573,74 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         const asset = getAssetById(value.assetId);
         const mediaInfo = getMediaInfoCached(asset?.path);
         if (!mediaInfo) continue;
-
-        const filePath = await getPreviewPath(`${clipId}_${input.id}`, {
-          ext: "mp3",
+        const audioClipExport = prepareExportClipsForValue(value as AnyClipProps, {
+          aspectRatio,
+          getClipsForGroup,
+          getAssetById,
+          getClipsByType,
+          getClipPositionScore,
+          timelines,
         });
+        const { exportClips } = audioClipExport;
+
         const frameRange = value.selectedRange ? value.selectedRange : [0, 1];
         value.startFrame = frameRange[0];
         value.endFrame = frameRange[1];
-        const result = await exportClip({
-          mode: "audio",
-          clip: value as any,
-          range: { start: frameRange[0], end: frameRange[1] },
-          fps: fps,
-          filename: filePath,
-        });
 
-        if (typeof result === "string") {
+        const cacheKey =
+          exportClips.length > 0
+            ? buildExportCacheKey({
+                mode: "audio",
+                exportClips,
+                range: { start: frameRange[0], end: frameRange[1] },
+                fps,
+                audioOptions: { format: "mp3" },
+              })
+            : null;
+
+        const cached = cacheKey ? getCachedExportResult(cacheKey) : undefined;
+        let resultPath: string | undefined;
+
+        if (cached && cacheKey) {
+          try {
+            const existsResp = await getPathExists(cached);
+            if (existsResp?.success && existsResp.data?.exists) {
+              resultPath = cached;
+            } else {
+              deleteCachedExportResult(cacheKey);
+            }
+          } catch {
+            // On IPC error, fall back to re-export path
+          }
+        }
+
+        if (!resultPath) {
+          const filePath = await getPreviewPath(`${clipId}_${input.id}`, {
+            ext: "mp3",
+          });
+          const result = await exportClip({
+            mode: "audio",
+            clip: exportClips[0],
+            range: { start: frameRange[0], end: frameRange[1] },
+            fps: fps,
+            filename: filePath,
+          });
+
+          if (typeof result === "string") {
+            resultPath = result;
+          }
+        }
+
+        if (resultPath) {
+          if (cacheKey) {
+            setCachedExportResult(cacheKey, {
+              mode: "audio",
+              src: resultPath,
+            });
+          }
           (modelValues as any)[input.id] = {
             type: input.type,
-            src: result,
+            src: resultPath,
           };
         }
       }
@@ -522,7 +769,6 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
     }
 
     const activeJobId = uuidv4();
-
 
     const res = await runEngine({
       manifest_id: manifestId,

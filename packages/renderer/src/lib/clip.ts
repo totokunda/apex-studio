@@ -24,7 +24,7 @@ import { getMediaInfo, getMediaInfoCached } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
 import { ManifestWithType, UIInput } from "./manifest/api";
-import { useInputControlsStore } from "./inputControl";
+import { globalInputControlsStore } from "./inputControl";
 import { remapMaskWithClipTransformProportional } from "./mask/clipTransformUtils";
 
 import _ from "lodash";
@@ -436,17 +436,22 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
       asset = { path: asset };
     }
 
+    const isModelInputAsset = !!(asset as any).modelInputAsset;
+
     const path =
       typeof asset === "object" && "path" in asset
         ? (asset.path as string)
         : (asset as string);
 
-    // Reuse existing asset for this path to avoid duplicates
+    // Reuse existing asset for this path to avoid duplicates,
+    // but NEVER reuse for modelInputAsset so they always get a unique assetId.
     const existingAssets = get().assets;
-    const existing = Object.values(existingAssets).find(
-      (a) => a.path === path,
-    );
-    if (existing) return existing;
+    if (!isModelInputAsset) {
+      const existing = Object.values(existingAssets).find(
+        (a) => a.path === path && !a.modelInputAsset,
+      );
+      if (existing) return existing;
+    }
 
 
     const mediaInfo = getMediaInfoCached(path as string);
@@ -528,17 +533,22 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
       asset = { path: asset };
     }
 
+    const isModelInputAsset = !!(asset as any).modelInputAsset;
+
     const path =
       typeof asset === "object" && "path" in asset
         ? (asset.path as string)
         : (asset as string);
 
-    // Reuse existing asset for this path to avoid duplicates
+    // Reuse existing asset for this path to avoid duplicates,
+    // but NEVER reuse for modelInputAsset so they always get a unique assetId.
     const existingAssets = get().assets;
-    const existing = Object.values(existingAssets).find(
-      (a) => a.path === path,
-    );
-    if (existing) return existing;
+    if (!isModelInputAsset) {
+      const existing = Object.values(existingAssets).find(
+        (a) => a.path === path && !a.modelInputAsset,
+      );
+      if (existing) return existing;
+    }
 
 
     const mediaInfo = getMediaInfoCached(path as string);
@@ -1420,23 +1430,20 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     try {
       if (
         currentClip.type === "model" &&
-        (currentClip as any)?.manifest?.spec
+        (currentClip as any)?.manifest?.spec &&
+        !currentClip.assetId
       ) {
         const manifestSpec = (currentClip as any).manifest.spec as any;
-        const manifestFps = Number(manifestSpec.fps);
         const projectFps = Math.max(1, useControlsStore.getState().fps || 1);
-        const fps =
-          Number.isFinite(manifestFps) && manifestFps > 0
-            ? manifestFps
-            : projectFps;
+        
         const maxSecs = Number(manifestSpec.max_duration_secs);
         const minSecs = Number(manifestSpec.min_duration_secs);
         const hasMax = Number.isFinite(maxSecs) && maxSecs > 0;
         const hasMin = Number.isFinite(minSecs) && minSecs > 0;
         const maxFrames = hasMax
-          ? Math.max(1, Math.floor(maxSecs * fps))
+          ? Math.max(1, Math.floor(maxSecs * projectFps))
           : null;
-        const minFrames = hasMin ? Math.max(1, Math.ceil(minSecs * fps)) : null;
+        const minFrames = hasMin ? Math.max(1, Math.ceil(minSecs * projectFps)) : null;
         if (maxFrames || minFrames) {
           const start = Math.max(0, currentClip.startFrame || 0);
           const end = Math.max(start + 1, currentClip.endFrame || start + 1);
@@ -1500,27 +1507,23 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         try {
           if (
             currentClip.type === "model" &&
-            (currentClip as any)?.manifest?.spec
+            (currentClip as any)?.manifest?.spec &&
+            !currentClip.assetId
           ) {
             const manifestSpec = (currentClip as any).manifest.spec as any;
-            const manifestFps = Number(manifestSpec.fps);
             const projectFps = Math.max(
               1,
               useControlsStore.getState().fps || 1,
             );
-            const fps =
-              Number.isFinite(manifestFps) && manifestFps > 0
-                ? manifestFps
-                : projectFps;
             const maxSecs = Number(manifestSpec.max_duration_secs);
             const minSecs = Number(manifestSpec.min_duration_secs);
             const hasMax = Number.isFinite(maxSecs) && maxSecs > 0;
             const hasMin = Number.isFinite(minSecs) && minSecs > 0;
             const maxFrames = hasMax
-              ? Math.max(1, Math.floor(maxSecs * fps))
+                ? Math.max(1, Math.floor(maxSecs * projectFps))
               : null;
             const minFrames = hasMin
-              ? Math.max(1, Math.ceil(minSecs * fps))
+              ? Math.max(1, Math.ceil(minSecs * projectFps))
               : null;
             if (maxFrames) {
               const limitEnd = start + maxFrames;
@@ -1534,7 +1537,8 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         } catch {}
 
         const frameDelta = desiredEndFrame - oldEndFrame;
-
+ 
+        
         if (frameDelta + (currentClip.trimEnd || 0) > 0) {
           return { clips: state.clips };
         }
@@ -1545,6 +1549,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
           endFrame: desiredEndFrame,
           trimEnd: frameDelta + (currentClip.trimEnd || 0),
         };
+      
       } else if (side === "left") {
         // Resize left edge - adjust current clip's start and shift all clips before it
         const oldStartFrame = currentClip.startFrame || 0;
@@ -1555,7 +1560,8 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         try {
           if (
             currentClip.type === "model" &&
-            (currentClip as any)?.manifest?.spec
+            (currentClip as any)?.manifest?.spec &&
+            !currentClip.assetId
           ) {
             const manifestSpec = (currentClip as any).manifest.spec as any;
             const projectFps = Math.max(
@@ -1605,7 +1611,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
           };
         }
       }
-
+  
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
       const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
@@ -1789,9 +1795,10 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         } else {
           selectedClip = finalVal;
         }
-        const inputStore = useInputControlsStore.getState();
+        const inputStore = globalInputControlsStore.getState();
+
         if (isVideoish || isAudioish) {
-          const [start, end] = inputStore.getSelectedRange(inp.id);
+          const [start, end] = inputStore.getSelectedRange(inp.id, clipId);
           if (selectedClip && typeof selectedClip === "object") {
             finalVal = {
               ...(selectedClip as any),
@@ -1810,7 +1817,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
             };
           }
         } else if (isImageish) {
-          const focus = inputStore.getFocusFrame(inp.id);
+          const focus = inputStore.getFocusFrame(inp.id, clipId);
           if (selectedClip && typeof selectedClip === "object") {
             finalVal = {
               ...(selectedClip as any),

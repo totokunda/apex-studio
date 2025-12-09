@@ -3,6 +3,7 @@ import { useClipStore } from "@/lib/clip";
 import { ModelClipProps } from "@/lib/types";
 import { ModelInputsPanel } from "./ModelInputsPanel";
 import { UIPanel } from "@/lib/manifest/api";
+import { InputControlsProvider } from "@/lib/inputControl";
 
 interface ModelInputsPropertiesProps {
   clipId: string;
@@ -16,6 +17,7 @@ export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({
   const clip = useClipStore((s) => s.getClipById(clipId)) as ModelClipProps;
 
   return (
+    <InputControlsProvider clipId={clipId}>
     <div className="flex flex-col gap-y-2">
       <div className="text-brand-light text-[10px] flex flex-col divide-y divide-brand-light/5">
         {(() => {
@@ -80,5 +82,6 @@ export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({
         })()}
       </div>
     </div>
+    </InputControlsProvider>
   );
 };

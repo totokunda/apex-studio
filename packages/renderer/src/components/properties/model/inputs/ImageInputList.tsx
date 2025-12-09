@@ -2,11 +2,9 @@ import React from "react";
 import ImageInput, { ImageSelection } from "./ImageInput";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  LuCircleX,
   LuImageOff,
   LuImagePlus,
   LuTrash,
-  LuX,
 } from "react-icons/lu";
 
 interface ImageInputListProps {
@@ -59,6 +57,8 @@ const ImageInputList: React.FC<ImageInputListProps> = ({
   const enableScroll =
     typeof panelSize === "number" ? panelSize < totalNeededWidth : true;
 
+
+
   return (
     <div className="w-full pr-1">
       <div className="flex flex-row items-center justify-between">
@@ -110,11 +110,11 @@ const ImageInputList: React.FC<ImageInputListProps> = ({
           {value.map((item, index) => (
             <div
               key={`${inputId}-${index}`}
-              className="w-48 flex-shrink-0 relative"
+              className="w-48 shrink-0 relative"
             >
               <button
                 onClick={() => handleItemRemove(index)}
-                className="absolute z-[51] shadow-lg -top-1 -right-1 rounded-full w-5 h-5 flex items-center justify-center  bg-brand-background-dark border border-red-500 hover:bg-brand-background transition-all duration-200"
+                className="absolute z-51 shadow-lg -top-1 -right-1 rounded-full w-5 h-5 flex items-center justify-center  bg-brand-background-dark border border-red-500 hover:bg-brand-background transition-all duration-200"
               >
                 <LuTrash className="w-2.5 h-2.5 text-red-500" />
               </button>

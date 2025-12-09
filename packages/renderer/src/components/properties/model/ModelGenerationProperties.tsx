@@ -35,8 +35,7 @@ export const ModelGenerationProperties: React.FC<
     return (generations || [])
       .filter(
         (g) =>
-          (g?.modelStatus === "complete" || g?.modelStatus === "running") &&
-          !!g?.assetId,
+          g.assetId !== null && g.assetId !== undefined,
       )
       .sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0));
   }, [generations]);

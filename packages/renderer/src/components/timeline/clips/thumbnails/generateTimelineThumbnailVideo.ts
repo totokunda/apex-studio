@@ -127,6 +127,7 @@ export const generateTimelineThumbnailVideo = async (
     return Math.max(mediaStartFrame, sourceFrame);
   });
 
+
   if (numColumnsAlt && frameIndices.length !== numColumnsAlt) {
     // Trim indices to match the original column count, removing from
     // left/right based on trimStart (left) and abs(trimEnd) (right)
@@ -165,6 +166,10 @@ export const generateTimelineThumbnailVideo = async (
   const getAssetById = useClipStore.getState().getAssetById;
   const asset = getAssetById(currentClip.assetId);
   if (!asset) return;
+
+  
+
+ 
 
   const nearest = getNearestCachedCanvasSamples(
     asset.path,

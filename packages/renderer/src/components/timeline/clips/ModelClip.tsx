@@ -24,7 +24,6 @@ import {
   generateTimelineThumbnailImage,
   generateTimelineThumbnailVideo,
 } from "./thumbnails";
-import { useControlsStore } from "@/lib/control";
 
 type Props = {
   clipWidth: number;
@@ -34,6 +33,16 @@ type Props = {
   modelUiCounts: Record<string, number> | null;
   modelNameRef: any;
   modelNameWidth: number;
+  clipPosition: { x: number; y: number };
+  timelineWidth: number;
+  imageWidth: number;
+  resizeSide: "left" | "right" | null;
+  zoomLevel: number;
+  clipType: "video" | "image";
+  tool: "move" | "resize" | null;
+  thumbnailClipWidth: number;
+  maxTimelineWidth: number;
+  timelineDuration: [number, number];
   clipId: string;
 };
 
@@ -41,10 +50,20 @@ const ModelClip: React.FC<Props> = ({
   clipWidth,
   timelineHeight,
   cornerRadius = 1,
+  clipPosition,
+  timelineWidth,
+  imageWidth,
   currentClip,
   modelUiCounts,
   modelNameRef,
   modelNameWidth,
+  resizeSide,
+  zoomLevel,
+  clipType,
+  tool,
+  thumbnailClipWidth,
+  maxTimelineWidth,
+  timelineDuration,
   clipId,
 }) => {
   const updateClip = useClipStore((s) => s.updateClip);
@@ -74,7 +93,6 @@ const ModelClip: React.FC<Props> = ({
   const lastExactRequestKeyRef = useRef<string | null>(null);
   const finalSrcSetRef = useRef(false);
   const [, setForceRerenderCounter] = useState(0);
-  const { fps } = useControlsStore();
 
   useEffect(() => {
     const clip = getClipById(clipId) as ModelClipProps | undefined;
@@ -182,7 +200,18 @@ const ModelClip: React.FC<Props> = ({
     } catch {}
   }, [(currentClip as ModelClipProps)?.assetId]);
 
-  // Listen for preview frames and update thumbnail
+  const overHang = useMemo(() => {
+    let overhang = 0;
+    const positionX =
+      clipPosition.x == 24 || clipWidth <= imageWidth ? 0 : -clipPosition.x;
+
+    if (clipWidth - positionX <= timelineWidth && positionX > 0) {
+      overhang = timelineWidth - (clipWidth - positionX);
+    }
+    return overhang;
+  }, [clipPosition.x, clipWidth, timelineWidth]);
+
+  // Generate / update the timeline thumbnail when preview or source changes
   useEffect(() => {
     const asset = getAssetById(currentClip?.assetId ?? "");
 
@@ -202,7 +231,10 @@ const ModelClip: React.FC<Props> = ({
         const isImage = !!mediaInfoRef.current?.image;
 
         // Treat model video like a video clip: initialize trims to 0 on first update
-        if (isVideo) {
+        if (
+          isVideo &&
+          (!isFinite(clip.trimStart ?? 0) || !isFinite(clip.trimEnd ?? 0))
+        ) {
           try {
             const ts = (clip as any)?.trimStart;
             const te = (clip as any)?.trimEnd;
@@ -239,32 +271,9 @@ const ModelClip: React.FC<Props> = ({
           displayCanvasRef.current = imageCanvas.current;
           setForceRerenderCounter((v) => v + 1);
         } else if (isVideo) {
-          // Adjust clip duration to match actual video duration (in project frames), factoring speed
-          try {
-            const projectFps = Math.max(1, Number(fps || 1));
-            const durationSeconds = Math.max(
-              0,
-              Number(mediaInfoRef.current?.duration || 0),
-            );
-            let durationFrames = Math.max(
-              1,
-              Math.floor(durationSeconds * projectFps),
-            );
-            const speed = Math.max(
-              0.1,
-              Math.min(5, Number((clip as any)?.speed || 1)),
-            );
-            durationFrames = Math.max(1, Math.round(durationFrames / speed));
-            const start = Math.max(0, clip?.startFrame ?? 0);
-            const desiredEndFrame = start + durationFrames;
-            if (desiredEndFrame !== (clip?.endFrame ?? start + 1)) {
-              updateClip(clipId, { endFrame: desiredEndFrame });
-            }
-          } catch {}
-          const timelineWidth = clipWidth;
+          
           const startFrame = clip?.startFrame ?? 0;
           const endFrame = clip?.endFrame ?? startFrame + 1;
-          const timelineDuration: [number, number] = [0, Math.max(1, endFrame)];
           await generateTimelineThumbnailVideo(
             "video",
             clip as any,
@@ -273,16 +282,16 @@ const ModelClip: React.FC<Props> = ({
             imageCanvas.current,
             timelineHeight,
             clipWidth,
-            clipWidth,
+            timelineWidth,
             timelineWidth,
             timelineDuration,
             startFrame,
             endFrame,
-            0,
+            overHang,
             noopMask,
             noopFilters,
             groupRef,
-            null,
+            resizeSide,
             exactVideoUpdateTimerRef,
             exactVideoUpdateSeqRef,
             lastExactRequestKeyRef,
@@ -294,124 +303,31 @@ const ModelClip: React.FC<Props> = ({
         }
         try {
           groupRef.current?.getLayer()?.batchDraw();
-        } catch {}
-      } catch {}
+        } catch (e) {
+          console.error(e);
+        }
+      } catch (e) {
+        console.error(e);
+      }
     })();
   }, [
+    (currentClip as ModelClipProps)?.assetId,
     (currentClip as ModelClipProps)?.previewPath,
     clipWidth,
     timelineHeight,
     clipId,
     getClipById,
     updateClip,
-    fps,
-  ]);
-
-  // When clip src changes (outside of job updates), regenerate the timeline thumbnail
-  useEffect(() => {
-    if (!(currentClip as ModelClipProps)?.assetId) return;
-
-    (async () => {
-      try {
-        const asset = getAssetById(currentClip?.assetId ?? "");
-        if (!asset) return;
-        mediaInfoRef.current = getMediaInfoCached(asset?.path);
-        if (!mediaInfoRef.current) {
-          mediaInfoRef.current = await getMediaInfo(asset?.path ?? currentClip?.previewPath ?? "", {
-            sourceDir: "apex-cache",
-          });
-        }
-        const clip = getClipById(clipId) as ModelClipProps | undefined;
-        if (!clip) return;
-        const isVideo = !!mediaInfoRef.current?.video;
-        const isImage = !!mediaInfoRef.current?.image;
-        const noopMask = (canvas: HTMLCanvasElement) => canvas;
-        const noopFilters = () => {};
-
-        if (isImage) {
-          await generateTimelineThumbnailImage(
-            "image",
-            clip as any,
-            clipId,
-            mediaInfoRef.current,
-            imageCanvas.current,
-            timelineHeight,
-            clipWidth,
-            clipWidth,
-            noopMask,
-            noopFilters,
-            groupRef,
-            () => {},
-            null,
-          );
-          displayCanvasRef.current = imageCanvas.current;
-          setForceRerenderCounter((v) => v + 1);
-        } else if (isVideo) {
-          // Adjust clip duration to match actual video duration (in project frames), factoring speed
-          try {
-            const projectFps = Math.max(1, Number(fps || 1));
-            const durationSeconds = Math.max(
-              0,
-              Number(mediaInfoRef.current?.duration || 0),
-            );
-            let durationFrames = Math.max(
-              1,
-              Math.floor(durationSeconds * projectFps),
-            );
-            const speed = Math.max(
-              0.1,
-              Math.min(5, Number((clip as any)?.speed || 1)),
-            );
-            durationFrames = Math.max(1, Math.round(durationFrames / speed));
-            const start = Math.max(0, clip?.startFrame ?? 0);
-            const desiredEndFrame = start + durationFrames;
-            if (desiredEndFrame !== (clip?.endFrame ?? start + 1)) {
-              updateClip(clipId, { endFrame: desiredEndFrame });
-            }
-          } catch {}
-          const timelineWidth = clipWidth;
-          const startFrame = clip?.startFrame ?? 0;
-          const endFrame = clip?.endFrame ?? startFrame + 1;
-          const timelineDuration: [number, number] = [0, Math.max(1, endFrame)];
-          await generateTimelineThumbnailVideo(
-            "video",
-            clip as any,
-            clipId,
-            mediaInfoRef.current,
-            imageCanvas.current,
-            timelineHeight,
-            clipWidth,
-            clipWidth,
-            timelineWidth,
-            timelineDuration,
-            startFrame,
-            endFrame,
-            0,
-            noopMask,
-            noopFilters,
-            groupRef,
-            null,
-            exactVideoUpdateTimerRef,
-            exactVideoUpdateSeqRef,
-            lastExactRequestKeyRef,
-            setForceRerenderCounter,
-          );
-          displayCanvasRef.current = imageCanvas.current;
-          setForceRerenderCounter((v) => v + 1);
-        }
-        try {
-          groupRef.current?.getLayer()?.batchDraw();
-        } catch {}
-      } catch {}
-    })();
-  }, [
-    currentClip?.assetId,
-    clipWidth,
-    timelineHeight,
-    fps,
-    clipId,
-    getClipById,
-    updateClip,
+    zoomLevel,
+    clipType,
+    tool,
+    thumbnailClipWidth,
+    maxTimelineWidth,
+    timelineDuration[0],
+    timelineDuration[1],
+    overHang,
+    resizeSide,
+    setForceRerenderCounter,
   ]);
 
   return (

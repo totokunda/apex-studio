@@ -475,6 +475,10 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
         </TabsContent>
         <TabsContent value="timeline" className="outline-none">
           <TimelineSearch
+            isAssetSelected={(clipId) => {
+              if (!value) return false;
+              return clipId === value.clipId;
+            }}
             types={["image", "video", "group", "text", "shape", "draw"]}
             excludeClipId={clipId}
           />
@@ -599,7 +603,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
           const mapWId: string | undefined = self?.map_w;
           if (!mapHId && !mapWId) return;
           const scaleById: string | undefined = self?.scale_by;
-          let targetHeight: number | undefined;
+          let targetShortSide: number | undefined;
           if (scaleById) {
             const scaleInp = inputsArr.find(
               (inp: any) => String(inp?.id) === String(scaleById),
@@ -609,7 +613,8 @@ const ImageInput: React.FC<ImageInputProps> = ({
               const valStr = String(scaleInp?.value ?? scaleInp?.default ?? "");
               if (type === "number" || type === "number+slider") {
                 const n = Number(valStr);
-                if (Number.isFinite(n) && n > 0) targetHeight = Math.floor(n);
+                if (Number.isFinite(n) && n > 0)
+                  targetShortSide = Math.floor(n);
               } else if (type === "select") {
                 const opts: any[] = Array.isArray(scaleInp?.options)
                   ? scaleInp.options
@@ -617,14 +622,13 @@ const ImageInput: React.FC<ImageInputProps> = ({
                 const selected = opts.find(
                   (o: any) => String(o?.value) === valStr,
                 );
-                const hCandidate = Number(
-                  selected?.height ?? selected?.h ?? NaN,
-                );
-                if (Number.isFinite(hCandidate) && hCandidate > 0)
-                  targetHeight = Math.floor(hCandidate);
+                const resCandidate = Number(selected?.value ?? NaN);
+                if (Number.isFinite(resCandidate) && resCandidate > 0)
+                  targetShortSide = Math.floor(resCandidate);
               } else {
                 const n = Number(valStr);
-                if (Number.isFinite(n) && n > 0) targetHeight = Math.floor(n);
+                if (Number.isFinite(n) && n > 0)
+                  targetShortSide = Math.floor(n);
               }
             }
           }
@@ -648,14 +652,30 @@ const ImageInput: React.FC<ImageInputProps> = ({
             } catch {}
           }
           if (!mw || !mh) return;
-          const baseAR = mw / Math.max(1, mh);
-          const outH = Math.floor(
-            Number.isFinite(targetHeight as number) &&
-              (targetHeight as number) > 0
-              ? (targetHeight as number)
-              : mh,
-          );
-          const outW = Math.floor(Math.max(1, outH * baseAR));
+
+          let outW = mw;
+          let outH = mh;
+
+          if (
+            Number.isFinite(targetShortSide as number) &&
+            (targetShortSide as number) > 0
+          ) {
+            const res = targetShortSide as number;
+            // Treat the scale-by value (usually resolution) as the target
+            // for the *shorter* side, and scale the longer side to match AR.
+            if (mw >= mh) {
+              // Landscape: height is shorter
+              const scale = res / mh;
+              outH = res;
+              outW = Math.floor(Math.max(1, mw * scale));
+            } else {
+              // Portrait: width is shorter
+              const scale = res / mw;
+              outW = res;
+              outH = Math.floor(Math.max(1, mh * scale));
+            }
+          }
+
           // Prevent ModelInputsPanel resolution/aspect sync from overriding mapped values
           if (mapHId === "height" || mapWId === "width") {
             updateModelInput(clipId, "resolution", { value: "custom" } as any);
@@ -686,6 +706,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
   const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const getActiveProject = useProjectsStore((s) => s.getActiveProject);
+  const { getTimelineDuration, getFocusFrame } = useInputControlsStore();
 
   const setInputTimelineDuration = useInputControlsStore(
     (s) => s.setTimelineDuration,
@@ -966,9 +987,9 @@ const ImageInput: React.FC<ImageInputProps> = ({
       }
       setStageSize({ w: 0, h: 0 });
       setMediaClip(null);
-      const storeState = useInputControlsStore.getState();
-      const currentDuration = storeState.getTimelineDuration(inputId);
-      const currentFocus = storeState.getFocusFrame(inputId);
+    
+      const currentDuration = getTimelineDuration(inputId);
+      const currentFocus = getFocusFrame(inputId);
       if (currentDuration[0] !== 0 || currentDuration[1] !== 1) {
         setInputTimelineDuration(0, 1, inputId);
       }
@@ -981,9 +1002,8 @@ const ImageInput: React.FC<ImageInputProps> = ({
     const start = Math.max(0, Math.round(value.startFrame ?? 0));
     const end = Math.max(start + 1, Math.round(value.endFrame ?? start + 1));
     const span = Math.max(1, end - start);
-    const storeState = useInputControlsStore.getState();
-    const currentDuration = storeState.getTimelineDuration(inputId);
-    const currentFocus = storeState.getFocusFrame(inputId);
+    const currentDuration = getTimelineDuration(inputId);
+    const currentFocus = getFocusFrame(inputId);
     if (currentDuration[0] !== 0 || currentDuration[1] !== span) {
       setInputTimelineDuration(0, span, inputId);
     }
@@ -1237,6 +1257,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
                           ratioOverride={displayRatio}
                           inputId={inputId}
                           needsStage={true}
+                          isDialogOpen={isDialogOpen}
                         />
                       );
                     })()
@@ -1364,6 +1385,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
               onClose={() => setIsDialogOpen(false)}
               onConfirm={handleConfirm}
               clipOverride={mediaClip}
+
               timelineSelectorProps={
                 mediaClip && mediaClip.type !== "image"
                   ? { mode: "frame", inputId: inputId }

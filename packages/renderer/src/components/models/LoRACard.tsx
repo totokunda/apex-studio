@@ -34,6 +34,7 @@ const LoRACard: React.FC<{ item: LoraType; manifestId: string }> = ({
   const runRef = useRef<(() => Promise<void>) | null>(null);
   const unsubsRef = useRef<Array<() => void>>([]);
   const isUnmountedRef = useRef(false);
+  const cardRef = useRef<HTMLDivElement | null>(null);
 
   const path = useMemo(
     () => (typeof item === "string" ? item : item?.source || ""),
@@ -279,7 +280,10 @@ const LoRACard: React.FC<{ item: LoraType; manifestId: string }> = ({
   }, [path, deleteDownloadEntry, manifestId, refreshManifestPart]);
 
   return (
-    <div className="bg-brand border border-brand-light/10 rounded-md text-start">
+    <div
+      ref={cardRef}
+      className="w-full bg-brand border border-brand-light/10 rounded-md text-start"
+    >
       <LoRACardHeader
         isActive={isActive}
         isDownloaded={isDownloaded}
@@ -290,6 +294,7 @@ const LoRACard: React.FC<{ item: LoraType; manifestId: string }> = ({
       />
       {isExpanded && (
         <LoRACardBody
+          cardRef={cardRef}
           deleting={deleting}
           downloadingPaths={downloadingPaths}
           files={files}
@@ -365,6 +370,7 @@ const LoRACardHeader: React.FC<LoRACardHeaderProps> = ({
 };
 
 interface LoRACardBodyProps {
+  cardRef: React.RefObject<HTMLDivElement | null>;
   computePercent: (file: any) => number;
   deleting: boolean;
   downloadingPaths: Set<string>;
@@ -380,6 +386,7 @@ interface LoRACardBodyProps {
 }
 
 const LoRACardBody: React.FC<LoRACardBodyProps> = ({
+  cardRef,
   computePercent,
   deleting,
   downloadingPaths,
@@ -426,8 +433,8 @@ const LoRACardBody: React.FC<LoRACardBodyProps> = ({
             />
           ) : isActive ? (
             <ActiveDownloadSection
+              cardRef={cardRef}
               computePercent={computePercent}
-              downloadingPaths={downloadingPaths}
               files={files}
               handleCancel={handleCancel}
               jobId={jobId}
@@ -480,8 +487,8 @@ const DownloadedLoRASection: React.FC<DownloadedLoRASectionProps> = ({
 };
 
 interface ActiveDownloadSectionProps {
+  cardRef: React.RefObject<HTMLDivElement | null>;
   computePercent: (file: any) => number;
-  downloadingPaths: Set<string>;
   files: any[];
   handleCancel: () => Promise<void>;
   jobId?: string;
@@ -489,8 +496,8 @@ interface ActiveDownloadSectionProps {
 }
 
 const ActiveDownloadSection: React.FC<ActiveDownloadSectionProps> = ({
+  cardRef,
   computePercent,
-  downloadingPaths,
   files,
   handleCancel,
   jobId,
@@ -508,11 +515,19 @@ const ActiveDownloadSection: React.FC<ActiveDownloadSectionProps> = ({
               >
                 <div className="flex items-center justify-between gap-x-2 w-full">
                   <div className="flex-1 min-w-0">
-                    <div className="text-[10px] text-brand-light/80 font-mono truncate break-all">
+                    <div
+                      style={{
+                        maxWidth: `${Math.max(
+                          0,
+                          (cardRef.current?.clientWidth || 0) - 120,
+                        )}px`,
+                      }}
+                      className="text-[10px] text-brand-light/80 font-mono truncate break-all"
+                    >
                       {f.filename || f.label || path}
                     </div>
                   </div>
-                  <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                  <div className="text-[10px] text-brand-light/80 font-mono shrink-0">
                     {computePercent(f).toFixed(1)}%
                   </div>
                 </div>
@@ -548,10 +563,10 @@ const ActiveDownloadSection: React.FC<ActiveDownloadSectionProps> = ({
         <div className="flex flex-col items-center justify-between mt-2 w-full">
           <button
             onClick={handleCancel}
-            disabled={!jobId || downloadingPaths.has(path || "")}
+            disabled={!jobId}
             className="text-[10px] text-brand-light/90 w-full mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2 disabled:hover:bg-brand disabled:opacity-90 disabled:cursor-not-allowed"
           >
-            {downloadingPaths.has(path || "") ? "Downloading..." : "Cancel"}
+            Cancel
           </button>
         </div>
       </div>

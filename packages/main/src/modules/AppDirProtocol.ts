@@ -1,6 +1,6 @@
 import { AppModule } from "../AppModule.js";
 import { ModuleContext } from "../ModuleContext.js";
-import { protocol } from "electron";
+import { protocol, ipcMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import mime from "mime";
@@ -63,6 +63,7 @@ function nodeStreamToWebStream(
 }
 
 class AppDirProtocol implements AppModule {
+  private electronApp: Electron.App | null = null;
   private cachePath: string | null = null; // local base used for serving
   private remoteCacheBasePath: string | null = null; // absolute base path on remote machine
   private backendUrl: string = "http://127.0.0.1:8765";
@@ -71,6 +72,20 @@ class AppDirProtocol implements AppModule {
 
   async enable({ app }: ModuleContext): Promise<void> {
     await app.whenReady();
+
+    this.electronApp = app;
+
+    ipcMain.handle(
+      "appdir:resolve-path",
+      async (_event, appUrl: string): Promise<string | null> => {
+        try {
+          const u = new URL(appUrl);
+          return await this.resolveAppUrlToFilePath(u);
+        } catch {
+          return null;
+        }
+      },
+    );
 
     // Kick off non-blocking initialization (backend locality, remote cache path, etc.)
     // Do NOT block app startup on backend/network availability.
@@ -107,87 +122,27 @@ class AppDirProtocol implements AppModule {
         return new Response(null, { status: 404, headers: baseCors });
       }
 
-      const decodedPathname = decodeURIComponent(u.pathname);
-      let filePath: string;
-      if (u.hostname === "apex-cache" && this.loopbackAppearsRemote) {
-        const rel = this.remoteRelFromNormalized(
-          decodedPathname.startsWith("/")
-            ? decodedPathname.slice(1)
-            : decodedPathname,
-        );
-        const localPath = rel.startsWith(basePath!)
-          ? rel
-          : path.join(basePath!, rel);
-        try {
-          if (!fs.existsSync(localPath) || !fs.statSync(localPath).isFile()) {
-            const ok = await this.ensureLocalFromRemote(rel, localPath);
-            if (!ok) {
-              return new Response(null, { status: 404, headers: baseCors });
-            }
-          }
-          // Best-effort: also expose downloads under per-project engine_results
-          // views so that both global and project-specific paths are valid.
-          await this.ensureProjectSymlinkForCache(rel, localPath, folderUuid);
-        } catch {
-          const ok = await this.ensureLocalFromRemote(rel, localPath).catch(
-            () => false,
-          );
-          if (!ok) {
-            return new Response(null, { status: 404, headers: baseCors });
-          }
-          // Even if we had to refetch, try to set up the project-level symlink view
-          await this.ensureProjectSymlinkForCache(
-            rel,
-            localPath,
-            folderUuid,
-          ).catch(() => {
-            /* ignore */
-          });
-        }
-        // Serve from the mirrored local path we just ensured
-        filePath = localPath;
-      } else {
-        // If an absolute filesystem path is provided, serve it directly
-        if (path.isAbsolute(decodedPathname)) {
-          filePath = decodedPathname;
-        } else {
-          const rel = decodedPathname.startsWith("/")
-            ? decodedPathname.slice(1)
-            : decodedPathname;
-          filePath = rel.startsWith(basePath) ? rel : path.join(basePath, rel);
-        }
-
-        // Local backend: when serving from apex-cache, also create per-project
-        // engine_results symlinks so both global and folderUuid-scoped paths work.
-        if (u.hostname === "apex-cache") {
-          const cacheBase = this.cachePath;
-          if (cacheBase && filePath.startsWith(cacheBase)) {
-            try {
-              const relFromCache = path
-                .relative(cacheBase, filePath)
-                .replace(/\\/g, "/");
-              await this.ensureProjectSymlinkForCache(
-                relFromCache,
-                filePath,
-                folderUuid,
-              );
-            } catch {
-              // Best-effort only; ignore failures
-            }
-          }
-        }
-      }
-      // Check if file exists and is readable
-      try {
-        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-          return new Response(null, { status: 404, headers: baseCors });
-        }
-      } catch {
+      const filePath = await this.resolveAppUrlToFilePath(u);
+      if (!filePath) {
         return new Response(null, { status: 404, headers: baseCors });
       }
 
+      const stat = fs.statSync(filePath);
+      const fileSize = stat.size;
       const contentType = mime.getType(filePath) || "application/octet-stream";
-      const fileSize = fs.statSync(filePath).size;
+
+      // Fast-path for HEAD: only return headers, never open a read stream.
+      if (request.method === "HEAD") {
+        return new Response(null, {
+          status: 200,
+          headers: {
+            "Content-Type": contentType,
+            "Content-Length": fileSize.toString(),
+            "Accept-Ranges": "bytes",
+            ...baseCors,
+          },
+        });
+      }
 
       // Handle Range requests
       const rangeHeader = request.headers.get("range");
@@ -226,6 +181,101 @@ class AppDirProtocol implements AppModule {
         },
       });
     });
+  }
+
+  private async resolveAppUrlToFilePath(u: URL): Promise<string | null> {
+    let basePath: string | null = null;
+    const app = this.electronApp;
+
+    if (u.hostname === "user-data") {
+      basePath = app ? app.getPath("userData") : null;
+    } else if (u.hostname === "apex-cache") {
+      basePath = this.cachePath;
+    }
+
+    if (!basePath) {
+      return null;
+    }
+
+    const decodedPathname = decodeURIComponent(u.pathname);
+    const rawFolderUuid = u.searchParams.get("folderUuid");
+    const folderUuid =
+      typeof rawFolderUuid === "string" && rawFolderUuid.length > 0
+        ? rawFolderUuid
+        : undefined;
+
+    let filePath: string;
+    if (u.hostname === "apex-cache" && this.loopbackAppearsRemote) {
+      const rel = this.remoteRelFromNormalized(
+        decodedPathname.startsWith("/")
+          ? decodedPathname.slice(1)
+          : decodedPathname,
+      );
+      const localPath = rel.startsWith(basePath!)
+        ? rel
+        : path.join(basePath!, rel);
+      try {
+        if (!fs.existsSync(localPath) || !fs.statSync(localPath).isFile()) {
+          const ok = await this.ensureLocalFromRemote(rel, localPath);
+          if (!ok) {
+            return null;
+          }
+        }
+        await this.ensureProjectSymlinkForCache(rel, localPath, folderUuid);
+      } catch {
+        const ok = await this.ensureLocalFromRemote(rel, localPath).catch(
+          () => false,
+        );
+        if (!ok) {
+          return null;
+        }
+        await this.ensureProjectSymlinkForCache(
+          rel,
+          localPath,
+          folderUuid,
+        ).catch(() => {
+          /* ignore */
+        });
+      }
+      filePath = localPath;
+    } else {
+      if (path.isAbsolute(decodedPathname)) {
+        filePath = decodedPathname;
+      } else {
+        const rel = decodedPathname.startsWith("/")
+          ? decodedPathname.slice(1)
+          : decodedPathname;
+        filePath = rel.startsWith(basePath) ? rel : path.join(basePath, rel);
+      }
+
+      if (u.hostname === "apex-cache") {
+        const cacheBase = this.cachePath;
+        if (cacheBase && filePath.startsWith(cacheBase)) {
+          try {
+            const relFromCache = path
+              .relative(cacheBase, filePath)
+              .replace(/\\/g, "/");
+            await this.ensureProjectSymlinkForCache(
+              relFromCache,
+              filePath,
+              folderUuid,
+            );
+          } catch {
+            // Best-effort only; ignore failures
+          }
+        }
+      }
+    }
+
+    try {
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+
+    return filePath;
   }
 
   private async initializeAsync(app: Electron.App): Promise<void> {

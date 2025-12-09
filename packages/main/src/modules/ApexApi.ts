@@ -82,6 +82,13 @@ export class ApexApi implements AppModule {
     await this.app.whenReady();
     this.wsManager?.setBaseUrl(this.backendUrl);
     void this.#probeBackendLocality();
+
+    ipcMain.handle(
+      "apexapi:path-exists",
+      async (_event, pathOrUrl: string): Promise<{ exists: boolean }> => {
+        return this.pathExists(pathOrUrl);
+      },
+    );
   }
 
   private registerBackendUrlHandlers(): void {
@@ -298,6 +305,15 @@ export class ApexApi implements AppModule {
           direction?: "forward" | "backward" | "both";
         },
       ) => {
+        // Ensure backend is healthy before starting streaming mask tracking
+        const probe = await this.#probeBackendLocality();
+        if (!probe.success) {
+          throw new Error(
+            probe.error ||
+              "Cannot complete the request because the backend API is unavailable.",
+          );
+        }
+
         const streamId = crypto.randomUUID();
 
         const controller = new AbortController();
@@ -429,6 +445,15 @@ export class ApexApi implements AppModule {
           direction?: "forward" | "backward" | "both";
         },
       ) => {
+        // Ensure backend is healthy before starting streaming mask tracking
+        const probe = await this.#probeBackendLocality();
+        if (!probe.success) {
+          throw new Error(
+            probe.error ||
+              "Cannot complete the request because the backend API is unavailable.",
+          );
+        }
+
         const streamId = crypto.randomUUID();
 
         const controller = new AbortController();
@@ -961,6 +986,7 @@ export class ApexApi implements AppModule {
           job_id?: string;
           manifest_id?: string;
           lora_name?: string;
+          component?: string;
         },
       ) => {
         const body = {
@@ -970,6 +996,7 @@ export class ApexApi implements AppModule {
           job_id: request.job_id,
           manifest_id: request.manifest_id,
           lora_name: request.lora_name,
+          component: request.component,
         };
         return this.makeRequest<{
           job_id: string;
@@ -1247,6 +1274,19 @@ export class ApexApi implements AppModule {
     body?: any,
   ): Promise<ConfigResponse<T>> {
     try {
+      // Probe the backend hostname before sending any API request. This both
+      // verifies that the backend is reachable and updates our remote/local
+      // detection state.
+      const probe = await this.#probeBackendLocality();
+      if (!probe.success) {
+        return {
+          success: false,
+          error:
+            probe.error ||
+            "Cannot complete the request because the backend API is unavailable.",
+        };
+      }
+
       const options: RequestInit = {
         method,
         headers: {
@@ -1287,31 +1327,61 @@ export class ApexApi implements AppModule {
   }
 
   // ===== Helpers for remote file handling =====
-  async #probeBackendLocality(): Promise<void> {
+  async #probeBackendLocality(): Promise<ConfigResponse<null>> {
     try {
       const u = new URL(this.backendUrl);
       const host = (u.hostname || "").toLowerCase();
-      // If not loopback, it's definitely remote
-      if (!(host === "localhost" || host === "127.0.0.1" || host === "::1")) {
-        this.loopbackAppearsRemote = true;
-        return;
-      }
-      // Attempt to detect if loopback is tunneling to a different machine
+
       const resp = await fetch(`${this.backendUrl}/config/hostname`, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
       });
+
       if (!resp.ok) {
-        return;
+        let detail = "";
+        try {
+          const data = await resp.json();
+          if (data && typeof (data as any).detail === "string") {
+            detail = ` ${(data as any).detail}`;
+          }
+        } catch {
+          // ignore JSON parse errors from hostname endpoint
+        }
+
+        return {
+          success: false,
+          error:
+            `Cannot complete the request: backend hostname probe failed (HTTP ${resp.status}: ${resp.statusText}).` +
+            detail,
+        };
       }
-      const data = await resp.json().catch(() => ({}) as any);
+
+      const data = (await resp.json().catch(() => ({}))) as any;
       const remoteHostname =
         typeof data?.hostname === "string" ? data.hostname : "";
       const localHostname = os.hostname();
-      this.loopbackAppearsRemote =
-        !!remoteHostname && remoteHostname !== localHostname;
-    } catch {
-      // On failure to probe, keep previous value (default false)
+
+      if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+        // For loopback, treat it as remote if the reported hostname differs
+        this.loopbackAppearsRemote =
+          !!remoteHostname && remoteHostname !== localHostname;
+      } else {
+        // Non-loopback hosts are definitely remote
+        this.loopbackAppearsRemote = true;
+      }
+
+      return {
+        success: true,
+        data: null,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? `Cannot complete the request because the backend API is unreachable: ${error.message}`
+            : "Cannot complete the request because the backend API is unreachable.",
+      };
     }
   }
 
@@ -1393,6 +1463,15 @@ export class ApexApi implements AppModule {
     if (!abs) return null;
     const cached = this.uploadCache.get(abs);
     if (cached) return cached;
+    // Ensure backend is reachable before attempting to upload, and update
+    // our remote/local detection at the same time.
+    const probe = await this.#probeBackendLocality();
+    if (!probe.success) {
+      throw new Error(
+        probe.error ||
+          "Cannot complete the request because the backend API is unavailable.",
+      );
+    }
 
     const remoteCacheBase = await this.#ensureRemoteCachePath();
     if (!remoteCacheBase) throw new Error("Remote cache path unavailable");
@@ -1607,6 +1686,25 @@ export class ApexApi implements AppModule {
     }
 
     return total;
+  }
+
+  async pathExists(pathOrUrl: string): Promise<{ exists: boolean }> {
+    try {
+      const resolved = this.#resolveLocalPath(pathOrUrl);
+      if (resolved) return { exists: true };
+      // If this looks like an HTTP URL, do a lightweight HEAD probe.
+      if (this.#looksLikeHttp(pathOrUrl)) {
+        try {
+          const resp = await fetch(pathOrUrl, { method: "HEAD" });
+          return { exists: resp.ok };
+        } catch {
+          return { exists: false };
+        }
+      }
+      return { exists: false };
+    } catch {
+      return { exists: false };
+    }
   }
 }
 

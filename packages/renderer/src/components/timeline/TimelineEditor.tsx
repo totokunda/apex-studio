@@ -810,7 +810,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
       try {
         const existingClips = useClipStore.getState().clips;
         const hasMediaAlready = existingClips.some(
-          (c) => c.type === "video" || c.type === "image",
+          (c) => c.type === "video" || c.type === "image" || (c.type === "model" && c.assetId),
         );
         const isMediaIncoming = data.type === "video" || data.type === "image";
         if (!hasMediaAlready && isMediaIncoming) {
@@ -1797,6 +1797,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
                         timelineY={timeline.timelineY}
                         timelineHeight={timeline.timelineHeight}
                         timelineId={timeline.timelineId}
+                        assetMode={false}
                       />
                     ))}
                   </Layer>

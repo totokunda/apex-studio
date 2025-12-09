@@ -75,6 +75,8 @@ interface MediaDialogProps {
   isPlayingExternal?: boolean;
   onPlay?: () => void;
   onPause?: () => void;
+  // Optional max duration (in frames) for input range selection
+  maxDuration?: number;
 }
 
 const ASPECT_RATIOS = [
@@ -380,6 +382,7 @@ const MediaDialogClipItem = React.memo(({
           inputMode={true}
           focusFrameOverride={focusFrame}
           inputId={inputId}
+          decoderKey={`media-dialog::${clip.clipId}`}
         />
       );
     case "image":
@@ -448,10 +451,12 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
   onPlay,
   onPause,
   selectionRange,
+  maxDuration,
 }) => {
   const [rotation, setRotation] = useState(0);
   const [aspectRatio, setAspectRatio] = useState("original");
   const [size, setSize] = useState({ width: 0, height: 0 });
+
   const [containerNode, setContainerNode] = useState<HTMLDivElement | null>(
     null,
   );
@@ -1516,6 +1521,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
               width={(divTimelineSelectorRef.current?.clientWidth ?? 0) - 60}
               mode={timelineSelectorProps.mode}
               inputId={timelineSelectorProps.inputId}
+              maxDuration={maxDuration}
             />
           </div>
         )}
@@ -1534,7 +1540,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                     }
                   }}
                 >
-                  <SelectTrigger className="w-[100px] !h-7.5 bg-secondary/50 border-none text-[11px] font-medium rounded-[6px]">
+                  <SelectTrigger className="w-[100px] h-7.5! bg-secondary/50 border-none text-[11px] font-medium rounded-[6px]">
                     <SelectValue placeholder="Select ratio" />
                   </SelectTrigger>
                   <SelectContent className="bg-background text-foreground font-poppins dark">

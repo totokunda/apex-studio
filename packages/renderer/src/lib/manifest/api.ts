@@ -190,12 +190,15 @@ export type UIInputMapDimensions = {
 export type UIInputVideo = UIInputBase &
   UIInputMapDimensions & {
     type: "video";
+    max_duration_secs?: number;
   };
+
 
 export type UIInputVideoMask = UIInputBase &
   UIInputMapDimensions & {
     type: "video+mask";
     map_to?: string;
+    max_duration_secs?: number;
   };
 
 export type UIInputImagePreprocessor = UIInputBase &
@@ -209,6 +212,7 @@ export type UIInputVideoPreprocessor = UIInputBase &
   UIInputMapDimensions & {
     type: "video+preprocessor";
     preprocessor_ref?: string;
+    max_duration_secs?: number;
     preprocessor_kwargs?: Record<string, any>;
   };
 
@@ -309,6 +313,7 @@ export type LoraType =
       label?: string;
       is_downloaded?: boolean;
       required?: boolean;
+      component?: string;
     }
   | string;
 

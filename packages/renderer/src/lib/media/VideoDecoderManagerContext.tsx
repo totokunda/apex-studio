@@ -26,6 +26,7 @@ export const VideoDecoderManagerProvider: React.FC<ProviderProps> = ({ children 
       for (const clip of clips) {
         if (clip.type === "video") {
           let mediaInfo = getMediaInfoCached(clip.assetId);
+
           const decoderId = `${clip.assetId}::${clip.clipId}`;
           if (mediaInfo && mediaInfo.video && !managerRef.current?.hasAsset(decoderId)) {
             const decoderConfig = mediaInfo.videoDecoderConfig;

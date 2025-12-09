@@ -34,6 +34,10 @@ export type WorkerMessage =
         formatStr?: string;
         initialTimestamp?: number;
         folderUuid?: string;
+        // Optional absolute Electron userData path, passed from the renderer
+        // so the worker can cheaply detect when an asset path is already
+        // rooted under userData and prefer app://user-data over app://apex-cache.
+        userDataPath?: string;
       };
       requestId?: number;
     }
@@ -102,6 +106,19 @@ function fileURLToPathInWorker(raw: string): string {
   } catch {
     // Not a URL – assume it's already a path; just normalize leading slashes.
     return raw.replace(/^\/+/, "");
+  }
+}
+
+// Best-effort helper to quickly detect a 404 for an app:// URL before we hand
+// it off to mediabunny. If the HEAD request itself fails (e.g. protocol does
+// not support HEAD), we treat it as "unknown" and *do not* block source
+// creation – only an explicit 404 status will cause us to skip this URL.
+async function isAppUrlDefinitely404(url: URL): Promise<boolean> {
+  try {
+    const res = await fetch(url.toString(), { method: "HEAD" });
+    return res.status === 404;
+  } catch {
+    return false;
   }
 }
 
@@ -379,24 +396,47 @@ async function handleConfigure(
   // to open (e.g. file://, app://, http://).
   let input: Input | null = null;
   let filePath: string | null = null;
-  let primarySourceDir = "user-data";
-  let secondarySourceDir = "apex-cache"
-  if (cfg.asset.path.includes("engine_results")) {
+  let primarySourceDir: "user-data" | "apex-cache" = "user-data";
+  let secondarySourceDir: "user-data" | "apex-cache" = "apex-cache";
+  filePath = fileURLToPathInWorker(cfg.asset.path);
+
+  const hasUserDataPrefix =
+    typeof cfg.userDataPath === "string" &&
+    cfg.userDataPath.length > 0 &&
+    filePath.includes(cfg.userDataPath?.replace(/^\/+/, ""))
+
+  // If the incoming asset path is explicitly rooted under Electron's userData
+  // directory, prefer serving via app://user-data regardless of engine_results
+  // naming. Otherwise, preserve the existing heuristic that favors apex-cache
+  // for engine_results outputs and user-data for everything else.
+  if (!hasUserDataPrefix && filePath.includes("engine_results")) {
     primarySourceDir = "apex-cache";
     secondarySourceDir = "user-data";
   }
   try {
-    filePath = fileURLToPathInWorker(cfg.asset.path);
     const url = new URL(`app://${primarySourceDir}/${filePath}`);
     if (cfg.folderUuid && primarySourceDir === "apex-cache") {
       url.searchParams.set("folderUuid", cfg.folderUuid);
     }
+    // Skip this URL up-front if we *know* it returns a 404; otherwise fall
+    // back to the previous behavior and let mediabunny attempt to open it.
+    const is404 = await isAppUrlDefinitely404(url);
+    if (is404) {
+      throw new Error("Primary app:// URL returned 404");
+    }
     input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
   } catch (e) {
     try {
+      if (!filePath) {
+        throw new Error("Missing file path for secondary source");
+      }
       const url = new URL(`app://${secondarySourceDir}/${filePath}`);
       if (cfg.folderUuid && secondarySourceDir === "apex-cache") {
         url.searchParams.set("folderUuid", cfg.folderUuid);
+      }
+      const is404 = await isAppUrlDefinitely404(url);
+      if (is404) {
+        throw new Error("Secondary app:// URL returned 404");
       }
       input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
     } catch (e) {

@@ -77,6 +77,12 @@ async function getFolderSize(
   return await ipcRenderer.invoke("system:get-folder-size", inputPath);
 }
 
+async function getPathExists(
+  pathOrUrl: string,
+): Promise<ConfigResponse<{ exists: boolean }>> {
+  return await ipcRenderer.invoke("apexapi:path-exists", pathOrUrl);
+}
+
 export {
   getBackendUrl,
   setBackendUrl,
@@ -92,6 +98,7 @@ export {
   setCachePath,
   getSystemMemory,
   getFolderSize,
+  getPathExists,
 };
 
 

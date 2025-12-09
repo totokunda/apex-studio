@@ -21,6 +21,7 @@ import type {
   ShapeTool,
   ViewTool,
   Point,
+  ZoomLevel,
 } from "../types";
 
 import _ from "lodash";
@@ -30,6 +31,7 @@ import { ManifestDocument } from "../manifest/api";
 import { useViewportStore } from "../viewport";
 import { useManifestStore } from "../manifest/store";
 import { usePreprocessorsListStore  } from "../preprocessor/list-store";
+import { globalInputControlsStore, useInputControlsStore } from "../inputControl";
 type JsonProjectSlice = {
   projects: Array<{
     id: number;
@@ -136,6 +138,23 @@ type ProjectJsonSnapshot = {
     tracks: TimelineProps[];
     clips: TimelineClipJson[];
   };
+  /**
+   * Optional persisted per-clip inputControls state keyed by clipId,
+   * then by inputId. This is populated by the renderer-side
+   * InputControlsProvider and read here for JSON persistence.
+   */
+  inputControls?: {
+    selectedRangeByInputId: Record<string, Record<string, [number, number]>>;
+    selectedInputClipIdByInputId: Record<string, Record<string, string | null>>;
+    totalTimelineFramesByInputId: Record<string, Record<string, number>>;
+    timelineDurationByInputId: Record<string, Record<string, [number, number]>>;
+    fpsByInputId: Record<string, Record<string, number>>;
+    focusFrameByInputId: Record<string, Record<string, number>>;
+    focusAnchorRatioByInputId: Record<string, Record<string, number>>;
+    zoomLevelByInputId: Record<string, Record<string, ZoomLevel>>;
+    isPlayingByInputId: Record<string, Record<string, boolean>>;
+  }
+  
   /**
    * Optional embedded manifests and preprocessors for this project.
    * These are persisted to disk by the main JSONPersistenceModule into
@@ -310,6 +329,91 @@ const extractModelInputValuesFromManifest = (
 };
 
 /**
+ * Internal shape used when persisting model input values that reference
+ * existing timeline clips. This keeps the JSON snapshot compact and
+ * avoids duplicating full clip state inside manifest UI values.
+ */
+type ModelInputClipRef = {
+  __kind: "timelineClipRef";
+  clipId: string;
+};
+
+const isClipLikeModelInputValue = (value: any): value is { clipId: string } => {
+
+  return (
+    value &&
+    typeof value === "object" &&
+    typeof (value as any).clipId === "string"
+  );
+};
+
+/**
+ * Given a map of model input values and the current set of timeline clips,
+ * replace any clip-shaped values whose clipId exists on the timeline with
+ * lightweight references. This lets us rehydrate them later by looking
+ * up the live clip instead of persisting a full copy here.
+ */
+const encodeModelInputClipRefsForJson = (
+  modelInputValues: Record<string, any> | undefined,
+  allClips: AnyClipProps[],
+): Record<string, any> | undefined => {
+  if (!modelInputValues) return modelInputValues;
+  if (!Array.isArray(allClips) || allClips.length === 0) {
+    return modelInputValues;
+  }
+
+  const clipIdsOnTimeline = new Set(
+    allClips
+      .map((c) => {
+        const id = (c as any).clipId;
+        return typeof id === "string" ? id : id != null ? String(id) : "";
+      })
+      .filter((id) => id !== ""),
+  );
+
+  console.log("clipIdsOnTimeline", clipIdsOnTimeline);
+
+  if (clipIdsOnTimeline.size === 0) return modelInputValues;
+
+  let changed = false;
+  const out: Record<string, any> = {};
+
+  const encodeValue = (raw: any): any => {
+    // try to json parse the raw value
+    try {
+      const parsed = JSON.parse(raw);
+      if (isClipLikeModelInputValue(parsed)) {
+        const clipId = String((parsed as any).clipId);
+        if (clipIdsOnTimeline.has(clipId)) {
+          changed = true;
+          const ref: ModelInputClipRef = {
+            __kind: "timelineClipRef",
+            clipId,
+          };
+          return ref;
+        }
+        else {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore json parse errors
+    }
+    return raw;
+  };
+
+  for (const [key, raw] of Object.entries(modelInputValues)) {
+    if (Array.isArray(raw)) {
+      out[key] = (raw as any[]).map((item) => encodeValue(item));
+    } else {
+      out[key] = encodeValue(raw);
+    }
+  }
+
+  return changed ? out : modelInputValues;
+};
+
+/**
  * Create a manifest clone suitable for on-disk storage by stripping
  * any UI input `value` fields. This keeps the saved manifest JSON
  * free of user-specific selections.
@@ -358,6 +462,7 @@ const buildProjectJsonSnapshot = (
     const clipState = useClipStore.getState();
     const controlsState = useControlsStore.getState();
     const viewportState = useViewportStore.getState();
+    const inputControlsState = globalInputControlsStore.getState();
 
     if (!clipState || !controlsState || !viewportState) {
       console.warn(
@@ -489,8 +594,12 @@ const buildProjectJsonSnapshot = (
         const manifestValues = extractModelInputValuesFromManifest(
           model.manifest,
         );
-        if (manifestValues && Object.keys(manifestValues).length > 0) {
-          clipForJson.modelInputValues = manifestValues;
+        const encodedValues = encodeModelInputClipRefsForJson(
+          manifestValues,
+          allClips,
+        );
+        if (encodedValues && Object.keys(encodedValues).length > 0) {
+          clipForJson.modelInputValues = encodedValues;
         } else {
           // Ensure we do not persist stale values from previous loads
           delete clipForJson.modelInputValues;
@@ -539,6 +648,70 @@ const buildProjectJsonSnapshot = (
       }
     }
 
+    // Build a set of clipIds that are actually present on the timeline so that
+    // we only persist per-input inputControls state for real timeline clips.
+    const activeClipIds = new Set<string>();
+    for (const clip of clipsForJson) {
+      const id = String((clip as any).clipId ?? "");
+      if (id) {
+        activeClipIds.add(id);
+      }
+    }
+
+    const filterNestedByClip = <T,>(
+      nested: Record<string, Record<string, T>> | undefined | null,
+    ): Record<string, Record<string, T>> => {
+      const result: Record<string, Record<string, T>> = {};
+      if (!nested) return result;
+
+      for (const [inputId, byClip] of Object.entries(nested)) {
+        if (!byClip || typeof byClip !== "object") continue;
+
+        const filteredByClip: Record<string, T> = {};
+        for (const [clipId, value] of Object.entries(
+          byClip as Record<string, T>,
+        )) {
+          if (activeClipIds.has(clipId)) {
+            filteredByClip[clipId] = value;
+          }
+        }
+
+        if (Object.keys(filteredByClip).length > 0) {
+          result[inputId] = filteredByClip;
+        }
+      }
+
+      return result;
+    };
+
+    const filteredSelectedRangeByInputId = filterNestedByClip(
+      inputControlsState.selectedRangeByInputId,
+    );
+    const filteredSelectedInputClipIdByInputId = filterNestedByClip(
+      inputControlsState.selectedInputClipIdByInputId,
+    );
+    const filteredTotalTimelineFramesByInputId = filterNestedByClip(
+      inputControlsState.totalTimelineFramesByInputId,
+    );
+    const filteredTimelineDurationByInputId = filterNestedByClip(
+      inputControlsState.timelineDurationByInputId,
+    );
+    const filteredFpsByInputId = filterNestedByClip(
+      inputControlsState.fpsByInputId,
+    );
+    const filteredFocusFrameByInputId = filterNestedByClip(
+      inputControlsState.focusFrameByInputId,
+    );
+    const filteredFocusAnchorRatioByInputId = filterNestedByClip(
+      inputControlsState.focusAnchorRatioByInputId,
+    );
+    const filteredZoomLevelByInputId = filterNestedByClip(
+      inputControlsState.zoomLevelByInputId,
+    );
+    const filteredIsPlayingByInputId = filterNestedByClip(
+      inputControlsState.isPlayingByInputId,
+    );
+
     const now = Date.now();
 
     const snapshot: ProjectJsonSnapshot = {
@@ -586,8 +759,20 @@ const buildProjectJsonSnapshot = (
       },
       manifests: localManifests,
       preprocessors: localPreprocessors,
+      inputControls: {
+        selectedRangeByInputId: filteredSelectedRangeByInputId,
+        selectedInputClipIdByInputId: filteredSelectedInputClipIdByInputId,
+        totalTimelineFramesByInputId: filteredTotalTimelineFramesByInputId,
+        timelineDurationByInputId: filteredTimelineDurationByInputId,
+        fpsByInputId: filteredFpsByInputId,
+        focusFrameByInputId: filteredFocusFrameByInputId,
+        focusAnchorRatioByInputId: filteredFocusAnchorRatioByInputId,
+        zoomLevelByInputId: filteredZoomLevelByInputId,
+        isPlayingByInputId: filteredIsPlayingByInputId,
+      },
     };
 
+    
     // Attach any captured manifests/preprocessors so the main process
     // can persist them to local/{manifest,preprocessor} and we can later
     // hydrate from those files without hitting the API again.
@@ -625,6 +810,124 @@ const hydrateStoresFromProjectJson = async (
   isHydratingFromJson = true;
   try {
     try {
+      // Hydrate the global inputControls store from any persisted inputControls
+      // snapshot in the project JSON. The snapshot is keyed by clipId, then
+      // inputId; we map that back into the internal per-input store shape.
+      if (doc.inputControls && typeof doc.inputControls === "object") {
+        try {
+          const snapshot = doc.inputControls;
+          globalInputControlsStore.setState((prev: any) => {
+            const next = { ...prev };
+
+            const ttByInput: Record<string, Record<string, number>> = {
+              ...(prev.totalTimelineFramesByInputId || {}),
+            };
+            const tdByInput: Record<
+              string,
+              Record<string, [number, number]>
+            > = { ...(prev.timelineDurationByInputId || {}) };
+            const fpsByInput: Record<string, Record<string, number>> = {
+              ...(prev.fpsByInputId || {}),
+            };
+            const ffByInput: Record<string, Record<string, number>> = {
+              ...(prev.focusFrameByInputId || {}),
+            };
+            const faByInput: Record<string, Record<string, number>> = {
+              ...(prev.focusAnchorRatioByInputId || {}),
+            };
+            const selClipByInput: Record<
+              string,
+              Record<string, string | null>
+            > = { ...(prev.selectedInputClipIdByInputId || {}) };
+            const selRangeByInput: Record<
+              string,
+              Record<string, [number, number]>
+            > = { ...(prev.selectedRangeByInputId || {}) };
+
+            for (const [clipId, perInput] of Object.entries(snapshot)) {
+              if (!perInput || typeof perInput !== "object") continue;
+              for (const [inputId, data] of Object.entries(perInput)) {
+                const rec = (data || {}) as {
+                  totalTimelineFrames?: number;
+                  timelineDuration?: [number, number];
+                  fps?: number;
+                  focusFrame?: number;
+                  focusAnchorRatio?: number;
+                  selectedInputClipId?: string | null;
+                  selectedRange?: [number, number];
+                };
+
+                if (rec.totalTimelineFrames != null) {
+                  const byClip = ttByInput[inputId] || {};
+                  byClip[clipId] = Number(rec.totalTimelineFrames) || 0;
+                  ttByInput[inputId] = byClip;
+                }
+
+                if (
+                  rec.timelineDuration &&
+                  Array.isArray(rec.timelineDuration) &&
+                  rec.timelineDuration.length === 2
+                ) {
+                  const byClip = tdByInput[inputId] || {};
+                  byClip[clipId] = [
+                    Number(rec.timelineDuration[0]) || 0,
+                    Number(rec.timelineDuration[1]) || 0,
+                  ];
+                  tdByInput[inputId] = byClip;
+                }
+
+                if (rec.fps != null) {
+                  const byClip = fpsByInput[inputId] || {};
+                  byClip[clipId] = Number(rec.fps) || 0;
+                  fpsByInput[inputId] = byClip;
+                }
+
+                if (rec.focusFrame != null) {
+                  const byClip = ffByInput[inputId] || {};
+                  byClip[clipId] = Number(rec.focusFrame) || 0;
+                  ffByInput[inputId] = byClip;
+                }
+
+                if (rec.focusAnchorRatio != null) {
+                  const byClip = faByInput[inputId] || {};
+                  byClip[clipId] = Number(rec.focusAnchorRatio) || 0;
+                  faByInput[inputId] = byClip;
+                }
+
+                if ("selectedInputClipId" in rec) {
+                  const byClip = selClipByInput[inputId] || {};
+                  byClip[clipId] = rec.selectedInputClipId ?? null;
+                  selClipByInput[inputId] = byClip;
+                }
+
+                if (
+                  rec.selectedRange &&
+                  Array.isArray(rec.selectedRange) &&
+                  rec.selectedRange.length === 2
+                ) {
+                  const byClip = selRangeByInput[inputId] || {};
+                  byClip[clipId] = [
+                    Number(rec.selectedRange[0]) || 0,
+                    Number(rec.selectedRange[1]) || 0,
+                  ];
+                  selRangeByInput[inputId] = byClip;
+                }
+              }
+            }
+
+            next.totalTimelineFramesByInputId = ttByInput;
+            next.timelineDurationByInputId = tdByInput;
+            next.fpsByInputId = fpsByInput;
+            next.focusFrameByInputId = ffByInput;
+            next.focusAnchorRatioByInputId = faByInput;
+            next.selectedInputClipIdByInputId = selClipByInput;
+            next.selectedRangeByInputId = selRangeByInput;
+            return next;
+          });
+        } catch {
+          // best-effort; skip inputControls hydration if anything goes wrong
+        }
+      }
 
       const timelineTracks = Array.isArray(doc.timeline?.tracks)
         ? (doc.timeline.tracks as TimelineProps[])
@@ -835,6 +1138,118 @@ const hydrateStoresFromProjectJson = async (
         clips.push(merged);
       }
 
+      /**
+       * After all clips have been constructed, resolve any model input values
+       * that were persisted as timeline clip references back into full clip
+       * objects. This lets model UI inputs refer to live timeline clips without
+       * duplicating clip state inside the JSON snapshot.
+       */
+      const decodeModelInputClipRefsFromJson = (
+        modelInputValues: Record<string, any> | undefined,
+        clipsById: Record<string, AnyClipProps>,
+      ): Record<string, any> | undefined => {
+        if (!modelInputValues) return modelInputValues;
+
+        let changed = false;
+        const out: Record<string, any> = {};
+
+        const decodeValue = (raw: any): any => {
+          if (
+            raw &&
+            typeof raw === "object" &&
+            (raw as any).__kind === "timelineClipRef" &&
+            typeof (raw as any).clipId === "string"
+          ) {
+            const clipId = String((raw as any).clipId);
+            const clip = clipsById[clipId];
+            if (clip) {
+              changed = true;
+              // When hydrating model input values, convert any resolved
+              // timeline clip references back into the JSON string shape
+              // that model inputs expect instead of returning a live clip
+              // object. This keeps `modelInputValues` consistent with the
+              // original manifest UI values (which are strings).
+              try {
+                return JSON.stringify({ clipId });
+              } catch {
+                // If JSON serialization fails for some reason, fall back
+                // to the original raw value rather than a clip object.
+                return raw;
+              }
+            }
+          }
+          return raw;
+        };
+
+        for (const [key, raw] of Object.entries(modelInputValues)) {
+          if (Array.isArray(raw)) {
+            out[key] = (raw as any[]).map((item) => decodeValue(item));
+          } else {
+            out[key] = decodeValue(raw);
+          }
+        }
+
+        return changed ? out : modelInputValues;
+      };
+
+      if (clips.length > 0) {
+        const clipsById: Record<string, AnyClipProps> = {};
+        for (const clip of clips) {
+          const id = (clip as any).clipId;
+          if (id == null) continue;
+          const key = typeof id === "string" ? id : String(id);
+          if (!key) continue;
+          clipsById[key] = clip;
+        }
+
+        for (const clip of clips) {
+          const anyClip = clip as any;
+          if (anyClip.type !== "model") continue;
+
+          const modelClip = anyClip as ModelClipProps;
+          const rawValues = modelClip.modelInputValues;
+          if (
+            !rawValues ||
+            typeof rawValues !== "object" ||
+            Object.keys(rawValues).length === 0
+          ) {
+            continue;
+          }
+
+          const resolvedValues = decodeModelInputClipRefsFromJson(
+            rawValues as Record<string, any>,
+            clipsById,
+          );
+          if (!resolvedValues) continue;
+
+          modelClip.modelInputValues = resolvedValues;
+
+          const mfAny: any = modelClip.manifest as any;
+          const ui =
+            (mfAny.spec && mfAny.spec.ui) || mfAny.ui || undefined;
+          if (ui && Array.isArray(ui.inputs)) {
+            ui.inputs = ui.inputs.map((inp: any) => {
+              if (!inp || typeof inp !== "object") return inp;
+              const id =
+                typeof inp.id === "string" ? inp.id : undefined;
+              if (!id) return inp;
+              if (
+                Object.prototype.hasOwnProperty.call(
+                  resolvedValues,
+                  id,
+                )
+              ) {
+                return {
+                  ...inp,
+                  value: (resolvedValues as any)[id],
+                };
+              }
+              return inp;
+            });
+          }
+        }
+      }
+
       const assetsRecord: Record<string, Asset> =
         (doc.assets as Record<string, Asset>) ?? {};
 
@@ -888,6 +1303,20 @@ const hydrateStoresFromProjectJson = async (
         console.warn(
           "jsonPersistence: viewport store not ready for JSON snapshot; JSON autosave will rely on project-store changes only until it is available",
         );
+      }
+
+      if (globalInputControlsStore && typeof globalInputControlsStore.setState === "function") {
+        globalInputControlsStore.setState({
+          selectedRangeByInputId: doc.inputControls?.selectedRangeByInputId ?? {},
+          selectedInputClipIdByInputId: doc.inputControls?.selectedInputClipIdByInputId ?? {},
+          totalTimelineFramesByInputId: doc.inputControls?.totalTimelineFramesByInputId ?? {},
+          timelineDurationByInputId: doc.inputControls?.timelineDurationByInputId ?? {},
+          fpsByInputId: doc.inputControls?.fpsByInputId ?? {},
+          focusFrameByInputId: doc.inputControls?.focusFrameByInputId ?? {},
+          focusAnchorRatioByInputId: doc.inputControls?.focusAnchorRatioByInputId ?? {},
+          zoomLevelByInputId: doc.inputControls?.zoomLevelByInputId ?? {},
+          isPlayingByInputId: doc.inputControls?.isPlayingByInputId ?? {},
+        });
       }
 
       if (useControlsStore && typeof useControlsStore.setState === "function") {
@@ -1025,6 +1454,57 @@ const initExternalSubscriptions = (getProjectState: () => JsonProjectSlice) => {
     } else {
       console.warn(
         "jsonPersistence: controls store not ready for JSON subscriptions; JSON autosave will rely on project-store changes only until it is available",
+      );
+    }
+
+    // Subscribe to global inputControls store so that any per-input timeline
+    // changes (fps, focus frame, ranges, etc.) trigger JSON autosave.
+
+    try {
+      if (
+        globalInputControlsStore &&
+        typeof globalInputControlsStore.subscribe === "function"
+      ) {
+        globalInputControlsStore.subscribe((state, prev) => {
+          if (
+            !_.isEqual(
+              state?.totalTimelineFramesByInputId,
+              prev?.totalTimelineFramesByInputId,
+            ) ||
+            !_.isEqual(
+              state?.timelineDurationByInputId,
+              prev?.timelineDurationByInputId,
+            ) ||
+            !_.isEqual(state?.fpsByInputId, prev?.fpsByInputId) ||
+            !_.isEqual(
+              state?.focusFrameByInputId,
+              prev?.focusFrameByInputId,
+            ) ||
+            !_.isEqual(
+              state?.focusAnchorRatioByInputId,
+              prev?.focusAnchorRatioByInputId,
+            ) ||
+            !_.isEqual(
+              state?.selectedInputClipIdByInputId,
+              prev?.selectedInputClipIdByInputId,
+            ) ||
+            !_.isEqual(
+              state?.selectedRangeByInputId,
+              prev?.selectedRangeByInputId,
+            )
+          ) {
+            scheduleJsonProjectSave(getProjectState);
+          }
+        });
+      } else {
+        console.warn(
+          "jsonPersistence: inputControls store not ready for JSON subscriptions; JSON autosave will omit inputControls until it is available",
+        );
+      }
+    } catch (err) {
+      console.error(
+        "jsonPersistence: failed to subscribe to inputControls store",
+        err,
       );
     }
   } catch (err) {

@@ -17,9 +17,16 @@ import {
 import { LuLoader, LuTrash2 } from "react-icons/lu";
 import { GrTasks } from "react-icons/gr";
 import { useClipStore } from "@/lib/clip";
-import { ClipTransform, ModelClipProps, GenerationModelClipProps } from "@/lib/types";
+import {
+  ClipTransform,
+  ModelClipProps,
+  GenerationModelClipProps,
+} from "@/lib/types";
 import { pathToFileURLString } from "@app/preload";
 import { BASE_LONG_SIDE } from "@/lib/settings";
+import { getMediaInfoCached } from "@/lib/media/utils";
+import { useControlsStore } from "@/lib/control";
+import { useViewportStore } from "@/lib/viewport";
 
 const POLL_MS = 2000;
 
@@ -46,8 +53,7 @@ const JobsMenu: React.FC = () => {
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const { updateClip, addAssetAsync } = useClipStore();
   const subscribedRef = React.useRef<Map<string, () => void>>(new Map());
-  const completedJobIdsRef = React.useRef<Set<string>>(new Set());
-
+  const { fps } = useControlsStore();
   // Poll aggregated Ray jobs
   useEffect(() => {
     let mounted = true;
@@ -133,33 +139,6 @@ const JobsMenu: React.FC = () => {
         .map((j) => j.job_id),
     );
 
-    // Helper: on-complete handler to eagerly fetch and attach engine result
-    const fetchAndStoreJobResult = async (jobId: string) => {
-      try {
-        const res = await getEngineResult(jobId);
-        console.log("res", res);
-        if (!res.success || !res.data) return;
-        const result = res.data;
-        setJobsById((prev) => {
-          const job = prev[jobId];
-          if (!job) return prev;
-          return {
-            ...prev,
-            [jobId]: {
-              ...job,
-              result,
-              latest: {
-                ...(job.latest || {}),
-                result,
-              },
-            } as any,
-          };
-        });
-      } catch {
-        // Swallow errors; polling will still eventually sync result if available
-      }
-    };
-
     // Connect to new jobs
     activeEngineJobIds.forEach((jobId) => {
       if (!subscribedRef.current.has(jobId)) {
@@ -168,7 +147,7 @@ const JobsMenu: React.FC = () => {
             await connectJobWebSocket(jobId);
             
             const unsubUpdate = subscribeToJobUpdates(jobId, (data) => {
-              const status = String(data?.status || "").toLowerCase();
+       
               setJobsById((prev) => {
                 const job = prev[jobId];
                 if (!job) return prev;
@@ -196,12 +175,6 @@ const JobsMenu: React.FC = () => {
                 };
               });
 
-              // When the engine reports completion, eagerly fetch the final result so
-              // downstream clip updates (e.g. result_path handling in the jobs sync
-              // effect) can run immediately without waiting for polling.
-              if (status === "complete" || status === "completed") {
-                void fetchAndStoreJobResult(jobId);
-              }
             });
 
             const unsubStatus = subscribeToJobStatus(jobId, (data) => {
@@ -263,7 +236,6 @@ const JobsMenu: React.FC = () => {
       if (!job.job_id) return;
 
 
-
       // Find model clips tracking this job
       const clip = clips.find(
         (c) =>
@@ -272,8 +244,6 @@ const JobsMenu: React.FC = () => {
       ) as ModelClipProps | undefined;
 
       if (!clip) return;
-
-      console.log(job);
 
       const status = (job.status || "").toLowerCase();
       let newStatus: "pending" | "running" | "complete" | "failed" | undefined;
@@ -308,6 +278,21 @@ const JobsMenu: React.FC = () => {
         patch.previewPath = fileUrl;
         needsUpdate = true;
         const asset = await addAssetAsync({ path:fileUrl }, "apex-cache");
+        // get the duration from the asset
+        const mediaInfo = getMediaInfoCached(asset.path);
+        if (mediaInfo) {
+          // update the duration of the clip
+          const duration = mediaInfo.duration;
+          if (typeof duration === "number" && duration > 0) {
+            let newEndFrame = clip.startFrame + (duration * fps)
+            let newStartFrame = clip.startFrame
+            let newDuration = (newEndFrame - newStartFrame) / fps;
+        
+            if (newDuration !== duration) {
+              patch.endFrame = Math.floor(newEndFrame);
+            }
+          }
+        }
         patch.assetId = asset.id;
         patch.trimEnd = 0;
         patch.trimStart = 0;
@@ -331,15 +316,9 @@ const JobsMenu: React.FC = () => {
           genUpdate = true;
         }
 
-        if (newStatus === "complete" && job.result?.result_path && newGen) {
-          const resultPath = (job.result as any)?.result_path;
-            const resultUrl = pathToFileURLString(resultPath);
-            // try get asset by id first
-            const asset = await addAssetAsync({ path: resultUrl }, "apex-cache");
-            newGen.assetId = asset.id;
-            newGen.src = resultUrl;
+        if (newStatus === "complete" && newGen) {
             newGen.modelStatus = "complete";
-            patch.assetId = asset.id;
+            newGen.assetId = patch.assetId ?? "";
             patch.activeJobId = undefined; // Clear active job on completion
             needsUpdate = true;
             genUpdate = true;
@@ -393,14 +372,52 @@ const JobsMenu: React.FC = () => {
             opacity: 100,
             crop: { x: 0, y: 0, width: 1, height: 1 },
           };
-            (patch as any).transform = baseTransform;
-            (patch as any).originalTransform = { ...baseTransform };
-            patch.mediaWidth = nativeW;
-            patch.mediaHeight = nativeH;
-            patch.mediaAspectRatio = nativeW / nativeH;
-            if (newGen) newGen.transform = baseTransform;
-            genUpdate = true;
-            needsUpdate = true;
+          (patch as any).transform = baseTransform;
+          (patch as any).originalTransform = { ...baseTransform };
+          patch.mediaWidth = nativeW;
+          patch.mediaHeight = nativeH;
+          patch.mediaAspectRatio = nativeW / nativeH;
+          if (newGen) newGen.transform = baseTransform;
+          genUpdate = true;
+          needsUpdate = true;
+
+          // If this model clip is the only *media* clip on the timeline,
+          // align the viewport aspect ratio with the clip's native aspect
+          // ratio, mirroring the behavior used when adding the first media
+          // clip in TimelineEditor.
+          try {
+            const allClips = useClipStore.getState().clips;
+            const hasOtherMediaClips = allClips.some((c) => {
+              const isMedia =
+                c.type === "video" ||
+                c.type === "image" ||
+                (c.type === "model" && (c as ModelClipProps).assetId);
+              return isMedia && c.clipId !== clip.clipId;
+            });
+
+            if (!hasOtherMediaClips) {
+              const w = Number(nativeW);
+              const h = Number(nativeH);
+              if (
+                Number.isFinite(w) &&
+                Number.isFinite(h) &&
+                w > 0 &&
+                h > 0
+              ) {
+                const gcd = (a: number, b: number): number =>
+                  b === 0 ? a : gcd(b, a % b);
+                const g = gcd(Math.round(w), Math.round(h)) || 1;
+                const id = `${Math.round(w / g)}:${Math.round(h / g)}`;
+                useViewportStore
+                  .getState()
+                  .setAspectRatio({
+                    width: Math.round(w),
+                    height: Math.round(h),
+                    id,
+                  });
+              }
+            }
+          } catch {}
         }
       }
 

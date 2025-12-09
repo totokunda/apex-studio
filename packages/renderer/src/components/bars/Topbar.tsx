@@ -214,6 +214,7 @@ const TopBar: React.FC<TopBarProps> = () => {
         preparedClips.push(...prepared.exportClips);
       }
 
+
       const { promise, cancel } = exportSequenceCancellable({
         mode: "video",
         filename: outpath,

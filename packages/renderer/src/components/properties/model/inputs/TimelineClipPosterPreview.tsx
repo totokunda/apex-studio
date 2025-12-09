@@ -44,7 +44,8 @@ const PosterClipItem = React.memo(({
   inputId,
   getApplicators,
   clipWithinFrame,
-  getClipById
+  getClipById,
+  isDialogOpen,
 }: {
   clip: AnyClipProps;
   rectWidth: number;
@@ -54,6 +55,7 @@ const PosterClipItem = React.memo(({
   getApplicators: (id: string, frame: number) => BaseClipApplicator[];
   clipWithinFrame: (clip: AnyClipProps, frame: number, overlap: boolean, padding: number) => boolean;
   getClipById: (id: string) => AnyClipProps | undefined;
+  isDialogOpen?: boolean;
 }) => {
   const startFrame = clip.startFrame || 0;
   const groupStart = clip.groupId
@@ -171,13 +173,13 @@ const PosterClipItem = React.memo(({
         }
     }
     return override;
-  }, [clip, rectWidth, rectHeight]);
+  }, [clip, rectWidth, rectHeight, isDialogOpen]);
 
   switch (clip.type) {
     case "video":
       return (
         <VideoPreview
-          key={clip.clipId}
+          key={`${clip.clipId}-${isDialogOpen}`}
           {...(clip as any)}
           overrideClip={overrideToUse}
           rectWidth={rectWidth}
@@ -187,6 +189,7 @@ const PosterClipItem = React.memo(({
           inputMode={true}
           focusFrameOverride={focusFrame}
           inputId={inputId}
+          decoderKey={`poster::${clip.clipId}`}
         />
       );
     case "image":
@@ -251,6 +254,7 @@ const TimelineClipPosterPreview: React.FC<{
   ratioOverride?: number;
   audioOnly?: boolean;
   needsStage?: boolean;
+  isDialogOpen?: boolean;
 }> = ({
   clipId,
   clip: clipOverride,
@@ -260,6 +264,7 @@ const TimelineClipPosterPreview: React.FC<{
   ratioOverride,
   audioOnly = false,
   needsStage = false,
+  isDialogOpen = false,
 }) => {
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const getClipById = useClipStore((s) => s.getClipById);
@@ -267,7 +272,7 @@ const TimelineClipPosterPreview: React.FC<{
   const clipWithinFrame = useClipStore((s) => s.clipWithinFrame);
   const haldClutInstance = useWebGLHaldClut();
   const focusFrame = useInputControlsStore(
-    (s) => s.getFocusFrame(inputId) ?? 0,
+    (s) => s.getFocusFrame(inputId ?? "") ?? 0,
   );
 
   const timelines = useClipStore((s) => s.timelines);
@@ -517,7 +522,7 @@ const TimelineClipPosterPreview: React.FC<{
                   // 3. USE THE NEW MEMOIZED ITEM COMPONENT HERE
                   return (
                     <PosterClipItem
-                        key={clip.clipId}
+                        key={`${clip.clipId}`}
                         clip={clip}
                         rectWidth={rectWidth}
                         rectHeight={rectHeight}
@@ -526,6 +531,7 @@ const TimelineClipPosterPreview: React.FC<{
                         getApplicators={getApplicators}
                         clipWithinFrame={clipWithinFrame}
                         getClipById={getClipById}
+                        isDialogOpen={isDialogOpen}
                     />
                   );
                 })}

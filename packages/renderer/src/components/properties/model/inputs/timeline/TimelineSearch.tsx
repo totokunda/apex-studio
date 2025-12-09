@@ -16,6 +16,7 @@ interface TimelineSearchProps {
   width?: number;
   height?: number;
   excludeClipId?: string | null;
+  isAssetSelected?: (clipId: string) => boolean;
 }
 
 const SCROLLBAR_HW = 8;
@@ -25,6 +26,7 @@ const TimelineSearch: React.FC<TimelineSearchProps> = ({
   width = 580,
   height = 300,
   excludeClipId = null,
+  isAssetSelected = () => false,
 }) => {
   const timelinesLayerRef = useRef<Konva.Layer>(null);
   const [clampedScroll, setClampedScroll] = useState<number>(0);
@@ -132,6 +134,7 @@ const TimelineSearch: React.FC<TimelineSearchProps> = ({
             {timelines.map((timeline, index) => (
               <Timeline
                 assetMode
+                isAssetSelected={isAssetSelected}
                 excludeClipId={excludeClipId || null}
                 cornerRadius={4}
                 key={timeline.timelineId}

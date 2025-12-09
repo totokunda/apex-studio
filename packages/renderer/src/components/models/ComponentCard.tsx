@@ -457,6 +457,7 @@ const ComponentCard: React.FC<{
       );
     } catch {}
     await refreshManifestPart(manifestId, `spec.components.${index}`);
+    await refreshManifestPart(manifestId, `downloaded`);
     setDeletingPaths((s) => new Set(Array.from(s).filter((p) => p !== path)));
   };
 
@@ -484,6 +485,7 @@ const ComponentCard: React.FC<{
         );
       } catch {}
       await refreshManifestPart(manifestId, `spec.components.${index}`);
+      await refreshManifestPart(manifestId, `downloaded`);
     } finally {
       setDeletingPaths((s) => new Set(Array.from(s).filter((p) => p !== path)));
     }
@@ -513,84 +515,210 @@ const ComponentCard: React.FC<{
         : typeLabel);
   const componentCarRef = useRef<HTMLDivElement>(null);
 
+  const extraDisplayName = `${displayName} Extra`;
+
+  return (
+    <>
+      <div
+        ref={componentCarRef}
+        className="bg-brand border border-brand-light/10 rounded-md text-start"
+      >
+        <ComponentCardHeader
+          component={component}
+          componentFlagDownloaded={componentFlagDownloaded}
+          displayName={displayName}
+          isComponentDownlading={isComponentDownlading}
+          isConfigOnly={isConfigOnly || false}
+          isExpanded={isExpanded}
+          onToggleExpanded={() => setIsExpanded((prev) => !prev)}
+          onDownloadAll={handleDownloadAll}
+          typeLabel={typeLabel}
+        />
+
+        {isExpanded && (
+          <div className="px-4 pb-4">
+            {modelPaths.length > 0 && (
+              <ModelPathsSection
+                baseModelPaths={modelPaths}
+                componentCarRef={componentCarRef}
+                deletingPaths={deletingPaths}
+                downloadedPaths={downloadedPaths}
+                downloadingPaths={downloadingPaths}
+                manifestId={manifestId}
+                index={index}
+                isAddingModelPath={isAddingModelPath}
+                isValidatingModelPath={isValidatingModelPath}
+                modelPaths={modelPaths}
+                newModelName={newModelName}
+                newModelPath={newModelPath}
+                onCancel={handleCancel}
+                onDelete={handleDelete}
+                onDeleteCustomPath={handleDeleteCustomPath}
+                onDownload={handleDownload}
+                pathToJobId={pathToJobId}
+                refreshManifestPart={refreshManifestPart}
+                setIsAddingModelPath={setIsAddingModelPath}
+                setNewModelName={setNewModelName}
+                setNewModelPath={setNewModelPath}
+                setIsValidatingModelPath={setIsValidatingModelPath}
+                wsFilesByPath={wsFilesByPath}
+              />
+            )}
+            {isConfigOnly &&
+              component.type !== "scheduler" &&
+              baseConfigPath && (
+                <ConfigOnlySection
+                  baseConfigPath={baseConfigPath}
+                  componentCarRef={componentCarRef}
+                  componentFlagDownloaded={componentFlagDownloaded}
+                  deletingPaths={deletingPaths}
+                  downloadingPaths={downloadingPaths}
+                  onCancel={handleCancel}
+                  onDelete={handleDelete}
+                  onDownload={handleDownload}
+                  wsFilesByPath={wsFilesByPath}
+                />
+              )}
+            {component.type === "scheduler" &&
+              component.scheduler_options &&
+              component.scheduler_options.length > 0 && (
+                <SchedulerSection
+                  component={component}
+                  componentCarRef={componentCarRef}
+                  componentFlagDownloaded={componentFlagDownloaded}
+                  deletingPaths={deletingPaths}
+                  downloadingPaths={downloadingPaths}
+                  onCancel={handleCancel}
+                  onDelete={handleDelete}
+                  onDownload={handleDownload}
+                  schedulerConfigPaths={schedulerConfigPaths}
+                  schedulerIsDownloading={schedulerIsDownloading}
+                  schedulersConfigDownloading={schedulersConfigDownloading}
+                  wsFilesByPath={wsFilesByPath}
+                />
+              )}
+          </div>
+        )}
+      </div>
+
+      {extraModelPaths.length > 0 && (
+        <ExtraModelComponentCard
+          component={component}
+          displayName={extraDisplayName}
+          extraModelPaths={extraModelPaths}
+          downloadedPaths={downloadedPaths}
+          downloadingPaths={downloadingPaths}
+          wsFilesByPath={wsFilesByPath}
+          onDownload={handleDownload}
+          deletingPaths={deletingPaths}
+          onDelete={handleDelete}
+          onDeleteCustomPath={handleDeleteCustomPath}
+          onCancel={handleCancel}
+          pathToJobId={pathToJobId}
+        />
+      )}
+    </>
+  );
+};
+
+interface ExtraModelComponentCardProps {
+  component: ManifestComponent;
+  displayName: string;
+  extraModelPaths: ManifestComponentModelPathItem[];
+  downloadedPaths: Set<string>;
+  downloadingPaths: Set<string>;
+  wsFilesByPath: Record<string, any>;
+  onDownload: (path: string | string[]) => Promise<void>;
+  deletingPaths: Set<string>;
+  onDelete: (path: string) => Promise<void>;
+  onDeleteCustomPath: (
+    pathItem: ManifestComponentModelPathItem,
+  ) => Promise<void>;
+  onCancel: (jobId: string) => Promise<void>;
+  pathToJobId: Record<string, string>;
+}
+
+const ExtraModelComponentCard: React.FC<ExtraModelComponentCardProps> = ({
+  component,
+  displayName,
+  extraModelPaths,
+  downloadedPaths,
+  downloadingPaths,
+  wsFilesByPath,
+  onDownload,
+  deletingPaths,
+  onDelete,
+  onDeleteCustomPath,
+  onCancel,
+  pathToJobId,
+}) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const extraCardRef = useRef<HTMLDivElement>(null);
+
+  const typeLabel = getComponentTypeLabel(component.type);
+
+  const extraPaths = useMemo(
+    () =>
+      extraModelPaths
+        .map((it) => it.path)
+        .filter(Boolean) as string[],
+    [extraModelPaths],
+  );
+
+  const allExtrasDownloaded =
+    extraPaths.length > 0 &&
+    extraPaths.every((p) => downloadedPaths.has(p));
+
+  const isComponentDownlading = useMemo(() => {
+    return (
+      extraPaths.some((p) => downloadingPaths.has(p)) ||
+      extraPaths.some(
+        (p) =>
+          wsFilesByPath[p] &&
+          Object.values(wsFilesByPath[p]).some(
+            (v: any) => v.status === "processing" || v.status === "pending",
+          ),
+      )
+    );
+  }, [extraPaths, wsFilesByPath, downloadingPaths]);
+
+  const handleDownloadAllExtras = async () => {
+    if (!extraPaths.length) return;
+    await onDownload(extraPaths);
+  };
+
   return (
     <div
-      ref={componentCarRef}
+      ref={extraCardRef}
       className="bg-brand border border-brand-light/10 rounded-md text-start"
     >
       <ComponentCardHeader
         component={component}
-        componentFlagDownloaded={componentFlagDownloaded}
+        componentFlagDownloaded={allExtrasDownloaded}
         displayName={displayName}
         isComponentDownlading={isComponentDownlading}
-        isConfigOnly={isConfigOnly || false}
+        isConfigOnly={false}
         isExpanded={isExpanded}
         onToggleExpanded={() => setIsExpanded((prev) => !prev)}
-        onDownloadAll={handleDownloadAll}
+        onDownloadAll={handleDownloadAllExtras}
         typeLabel={typeLabel}
       />
 
       {isExpanded && (
         <div className="px-4 pb-4">
-          {modelPaths.length > 0 && (
-            <ModelPathsSection
-              baseModelPaths={modelPaths}
-              componentCarRef={componentCarRef}
-              deletingPaths={deletingPaths}
-              downloadedPaths={downloadedPaths}
-              downloadingPaths={downloadingPaths}
-              extraModelPaths={extraModelPaths}
-              manifestId={manifestId}
-              index={index}
-              isAddingModelPath={isAddingModelPath}
-              isValidatingModelPath={isValidatingModelPath}
-              modelPaths={modelPaths}
-              newModelName={newModelName}
-              newModelPath={newModelPath}
-              onCancel={handleCancel}
-              onDelete={handleDelete}
-              onDeleteCustomPath={handleDeleteCustomPath}
-              onDownload={handleDownload}
-              pathToJobId={pathToJobId}
-              refreshManifestPart={refreshManifestPart}
-              setIsAddingModelPath={setIsAddingModelPath}
-              setNewModelName={setNewModelName}
-              setNewModelPath={setNewModelPath}
-              setIsValidatingModelPath={setIsValidatingModelPath}
-              wsFilesByPath={wsFilesByPath}
-            />
-          )}
-          {isConfigOnly && component.type !== "scheduler" && baseConfigPath && (
-            <ConfigOnlySection
-              baseConfigPath={baseConfigPath}
-              componentCarRef={componentCarRef}
-              componentFlagDownloaded={componentFlagDownloaded}
-              deletingPaths={deletingPaths}
-              downloadingPaths={downloadingPaths}
-              onCancel={handleCancel}
-              onDelete={handleDelete}
-              onDownload={handleDownload}
-              wsFilesByPath={wsFilesByPath}
-            />
-          )}
-          {component.type === "scheduler" &&
-            component.scheduler_options &&
-            component.scheduler_options.length > 0 && (
-              <SchedulerSection
-                component={component}
-                componentCarRef={componentCarRef}
-                componentFlagDownloaded={componentFlagDownloaded}
-                deletingPaths={deletingPaths}
-                downloadingPaths={downloadingPaths}
-                onCancel={handleCancel}
-                onDelete={handleDelete}
-                onDownload={handleDownload}
-                schedulerConfigPaths={schedulerConfigPaths}
-                schedulerIsDownloading={schedulerIsDownloading}
-                schedulersConfigDownloading={schedulersConfigDownloading}
-                wsFilesByPath={wsFilesByPath}
-              />
-            )}
+          <ExtraModelPathsSection
+            componentCarRef={extraCardRef}
+            deletingPaths={deletingPaths}
+            downloadedPaths={downloadedPaths}
+            downloadingPaths={downloadingPaths}
+            extraModelPaths={extraModelPaths}
+            onDownload={onDownload}
+            onDelete={onDelete}
+            onDeleteCustomPath={onDeleteCustomPath}
+            onCancel={onCancel}
+            pathToJobId={pathToJobId}
+            wsFilesByPath={wsFilesByPath}
+          />
         </div>
       )}
     </div>
@@ -717,7 +845,6 @@ interface ModelPathsSectionProps {
   deletingPaths: Set<string>;
   downloadedPaths: Set<string>;
   downloadingPaths: Set<string>;
-  extraModelPaths: ManifestComponentModelPathItem[];
   index: number;
   isAddingModelPath: boolean;
   isValidatingModelPath: boolean;
@@ -745,7 +872,6 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
   deletingPaths,
   downloadedPaths,
   downloadingPaths,
-  extraModelPaths,
   index,
   isAddingModelPath,
   isValidatingModelPath,
@@ -905,15 +1031,6 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
               </div>
             )}
 
-            {extraModelPaths.length > 0 && (
-              <ExtraModelPathsSection
-                componentCarRef={componentCarRef}
-                downloadedPaths={downloadedPaths}
-                extraModelPaths={extraModelPaths}
-                wsFilesByPath={wsFilesByPath}
-              />
-            )}
-
             {!isDownloaded ? (
               isDownloading ? (
                 <DownloadProgressSection
@@ -924,22 +1041,19 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
               ) : (
                 <button
                   onClick={() => {
-                    const extraPaths = extraModelPaths
-                      .map((it) => it.path)
-                      .filter(Boolean) as string[];
-                    const allPaths = [pathItem.path, ...extraPaths].filter(
-                      Boolean,
-                    ) as string[];
-                    if (allPaths.length > 0) {
-                      onDownload(allPaths);
+                    if (pathItem.path && downloadingPaths.has(pathItem.path)) {
+                        onCancel(pathToJobId[pathItem.path]);
+                    } else {
+                    if (pathItem.path) {
+                      onDownload(pathItem.path);
+                      }
                     }
                   }}
                   className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
                 >
                   {pathItem.path && downloadingPaths.has(pathItem.path) ? (
                     <>
-                      <LuLoader className="w-3.5 h-3.5 animate-spin" />
-                      <span>Downloading</span>
+                      <span>Cancel</span>
                     </>
                   ) : (
                     <>
@@ -952,8 +1066,6 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
             ) : (
               <DownloadedModelActions
                 deletingPaths={deletingPaths}
-                extraModelPaths={extraModelPaths}
-                modelPaths={modelPaths}
                 onDelete={onDelete}
                 onDeleteCustomPath={onDeleteCustomPath}
                 pathItem={pathItem}
@@ -992,28 +1104,45 @@ const ModelPathsSection: React.FC<ModelPathsSectionProps> = ({
 
 interface ExtraModelPathsSectionProps {
   componentCarRef: React.RefObject<HTMLDivElement | null>;
+  deletingPaths: Set<string>;
   downloadedPaths: Set<string>;
+  downloadingPaths: Set<string>;
   extraModelPaths: ManifestComponentModelPathItem[];
+  onDownload: (path: string | string[]) => Promise<void>;
+  onDelete: (path: string) => Promise<void>;
+  onDeleteCustomPath: (
+    pathItem: ManifestComponentModelPathItem,
+  ) => Promise<void>;
+  onCancel: (jobId: string) => Promise<void>;
+  pathToJobId: Record<string, string>;
   wsFilesByPath: Record<string, any>;
 }
 
 const ExtraModelPathsSection: React.FC<ExtraModelPathsSectionProps> = ({
   componentCarRef,
+  deletingPaths,
   downloadedPaths,
+  downloadingPaths,
   extraModelPaths,
+  onDownload,
+  onDelete,
+  onDeleteCustomPath,
+  onCancel,
+  pathToJobId,
   wsFilesByPath,
 }) => {
   return (
-    <div className="mt-2 pt-2 border-t border-brand-light/5">
-      <div className="text-brand-light text-[10.5px] font-medium mb-1">
-        Extra Model Paths
-      </div>
+    <div className="mt-2 pt-2 ">
+
       <div className="flex flex-col space-y-2">
-        {extraModelPaths.map((extra, extraIdx) => {
-          const extraPath = extra.path;
-          if (!extraPath) return null;
-          const extraDownloaded = downloadedPaths.has(extraPath);
-          const wsFilesObj = wsFilesByPath[extraPath] || {};
+        {extraModelPaths.map((extra, idx) => {
+          const pathItem = extra as ManifestComponentModelPathItem;
+          const path = pathItem.path;
+          if (!path) return null;
+
+          const isDownloaded = downloadedPaths.has(path);
+
+          const wsFilesObj = wsFilesByPath[path] || {};
           const wsFiles = Object.entries(wsFilesObj).map(([filename, v]) => ({
             filename,
             downloadedBytes: (v as any).downloadedBytes,
@@ -1023,82 +1152,166 @@ const ExtraModelPathsSection: React.FC<ExtraModelPathsSectionProps> = ({
             message: (v as any).message,
             bucket: (v as any).bucket,
             label: (v as any).label,
-            downloadSpeed: (v as any).downloadSpeed,
           })) as any[];
-          const isExtraDownloading = wsFiles.length > 0;
+          const isDownloading = wsFiles.length > 0;
 
           return (
-            <div key={extraIdx} className="flex flex-col gap-y-1.5">
-              <div className="text-brand-light text-[10px] font-mono break-all">
-                {extraPath}
-              </div>
-              {!extraDownloaded && isExtraDownloading && (
-                <div className="w-full">
-                  <div className="flex flex-col gap-y-2">
-                    {wsFiles.map((f: any) => (
-                      <div key={f.filename} className="flex flex-col gap-y-1">
-                        <div className="flex items-center justify-between gap-x-2 w-full">
-                          <div className="flex-1 min-w-0">
-                            <div
-                              style={{
-                                maxWidth: `${(componentCarRef.current?.clientWidth || 0) - 120}px`,
-                              }}
-                              className="text-[10px] text-brand-light/80 font-mono truncate break-all"
-                            >
-                              {f.filename}
-                            </div>
-                          </div>
-                          <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
-                            {(() => {
-                              const pct = f.totalBytes
-                                ? ((f.downloadedBytes || 0) / f.totalBytes) *
-                                  100
-                                : typeof f.progress === "number"
-                                  ? f.progress * 100
-                                  : 0;
-                              return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
-                            })()}
-                          </div>
-                        </div>
-                        <ProgressBar
-                          percent={(() => {
-                            const pct = f.totalBytes
-                              ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
-                              : typeof f.progress === "number"
-                                ? f.progress * 100
-                                : 0;
-                            return Math.max(0, Math.min(100, pct));
-                          })()}
-                        />
-                        <div className="flex items-center justify-between">
-                          {typeof f.downloadedBytes === "number" &&
-                          typeof f.totalBytes === "number" ? (
-                            <div className="text-[10px] text-brand-light/90">
-                              {formatDownloadProgress(
-                                f.downloadedBytes,
-                                f.totalBytes,
-                              )}
-                            </div>
-                          ) : (
-                            <div />
-                          )}
-                          {f.status === "completed" ||
-                          f.status === "complete" ? (
-                            <div className="text-[10px] text-green-400">
-                              Completed
-                            </div>
-                          ) : (
-                            <div className="text-[9px] text-brand-light/60">
-                              {f.downloadSpeed != null && f.downloadSpeed > 0
-                                ? formatSpeed(f.downloadSpeed)
-                                : ""}
-                            </div>
-                          )}
-                        </div>
+            <div
+              key={idx}
+              className="bg-brand-background border border-brand-light/10 rounded-md  p-3 overflow-hidden w-full"
+            >
+              {(pathItem.variant || pathItem.custom) && (
+                <div className="flex flex-row justify-between items-center mb-2.5">
+                  <div className="flex items-center gap-x-1.5">
+                    {pathItem.variant && (
+                      <div className="text-brand-light text-[11px] break-all font-semibold">
+                        {pathItem.variant.toLowerCase().includes("default")
+                          ? "Default"
+                          : pathItem.variant.toLowerCase().includes("gguf")
+                            ? pathItem.variant
+                                .replace("GGUF_", "")
+                                .replace("Q", "q")
+                                .toUpperCase()
+                            : pathItem.variant}
                       </div>
-                    ))}
+                    )}
+                    {pathItem.custom && (
+                      <span className="inline-flex items-center rounded-full bg-brand-background px-2 py-0.5 text-[9px] font-medium text-brand-light/80 border border-brand-light/20">
+                        Custom
+                      </span>
+                    )}
+                  </div>
+                  {typeof (pathItem as any).file_size === "number" &&
+                    (pathItem as any).file_size > 0 && (
+                      <div className="shrink-0 ml-2 text-[10px] text-brand-light/80 font-mono whitespace-nowrap">
+                        {formatBytes((pathItem as any).file_size, 1)}
+                      </div>
+                    )}
+                </div>
+              )}
+              <div className="flex items-start justify-between gap-x-2 ">
+                <div className="flex-1 min-w-0 flex-row items-center gap-x-2">
+                  <div className="text-brand-light text-[10.5px] font-medium mb-1">
+                    Model Path
+                  </div>
+                  <div className="text-brand-light text-[10px] font-mono break-all">
+                    {path}
                   </div>
                 </div>
+              </div>
+              {(pathItem.type || pathItem.precision) && (
+                <div className="flex flex-col items-start  mt-2 justify-start border-t border-brand-light/5  pt-2">
+                  <h4 className="text-brand-light text-[10.5px] font-medium mb-1">
+                    Model specifications
+                  </h4>
+                  {pathItem.type && (
+                    <div className="text-[10px] flex flex-row items-center gap-x-1 ">
+                      <span className="text-brand-light/60 font-medium">
+                        Model Type{" "}
+                      </span>
+                      <span className="text-brand-light/80 font-mono">
+                        {pathItem.type === "gguf"
+                          ? "GGUF"
+                          : formatComponentName(pathItem.type)}
+                      </span>
+                    </div>
+                  )}
+                  {pathItem.precision && (
+                    <div className="text-[10px] flex flex-row items-center gap-x-1 ">
+                      <span className="text-brand-light/60 font-medium">
+                        Precision{" "}
+                      </span>
+                      <span className="text-brand-light/90 font-mono">
+                        {pathItem.precision.toUpperCase()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {pathItem.resource_requirements && (
+                <div className="mt-2 pt-2 border-t border-brand-light/5">
+                  <div className="text-brand-light text-[10.5px] font-medium mb-1">
+                    Resource Requirements
+                  </div>
+                  <div className="flex flex-col ">
+                    {pathItem.resource_requirements.min_vram_gb && (
+                      <div className="text-[10px]">
+                        <span className="text-brand-light/60 font-medium">
+                          Min VRAM{" "}
+                        </span>
+                        <span className="text-brand-light/90">
+                          {pathItem.resource_requirements.min_vram_gb}GB
+                        </span>
+                      </div>
+                    )}
+                    {pathItem.resource_requirements.recommended_vram_gb && (
+                      <div className="text-[10px]">
+                        <span className="text-brand-light/60 font-medium">
+                          Recommended VRAM{" "}
+                        </span>
+                        <span className="text-brand-light/90">
+                          {
+                            pathItem.resource_requirements
+                              .recommended_vram_gb
+                          }
+                          GB
+                        </span>
+                      </div>
+                    )}
+                    {pathItem.resource_requirements.compute_capability && (
+                      <div className="text-[10px]">
+                        <span className="text-brand-light/60">
+                          Compute Capability:{" "}
+                        </span>
+                        <span className="text-brand-light/90">
+                          {
+                            pathItem.resource_requirements
+                              .compute_capability
+                          }
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {!isDownloaded ? (
+                isDownloading ? (
+                  <DownloadProgressSection
+                    componentCarRef={componentCarRef}
+                    files={wsFiles}
+                    onCancel={() => onCancel(pathToJobId[path || ""])}
+                  />
+                ) : (
+                  <button
+                    onClick={() => {
+                      if (path) {
+                        onDownload(path);
+                      }
+                    }}
+                    className="w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all"
+                  >
+                    {downloadingPaths.has(path) ? (
+                      <>
+                        <LuLoader className="w-3.5 h-3.5 animate-spin" />
+                        <span>Downloading</span>
+                      </>
+                    ) : (
+                      <>
+                        <LuDownload className="w-3.5 h-3.5" />
+                        <span>Download Model</span>
+                      </>
+                    )}
+                  </button>
+                )
+              ) : (
+                <DownloadedModelActions
+                  deletingPaths={deletingPaths}
+                  onDelete={onDelete}
+                  onDeleteCustomPath={onDeleteCustomPath}
+                  pathItem={pathItem}
+                />
               )}
             </div>
           );
@@ -1137,7 +1350,7 @@ const DownloadProgressSection: React.FC<DownloadProgressSectionProps> = ({
                   {f.filename}
                 </div>
               </div>
-              <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                            <div className="text-[10px] text-brand-light/80 font-mono shrink-0">
                 {(() => {
                   const pct = f.totalBytes
                     ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
@@ -1196,8 +1409,6 @@ const DownloadProgressSection: React.FC<DownloadProgressSectionProps> = ({
 
 interface DownloadedModelActionsProps {
   deletingPaths: Set<string>;
-  extraModelPaths: ManifestComponentModelPathItem[];
-  modelPaths: (string | ManifestComponentModelPathItem)[];
   onDelete: (path: string) => Promise<void>;
   onDeleteCustomPath: (
     pathItem: ManifestComponentModelPathItem,
@@ -1207,8 +1418,6 @@ interface DownloadedModelActionsProps {
 
 const DownloadedModelActions: React.FC<DownloadedModelActionsProps> = ({
   deletingPaths,
-  extraModelPaths,
-  modelPaths,
   onDelete,
   onDeleteCustomPath,
   pathItem,
@@ -1227,17 +1436,7 @@ const DownloadedModelActions: React.FC<DownloadedModelActionsProps> = ({
           }
           const primaryPath = pathItem.path;
           if (!primaryPath) return;
-          // If there is only one model path for this component, treat extras as tightly coupled
-          if (modelPaths.length === 1 && extraModelPaths.length > 0) {
-            await onDelete(primaryPath);
-            for (const extra of extraModelPaths) {
-              if (extra.path) {
-                await onDelete(extra.path);
-              }
-            }
-          } else {
-            await onDelete(primaryPath);
-          }
+          await onDelete(primaryPath);
         }}
         disabled={!!pathItem.path && deletingPaths.has(pathItem.path)}
         className="w-fit mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
@@ -1355,6 +1554,7 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
               }
 
               await refreshManifestPart(manifestId, `spec.components.${index}`);
+              await refreshManifestPart(manifestId, 'downloaded')
               try {
                 window.dispatchEvent(
                   new CustomEvent("component-card-reload", {
@@ -1452,7 +1652,7 @@ const ConfigOnlySection: React.FC<ConfigOnlySectionProps> = ({
                           {f.filename}
                         </div>
                       </div>
-                      <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                      <div className="text-[10px] text-brand-light/80 font-mono shrink-0">
                         {(() => {
                           const pct = f.totalBytes
                             ? ((f.downloadedBytes || 0) / f.totalBytes) * 100

@@ -451,13 +451,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     }
   }, [panelSize, numVisibleTabs]);
 
-  useEffect(() => {
-    // Reset mapping and status when switching selected clip
-    setEngineJobId(null);
-    if (clipId) {
-      try { updateClip(clipId, { modelStatus: undefined }); } catch {}
-    }
-  }, [clipId, updateClip]);
 
   const hasValidPreprocessor = useMemo(() => {
     if (selectedPreprocessorId) {
@@ -610,6 +603,8 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     setSelectedTab,
   ]);
 
+  const isModelRunning = clip && (clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending';
+
   const handleStopGeneration = useCallback(async () => {
     const targetJobId = engineJobId || (clip as ModelClipProps)?.activeJobId;
     if (!targetJobId) return;
@@ -659,17 +654,17 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasValidPreprocessor && hasPreprocessorDuration) && <TabsTrigger value="preprocessor-duration" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Duration</TabsTrigger>}
             
             {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Inputs</TabsTrigger>}
-            {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5  whitespace-nowrap">Progress</TabsTrigger>}
+            {(hasModel) && isModelRunning && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5  whitespace-nowrap">Progress</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-architecture" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Architecture</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-lora" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">LoRA</TabsTrigger>}
-            {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus !== 'running' && (clip as ModelClipProps | undefined)?.modelStatus !== 'pending') && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Generations</TabsTrigger>}
+            {(hasModel) && !isModelRunning && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Generations</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Line</TabsTrigger>}
             {(hasText) && <TabsTrigger value="text" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Text</TabsTrigger>}
             {(hasTransform) && <TabsTrigger value="transform" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Transform</TabsTrigger>}
             {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Mask</TabsTrigger>}
             {(hasAudio) && <TabsTrigger value="audio" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Audio</TabsTrigger>}
             {(hasPreprocessorBrowser) && <TabsTrigger value="preprocessors" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Preprocessors</TabsTrigger>}
-            {((hasDuration || hasFilter)  && !((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending')) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">
+            {((hasDuration || hasFilter)  && !isModelRunning) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">
               {hasFilter ? 'Filter' : 'Duration'}
               </TabsTrigger>}
             {(hasAdjust) && <TabsTrigger value="adjust" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Adjust</TabsTrigger>}
@@ -718,7 +713,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasAudio) && <TabsContent value="audio" className="min-w-0 m-0">
             <AudioProperties clipId={clipId} />
           </TabsContent>}
-          {((hasDuration || hasFilter)  && !((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending')) && <TabsContent value="duration" className="min-w-0 m-0">
+          {((hasDuration || hasFilter)  && !isModelRunning) && <TabsContent value="duration" className="min-w-0 m-0">
             {hasFilter && <FilterProperties clipId={clipId} />}
             <DurationProperties clipId={clipId} />
           </TabsContent>}
@@ -731,7 +726,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasModel) && <TabsContent value="model-inputs" className="min-w-0 m-0">
             <ModelInputsProperties clipId={clipId} panelSize={panelSize} />
           </TabsContent>}
-          {(hasModel) && ((clip as ModelClipProps | undefined)?.modelStatus !== 'running' && (clip as ModelClipProps | undefined)?.modelStatus !== 'pending') &&  <TabsContent value="model-generation" className="min-w-0 m-0">
+          {(hasModel) && !isModelRunning &&  <TabsContent value="model-generation" className="min-w-0 m-0">
             <ModelGenerationProperties clipId={clipId} />
           </TabsContent>}
           {(hasModel) && <TabsContent value="model-progress" className="min-w-0 m-0"> 
@@ -777,7 +772,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         <div className={cn("absolute bottom-0 left-0 right-0  border-brand-light/5",
            isModelDownloaded ? "bg-brand  p-5 border-t" : "py-3 px-3 "
         )} style={{ zIndex: 50, pointerEvents: 'auto' }}>
-          {((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') ? (
+          {isModelRunning ? (
             <button
               onClick={handleStopGeneration}
               className={cn(
@@ -796,7 +791,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
                 onClick={handleGenerate}
                 disabled={isGenerateDisabled || isPreparingGeneration}
                 className={cn(
-                  "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] text-brand-light bg-brand-accent-two-shade flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50",
+                  "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] text-brand-lighter bg-brand-accent-two-shade flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50",
                 )}
               >
                 <RiAiGenerate size={16} />

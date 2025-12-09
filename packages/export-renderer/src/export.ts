@@ -20,6 +20,57 @@ import type {
   VideoClipProps,
 } from "./blit";
 import type { WrappedCanvas } from "mediabunny";
+import { getMediaInfo } from "../../renderer/src/lib/media/utils";
+
+// Simple in-memory cache so repeated requests for the same image src
+// reuse the same HTMLImageElement (and underlying load work).
+const imageElementCache = new Map<string, Promise<HTMLImageElement>>();
+
+async function loadCachedImage(effectiveSrc: string): Promise<HTMLImageElement> {
+  const cached = imageElementCache.get(effectiveSrc);
+  if (cached) {
+    return cached;
+  }
+
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
+    const im = new Image();
+    im.crossOrigin = "anonymous";
+
+    im.onload = () => {
+      resolve(im);
+    };
+
+    im.onerror = (e) => {
+      // If loading fails, remove from cache so future attempts can retry.
+      imageElementCache.delete(effectiveSrc);
+      reject(e);
+    };
+
+    getMediaInfo(effectiveSrc)
+      .then((info) => {
+        if (info) {
+          im.width = info.image?.width ?? 0;
+          im.height = info.image?.height ?? 0;
+          if (info.image?.input && typeof info.image.input === "string") {
+            im.src = info.image.input;
+            return;
+          }
+        }
+
+        // Fallback to the effectiveSrc if there is no info
+        // or if it does not contain a usable image input.
+        im.src = effectiveSrc;
+      })
+      .catch((e) => {
+        console.error("Error loading image info", e);
+        // Even if media info fetching fails, still attempt to load the image.
+        im.src = effectiveSrc;
+      });
+  });
+
+  imageElementCache.set(effectiveSrc, promise);
+  return promise;
+}
 
 // Re-defining missing local types from blit.ts to fix linter errors
 // These are not exported from blit.ts, so we must define them locally or export them from blit.ts.
@@ -389,14 +440,8 @@ export class KonvaExportRenderer {
       }
     }
 
-    // 2. Load Image
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const im = new Image();
-      im.crossOrigin = "anonymous";
-      im.onload = () => resolve(im);
-      im.onerror = (e) => reject(e);
-      im.src = effectiveSrc;
-    });
+    // 2. Load Image (cached by effectiveSrc)
+    const img = await loadCachedImage(effectiveSrc);
 
     // 3. Prepare high-quality texture
     // Use natural dimensions to preserve maximum quality.

@@ -10,7 +10,15 @@ import {
   updateManifestLoraScale,
   updateManifestLoraName,
   deleteManifestLora,
+  type ManifestComponent,
 } from "@/lib/manifest/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import PropertiesSlider from "@/components/properties/PropertiesSlider";
 import { LuLoader } from "react-icons/lu";
 import { toast } from "sonner";
@@ -34,8 +42,6 @@ const isLoraDownloading = (item: LoraType): boolean => {
 const LoraDownloadItem: React.FC<{ job: LoraJobProgress, panelWidth: number }> = ({ job, panelWidth }) => {
   const clearJob = useLoraJobStore((s) => s.clearJob);
   const { refreshManifestPart } = useManifestStore();
-
-  console.log(job);
 
   const lastUpdate = useMemo(
     () =>
@@ -457,6 +463,55 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
   const stopTracking  = useLoraJobStore((s) => s.stopTracking);
   const loraJobs  = useLoraJobStore((s) => s.jobs);
 
+  const [newLoraComponent, setNewLoraComponent] = useState<string>("");
+
+  const transformerComponents = useMemo(
+    () => {
+      const components = (manifest?.spec?.components ||
+        []) as ManifestComponent[] | undefined;
+      if (!Array.isArray(components)) return [] as Array<{ comp: ManifestComponent; index: number }>;
+      return components
+        .map((comp, index) => ({ comp, index }))
+        .filter(
+          ({ comp }) =>
+            comp &&
+            typeof comp === "object" &&
+            (comp as any).type === "transformer",
+        );
+    },
+    [manifest?.spec?.components],
+  );
+
+  const hasMultipleTransformers = transformerComponents.length > 1;
+
+  const getTransformerComponentKey = useCallback(
+    (entry: { comp: ManifestComponent; index: number }) => {
+      const compAny = entry.comp as any;
+      const key =
+        (compAny?.name as string | undefined) ||
+        (compAny?.base as string | undefined) ||
+        `transformer-${entry.index}`;
+      return key;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!isAddingLora) {
+      setNewLoraComponent("");
+      return;
+    }
+    if (!newLoraComponent && transformerComponents.length > 0) {
+      const firstKey = getTransformerComponentKey(transformerComponents[0]);
+      setNewLoraComponent(firstKey);
+    }
+  }, [
+    isAddingLora,
+    newLoraComponent,
+    transformerComponents,
+    getTransformerComponentKey,
+  ]);
+
   
   const onCompleteDownload = useCallback(
     async (_path: string) => {
@@ -543,7 +598,11 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
     onErrorDownload,
   ]);
 
-  const handleAddLoraSource = async (source: string, name: string) => {
+  const handleAddLoraSource = async (
+    source: string,
+    name: string,
+    component?: string,
+  ) => {
     if (!source) return;
     if (!name) return;
     setAddingLoraJob(source);
@@ -553,6 +612,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
         source,
         manifest_id: manifest?.metadata?.id || "",
         lora_name: name,
+        ...(component ? { component } : {}),
       });
       if (!response.success || !response.data?.job_id) {
         throw new Error(response.error || "Failed to start LoRA download");
@@ -573,6 +633,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
       setAddingLoraJob(null);
       setNewLoraName("");
       setNewLoraSource("");
+      setNewLoraComponent("");
       setIsAddingLora(false);
     } finally {
       const manifestIdSafe = manifest?.metadata?.id || "";
@@ -580,6 +641,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
         setIsAddingLora(false);
         setNewLoraName("");
         setNewLoraSource("");
+        setNewLoraComponent("");
         setAddingLoraJob(null);
         return;
       }
@@ -627,6 +689,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
           setIsAddingLora(false);
           setNewLoraName("");
           setNewLoraSource("");
+          setNewLoraComponent("");
           setAddingLoraJob(null);
         }
       };
@@ -654,6 +717,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
     setNewLoraName("");
     setNewLoraSource("");
     setAddingLoraJob(null);
+    setNewLoraComponent("");
   };
 
   return (
@@ -737,6 +801,47 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
                   placeholder="civitai:123456 or https://... or /Users/you/models/my_lora.safetensors"
                 />
               </div>
+              {hasMultipleTransformers && transformerComponents.length > 0 && (
+                <div className="flex flex-col gap-y-0.5 text-start">
+                  <label className="text-[11px] text-brand-light/90 font-medium">
+                    Apply to transformer
+                  </label>
+                  <p className="text-[10px] text-brand-light/55">
+                    Choose which transformer this LoRA should be applied to.
+                  </p>
+                  <Select
+                    value={newLoraComponent}
+                    onValueChange={(value) => setNewLoraComponent(value)}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="w-full h-8! mt-1.5 text-[10.5px] bg-brand-background border border-brand-light/15 rounded-[5px] text-brand-lighter"
+                    >
+                      <SelectValue placeholder="Select transformer" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                      {transformerComponents.map((entry) => {
+                        const key = getTransformerComponentKey(entry);
+                        const compAny = entry.comp as any;
+                        const label =
+                          (compAny?.label as string | undefined) ||
+                          (compAny?.name as string | undefined) ||
+                          (compAny?.base as string | undefined) ||
+                          key;
+                        return (
+                          <SelectItem
+                            key={key}
+                            value={key}
+                            className="text-[11px] font-medium"
+                          >
+                            {label}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="flex items-center justify-end gap-x-2 pt-1">
                 <button
                   type="button"
@@ -749,13 +854,20 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
                   type="button"
                   onClick={() =>
                     {
-                    handleAddLoraSource(newLoraSource.trim(), newLoraName)
+                    handleAddLoraSource(
+                      newLoraSource.trim(),
+                      newLoraName,
+                      newLoraComponent || undefined,
+                    );
                     setIsAddingLora(false);
                     }
                   }
                   disabled={
                     !newLoraSource.trim() ||
                     !newLoraName.trim() ||
+                    (hasMultipleTransformers &&
+                      transformerComponents.length > 1 &&
+                      !newLoraComponent.trim()) ||
                     !!addingLoraJob
                   }
                   className="text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90  bg-brand-accent-shade hover:bg-brand-accent-two-shade border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"

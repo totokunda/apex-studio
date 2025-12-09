@@ -69,18 +69,6 @@ import {
 } from "@/components/timeline/clips/thumbnails";
 import { useInputControlsStore } from "@/lib/inputControl";
 
-/**
- * text rx/RxText
- * image fa6/FaRegFileImage
- * video fa6/FaRegFileVideo
- * audio fa/FaRegFileAudio
- * image+mask fa6/FaRegFileImage + tb/TbMask
- * video+mask fa6/FaRegFileVideo2 + tb/TbMask
- * image+preprocessor ri/RiImageAiLine
- * video+preprocessor ri/RiVideoAiLine
- * image_list lu/LuImages
- * video_list bi/BiSolidVideos
- */
 
 const TimelineClip: React.FC<
   TimelineProps & {
@@ -89,6 +77,8 @@ const TimelineClip: React.FC<
     selectionMode?: "frame" | "range";
     mode?: "frame" | "range";
     inputId?: string;
+    // Optional max duration (in frames) for the selectable range
+    maxDuration?: number;
   }
 > = ({
   timelineWidth = 0,
@@ -100,13 +90,14 @@ const TimelineClip: React.FC<
   selectionMode,
   mode,
   inputId,
+  maxDuration,
 }) => {
   const effectiveSelectionMode = selectionMode ?? mode ?? "range";
   // Select only what we need to avoid unnecessary rerenders
   const timelineDuration = useInputControlsStore((s) =>
-    s.getTimelineDuration(inputId),
+    s.getTimelineDuration(inputId ?? ""),
   );
-  const zoomLevel = useInputControlsStore((s) => s.getZoomLevel(inputId));
+  const zoomLevel = useInputControlsStore((s) => s.getZoomLevel(inputId ?? ""));
   const tool = useViewportStore((s) => s.tool);
   const getClipById = useClipStore((s) => s.getClipById);
   const getClipsForGroup = useClipStore((s) => s.getClipsForGroup);
@@ -238,6 +229,17 @@ const TimelineClip: React.FC<
     [rangeStart, rangeEnd],
   );
 
+  const maxSpanFrames = useMemo(() => {
+    if (typeof maxDuration !== "number" || maxDuration <= 0) return null;
+    return Math.max(1, Math.floor(maxDuration));
+  }, [maxDuration]);
+
+  const effectiveSpanFrames = useMemo(
+    () =>
+      maxSpanFrames ? Math.min(rangeSpanFrames, maxSpanFrames) : rangeSpanFrames,
+    [rangeSpanFrames, maxSpanFrames],
+  );
+
   // Base X positions for the absolute range, then clipped to the visible window
   const baseRangeStartX = useMemo(
     () => frameToX(rangeStart),
@@ -259,34 +261,43 @@ const TimelineClip: React.FC<
     () => Math.max(frameWidthSafe, rangeEndLocal - rangeStartLocal),
     [frameWidthSafe, rangeEndLocal, rangeStartLocal],
   );
+  
   const maxRangeStart = useMemo(
-    () => Math.max(currentStartFrame, currentEndFrame - rangeSpanFrames),
-    [currentStartFrame, currentEndFrame, rangeSpanFrames],
+    () => Math.max(currentStartFrame, currentEndFrame - effectiveSpanFrames),
+    [currentStartFrame, currentEndFrame, effectiveSpanFrames],
   );
   const rangeHandleWidth = useMemo(() => 3, []);
 
   const commitRange = useCallback(
     (startFrame: number, endFrame: number) => {
-      const clampedStart = Math.max(
+      let clampedStart = Math.max(
         currentStartFrame,
         Math.min(currentEndFrame - 1, Math.round(startFrame)),
       );
       const minEnd = clampedStart + 1;
-      const clampedEnd = Math.max(
+      let clampedEnd = Math.max(
         minEnd,
         Math.min(currentEndFrame, Math.round(endFrame)),
       );
+
+      if (maxSpanFrames) {
+        const maxSpan = maxSpanFrames;
+        const span = clampedEnd - clampedStart;
+        if (span > maxSpan) {
+          clampedEnd = clampedStart + maxSpan;
+        }
+      }
 
       // Store selection as clip-local
       const localStart = clampedStart - currentStartFrame;
       const localEnd = clampedEnd - currentStartFrame;
       const [existingStart, existingEnd] = useInputControlsStore
         .getState()
-        .getSelectedRange(inputId);
+        .getSelectedRange(inputId ?? "");
       if (existingStart === localStart && existingEnd === localEnd) {
         // Range already matches; still ensure focus is clamped into this range if needed.
       } else {
-        setSelectedRange(localStart, localEnd, inputId);
+        setSelectedRange(localStart, localEnd, inputId ?? "");
       }
 
       // Ensure focus frame does not jump to range start when moving range.
@@ -302,12 +313,12 @@ const TimelineClip: React.FC<
       }
 
       const newLocalFocus = newAbsFocus - currentStartFrame;
-      setFocusFrame(newLocalFocus, inputId);
+      setFocusFrame(newLocalFocus, inputId ?? "");
 
       const [winStart, winEnd] = timelineDuration;
       const winSpan = Math.max(1, winEnd - winStart);
       const anchor = (newLocalFocus - winStart) / winSpan;
-      setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId);
+      setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId ?? "");
     },
     [
       currentStartFrame,
@@ -318,6 +329,7 @@ const TimelineClip: React.FC<
       setFocusFrame,
       setFocusAnchorRatio,
       timelineDuration,
+      maxSpanFrames,
     ],
   );
 
@@ -1409,7 +1421,8 @@ const TimelineClip: React.FC<
               );
               const nextStartLocal = frameToX(clampedStart);
               e.target.x(nextStartLocal);
-              const endFrame = clampedStart + rangeSpanFrames;
+              const span = effectiveSpanFrames;
+              const endFrame = clampedStart + span;
               updateRangeVisuals(clampedStart, endFrame);
             }}
             onDragEnd={(e) => {
@@ -1428,7 +1441,8 @@ const TimelineClip: React.FC<
               );
               const finalLocal = frameToX(clampedStart);
               e.target.x(finalLocal);
-              const endFrame = clampedStart + rangeSpanFrames;
+              const span = effectiveSpanFrames;
+              const endFrame = clampedStart + span;
               updateRangeVisuals(clampedStart, endFrame);
               commitRange(clampedStart, endFrame);
               isDraggingRangeRef.current = false;
@@ -1479,7 +1493,11 @@ const TimelineClip: React.FC<
               );
               const nextLocal = frameToX(clampedStart);
               e.target.x(nextLocal - rangeHandleWidth / 2);
-              const endFrame = Math.max(clampedStart + 1, rangeEnd);
+              let endFrame = Math.max(clampedStart + 1, rangeEnd);
+              if (maxSpanFrames) {
+                const maxEnd = clampedStart + maxSpanFrames;
+                endFrame = Math.min(endFrame, maxEnd);
+              }
               updateRangeVisuals(clampedStart, endFrame);
             }}
             onDragEnd={(e) => {
@@ -1501,7 +1519,11 @@ const TimelineClip: React.FC<
               );
               const nextLocal = frameToX(clampedStart);
               e.target.x(nextLocal - rangeHandleWidth / 2);
-              const endFrame = Math.max(clampedStart + 1, rangeEnd);
+              let endFrame = Math.max(clampedStart + 1, rangeEnd);
+              if (maxSpanFrames) {
+                const maxEnd = clampedStart + maxSpanFrames;
+                endFrame = Math.min(endFrame, maxEnd);
+              }
               updateRangeVisuals(clampedStart, endFrame);
               commitRange(clampedStart, endFrame);
               isDraggingRangeRef.current = false;
@@ -1550,9 +1572,14 @@ const TimelineClip: React.FC<
                 rangeStart + 1,
                 Math.min(currentEndFrame, proposedEnd),
               );
-              const nextLocal = frameToX(clampedEnd);
+              let limitedEnd = clampedEnd;
+              if (maxSpanFrames) {
+                const maxEnd = rangeStart + maxSpanFrames;
+                limitedEnd = Math.min(limitedEnd, maxEnd);
+              }
+              const nextLocal = frameToX(limitedEnd);
               e.target.x(nextLocal - rangeHandleWidth / 2);
-              updateRangeVisuals(rangeStart, clampedEnd);
+              updateRangeVisuals(rangeStart, limitedEnd);
             }}
             onDragEnd={(e) => {
               const container = e.target.getStage()?.container();
@@ -1571,10 +1598,15 @@ const TimelineClip: React.FC<
                 rangeStart + 1,
                 Math.min(currentEndFrame, proposedEnd),
               );
-              const nextLocal = frameToX(clampedEnd);
+              let limitedEnd = clampedEnd;
+              if (maxSpanFrames) {
+                const maxEnd = rangeStart + maxSpanFrames;
+                limitedEnd = Math.min(limitedEnd, maxEnd);
+              }
+              const nextLocal = frameToX(limitedEnd);
               e.target.x(nextLocal - rangeHandleWidth / 2);
-              updateRangeVisuals(rangeStart, clampedEnd);
-              commitRange(rangeStart, clampedEnd);
+              updateRangeVisuals(rangeStart, limitedEnd);
+              commitRange(rangeStart, limitedEnd);
               isDraggingRangeRef.current = false;
             }}
           />
@@ -1629,13 +1661,13 @@ const TimelineClip: React.FC<
                 Math.min(currentEndFrame - 1, visibleStart + frameOffset),
               );
 
-              setFocusFrame(newFocus - currentStartFrame, inputId);
+              setFocusFrame(newFocus - currentStartFrame, inputId ?? "");
 
               const [winStart, winEnd] = timelineDuration;
               const winSpan = Math.max(1, winEnd - winStart);
               const newLocalFocus = newFocus - currentStartFrame;
               const anchor = (newLocalFocus - winStart) / winSpan;
-              setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId);
+              setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId ?? "");
             }}
             onDragEnd={(e) => {
               const container = e.target.getStage()?.container();
@@ -1717,12 +1749,12 @@ const TimelineClip: React.FC<
                     currentStartFrame + frameOffset,
                   ),
                 ) + timelineDuration[0];
-              setFocusFrame(newFocus - currentStartFrame, inputId);
+              setFocusFrame(newFocus - currentStartFrame, inputId ?? "");
               const [winStart, winEnd] = timelineDuration;
               const winSpan = Math.max(1, winEnd - winStart);
               const newLocalFocus = newFocus - currentStartFrame;
               const anchor = (newLocalFocus - winStart) / winSpan;
-              setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId);
+              setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId ?? "");
             }}
           />
         </Group>

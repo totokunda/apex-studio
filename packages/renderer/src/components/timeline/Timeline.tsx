@@ -7,6 +7,7 @@ import GhostTimeline from "./clips/GhostTimeline";
 import { useControlsStore } from "@/lib/control";
 import { useContextMenuStore } from "@/lib/context-menu";
 import { calculateFrameFromX } from "@/lib/preprocessorHelpers";
+import { Rect as KonvaRect } from "konva/lib/shapes/Rect";
 import {
   useAssetControlsStore,
   updateAssetZoomLevel,
@@ -19,6 +20,7 @@ const Timeline: React.FC<
     cornerRadius?: number;
     assetMode?: boolean;
     excludeClipId?: string | null;
+    isAssetSelected?: (clipId: string) => boolean;
   }
 > = ({
   timelineWidth,
@@ -34,8 +36,10 @@ const Timeline: React.FC<
   cornerRadius = 1,
   assetMode = false,
   excludeClipId = null,
+  isAssetSelected = () => false,
 }) => {
   const { hoveredTimelineId, getClipsForTimeline } = useClipStore();
+  const hiddenRectRef = React.useRef<KonvaRect>(null);
 
   const clipsAll = getClipsForTimeline(timelineId);
   const clips = useMemo(() => {
@@ -106,6 +110,16 @@ const Timeline: React.FC<
     if (!assetMode || index !== 0) return;
     updateAssetZoomLevel(allVisibleClips, clipDuration);
   }, [assetMode, index, allClipsSignature]);
+
+  // Ensure the hidden/disabled overlay rect always stays on top visually
+  React.useEffect(() => {
+    if (hiddenRectRef.current) {
+      setTimeout(() => {
+        hiddenRectRef.current?.moveToTop();
+        hiddenRectRef.current?.getLayer()?.batchDraw();
+      }, 100);
+    }
+  }, [hidden, muted, type]);
 
   return (
     <>
@@ -186,7 +200,7 @@ const Timeline: React.FC<
         <TimelineClip
           key={clip.clipId}
           muted={muted}
-          hidden={hidden}
+          hidden={assetMode ? false : hidden}
           cornerRadius={cornerRadius}
           timelineId={timelineId}
           clipId={clip.clipId}
@@ -197,6 +211,7 @@ const Timeline: React.FC<
           clipType={clip.type}
           type={type}
           scrollY={scrollY}
+          isAssetSelected={isAssetSelected}
           assetMode={assetMode}
         />
       ))}
@@ -208,7 +223,7 @@ const Timeline: React.FC<
         timelineWidth={timelineWidth}
         type={type}
         muted={muted}
-        hidden={hidden}
+        hidden={assetMode ? false : hidden}
       />
       <Group
         id={`dashed-${timelineId}`}
@@ -228,8 +243,9 @@ const Timeline: React.FC<
           strokeWidth={hoveredTimelineId === `dashed-${timelineId}` ? 1.2 : 0}
         />
       </Group>
-      {(hidden || (muted && type === "audio")) && (
+      {(!assetMode && (hidden || (muted && type === "audio"))) && (
         <Rect
+          ref={hiddenRectRef}
           id={`hidden-${timelineId}`}
           x={timelineX}
           y={timelineY! + 32}
