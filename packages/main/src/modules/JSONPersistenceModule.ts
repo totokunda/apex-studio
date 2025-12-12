@@ -95,7 +95,7 @@ function ensureProjectJson(
     isPlayingByInputId: raw?.inputControls?.isPlayingByInputId ?? {},
   };
 
-  
+
   return {
     version,
     meta: {
@@ -1121,6 +1121,7 @@ export class JSONPersistenceModule implements AppModule {
                 height: 9,
                 id: "16:9",
               },
+              defaultClipLength: 5,
             },
             editorState: {},
             assets: {},

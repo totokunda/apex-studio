@@ -54,10 +54,11 @@ export function useManifestsByModel(model: string | null) {
   const data = model ? (manifests || [])?.filter((m) => m.model === model) : [];
   const isLoading = loading || manifests == null;
   useEffect(() => {
-    if (!isLoading && manifests == null) {
+    // Ensure manifests are fetched when missing.
+    if (manifests == null && !loading) {
       useManifestStore.getState().loadManifests(false);
     }
-  }, [isLoading, manifests]);
+  }, [manifests, loading]);
   return { data, loading: isLoading, error } as AsyncState<ManifestDocument[]>;
 }
 
@@ -76,10 +77,11 @@ export function useManifestsByType(modelType: string | null) {
     : [];
   const isLoading = loading || manifests == null;
   useEffect(() => {
-    if (!isLoading && manifests == null) {
+    // Ensure manifests are fetched when missing.
+    if (manifests == null && !loading) {
       useManifestStore.getState().loadManifests(false);
     }
-  }, [isLoading, manifests]);
+  }, [manifests, loading]);
   return { data, loading: isLoading, error } as AsyncState<ManifestDocument[]>;
 }
 
@@ -105,10 +107,11 @@ export function useManifestsByModelAndType(
       : [];
   const isLoading = loading || manifests == null;
   useEffect(() => {
-    if (!isLoading && manifests == null) {
+    // Ensure manifests are fetched when missing.
+    if (manifests == null && !loading) {
       useManifestStore.getState().loadManifests(false);
     }
-  }, [isLoading, manifests]);
+  }, [manifests, loading]);
   return { data, loading: isLoading, error } as AsyncState<ManifestDocument[]>;
 }
 

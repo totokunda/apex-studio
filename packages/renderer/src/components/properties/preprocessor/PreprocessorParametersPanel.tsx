@@ -5,6 +5,7 @@ import BooleanToggle from "./BooleanToggle";
 import PropertiesSlider from "../PropertiesSlider";
 import CategorySelector from "./CategorySelector";
 import { useClipStore } from "@/lib/clip";
+import { FaCheckSquare, FaRegSquare } from "react-icons/fa";
 
 interface PreprocessorParametersPanelProps {
   preprocessor: PreprocessorClipProps;
@@ -17,6 +18,43 @@ interface ParamDescriptionProps {
   onToggle: () => void;
   onTruncationDetected: (isTruncated: boolean) => void;
 }
+
+interface ExpandableTextProps {
+  text: string;
+}
+
+const ExpandableText: React.FC<ExpandableTextProps> = ({ text }) => {
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isTruncated, setIsTruncated] = useState(false);
+
+  useEffect(() => {
+    if (!textRef.current || isExpanded) return;
+    const nextTruncated =
+      textRef.current.scrollHeight > textRef.current.clientHeight;
+    if (nextTruncated !== isTruncated) setIsTruncated(nextTruncated);
+  }, [text, isExpanded, isTruncated]);
+
+  return (
+    <div className="flex flex-col gap-y-1">
+      <span
+        ref={textRef}
+        className={`text-brand-light/60 text-[10px] text-start ${!isExpanded ? "line-clamp-1" : ""}`}
+      >
+        {text}
+      </span>
+      {isTruncated && (
+        <button
+          type="button"
+          onClick={() => setIsExpanded((v) => !v)}
+          className="text-brand-light/50 hover:text-brand-light text-[9px] text-start transition-colors duration-200"
+        >
+          {isExpanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+};
 
 const ParamDescription: React.FC<ParamDescriptionProps> = ({
   param,
@@ -75,6 +113,15 @@ const PreprocessorParametersPanel: React.FC<
   // Get the actual clipId from the clip that contains this preprocessor
   const parentClip = getClipFromPreprocessorId(preprocessor.id);
   const actualClipId = parentClip?.clipId ?? "";
+
+  // Default to true when unset
+  const createNewClipEnabled = storedPreprocessor?.createNewClip ?? true;
+
+  const hasExistingResultSource =
+    !!storedPreprocessor?.assetId ||
+    !!(storedPreprocessor as any)?.src ||
+    !!(storedPreprocessor as any)?.result_path ||
+    !!(storedPreprocessor as any)?.resultPath;
 
   const formatParameterName = (name: string) => {
     return name
@@ -150,20 +197,51 @@ const PreprocessorParametersPanel: React.FC<
     preprocessor.preprocessor.parameters &&
     preprocessor.preprocessor.parameters.length > 0;
 
-  if (!hasParameters) {
-    return (
-      <div className="p-6 flex items-center justify-center">
-        <span className="text-brand-light/60 text-[12px]">
-          No inputs available
-        </span>
-      </div>
-    );
-  }
+  const handleToggleCreateNewClip = () => {
+    if (!actualClipId) return;
+    updatePreprocessor(actualClipId, preprocessor.id, {
+      createNewClip: !createNewClipEnabled,
+    });
+  };
 
   return (
     <div className="p-6 flex flex-col gap-y-4 ">
       <div className="flex flex-col gap-y-5  rounded-md">
-        {preprocessor.preprocessor.parameters!.map((param, index) => (
+        {/* Create New Clip toggle - applies to all preprocessors (hidden once a src/result/asset is present) */}
+        {!hasExistingResultSource && (
+          <div className="flex flex-col gap-y-2">
+            <div className="flex flex-row items-center gap-x-2 justify-between">
+              <span className="text-brand-lighter text-[11px] font-semibold">
+                Create new clip
+              </span>
+            </div>
+            <ExpandableText text="When enabled, the completed preprocessor result will be placed as a new clip on a timeline above this one." />
+            <button
+              type="button"
+              onClick={handleToggleCreateNewClip}
+              className="w-full h-8.5 px-2.5 text-brand-lighter text-[11px] font-normal border border-brand-light/10 bg-brand rounded-[6px] flex items-center justify-between hover:bg-brand-light/5 transition-colors"
+            >
+              <span className="text-brand-light text-[11px] font-medium">
+                Create clip from result
+              </span>
+              {createNewClipEnabled ? (
+                <FaCheckSquare className="text-brand-light" size={14} />
+              ) : (
+                <FaRegSquare className="text-brand-light/60" size={14} />
+              )}
+            </button>
+          </div>
+        )}
+
+        {!hasParameters && (
+          <div className="pt-2 flex items-center justify-center">
+            <span className="text-brand-light/60 text-[12px]">
+              No inputs available
+            </span>
+          </div>
+        )}
+
+        {(preprocessor.preprocessor.parameters ?? []).map((param, index) => (
           <div key={index} className="flex flex-col gap-y-3 ">
             <div className="flex flex-col gap-y-1">
               <div className="flex flex-row items-center gap-x-2 justify-between">

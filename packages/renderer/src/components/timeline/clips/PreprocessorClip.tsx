@@ -7,10 +7,13 @@ import React, {
 } from "react";
 import {
   MediaInfo,
+  ImageClipProps,
+  MaskClipProps,
   PreprocessorClipProps,
   PreprocessorClipType,
+  VideoClipProps,
 } from "@/lib/types";
-import { getClipWidth, useClipStore } from "@/lib/clip";
+import { getClipWidth, getTimelineHeightForClip, useClipStore } from "@/lib/clip";
 import { Rect, Image } from "react-konva";
 import { Text } from "react-konva";
 import { Group } from "react-konva";
@@ -47,6 +50,14 @@ import { useWebGLMask } from "@/components/preview/mask/useWebGLMask";
 import { useViewportStore } from "@/lib/viewport";
 import { v4 as uuidv4 } from "uuid";
 const THUMBNAIL_TILE_SIZE = 36;
+
+const rangesOverlap = (aStart: number, aEnd: number, bStart: number, bEnd: number) => {
+  const as = Math.min(aStart, aEnd);
+  const ae = Math.max(aStart, aEnd);
+  const bs = Math.min(bStart, bEnd);
+  const be = Math.max(bStart, bEnd);
+  return Math.max(as, bs) < Math.min(ae, be);
+};
 
 interface PropsPreprocessorClip {
   preprocessor: PreprocessorClipProps;
@@ -186,6 +197,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     startFrame: currentStartFrame,
     endFrame: currentEndFrame,
   });
+  const didCreateNewClipRef = useRef(false);
   const [isCtrlPressed, setIsCtrlPressed] = useState(false);
   const previousMouseX = useRef<number | null>(null);
   const dragOffsetX = useRef<number>(0);
@@ -215,8 +227,8 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
   const ctrlFocusFrame = useControlsStore((s) => s.focusFrame);
   const assetFps = useAssetControlsStore((s) => s.fps);
   const assetFocusFrame = useAssetControlsStore((s) => s.focusFrame);
-  const inputFps = useInputControlsStore((s) => s.fps);
-  const inputFocusFrame = useInputControlsStore((s) => s.focusFrame);
+  const inputFps = useInputControlsStore((s) => s.getFps(inputId ?? ""));
+  const inputFocusFrame = useInputControlsStore((s) => s.getFocusFrame(inputId ?? ""));
   const clipAsset = clip?.assetId ? getAssetById(clip.assetId) : null;
   const fps = inputMode ? inputFps : assetMode ? assetFps : ctrlFps;
   const focusFrame = inputMode
@@ -264,6 +276,129 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     return clipPosition.x + startSpanWidth;
   }, [clipPosition.x, preprocessorWidth, timelineDuration]);
 
+  const createNewClipFromResultAsset = useCallback(
+    async (resultAssetId: string, mediaInfo?: MediaInfo | null) => {
+      if (didCreateNewClipRef.current) return;
+
+      const state = useClipStore.getState();
+      const parentClip = state.getClipById(clipId);
+      if (!parentClip) return;
+      const parentTimelineId = parentClip.timelineId;
+      if (!parentTimelineId) return;
+
+      const asset = state.getAssetById(resultAssetId);
+      if (!asset?.path) return;
+
+      // Build absolute frame range aligned to the parent clip timeline position
+      const relStart = Math.max(0, Math.round(preprocessor.startFrame ?? 0));
+      const relEnd = Math.max(
+        relStart + 1,
+        Math.round(
+          preprocessor.endFrame ??
+            (parentClip.endFrame - parentClip.startFrame),
+        ),
+      );
+      const absStart = Math.max(
+        0,
+        Math.round((parentClip.startFrame ?? 0) + relStart),
+      );
+      const absEnd = Math.max(
+        absStart + 1,
+        Math.round((parentClip.startFrame ?? 0) + relEnd),
+      );
+
+      const chooseTimelineAbove = (
+        desiredType: "media",
+        startFrame: number,
+        endFrame: number,
+      ) => {
+        const timelines = state.timelines || [];
+        const clips = state.clips || [];
+        const parentIdx = timelines.findIndex(
+          (t) => t.timelineId === parentTimelineId,
+        );
+
+        // Find the closest compatible timeline above that has no overlap in the desired range.
+        for (let i = parentIdx - 1; i >= 0; i--) {
+          const t = timelines[i];
+          if (!t || t.type !== desiredType) continue;
+          const hasOverlap = clips.some((c) => {
+            if (!c || c.hidden) return false;
+            if (c.timelineId !== t.timelineId) return false;
+            return rangesOverlap(
+              startFrame,
+              endFrame,
+              c.startFrame ?? 0,
+              c.endFrame ?? 0,
+            );
+          });
+          if (!hasOverlap) return t.timelineId;
+        }
+
+        // Otherwise insert a new compatible timeline directly above the parent.
+        const newTimelineId = uuidv4();
+        const parentTimeline = timelines.find(
+          (t) => t.timelineId === parentTimelineId,
+        );
+        state.addTimeline(
+          {
+            timelineId: newTimelineId,
+            type: desiredType,
+            timelineHeight: getTimelineHeightForClip(desiredType),
+            timelineWidth:
+              parentTimeline?.timelineWidth ??
+              timelines[timelines.length - 1]?.timelineWidth ??
+              0,
+            timelinePadding:
+              parentTimeline?.timelinePadding ??
+              timelines[timelines.length - 1]?.timelinePadding ??
+              24,
+          },
+          parentIdx - 1,
+        );
+        return newTimelineId;
+      };
+
+      let mi = mediaInfo ?? (getMediaInfoCached(asset.path) as any);
+      if (!mi) {
+        mi = await getMediaInfo(asset.path, { sourceDir: "apex-cache" });
+      }
+      const isVideo = !!mi?.video;
+
+      const timelineId = chooseTimelineAbove("media", absStart, absEnd);
+      const newClipId = uuidv4();
+      const base = {
+        clipId: newClipId,
+        timelineId,
+        startFrame: absStart,
+        endFrame: absEnd,
+        trimStart: 0,
+        trimEnd: 0,
+        assetId: resultAssetId,
+        assetIdHistory: [resultAssetId],
+        preprocessors: [] as PreprocessorClipProps[],
+        masks: [] as MaskClipProps[],
+      };
+
+      const newClip: VideoClipProps | ImageClipProps = isVideo
+        ? ({
+            ...base,
+            type: "video",
+          } as VideoClipProps)
+        : ({
+            ...base,
+            type: "image",
+          } as ImageClipProps);
+
+      // Important ordering: add the clip first so the asset won't be pruned
+      // when the preprocessor is removed from the parent clip.
+      didCreateNewClipRef.current = true;
+      state.addClip(newClip);
+      state.removePreprocessorFromClip(clipId, preprocessor.id);
+    },
+    [clipId, preprocessor.id, preprocessor.startFrame, preprocessor.endFrame, preprocessor.createNewClip],
+  );
+
   useEffect(() => {
     if (result?.result_path) {
       const resultPath = result.result_path;
@@ -273,6 +408,13 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
       getMediaInfo(fileUrl, { sourceDir: "apex-cache" })
         .then((mediaInfo) => {
           mediaInfoRef.current = mediaInfo;
+          // If createNewClip is enabled (default), create a new clip from the result
+          // and remove the preprocessor WITHOUT attaching the result asset to the parent clip.
+          if (preprocessor.createNewClip !== false) {
+            createNewClipFromResultAsset(asset.id, mediaInfo);
+            return;
+          }
+          // Otherwise, attach the result to the preprocessor as before.
           updatePreprocessor(clipId, preprocessor.id, {
             assetId: asset.id,
             status: "complete",
@@ -305,10 +447,14 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
             });
             mediaInfoRef.current = mediaInfo;
             const asset = addAsset({ path: fileUrl });
-            updatePreprocessor(clipId, preprocessor.id, {
-              assetId: asset.id,
-              status: "complete",
-            });
+            if (preprocessor.createNewClip !== false) {
+              await createNewClipFromResultAsset(asset.id, mediaInfo as any);
+            } else {
+              updatePreprocessor(clipId, preprocessor.id, {
+                assetId: asset.id,
+                status: "complete",
+              });
+            }
           } else if (response.data?.status === "failed") {
             updatePreprocessor(clipId, preprocessor.id, {
               status: "failed",
@@ -1097,7 +1243,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
 
       const projectFps =
         (inputMode
-          ? useInputControlsStore.getState().fps
+          ? useInputControlsStore.getState().getFps(inputId ?? "")
           : assetMode
             ? useAssetControlsStore.getState().fps
             : useControlsStore.getState().fps) || 30;

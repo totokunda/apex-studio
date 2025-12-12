@@ -50,7 +50,7 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     const state = get();
     const manifests = state.manifests || [];
     const manifest = manifests.find(
-      (manifest) => manifest.metadata?.id === manifestId,
+      (manifest) => (manifest.metadata?.id || manifest.id) === manifestId,
     );
     if (manifest) return manifest as ManifestDocument;
     return null;
@@ -76,20 +76,33 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
       loading: { ...s.loading, modelTypes: true },
       error: { ...s.error, modelTypes: null },
     }));
-    const res = await listModelTypes();
-    if (res.success)
-      set((s) => ({
-        modelTypes: res.data || [],
-        loading: { ...s.loading, modelTypes: false },
-      }));
-    else
+    try {
+      const res = await listModelTypes();
+      if (res.success)
+        set((s) => ({
+          modelTypes: res.data || [],
+          loading: { ...s.loading, modelTypes: false },
+        }));
+      else
+        set((s) => ({
+          loading: { ...s.loading, modelTypes: false },
+          error: {
+            ...s.error,
+            modelTypes: res.error || "Failed to load model types",
+          },
+        }));
+    } catch (e: any) {
       set((s) => ({
         loading: { ...s.loading, modelTypes: false },
         error: {
           ...s.error,
-          modelTypes: res.error || "Failed to load model types",
+          modelTypes:
+            e?.message ||
+            e?.toString?.() ||
+            "Failed to load model types (unexpected error)",
         },
       }));
+    }
   },
 
   loadManifests: async (force = false) => {
@@ -98,8 +111,10 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
     if (!force && Array.isArray(state.manifests) && state.manifests.length > 0)
       return;
 
+    console.log("loading manifests", force);
+
     // Avoid starting multiple concurrent polls / loads
-    if (state.loading.manifests || state.pollingManifests) return;
+    if (state.loading.manifests || (state.pollingManifests && !force)) return;
 
     const pollOnce = async (): Promise<void> => {
   
@@ -108,29 +123,43 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
         error: { ...s.error, manifests: null },
       }));
 
-      const res = await listManifests();
-      if (res.success) {
-        const incoming = res.data || [];
-        if (incoming.length > 0) {
-          // Stop polling once we actually have manifests.
-          set((s) => ({
-            manifests: incoming,
-            loading: { ...s.loading, manifests: false },
-            pollingManifests: false,
-          }));
-          return;
-        }
+      try {
+        const res = await listManifests();
+        if (res.success) {
+          const incoming = res.data || [];
+          if (incoming.length > 0) {
+            // Stop polling once we actually have manifests.
+            set((s) => ({
+              manifests: incoming,
+              loading: { ...s.loading, manifests: false },
+              pollingManifests: false,
+            }));
+            return;
+          }
 
-        // No manifests yet; keep waiting and poll again.
-        set((s) => ({
-          loading: { ...s.loading, manifests: false },
-        }));
-      } else {
+          // No manifests yet; keep waiting and poll again.
+          set((s) => ({
+            loading: { ...s.loading, manifests: false },
+          }));
+        } else {
+          set((s) => ({
+            loading: { ...s.loading, manifests: false },
+            error: {
+              ...s.error,
+              manifests: res.error || "Failed to load manifests",
+            },
+          }));
+        }
+      } catch (e: any) {
+        // Important: preload/IPCs may throw on disconnect. Never leave pollingManifests stuck.
         set((s) => ({
           loading: { ...s.loading, manifests: false },
           error: {
             ...s.error,
-            manifests: res.error || "Failed to load manifests",
+            manifests:
+              e?.message ||
+              e?.toString?.() ||
+              "Failed to load manifests (unexpected error)",
           },
         }));
       }
@@ -170,34 +199,49 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
       },
       error: { ...s.error, byId: { ...s.error.byId, [manifestId]: null } },
     }));
-    const res = await getManifest(manifestId);
-    if (res.success)
-      set((s) => {
-        const incoming = res.data as ManifestDocument | undefined;
-        if (!incoming) {
+    try {
+      const res = await getManifest(manifestId);
+      if (res.success)
+        set((s) => {
+          const incoming = res.data as ManifestDocument | undefined;
+          if (!incoming) {
+            return {
+              loading: {
+                ...s.loading,
+                byId: { ...s.loading.byId, [manifestId]: false },
+              },
+            };
+          }
+          const current = s.manifests || [];
+          const idx = current.findIndex(
+            (m) => (m.metadata?.id || m.id) === manifestId,
+          );
+          const next = [...current];
+          if (idx >= 0) next[idx] = incoming;
+          else next.push(incoming);
           return {
+            manifests: next,
             loading: {
               ...s.loading,
               byId: { ...s.loading.byId, [manifestId]: false },
             },
           };
-        }
-        const current = s.manifests || [];
-        const idx = current.findIndex(
-          (m) => (m.metadata?.id || m.id) === manifestId,
-        );
-        const next = [...current];
-        if (idx >= 0) next[idx] = incoming;
-        else next.push(incoming);
-        return {
-          manifests: next,
+        });
+      else
+        set((s) => ({
           loading: {
             ...s.loading,
             byId: { ...s.loading.byId, [manifestId]: false },
           },
-        };
-      });
-    else
+          error: {
+            ...s.error,
+            byId: {
+              ...s.error.byId,
+              [manifestId]: res.error || "Failed to load",
+            },
+          },
+        }));
+    } catch (e: any) {
       set((s) => ({
         loading: {
           ...s.loading,
@@ -207,10 +251,14 @@ export const useManifestStore = create<ManifestStoreState>((set, get) => ({
           ...s.error,
           byId: {
             ...s.error.byId,
-            [manifestId]: res.error || "Failed to load",
+            [manifestId]:
+              e?.message ||
+              e?.toString?.() ||
+              "Failed to load (unexpected error)",
           },
         },
       }));
+    }
   },
 
   refreshManifestPart: async (manifestId: string, pathDot: string) => {

@@ -159,7 +159,11 @@ const ImagePreview: React.FC<
 
   const selectedAssetId = useMemo(() => {
     return (
-      clip?.preprocessors?.find((p) => p.status === "complete")?.assetId ?? assetId
+      // Only apply preprocessor outputs in-place when explicitly requested.
+      // When createNewClip is enabled (default), the parent clip should render as-is.
+      clip?.preprocessors?.find(
+        (p) => p.createNewClip === false && p.status === "complete",
+      )?.assetId ?? assetId
     );
   }, [assetId, clip?.preprocessors]);
 

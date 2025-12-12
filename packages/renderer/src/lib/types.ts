@@ -313,6 +313,12 @@ export type PreprocessorClipProps = {
   startFrame?: number;
   endFrame?: number;
   values: Record<string, any>;
+  /**
+   * When enabled, once this preprocessor has a completed result it will be
+   * converted into a new clip on the timeline above its parent clip, and this
+   * preprocessor will be removed from the parent.
+   */
+  createNewClip?: boolean;
   status?: "running" | "complete" | "failed";
   activeJobId?: string;
   jobIds?: string[];

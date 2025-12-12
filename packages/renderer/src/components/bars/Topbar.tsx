@@ -6,11 +6,10 @@ import {
   LuFolder,
   LuFolderPlus,
   LuSearch,
-  LuPlus,
-  LuSettings,
+  LuTrash2,
 } from "react-icons/lu";
-import { useProjectsStore } from "@/lib/projects";
-import { createProject } from "@app/preload";
+import { useProjectsStore, type ProjectSettings } from "@/lib/projects";
+import { createProject, deleteProject } from "@app/preload";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +18,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useLayoutConfigStore } from "@/lib/layout-config";
 import { useViewportStore } from "@/lib/viewport";
 import { PiResize } from "react-icons/pi";
@@ -43,6 +52,7 @@ import { revealPathInFolder } from "@app/preload";
 import { DEFAULT_FPS } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { SettingsModal } from "../dialogs/SettingsModal";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface TopBarProps {
 
@@ -90,6 +100,8 @@ const TopBar: React.FC<TopBarProps> = () => {
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const projects = useProjectsStore((s) => s.projects);
   const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+  const addProject = useProjectsStore((s) => s.addProject);
+  const removeProject = useProjectsStore((s) => s.removeProject);
   const getAssetById = useClipStore((s) => s.getAssetById);
   const activeProject = useProjectsStore((s) => s.getActiveProject());
   const updateProject = useProjectsStore((s) => s.updateProject);
@@ -98,6 +110,11 @@ const TopBar: React.FC<TopBarProps> = () => {
   const [projectNameDraft, setProjectNameDraft] = useState("");
   const [isEditingProjectName, setIsEditingProjectName] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
+  const [deleteProjectOpen, setDeleteProjectOpen] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<ProjectSettings | null>(
+    null,
+  );
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
 
   const [cancelExportFn, setCancelExportFn] = useState<(() => void) | null>(
     null,
@@ -135,7 +152,29 @@ const TopBar: React.FC<TopBarProps> = () => {
     const name = getNextDefaultProjectName();
     const newFps = controlsFps || DEFAULT_FPS;
     try {
-      await createProject({ name, fps: newFps });
+      const res = await createProject({
+        name,
+        fps: newFps,
+      });
+
+      if (!res?.success || !res?.data) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to create project", res?.error);
+        return;
+      }
+
+      const created = res.data as ProjectSettings;
+
+      // Ensure the newly created project appears immediately in the list
+      // (JSON persistence may refresh later, but we shouldn't wait for it).
+      const alreadyInList = projects.some((p) => p.id === created.id);
+      if (!alreadyInList) {
+        addProject(created);
+      }
+
+      // Navigate to the newly created project.
+      setActiveProjectId(created.id);
+      setProjectSearch("");
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("Failed to create project", e);
@@ -153,6 +192,36 @@ const TopBar: React.FC<TopBarProps> = () => {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("Failed to update project name", e);
+    }
+  };
+
+  const handleConfirmDeleteProject = async () => {
+    if (!projectToDelete) return;
+
+    setIsDeletingProject(true);
+    try {
+      const res = await deleteProject(projectToDelete.id);
+      if (!res?.success) {
+        toast("Failed to delete project", {
+          description: res?.error || "Unknown error",
+        });
+        return;
+      }
+
+      removeProject(projectToDelete.id);
+      toast("Project deleted", {
+        description: projectToDelete.name,
+      });
+
+      setDeleteProjectOpen(false);
+      setProjectToDelete(null);
+      setProjectSearch("");
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to delete project", e);
+      toast("Failed to delete project");
+    } finally {
+      setIsDeletingProject(false);
     }
   };
   const handleExport = async (settings: ExportSettings) => {
@@ -360,38 +429,61 @@ const TopBar: React.FC<TopBarProps> = () => {
               />
             </div>
             <DropdownMenuSeparator className="my-0" />
-            <div className="max-h-64 overflow-y-auto px-1 gap-y-1">
-              {filteredProjects.length === 0 && (
-                <DropdownMenuItem
-                  disabled
-                  className="dark text-[11px] text-brand-light/60 px-2"
-                >
-                  {projects.length === 0
-                    ? "No projects yet"
-                    : "No matching projects"}
-                </DropdownMenuItem>
-              )}
-              {filteredProjects.map((project, index) => (
-                <>
-                <DropdownMenuItem
-                  key={project.id}
-                  className={cn("dark text-[11px] font-medium flex items-center gap-x-2 cursor-pointer", index === 0 && "mt-1")}
-                  onClick={() => {
-                    setActiveProjectId(project.id);
-                  }}
-                >
-                  <LuFolder className="w-3.5 h-3.5 text-brand-light/70" />
-                  <span className="truncate">{project.name}</span>
-                  {activeProjectId === project.id && (
-                    <LuCheck className="w-4 h-4 ml-auto text-brand-light" />
-                  )}
-                </DropdownMenuItem>
-                {index !== filteredProjects.length - 1 && (
-                  <DropdownMenuSeparator />
-                )}
-                </>
-              ))}
             
+            <ScrollArea className="max-h-64">
+              <div className="px-1 py-1 flex flex-col">
+                {filteredProjects.length === 0 && (
+                  <DropdownMenuItem
+                    disabled
+                    className="dark text-[11px] text-brand-light/60 px-2"
+                  >
+                    {projects.length === 0
+                      ? "No projects yet"
+                      : "No matching projects"}
+                  </DropdownMenuItem>
+                )}
+                {filteredProjects.map((project, index) => (
+                  <React.Fragment key={project.id}>
+                    <DropdownMenuItem
+                      className={cn(
+                        "dark text-[11px] font-medium flex items-center gap-x-2 cursor-pointer",
+                        index === 0 && "mt-1",
+                      )}
+                      onClick={() => {
+                        setActiveProjectId(project.id);
+                      }}
+                    >
+                      <LuFolder className="w-3.5 h-3.5 text-brand-light/70" />
+                      <span className="truncate">{project.name}</span>
+                      <div className="ml-auto flex items-center gap-1">
+                        {activeProjectId === project.id && (
+                          <LuCheck className="w-4 h-4 text-brand-light" />
+                        )}
+                        {project.id !== activeProjectId && (
+                          <button
+                            type="button"
+                            title={`Delete ${project.name}`}
+                            className="inline-flex items-center justify-center w-6 h-6 rounded-[4px] hover:bg-red-500/15 text-brand-light/60 hover:text-red-400 transition-colors"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setProjectToDelete(project);
+                              setDeleteProjectOpen(true);
+                            }}
+                          >
+                            <LuTrash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </DropdownMenuItem>
+                    {index !== filteredProjects.length - 1 && (
+                      <DropdownMenuSeparator />
+                    )}
+                  </React.Fragment>
+                ))}
+              </div>
+            </ScrollArea>
+
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="dark text-[11px] font-medium flex items-center gap-x-2 cursor-pointer mb-1"
@@ -402,7 +494,6 @@ const TopBar: React.FC<TopBarProps> = () => {
               <LuFolderPlus className="w-3.5 h-3.5 text-brand-light/80" />
               <span>New Project</span>
             </DropdownMenuItem>
-            </div>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -762,6 +853,52 @@ const TopBar: React.FC<TopBarProps> = () => {
           }
         }}
       />
+
+      <AlertDialog
+        open={deleteProjectOpen}
+        onOpenChange={(open) => {
+          setDeleteProjectOpen(open);
+          if (!open) {
+            setProjectToDelete(null);
+            setIsDeletingProject(false);
+          }
+        }}
+        
+      >
+        <AlertDialogContent className="dark bg-brand-background/95 font-poppins backdrop-blur-md border border-brand-light/10">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-brand-light">
+              Delete project?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-brand-light/70">
+              This will permanently delete{" "}
+              <span className="text-brand-light font-medium">
+                {projectToDelete?.name ?? "this project"}
+              </span>{" "}
+              and its saved JSON.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={isDeletingProject}
+              className="dark border-brand-light/15 text-brand-light hover:bg-brand-light/10 text-[12px] font-medium px-5"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!projectToDelete || isDeletingProject}
+              onClick={(e) => {
+                // Prevent radix from closing early while we await deletion.
+                e.preventDefault();
+                void handleConfirmDeleteProject();
+              }}
+              className="bg-red-500/80 hover:bg-red-500/70 text-brand-light text-[12px] font-medium px-5"
+            >
+              {isDeletingProject ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

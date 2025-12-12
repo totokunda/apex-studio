@@ -2784,7 +2784,9 @@ const Preview: React.FC<PreviewProps> = () => {
                   y={0}
                   width={rectWidth}
                   height={rectHeight}
-                  fill={"#000000"}
+                  // Keep the stage background visible so clips with transparency
+                  // don't appear to have a "black screen" behind them.
+                  fill={"rgb(0,0,0)"}
                   onTransform={() => {
                     const node = aspectRectRef.current;
                     if (!node) return;

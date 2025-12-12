@@ -248,6 +248,9 @@ const VideoPreview: React.FC<
       if (
         preprocessor.startFrame !== undefined &&
         preprocessor.endFrame !== undefined &&
+        // Only apply preprocessor outputs in-place when explicitly requested.
+        // When createNewClip is enabled (default), the parent clip should render as-is.
+        preprocessor.createNewClip === false &&
         preprocessor.status === "complete" &&
         preprocessor.assetId
       ) {
@@ -768,6 +771,8 @@ const VideoPreview: React.FC<
     (wc: { canvas: HTMLCanvasElement | OffscreenCanvas | VideoFrame; timestamp: number; duration: number }, maskFrame?: number) => {
       let canvas = canvasRef.current;
       if (!canvas) return;
+
+      
 
       const ctx = canvas.getContext("2d");
       if (!ctx) return;

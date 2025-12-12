@@ -620,6 +620,13 @@ export class VideoDecoderManager {
             codedWidth: targetWidth,
             codedHeight: targetHeight,
         };
+        // Prefer keeping alpha for formats that support it (e.g. WebM with alpha).
+        // Some TS lib.dom versions don't expose `alpha` on VideoDecoderConfig yet,
+        // but the runtime may support it. The worker will fall back if unsupported.
+        const normalizedAny = normalizedConfig as any;
+        if (normalizedAny.alpha == null) {
+            normalizedAny.alpha = "keep";
+        }
 
         // Determine format string to speed up worker init
         let formatStr: string | undefined;

@@ -767,7 +767,7 @@ const ModelMenu: React.FC = () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [manifestsData, loadManifests]);
+  }, [manifestsData, loadManifests,]);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);

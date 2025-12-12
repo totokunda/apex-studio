@@ -125,6 +125,7 @@ async function isAppUrlDefinitely404(url: URL): Promise<boolean> {
 // State
 type AssetState = {
   decoder: VideoDecoder | null;
+  alphaDecoder: VideoDecoder | null;
   sink: EncodedPacketSink | null;
   input: Input | null;
 
@@ -132,6 +133,21 @@ type AssetState = {
   cachedDecodedFrames: Map<number, VideoFrame>;
   keyPacketCache: Map<number, EncodedPacket>;
   isCachingKeyPackets: boolean;
+
+  // Alpha merge (for codecs where alpha is stored separately in packet sideData)
+  alphaFramesByTimestamp: Map<number, VideoFrame>;
+  pendingColorFramesByTimestamp: Map<
+    number,
+    {
+      frame: VideoFrame;
+      requestId: number;
+    }
+  >;
+  // Reused canvases to avoid reallocating for every frame
+  mergeCanvas: OffscreenCanvas | null;
+  mergeCtx: OffscreenCanvasRenderingContext2D | null;
+  alphaCanvas: OffscreenCanvas | null;
+  alphaCtx: OffscreenCanvasRenderingContext2D | null;
 
   // Seek state
   seekTargetTimestamp: number | null;
@@ -176,11 +192,21 @@ function getOrCreateState(assetId: string): AssetState {
   if (!state) {
     state = {
       decoder: null,
+      alphaDecoder: null,
       sink: null,
       input: null,
       cachedDecodedFrames: new Map<number, VideoFrame>(),
       keyPacketCache: new Map<number, EncodedPacket>(),
       isCachingKeyPackets: false,
+      alphaFramesByTimestamp: new Map<number, VideoFrame>(),
+      pendingColorFramesByTimestamp: new Map<
+        number,
+        { frame: VideoFrame; requestId: number }
+      >(),
+      mergeCanvas: null,
+      mergeCtx: null,
+      alphaCanvas: null,
+      alphaCtx: null,
       seekTargetTimestamp: null,
       seekDone: false,
       currentRequestId: 0,
@@ -197,6 +223,228 @@ function getOrCreateState(assetId: string): AssetState {
     assetStates.set(assetId, state);
   }
   return state;
+}
+
+function resetAlphaMergeQueues(state: AssetState) {
+  for (const f of state.alphaFramesByTimestamp.values()) f.close();
+  state.alphaFramesByTimestamp.clear();
+  for (const v of state.pendingColorFramesByTimestamp.values()) v.frame.close();
+  state.pendingColorFramesByTimestamp.clear();
+}
+
+function ensureMergeCanvases(state: AssetState, width: number, height: number) {
+  if (
+    !state.mergeCanvas ||
+    state.mergeCanvas.width !== width ||
+    state.mergeCanvas.height !== height
+  ) {
+    state.mergeCanvas = new OffscreenCanvas(width, height);
+    state.mergeCtx = state.mergeCanvas.getContext("2d", {
+      willReadFrequently: true,
+    }) as OffscreenCanvasRenderingContext2D | null;
+  }
+  if (
+    !state.alphaCanvas ||
+    state.alphaCanvas.width !== width ||
+    state.alphaCanvas.height !== height
+  ) {
+    state.alphaCanvas = new OffscreenCanvas(width, height);
+    state.alphaCtx = state.alphaCanvas.getContext("2d", {
+      willReadFrequently: true,
+    }) as OffscreenCanvasRenderingContext2D | null;
+  }
+}
+
+function mergeAlphaIntoColor(
+  state: AssetState,
+  colorFrame: VideoFrame,
+  alphaFrame: VideoFrame,
+): VideoFrame {
+  const width = colorFrame.displayWidth || (colorFrame as any).codedWidth || 0;
+  const height =
+    colorFrame.displayHeight || (colorFrame as any).codedHeight || 0;
+  if (!width || !height) {
+    // Fallback: if we can't determine dimensions, just return color as-is.
+    // Caller will close `alphaFrame`.
+    return colorFrame;
+  }
+
+  ensureMergeCanvases(state, width, height);
+  const ctx = state.mergeCtx;
+  const aCtx = state.alphaCtx;
+  if (!ctx || !aCtx || !state.mergeCanvas || !state.alphaCanvas) {
+    return colorFrame;
+  }
+
+  // Render both frames into RGBA buffers via 2D canvas drawImage conversion.
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(colorFrame as any, 0, 0, width, height);
+  const colorImage = ctx.getImageData(0, 0, width, height);
+
+  aCtx.clearRect(0, 0, width, height);
+  aCtx.drawImage(alphaFrame as any, 0, 0, width, height);
+  const alphaImage = aCtx.getImageData(0, 0, width, height);
+
+  const c = colorImage.data;
+  const a = alphaImage.data;
+  // Use the alpha frame's luminance (red channel after drawImage) as the output alpha.
+  for (let i = 0; i < c.length; i += 4) {
+    c[i + 3] = a[i]; // take R as alpha (grayscale)
+  }
+
+  ctx.putImageData(colorImage, 0, 0);
+  return new VideoFrame(state.mergeCanvas, {
+    timestamp: colorFrame.timestamp,
+    duration: colorFrame.duration ?? undefined,
+  });
+}
+
+function createAlphaFrameHandler(assetId: string) {
+  return (alphaFrame: VideoFrame) => {
+    const state = assetStates.get(assetId);
+    if (!state) {
+      alphaFrame.close();
+      return;
+    }
+
+    const ts = alphaFrame.timestamp;
+    const pending = state.pendingColorFramesByTimestamp.get(ts);
+    if (pending) {
+      state.pendingColorFramesByTimestamp.delete(ts);
+
+      // If request has moved on, drop both frames.
+      if (pending.requestId !== state.currentRequestId) {
+        pending.frame.close();
+        alphaFrame.close();
+        return;
+      }
+
+      let merged: VideoFrame | null = null;
+      try {
+        merged = mergeAlphaIntoColor(state, pending.frame, alphaFrame);
+      } catch {
+        merged = pending.frame;
+      } finally {
+        // If mergeAlphaIntoColor returned the original color frame, don't double-close.
+        if (merged !== pending.frame) pending.frame.close();
+        alphaFrame.close();
+      }
+
+      // Dispatch merged frame through the normal pipeline.
+      dispatchDecodedFrame(assetId, merged);
+      return;
+    }
+
+    // Store alpha frame for when the corresponding color frame arrives.
+    // Bound the map to avoid unbounded growth.
+    if (state.alphaFramesByTimestamp.size > 120) {
+      const firstKey = state.alphaFramesByTimestamp.keys().next().value;
+      if (firstKey !== undefined) {
+        state.alphaFramesByTimestamp.get(firstKey)?.close();
+        state.alphaFramesByTimestamp.delete(firstKey);
+      }
+    }
+    state.alphaFramesByTimestamp.set(ts, alphaFrame);
+  };
+}
+
+function ensureAlphaDecoder(state: AssetState, assetId: string) {
+  if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+    return;
+  }
+  if (!state.config) {
+    return;
+  }
+
+  state.alphaDecoder = new VideoDecoder({
+    output: createAlphaFrameHandler(assetId),
+    error: (e) => {
+      console.error("Alpha VideoDecoder error", e);
+      try {
+        // @ts-ignore
+        postMessage({
+          type: "error",
+          error: e.message ?? "Alpha VideoDecoder error",
+          assetId,
+        });
+      } catch {
+        // ignore
+      }
+    },
+  });
+
+  // Alpha side data is encoded with the same codec, but is not "embedded alpha"
+  // in the bitstream. Some platforms reject `alpha: "keep"` for such streams,
+  // so we try without the alpha hint first.
+  try {
+    const cfgAny: any = { ...(state.config as any) };
+    delete cfgAny.alpha;
+    state.alphaDecoder.configure(cfgAny as VideoDecoderConfig);
+  } catch (e) {
+    try {
+      state.alphaDecoder.configure(state.config as VideoDecoderConfig);
+    } catch (e2) {
+      console.error("Alpha VideoDecoder configure failed", e, e2);
+      try {
+        state.alphaDecoder.close();
+      } catch {
+        // ignore
+      }
+      state.alphaDecoder = null;
+    }
+  }
+}
+
+function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
+  const state = assetStates.get(assetId);
+  if (!state) {
+    frame.close();
+    return;
+  }
+
+  if (state.customOutputHandler) {
+    state.customOutputHandler(frame);
+    return;
+  }
+
+  const frameTime = frame.timestamp / 1e6;
+
+  // 1. Cache
+  cacheFrame(state, frame);
+
+  // 2. Preview
+  if (state.showingPreview) {
+    postFrame(assetId, frame, state.currentRequestId);
+    state.showingPreview = false;
+  }
+
+  // 3. Check Target
+  if (state.seekTargetTimestamp !== null) {
+    // Track closest frame to the desired seek position as a fallback.
+    const distance = Math.abs(frameTime - state.seekTargetTimestamp);
+    if (
+      !state.pendingSeekFrame ||
+      distance < Math.abs(state.pendingSeekFrameTime - state.seekTargetTimestamp)
+    ) {
+      if (state.pendingSeekFrame) {
+        state.pendingSeekFrame.close();
+      }
+      state.pendingSeekFrame = frame.clone();
+      state.pendingSeekFrameTime = frameTime;
+    }
+
+    if (frameTime >= state.seekTargetTimestamp - 0.04) {
+      state.seekDone = true;
+      postFrame(assetId, frame, state.currentRequestId);
+      state.seekTargetTimestamp = null;
+      if (state.pendingSeekFrame) {
+        state.pendingSeekFrame.close();
+        state.pendingSeekFrame = null;
+      }
+    }
+  }
+
+  frame.close();
 }
 
 // Helpers
@@ -240,46 +488,45 @@ const createFrameHandler = (assetId: string) => (frame: VideoFrame) => {
     return;
   }
 
-  if (state.customOutputHandler) {
-      state.customOutputHandler(frame);
+  // If an alpha decoder is active, merge alpha frames (from sideData) into this
+  // color frame before dispatching it to the rest of the worker pipeline.
+  if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+    const ts = frame.timestamp;
+    const alpha = state.alphaFramesByTimestamp.get(ts);
+    if (alpha) {
+      state.alphaFramesByTimestamp.delete(ts);
+      let merged: VideoFrame | null = null;
+      try {
+        merged = mergeAlphaIntoColor(state, frame, alpha);
+      } catch {
+        merged = frame;
+      } finally {
+        if (merged !== frame) frame.close();
+        alpha.close();
+      }
+      dispatchDecodedFrame(assetId, merged);
       return;
-  }
-
-  const frameTime = frame.timestamp / 1e6;
-
-  // 1. Cache
-  cacheFrame(state, frame);
-
-  // 2. Preview
-  if (state.showingPreview) {
-    postFrame(assetId, frame, state.currentRequestId);
-    state.showingPreview = false;
-  }
-
-  // 3. Check Target
-  if (state.seekTargetTimestamp !== null) {
-    // Track closest frame to the desired seek position as a fallback.
-    const distance = Math.abs(frameTime - state.seekTargetTimestamp);
-    if (!state.pendingSeekFrame || distance < Math.abs(state.pendingSeekFrameTime - state.seekTargetTimestamp)) {
-      if (state.pendingSeekFrame) {
-        state.pendingSeekFrame.close();
-      }
-      state.pendingSeekFrame = frame.clone();
-      state.pendingSeekFrameTime = frameTime;
     }
 
-    if (frameTime >= state.seekTargetTimestamp - 0.04) {
-      state.seekDone = true;
-      postFrame(assetId, frame, state.currentRequestId);
-      state.seekTargetTimestamp = null;
-      if (state.pendingSeekFrame) {
-        state.pendingSeekFrame.close();
-        state.pendingSeekFrame = null;
+    // Wait for alpha output callback to arrive.
+    state.pendingColorFramesByTimestamp.set(ts, {
+      frame,
+      requestId: state.currentRequestId,
+    });
+
+    // Bound pending color frames to avoid unbounded growth.
+    if (state.pendingColorFramesByTimestamp.size > 120) {
+      const firstKey = state.pendingColorFramesByTimestamp.keys().next().value;
+      if (firstKey !== undefined) {
+        const v = state.pendingColorFramesByTimestamp.get(firstKey);
+        v?.frame.close();
+        state.pendingColorFramesByTimestamp.delete(firstKey);
       }
     }
+    return;
   }
 
-  frame.close();
+  dispatchDecodedFrame(assetId, frame);
 };
 
 function postFrame(assetId: string, frame: VideoFrame, reqId: number) {
@@ -424,7 +671,7 @@ async function handleConfigure(
     if (is404) {
       throw new Error("Primary app:// URL returned 404");
     }
-    input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
+    input = new Input({ formats, source: new UrlSource(url) });
   } catch (e) {
     try {
       if (!filePath) {
@@ -438,7 +685,7 @@ async function handleConfigure(
       if (is404) {
         throw new Error("Secondary app:// URL returned 404");
       }
-      input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
+      input = new Input({ formats, source: new UrlSource(url) });
     } catch (e) {
       throw new Error("Failed to create input");
     }
@@ -453,10 +700,16 @@ async function handleConfigure(
   state.sink = new EncodedPacketSink(videoTrack);
 
   // 3. Setup Decoder
-  state.config = {
+  // NOTE: Some TS lib.dom versions don't expose `alpha` on VideoDecoderConfig yet.
+  // We still set it at runtime (when supported) to preserve transparency.
+  const configAny: any = {
     ...cfg.videoDecoderConfig,
     optimizeForLatency: true,
   };
+  if (configAny.alpha == null) {
+    configAny.alpha = "keep";
+  }
+  state.config = configAny as VideoDecoderConfig;
  
   state.decoder = new VideoDecoder({
     output: createFrameHandler(id),
@@ -471,8 +724,27 @@ async function handleConfigure(
     },
   });
 
-
-  state.decoder.configure(state.config);
+  try {
+    state.decoder.configure(state.config as VideoDecoderConfig);
+  } catch (e) {
+    // Fallback: if the platform/codec rejects alpha preservation, retry without it.
+    // This keeps broad compatibility while enabling transparency where supported.
+    try {
+      const fallbackConfig: any = { ...(state.config as any) };
+      delete fallbackConfig.alpha;
+      state.config = fallbackConfig;
+      state.decoder.configure(fallbackConfig as VideoDecoderConfig);
+    } catch (e2) {
+      console.error("VideoDecoder configure failed", e, e2);
+      // @ts-ignore
+      postMessage({
+        type: "error",
+        error: (e2 as any)?.message ?? "VideoDecoder configure failed",
+        assetId: id,
+      });
+      return;
+    }
+  }
   void cacheKeyPackets(state);
   postMessage({
     type: "ready",
@@ -502,6 +774,7 @@ async function handleSeek(
   }
 
   state.currentRequestId = requestId;
+  resetAlphaMergeQueues(state);
 
   // Reset any previous seek fallback frame
   if (state.pendingSeekFrame) {
@@ -548,7 +821,29 @@ async function handleSeek(
 
   state.decoder.reset();
   if (state.config) state.decoder.configure(state.config);
-  state.decoder.decode(currentPacket.toEncodedVideoChunk());
+  if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+    try {
+      state.alphaDecoder.reset();
+      // Configure alpha decoder without the alpha hint when possible.
+      const cfgAny: any = { ...(state.config as any) };
+      delete cfgAny.alpha;
+      state.alphaDecoder.configure(cfgAny as VideoDecoderConfig);
+    } catch {
+      // ignore; we'll recreate lazily if needed
+    }
+  }
+  const chunk = currentPacket.toEncodedVideoChunk();
+  state.decoder.decode(chunk);
+  if (currentPacket.sideData?.alpha) {
+    ensureAlphaDecoder(state, id);
+    if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+      try {
+        state.alphaDecoder.decode(currentPacket.alphaToEncodedVideoChunk());
+      } catch {
+        // ignore alpha decode errors; color still decodes
+      }
+    }
+  }
 
 
   if (isFastScrubbing) {
@@ -561,7 +856,18 @@ async function handleSeek(
   const packets = state.sink.packets(currentPacket);
   for await (const packet of packets) {
     if ((state.decoder.state as string) === "closed") break;
-      state.decoder.decode(packet.toEncodedVideoChunk());
+    const colorChunk = packet.toEncodedVideoChunk();
+    state.decoder.decode(colorChunk);
+    if (packet.sideData?.alpha) {
+      ensureAlphaDecoder(state, id);
+      if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+        try {
+          state.alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
+        } catch {
+          // ignore
+        }
+      }
+    }
     if (state.seekDone) break;
     if (state.currentRequestId !== requestId) break;
     if (packet.timestamp > timestamp + 0.1) break;
@@ -569,6 +875,13 @@ async function handleSeek(
 
   if (forceAccurate) {
     await state.decoder.flush();
+    if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+      try {
+        await state.alphaDecoder.flush();
+      } catch {
+        // ignore
+      }
+    }
   }
 
   // If we never hit the seek threshold inside onFrameHandler (e.g. end of
@@ -603,6 +916,7 @@ async function handleIterate(
     if (!state || !state.decoder || !state.sink || !state.config) return;
 
     state.currentRequestId = requestId;
+    resetAlphaMergeQueues(state);
 
     const keyPacket = await state.sink.getKeyPacket(startTime, { verifyKeyPackets: false });
     if (!keyPacket) {
@@ -618,6 +932,16 @@ async function handleIterate(
     if ((state.decoder.state as string) === "closed") return;
     state.decoder.reset();
     state.decoder.configure(state.config);
+    if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+      try {
+        state.alphaDecoder.reset();
+        const cfgAny: any = { ...(state.config as any) };
+        delete cfgAny.alpha;
+        state.alphaDecoder.configure(cfgAny as VideoDecoderConfig);
+      } catch {
+        // ignore
+      }
+    }
 
     // Override handler temporarily for iteration
     
@@ -668,7 +992,19 @@ async function handleIterate(
              return;
         }
         
+        // Always decode color into the main decoder, and alpha (when present)
+        // into the alphaDecoder for later merge.
         state.decoder.decode(keyPacket.toEncodedVideoChunk());
+        if (keyPacket.sideData?.alpha) {
+          ensureAlphaDecoder(state, id);
+          if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+            try {
+              state.alphaDecoder.decode(keyPacket.alphaToEncodedVideoChunk());
+            } catch {
+              // ignore
+            }
+          }
+        }
         const packets = state.sink.packets(keyPacket);
         
         for await (const packet of packets) {
@@ -683,8 +1019,17 @@ async function handleIterate(
                  await new Promise<void>(r => state.iterationResume = r);
             }
 
-
             state.decoder.decode(packet.toEncodedVideoChunk());
+            if (packet.sideData?.alpha) {
+              ensureAlphaDecoder(state, id);
+              if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+                try {
+                  state.alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
+                } catch {
+                  // ignore
+                }
+              }
+            }
             
             while (state.decoder.decodeQueueSize > 6) {
                  await new Promise(r => setTimeout(r, 5));
@@ -693,6 +1038,13 @@ async function handleIterate(
         
         if ((state.decoder.state as string) !== "closed") {
             await state.decoder.flush();
+        }
+        if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+          try {
+            await state.alphaDecoder.flush();
+          } catch {
+            // ignore
+          }
         }
     } finally {
         state.customOutputHandler = null;
@@ -715,6 +1067,15 @@ function dispose(assetId?: string) {
       state.decoder.close();
       state.decoder = null;
   }
+    if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+      try {
+        state.alphaDecoder.close();
+      } catch {
+        // ignore
+      }
+      state.alphaDecoder = null;
+    }
+    resetAlphaMergeQueues(state);
     for (const frame of state.cachedDecodedFrames.values()) {
     frame.close();
   }

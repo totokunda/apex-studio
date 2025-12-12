@@ -1288,7 +1288,7 @@ const hydrateStoresFromProjectJson = async (
         });
       }
 
-      if (useViewportStore && typeof useViewportStore.setState === "function") {
+      if (useViewportStore && typeof useViewportStore.setState === "function" && Object.keys(doc.editorState ?? {}).length > 0) {
         useViewportStore.setState({
           aspectRatio: doc.settings?.aspectRatio,
           tool: doc.editorState?.tool,
