@@ -173,7 +173,6 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
     const off = onUnifiedDownloadUpdate(
       jobId,
       (data: UnifiedDownloadWsUpdate) => {
-        console.log("data", data);
         try {
           const meta = (data && (data as any).metadata) || {};
           const filename =

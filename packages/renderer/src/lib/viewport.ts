@@ -38,6 +38,7 @@ interface ViewportState {
     viewportSize: { width: number; height: number },
   ) => void;
   centerContentAt: (percent: number) => void;
+  zoomToFit: (options?: { padding?: number }) => void;
   shouldUpdateViewport: boolean;
   setShouldUpdateViewport: (shouldUpdate: boolean) => void;
 }
@@ -167,6 +168,34 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
       y: centerScreen.y - worldCenter.y * scale,
     };
     set({ scale, position });
+  },
+  zoomToFit: (options) => {
+    const { contentBounds, viewportSize, minScale, maxScale } = get();
+    if (!contentBounds) return;
+    if (viewportSize.width === 0 || viewportSize.height === 0) return;
+    if (contentBounds.width === 0 || contentBounds.height === 0) return;
+
+    const padding = options?.padding ?? 0.90; // small margin so the frame isn't flush to the edges
+    const fitScale =
+      Math.min(
+        viewportSize.width / contentBounds.width,
+        viewportSize.height / contentBounds.height,
+      ) * padding;
+    const clampedScale = Math.max(minScale, Math.min(maxScale, fitScale));
+
+    const worldCenter = {
+      x: contentBounds.x + contentBounds.width / 2,
+      y: contentBounds.y + contentBounds.height / 2,
+    };
+    const centerScreen = {
+      x: viewportSize.width / 2,
+      y: viewportSize.height / 2,
+    };
+    const position = {
+      x: centerScreen.x - worldCenter.x * clampedScale,
+      y: centerScreen.y - worldCenter.y * clampedScale,
+    };
+    set({ scale: clampedScale, position });
   },
 }));
 

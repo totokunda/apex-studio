@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Popover,
   PopoverContent,
@@ -6,28 +6,23 @@ import {
 } from "@/components/ui/popover";
 import SemiGauge from "@/components/ui/semi-gauge";
 import { fetchSystemMemory, SystemMemoryResponse } from "@/lib/system/api";
-import { LuGauge } from "react-icons/lu";
+import { LuGauge, LuInfo, LuLoader } from "react-icons/lu";
+import { useQuery } from "@tanstack/react-query";
 
 const POLL_MS = 2000;
+const SYSTEM_MEMORY_QUERY_KEY = ["systemMemory"] as const;
 
 const SystemMemoryMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
-  const [data, setData] = useState<SystemMemoryResponse | null>(null);
-
-  // Polling
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      const res = await fetchSystemMemory();
-      if (mounted) setData(res);
-    };
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => {
-      mounted = false;
-      clearInterval(id);
-    };
-  }, []);
+  const { data, isLoading } = useQuery<SystemMemoryResponse | null>({
+    queryKey: SYSTEM_MEMORY_QUERY_KEY,
+    queryFn: fetchSystemMemory,
+    placeholderData: (prev) => prev ?? null,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: POLL_MS,
+    refetchIntervalInBackground: true,
+  });
 
   const fmt = (bytes?: number) => {
     if (!Number.isFinite(bytes || 0)) return "0 GB";
@@ -178,7 +173,14 @@ const SystemMemoryMenu: React.FC = () => {
             </div>
           </div>
         ) : (
-          <div className="text-[12px] text-brand-light/70">Loading…</div>
+          <div className="text-[12px] text-brand-light/70">
+            <div className="flex items-center gap-x-2">
+            {isLoading ? <LuLoader className="w-4 h-4 text-brand-light/80 animate-spin" /> : <LuInfo className="w-4 h-4 text-brand-light/80" />}
+            <span>
+              {isLoading ? "Loading…" : "Error loading system memory."}
+            </span>
+            </div>
+          </div>
         )}
       </PopoverContent>
     </Popover>

@@ -358,6 +358,23 @@ export type ModelClipProps = ClipProps & {
   // Persist user selections for model components (e.g., scheduler, transformer, vae, text_encoder)
   // Keyed by component type (e.g., 'scheduler', 'transformer'), value is a small descriptor object
   selectedComponents?: Record<string, any>;
+  /**
+   * Optional per-component offloading configuration.
+   * Keyed by component key (usually manifest component `name` if present, else `type`).
+   *
+   * NOTE: This is UI-driven config and is forwarded to the engine as
+   * `selected_components.offload` when present.
+   */
+  offload?: Record<
+    string,
+    {
+      enabled?: boolean;
+      level?: "leaf" | "block";
+      num_blocks?: number;
+      use_stream?: boolean;
+      record_stream?: boolean;
+    }
+  >;
   generations?: GenerationModelClipProps[];
   activeJobId?: string;
 };

@@ -23,6 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import { BsFilter } from "react-icons/bs";
 import { DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listConvertedMedia,
   importMediaPaths,
@@ -86,13 +87,6 @@ type MediaType = "video" | "image" | "audio";
 type SortKey = "name" | "duration" | "date";
 type SortOrder = "asc" | "desc";
 
-// Simple in-memory cache so we don't refetch and recompute metadata every time
-// the user navigates away from and back to the Media sidebar.
-let cachedMediaItems: MediaItem[] | null = null;
-let cachedDurationCache: Record<string, number | undefined> = {};
-let lastMediaLibraryVersionLoaded: number | null = null;
-let lastFolderUuidLoaded: string | null = null;
-
 const filterMediaItems = (
   items: MediaItem[],
   selectedTypes: Set<MediaType>,
@@ -153,10 +147,7 @@ const sortMediaItems = (
 // }
 
 const MediaSidebar: React.FC<MediaSidebarProps> = () => {
-  const [items, setItems] = useState<MediaItem[]>(
-    () => cachedMediaItems ?? [],
-  );
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
   const uploadBarRef = useRef<HTMLDivElement | null>(null);
@@ -175,7 +166,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
   const [sortOpen, setSortOpen] = useState(false);
   const [durationCache, setDurationCache] = useState<
     Record<string, number | undefined>
-  >(() => cachedDurationCache);
+  >(() => ({}));
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -186,6 +177,56 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
   const mediaLibraryVersion = useMediaLibraryVersion();
   const activeProject = useProjectsStore((s) => s.getActiveProject());
   const folderUuid = activeProject?.folderUuid;
+
+  const mediaQueryKey = useMemo(
+    () => ["media", "converted", folderUuid ?? null] as const,
+    [folderUuid],
+  );
+
+  const {
+    data: items = [],
+    isLoading: isMediaListLoading,
+  } = useQuery({
+    queryKey: mediaQueryKey,
+    queryFn: async () => {
+      const list = await listConvertedMedia(folderUuid);
+      const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
+      const infos = await Promise.all(infoPromises);
+      const results: MediaItem[] = list.map((it, idx) => ({
+        name: it.name,
+        type: it.type,
+        absPath: it.absPath,
+        assetUrl: it.assetUrl,
+        dateAddedMs: it.dateAddedMs,
+        mediaInfo: infos[idx],
+        hasProxy: it.hasProxy,
+      }));
+      results.sort((a, b) =>
+        a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+      );
+      return results;
+    },
+    // Keep previous data visible during background refetches (prevents "flashing")
+    placeholderData: (prev) => {
+      if (prev) return prev;
+    },
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+
+  // When media library version bumps (upload/rename/delete/proxy), refetch the list.
+  const lastMediaLibraryVersionRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (lastMediaLibraryVersionRef.current == null) {
+      lastMediaLibraryVersionRef.current = mediaLibraryVersion;
+      return;
+    }
+    if (lastMediaLibraryVersionRef.current !== mediaLibraryVersion) {
+      lastMediaLibraryVersionRef.current = mediaLibraryVersion;
+      void queryClient.invalidateQueries({ queryKey: mediaQueryKey });
+    }
+  }, [mediaLibraryVersion, queryClient, mediaQueryKey]);
 
   useEffect(() => {
     const el = uploadBarRef.current;
@@ -216,59 +257,6 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
     };
   }, []);
 
-  const loadMediaList = useCallback(async () => {
-    try {
-      setLoading(true);
-      const list = await listConvertedMedia(folderUuid);
-      const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      const results: MediaItem[] = list.map((it, idx) => ({
-        name: it.name,
-        type: it.type,
-        absPath: it.absPath,
-        assetUrl: it.assetUrl,
-        dateAddedMs: it.dateAddedMs,
-        mediaInfo: infos[idx],
-        hasProxy: it.hasProxy,
-      }));
-      results.sort((a, b) =>
-        a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
-      );
-      setItems(results);
-      cachedMediaItems = results;
-      lastMediaLibraryVersionLoaded = mediaLibraryVersion;
-      lastFolderUuidLoaded = folderUuid ?? null;
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }, [mediaLibraryVersion, folderUuid]);
-
-  // When the active project's folder changes, clear the in-memory cache so we
-  // force a fresh load for the new folder instead of reusing the old folder's data.
-  useEffect(() => {
-    cachedMediaItems = null;
-    cachedDurationCache = {};
-    lastMediaLibraryVersionLoaded = null;
-    lastFolderUuidLoaded = null;
-  }, [folderUuid]);
-
-  useEffect(() => {
-    // If we've never loaded for this version (or have no cache), hit disk.
-    // Otherwise, just hydrate the component state from the cached items.
-    const shouldLoad =
-      !cachedMediaItems ||
-      lastMediaLibraryVersionLoaded !== mediaLibraryVersion ||
-      lastFolderUuidLoaded !== folderUuid;
-
-    if (shouldLoad) {
-      void loadMediaList();
-    } else if (cachedMediaItems) {
-      setItems(cachedMediaItems);
-    }
-  }, [loadMediaList, mediaLibraryVersion, folderUuid]);
-
   const handleUpload = async (directory: boolean = false) => {
     try {
       setIsUploading(true);
@@ -296,11 +284,11 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         mediaInfo: infos[idx],
         hasProxy: it.hasProxy,
       }));
-      setItems((prev) => {
-        const next = [...prev, ...newItems].sort((a, b) =>
+      queryClient.setQueryData<MediaItem[]>(mediaQueryKey, (prev) => {
+        const base = prev ?? [];
+        const next = [...base, ...newItems].sort((a, b) =>
           a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
         );
-        cachedMediaItems = next;
         return next;
       });
       bumpMediaLibraryVersion();
@@ -362,11 +350,11 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         mediaInfo: infos[idx],
         hasProxy: it.hasProxy,
       }));
-      setItems((prev) => {
-        const next = [...prev, ...newItems].sort((a, b) =>
+      queryClient.setQueryData<MediaItem[]>(mediaQueryKey, (prev) => {
+        const base = prev ?? [];
+        const next = [...base, ...newItems].sort((a, b) =>
           a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
         );
-        cachedMediaItems = next;
         return next;
       });
       bumpMediaLibraryVersion();
@@ -470,8 +458,9 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
       });
       setRenamingItem(null);
       setRenameValue("");
-      setItems((prev) =>
-        prev
+      queryClient.setQueryData<MediaItem[]>(mediaQueryKey, (prev) => {
+        const base = prev ?? [];
+        const next = base
           .map((item) => {
             if (item.name === originalName) {
               const newAbsPath = item.absPath.replace(originalName, unique);
@@ -490,8 +479,9 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
           })
           .sort((a, b) =>
             a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
-          ),
-      );
+          );
+        return next;
+      });
       bumpMediaLibraryVersion();
     } catch (e) {
       console.error(e);
@@ -531,16 +521,13 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             width: "fit-content",
           },
         });
-        setItems((prev) => {
-          const next = prev.filter((item) => item.name !== name);
-          cachedMediaItems = next;
-          return next;
-        });
+        const removed = items.find((it) => it.name === name);
+        queryClient.setQueryData<MediaItem[]>(mediaQueryKey, (prev) =>
+          (prev ?? []).filter((item) => item.name !== name),
+        );
         setDurationCache((prev) => {
           const next = { ...prev };
-          const item = items.find((it) => it.name === name);
-          if (item) delete next[item.assetUrl];
-          cachedDurationCache = next;
+          if (removed?.assetUrl) delete next[removed.assetUrl];
           return next;
         });
         bumpMediaLibraryVersion();
@@ -555,7 +542,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         });
       }
     },
-    [items, activeProject?.folderUuid],
+    [items, activeProject?.folderUuid, queryClient, mediaQueryKey],
   );
 
   const handleCreateProxy = useCallback(
@@ -572,7 +559,12 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
           duration: 3000,
           style: { width: "fit-content" },
         });
-        await loadMediaList();
+        queryClient.setQueryData<MediaItem[]>(mediaQueryKey, (prev) =>
+          (prev ?? []).map((it) =>
+            it.name === item.name ? { ...it, hasProxy: true } : it,
+          ),
+        );
+        await queryClient.invalidateQueries({ queryKey: mediaQueryKey });
         bumpMediaLibraryVersion();
       } catch (e) {
         console.error(e);
@@ -589,7 +581,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         });
       }
     },
-    [loadMediaList, folderUuid],
+    [folderUuid, mediaQueryKey, queryClient],
   );
 
   const handleRemoveProxy = useCallback(
@@ -601,7 +593,12 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
           duration: 3000,
           style: { width: "fit-content" },
         });
-        await loadMediaList();
+        queryClient.setQueryData<MediaItem[]>(mediaQueryKey, (prev) =>
+          (prev ?? []).map((it) =>
+            it.name === item.name ? { ...it, hasProxy: false } : it,
+          ),
+        );
+        await queryClient.invalidateQueries({ queryKey: mediaQueryKey });
         bumpMediaLibraryVersion();
       } catch (e) {
         console.error(e);
@@ -612,7 +609,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         });
       }
     },
-    [loadMediaList, folderUuid],
+    [folderUuid, mediaQueryKey, queryClient],
   );
 
   // removed old inline thumbnail implementations in favor of memoized MediaThumb above
@@ -858,7 +855,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         {/* Only show the loading state when we have no items yet.
             This prevents the entire panel from "flashing" to the loading/empty state
             when updating a single item's state (rename, delete, proxy changes). */}
-        {loading && items.length === 0 && (
+        {isMediaListLoading && items.length === 0 && (
           <div className="text-brand-lighter/70 text-[13px] px-5 py-8 justify-center flex flex-row items-center gap-x-2">
               <div className="rounded-md border bg-brand border-brand-lighter/30 animate-ripple font-medium px-3.5 py-1 flex flex-row items-center gap-x-2">
                 <HiFilm className="w-4 h-4 animate-pulse" />
@@ -866,7 +863,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             </div>  
           </div>
         )}
-        {!loading && items.length === 0 && (
+        {!isMediaListLoading && items.length === 0 && (
           <div
             style={{ height: Math.max(0, panelHeight - 172) }}
             className="flex flex-col items-center justify-center w-full text-sm gap-y-2 text-brand-lighter/60"

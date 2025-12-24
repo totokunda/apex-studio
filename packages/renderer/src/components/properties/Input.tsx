@@ -1,10 +1,18 @@
 import { cn } from "@/lib/utils";
 import React, { useEffect, useState } from "react";
 import { LuChevronDown, LuChevronUp } from "react-icons/lu";
+import { LuInfo } from "react-icons/lu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface InputProps<T> {
   className?: string;
+  stepClassName?: string;
   label?: string;
+  description?: string;
   value: T;
   onChange: (value: T) => void;
   startLogo?: string;
@@ -19,7 +27,9 @@ const Input: React.FC<InputProps<string>> = ({
   value,
   onChange,
   label,
+  description,
   className,
+  stepClassName,
   startLogo,
   canStep,
   step,
@@ -74,9 +84,33 @@ const Input: React.FC<InputProps<string>> = ({
 
   return (
     <div className="flex flex-col items-start w-full gap-y-1 min-w-0">
-      <label className="text-brand-light  text-[10.5px] font-medium w-full text-start mb-0.5">
-        {label}
-      </label>
+      {(label || description) && (
+        <div className="flex items-center gap-1.5 w-full text-start mb-0.5">
+          {label && (
+            <label className="text-brand-light text-[10.5px] font-medium">
+              {label}
+            </label>
+          )}
+          {description && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="text-brand-light/70 hover:text-brand-light focus:outline-none"
+                >
+                  <LuInfo className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent
+                sideOffset={6}
+                className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+              >
+                {description}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+      )}
       {emptyLabel && <span className="mb-3"></span>}
 
       <div className="relative w-full flex flex-row items-center min-w-0">
@@ -100,9 +134,9 @@ const Input: React.FC<InputProps<string>> = ({
           onKeyDown={handleKeyDown}
         />
         {canStep && (
-          <div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand  h-6 cursor-pointer rounded-r">
+          <div className={cn("flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand  h-6 cursor-pointer rounded-r", stepClassName)}>
             <button
-              className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center"
+              className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center rounded-tr"
               onClick={() => {
                 const numValue = Number(value);
                 if (isNaN(numValue) || !isFinite(numValue)) return;
@@ -116,7 +150,7 @@ const Input: React.FC<InputProps<string>> = ({
               <LuChevronUp className="w-2 h-2 cursor-pointer text-brand-light" />
             </button>
             <button
-              className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center"
+              className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center rounded-br"
               onClick={() => {
                 const numValue = Number(value);
                 if (isNaN(numValue) || !isFinite(numValue)) return;

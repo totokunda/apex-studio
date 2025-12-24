@@ -15,6 +15,7 @@ import {
 import { useControlsStore } from "@/lib/control";
 import { useSettingsStore } from "@/lib/settings-store";
 import { getFolderSize } from "@app/preload";
+import { Checkbox } from "@/components/ui/checkbox";
 
 import {
     Tabs,
@@ -48,6 +49,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     hfToken: hfTokenGlobal,
     civitaiApiKey: civitaiApiKeyGlobal,
     backendUrl: backendUrlGlobal,
+    renderImageSteps: renderImageStepsGlobal,
+    renderVideoSteps: renderVideoStepsGlobal,
+    useFastDownload: useFastDownloadGlobal,
     maskModel: maskModelGlobal,
     setMaskModel: setMaskModelGlobal,
     setCachePath: setCachePathGlobal,
@@ -59,6 +63,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setHfToken: setHfTokenGlobal,
     setCivitaiApiKey: setCivitaiApiKeyGlobal,
     setBackendUrl: setBackendUrlGlobal,
+    setRenderImageSteps: setRenderImageStepsGlobal,
+    setRenderVideoSteps: setRenderVideoStepsGlobal,
+    setUseFastDownload: setUseFastDownloadGlobal,
   } = useSettingsStore();
 
   const controlsFps = useControlsStore((s) => s.fps);
@@ -92,6 +99,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [preSizeLabel, setPreSizeLabel] = useState<string | null>(null);
   const [postSizeLabel, setPostSizeLabel] = useState<string | null>(null);
   const [maskModel, setMaskModel] = useState<string>("sam2_base_plus");
+  const [renderImageSteps, setRenderImageSteps] = useState<boolean>(false);
+  const [renderVideoSteps, setRenderVideoSteps] = useState<boolean>(false);
+  const [useFastDownload, setUseFastDownload] = useState<boolean>(true);
 
 
   useEffect(() => {
@@ -113,6 +123,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setCivitaiApiKey(civitaiApiKeyGlobal ?? "");
     setBackendUrlLocal(backendUrlGlobal ?? "");
     setMaskModel(maskModelGlobal ?? "sam2_base_plus");
+    setRenderImageSteps(Boolean(renderImageStepsGlobal));
+    setRenderVideoSteps(Boolean(renderVideoStepsGlobal));
+    setUseFastDownload(Boolean(useFastDownloadGlobal));
   }, [
     open,
     cachePathGlobal,
@@ -125,6 +138,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     civitaiApiKeyGlobal,
     backendUrlGlobal,
     maskModelGlobal,
+    renderImageStepsGlobal,
+    renderVideoStepsGlobal,
+    useFastDownloadGlobal,
   ]);
 
   const formatBytes = (bytes: number | null | undefined): string | null => {
@@ -204,7 +220,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
 
-      <DialogContent className="w-full max-w-xl dark p-0 h-[480px] gap-0 space-y-0 items-start flex flex-col">
+      <DialogContent className="w-full max-w-xl dark p-0 h-[500px] gap-0 space-y-0 items-start flex flex-col">
         <DialogTitle className="text-brand-light font-poppins text-xs font-medium px-5 pt-4 h-fit">
             Settings
         </DialogTitle>
@@ -435,6 +451,67 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div className="flex items-start justify-between gap-3">
+                <label
+                  htmlFor="render-image-steps"
+                  className={fieldLabelClass + " flex-1 cursor-pointer"}
+                >
+                  <span>Render Image Steps</span>
+                  <span className="text-[10px] text-brand-light/60 font-normal">
+                    Render intermediary steps when denoising an image model.
+                  </span>
+                </label>
+                <Checkbox
+                  id="render-image-steps"
+                  checked={renderImageSteps}
+                  onCheckedChange={(checked) =>
+                    setRenderImageSteps(Boolean(checked))
+                  }
+                  className="mt-1"
+                />
+              </div>
+
+              <div className="flex items-start justify-between gap-3">
+                <label
+                  htmlFor="render-video-steps"
+                  className={fieldLabelClass + " flex-1 cursor-pointer"}
+                >
+                  <span>Render Video Steps</span>
+                  <span className="text-[10px] text-brand-light/60 font-normal">
+                    Render intermediary steps when denoising a video model.
+                  </span>
+                </label>
+                <Checkbox
+                  id="render-video-steps"
+                  checked={renderVideoSteps}
+                  onCheckedChange={(checked) =>
+                    setRenderVideoSteps(Boolean(checked))
+                  }
+                  className="mt-1"
+                />
+              </div>
+
+              <div className="flex items-start justify-between gap-3">
+                <label
+                  htmlFor="use-fast-download"
+                  className={fieldLabelClass + " flex-1 cursor-pointer"}
+                >
+                  <span>Fast Download</span>
+                  <span className="text-[10px] text-brand-light/60 font-normal">
+                    Enable faster model downloads (when supported by the
+                    backend).
+                  </span>
+                </label>
+                <Checkbox
+                  id="use-fast-download"
+                  checked={useFastDownload}
+                  onCheckedChange={(checked) =>
+                    setUseFastDownload(Boolean(checked))
+                  }
+                  className="mt-1"
+                />
               </div>
             </div>
           </TabsContent>
@@ -696,6 +773,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               void setCivitaiApiKeyGlobal(civitaiApiKey || null);
               void setBackendUrlGlobal(backendUrl || null);
               void setMaskModelGlobal(maskModel || null);
+              void setRenderImageStepsGlobal(renderImageSteps);
+              void setRenderVideoStepsGlobal(renderVideoSteps);
+              void setUseFastDownloadGlobal(useFastDownload);
               onOpenChange(false);
             }}
           >

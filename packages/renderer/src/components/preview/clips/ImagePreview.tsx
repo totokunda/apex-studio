@@ -70,7 +70,7 @@ const ImagePreview: React.FC<
   );
   const focusFrameFromControls = useControlsStore((s) => s.focusFrame);
   const focusFrameFromInputs = useInputControlsStore((s) =>
-    s.getFocusFrame(inputId),
+    s.getFocusFrame(inputId ?? ""),
   );
   const clipInfo = useMemo(() => {
     try {

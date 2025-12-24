@@ -38,6 +38,8 @@ const Timeline: React.FC<
   excludeClipId = null,
   isAssetSelected = () => false,
 }) => {
+
+
   const { hoveredTimelineId, getClipsForTimeline } = useClipStore();
   const hiddenRectRef = React.useRef<KonvaRect>(null);
 
@@ -56,6 +58,7 @@ const Timeline: React.FC<
     () => allClips.filter((c) => !c.hidden),
     [allClips],
   );
+
   const allClipsSignature = useMemo(() => {
     if (!allVisibleClips || allVisibleClips.length === 0) return "0:0";
     let longest = 0;
@@ -121,6 +124,9 @@ const Timeline: React.FC<
     }
   }, [hidden, muted, type]);
 
+
+
+  
   return (
     <>
       {index === 0 && (

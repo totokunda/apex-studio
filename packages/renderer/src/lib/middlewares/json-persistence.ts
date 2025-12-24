@@ -8,6 +8,8 @@ import {
   listProjects,
   getActiveProjectId,
   setActiveProjectId,
+  listManifests,
+  listManifestModelTypes,
 } from "@app/preload";
 
 import type {
@@ -29,9 +31,9 @@ import { getMediaInfo } from "../media/utils";
 import { Preprocessor } from "../preprocessor/api";
 import { ManifestDocument } from "../manifest/api";
 import { useViewportStore } from "../viewport";
-import { useManifestStore } from "../manifest/store";
-import { usePreprocessorsListStore  } from "../preprocessor/list-store";
-import { globalInputControlsStore, useInputControlsStore } from "../inputControl";
+import { globalInputControlsStore } from "../inputControl";
+import { fetchPreprocessorsList } from "../preprocessor/queries";
+import { queryClient } from "../react-query/queryClient";
 type JsonProjectSlice = {
   projects: Array<{
     id: number;
@@ -371,7 +373,6 @@ const encodeModelInputClipRefsForJson = (
       .filter((id) => id !== ""),
   );
 
-  console.log("clipIdsOnTimeline", clipIdsOnTimeline);
 
   if (clipIdsOnTimeline.size === 0) return modelInputValues;
 
@@ -1679,15 +1680,45 @@ export const withJsonProjectPersistence =
 
     // Initial load for whatever the current active project is (if any)
     try {
-      void loadActiveProjectFromJson();
-      void useManifestStore.getState().loadManifests(true);
-      void useManifestStore.getState().loadModelTypes(true);
-      void usePreprocessorsListStore.getState().load(true);
+      void (async () => {
+        // Warm React Query cache early (shared QueryClient instance).
+        await Promise.allSettled([
+          queryClient.prefetchQuery({
+            queryKey: ["manifest"],
+            queryFn: async () => {
+              const response = await listManifests();
+              if (!response.success) {
+                throw new Error(
+                  response.error ||
+                    "Backend is unavailable (failed to load manifests).",
+                );
+              }
+              return response.data ?? [];
+            },
+          }),
+          queryClient.prefetchQuery({
+            queryKey: ["modelTypes"],
+            queryFn: async () => {
+              const response = await listManifestModelTypes();
+              if (!response.success) {
+                throw new Error(
+                  response.error || "Backend is unavailable (failed to load manifest types).",
+                );
+              }
+              return response.data ?? {};
+            },
+          }),
+          queryClient.prefetchQuery({
+            queryKey: ["preprocessor", "list"],
+            queryFn: () => fetchPreprocessorsList(),
+          }),
+        ]);
+      })();
 
+      void loadActiveProjectFromJson();
     } catch (err) {
       console.error("jsonPersistence: failed initial JSON project load", err);
     }
-
     return base;
   };
 

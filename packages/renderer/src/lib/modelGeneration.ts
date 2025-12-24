@@ -7,6 +7,7 @@ import { getMediaInfoCached } from "@/lib/media/utils";
 import { exportClip, exportSequence } from "@app/export-renderer";
 import type { ManifestComponent } from "@/lib/manifest/api";
 import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
+import { getSchedulerComponentKey } from "@/lib/manifest/componentKey";
 type MediaItem = {
   type: "image" | "video" | "audio";
   src: string;
@@ -117,6 +118,22 @@ export interface GenerateContext {
   setSelectedTab: (tab: string) => void;
 }
 
+const mapOffloadToEngineInputs = (offload: Record<string, { enabled?: boolean, level?: string, num_blocks?: number, use_stream?: boolean, record_stream?: boolean }> | undefined): Record<string, any> => {
+    if (!offload) return {};
+    const mappedObject: Record<string, any> = {};
+    Object.entries(offload).forEach(([key, value]) => {
+      if (value.enabled) {
+        mappedObject[key] = {
+          group_offload_type: value.level === "leaf" ? "leaf_level" : "block_level",
+          group_offload_num_blocks_per_group: value.num_blocks,
+          group_offload_use_stream: value.use_stream,
+          group_offload_record_stream: value.record_stream,
+        }
+      }
+    });
+    return mappedObject;
+}
+
 const buildSelectedComponentDefaults = (manifest: any): Record<string, any> => {
   const defaults: Record<string, any> = {};
   if (!manifest) return defaults;
@@ -136,8 +153,12 @@ const buildSelectedComponentDefaults = (manifest: any): Record<string, any> => {
   const isItemDownloaded = (item: any): boolean =>
     !!(item && item.is_downloaded === true);
 
+  let schedulerIdx = 0;
   components.forEach((comp) => {
-    const key = String((comp as any).name || comp.type || "component");
+    const key =
+      comp.type === "scheduler"
+        ? getSchedulerComponentKey(comp, schedulerIdx++)
+        : String((comp as any).name || comp.type || "component");
     if (
       comp.type === "scheduler" &&
       Array.isArray(comp.scheduler_options) &&
@@ -768,14 +789,36 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
       selectedComponents.attention = { name: "sdpa" };
     }
 
+    // Forward optional offload config to the engine using the existing `selected_components` payload.
+    // We merge the offload fields into their respective component keys (e.g. "unet", "vae", etc.)
+    // to match the engine's expected shape.
+    const offload = (clip as ModelClipProps)?.offload;
+    const offloadEngineInputs = mapOffloadToEngineInputs(offload);
+    const selectedComponentsWithOffload: Record<string, any> = {
+      ...selectedComponents,
+    };
+    for (const [key, value] of Object.entries(offloadEngineInputs || {})) {
+      const existing = (selectedComponentsWithOffload as any)[key];
+      const existingObj =
+        existing && typeof existing === "object" ? existing : {};
+      (selectedComponentsWithOffload as any)[key] = { ...existingObj, ...value };
+    }
+
+    // Remove local filesystem paths from selected components (server fills these in).
+    const selectedComponentsForEngine: Record<string, any> = Object.fromEntries(
+      Object.entries(selectedComponentsWithOffload).map(([key, value]) => {
+        if (!value || typeof value !== "object") return [key, value];
+        const { path: _path, ...rest } = value as any;
+        return [key, rest];
+      }),
+    );
+
     const activeJobId = uuidv4();
-
-
 
     const res = await runEngine({
       manifest_id: manifestId,
       inputs: engineInputs,
-      selected_components: selectedComponents,
+      selected_components: selectedComponentsForEngine,
       job_id: activeJobId,
     });
     if (res.success) {
@@ -818,7 +861,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           assetId: undefined,
           createdAt: Date.now(),
           src: undefined,
-          selectedComponents: selectedComponents,
+          selectedComponents: selectedComponentsForEngine,
           values: getRawModelValues(clipId),
         };
         if (clipId) {

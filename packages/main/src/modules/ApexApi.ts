@@ -21,6 +21,23 @@ const MAX_UPLOAD_BYTES = Number(
   process.env.APEX_MAX_UPLOAD_BYTES || 1_073_741_824,
 ); // 1 GiB default
 
+const DEFAULT_REQUEST_TIMEOUT_MS = Number(
+  process.env.APEX_API_REQUEST_TIMEOUT_MS || 30_000,
+);
+const PROBE_TIMEOUT_MS = Number(process.env.APEX_API_PROBE_TIMEOUT_MS || 10_000);
+const STREAM_CONNECT_TIMEOUT_MS = Number(
+  process.env.APEX_API_STREAM_CONNECT_TIMEOUT_MS || 15_000,
+); 
+const UPLOAD_TIMEOUT_MS = Number(process.env.APEX_API_UPLOAD_TIMEOUT_MS || 60_000);
+const PROBE_TTL_OK_MS = Number(process.env.APEX_API_PROBE_TTL_OK_MS || 30_000);
+const PROBE_TTL_FAIL_MS = Number(process.env.APEX_API_PROBE_TTL_FAIL_MS || 5_000);
+const REMOTE_FILE_EXISTS_TIMEOUT_MS = Number(
+  process.env.APEX_API_REMOTE_FILE_EXISTS_TIMEOUT_MS || 1000,
+);
+const REMOTE_FILE_MATCH_TIMEOUT_MS = Number(
+  process.env.APEX_API_REMOTE_FILE_MATCH_TIMEOUT_MS || 1_200,
+);
+
 interface ConfigResponse<T> {
   success: boolean;
   data?: T;
@@ -42,6 +59,9 @@ export class ApexApi implements AppModule {
   private uploadCache: Map<string, string> = new Map(); // localAbsPath -> remoteAbsPath
   private remoteCachePath: string | null = null; // backend-reported cache path
   private loopbackAppearsRemote: boolean = false; // true when localhost is actually a tunnel to a remote backend
+  private probeInFlight: Promise<ConfigResponse<null>> | null = null;
+  private probeLastAt: number = 0;
+  private probeLastRes: ConfigResponse<null> | null = null;
 
   constructor(backendUrl?: string) {
     if (backendUrl) {
@@ -60,6 +80,11 @@ export class ApexApi implements AppModule {
     settings.on("backend-url-changed", (newUrl: string) => {
       this.backendUrl = newUrl;
       this.wsManager?.setBaseUrl(newUrl);
+      // Backend locality & cache roots depend on backend URL; reset derived state.
+      this.remoteCachePath = null;
+      this.loopbackAppearsRemote = false;
+      this.probeLastAt = 0;
+      this.probeLastRes = null;
       void this.#probeBackendLocality();
     });
 
@@ -122,6 +147,7 @@ export class ApexApi implements AppModule {
     // Expose a definitive remote/loopback-tunneled status computed in main
     ipcMain.handle("backend:is-remote", async () => {
       try {
+        // Cached probe: avoids spamming /config/hostname.
         await this.#probeBackendLocality();
       } catch {}
       try {
@@ -148,13 +174,8 @@ export class ApexApi implements AppModule {
         const cached = this.uploadCache.get(abs);
         return { success: true, data: { shouldUpload: !cached } };
       } catch (error) {
-        return {
-          success: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Failed to check upload necessity",
-        };
+        // Sensible default on timeout/errors: do not auto-upload.
+        return { success: true, data: { shouldUpload: false } };
       }
     });
 
@@ -166,13 +187,8 @@ export class ApexApi implements AppModule {
         const cached = this.uploadCache.get(abs);
         return { success: true, data: { isUploaded: !!cached } };
       } catch (error) {
-        return {
-          success: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Failed to check upload cache",
-        };
+        // Sensible default on timeout/errors: treat as not uploaded.
+        return { success: true, data: { isUploaded: false } };
       }
     });
   }
@@ -318,15 +334,33 @@ export class ApexApi implements AppModule {
 
         const controller = new AbortController();
         const payload = await this.#prepareMaskRequest(request);
-        const response = await fetch(`${this.backendUrl}/mask/track`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/x-ndjson",
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
+        const connectTimeoutId = setTimeout(() => {
+          try {
+            controller.abort();
+          } catch {}
+        }, Math.max(1, STREAM_CONNECT_TIMEOUT_MS));
+
+        let response: Response;
+        try {
+          response = await fetch(`${this.backendUrl}/mask/track`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/x-ndjson",
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          });
+        } catch (err) {
+          if (controller.signal.aborted) {
+            throw new Error(
+              `Mask track request timed out after ${STREAM_CONNECT_TIMEOUT_MS}ms`,
+            );
+          }
+          throw err;
+        } finally {
+          clearTimeout(connectTimeoutId);
+        }
 
         if (!response.ok || !response.body) {
           const errorData = await response
@@ -458,15 +492,33 @@ export class ApexApi implements AppModule {
 
         const controller = new AbortController();
         const payload = await this.#prepareMaskRequest(request);
-        const response = await fetch(`${this.backendUrl}/mask/track/shapes`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/x-ndjson",
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
+        const connectTimeoutId = setTimeout(() => {
+          try {
+            controller.abort();
+          } catch {}
+        }, Math.max(1, STREAM_CONNECT_TIMEOUT_MS));
+
+        let response: Response;
+        try {
+          response = await fetch(`${this.backendUrl}/mask/track/shapes`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/x-ndjson",
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          });
+        } catch (err) {
+          if (controller.signal.aborted) {
+            throw new Error(
+              `Mask track(shapes) request timed out after ${STREAM_CONNECT_TIMEOUT_MS}ms`,
+            );
+          }
+          throw err;
+        } finally {
+          clearTimeout(connectTimeoutId);
+        }
 
         if (!response.ok || !response.body) {
           const errorData = await response
@@ -815,6 +867,7 @@ export class ApexApi implements AppModule {
       "manifest:get-part",
       async (_event, manifestId: string, pathDot?: string) => {
         const qp = pathDot ? `?path=${encodeURIComponent(pathDot)}` : "";
+        console.log("getManifestPart", manifestId, pathDot);
         return this.makeRequest<any>(
           "GET",
           `/manifest/${encodeURIComponent(manifestId)}/part${qp}`,
@@ -1268,25 +1321,95 @@ export class ApexApi implements AppModule {
     });
   }
 
+
+  async #fetchWithTimeout(
+    url: string,
+    init: RequestInit = {},
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      console.log("Failed to fetch with timeout", err, url, timeoutMs);
+      throw err;
+    } finally {
+      clearTimeout(id);
+    }
+  }
+
+  async #remoteApexCacheFileExists(relPath: string): Promise<boolean> {
+    try {
+      if (!this.#isRemoteBackend()) return false;
+      const url = `${this.backendUrl}/files?scope=apex-cache&path=${encodeURIComponent(relPath)}`;
+      // Prefer a tiny range request to avoid downloading large files.
+      const resp = await this.#fetchWithTimeout(
+        url,
+        {
+          method: "GET",
+          headers: { Range: "bytes=0-0" },
+        },
+        REMOTE_FILE_EXISTS_TIMEOUT_MS,
+      );
+      return resp.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async #matchRemoteFile(params: {
+    scope: string;
+    path: string;
+    sha256: string;
+    size?: number;
+  }): Promise<{ exists: boolean; matches: boolean; sha256?: string; size?: number }> {
+    const qp = new URLSearchParams();
+    qp.set("scope", params.scope);
+    qp.set("path", params.path);
+    qp.set("sha256", params.sha256);
+    if (typeof params.size === "number" && Number.isFinite(params.size)) {
+      qp.set("size", String(params.size));
+    }
+
+    const url = `${this.backendUrl}/files/match?${qp.toString()}`;
+    const resp = await this.#fetchWithTimeout(
+      url,
+      { method: "GET", headers: { "Content-Type": "application/json" } },
+      REMOTE_FILE_MATCH_TIMEOUT_MS,
+    );
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => "");
+      throw new Error(
+        `Remote match failed (HTTP ${resp.status}: ${t || resp.statusText})`,
+      );
+    }
+    const j = (await resp.json().catch(() => ({}))) as any;
+    return {
+      exists: !!j?.exists,
+      matches: !!j?.matches,
+      sha256: typeof j?.sha256 === "string" ? j.sha256 : undefined,
+      size: typeof j?.size === "number" ? j.size : undefined,
+    };
+  }
+
+  async #sha256File(absPath: string): Promise<string> {
+    return await new Promise<string>((resolve, reject) => {
+      const hash = crypto.createHash("sha256");
+      const stream = fs.createReadStream(absPath);
+      stream.on("error", reject);
+      stream.on("data", (chunk) => hash.update(chunk));
+      stream.on("end", () => resolve(hash.digest("hex")));
+    });
+  }
+
   private async makeRequest<T>(
     method: "GET" | "POST" | "DELETE",
     endpoint: string,
     body?: any,
   ): Promise<ConfigResponse<T>> {
     try {
-      // Probe the backend hostname before sending any API request. This both
-      // verifies that the backend is reachable and updates our remote/local
-      // detection state.
-      const probe = await this.#probeBackendLocality();
-      if (!probe.success) {
-        return {
-          success: false,
-          error:
-            probe.error ||
-            "Cannot complete the request because the backend API is unavailable.",
-        };
-      }
-
       const options: RequestInit = {
         method,
         headers: {
@@ -1298,9 +1421,16 @@ export class ApexApi implements AppModule {
         options.body = JSON.stringify(body);
       }
 
-      const response = await fetch(`${this.backendUrl}${endpoint}`, options);
+      const response = await this.#fetchWithTimeout(
+        `${this.backendUrl}${endpoint}`,
+        options,
+        DEFAULT_REQUEST_TIMEOUT_MS,
+      );
+
+      
 
       if (!response.ok) {
+        console.log("Failed to make request", response.statusText, endpoint);
         const errorData = await response
           .json()
           .catch(() => ({ detail: "Unknown error" }));
@@ -1318,6 +1448,8 @@ export class ApexApi implements AppModule {
         data: data as T,
       };
     } catch (error) {
+      // Best-effort background locality refresh on failures; do not block API calls.
+      void this.#probeBackendLocality().catch(() => {});
       return {
         success: false,
         error:
@@ -1327,62 +1459,87 @@ export class ApexApi implements AppModule {
   }
 
   // ===== Helpers for remote file handling =====
-  async #probeBackendLocality(): Promise<ConfigResponse<null>> {
-    try {
-      const u = new URL(this.backendUrl);
-      const host = (u.hostname || "").toLowerCase();
+  async #probeBackendLocality(opts?: { force?: boolean }): Promise<ConfigResponse<null>> {
+    const now = Date.now();
 
-      const resp = await fetch(`${this.backendUrl}/config/hostname`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
+    // Serve cached result if still fresh
+    if (!opts?.force && this.probeLastRes) {
+      const ttl = this.probeLastRes.success ? PROBE_TTL_OK_MS : PROBE_TTL_FAIL_MS;
+      if (now - this.probeLastAt < ttl) return this.probeLastRes;
+    }
 
-      if (!resp.ok) {
-        let detail = "";
-        try {
-          const data = await resp.json();
-          if (data && typeof (data as any).detail === "string") {
-            detail = ` ${(data as any).detail}`;
+    // De-dupe concurrent callers
+    if (!opts?.force && this.probeInFlight) return this.probeInFlight;
+
+    const run = (async (): Promise<ConfigResponse<null>> => {
+      try {
+        const u = new URL(this.backendUrl);
+        const host = (u.hostname || "").toLowerCase();
+
+        const resp = await this.#fetchWithTimeout(
+          `${this.backendUrl}/config/hostname`,
+          {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+          },
+          PROBE_TIMEOUT_MS,
+        );
+
+        if (!resp.ok) {
+          let detail = "";
+          try {
+            const data = await resp.json();
+            if (data && typeof (data as any).detail === "string") {
+              detail = ` ${(data as any).detail}`;
+            }
+          } catch {
+            // ignore JSON parse errors from hostname endpoint
           }
-        } catch {
-          // ignore JSON parse errors from hostname endpoint
+
+          return {
+            success: false,
+            error:
+              `Cannot complete the request: backend hostname probe failed (HTTP ${resp.status}: ${resp.statusText}).` +
+              detail,
+          };
+        }
+
+        const data = (await resp.json().catch(() => ({}))) as any;
+        const remoteHostname =
+          typeof data?.hostname === "string" ? data.hostname : "";
+        const localHostname = os.hostname();
+
+        if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+          // For loopback, treat it as remote if the reported hostname differs
+          this.loopbackAppearsRemote =
+            !!remoteHostname && remoteHostname !== localHostname;
+        } else {
+          // Non-loopback hosts are definitely remote
+          this.loopbackAppearsRemote = true;
         }
 
         return {
+          success: true,
+          data: null,
+        };
+      } catch (error) {
+        return {
           success: false,
           error:
-            `Cannot complete the request: backend hostname probe failed (HTTP ${resp.status}: ${resp.statusText}).` +
-            detail,
+            error instanceof Error
+              ? `Cannot complete the request because the backend API is unreachable: ${error.message}`
+              : "Cannot complete the request because the backend API is unreachable.",
         };
       }
+    })();
 
-      const data = (await resp.json().catch(() => ({}))) as any;
-      const remoteHostname =
-        typeof data?.hostname === "string" ? data.hostname : "";
-      const localHostname = os.hostname();
-
-      if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
-        // For loopback, treat it as remote if the reported hostname differs
-        this.loopbackAppearsRemote =
-          !!remoteHostname && remoteHostname !== localHostname;
-      } else {
-        // Non-loopback hosts are definitely remote
-        this.loopbackAppearsRemote = true;
-      }
-
-      return {
-        success: true,
-        data: null,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? `Cannot complete the request because the backend API is unreachable: ${error.message}`
-            : "Cannot complete the request because the backend API is unreachable.",
-      };
-    }
+    this.probeInFlight = run;
+    const res = await run.finally(() => {
+      this.probeInFlight = null;
+    });
+    this.probeLastAt = Date.now();
+    this.probeLastRes = res;
+    return res;
   }
 
   #isRemoteBackend(): boolean {
@@ -1477,7 +1634,6 @@ export class ApexApi implements AppModule {
     if (!remoteCacheBase) throw new Error("Remote cache path unavailable");
 
     const fileName = path.basename(abs);
-    const destRel = `uploads/${crypto.randomUUID()}-${fileName}`;
 
     const { size } = await fs.promises.stat(abs);
 
@@ -1488,7 +1644,52 @@ export class ApexApi implements AppModule {
         `File is too large to upload automatically (${fileGiB} GiB > ${limitGiB} GiB). Place the file on the backend or raise APEX_MAX_UPLOAD_BYTES.`,
       );
     }
-    
+
+    // Use a deterministic destination so we can cheaply skip uploads when the
+    // backend already has the same content.
+    // - Path is inside the apex-cache scope (server-side).
+    // - Name is content-addressed to dedupe across repeated uploads.
+    let destRel = `uploads/${crypto.randomUUID()}-${fileName}`;
+    let sha: string | null = null;
+    try {
+      sha = await this.#sha256File(abs);
+      const ext = path.extname(fileName || "");
+      destRel = `uploads/by-hash/${sha}${ext}`;
+    } catch {
+      // If hashing fails, fall back to randomized dest.
+    }
+
+    // If the backend already has this exact dest path, skip uploading.
+    try {
+      if (sha) {
+        const match = await this.#matchRemoteFile({
+          scope: "apex-cache",
+          path: destRel,
+          sha256: sha,
+          size,
+        });
+        if (match.exists && match.matches) {
+          const remoteAbs = this.#joinRemote(remoteCacheBase, destRel);
+          this.uploadCache.set(abs, remoteAbs);
+          return remoteAbs;
+        }
+        // If the deterministic path is occupied by different content, avoid
+        // overwriting and choose an alternate unique destination.
+        if (match.exists && !match.matches) {
+          const ext = path.extname(fileName || "");
+          destRel = `uploads/by-hash/${sha}-${crypto.randomUUID()}${ext}`;
+        }
+      } else {
+        const exists = await this.#remoteApexCacheFileExists(destRel);
+        if (exists) {
+          const remoteAbs = this.#joinRemote(remoteCacheBase, destRel);
+          this.uploadCache.set(abs, remoteAbs);
+          return remoteAbs;
+        }
+      }
+    } catch {
+      // Ignore preflight probe errors and proceed with upload.
+    }
 
     // Use query params for scope/dest to avoid multipart field name disagreements
     const url = `${this.backendUrl}/files/ingest?scope=apex-cache&dest=${encodeURIComponent(destRel)}`;
@@ -1496,15 +1697,35 @@ export class ApexApi implements AppModule {
     form.set("file", await fileFromPath(abs, fileName));
     const encoder = new FormDataEncoder(form);
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: encoder.headers as any,
-      body: Readable.from(encoder) as any,
-      // Required by Node's fetch for streaming request bodies
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      duplex: "half",
-    });
+    const uploadController = new AbortController();
+    let uploadTimedOut = false;
+    const uploadTimeoutId = setTimeout(() => {
+      uploadTimedOut = true;
+      try {
+        uploadController.abort();
+      } catch {}
+    }, Math.max(1, UPLOAD_TIMEOUT_MS));
+
+    let resp: Response;
+    try {
+      resp = await fetch(url, {
+        method: "POST",
+        headers: encoder.headers as any,
+        body: Readable.from(encoder) as any,
+        signal: uploadController.signal,
+        // Required by Node's fetch for streaming request bodies
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        duplex: "half",
+      });
+    } catch (err) {
+      if (uploadTimedOut) {
+        throw new Error(`Upload timed out after ${UPLOAD_TIMEOUT_MS}ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(uploadTimeoutId);
+    }
     if (!resp.ok) {
       const t = await resp.text().catch(() => "");
       throw new Error(
@@ -1695,7 +1916,11 @@ export class ApexApi implements AppModule {
       // If this looks like an HTTP URL, do a lightweight HEAD probe.
       if (this.#looksLikeHttp(pathOrUrl)) {
         try {
-          const resp = await fetch(pathOrUrl, { method: "HEAD" });
+          const resp = await this.#fetchWithTimeout(
+            pathOrUrl,
+            { method: "HEAD" },
+            PROBE_TIMEOUT_MS,
+          );
           return { exists: resp.ok };
         } catch {
           return { exists: false };

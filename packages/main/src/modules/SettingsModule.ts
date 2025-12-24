@@ -28,6 +28,9 @@ interface Settings {
   hfToken?: string | null;
   civitaiApiKey?: string | null;
   maskModel?: string | null;
+  renderImageSteps?: boolean;
+  renderVideoSteps?: boolean;
+  useFastDownload?: boolean;
 }
 
 interface ConfigResponse<T> {
@@ -265,6 +268,20 @@ export class SettingsModule extends EventEmitter implements AppModule {
     });
   }
 
+  private setBooleanSettingAndUpdateApi(
+    key: keyof Settings,
+    enabled: boolean,
+    endpoint: string,
+    requestField: string,
+  ): void {
+    const v = Boolean(enabled);
+    this.store.set(key, v);
+    // Fire and forget; caller does not depend on result
+    void this.makeConfigRequest<any>("POST", endpoint, {
+      [requestField]: v,
+    });
+  }
+
   private async getAllPathsEnsuringFromApi(): Promise<PathsPayload> {
     const keys: PathKey[] = [
       "cachePath",
@@ -464,6 +481,61 @@ export class SettingsModule extends EventEmitter implements AppModule {
       "settings:set-civitai-api-key",
       async (_event, token: string | null) => {
         await this.setCivitaiApiKeyAndUpdateApi(token);
+        return { success: true };
+      },
+    );
+
+    // Render intermediary steps toggles
+    ipcMain.handle("settings:get-render-image-steps", () => {
+      return Boolean(this.store.get("renderImageSteps"));
+    });
+
+    ipcMain.handle(
+      "settings:set-render-image-steps",
+      (_event, enabled: boolean) => {
+        this.setBooleanSettingAndUpdateApi(
+          "renderImageSteps",
+          enabled,
+          "/config/enable-image-render-steps",
+          "enabled",
+        );
+        return { success: true };
+      },
+    );
+
+    ipcMain.handle("settings:get-render-video-steps", () => {
+      return Boolean(this.store.get("renderVideoSteps"));
+    });
+
+    ipcMain.handle(
+      "settings:set-render-video-steps",
+      (_event, enabled: boolean) => {
+        this.setBooleanSettingAndUpdateApi(
+          "renderVideoSteps",
+          enabled,
+          "/config/enable-video-render-steps",
+          "enabled",
+        );
+        return { success: true };
+      },
+    );
+
+    // Fast download toggle
+    ipcMain.handle("settings:get-use-fast-download", () => {
+      const current = this.store.get("useFastDownload");
+      // Default to true when unset to match renderer's default.
+      return current === undefined ? true : Boolean(current);
+    });
+
+    ipcMain.handle(
+      "settings:set-use-fast-download",
+      (_event, enabled: boolean) => {
+        this.setBooleanSettingAndUpdateApi(
+          "useFastDownload",
+          enabled,
+          "/config/enable-fast-download",
+          "enabled",
+        );
         return { success: true };
       },
     );

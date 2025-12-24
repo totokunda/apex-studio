@@ -75,3 +75,6 @@ export * from "./rayJobs.ts";
 
 // Settings helpers
 export * from "./settings.ts";
+
+// Export result caching (persistent, electron-store)
+export * from "./exportCache.ts";

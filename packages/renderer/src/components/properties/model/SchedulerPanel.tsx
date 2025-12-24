@@ -3,6 +3,8 @@ import { useClipStore } from "@/lib/clip";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronUp, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { ManifestComponent } from "@/lib/manifest/api";
+import { getSchedulerComponentKey } from "@/lib/manifest/componentKey";
 import {
   Popover,
   PopoverContent,
@@ -19,40 +21,41 @@ import {
 
 interface SchedulerPanelProps {
   clipId: string;
+  component: ManifestComponent;
+  schedulerIndex: number;
 }
 
-const SchedulerPanel: React.FC<SchedulerPanelProps> = ({ clipId }) => {
+const SchedulerPanel: React.FC<SchedulerPanelProps> = ({
+  clipId,
+  component,
+  schedulerIndex,
+}) => {
   const getClipById = useClipStore((s) => s.getClipById);
   const updateClip = useClipStore((s) => s.updateClip);
   const clip: any = getClipById(clipId);
 
+  const componentKey = useMemo(() => {
+    return getSchedulerComponentKey(component, schedulerIndex);
+  }, [component, schedulerIndex]);
+
   const options = useMemo(() => {
-    const comps = clip?.manifest?.spec?.components || [];
-    const all = comps
-      .filter((c: any) => String(c?.type) === "scheduler")
-      .flatMap((c: any) =>
-        Array.isArray(c?.scheduler_options) ? c.scheduler_options : [],
-      );
-    const seen = new Set<string>();
-    const unique = all.filter((opt: any) => {
-      const key = String(opt?.name || "");
-      if (!key) return false;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    return unique as Array<{
+    const all = Array.isArray((component as any)?.scheduler_options)
+      ? ((component as any).scheduler_options as any[])
+      : [];
+    // Keep options stable but drop entries without a name.
+    return all.filter((opt) => String(opt?.name || "").trim().length > 0) as Array<{
       name: string;
       label?: string;
       description?: string;
       base?: string;
       config_path?: string;
     }>;
-  }, [clip]);
+  }, [component]);
 
   const selectedName: string | undefined = useMemo(() => {
-    return String(clip?.selectedComponents?.scheduler?.name ?? "") || undefined;
-  }, [clip?.selectedComponents]);
+    const fromKey = clip?.selectedComponents?.[componentKey]?.name;
+    return String(fromKey ?? "") || undefined;
+  }, [clip?.selectedComponents, componentKey]);
 
   // Ensure a default selection
   useEffect(() => {
@@ -68,11 +71,11 @@ const SchedulerPanel: React.FC<SchedulerPanelProps> = ({ clipId }) => {
       };
       const nextSelected = {
         ...(clip.selectedComponents || {}),
-        scheduler: next,
+        [componentKey]: next,
       };
       updateClip(clipId, { selectedComponents: nextSelected } as any);
     }
-  }, [clip, clipId, options, selectedName, updateClip]);
+  }, [clip, clipId, options, selectedName, updateClip, componentKey]);
 
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -84,6 +87,10 @@ const SchedulerPanel: React.FC<SchedulerPanelProps> = ({ clipId }) => {
 
   return (
     <div className="w-full min-w-0">
+      <div className="text-[10px] text-brand-light/70 mb-1.5 px-0.5 text-start">
+        {String((component as any)?.label || (component as any)?.name || "").trim() ||
+          (schedulerIndex > 0 ? `Scheduler ${schedulerIndex + 1}` : "Scheduler")}
+      </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
@@ -96,7 +103,7 @@ const SchedulerPanel: React.FC<SchedulerPanelProps> = ({ clipId }) => {
             )}
             onClick={() => setOpen(true)}
           >
-            <div className="flex flex-col text-left min-w-0 w-0 flex-1 gap-y-0.5 overflow-hidden">
+            <div className="flex flex-col min-w-0 w-0 flex-1 gap-y-0.5 overflow-hidden text-start">
               <span className="block truncate font-medium">
                 {selectedOption?.label ||
                   selectedOption?.name ||
@@ -148,7 +155,7 @@ const SchedulerPanel: React.FC<SchedulerPanelProps> = ({ clipId }) => {
                           : { name: val };
                         const nextSelected = {
                           ...(clip?.selectedComponents || {}),
-                          scheduler: next,
+                          [componentKey]: next,
                         };
                         updateClip(clipId, {
                           selectedComponents: nextSelected,

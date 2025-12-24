@@ -382,6 +382,7 @@ export class ShapeMask extends WebGLMaskBase {
       return sourceCanvas;
     }
 
+
     // Check if context is lost
     if (this.gl.isContextLost()) {
       console.error("WebGL context is lost!");

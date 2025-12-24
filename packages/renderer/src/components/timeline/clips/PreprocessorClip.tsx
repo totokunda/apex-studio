@@ -359,13 +359,15 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
         return newTimelineId;
       };
 
-      let mi = mediaInfo ?? (getMediaInfoCached(asset.path) as any);
+      let mi = mediaInfo ?? (getMediaInfoCached(asset.path));
       if (!mi) {
         mi = await getMediaInfo(asset.path, { sourceDir: "apex-cache" });
       }
       const isVideo = !!mi?.video;
 
       const timelineId = chooseTimelineAbove("media", absStart, absEnd);
+      const width = isVideo ? mi?.video?.displayWidth : mi?.image?.width;
+      const height = isVideo ? mi?.video?.displayHeight : mi?.image?.height;
       const newClipId = uuidv4();
       const base = {
         clipId: newClipId,
@@ -374,10 +376,14 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
         endFrame: absEnd,
         trimStart: 0,
         trimEnd: 0,
+        mediaWidth: width,
+        mediaHeight: height,
         assetId: resultAssetId,
         assetIdHistory: [resultAssetId],
         preprocessors: [] as PreprocessorClipProps[],
         masks: [] as MaskClipProps[],
+        transform: clip?.transform ?? undefined,
+        originalTransform: clip?.originalTransform ?? undefined,
       };
 
       const newClip: VideoClipProps | ImageClipProps = isVideo
@@ -445,6 +451,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
             const mediaInfo = await getMediaInfo(fileUrl, {
               sourceDir: "apex-cache",
             });
+
             mediaInfoRef.current = mediaInfo;
             const asset = addAsset({ path: fileUrl });
             if (preprocessor.createNewClip !== false) {
@@ -1576,6 +1583,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
 
   if (preprocessor.status !== "complete" && assetMode) return null;
 
+  
   return (
     <>
       <Group

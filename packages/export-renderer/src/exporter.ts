@@ -10,7 +10,14 @@ import { KonvaExportRenderer } from "./export";
 import { Rect } from "konva/lib/shapes/Rect";
 import { getVideoFrameIterator } from "../../../packages/renderer/src/lib/media/video";
 import { getMediaInfo, getMediaInfoCached } from "../../renderer/src/lib/media/utils";
-import { renderAudioMixWithFfmpeg, deleteFile } from "@app/preload";
+import {
+  renderAudioMixWithFfmpeg,
+  deleteFile,
+  sha256sum,
+  exportCacheGet,
+  exportCachePut,
+  exportCacheMaterialize,
+} from "@app/preload";
 import type { WrappedCanvas } from "mediabunny";
 import {
   acquireHaldClut,
@@ -264,6 +271,45 @@ export interface ExportAudioClip extends ExportClipBase {
   trimEnd?: number;
 }
 
+const EXPORT_CACHE_VERSION = 1;
+
+const getExtFromFilename = (p?: string | null): string | null => {
+  if (!p) return null;
+  const base = String(p).split(/[\\/]/).pop() || "";
+  const idx = base.lastIndexOf(".");
+  if (idx <= 0 || idx >= base.length - 1) return null;
+  return base.slice(idx + 1).toLowerCase();
+};
+
+const stableStringify = (value: any): string => {
+  const seen = new WeakSet<object>();
+  const walk = (v: any): any => {
+    if (v === null) return null;
+    const t = typeof v;
+    if (t === "string" || t === "number" || t === "boolean") return v;
+    if (t === "bigint") return v.toString();
+    if (t === "undefined") return undefined;
+    if (t === "function") return undefined;
+    if (t !== "object") return String(v);
+    if (v instanceof Date) return v.toISOString();
+    if (Array.isArray(v)) return v.map(walk);
+    if (seen.has(v)) return "[Circular]";
+    seen.add(v);
+    const out: Record<string, any> = {};
+    const keys = Object.keys(v).sort();
+    for (const k of keys) {
+      const next = walk(v[k]);
+      if (typeof next !== "undefined") out[k] = next;
+    }
+    return out;
+  };
+  return JSON.stringify(walk(value));
+};
+
+const buildExportRequestHash = (payload: any): string => {
+  return sha256sum(stableStringify({ v: EXPORT_CACHE_VERSION, ...payload }));
+};
+
 
 const getAudioSrc = async (src:string): Promise<URL | null> => {
   if (!src) return null;
@@ -366,6 +412,15 @@ export async function exportSequence(
     }
   };
 
+  // Compute export time range early (used both for cache key and for progress when cache hits).
+  const globalStart =
+    range?.start ?? Math.min(...clips.map((c) => c.startFrame ?? 0), 0);
+  const globalEnd =
+    range?.end ?? Math.max(...clips.map((c) => c.endFrame ?? 0), 0);
+  const startFrame = Math.max(0, globalStart);
+  const endFrame = Math.max(startFrame + 1, globalEnd);
+  const totalFrames = Math.max(1, endFrame - startFrame);
+
   // Resolve output dimensions
   const inferredWidth = opts.width
     ? Math.max(opts.width, 0)
@@ -387,21 +442,59 @@ export async function exportSequence(
   const w = Math.max(1, inferredWidth || 1920);
   const h = Math.max(1, inferredHeight || 1080);
 
+  // Persistent export cache: for audio/video exports with an explicit output filename,
+  // short-circuit if we've already exported the exact same content/options before.
+  const canUsePersistentCache =
+    (mode === "video" || mode === "audio") &&
+    typeof filename === "string" &&
+    filename.length > 0;
+
+  const inferredExt =
+    mode === "video"
+      ? String((encoderOptions as any)?.format || getExtFromFilename(filename) || "mp4")
+      : mode === "audio"
+        ? String(audioOptions?.format || getExtFromFilename(filename) || "mp3")
+        : null;
+
+  const exportHash = canUsePersistentCache
+    ? buildExportRequestHash({
+        fn: "exportSequence",
+        mode,
+        fps,
+        includeAudio,
+        range: { start: startFrame, end: endFrame },
+        imageFrame,
+        width: w,
+        height: h,
+        backgroundColor: opts.backgroundColor,
+        encoderOptions: encoderOptions ?? null,
+        audioOptions: audioOptions ?? null,
+        clips,
+      })
+    : null;
+
+  if (canUsePersistentCache && exportHash) {
+    checkCancelled();
+    const cachedPath = await exportCacheGet(exportHash);
+    if (cachedPath) {
+      // Ensure the requested output is present at the caller-specified path.
+      const out = await exportCacheMaterialize(exportHash, filename as string);
+      if (out) {
+        if (onProgress) {
+          onProgress({ currentFrame: totalFrames, totalFrames, ratio: 1 });
+        }
+        try {
+          opts.onDone?.();
+        } catch {}
+        return out;
+      }
+    }
+  }
+
   const renderer = new KonvaExportRenderer({
     width: w,
     height: h,
   });
-
-  // precompute duration if not provided
-  let startFrame = 0;
-  let endFrame = 0;
-  const globalStart =
-    range?.start ?? Math.min(...clips.map((c) => c.startFrame ?? 0), 0);
-  const globalEnd =
-    range?.end ?? Math.max(...clips.map((c) => c.endFrame ?? 0), 0);
-  startFrame = Math.max(0, globalStart);
-  endFrame = Math.max(startFrame + 1, globalEnd);
-  const totalFrames = Math.max(1, endFrame - startFrame);
 
   // Prepare applicators per clip using shared hald clut (only if needed by filters)
   const hald = acquireHaldClut();
@@ -755,6 +848,11 @@ export async function exportSequence(
       if (onProgress) {
         onProgress({ currentFrame: totalFrames, totalFrames, ratio: 1 });
       }
+      if (canUsePersistentCache && exportHash && outPath) {
+        try {
+          await exportCachePut(exportHash, outPath, { ext: inferredExt || undefined });
+        } catch {}
+      }
       if (!cancelToken?.cancelled) {
         try {
           opts.onDone?.();
@@ -856,6 +954,11 @@ export async function exportSequence(
     }
 
     const result = await encoder.finalize();
+    if (canUsePersistentCache && exportHash && typeof result === "string" && result) {
+      try {
+        await exportCachePut(exportHash, result, { ext: inferredExt || undefined });
+      } catch {}
+    }
     if (!cancelToken?.cancelled) {
       try {
         opts.onDone?.();
@@ -951,6 +1054,17 @@ export async function exportClip(
   const w = Math.max(1, (inferredWidth || 1920) * cropWidthRatio);
   const h = Math.max(1, (inferredHeight || 1080) * cropHeightRatio);
 
+  const canUsePersistentCache =
+    (mode === "video" || mode === "audio") &&
+    typeof filename === "string" &&
+    filename.length > 0;
+  const inferredExt =
+    mode === "video"
+      ? String((encoderOptions as any)?.format || getExtFromFilename(filename) || "mp4")
+      : mode === "audio"
+        ? String(audioOptions?.format || getExtFromFilename(filename) || "mp3")
+        : null;
+
 
   const renderer = new KonvaExportRenderer({
     width: w,
@@ -967,6 +1081,40 @@ export async function exportClip(
   const startFrame = range?.start ?? 0;
   const endFrame = range?.end ?? localDuration;
   const totalFrames = Math.max(1, Math.max(0, endFrame - startFrame));
+
+  const exportHash = canUsePersistentCache
+    ? buildExportRequestHash({
+        fn: "exportClip",
+        mode,
+        fps,
+        includeAudio,
+        range: { start: startFrame, end: endFrame },
+        imageFrame,
+        width: w,
+        height: h,
+        backgroundColor: opts.backgroundColor,
+        encoderOptions: encoderOptions ?? null,
+        audioOptions: audioOptions ?? null,
+        clip: workingClip,
+      })
+    : null;
+
+  if (canUsePersistentCache && exportHash) {
+    checkCancelled();
+    const cachedPath = await exportCacheGet(exportHash);
+    if (cachedPath) {
+      const out = await exportCacheMaterialize(exportHash, filename as string);
+      if (out) {
+        if (onProgress) {
+          onProgress({ currentFrame: totalFrames, totalFrames, ratio: 1 });
+        }
+        try {
+          opts.onDone?.();
+        } catch {}
+        return out;
+      }
+    }
+  }
 
   // Prepare applicators using shared hald clut
   const hald = acquireHaldClut();
@@ -1040,6 +1188,7 @@ export async function exportClip(
         const s = Number((workingClip as any)?.speed ?? 1);
         return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
       })();
+
       const { srcStartFrame } = getSrcFrameWindow(selectedSrc);
       const trimStartFrames = Math.max(
         0,
@@ -1271,6 +1420,11 @@ export async function exportClip(
       if (onProgress) {
         onProgress({ currentFrame: totalFrames, totalFrames, ratio: 1 });
       }
+      if (canUsePersistentCache && exportHash && outPath) {
+        try {
+          await exportCachePut(exportHash, outPath, { ext: inferredExt || undefined });
+        } catch {}
+      }
       if (!cancelToken?.cancelled) {
         try {
           opts.onDone?.();
@@ -1353,6 +1507,11 @@ export async function exportClip(
     }
 
     const result = await encoder.finalize();
+    if (canUsePersistentCache && exportHash && typeof result === "string" && result) {
+      try {
+        await exportCachePut(exportHash, result, { ext: inferredExt || undefined });
+      } catch {}
+    }
     if (!cancelToken?.cancelled) {
       try {
         opts.onDone?.();

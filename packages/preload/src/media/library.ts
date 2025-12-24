@@ -35,8 +35,108 @@ export type ConvertedMediaItem = {
   hasProxy?: boolean;
 };
 
+export type ListGeneratedMediaPageParams = {
+  folderUuid?: string;
+  cursor?: string | null;
+  limit?: number;
+};
+
+export type ListGeneratedMediaPageResult = {
+  items: ConvertedMediaItem[];
+  nextCursor: string | null;
+};
+
 function isSupportedExt(ext: string): boolean {
   return VIDEO_EXTS.has(ext) || IMAGE_EXTS.has(ext) || AUDIO_EXTS.has(ext);
+}
+
+type GeneratedMediaCursor = {
+  dateAddedMs: number;
+  absPath: string;
+};
+
+function encodeGeneratedMediaCursor(cursor: GeneratedMediaCursor): string {
+  try {
+    return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+  } catch {
+    // Best-effort fallback
+    return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64");
+  }
+}
+
+function decodeGeneratedMediaCursor(encoded: string): GeneratedMediaCursor | null {
+  try {
+    const json = Buffer.from(encoded, "base64url").toString("utf8");
+    const parsed = JSON.parse(json);
+    if (
+      parsed &&
+      typeof parsed.dateAddedMs === "number" &&
+      Number.isFinite(parsed.dateAddedMs) &&
+      typeof parsed.absPath === "string" &&
+      parsed.absPath.length > 0
+    ) {
+      return { dateAddedMs: parsed.dateAddedMs, absPath: parsed.absPath };
+    }
+    return null;
+  } catch {
+    try {
+      const json = Buffer.from(encoded, "base64").toString("utf8");
+      const parsed = JSON.parse(json);
+      if (
+        parsed &&
+        typeof parsed.dateAddedMs === "number" &&
+        Number.isFinite(parsed.dateAddedMs) &&
+        typeof parsed.absPath === "string" &&
+        parsed.absPath.length > 0
+      ) {
+        return { dateAddedMs: parsed.dateAddedMs, absPath: parsed.absPath };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function compareGeneratedDesc(
+  a: Pick<ConvertedMediaItem, "dateAddedMs" | "absPath">,
+  b: Pick<ConvertedMediaItem, "dateAddedMs" | "absPath">,
+): number {
+  if (a.dateAddedMs !== b.dateAddedMs) return b.dateAddedMs - a.dateAddedMs;
+  return b.absPath.localeCompare(a.absPath);
+}
+
+function isAfterCursor(
+  item: Pick<ConvertedMediaItem, "dateAddedMs" | "absPath">,
+  cursor: GeneratedMediaCursor | null,
+): boolean {
+  if (!cursor) return true;
+  // We paginate in descending order; "after cursor" means strictly older.
+  return compareGeneratedDesc(item, cursor) > 0;
+}
+
+async function removeIfBrokenSymlink(absPath: string): Promise<boolean> {
+  try {
+    const st = await fsp.lstat(absPath);
+    if (!st.isSymbolicLink()) return false;
+
+    try {
+      // Follow the link; if target is missing, stat() throws ENOENT.
+      await fsp.stat(absPath);
+      return false;
+    } catch (e: any) {
+      const code = e?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return false;
+      try {
+        await fsp.unlink(absPath);
+      } catch {
+        await fsp.rm(absPath, { force: true });
+      }
+      return true;
+    }
+  } catch {
+    return false;
+  }
 }
 
 async function loadProxyIndex(): Promise<ProxyIndex> {
@@ -134,6 +234,7 @@ async function listConvertedMedia(
   }
 
   const proxyIndex = await loadProxyIndex();
+  let proxyIndexDirty = false;
 
   let entries: import("node:fs").Dirent[] = [];
   try {
@@ -151,6 +252,23 @@ async function listConvertedMedia(
     if (!isSupportedExt(ext)) continue;
 
     const originalAbsPath = join(symlinksAbs, name);
+
+    // If the media item is a symlink and its target has been deleted, remove
+    // the broken symlink from disk (and any proxy mapping) and skip it.
+    if (await removeIfBrokenSymlink(originalAbsPath)) {
+      if (proxyIndex[name]) {
+        const proxyPath = join(proxyAbs, proxyIndex[name]);
+        try {
+          await fsp.rm(proxyPath, { force: true });
+        } catch {
+          // ignore
+        }
+        delete proxyIndex[name];
+        proxyIndexDirty = true;
+      }
+      continue;
+    }
+
     let absPath = originalAbsPath;
     let hasProxy = false;
 
@@ -164,11 +282,12 @@ async function listConvertedMedia(
 
     let dateAddedMs = Date.now();
     try {
-      const st = await fsp.lstat(join(symlinksAbs, name));
+      const st = await fsp.lstat(originalAbsPath);
       dateAddedMs =
         st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateAddedMs;
     } catch {
-      // ignore
+      // If we can't stat it (race / deleted), don't return it.
+      continue;
     }
 
     const originalAssetUrl = pathToFileURL(originalAbsPath).href;
@@ -192,6 +311,14 @@ async function listConvertedMedia(
     });
   }
 
+  if (proxyIndexDirty) {
+    try {
+      await saveProxyIndex(proxyIndex);
+    } catch {
+      // ignore
+    }
+  }
+
   items.sort((a, b) =>
     a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
   );
@@ -202,56 +329,101 @@ async function listGeneratedMedia(
   folderUuid?: string,
 ): Promise<ConvertedMediaItem[]> {
   try {
-    // Prefer the cache path from the backend when available, but gracefully
-    // fall back to the local default so generations still show up when the
-    // API server is offline or unreachable.
-    let cachePath: string | null = null;
-    try {
-      const cacheRes = await getCachePath();
-      if (cacheRes?.success && cacheRes.data?.cache_path) {
-        cachePath = cacheRes.data.cache_path;
-      }
-    } catch {
-      // Swallow IPC/backend errors; we'll compute a local fallback below.
+    // Back-compat helper: load all pages (used by older codepaths/tests).
+    const all: ConvertedMediaItem[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 10_000; i++) {
+      const page = await listGeneratedMediaPage({
+        folderUuid,
+        cursor,
+        limit: 500,
+      });
+      all.push(...page.items);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
     }
+    return all;
+  } catch {
+    return [];
+  }
+}
 
-    if (!cachePath) {
-      try {
-        const envPath = process.env.APEX_CACHE_PATH;
-        if (typeof envPath === "string" && envPath.length > 0) {
-          cachePath = envPath;
-        } else {
-          const home = os.homedir?.();
-          if (home && typeof home === "string" && home.length > 0) {
-            cachePath = join(home, "apex-diffusion", "cache");
-          }
+let generationRootsCache:
+  | { atMs: number; roots: string[]; cachePath: string | null; userDataDir: string | null }
+  | null = null;
+
+async function getGenerationRoots(): Promise<string[]> {
+  const now = Date.now();
+  if (generationRootsCache && now - generationRootsCache.atMs < 30_000) {
+    return generationRootsCache.roots;
+  }
+
+  // Prefer the cache path from the backend when available, but gracefully
+  // fall back to the local default so generations still show up when the
+  // API server is offline or unreachable.
+  let cachePath: string | null = null;
+    try {
+      const envPath = process.env.APEX_CACHE_PATH;
+      if (typeof envPath === "string" && envPath.length > 0) {
+        cachePath = envPath;
+      } else {
+        const home = os.homedir?.();
+        if (home && typeof home === "string" && home.length > 0) {
+          cachePath = join(home, "apex-diffusion", "cache");
         }
-      } catch {
-        cachePath = null;
-      }
-    }
-
-    let userDataDir: string | null = null;
-    try {
-      const userDataRes = await getUserDataPath();
-      if (userDataRes?.success && userDataRes.data?.user_data) {
-        userDataDir = userDataRes.data.user_data;
       }
     } catch {
-      userDataDir = null;
+      cachePath = null;
     }
-
-    const roots = new Set<string>();
-    if (cachePath) {
-      roots.add(cachePath);
+  
+  let userDataDir: string | null = null;
+  try {
+    const userDataRes = await getUserDataPath();
+    if (userDataRes?.success && userDataRes.data?.user_data) {
+      userDataDir = userDataRes.data.user_data;
     }
-    if (userDataDir) {
-      roots.add(join(userDataDir, "apex-cache"));
-      roots.add(join(userDataDir, "apex-cache-remote"));
-    }
+  } catch {
+    userDataDir = null;
+  }
 
-    const collected: ConvertedMediaItem[] = [];
+  const roots = new Set<string>();
+  if (cachePath) roots.add(cachePath);
+  if (userDataDir) {
+    roots.add(join(userDataDir, "apex-cache"));
+    roots.add(join(userDataDir, "apex-cache-remote"));
+  }
 
+  const rootsArr = Array.from(roots.values());
+  generationRootsCache = { atMs: now, roots: rootsArr, cachePath, userDataDir };
+  return rootsArr;
+}
+
+async function listGeneratedMediaPage(
+  params: ListGeneratedMediaPageParams = {},
+): Promise<ListGeneratedMediaPageResult> {
+  try {
+    const folderUuid = params.folderUuid;
+    const limit =
+      typeof params.limit === "number" && Number.isFinite(params.limit)
+        ? Math.max(1, Math.min(500, Math.floor(params.limit)))
+        : 60;
+
+    const cursorObj =
+      typeof params.cursor === "string" && params.cursor.length > 0
+        ? decodeGeneratedMediaCursor(params.cursor)
+        : null;
+
+    const roots = await getGenerationRoots();
+    if (!roots || roots.length === 0) return { items: [], nextCursor: null };
+
+    type Candidate = {
+      kind: "file" | "dir";
+      baseName: string;
+      absPath: string;
+      dateKeyMs: number;
+    };
+
+    const candidates: Candidate[] = [];
     for (const root of roots) {
       let engineResultsAbs: string;
       if (typeof folderUuid === "string" && folderUuid.length > 0) {
@@ -259,9 +431,7 @@ async function listGeneratedMedia(
       } else {
         engineResultsAbs = join(root, "engine_results");
       }
-      if (!fs.existsSync(engineResultsAbs)) {
-        continue;
-      }
+      if (!fs.existsSync(engineResultsAbs)) continue;
 
       let entries: import("node:fs").Dirent[] = [];
       try {
@@ -271,109 +441,145 @@ async function listGeneratedMedia(
       } catch {
         entries = [] as any;
       }
-
-      if (entries.length === 0) continue;
+      if (!entries || entries.length === 0) continue;
 
       for (const e of entries) {
         const entryName = e.name;
         const entryPath = join(engineResultsAbs, entryName);
 
-        if (e.isDirectory()) {
-          let jobEntries: import("node:fs").Dirent[] = [];
-          try {
-            jobEntries = (await fsp.readdir(entryPath, {
-              withFileTypes: true,
-            })) as unknown as import("node:fs").Dirent[];
-          } catch {
-            jobEntries = [] as any;
-          }
-
-          for (const je of jobEntries) {
-            const name = je.name;
-            const ext = getLowercaseExtension(name);
-            if (!isSupportedExt(ext)) continue;
-
-            const stem = name.replace(/\.[^.]+$/, "");
-            if (!stem.toLowerCase().startsWith("result")) continue;
-
-            const absPath = join(entryPath, name);
-
-            let dateAddedMs = Date.now();
-            try {
-              const st = await fsp.lstat(absPath);
-              dateAddedMs =
-                st.birthtime?.getTime?.() ??
-                st.mtime?.getTime?.() ??
-                dateAddedMs;
-            } catch {
-              // ignore
-            }
-
-            const assetUrl = pathToFileURL(absPath).href;
-            const type: ConvertedMediaItem["type"] = VIDEO_EXTS.has(ext)
-              ? "video"
-              : IMAGE_EXTS.has(ext)
-              ? "image"
-              : AUDIO_EXTS.has(ext)
-              ? "audio"
-              : "video";
-
-            const displayName = `${entryName}/${name}`;
-            collected.push({
-              name: displayName,
-              absPath,
-              assetUrl,
-              dateAddedMs,
-              type,
-            });
-          }
-        } else {
-          const name = entryName;
-          const ext = getLowercaseExtension(name);
+        if (!e.isDirectory()) {
+          const ext = getLowercaseExtension(entryName);
           if (!isSupportedExt(ext)) continue;
-
-          const stem = name.replace(/\.[^.]+$/, "");
+          const stem = entryName.replace(/\.[^.]+$/, "");
           if (!stem.toLowerCase().startsWith("result")) continue;
-
-          const absPath = entryPath;
-
-          let dateAddedMs = Date.now();
-          try {
-            const st = await fsp.lstat(absPath);
-            dateAddedMs =
-              st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateAddedMs;
-          } catch {
-            // ignore
-          }
-
-          const assetUrl = pathToFileURL(absPath).href;
-          const type: ConvertedMediaItem["type"] = VIDEO_EXTS.has(ext)
-            ? "video"
-            : IMAGE_EXTS.has(ext)
-            ? "image"
-            : AUDIO_EXTS.has(ext)
-            ? "audio"
-            : "video";
-
-          collected.push({ name, absPath, assetUrl, dateAddedMs, type });
         }
+
+        let dateKeyMs = Date.now();
+        try {
+          const st = await fsp.lstat(entryPath);
+          dateKeyMs =
+            st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateKeyMs;
+        } catch {
+          // ignore
+        }
+
+        candidates.push({
+          kind: e.isDirectory() ? "dir" : "file",
+          baseName: entryName,
+          absPath: entryPath,
+          dateKeyMs,
+        });
       }
     }
 
-    if (collected.length === 0) return [];
+    if (candidates.length === 0) return { items: [], nextCursor: null };
 
-    const byPath = new Map<string, ConvertedMediaItem>();
-    for (const it of collected) {
-      if (!byPath.has(it.absPath)) {
-        byPath.set(it.absPath, it);
+    // Newest candidates first (dirs are treated like batches of results).
+    candidates.sort((a, b) => {
+      if (a.dateKeyMs !== b.dateKeyMs) return b.dateKeyMs - a.dateKeyMs;
+      return b.absPath.localeCompare(a.absPath);
+    });
+
+    const items: ConvertedMediaItem[] = [];
+    const seen = new Set<string>();
+
+    const pushItem = (it: ConvertedMediaItem) => {
+      if (seen.has(it.absPath)) return;
+      if (!isAfterCursor(it, cursorObj)) return;
+      seen.add(it.absPath);
+      items.push(it);
+    };
+
+    for (const c of candidates) {
+      if (items.length >= limit) break;
+
+      if (c.kind === "file") {
+        const name = c.baseName;
+        if (await removeIfBrokenSymlink(c.absPath)) continue;
+        const ext = getLowercaseExtension(name);
+        const assetUrl = pathToFileURL(c.absPath).href;
+        const type: ConvertedMediaItem["type"] = VIDEO_EXTS.has(ext)
+          ? "video"
+          : IMAGE_EXTS.has(ext)
+          ? "image"
+          : AUDIO_EXTS.has(ext)
+          ? "audio"
+          : "video";
+        pushItem({
+          name,
+          absPath: c.absPath,
+          assetUrl,
+          dateAddedMs: c.dateKeyMs,
+          type,
+        });
+        continue;
+      }
+
+      // Directory candidate: scan for "result*" media, newest first.
+      let jobEntries: import("node:fs").Dirent[] = [];
+      try {
+        jobEntries = (await fsp.readdir(c.absPath, {
+          withFileTypes: true,
+        })) as unknown as import("node:fs").Dirent[];
+      } catch {
+        jobEntries = [] as any;
+      }
+      if (!jobEntries || jobEntries.length === 0) continue;
+
+      const jobItems: ConvertedMediaItem[] = [];
+      for (const je of jobEntries) {
+        if (items.length + jobItems.length >= limit * 2) {
+          // Avoid runaway work in huge job dirs; we only need enough to fill the page.
+          break;
+        }
+
+        const fileName = je.name;
+        const ext = getLowercaseExtension(fileName);
+        if (!isSupportedExt(ext)) continue;
+        const stem = fileName.replace(/\.[^.]+$/, "");
+        if (!stem.toLowerCase().startsWith("result")) continue;
+
+        const absPath = join(c.absPath, fileName);
+        if (await removeIfBrokenSymlink(absPath)) continue;
+        let dateAddedMs = c.dateKeyMs;
+        try {
+          const st = await fsp.lstat(absPath);
+          dateAddedMs =
+            st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateAddedMs;
+        } catch {
+          // ignore
+        }
+
+        const assetUrl = pathToFileURL(absPath).href;
+        const type: ConvertedMediaItem["type"] = VIDEO_EXTS.has(ext)
+          ? "video"
+          : IMAGE_EXTS.has(ext)
+          ? "image"
+          : AUDIO_EXTS.has(ext)
+          ? "audio"
+          : "video";
+        const displayName = `${basename(c.absPath)}/${fileName}`;
+        jobItems.push({ name: displayName, absPath, assetUrl, dateAddedMs, type });
+      }
+
+      if (jobItems.length === 0) continue;
+      jobItems.sort(compareGeneratedDesc);
+
+      for (const it of jobItems) {
+        if (items.length >= limit) break;
+        pushItem(it);
       }
     }
 
-    const unique = Array.from(byPath.values());
-    unique.sort((a, b) => (b.dateAddedMs ?? 0) - (a.dateAddedMs ?? 0));
-    return unique;
+    if (items.length === 0) return { items: [], nextCursor: null };
+    items.sort(compareGeneratedDesc);
+    const sliced = items.slice(0, limit);
+    const last = sliced[sliced.length - 1];
+    const nextCursor =
+      sliced.length < limit ? null : encodeGeneratedMediaCursor({ dateAddedMs: last.dateAddedMs, absPath: last.absPath });
+    return { items: sliced, nextCursor };
   } catch {
-    return [];
+    return { items: [], nextCursor: null };
   }
 }
 
@@ -624,6 +830,7 @@ export {
   pickMediaPaths,
   listConvertedMedia,
   listGeneratedMedia,
+  listGeneratedMediaPage,
   importMediaPaths,
   ensureUniqueConvertedName,
   revealMediaItemInFolder,

@@ -212,10 +212,11 @@ const Preview: React.FC<PreviewProps> = () => {
   const shape = useViewportStore((s) => s.shape);
   const setViewportSize = useViewportStore((s) => s.setViewportSize);
   const setContentBounds = useViewportStore((s) => s.setContentBounds);
+  
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const isAspectEditing = useViewportStore((s) => s.isAspectEditing);
   const shouldUpdateViewport = useViewportStore((s) => s.shouldUpdateViewport);
-  const setShouldUpdateViewport = useViewportStore((s) => s.setShouldUpdateViewport);
+  
   const setAspectRatio = useViewportStore((s) => s.setAspectRatio);
   const {
     clips,
@@ -2751,6 +2752,7 @@ const Preview: React.FC<PreviewProps> = () => {
     return () => layer.off("draw", handler);
   }, []);
 
+  
   return (
     <>
       {isFullscreen ? (

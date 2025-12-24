@@ -19,6 +19,8 @@ import AttentionPanel from "./AttentionPanel";
 import ImageInputList from "./inputs/ImageInputList";
 import { useControlsStore } from "@/lib/control";
 import { useResolutionAspectSync } from "./useResolutionAspectSync";
+import type { ManifestComponent } from "@/lib/manifest/api";
+import { getSchedulerComponentKey } from "@/lib/manifest/componentKey";
 
 export const ModelInputsPanel: React.FC<{
   panel: UIPanel;
@@ -28,7 +30,6 @@ export const ModelInputsPanel: React.FC<{
 }> = ({ panel, inputs, clipId, panelSize }) => {
   const updateModelInput = useClipStore((s) => s.updateModelInput);
   const getClipById = useClipStore((s) => s.getClipById);
-  const updateClip = useClipStore((s) => s.updateClip);
   const [iconEl, setIconEl] = useState<React.ReactNode>(null);
   const { fps } = useControlsStore();
 
@@ -184,55 +185,18 @@ export const ModelInputsPanel: React.FC<{
         updateModelInput(cId, inputId, patch as any),
     });
 
-  // Scheduler dropdown (from manifest spec.components -> scheduler_options)
+  // Scheduler components (from manifest spec.components -> scheduler_options)
   const clip: any = getClipById(clipId);
-  const schedulerOptions = useMemo(() => {
-    const comps = clip?.manifest?.spec?.components || [];
-    const all = comps
-      .filter((c: any) => String(c?.type) === "scheduler")
-      .flatMap((c: any) =>
-        Array.isArray(c?.scheduler_options) ? c.scheduler_options : [],
-      );
-    const seen = new Set<string>();
-    const unique = all.filter((opt: any) => {
-      const key = String(opt?.name || "");
-      if (!key) return false;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    return unique;
+  const schedulerComponents: ManifestComponent[] = useMemo(() => {
+    const comps = (clip?.manifest?.spec?.components || []) as ManifestComponent[];
+    return comps.filter((c: any) => String(c?.type) === "scheduler");
   }, [clip]);
-
-  const selectedSchedulerName: string | undefined = useMemo(() => {
-    return String(clip?.selectedComponents?.scheduler?.name ?? "") || undefined;
-  }, [clip?.selectedComponents]);
-
-  // Ensure a default scheduler selection if options exist and none selected
-  useEffect(() => {
-    if (!clip || !schedulerOptions || schedulerOptions.length === 0) return;
-    const names = schedulerOptions.map((o: any) => String(o?.name));
-    const curr = selectedSchedulerName;
-    if (!curr || !names.includes(String(curr))) {
-      const first = schedulerOptions[0];
-      const next = {
-        name: first?.name,
-        base: first?.base,
-        config_path: first?.config_path,
-      };
-      const nextSelected = {
-        ...(clip.selectedComponents || {}),
-        scheduler: next,
-      };
-      updateClip(clipId, { selectedComponents: nextSelected } as any);
-    }
-  }, [clip, clipId, schedulerOptions, selectedSchedulerName, updateClip]);
 
   // Only render scheduler selector when this panel is named 'scheduler'
   const shouldShowScheduler = useMemo(() => {
-    if (!schedulerOptions || schedulerOptions.length === 0) return false;
+    if (!schedulerComponents || schedulerComponents.length === 0) return false;
     return String(panel.name || "").toLowerCase() === "scheduler";
-  }, [panel.name, schedulerOptions]);
+  }, [panel.name, schedulerComponents]);
 
   // Only render attention selector when this panel is named 'attention' and options exist
   const shouldShowAttention = useMemo(() => {
@@ -285,13 +249,20 @@ export const ModelInputsPanel: React.FC<{
             <div
               style={{
                 display: "flex",
-                flexDirection: "row",
+                flexDirection: "column",
                 gap: "12px",
                 width: "100%",
                 minWidth: 0,
               }}
             >
-              <SchedulerPanel clipId={clipId} />
+              {schedulerComponents.map((comp, idx) => (
+                <SchedulerPanel
+                  key={getSchedulerComponentKey(comp, idx)}
+                  clipId={clipId}
+                  component={comp}
+                  schedulerIndex={idx}
+                />
+              ))}
             </div>
           )}
           {shouldShowAttention && (
@@ -532,6 +503,15 @@ export const ModelInputsPanel: React.FC<{
                         />
                       );
                     case "boolean": {
+                      if (input.value === undefined) {
+                        updateModelInput(clipId, inputId, {
+                          value:
+                            String(input?.default ?? "false").toLowerCase() ===
+                            "true"
+                              ? "true"
+                              : "false",
+                        });
+                      }
                       const boolVal =
                         String(
                           input?.value ?? input?.default ?? "false",
@@ -555,7 +535,7 @@ export const ModelInputsPanel: React.FC<{
                         input?.value ?? input?.default ?? 0,
                       );
                       const toFixed = input.step
-                        ? (input.step.toString().split(".")[1]?.length ?? 0)
+                        ? ((input.step.toString().split(".")[1]?.length ?? 0) + 1)
                         : 0;
 
                       return (
@@ -591,7 +571,7 @@ export const ModelInputsPanel: React.FC<{
                           }
                           key={inputId}
                           label={input?.label}
-                          toFixed={input?.value_type === "integer" ? 0 : 1}
+                          toFixed={input?.value_type === "integer" ? 0 : 2}
                           description={input?.description}
                           value={strVal}
                           min={input?.min}

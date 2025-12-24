@@ -23,7 +23,7 @@ import { pickMediaPaths, resolvePath } from "@app/preload";
 import { TbCancel, TbMovie } from "react-icons/tb";
 import { ProgressBar } from "@/components/common/ProgressBar";
 import { LuLoaderCircle } from "react-icons/lu";
-import { VideoClipProps } from "@/lib/types";
+import { ModelClipProps, VideoClipProps } from "@/lib/types";
 type ResolutionOption = {
   label: string;
   value: number;
@@ -177,6 +177,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           if (clip.type === "audio") return true;
           if (clip.type === "video") {
             const info = getMediaInfoCached((clip as VideoClipProps).assetId);
+            return info?.audio !== null;
+          }
+          if (clip.type === "model") {
+            const info = getMediaInfoCached((clip as ModelClipProps).assetId);
             return info?.audio !== null;
           }
           return false;

@@ -807,7 +807,16 @@ async function handleSeek(
   state.seekDone = false;
   state.showingPreview = false;
 
-  const currentPacket = await state.sink.getKeyPacket(timestamp, { verifyKeyPackets: false });
+  // IMPORTANT:
+  // After VideoDecoder.reset()/configure() (and sometimes after flush()), WebCodecs
+  // requires the *next* decode() call to be a key frame. If we ask mediabunny for
+  // a "key packet" without verification, it can occasionally return a non-key
+  // packet (especially during rapid scrubbing), which triggers:
+  //   DataError: A key frame is required after configure() or flush().
+  // So we always verify key packets for seeks.
+  const currentPacket = await state.sink.getKeyPacket(timestamp, {
+    verifyKeyPackets: true,
+  });
 
   if (!currentPacket) return;
 
@@ -820,6 +829,7 @@ async function handleSeek(
   if ((state.decoder.state as string) === "closed") return;
 
   state.decoder.reset();
+
   if (state.config) state.decoder.configure(state.config);
   if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
     try {
@@ -832,8 +842,36 @@ async function handleSeek(
       // ignore; we'll recreate lazily if needed
     }
   }
-  const chunk = currentPacket.toEncodedVideoChunk();
-  state.decoder.decode(chunk);
+
+  const isKeyframeRequiredError = (e: any): boolean => {
+    const msg = (e?.message ?? "").toString();
+    return e?.name === "DataError" && /key\s*frame/i.test(msg);
+  };
+
+  // Decode the verified key packet first. If the runtime still complains (some
+  // platforms are extra strict about "key" typing), retry by re-fetching a
+  // verified key packet at the same timestamp and decoding that.
+  try {
+    const chunk = currentPacket.toEncodedVideoChunk();
+    state.decoder.decode(chunk);
+  } catch (e: any) {
+    if (isKeyframeRequiredError(e)) {
+      try {
+        // Re-verify from the demuxer and retry once.
+        const retryKey = await state.sink.getKeyPacket(timestamp, {
+          verifyKeyPackets: true,
+        });
+        if (retryKey && (state.decoder.state as string) !== "closed") {
+          state.decoder.reset();
+          if (state.config) state.decoder.configure(state.config);
+          state.decoder.decode(retryKey.toEncodedVideoChunk());
+        }
+      } catch {
+        // fall through to the outer error handler
+      }
+    }
+    throw e;
+  }
   if (currentPacket.sideData?.alpha) {
     ensureAlphaDecoder(state, id);
     if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
@@ -918,7 +956,12 @@ async function handleIterate(
     state.currentRequestId = requestId;
     resetAlphaMergeQueues(state);
 
-    const keyPacket = await state.sink.getKeyPacket(startTime, { verifyKeyPackets: false });
+    // Same keyframe requirement as seek: after reset/configure, the first decode
+    // must be a key frame. Verify key packets to avoid intermittent DataError
+    // during iteration starts.
+    const keyPacket = await state.sink.getKeyPacket(startTime, {
+      verifyKeyPackets: true,
+    });
     if (!keyPacket) {
         // @ts-ignore
         postMessage({

@@ -107,6 +107,36 @@ function setMaskModelSetting(model: string | null): Promise<void> {
   return ipcRenderer.invoke("settings:set-mask-model", model);
 }
 
+function getRenderImageStepsSetting(): Promise<boolean> {
+  return ipcRenderer.invoke("settings:get-render-image-steps");
+}
+
+function setRenderImageStepsSetting(
+  enabled: boolean,
+): Promise<{ success: boolean }> {
+  return ipcRenderer.invoke("settings:set-render-image-steps", enabled);
+}
+
+function getRenderVideoStepsSetting(): Promise<boolean> {
+  return ipcRenderer.invoke("settings:get-render-video-steps");
+}
+
+function setRenderVideoStepsSetting(
+  enabled: boolean,
+): Promise<{ success: boolean }> {
+  return ipcRenderer.invoke("settings:set-render-video-steps", enabled);
+}
+
+function getUseFastDownloadSetting(): Promise<boolean> {
+  return ipcRenderer.invoke("settings:get-use-fast-download");
+}
+
+function setUseFastDownloadSetting(
+  enabled: boolean,
+): Promise<{ success: boolean }> {
+  return ipcRenderer.invoke("settings:set-use-fast-download", enabled);
+}
+
 export {
   getActiveProjectId,
   setActiveProjectId,
@@ -130,4 +160,10 @@ export {
   setCivitaiApiKeySetting,
   getMaskModelSetting,
   setMaskModelSetting,
+  getRenderImageStepsSetting,
+  setRenderImageStepsSetting,
+  getRenderVideoStepsSetting,
+  setRenderVideoStepsSetting,
+  getUseFastDownloadSetting,
+  setUseFastDownloadSetting,
 };

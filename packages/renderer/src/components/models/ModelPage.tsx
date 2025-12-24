@@ -1,9 +1,7 @@
 import { useManifestStore } from "@/lib/manifest/store";
-import React from "react";
-import { LuChevronLeft, LuPlus } from "react-icons/lu";
+import React, { useLayoutEffect, useRef } from "react";
+import { LuChevronLeft, LuPlus, LuRefreshCw } from "react-icons/lu";
 import { ScrollArea } from "../ui/scroll-area";
-import ComponentCard from "./ComponentCard";
-import LoRACard from "./LoRACard";
 import { useControlsStore } from "@/lib/control";
 import {
   useClipStore,
@@ -12,15 +10,53 @@ import {
   isValidTimelineForClip,
 } from "@/lib/clip";
 import { v4 as uuidv4 } from "uuid";
+import { refreshManifest, useManifestQuery } from "@/lib/manifest/queries";
+import ComponentCard, { LoraCard } from "./ComponentCard2";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface ModelPageProps {
   manifestId: string;
+  scrollCache?: Map<string, number>;
+  scrollKey?: string;
 }
 
-const ModelPage: React.FC<ModelPageProps> = ({ manifestId }) => {
-  const { clearSelectedManifestId, getLoadedManifest } = useManifestStore();
-  const manifest = getLoadedManifest(manifestId);
+const ModelPage: React.FC<ModelPageProps> = ({
+  manifestId,
+  scrollCache,
+  scrollKey,
+}) => {
+  const { clearSelectedManifestId } = useManifestStore();
+  const queryClient = useQueryClient();
+  const { data: manifest, isFetching } = useManifestQuery(manifestId);
+  const [isRefreshingManifest, setIsRefreshingManifest] = React.useState(false);
+  const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   if (!manifest) return null;
+
+  useLayoutEffect(() => {
+    if (!scrollCache || !scrollKey) return;
+    const root = scrollAreaRef.current;
+    if (!root) return;
+
+    const viewport = root.querySelector(
+      "[data-radix-scroll-area-viewport]",
+    ) as HTMLDivElement | null;
+    if (!viewport) return;
+
+    const onScroll = () => {
+      scrollCache.set(scrollKey, viewport.scrollTop);
+    };
+
+    const saved = scrollCache.get(scrollKey);
+    if (typeof saved === "number") {
+      viewport.scrollTop = saved;
+    }
+
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+      viewport.removeEventListener("scroll", onScroll as EventListener);
+    };
+  }, [manifestId, scrollCache, scrollKey]);
 
   const isVideoDemo = React.useMemo(() => {
     const value = (manifest.metadata?.demo_path || "").toLowerCase();
@@ -45,7 +81,7 @@ const ModelPage: React.FC<ModelPageProps> = ({ manifestId }) => {
 
   return (
     <div className="flex flex-col h-full w-full">
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1" ref={scrollAreaRef}>
         <div className="p-7 pt-3 pb-28">
           <div className="flex items-center gap-x-2">
             <button
@@ -61,7 +97,7 @@ const ModelPage: React.FC<ModelPageProps> = ({ manifestId }) => {
             </span>
           </div>
           <div className="mt-4 flex flex-row gap-x-4 w-full">
-            <div className="rounded-md overflow-hidden flex items-center w-44 aspect-square justify-start flex-shrink-0">
+            <div className="rounded-md overflow-hidden flex items-center w-44 aspect-square justify-start shrink-0">
               {isVideoDemo ? (
                 <video
                   src={manifest.demo_path}
@@ -97,7 +133,7 @@ const ModelPage: React.FC<ModelPageProps> = ({ manifestId }) => {
                 </span>
               </div>
 
-              <div className="flex flex-row items-center gap-x-1.5 mt-2">
+              <div className="flex flex-row items-center gap-1.5 mt-2 flex-wrap">
                 {manifest.metadata?.tags?.map((tag) => (
                   <span
                     key={tag}
@@ -113,7 +149,7 @@ const ModelPage: React.FC<ModelPageProps> = ({ manifestId }) => {
             <div className="mt-5 ">
               <button
                 type="button"
-                className="text-[11px] font-medium w-full flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded-[6px] px-12 py-2 flex-shrink-0 text-brand-light hover:text-brand-light/90 bg-brand-accent-two-shade hover:bg-brand-accent-two-shade/90"
+                className="text-[11px] font-medium w-full flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded-[6px] px-12 py-2 shrink-0 text-brand-light hover:text-brand-light/90 bg-brand-accent-two-shade hover:bg-brand-accent-two-shade/90"
                 title="Add clip at playhead"
                 onClick={() => {
                   try {
@@ -201,16 +237,41 @@ const ModelPage: React.FC<ModelPageProps> = ({ manifestId }) => {
               <h3 className="text-brand-light text-[13.5px] font-semibold text-start">
                 Model Architecture
               </h3>
+              <button
+                type="button"
+                title="Refresh manifest"
+                aria-label="Refresh manifest"
+                disabled={isRefreshingManifest}
+                onClick={async () => {
+                  if (isRefreshingManifest) return;
+                  try {
+                    setIsRefreshingManifest(true);
+                    await refreshManifest(manifestId, queryClient);
+                  } catch {
+                    // Intentionally no-op; errors are handled by existing query error UX/toasts elsewhere
+                  } finally {
+                    setIsRefreshingManifest(false);
+                  }
+                }}
+                className="text-[11px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
+              >
+                <LuRefreshCw
+                  className={`w-3.5 h-3.5 ${(isRefreshingManifest || isFetching) ? "animate-spin" : ""}`}
+                />
+                <span>Refresh</span>
+              </button>
             </div>
 
             <div className="space-y-2 mt-3.5">
               {components.map((component, index) => (
+                <div key={index}>
                 <ComponentCard
                   key={index}
                   component={component}
                   manifestId={manifestId}
                   index={index}
                 />
+                </div>
               ))}
               {components.length === 0 && (
                 <div className="text-brand-light/60 text-[12px] text-center py-8">
@@ -228,7 +289,7 @@ const ModelPage: React.FC<ModelPageProps> = ({ manifestId }) => {
               </div>
               <div className="space-y-2 mt-3.5">
                 {manifest.spec.loras.map((l, idx) => (
-                  <LoRACard key={idx} item={l} manifestId={manifestId} />
+                  <LoraCard key={idx} lora={l} manifestId={manifestId} loraIndex={idx} />
                 ))}
               </div>
             </div>

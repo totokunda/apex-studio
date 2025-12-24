@@ -11,7 +11,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { LuChevronDown } from "react-icons/lu";
+import { LuChevronDown, LuInfo } from "react-icons/lu";
 
 interface PreprocessorPropertiesProps {
   preprocDetailId: string | null;
@@ -119,7 +119,7 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
             <div
               className="grid gap-2"
               style={{
-                gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))",
               }}
             >
               {filteredList.map((p) => (
@@ -194,7 +194,8 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
                 </div>
               ))}
               {compatiblePreprocessors.length === 0 && (
-                <div className="text-[11px] text-brand-light/60 p-2">
+                <div className="text-[11px] text-brand-light/60 p-3.5 bg-brand rounded-md flex items-center gap-x-2">
+                  <LuInfo className="w-4 h-4 text-brand-light/80" />
                   No preprocessors found
                 </div>
               )}

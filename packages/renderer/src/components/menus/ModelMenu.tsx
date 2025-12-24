@@ -1,14 +1,16 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import {
-  useManifestTypes,
-  useManifests,
+  listManifests,
+  listModelTypes,
   type ManifestDocument,
+  type ModelTypeInfo,
 } from "@/lib/manifest";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "../ui/scroll-area";
@@ -21,11 +23,13 @@ import {
   LuDownload,
   LuLoader,
   LuPlus,
+  LuRefreshCw,
 } from "react-icons/lu";
 import { TbWorldDownload } from "react-icons/tb";
 import Draggable from "../dnd/Draggable";
 import { useManifestStore } from "@/lib/manifest/store";
-import { useDownloadStore } from "@/lib/download/store";
+import { extractAllDownloadableDefaultPaths, extractAllDownloadablePaths } from "@/lib/manifest/api";
+
 import ModelPage from "../models/ModelPage";
 // check
 import CategorySidebar from "./CategorySidebar";
@@ -37,40 +41,24 @@ import {
   isValidTimelineForClip,
 } from "@/lib/clip";
 import { v4 as uuidv4 } from "uuid";
+import { useQuery, useQueryClient} from "@tanstack/react-query";
+import { useManifestQuery } from "@/lib/manifest/queries";
+import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
+import { useStartUnifiedDownloadMutation } from "@/lib/download/mutations";
 
 export const ModelItem: React.FC<{
   manifest: ManifestDocument;
   isDragging?: boolean;
   category?: string;
-}> = ({ manifest, isDragging, category }) => {
-  const { setSelectedManifestId, refreshManifestPart } = useManifestStore();
+}> = ({ manifest:initialManifest, isDragging, category }) => {
+  const { setSelectedManifestId } = useManifestStore();
   const tagsContainerRef = useRef<HTMLDivElement>(null);
   const hiddenMeasureRef = useRef<HTMLDivElement>(null);
   const [visibleTagCount, setVisibleTagCount] = useState<number | null>(null);
   const [isStartingDownload, setIsStartingDownload] = useState(false);
-  const {
-    startAndTrackDownload,
-    wsFilesByPath,
-    downloadingPaths,
-    resolveDownloadBatch,
-    subscribeToJob,
-  } = useDownloadStore();
-  const onCompleteDownload = useCallback(
-    async (paths: string | string[]) => {
-      // dispatch a custom event to refresh the model menu
-      window.dispatchEvent(
-        new CustomEvent("component-card-reload", {
-          detail: {
-            paths: Array.isArray(paths) ? paths : [paths],
-            manifestId: manifest.metadata?.id,
-          },
-        }),
-      );
-      await refreshManifestPart(manifest.metadata?.id || "", `spec.components`);
-      await refreshManifestPart(manifest.metadata?.id || "", `downloaded`);
-    },
-    [manifest.metadata?.id],
-  );
+  const { data: manifestData } = useManifestQuery(initialManifest.metadata?.id || "");
+  const manifest = manifestData ?? initialManifest;
+  const {getSourceToJobId, getJobUpdates, addSourceToJobId,  addJobIdToParts, addJobIdToManifestId} = useDownloadJobIdStore();
 
   const isVideoDemo = React.useMemo(() => {
     const value = (manifest.metadata?.demo_path || "").toLowerCase();
@@ -91,135 +79,35 @@ export const ModelItem: React.FC<{
     }
   }, [manifest.metadata?.demo_path]);
 
-  const getAllComponentPaths = useMemo(() => {
-    const paths:string[] = [];
-    const components = manifest?.spec?.components || [];
-    for (const comp of components) {
-      const modelPaths = Array.isArray(comp.model_path)
-        ? comp.model_path
-        : comp.model_path
-          ? [{ path: comp.model_path }]
-          : [];
-      // add config_paths too
-      if (comp?.config_path) {
-        paths.push(comp.config_path as string);
-      }
-      if (
-        comp?.type === "scheduler" &&
-        Array.isArray(comp?.scheduler_options)
-      ) {
-        for (const opt of comp.scheduler_options as any[]) {
-          if (opt?.config_path) {
-            paths.push(opt.config_path as string);
-          }
-        }
-      }
-      // add extra_model_paths too
-      if (Array.isArray(comp?.extra_model_paths)) {
-        for (const p of comp.extra_model_paths) {
-          if (typeof p === "string") {
-            paths.push(p);
-          } else {
-            paths.push(p.path);
-          }
-        }
-      }
-      for (const modelPath of modelPaths) {
-        if (typeof modelPath === "string") {
-          paths.push(modelPath);
-        } else {
-          paths.push(modelPath.path);
-        }
-      }
-    }
-    return paths;
-  }, []);
+  const allDownloadablePaths = useMemo(() => {
+    return extractAllDownloadablePaths(manifest);
+  }, [manifest]);
 
-  const getAllLoraPaths = useMemo(() => {
-    const paths = [];
-    const loras = manifest?.spec?.loras || [];
-    for (const lora of loras) {
-      if (typeof lora === "string") {
-        paths.push(lora);
+  const allDownloadableDefaultPaths = useMemo(() => {
+    return extractAllDownloadableDefaultPaths(manifest);
+  }, [manifest]);
+
+
+  const { mutate: startDownload } = useStartUnifiedDownloadMutation({
+    onSuccess(data, variables) {
+      addSourceToJobId(variables.source, data.job_id);
+      if (variables.index !== undefined) {
+        addJobIdToParts(data.job_id, [`spec.${variables.item_type}s.${variables.index}`, "downloaded"]);
       } else {
-        if (lora.source) {
-          paths.push(lora.source);
-        }
+        addJobIdToParts(data.job_id, [`spec.${variables.item_type}s`, "downloaded"]);
       }
-    }
-    return paths;
-  }, []);
+      addJobIdToManifestId(data.job_id, manifest.metadata?.id || ""); 
+    },
+  });
+  
+  const isDownloading = allDownloadablePaths.some((path) => {
+      const jobId = getSourceToJobId(path.path);
+      return jobId && (getJobUpdates(jobId)?.length ?? 0) > 0;
+    });
 
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      try {
-        const response = await resolveDownloadBatch({
-          item_type: "component",
-          sources: getAllComponentPaths,
-        });
-
-        if (response?.results?.some((r) => r.running) && !cancelled) {
-          for (const r of response.results) {
-            if (r.running) {
-              await subscribeToJob(
-                r.job_id || "",
-                r.source as string,
-                onCompleteDownload,
-              );
-            }
-          }
-        }
-      } catch {}
-
-      try {
-        const response = await resolveDownloadBatch({
-          item_type: "lora",
-          sources: getAllLoraPaths,
-        });
-        if (response?.results?.some((r) => r.running) && !cancelled) {
-          for (const r of response.results) {
-            if (r.running) {
-              await subscribeToJob(
-                r.job_id || "",
-                r.source as string,
-                onCompleteDownload,
-              );
-            }
-          }
-        }
-      } catch {}
-    };
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [manifest.metadata?.id, getAllComponentPaths, getAllLoraPaths]);
-
-  const isDownloading = useMemo(() => {
-    return (
-      getAllComponentPaths.some((p) => downloadingPaths.has(p)) ||
-      getAllComponentPaths.some(
-        (p) =>
-          wsFilesByPath[p] &&
-          Object.values(wsFilesByPath[p]).some(
-            (v) => v.status === "processing" || v.status === "pending",
-          ),
-      ) ||
-      getAllLoraPaths.some((p) => downloadingPaths.has(p)) ||
-      getAllLoraPaths.some(
-        (p) =>
-          wsFilesByPath[p] &&
-          Object.values(wsFilesByPath[p]).some(
-            (v) => v.status === "processing" || v.status === "pending",
-          ),
-      ) ||
-      Array.from(downloadingPaths).some((p) => getAllComponentPaths.includes(p))
-    );
-  }, [getAllComponentPaths, wsFilesByPath, downloadingPaths, getAllLoraPaths]);
 
   const allDownloaded = useMemo(() => {
-    return manifest.downloaded && !isDownloading;
+    return (manifestData?.downloaded ?? manifest.downloaded) && !isDownloading;
   }, [manifest.downloaded, isDownloading]);
 
   // Compute how many tags fit on a single line
@@ -265,79 +153,25 @@ export const ModelItem: React.FC<{
     };
   }, [manifest.metadata?.tags]);
 
-  const handleDownloadAllDefault = async () => {
-    try {
-      setIsStartingDownload(true);
 
-      const components = manifest?.spec?.components || [];
-      for (const comp of components) {
-        const modelPaths = Array.isArray(comp.model_path)
-          ? comp.model_path
-          : comp.model_path
-            ? [{ path: comp.model_path }]
-            : [];
-        // Only default variants (treat string paths as default)
-        const filtered = modelPaths.filter((item: any) => {
-          if (typeof item === "string") return true;
-          const v = (item?.variant ?? "").toLowerCase();
-          return v === "" || v.toLowerCase() === "default";
+  const handleDownloadAll = useCallback(async () => {
+    setIsStartingDownload(true);
+    for (const path of allDownloadableDefaultPaths) {
+        await startDownload({
+          item_type: path.type as "component" | "lora" | "preprocessor",
+          source: path.path,
+          index: path.index,
         });
-        for (const item of filtered) {
-          const p = typeof item === "string" ? item : item?.path;
-          await startAndTrackDownload(
-            {
-              item_type: "component",
-              source: p,
-            },
-            onCompleteDownload,
-          );
-        }
-        // Ensure scheduler configs (base and options) are downloaded too
-        const configPathsSet = new Set<string>();
-        if (comp?.config_path) {
-          configPathsSet.add(comp.config_path as string);
-        }
-        if (
-          comp?.type === "scheduler" &&
-          Array.isArray(comp?.scheduler_options)
-        ) {
-          for (const opt of comp.scheduler_options as any[]) {
-            const cp = opt?.config_path as string | undefined;
-            if (cp) configPathsSet.add(cp);
-          }
-        }
-        for (const cp of configPathsSet) {
-          await startAndTrackDownload(
-            {
-              item_type: "component",
-              source: cp,
-              save_path: comp?.save_path,
-            },
-            onCompleteDownload,
-          );
-        }
-      }
-    } catch {}
-    try {
-      const loras = manifest?.spec?.loras || [];
-      for (const lora of loras) {
-        const source = typeof lora === "string" ? lora : lora.source;
-        if (source) {
-          await startAndTrackDownload(
-            {
-              item_type: "lora",
-              source: source,
-            },
-            onCompleteDownload,
-          );
-        }
-      }
-    } catch {
-    } finally {
-      // Fallback clear in case store entries are delayed
-      setTimeout(() => setIsStartingDownload(false), 1200);
     }
-  };
+  }, [allDownloadableDefaultPaths, startDownload]);
+
+  useEffect(() => {
+    if (isDownloading) {
+      setIsStartingDownload(false);
+    }
+  }, [isDownloading]);
+
+
 
   const card = (
     <div className="flex flex-col items-center relative w-full ">
@@ -457,7 +291,7 @@ export const ModelItem: React.FC<{
           <button
             onClick={async () => {
               if (!allDownloaded) {
-                await handleDownloadAllDefault();
+                await handleDownloadAll();
                 return;
               }
               try {
@@ -533,17 +367,8 @@ export const ModelItem: React.FC<{
                   speed: 1.0,
                   category,
                 };
-                const store = useManifestStore.getState();
-                const existing = store.getLoadedManifest(
-                  manifest.metadata?.id || "",
-                );
-                if (existing) {
-                  clipBase.manifest = existing;
-                  useClipStore.getState().addClip(clipBase);
-                } else {
-                  clipBase.manifest = manifest;
-                  useClipStore.getState().addClip(clipBase);
-                }
+                clipBase.manifest = manifest;
+                useClipStore.getState().addClip(clipBase);
               } catch {}
             }}
             type="button"
@@ -645,7 +470,7 @@ const ModelCategory: React.FC<{
         </span>
         <button
           onClick={onViewAll}
-          className="flex items-center gap-x-1.5 text-brand-light hover:text-brand-light/70 text-[12px] font-medium cursor-pointer transition-colors rounded-md flex-shrink-0"
+          className="flex items-center gap-x-1.5 text-brand-light hover:text-brand-light/70 text-[12px] font-medium cursor-pointer transition-colors rounded-md shrink-0"
         >
           <span>View all</span>
           <LuArrowRight className="w-3.5 h-3.5" />
@@ -678,7 +503,7 @@ const ModelCategory: React.FC<{
           }}
         >
           {manifests.map((manifest) => (
-            <div key={manifest.metadata?.id || ""} className="flex-shrink-0">
+            <div key={manifest.metadata?.id || ""} className="shrink-0">
               <ModelItem manifest={manifest} category={category} />
             </div>
           ))}
@@ -692,7 +517,36 @@ const CategoryDetailView: React.FC<{
   category: string;
   manifests: ManifestDocument[];
   onBack: () => void;
-}> = ({ category, manifests, onBack }) => {
+  scrollCache: Map<string, number>;
+}> = ({ category, manifests, onBack, scrollCache }) => {
+  const scrollAreaRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const root = scrollAreaRef.current;
+    if (!root) return;
+
+    const key = `modelMenu:category:${category}`;
+    const viewport = root.querySelector(
+      "[data-radix-scroll-area-viewport]",
+    ) as HTMLDivElement | null;
+    if (!viewport) return;
+
+    const saved = scrollCache.get(key);
+    if (typeof saved === "number") {
+      viewport.scrollTop = saved;
+    }
+
+    const onScroll = () => {
+      scrollCache.set(key, viewport.scrollTop);
+    };
+
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+      viewport.removeEventListener("scroll", onScroll as EventListener);
+    };
+  }, [category, scrollCache]);
+
   return (
     <div className="flex flex-col h-full w-full">
       <div className="px-7 pt-4 pb-4 border-b border-brand/20">
@@ -708,7 +562,7 @@ const CategoryDetailView: React.FC<{
           </span>
         </div>
       </div>
-      <ScrollArea className="flex-1 pb-16">
+      <ScrollArea className="flex-1 pb-16" ref={scrollAreaRef}>
         <div className="px-7 pt-6">
           <div
             className="grid gap-x-2 gap-y-3"
@@ -734,40 +588,49 @@ const CategoryDetailView: React.FC<{
 const ModelMenu: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const { data: manifestsData } = useManifests();
-  const { data: modelTypesData } = useManifestTypes();
-  const { selectedManifestId, loadManifests } = useManifestStore();
+  const scrollCacheRef = useRef<Map<string, number>>(new Map());
+  const {selectedManifestId} = useManifestStore();
+  const queryClient = useQueryClient();
 
-
-  // Fallback polling: if manifests are null or empty, keep trying to load them.
-  useEffect(() => {
-    const hasManifests =
-      Array.isArray(manifestsData) && manifestsData.length > 0;
-  
-    if (hasManifests) return;
-
-    let cancelled = false;
-    const POLL_INTERVAL_MS = 2000;
-
-    const poll = async () => {
-      if (cancelled) return;
-      try {
-        await loadManifests(true);
-        console.log(manifestsData, "manifestsData");
-      } catch (e) {
-        console.error("Error loading manifests", e);
-        // swallow errors; polling will retry
+  const manifestsQuery = useQuery<ManifestDocument[]>({
+    queryKey: ["manifest"],
+    queryFn: async () => {
+      const response = await listManifests();
+      if (!response.success) {
+        throw new Error(
+          response.error || "Backend is unavailable (failed to load manifests).",
+        );
       }
-    };
+      response.data?.forEach((manifest) => {
+        queryClient.setQueryData(["manifest", manifest.metadata?.id], manifest);
+      })
+      return response.data ?? [];
+    },
+    placeholderData: (prev) => prev ?? [],
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  
+  const modelTypesQuery = useQuery<ModelTypeInfo[]>({
+    queryKey: ["modelTypes"],
+    queryFn: async () => {
+      const response = await listModelTypes();
+      if (!response.success) {
+        throw new Error(
+          response.error || "Backend is unavailable (failed to load model types).",
+        );
+      }
+      return response.data ?? [];
+    },
+    placeholderData: [],
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
 
-    void poll();
-    const id = window.setInterval(poll, POLL_INTERVAL_MS);
+  const manifestsData = manifestsQuery.data;
+  const modelTypesData = modelTypesQuery.data;
 
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [manifestsData, loadManifests,]);
+  const backendUnavailable = manifestsQuery.data === undefined;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -827,6 +690,13 @@ const ModelMenu: React.FC = () => {
     return filteredManifests.some((m) => !!m.downloaded);
   }, [filteredManifests]);
 
+  // Keep a sensible active category when data arrives/changes.
+  useEffect(() => {
+    if (!selectedCategory && !activeCategory && categories.length > 0) {
+      setActiveCategory(categories[0]);
+    }
+  }, [categories, selectedCategory, activeCategory]);
+
   const handleCategoryClick = (category: string) => {
     setActiveCategory(category);
     if (category === DOWNLOADED_CATEGORY) {
@@ -869,6 +739,33 @@ const ModelMenu: React.FC = () => {
       timeouts.forEach(clearTimeout);
       resizeObserver.disconnect();
       window.removeEventListener("resize", updateWidth);
+    };
+  }, [selectedCategory, selectedManifestId]);
+
+  // Remember & restore scroll position for the overview list.
+  useLayoutEffect(() => {
+    if (selectedCategory || selectedManifestId) return;
+    const root = scrollRef.current;
+    if (!root) return;
+    const viewport = root.querySelector(
+      "[data-radix-scroll-area-viewport]",
+    ) as HTMLDivElement | null;
+    if (!viewport) return;
+    viewportRef.current = viewport;
+
+    const key = "modelMenu:overview";
+
+    const saved = scrollCacheRef.current.get(key);
+    if (typeof saved === "number") {
+      viewport.scrollTop = saved;
+    }
+
+    const onScroll = () => {
+      scrollCacheRef.current.set(key, viewport.scrollTop);
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      viewport.removeEventListener("scroll", onScroll as EventListener);
     };
   }, [selectedCategory, selectedManifestId]);
 
@@ -923,7 +820,13 @@ const ModelMenu: React.FC = () => {
   }, [categories, selectedCategory, activeCategory]);
 
   if (selectedManifestId) {
-    return <ModelPage manifestId={selectedManifestId} />;
+    return (
+      <ModelPage
+        manifestId={selectedManifestId}
+        scrollCache={scrollCacheRef.current}
+        scrollKey={`modelMenu:model:${selectedManifestId}`}
+      />
+    );
   }
 
   if (selectedCategory) {
@@ -937,6 +840,7 @@ const ModelMenu: React.FC = () => {
             category={DOWNLOADED_CATEGORY}
             manifests={filteredManifests.filter((m) => m.downloaded)}
             onBack={() => setSelectedCategory(null)}
+            scrollCache={scrollCacheRef.current}
           />
         </>
       );
@@ -958,11 +862,16 @@ const ModelMenu: React.FC = () => {
               return labels.includes(selectedCategory);
             })}
             onBack={() => setSelectedCategory(null)}
+            scrollCache={scrollCacheRef.current}
           />
         </>
       );
     }
   }
+
+  const hasAnyManifests = manifests.length > 0;
+  const hasAnyFiltered = filteredManifests.length > 0;
+  const showEmptyState = !hasAnyFiltered;
 
   return (
     <>
@@ -1000,33 +909,78 @@ const ModelMenu: React.FC = () => {
                 />
               </div>
             </div>
-            <ScrollArea className="flex-1" ref={scrollRef}>
-              <div className="flex flex-col gap-y-5 pt-1 pb-28">
-                {categories.map((category) => (
-                  <div
-                    key={category}
-                    ref={(el) => {
-                      categorySectionRefs.current[category] = el;
-                    }}
-                    className="w-full"
-                  >
-                    <ModelCategory
-                      width={scrollWidth - 36}
-                      category={category}
-                      manifests={filteredManifests.filter((m) => {
-                        const keys: string[] = m.metadata?.categories || [];
-                        const labels = keys.map(
-                          (k) =>
-                            manifestCategoryKeyToLabel.get(k) ||
-                            k.replace(/[_-]/g, " ").replace(/\s+/g, " ").trim(),
-                        );
-                        return labels.includes(category);
-                      })}
-                      onViewAll={() => setSelectedCategory(category)}
-                    />
-                  </div>
-                ))}
+            {backendUnavailable ? (
+              <div className="px-3 pb-2">
+                <div className="bg-brand border border-brand-light/10 rounded-lg shadow-md p-3 flex items-center gap-x-2 text-[11px] text-brand-light/80">
+                  <LuInfo className="w-4 h-4 text-brand-light/80" />
+                  <div className="text-brand-light/80">Backend unavailable — start/connect the server to load models.</div>
+                </div>
               </div>
+            ) : null}
+            <ScrollArea className="flex-1" ref={scrollRef}>
+              {showEmptyState ? (
+                <div className="flex flex-col items-center justify-center h-full w-full px-3">
+                  <div className="bg-brand border border-brand-light/10 rounded-lg shadow-md p-4 w-full ">
+                    <div className="flex items-center justify-between gap-x-3">
+                      <div className="flex flex-col text-start">
+                        <div className="text-brand-light text-[13px] font-semibold leading-tight">
+                          No Models Found
+                        </div>
+                        <div className="text-brand-light/70 text-[11px] leading-snug">
+                          {hasAnyManifests
+                            ? "Try adjusting your search, or clear filters."
+                            : "Connect a backend or refresh to load available models."}
+                        </div>
+                      </div>
+                      {!hasAnyManifests ? (
+                        <button
+                          type="button"
+                          title="Refresh models"
+                          aria-label="Refresh models"
+                          disabled={manifestsQuery.isFetching}
+                          onClick={() => manifestsQuery.refetch()}
+                          className="text-[11px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
+                        >
+                          <LuRefreshCw
+                            className={`w-3.5 h-3.5 ${manifestsQuery.isFetching ? "animate-spin" : ""}`}
+                          />
+                          <span>Refresh</span>
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-y-5 pt-1 pb-28">
+                  {categories.map((category) => (
+                    <div
+                      key={category}
+                      ref={(el) => {
+                        categorySectionRefs.current[category] = el;
+                      }}
+                      className="w-full"
+                    >
+                      <ModelCategory
+                        width={Math.max(0, scrollWidth - 36)}
+                        category={category}
+                        manifests={filteredManifests.filter((m) => {
+                          const keys: string[] = m.metadata?.categories || [];
+                          const labels = keys.map(
+                            (k) =>
+                              manifestCategoryKeyToLabel.get(k) ||
+                              k
+                                .replace(/[_-]/g, " ")
+                                .replace(/\s+/g, " ")
+                                .trim(),
+                          );
+                          return labels.includes(category);
+                        })}
+                        onViewAll={() => setSelectedCategory(category)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
             </ScrollArea>
           </div>
         </div>

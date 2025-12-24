@@ -944,7 +944,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
       }
 
       if (!current.originalTransform) {
-        updatedClip.originalTransform = { ...next };
+        updatedClip.originalTransform = { ...next, x: 0, y: 0 };
       }
       const newClips = [...state.clips];
       newClips[index] = updatedClip;

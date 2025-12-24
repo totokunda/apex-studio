@@ -63,6 +63,29 @@ const calculateIterateRange = (
     return { startTime, endTime, startIdx };
 };
 
+const getAspectFitSize = (
+  info: MediaInfo | null | undefined,
+  rectWidth: number,
+  rectHeight: number,
+) => {
+  const originalWidth = info?.video?.displayWidth || 0;
+  const originalHeight = info?.video?.displayHeight || 0;
+  if (!originalWidth || !originalHeight || !rectWidth || !rectHeight) {
+    return { displayWidth: 0, displayHeight: 0, offsetX: 0, offsetY: 0 };
+  }
+  const aspectRatio = originalWidth / originalHeight;
+  let dw = rectWidth;
+  let dh = rectHeight;
+  if (rectWidth / rectHeight > aspectRatio) {
+    dw = rectHeight * aspectRatio;
+  } else {
+    dh = rectWidth / aspectRatio;
+  }
+  const ox = (rectWidth - dw) / 2;
+  const oy = (rectHeight - dh) / 2;
+  return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
+};
+
 
 const VideoPreview: React.FC<
   VideoClipProps & {
@@ -104,6 +127,14 @@ const VideoPreview: React.FC<
 }) => {
 
   const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(assetId) || null);
+  // `mediaInfo` is stored in a ref for fast access by decoder callbacks, but ref updates
+  // don't trigger React renders. We bump this version whenever `mediaInfo.current` changes
+  // so aspect-fit sizing and Konva props update immediately (no "wait until drag" issues).
+  const [mediaInfoVersion, setMediaInfoVersion] = useState(0);
+  const setMediaInfoAndBump = useCallback((info: MediaInfo | null) => {
+    mediaInfo.current = info;
+    setMediaInfoVersion((v) => v + 1);
+  }, []);
   const decoderManager = useVideoDecoderManager();
   const focusFrameFromControls = useControlsStore((state) => state.focusFrame);
   const focusFrameFromInputs = useInputControlsStore((s) =>
@@ -119,6 +150,12 @@ const VideoPreview: React.FC<
   
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const displaySizeRef = useRef<{
+    displayWidth: number;
+    displayHeight: number;
+    offsetX: number;
+    offsetY: number;
+  }>({ displayWidth: 0, displayHeight: 0, offsetX: 0, offsetY: 0 });
   const [imageSource, setImageSource] = useState<HTMLCanvasElement | null>(
     null,
   );
@@ -170,6 +207,7 @@ const VideoPreview: React.FC<
   const clipTransform = overrideClip
     ? overrideClip.transform
     : useClipStore((s) => s.getClipTransform(clipId));
+
   const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
   const addClipSelection = useControlsStore((s) => s.addClipSelection);
   const clearSelection = useControlsStore((s) => s.clearSelection);
@@ -285,7 +323,6 @@ const VideoPreview: React.FC<
   }, [clip?.preprocessors, assetId, currentFrame, trimStart]);
 
 
-  
 
   // Use refs to store current filter values to avoid callback recreation
   const filterParamsRef = useRef({
@@ -630,6 +667,7 @@ const VideoPreview: React.FC<
     // Force redraw on source switch: reset last rendered frame and clear cached original frame
     lastRenderedFrameRef.current = -1;
     originalFrameRef.current = null;
+    processingCanvasRef.current = null;
     // @ts-ignore
     iteratorRef.current?.return?.();
     iteratorRef.current = null;
@@ -637,37 +675,31 @@ const VideoPreview: React.FC<
     if (!info) {
       return;
     } else {
-      mediaInfo.current = info;
+      setMediaInfoAndBump(info);
+      // Update the "current" aspect-fit size for drawWrappedCanvas immediately so the
+      // very first frame of the new asset can't render into a stale-sized canvas.
+      displaySizeRef.current = getAspectFitSize(info, rectWidth, rectHeight);
       // Have cached info; force immediate redraw
       lastRenderedFrameRef.current = -1;
     }
-  }, [selectedAssetId]);
+  }, [selectedAssetId, rectWidth, rectHeight, setMediaInfoAndBump]);
 
   // Compute aspect-fit display size and offsets within the preview rect
   const { displayWidth, displayHeight, offsetX, offsetY } = useMemo(() => {
-    const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
-    const originalHeight = mediaInfo.current?.video?.displayHeight || 0;
-    if (!originalWidth || !originalHeight || !rectWidth || !rectHeight) {
-      return { displayWidth: 0, displayHeight: 0, offsetX: 0, offsetY: 0 };
-    }
-    const aspectRatio = originalWidth / originalHeight;
-    let dw = rectWidth;
-    let dh = rectHeight;
-    if (rectWidth / rectHeight > aspectRatio) {
-      dw = rectHeight * aspectRatio;
-    } else {
-      dh = rectWidth / aspectRatio;
-    }
-    const ox = (rectWidth - dw) / 2;
-    const oy = (rectHeight - dh) / 2;
-
-    return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
+    return getAspectFitSize(mediaInfo.current, rectWidth, rectHeight);
   }, [
+    mediaInfoVersion,
     mediaInfo.current?.video?.displayWidth,
     mediaInfo.current?.video?.displayHeight,
     rectWidth,
     rectHeight,
   ]);
+
+  // Keep a ref version for drawWrappedCanvas (which may run before React re-renders
+  // after an asset switch) so it always knows the latest target canvas size.
+  useEffect(() => {
+    displaySizeRef.current = { displayWidth, displayHeight, offsetX, offsetY };
+  }, [displayWidth, displayHeight, offsetX, offsetY]);
 
   // Initialize default transform if missing or invalid (zero-sized),
   // always recentering the clip in the preview rect.
@@ -772,7 +804,20 @@ const VideoPreview: React.FC<
       let canvas = canvasRef.current;
       if (!canvas) return;
 
-      
+      // If the active source asset changes (assetId/selectedAssetId switch) and the
+      // aspect-fit size is different, ensure we resize our backing canvas before drawing.
+      // This prevents drawing new frames into a stale-sized canvas.
+      const targetW = Math.floor(displaySizeRef.current.displayWidth || 0);
+      const targetH = Math.floor(displaySizeRef.current.displayHeight || 0);
+      if (targetW > 0 && targetH > 0) {
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+          // Any cached intermediate canvases must be reset to match the new size.
+          originalFrameRef.current = null;
+          processingCanvasRef.current = null;
+        }
+      }
 
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
@@ -962,6 +1007,13 @@ const VideoPreview: React.FC<
           }
           
           if (!active || !info || !asset) continue;
+
+          // If this is the currently-selected source, publish the mediaInfo into React
+          // state immediately so sizing updates before the first frame renders.
+          if (id === selectedAssetId) {
+            setMediaInfoAndBump(info);
+            displaySizeRef.current = getAspectFitSize(info, rectWidth, rectHeight);
+          }
 
           const config = info.videoDecoderConfig;
           if (!active || !config) continue;
@@ -1552,6 +1604,8 @@ const VideoPreview: React.FC<
       height: c.height * displayHeight,
     };
   }, [clipTransform?.crop, displayWidth, displayHeight]);
+
+
 
   return (
     <React.Fragment>

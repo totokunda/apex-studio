@@ -31,19 +31,21 @@ import ProgressPanel from '../properties/model/ProgressPanel'
 import FilterProperties from '../properties/FilterProperties'
 import { ImageClipProps, ModelClipProps, VideoClipProps } from '@/lib/types'
 import _ from 'lodash';
-import { usePreprocessorsListStore } from '@/lib/preprocessor/list-store';
+import { getSchedulerComponentKey } from "@/lib/manifest/componentKey";
+import { usePreprocessorsListQuery } from "@/lib/preprocessor/queries";
 import type { Preprocessor } from '@/lib/preprocessor/api';
 import { validatePreprocessorFrames } from '@/lib/preprocessorHelpers';
 import { runEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/lib/engine/api';
-import { useManifest } from '@/lib/manifest/hooks';
 import { ManifestComponent } from '@/lib/manifest/api';
 import ModelComponentsProperties from '../properties/model/ModelComponentsProperties'
+import OffloadProperties from '../properties/OffloadProperties'
 import { v4 as uuidv4 } from 'uuid';
 import FrameInterpolateProperties from '../properties/FrameInterpolateProperties'
 import PreprocessorProperties from '../properties/preprocessor/PreprocessorProperties'
 import LoraPanel from '../properties/model/LoraPanel'
 import { runModelGeneration } from '@/lib/modelGeneration';
 import { runPreprocessorJob } from '@/lib/preprocessorRun';
+import { useManifestQuery } from '@/lib/manifest/queries'
 interface PropertiesPanelProps {
     panelSize: number;
 }
@@ -86,7 +88,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   }, [clip?.type]);
 
   // Preprocessor browser state
-  const { preprocessors, load: loadPreprocessors } = usePreprocessorsListStore();
+  const { data: preprocessors = [] } = usePreprocessorsListQuery({
+    enabled: hasPreprocessorBrowser,
+  });
   const [preprocQuery, setPreprocQuery] = useState('');
   const [preprocDetailId, setPreprocDetailId] = useState<string | null>(null);
   const focusFrame = useControlsStore((s) => s.focusFrame);
@@ -94,12 +98,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const setSelectedPreprocessorId = useClipStore((s) => s.setSelectedPreprocessorId);
   const getPreprocessorsForClip = useClipStore((s) => s.getPreprocessorsForClip);
   const currentPreprocessors = getPreprocessorsForClip(clip?.clipId ?? '') || []
-
-  useEffect(() => {
-    if (hasPreprocessorBrowser) {
-      try { loadPreprocessors(); } catch {}
-    }
-  }, [hasPreprocessorBrowser, loadPreprocessors]);
 
   const compatiblePreprocessors = useMemo(() => {
     const list = preprocessors ?? [];
@@ -279,7 +277,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
   // Ensure we have the latest manifest with download flags for components and paths
   const manifestId = (clip as ModelClipProps)?.manifest?.metadata?.id || null;
-  const { data: manifestData } = useManifest(manifestId);
+  const { data: manifestData } = useManifestQuery(manifestId);
 
   const buildSelectedComponentDefaults = useCallback((manifest: any): Record<string, any> => {
     const defaults: Record<string, any> = {};
@@ -292,11 +290,23 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     };
     const isItemDownloaded = (item: any): boolean => !!(item && item.is_downloaded === true);
 
+    let schedulerIdx = 0;
     components.forEach((comp) => {
-      const key = String((comp as any).name || comp.type || 'component');
-      if (comp.type === 'scheduler' && Array.isArray(comp.scheduler_options) && comp.scheduler_options.length > 0) {
+      const key =
+        comp.type === "scheduler"
+          ? getSchedulerComponentKey(comp, schedulerIdx++)
+          : String((comp as any).name || comp.type || "component");
+      if (
+        comp.type === "scheduler" &&
+        Array.isArray(comp.scheduler_options) &&
+        comp.scheduler_options.length > 0
+      ) {
         const first = comp.scheduler_options[0];
-        defaults[key] = { name: first.name, base: (first as any).base, config_path: (first as any).config_path };
+        defaults[key] = {
+          name: first.name,
+          base: (first as any).base,
+          config_path: (first as any).config_path,
+        };
       } else if (comp.model_path) {
         const items = normalizeModelPaths(comp).filter((it) => isItemDownloaded(it));
         if (items.length > 0) {
@@ -491,6 +501,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (currentTab === "preprocessor-duration" && hasValidPreprocessor && hasPreprocessorDuration) return "preprocessor-duration";
     if (currentTab === "model-inputs" && hasModel) return "model-inputs";
     if (currentTab === "model-progress" && hasModel && ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending')) return "model-progress";
+    if (currentTab === "model-offload" && hasModel && isModelDownloaded) return "model-offload";
     // If current tab is invalid, return first available tab
     if (hasValidPreprocessor) return "preprocessor-parameters";
     if (hasLine) return "line";
@@ -517,7 +528,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (isEngineProcessing) { 
       updateClip(clipId, { modelStatus: 'running' });
     } else if (isEngineComplete) {
-      updateClip(clipId, { modelStatus: 'complete' });
+      // Only mark complete once the result is actually present on the clip.
+      // Otherwise keep it running until the timeline has something to render.
+      const modelClip = clip as ModelClipProps | undefined;
+      const hasResult = !!(modelClip?.assetId || modelClip?.previewPath);
+      if (hasResult) updateClip(clipId, { modelStatus: 'complete' });
+      else updateClip(clipId, { modelStatus: 'running' });
     } else if (isEngineFailed) {
       updateClip(clipId, { modelStatus: 'failed' });
     }
@@ -560,9 +576,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const handleGenerate = useCallback(async () => {
     setIsPreparingGeneration(true);
     try {
+      // Always read the latest clip from the store so newly-changed offload settings
+      // (and other model settings) are included in the engine request.
+      const latestClip = clipId ? getClipById(clipId) : clip;
       await runModelGeneration({
         clipId,
-        clip,
+        clip: latestClip,
         fps: fps || 24,
         aspectRatio,
         getClipsForGroup,
@@ -607,7 +626,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
   const handleStopGeneration = useCallback(async () => {
     const targetJobId = engineJobId || (clip as ModelClipProps)?.activeJobId;
-    if (!targetJobId) return;
+    if (!targetJobId) {
+      updateClip(clipId, { modelStatus: undefined });
+      return;
+    }
     try {
       const res = await cancelEngine(targetJobId);
       if (!res.success) {
@@ -656,6 +678,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Inputs</TabsTrigger>}
             {(hasModel) && isModelRunning && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5  whitespace-nowrap">Progress</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-architecture" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Architecture</TabsTrigger>}
+            {(hasModel) && isModelDownloaded && <TabsTrigger value="model-offload" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Offload</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-lora" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">LoRA</TabsTrigger>}
             {(hasModel) && !isModelRunning && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Generations</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Line</TabsTrigger>}
@@ -664,7 +687,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasMask) && <TabsTrigger value="mask" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Mask</TabsTrigger>}
             {(hasAudio) && <TabsTrigger value="audio" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Audio</TabsTrigger>}
             {(hasPreprocessorBrowser) && <TabsTrigger value="preprocessors" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Preprocessors</TabsTrigger>}
-            {((hasDuration || hasFilter)  && !isModelRunning) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 flex-shrink-0 px-4.5 whitespace-nowrap">
+            {((hasDuration || hasFilter)  && !isModelRunning) && <TabsTrigger value="duration" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">
               {hasFilter ? 'Filter' : 'Duration'}
               </TabsTrigger>}
             {(hasAdjust) && <TabsTrigger value="adjust" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Adjust</TabsTrigger>}
@@ -677,7 +700,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             if (tabRef.current) {
               tabRef.current.scrollBy({ left: 96, behavior: 'smooth' });
             }
-          }} className={cn("text-brand-light h-6 w-6 border border-brand-light/10 bg-brand-background-dark/90 backdrop-blur-sm hover:bg-brand-background/100 z-10 transition-all duration-200 rounded-full absolute right-0 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollRight ? "block" : "hidden")} />
+          }} className={cn("text-brand-light h-6 w-6 border border-brand-light/10 bg-brand-background-dark/90 backdrop-blur-sm hover:bg-brand-background z-10 transition-all duration-200 rounded-full absolute right-0 top-1/2 -translate-y-1/2 p-1 cursor-pointer ", canScrollRight ? "block" : "hidden")} />
         </div>
         <ScrollArea className="flex-1 overflow-y-auto">
           <div style={{ paddingBottom: hasValidPreprocessor ? '20px' : '0' }}>
@@ -734,6 +757,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           </TabsContent>}
           {(hasModel) && <TabsContent value="model-architecture" className="min-w-0 m-0"> 
             <ModelComponentsProperties clipId={clipId} />
+          </TabsContent>}
+          {(hasModel) && isModelDownloaded && <TabsContent value="model-offload" className="min-w-0 m-0">
+            <OffloadProperties clipId={clipId} />
           </TabsContent>}
             {(hasFrameInterpolate) && <TabsContent value="enhance" className="min-w-0 m-0">
             <FrameInterpolateProperties clipId={clipId} />

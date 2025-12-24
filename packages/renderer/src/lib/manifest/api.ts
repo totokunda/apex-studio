@@ -52,6 +52,7 @@ export type ManifestComponentModelPathItem = {
   resource_requirements?: ManifestResourceRequirements;
   [key: string]: any;
   custom?: boolean;
+  is_downloaded?: boolean;
 };
 
 export type ManifestComponent = {
@@ -61,6 +62,7 @@ export type ManifestComponent = {
     | "text_encoder"
     | "transformer"
     | "helper"
+    | "extra_model_path"
     | string;
   name?: string;
   label?: string;
@@ -181,6 +183,10 @@ export type UIInputRandom = UIInputBase & {
   step?: number;
 };
 
+export type UIInputBoolean = UIInputBase & {
+  type: "boolean";
+};
+
 export type UIInputMapDimensions = {
   map_h?: string; // the id of the input for height mapping
   map_w?: string; // the id of the input for width mapping
@@ -254,6 +260,7 @@ export type UIInput =
   | UIInputNumber
   | UIInputNumberSlider
   | UIInputRandom
+  | UIInputBoolean
   | UIInputVideo
   | UIInputVideoMask
   | UIInputImagePreprocessor
@@ -303,8 +310,7 @@ export type ManifestWithType = ManifestDocument & {
   category: string;
 };
 
-export type LoraType =
-  | {
+export type LoraType = {
       source?: string;
       remote_source?: string;
       verified?: boolean;
@@ -315,7 +321,6 @@ export type LoraType =
       required?: boolean;
       component?: string;
     }
-  | string;
 
 export type ManifestDocument = {
   api_version: string;
@@ -443,4 +448,98 @@ export async function deleteManifestLora(
     manifestId,
     loraIndex,
   )) as ConfigResponse<any>;
+}
+
+
+export const extractAllDownloadableDefaultPaths = (manifest: ManifestDocument) => {
+  const spec = manifest.spec;
+  const components = spec.components ?? [];
+  const loras = spec.loras ?? [];
+  const allDownloadablePaths = new Set<{type: string, path: string | string[], index?: number}>();
+  for (const [index, component] of components.entries()) {
+    const componentDownloadablePath = [];
+    if (component.is_downloaded) continue;
+    if (component.model_path) {
+      if (typeof component.model_path === "string") {
+        componentDownloadablePath.push({type: "component", path: component.model_path, index});
+      } else {
+        for (const pathItem of component.model_path) {
+          if (pathItem.path && !pathItem.is_downloaded && !pathItem.custom && (pathItem.variant ?? 'default').toLowerCase() == "default") {
+            componentDownloadablePath.push({type: "component", path: pathItem.path, index});
+          }
+        }
+      }
+      if (component.config_path) {
+        componentDownloadablePath.push({type: "component", path: component.config_path, index});
+      }
+    }
+    if (componentDownloadablePath.length > 0) {
+      allDownloadablePaths.add({type: "component", path: componentDownloadablePath.map((path) => path.path), index});
+    }
+  }
+  for (const [index, lora] of loras.entries()) {
+    if (lora.source && !lora.is_downloaded) {
+      allDownloadablePaths.add({type: "lora", path: lora.source, index: index});
+    }
+  }
+  return Array.from(allDownloadablePaths);
+}
+
+export const extractAllDownloadablePaths = (manifest: ManifestDocument) => {
+  const spec = manifest.spec;
+  const components = spec.components ?? [];
+  const loras = spec.loras ?? [];
+  const allDownloadablePaths = new Set<{type: string, path: string}>();
+  for (const component of components) {
+    if (component.model_path) {
+      if (typeof component.model_path === "string") {
+        allDownloadablePaths.add({type: "component", path: component.model_path});
+      } else {
+        for (const pathItem of component.model_path) {
+          if (pathItem.path) {
+            allDownloadablePaths.add({type: "component", path: pathItem.path});
+          }
+        }
+      }
+      if (component.config_path) {
+        allDownloadablePaths.add({type: "component", path: component.config_path});
+      }
+    }
+  }
+  for (const lora of loras) {
+    if (lora.source) {
+      allDownloadablePaths.add({type: "lora", path: lora.source});
+    }
+  }
+  return Array.from(allDownloadablePaths);
+}
+
+export const extractAllComponentDownloadingPaths = (component: ManifestComponent) => {
+  const modelPath = component.model_path;
+  const configPath = component.config_path;
+  const allDownloadingPaths = new Set<{type: string, path: string}>();
+  if (modelPath) {
+    if (typeof modelPath === "string") {
+      allDownloadingPaths.add({type: "component", path: modelPath});
+    } else {
+      for (const pathItem of modelPath) {
+        if (pathItem.path && !pathItem.is_downloaded) {
+          allDownloadingPaths.add({type: "component", path: pathItem.path});
+        }
+      }
+    }
+  }
+  if (configPath) {
+    allDownloadingPaths.add({type: "component", path: configPath});
+  }
+  return Array.from(allDownloadingPaths);
+}
+
+export const extractAllLoraDownloadingPaths = (lora: LoraType) => {
+  const source = lora.source;
+  const allDownloadingPaths = new Set<{type: string, path: string}>();
+  if (source && !lora.is_downloaded) {
+    allDownloadingPaths.add({type: "lora", path: source});
+  }
+  return Array.from(allDownloadingPaths);
 }

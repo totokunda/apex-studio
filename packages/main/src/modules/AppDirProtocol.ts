@@ -69,6 +69,124 @@ class AppDirProtocol implements AppModule {
   private backendUrl: string = "http://127.0.0.1:8765";
   private loopbackAppearsRemote: boolean = false;
   private inflightDownloads: Map<string, Promise<boolean>> = new Map();
+  private inflightRemoteReprobe: Promise<boolean> | null = null;
+  private lastRemoteReprobeAtMs: number = 0;
+
+  private backendUrlIsLoopbackHost(): boolean {
+    try {
+      const u = new URL(this.backendUrl);
+      const host = (u.hostname || "").toLowerCase();
+      return host === "localhost" || host === "127.0.0.1" || host === "::1";
+    } catch {
+      return false;
+    }
+  }
+
+  private appDirBackendRequestTimeoutMs(): number {
+    // Keep this aligned with `packages/main/src/modules/ApexApi.ts` defaults.
+    // Prefer an AppDirProtocol-specific override, but fall back to the general API timeout.
+    const raw =
+      process.env.APEX_APPDIR_REQUEST_TIMEOUT_MS ??
+      process.env.APEX_API_REQUEST_TIMEOUT_MS;
+    const n = Number(raw);
+    if (Number.isFinite(n)) {
+      // Allow 0/negative to mean "no timeout" if explicitly configured.
+      return n;
+    }
+    return 30_000;
+  }
+
+  private onBackendRequestTimeout(context: string, timeoutMs: number): void {
+    // Only "downgrade" remote-mode when the backend URL is loopback.
+    // If the backend host is truly remote (non-loopback), forcing local-mode breaks remote setups.
+    if (this.loopbackAppearsRemote && this.backendUrlIsLoopbackHost()) {
+      console.warn(
+        `[AppDirProtocol] Backend request timed out after ${timeoutMs}ms (${context}); setting loopbackAppearsRemote=false`,
+      );
+      this.loopbackAppearsRemote = false;
+    }
+  }
+
+  private async fetchBackendWithTimeout(
+    url: string,
+    init?: RequestInit,
+    context: string = "backend-request",
+  ): Promise<Response> {
+    const timeoutMs = this.appDirBackendRequestTimeoutMs();
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return await fetch(url, init);
+    }
+
+    const controller = new AbortController();
+    let didTimeout = false;
+    const timer = setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, timeoutMs);
+
+    try {
+      return await fetch(url, { ...(init || {}), signal: controller.signal });
+    } catch (err) {
+      if (didTimeout) {
+        this.onBackendRequestTimeout(context, timeoutMs);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private stripLeadingSlashes(p: string): string {
+    return (p || "").replace(/^\/+/, "");
+  }
+
+  private stripTrailingSlashes(p: string): string {
+    return (p || "").replace(/\/+$/, "");
+  }
+
+  private localUserDataBaseCandidates(app: Electron.App): string[] {
+    // Keep this aligned with preload's `guessUserDataDir()` (packages/preload/src/media/root.ts).
+    // Electron's `app.getPath("userData")` is often ".../Application Support/Electron" in dev,
+    // while Apex Studio stores its own data under ".../Application Support/apex-studio".
+    const appData = app.getPath("appData");
+    const candidates: string[] = [];
+    candidates.push(app.getPath("userData"));
+    candidates.push(path.join(appData, "apex-studio"));
+    candidates.push(path.join(appData, "Apex Studio"));
+    const explicit = process.env.APEX_USER_DATA_DIR;
+    if (typeof explicit === "string" && explicit.length > 0) {
+      candidates.push(explicit);
+    }
+    return Array.from(new Set(candidates.map((p) => path.resolve(p))));
+  }
+
+  private isUnderAnyBase(childAbs: string, basesAbs: string[]): boolean {
+    const child = path.resolve(childAbs);
+    for (const b of basesAbs) {
+      if (this.isSubPath(path.resolve(b), child)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Resolve a relative-ish path under a base directory and reject traversal.
+   * Returns an absolute path under `basePath`, or null if it escapes.
+   */
+  private resolveUnderBase(basePath: string, relOrAbs: string): string | null {
+    const baseAbs = path.resolve(basePath);
+    const abs = path.resolve(baseAbs, relOrAbs);
+    const rel = path.relative(baseAbs, abs);
+    // If rel starts with ".." or is absolute, it escaped the base.
+    if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
+      return abs;
+    }
+    return null;
+  }
+
+  private isSubPath(parentAbs: string, childAbs: string): boolean {
+    const rel = path.relative(parentAbs, childAbs);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  }
 
   async enable({ app }: ModuleContext): Promise<void> {
     await app.whenReady();
@@ -80,7 +198,7 @@ class AppDirProtocol implements AppModule {
       async (_event, appUrl: string): Promise<string | null> => {
         try {
           const u = new URL(appUrl);
-          return await this.resolveAppUrlToFilePath(u);
+          return await this.resolveAppUrlToFilePathWithRemoteFallback(u);
         } catch {
           return null;
         }
@@ -117,12 +235,9 @@ class AppDirProtocol implements AppModule {
       } else if (u.hostname === "apex-cache") {
         basePath = this.cachePath;
       }
+ 
 
-      if (!basePath) {
-        return new Response(null, { status: 404, headers: baseCors });
-      }
-
-      const filePath = await this.resolveAppUrlToFilePath(u);
+      const filePath = await this.resolveAppUrlToFilePathWithRemoteFallback(u);
       if (!filePath) {
         return new Response(null, { status: 404, headers: baseCors });
       }
@@ -183,6 +298,27 @@ class AppDirProtocol implements AppModule {
     });
   }
 
+  private async resolveAppUrlToFilePathWithRemoteFallback(
+    u: URL,
+  ): Promise<string | null> {
+    const first = await this.resolveAppUrlToFilePath(u);
+    if (first) return first;
+
+    // Only attempt remote fallback for apex-cache.
+    if (u.hostname !== "apex-cache") return null;
+    if (this.loopbackAppearsRemote) return null;
+
+    const decodedPathname = this.safeDecodeURIComponent(u.pathname);
+    const candidates = this.remoteRelCandidatesFromPath(decodedPathname);
+    if (candidates.length === 0) return null;
+
+    const switched = await this.maybeReprobeRemoteAndSwitch(candidates);
+    if (!switched) return null;
+
+    // Retry once with updated remote settings.
+    return await this.resolveAppUrlToFilePath(u);
+  }
+
   private async resolveAppUrlToFilePath(u: URL): Promise<string | null> {
     let basePath: string | null = null;
     const app = this.electronApp;
@@ -193,11 +329,12 @@ class AppDirProtocol implements AppModule {
       basePath = this.cachePath;
     }
 
+
     if (!basePath) {
       return null;
     }
 
-    const decodedPathname = decodeURIComponent(u.pathname);
+    const decodedPathname = this.safeDecodeURIComponent(u.pathname);
     const rawFolderUuid = u.searchParams.get("folderUuid");
     const folderUuid =
       typeof rawFolderUuid === "string" && rawFolderUuid.length > 0
@@ -205,47 +342,111 @@ class AppDirProtocol implements AppModule {
         : undefined;
 
     let filePath: string;
+
+
     if (u.hostname === "apex-cache" && this.loopbackAppearsRemote) {
-      const rel = this.remoteRelFromNormalized(
-        decodedPathname.startsWith("/")
-          ? decodedPathname.slice(1)
-          : decodedPathname,
-      );
-      const localPath = rel.startsWith(basePath!)
-        ? rel
-        : path.join(basePath!, rel);
-      try {
-        if (!fs.existsSync(localPath) || !fs.statSync(localPath).isFile()) {
-          const ok = await this.ensureLocalFromRemote(rel, localPath);
+      // In remote mode, apex-cache usually refers to a remote cache mirrored locally under `this.cachePath`.
+      // However, some callers pass absolute *local* paths (e.g. appData/apex-studio/media/...).
+      // If it's a local absolute path under our allowed roots, serve it directly.
+      const candidateAbs = path.isAbsolute(decodedPathname)
+        ? path.normalize(decodedPathname)
+        : null;
+      if (candidateAbs && app) {
+        const allowedLocalBases = [
+          ...(this.cachePath ? [this.cachePath] : []),
+          ...this.localUserDataBaseCandidates(app),
+        ];
+        if (this.isUnderAnyBase(candidateAbs, allowedLocalBases)) {
+          filePath = candidateAbs;
+        } else {
+          const rel = this.remoteRelFromNormalized(
+            this.stripLeadingSlashes(decodedPathname),
+          );
+          const localPath = this.resolveUnderBase(basePath!, rel);
+          if (!localPath) return null;
+          try {
+            if (!fs.existsSync(localPath) || !fs.statSync(localPath).isFile()) {
+              const ok = await this.ensureLocalFromRemote(rel, localPath);
+              if (!ok) {
+                return null;
+              }
+            }
+            await this.ensureProjectSymlinkForCache(rel, localPath, folderUuid);
+          } catch {
+            const ok = await this.ensureLocalFromRemote(rel, localPath).catch(
+              () => false,
+            );
+            if (!ok) {
+              return null;
+            }
+            await this.ensureProjectSymlinkForCache(
+              rel,
+              localPath,
+              folderUuid,
+            ).catch(() => {
+              /* ignore */
+            });
+          }
+          filePath = localPath;
+        }
+      } else {
+        const rel = this.remoteRelFromNormalized(
+          this.stripLeadingSlashes(decodedPathname),
+        );
+        const localPath = this.resolveUnderBase(basePath!, rel);
+        if (!localPath) return null;
+        try {
+          if (!fs.existsSync(localPath) || !fs.statSync(localPath).isFile()) {
+            const ok = await this.ensureLocalFromRemote(rel, localPath);
+            if (!ok) {
+              return null;
+            }
+          }
+          await this.ensureProjectSymlinkForCache(rel, localPath, folderUuid);
+        } catch {
+          const ok = await this.ensureLocalFromRemote(rel, localPath).catch(
+            () => false,
+          );
           if (!ok) {
             return null;
           }
+          await this.ensureProjectSymlinkForCache(
+            rel,
+            localPath,
+            folderUuid,
+          ).catch(() => {
+            /* ignore */
+          });
         }
-        await this.ensureProjectSymlinkForCache(rel, localPath, folderUuid);
-      } catch {
-        const ok = await this.ensureLocalFromRemote(rel, localPath).catch(
-          () => false,
-        );
-        if (!ok) {
+        filePath = localPath;
+      }
+    } else {
+      // URL pathnames always start with "/". Treat them as paths *relative to basePath*,
+      // except when the decoded pathname is an absolute filesystem path already under basePath.
+      const candidateAbs = path.isAbsolute(decodedPathname)
+        ? path.normalize(decodedPathname)
+        : null;
+      if (candidateAbs) {
+        // If the renderer passed an absolute path, accept it only if it falls under our allowed roots.
+        // Crucially: never "re-base" an absolute path under basePath (that causes double-concat bugs).
+        const allowedBases: string[] = [];
+        if (u.hostname === "apex-cache" && this.cachePath) {
+          allowedBases.push(this.cachePath);
+        }
+        if (app) {
+          allowedBases.push(...this.localUserDataBaseCandidates(app));
+        } else {
+          allowedBases.push(basePath);
+        }
+        if (!this.isUnderAnyBase(candidateAbs, allowedBases)) {
           return null;
         }
-        await this.ensureProjectSymlinkForCache(
-          rel,
-          localPath,
-          folderUuid,
-        ).catch(() => {
-          /* ignore */
-        });
-      }
-      filePath = localPath;
-    } else {
-      if (path.isAbsolute(decodedPathname)) {
-        filePath = decodedPathname;
+        filePath = candidateAbs;
       } else {
-        const rel = decodedPathname.startsWith("/")
-          ? decodedPathname.slice(1)
-          : decodedPathname;
-        filePath = rel.startsWith(basePath) ? rel : path.join(basePath, rel);
+        const rel = this.stripLeadingSlashes(decodedPathname);
+        const resolved = this.resolveUnderBase(basePath, rel);
+        if (!resolved) return null;
+        filePath = resolved;
       }
 
       if (u.hostname === "apex-cache") {
@@ -278,6 +479,107 @@ class AppDirProtocol implements AppModule {
     return filePath;
   }
 
+  private safeDecodeURIComponent(value: string): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  private remoteRelCandidatesFromPath(decodedPathname: string): string[] {
+    const n = (decodedPathname || "").replace(/\\/g, "/");
+    const candidates: string[] = [];
+
+    const noLead = n.startsWith("/") ? n.slice(1) : n;
+    if (noLead) candidates.push(noLead);
+
+    // Heuristic: strip up to and including 'apex-diffusion/cache' segment if present.
+    const marker = "apex-diffusion/cache/";
+    const markerIdx = noLead.indexOf(marker);
+    if (markerIdx !== -1) {
+      const after = noLead.slice(markerIdx + marker.length);
+      if (after) candidates.push(after.startsWith("/") ? after.slice(1) : after);
+    }
+
+    // Dedupe while preserving order
+    return Array.from(new Set(candidates));
+  }
+
+  private async fetchExistsWithTimeout(
+    url: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      // Prefer a tiny range request to avoid downloading large files.
+      const resp = await fetch(url, {
+        method: "GET",
+        headers: { Range: "bytes=0-0" },
+        signal: controller.signal,
+      });
+      return resp.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async remoteApexCacheFileExists(relPath: string): Promise<boolean> {
+    try {
+      const url = `${this.backendUrl}/files?scope=apex-cache&path=${encodeURIComponent(relPath)}`;
+      // Keep this probe quick; we only use it to detect remote mode.
+      return await this.fetchExistsWithTimeout(url, 450);
+    } catch {
+      return false;
+    }
+  }
+
+  private async maybeReprobeRemoteAndSwitch(
+    relCandidates: string[],
+  ): Promise<boolean> {
+    // Debounce + dedupe concurrent probes.
+    const now = Date.now();
+    if (now - this.lastRemoteReprobeAtMs < 1500) {
+      return this.loopbackAppearsRemote;
+    }
+    if (this.inflightRemoteReprobe) {
+      return await this.inflightRemoteReprobe;
+    }
+
+    const probePromise = (async (): Promise<boolean> => {
+      this.lastRemoteReprobeAtMs = Date.now();
+
+      // First, check if the requested path exists via the backend file endpoint.
+      let exists = false;
+      for (const rel of relCandidates) {
+        // eslint-disable-next-line no-await-in-loop
+        exists = await this.remoteApexCacheFileExists(rel);
+        if (exists) break;
+      }
+      if (!exists) return false;
+
+      // If it exists remotely, switch to remote mode and initialize mirror/cache base.
+      this.loopbackAppearsRemote = true;
+      const app = this.electronApp;
+      if (app) {
+        try {
+          await this.fetchCachePath(app);
+        } catch {}
+      }
+      return true;
+    })();
+
+    this.inflightRemoteReprobe = probePromise;
+    try {
+      return await probePromise;
+    } finally {
+      this.inflightRemoteReprobe = null;
+    }
+  }
+
   private async initializeAsync(app: Electron.App): Promise<void> {
     try {
       await this.initBackendUrl(app);
@@ -292,7 +594,11 @@ class AppDirProtocol implements AppModule {
 
   private async fetchCachePath(app: Electron.App): Promise<void> {
     try {
-      const response = await fetch(`${this.backendUrl}/config/cache-path`);
+      const response = await this.fetchBackendWithTimeout(
+        `${this.backendUrl}/config/cache-path`,
+        { method: "GET", headers: { "Content-Type": "application/json" } },
+        "config/cache-path",
+      );
       const ok = response.ok;
       let data: { cache_path?: string } = {};
       if (ok) {
@@ -380,10 +686,11 @@ class AppDirProtocol implements AppModule {
       }
 
       // For loopback hosts, rely solely on backend-reported hostname
-      const resp = await fetch(`${this.backendUrl}/config/hostname`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
+      const resp = await this.fetchBackendWithTimeout(
+        `${this.backendUrl}/config/hostname`,
+        { method: "GET", headers: { "Content-Type": "application/json" } },
+        "config/hostname",
+      );
       if (!resp.ok) {
         // On failure, keep previous value (default false)
         return;
@@ -404,20 +711,59 @@ class AppDirProtocol implements AppModule {
     if (this.loopbackAppearsRemote) {
       // Known bases to strip
       const bases: string[] = [];
+      // Also strip the local mirror path if the renderer accidentally sent it
+      // (this prevents double-prefixing like: mirror + "/Users/.../mirror/...").
+      if (this.cachePath) bases.push(this.cachePath);
       if (this.remoteCacheBasePath) bases.push(this.remoteCacheBasePath);
-      // Normalize and attempt stripping
-      for (const b of bases) {
-        const base = b.replace(/\\/g, "/");
+      const stripBaseOnce = (
+        value: string,
+        baseRaw: string,
+      ): { changed: boolean; value: string } => {
+        const base = this.stripTrailingSlashes(baseRaw.replace(/\\/g, "/"));
+        if (!base) return { changed: false, value };
         const baseNoLead = base.startsWith("/") ? base.slice(1) : base;
-        if (n.startsWith(base)) {
-          const rel = n.slice(base.length);
-          return rel.startsWith("/") ? rel.slice(1) : rel;
+
+        const tryStrip = (prefix: string): { changed: boolean; value: string } => {
+          if (!prefix) return { changed: false, value };
+          if (value === prefix) return { changed: true, value: "" };
+          if (value.startsWith(prefix)) {
+            const next = value.charAt(prefix.length);
+            // Only strip on boundary (end or '/'), so we don't strip partial matches.
+            if (next === "" || next === "/") {
+              const rest = value.slice(prefix.length);
+              return { changed: true, value: rest };
+            }
+          }
+          return { changed: false, value };
+        };
+
+        const a = tryStrip(base);
+        if (a.changed) return a;
+        return tryStrip(baseNoLead);
+      };
+
+      // Normalize and attempt stripping repeatedly.
+      // This is important because a common bug is doing:
+      //   path.join(mirrorBase, absolutePathUnderMirrorBase)
+      // which creates:
+      //   mirrorBase + "/" + mirrorBase(no-leading-slash) + "/..."
+      // We want to strip *all* repeated base prefixes until the remainder is truly relative.
+      let cur = n;
+      for (let i = 0; i < 6; i++) {
+        let changed = false;
+        for (const b of bases) {
+          const res = stripBaseOnce(cur, b);
+          if (res.changed) {
+            cur = res.value;
+            changed = true;
+          }
         }
-        if (n.startsWith(baseNoLead)) {
-          const rel = n.slice(baseNoLead.length);
-          return rel.startsWith("/") ? rel.slice(1) : rel;
-        }
+        if (!changed) break;
       }
+      if (cur !== n) {
+        return this.stripLeadingSlashes(cur);
+      }
+
       // Heuristic: strip up to and including 'apex-diffusion/cache' segment if present
       const markerIdx = n.indexOf("apex-diffusion/cache/");
       if (markerIdx !== -1) {
@@ -456,9 +802,18 @@ class AppDirProtocol implements AppModule {
         const baseDelayMs = 80;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           try {
-            resp = await fetch(url);
+            resp = await this.fetchBackendWithTimeout(
+              url,
+              { method: "GET" },
+              "files(apex-cache)",
+            );
             if (resp.ok && resp.body) break;
-          } catch {}
+          } catch {
+            // If a backend timeout flipped us out of remote-mode, stop retrying.
+            if (!this.loopbackAppearsRemote && this.backendUrlIsLoopbackHost()) {
+              return false;
+            }
+          }
           // If target got created during wait, bail out early as success
           try {
             const st = await fs.promises

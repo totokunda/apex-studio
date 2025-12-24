@@ -58,7 +58,7 @@ const NumberListInput: React.FC<NumberListInputProps> = ({
   emptyLabel,
   maxItems,
   valueType,
-  toFixed = 1,
+  toFixed = 2,
 }) => {
   const [tempValue, setTempValue] = useState<string>("");
   const lastValueRef = useRef<string>(value);

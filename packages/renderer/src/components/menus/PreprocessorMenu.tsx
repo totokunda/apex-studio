@@ -22,10 +22,18 @@ import {
 } from "react-icons/lu";
 import { TbWorldDownload } from "react-icons/tb";
 import { cn } from "@/lib/utils";
-import { usePreprocessorsListStore } from "@/lib/preprocessor/list-store";
-import { useDownloadStore } from "@/lib/download/store";
+import {
+  PREPROCESSOR_QUERY_KEY,
+  PREPROCESSORS_LIST_QUERY_KEY,
+  usePreprocessorQuery,
+  usePreprocessorsListQuery,
+} from "@/lib/preprocessor/queries";
 import PreprocessorPage from "../preprocessors/PreprocessorPage";
 import CategorySidebar from "./CategorySidebar";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
+import { useStartUnifiedDownloadMutation } from "@/lib/download/mutations";
+import { fetchRayJobs, type RayJobStatus } from "@/lib/jobs/api";
 
 export const PreprocessorItem: React.FC<{
   preprocessor: Preprocessor;
@@ -34,115 +42,156 @@ export const PreprocessorItem: React.FC<{
   onAdd?: (preprocessor: Preprocessor) => void;
   addDisabled?: boolean;
   dimmed?: boolean;
-}> = ({ preprocessor, isDragging, onMoreInfo, onAdd, addDisabled, dimmed }) => {
-  const {
-    startAndTrackDownload,
-    resolveDownload,
-    subscribeToJob,
-    downloadingPaths,
-    wsFilesByPath,
-  } = useDownloadStore();
-  const { load } = usePreprocessorsListStore();
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
+  polledJobs?: RayJobStatus[];
+}> = ({
+  preprocessor:initialPreprocessor,
+  isDragging,
+  onMoreInfo,
+  onAdd,
+  addDisabled,
+  dimmed,
+  polledJobs,
+}) => {
+  const queryClient = useQueryClient();
+  const {data:preprocessorData} = usePreprocessorQuery(initialPreprocessor.id);
+  const preprocessor = preprocessorData ?? initialPreprocessor;
   const [isDownloaded, setIsDownloaded] = useState<boolean>(
     !!preprocessor.is_downloaded,
   );
-  const subscriptionRef = useRef<(() => void) | null>(null);
-  const unmountedRef = useRef(false);
+  const [starting, setStarting] = useState(false);
+  const [localJobId, setLocalJobId] = useState<string | null>(null);
+  const {
+    addSourceToJobId,
+    getSourceToJobId,
+    getJobUpdates,
+    removeJobUpdates,
+    removeSourceToJobId,
+    removeSourceByJobId,
+  } =
+    useDownloadJobIdStore();
 
-  const cleanupSubscription = useCallback(() => {
-    if (subscriptionRef.current) {
-      try {
-        subscriptionRef.current();
-      } catch {}
-      subscriptionRef.current = null;
-    }
-  }, []);
 
-  useEffect(() => {
-    unmountedRef.current = false;
-    return () => {
-      unmountedRef.current = true;
-      cleanupSubscription();
-    };
-  }, [cleanupSubscription]);
+  const mappedJobId = getSourceToJobId(preprocessor.id) || null;
+  const jobId = mappedJobId || localJobId;
+  const jobUpdates = getJobUpdates(jobId ?? undefined) ?? [];
+
+  const { mutateAsync: startDownload } = useStartUnifiedDownloadMutation({
+    onSuccess(data, variables) {
+      addSourceToJobId(variables.source, data.job_id);
+      setLocalJobId(data.job_id);
+    },
+  });
 
   useEffect(() => {
     setIsDownloaded(!!preprocessor.is_downloaded);
   }, [preprocessor.is_downloaded]);
 
   const handleComplete = useCallback(async () => {
-    if (unmountedRef.current) return;
-    cleanupSubscription();
     setStarting(false);
-    setJobId(null);
     setIsDownloaded(true);
     try {
-      await load(true);
+      // Update caches optimistically so the UI reflects the new state immediately,
+      // even when `usePreprocessorQuery` is configured to be cache-only.
+      queryClient.setQueryData(
+        PREPROCESSOR_QUERY_KEY(preprocessor.id),
+        (prev: Preprocessor | undefined) => {
+          if (!prev) return prev;
+          return { ...prev, is_downloaded: true };
+        },
+      );
+      queryClient.setQueryData(
+        PREPROCESSORS_LIST_QUERY_KEY,
+        (prev: Preprocessor[] | undefined) => {
+          if (!Array.isArray(prev)) return prev;
+          return prev.map((p) =>
+            p?.id === preprocessor.id ? { ...p, is_downloaded: true } : p,
+          );
+        },
+      );
     } catch {}
-  }, [cleanupSubscription, load]);
+  }, [queryClient, preprocessor.id]);
+
+  const terminalStatuses = useMemo(
+    () => new Set(["complete", "completed", "cancelled", "canceled", "error", "failed"]),
+    [],
+  );
+  const polledJob = useMemo(() => {
+    if (!jobId) return null;
+    return (polledJobs || []).find((j) => j.job_id === jobId) ?? null;
+  }, [jobId, polledJobs]);
+  const polledStatus = (polledJob?.status || "").toLowerCase();
+  const isJobActive =
+    !!jobId &&
+    !!polledJob &&
+    polledJob.category === "download" &&
+    !terminalStatuses.has(polledStatus);
+  const isDownloading = starting || (jobUpdates?.length ?? 0) > 0 || isJobActive;
 
   useEffect(() => {
-    let cancelled = false;
-    const adoptExisting = async () => {
-      try {
-        const res = await resolveDownload({
-          item_type: "preprocessor",
-          source: preprocessor.id,
-        });
-        if (cancelled || unmountedRef.current || !res) return;
-        if (res.downloaded) {
-          setIsDownloaded(true);
-          cleanupSubscription();
-          setJobId(null);
-          return;
-        }
-        if (res.running && res.job_id) {
-          setJobId(res.job_id);
-          try {
-            const off = await subscribeToJob(
-              res.job_id,
-              preprocessor.id,
-              async () => {
-                await handleComplete();
-              },
-            );
-            if (cancelled || unmountedRef.current) {
-              try {
-                off();
-              } catch {}
-            } else {
-              cleanupSubscription();
-              subscriptionRef.current = () => {
-                try {
-                  off();
-                } catch {}
-              };
-            }
-          } catch {}
-        } else {
-          cleanupSubscription();
-          setJobId(null);
-        }
-      } catch {}
-    };
-    adoptExisting();
-    return () => {
-      cancelled = true;
-    };
+    if (!jobId) return;
+
+    const latestWsStatus =
+      typeof jobUpdates?.[jobUpdates.length - 1]?.status === "string"
+        ? jobUpdates[jobUpdates.length - 1].status.toLowerCase()
+        : "";
+
+    const terminalFromPolling = !!polledJob && terminalStatuses.has(polledStatus);
+    const terminalFromWs = !!latestWsStatus && terminalStatuses.has(latestWsStatus);
+
+    // If the job disappears from polling quickly, fall back to WS terminal updates.
+    if (!terminalFromPolling && !terminalFromWs) return;
+
+    // Finalize: update UI + clear download tracking so we don't get stuck in "downloading".
+    try {
+      removeJobUpdates(jobId);
+    } catch {}
+    try {
+      // Best-effort: clear both the explicit source mapping and any mapping by job id.
+      removeSourceToJobId(preprocessor.id);
+    } catch {}
+    try {
+      removeSourceByJobId(jobId);
+    } catch {}
+    setLocalJobId(null);
+    void handleComplete();
   }, [
-    cleanupSubscription,
+    jobId,
+    polledJob,
+    polledStatus,
+    terminalStatuses,
     handleComplete,
+    jobUpdates,
+    removeJobUpdates,
+    removeSourceToJobId,
+    removeSourceByJobId,
     preprocessor.id,
-    resolveDownload,
-    subscribeToJob,
   ]);
 
-  const wsFilesRecord = wsFilesByPath[preprocessor.id] || {};
-  const downloadFiles = Object.values(wsFilesRecord);
-  const isQueued = downloadingPaths.has(preprocessor.id);
-  const isDownloading = isQueued || downloadFiles.length > 0 || !!jobId;
+  // If the preprocessor flips to downloaded via cache updates, ensure we clear
+  // any lingering download tracking so the loader/button don't get stuck.
+  useEffect(() => {
+    if (!jobId) return;
+    if (!preprocessor.is_downloaded) return;
+    try {
+      removeJobUpdates(jobId);
+    } catch {}
+    try {
+      removeSourceToJobId(preprocessor.id);
+    } catch {}
+    try {
+      removeSourceByJobId(jobId);
+    } catch {}
+    setLocalJobId(null);
+    setStarting(false);
+    setIsDownloaded(true);
+  }, [
+    jobId,
+    preprocessor.is_downloaded,
+    preprocessor.id,
+    removeJobUpdates,
+    removeSourceToJobId,
+    removeSourceByJobId,
+  ]);
 
   const formatSize = (bytes: number): string | null => {
     if (bytes === 0) {
@@ -163,22 +212,13 @@ export const PreprocessorItem: React.FC<{
     if (starting || isDownloading || isDownloaded) return;
     setStarting(true);
     try {
-      const jobIds = await startAndTrackDownload(
-        {
-          item_type: "preprocessor",
-          source: preprocessor.id,
-        },
-        async () => {
-          await handleComplete();
-        },
-      );
-      if (!unmountedRef.current && jobIds?.[0]) {
-        setJobId(jobIds[0]);
-      }
+      const res = await startDownload({
+        item_type: "preprocessor",
+        source: preprocessor.id,
+      });
+      setLocalJobId(res.job_id);
     } catch {
-      if (!unmountedRef.current) {
-        setStarting(false);
-      }
+      setStarting(false);
     }
   };
 
@@ -191,9 +231,9 @@ export const PreprocessorItem: React.FC<{
   return (
     <div
       className={cn(
-        "flex flex-col w-28 transition-all duration-200 rounded-md border shadow border-brand-light/10",
+        "flex flex-col transition-all duration-200 rounded-md border shadow border-brand-light/10",
         {
-          "w-40": !isDragging,
+          "w-44": !isDragging,
           "w-32": isDragging,
         },
         dimmed ? "opacity-100" : "",
@@ -334,10 +374,10 @@ export const PreprocessorItem: React.FC<{
             <button
               onClick={() => onMoreInfo?.(preprocessor.id)}
               type="button"
-              className="text-[10px] font-medium whitespace-nowrap w-1/2 flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1"
+              className="text-[10px] font-medium whitespace-nowrap w-3/8 flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1"
               title="Show more info"
             >
-              <LuInfo className="w-3 h-3" />
+              <LuInfo className="min-w-3 min-h-3 inline-block" />
               <span>Info</span>
             </button>
             {!!onAdd && isDownloaded && (
@@ -346,7 +386,7 @@ export const PreprocessorItem: React.FC<{
                 onClick={() => !addDisabled && onAdd?.(preprocessor)}
                 disabled={addDisabled}
                 className={cn(
-                  "text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light bg-brand-background border disabled:!cursor-default disabled:opacity-50 border-brand-light/10 rounded px-2 py-1",
+                  "text-[10px] font-medium w-1/2 flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light bg-brand-background border disabled:cursor-default! disabled:opacity-50 border-brand-light/10 rounded px-2 py-1",
                 )}
                 title="Add to clip"
               >
@@ -360,7 +400,7 @@ export const PreprocessorItem: React.FC<{
                 onClick={handleDownload}
                 disabled={starting || isDownloading}
                 className={cn(
-                  "inline-flex items-center justify-center gap-x-1 text-[10px] font-medium w-1/2 bg-brand-background border border-brand-light/10 rounded py-1 px-1 h-[25px] min-w-7",
+                  "inline-flex items-center justify-center gap-x-1 text-[10px] font-medium w-5/8 bg-brand-background border border-brand-light/10 rounded py-1 px-1 h-[25px] min-w-7",
                   {
                     "text-brand-light/60 cursor-default opacity-70":
                       isDownloading || starting,
@@ -371,11 +411,11 @@ export const PreprocessorItem: React.FC<{
                 title={starting ? "Starting…" : "Download"}
               >
                 {isDownloading || starting ? (
-                  <LuLoader className="size-2.5 animate-spin" />
+                  <LuLoader className="min-w-2.5! min-h-2.5! inline-block animate-spin" />
                 ) : (
-                  <LuDownload className="size-2.5" />
+                  <LuDownload className="min-w-2.5! min-h-2.5! inline-block" />
                 )}
-                {isDownloading || starting ? "Installing" : "Install"}
+                {isDownloading || starting ? "Download" : "Download"}
               </button>
             )}
           </div>
@@ -391,7 +431,8 @@ const PreprocessorCategory: React.FC<{
   width: number;
   onViewAll: () => void;
   onMoreInfo: (id: string) => void;
-}> = ({ category, preprocessors, width, onViewAll, onMoreInfo }) => {
+  polledJobs: RayJobStatus[];
+}> = ({ category, preprocessors, width, onViewAll, onMoreInfo, polledJobs }) => {
   const carouselRef = useRef<HTMLDivElement>(null);
   const [showLeftArrow, setShowLeftArrow] = useState(false);
   const [showRightArrow, setShowRightArrow] = useState(false);
@@ -455,7 +496,7 @@ const PreprocessorCategory: React.FC<{
         </span>
         <button
           onClick={onViewAll}
-          className="flex items-center gap-x-1.5 text-brand-light hover:text-brand-light/70 text-[12px] font-medium cursor-pointer transition-colors rounded-md flex-shrink-0"
+          className="flex items-center gap-x-1.5 text-brand-light hover:text-brand-light/70 text-[12px] font-medium cursor-pointer transition-colors rounded-md shrink-0"
         >
           <span>View all</span>
           <LuArrowRight className="w-3.5 h-3.5" />
@@ -465,7 +506,7 @@ const PreprocessorCategory: React.FC<{
         {showLeftArrow && (
           <button
             onClick={() => scroll("left")}
-            className="absolute -left-3 top-1/2 cursor-pointer -translate-y-1/2 z-[9999] bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
+            className="absolute -left-3 top-1/2 cursor-pointer -translate-y-1/2 z-9999 bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
           >
             <LuChevronLeft className="w-4 h-4 text-brand-light" />
           </button>
@@ -473,7 +514,7 @@ const PreprocessorCategory: React.FC<{
         {showRightArrow && (
           <button
             onClick={() => scroll("right")}
-            className="absolute -right-3 top-1/2 cursor-pointer -translate-y-1/2 z-[9999] bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
+            className="absolute -right-3 top-1/2 cursor-pointer -translate-y-1/2 z-9999 bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
           >
             <LuChevronRight className="w-4 h-4 text-brand-light" />
           </button>
@@ -488,10 +529,11 @@ const PreprocessorCategory: React.FC<{
           }}
         >
           {preprocessors.map((preprocessor) => (
-            <div key={preprocessor.name} className="flex-shrink-0">
+            <div key={preprocessor.name} className="shrink-0">
               <PreprocessorItem
                 preprocessor={preprocessor}
                 onMoreInfo={onMoreInfo}
+                polledJobs={polledJobs}
               />
             </div>
           ))}
@@ -506,7 +548,8 @@ const CategoryDetailView: React.FC<{
   preprocessors: Preprocessor[];
   onBack: () => void;
   onMoreInfo: (id: string) => void;
-}> = ({ category, preprocessors, onBack, onMoreInfo }) => {
+  polledJobs: RayJobStatus[];
+}> = ({ category, preprocessors, onBack, onMoreInfo, polledJobs }) => {
   return (
     <div className="flex flex-col h-full w-full">
       <div className="px-7 pt-4 pb-4 border-b border-brand/20">
@@ -535,6 +578,7 @@ const CategoryDetailView: React.FC<{
                 <PreprocessorItem
                   preprocessor={preprocessor}
                   onMoreInfo={onMoreInfo}
+                  polledJobs={polledJobs}
                 />
               </div>
             ))}
@@ -548,12 +592,19 @@ const CategoryDetailView: React.FC<{
 const PreprocessorMenu: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const {
-    preprocessors,
-    load,
-    selectedPreprocessorId,
-    setSelectedPreprocessorId,
-  } = usePreprocessorsListStore();
+  const { data: preprocessors = [] } = usePreprocessorsListQuery();
+  const { data: polledJobs = [] } = useQuery<RayJobStatus[]>({
+    queryKey: ["rayJobs"],
+    queryFn: fetchRayJobs,
+    placeholderData: (prev) => prev ?? [],
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: 4000,
+    refetchIntervalInBackground: true,
+  });
+  const [selectedPreprocessorId, setSelectedPreprocessorId] = useState<
+    string | null
+  >(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [scrollWidth, setScrollWidth] = useState(0);
@@ -605,11 +656,7 @@ const PreprocessorMenu: React.FC = () => {
       ),
     ];
   }, [filteredPreprocessors]);
-
-  useEffect(() => {
-    // trigger a single idempotent load; store prevents refetching
-    load();
-  }, [load]);
+  // `usePreprocessorsListQuery()` handles fetching/caching.
 
   useEffect(() => {
     const updateWidth = () => {
@@ -724,6 +771,7 @@ const PreprocessorMenu: React.FC = () => {
             )}
             onBack={() => setSelectedCategory(null)}
             onMoreInfo={(id) => setSelectedPreprocessorId(id)}
+            polledJobs={polledJobs}
           />
         </>
       );
@@ -742,6 +790,7 @@ const PreprocessorMenu: React.FC = () => {
           )}
           onBack={() => setSelectedCategory(null)}
           onMoreInfo={(id) => setSelectedPreprocessorId(id)}
+          polledJobs={polledJobs}
         />
       </>
     );
@@ -796,13 +845,14 @@ const PreprocessorMenu: React.FC = () => {
                     className="w-full"
                   >
                     <PreprocessorCategory
-                      width={scrollWidth - 36}
+                      width={scrollWidth - 32}
                       category={category}
                       preprocessors={filteredPreprocessors.filter(
                         (preprocessor) => preprocessor.category === category,
                       )}
                       onViewAll={() => setSelectedCategory(category)}
                       onMoreInfo={(id) => setSelectedPreprocessorId(id)}
+                      polledJobs={polledJobs}
                     />
                   </div>
                 ))}

@@ -11,6 +11,9 @@ interface TimelineSelectorZoomProps {
   mode?: "frame" | "range";
 }
 
+const minZoomLevel = 1;
+const maxZoomLevel = 10;
+
 const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({
   hasClip = true,
   inputId,
@@ -23,8 +26,6 @@ const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({
     setFocusAnchorRatio,
     focusFrameByInputId,
     totalTimelineFramesByInputId,
-    minZoomLevel,
-    maxZoomLevel,
   } = useInputControlsStore();
   const zoomLevel = zoomLevelByInputId[inputId ?? ""] ?? 1;
   const focusFrame = focusFrameByInputId[inputId ?? ""] ?? 0;
@@ -37,9 +38,9 @@ const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({
 
   useEffect(() => {
     if (!hasClips) {
-      setZoomLevel(1, inputId);
-      console.log("setting zoom level to 1", inputId);
-      setFocusFrame(0, inputId);
+      setZoomLevel(1, inputId ?? "");
+
+      setFocusFrame(0, inputId ?? "");
     }
   }, [hasClips, inputId, setZoomLevel, setFocusFrame]);
 
@@ -82,9 +83,9 @@ const TimelineSelectorZoom: React.FC<TimelineSelectorZoomProps> = ({
       targetDuration > 0 ? (anchorFocusFrame - newStart) / targetDuration : 0.5;
     const finalAnchor = Math.max(0, Math.min(1, newAnchor));
 
-    setFocusAnchorRatio(finalAnchor, inputId);
-    setTimelineDuration(newStart, newEnd, inputId);
-    setZoomLevel(clampedLevel as ZoomLevel, inputId);
+    setFocusAnchorRatio(finalAnchor, inputId ?? "");
+    setTimelineDuration(newStart, newEnd, inputId ?? "");
+    setZoomLevel(clampedLevel as ZoomLevel, inputId ?? "");
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {

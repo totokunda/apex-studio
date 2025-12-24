@@ -119,6 +119,10 @@ type KeyframeEntry = {
 
 const CLIP_DRAG_OFFSET = 1.5;
 const KEYFRAME_RADIUS = 12;
+// Avoid rendering thousands of keyframes at low zoom by enforcing a minimum pixel
+// spacing between rendered diamonds. As zoom increases, `pxPerFrame` increases,
+// which lowers the derived `minFrameDelta` and naturally renders more keyframes.
+const MIN_KEYFRAME_PIXEL_SPACING = Math.max(10, Math.round(KEYFRAME_RADIUS * 1.25));
 
 const cloneKeyframes = (keyframes: MaskClipProps["keyframes"]) => {
   if (keyframes instanceof Map) {
@@ -241,6 +245,40 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
   const displayActiveFrame = useMemo(() => {
     return selectedFrame != null ? selectedFrame : activeFrame;
   }, [selectedFrame, activeFrame]);
+
+  const visibleKeyframes = useMemo(() => {
+    if (keyframes.length <= 1) return keyframes;
+
+    // At high zoom, show everything.
+    const safePxPerFrame = Math.max(1e-6, pxPerFrame);
+    const minFrameDelta = Math.max(
+      1,
+      Math.ceil(MIN_KEYFRAME_PIXEL_SPACING / safePxPerFrame),
+    );
+    if (minFrameDelta <= 1) return keyframes;
+
+    const keep = new Set<number>();
+    keep.add(keyframes[0].frame);
+    keep.add(keyframes[keyframes.length - 1].frame);
+    if (displayActiveFrame != null) keep.add(displayActiveFrame);
+    if (selectedFrame != null) keep.add(selectedFrame);
+
+    let lastKeptFrame = keyframes[0].frame;
+    for (let i = 1; i < keyframes.length - 1; i++) {
+      const frame = keyframes[i].frame;
+      // If a frame is explicitly kept (selected/active), accept it and move the cursor.
+      if (keep.has(frame)) {
+        lastKeptFrame = frame;
+        continue;
+      }
+      if (frame - lastKeptFrame >= minFrameDelta) {
+        keep.add(frame);
+        lastKeptFrame = frame;
+      }
+    }
+
+    return keyframes.filter(({ frame }) => keep.has(frame));
+  }, [displayActiveFrame, keyframes, pxPerFrame, selectedFrame]);
 
   useEffect(() => {
     if (selectedFrame == null) return;
@@ -409,15 +447,19 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     return visualBaseX + clamped * pxPerFrame;
   };
 
-  const boundDrag = () => (pos: Konva.Vector2d) => {
-    const relativeX = pos.x - visualBaseX;
-    const clampedRelative = Math.max(0, Math.min(clipWidth, relativeX));
-    const nextFrame = Math.round(clampedRelative / Math.max(1e-6, pxPerFrame));
-    return {
-      x: visualBaseX + nextFrame * pxPerFrame,
-      y: keyframeY,
+  const dragBoundFunc = useMemo(() => {
+    return (pos: Konva.Vector2d) => {
+      const relativeX = pos.x - visualBaseX;
+      const clampedRelative = Math.max(0, Math.min(clipWidth, relativeX));
+      const nextFrame = Math.round(
+        clampedRelative / Math.max(1e-6, pxPerFrame),
+      );
+      return {
+        x: visualBaseX + nextFrame * pxPerFrame,
+        y: keyframeY,
+      };
     };
-  };
+  }, [clipWidth, keyframeY, pxPerFrame, visualBaseX]);
 
   const handleDragEnd =
     (originalFrame: number) => (e: Konva.KonvaEventObject<DragEvent>) => {
@@ -437,7 +479,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
 
   return (
     <Group ref={containerRef} listening>
-      {keyframes.map(({ frame }) => {
+      {visibleKeyframes.map(({ frame }) => {
         const isHighlighted = frame === displayActiveFrame;
         const fill = isHighlighted ? "#4C8DFF" : "#ffffff";
         const stroke = isHighlighted ? "#CFE2FF" : "rgba(180, 180, 180, 0.9)";
@@ -452,7 +494,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
             x={frameToX(frame)}
             y={keyframeY}
             draggable
-            dragBoundFunc={boundDrag()}
+            dragBoundFunc={dragBoundFunc}
             onDragStart={handleDragStart(frame)}
             onDragEnd={handleDragEnd(frame)}
             onMouseDown={(e) => {

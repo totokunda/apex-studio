@@ -2,13 +2,10 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import {
   LuChevronLeft,
-  LuChevronDown,
-  LuChevronRight,
   LuImage,
   LuVideo,
   LuTrash,
@@ -16,16 +13,24 @@ import {
   LuDownload,
 } from "react-icons/lu";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { Preprocessor } from "@/lib/preprocessor/api";
 import {
-  getPreprocessor,
   deletePreprocessor as deletePreprocessorApi,
 } from "@/lib/preprocessor/api";
 import { cn } from "@/lib/utils";
 
-import { usePreprocessorsListStore } from "@/lib/preprocessor/list-store";
-import { useDownloadStore } from "@/lib/download/store";
+import {
+  PREPROCESSOR_QUERY_KEY,
+  PREPROCESSORS_LIST_QUERY_KEY,
+  usePreprocessorQuery,
+} from "@/lib/preprocessor/queries";
+import { useQueryClient } from "@tanstack/react-query";
 import { ProgressBar } from "@/components/common/ProgressBar";
+import { unifiedDownloadWsUpdatesToFiles } from "@/lib/download/ws-updates-to-files";
+import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
+import { useStartUnifiedDownloadMutation } from "@/lib/download/mutations";
+import { useQuery } from "@tanstack/react-query";
+import { fetchRayJobs, type RayJobStatus } from "@/lib/jobs/api";
+import { cancelRayJob } from "@/lib/jobs/api";
 
 import {
   formatDownloadProgress,
@@ -41,34 +46,18 @@ const PreprocessorPage: React.FC<PreprocessorPageProps> = ({
   preprocessorId,
   onBack,
 }) => {
-  const [data, setData] = useState<Preprocessor | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await getPreprocessor(preprocessorId);
-        if (!cancelled) {
-          setData(res.data ?? null);
-        }
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message || "Failed to load preprocessor");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [preprocessorId]);
+  const queryClient = useQueryClient();
+  const {
+    data,
+    isLoading: loading,
+    isError,
+  } = usePreprocessorQuery(preprocessorId, {
+    enabled: !!preprocessorId,
+    forceFetch: true,
+  });
 
   if (loading) return null;
-  if (error || !data) return null;
+  if (isError || !data) return null;
 
   const totalBytes = (data.files ?? []).reduce(
     (acc, f) => acc + (f.size_bytes || 0),
@@ -146,11 +135,14 @@ const PreprocessorPage: React.FC<PreprocessorPageProps> = ({
               files={data.files}
               onDownloaded={async () => {
                 try {
-                  const res = await getPreprocessor(preprocessorId);
-                  setData(res.data ?? null);
-                } catch {}
-                try {
-                  await usePreprocessorsListStore.getState().load(true);
+                  await Promise.all([
+                    queryClient.invalidateQueries({
+                      queryKey: PREPROCESSORS_LIST_QUERY_KEY,
+                    }),
+                    queryClient.invalidateQueries({
+                      queryKey: PREPROCESSOR_QUERY_KEY(preprocessorId),
+                    }),
+                  ]);
                 } catch {}
               }}
             />
@@ -164,8 +156,9 @@ const PreprocessorPage: React.FC<PreprocessorPageProps> = ({
                 files={data.files}
                 onRefresh={async () => {
                   try {
-                    const res = await getPreprocessor(preprocessorId);
-                    setData(res.data ?? null);
+                    await queryClient.invalidateQueries({
+                      queryKey: PREPROCESSOR_QUERY_KEY(preprocessorId),
+                    });
                   } catch {}
                 }}
               />
@@ -192,19 +185,40 @@ const PreprocessorDownloadSection: React.FC<{
   files: { path: string; size_bytes: number; name?: string }[];
   onDownloaded: () => Promise<void>;
 }> = ({ preprocessorId, files, onDownloaded }) => {
+  const queryClient = useQueryClient();
   const {
-    startAndTrackDownload,
-    cancelDownload,
-    resolveDownload,
-    subscribeToJob,
-    downloadingPaths,
-    wsFilesByPath,
-  } = useDownloadStore();
-  const [jobId, setJobId] = useState<string | null>(null);
+    addSourceToJobId,
+    getSourceToJobId,
+    getJobUpdates,
+    removeJobUpdates,
+    removeSourceToJobId,
+  } = useDownloadJobIdStore();
+
   const [starting, setStarting] = useState(false);
-  const subscriptionRef = useRef<(() => void) | null>(null);
-  const unmountedRef = useRef(false);
   const [cancelling, setCancelling] = useState(false);
+
+  // Shared polling cache (also used by JobsMenu); when a download is active, ensure it keeps polling.
+  const { data: polledJobs = [] } = useQuery<RayJobStatus[]>({
+    queryKey: ["rayJobs"],
+    queryFn: fetchRayJobs,
+    placeholderData: (prev) => prev ?? [],
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: starting ? 2000 : 4000,
+    refetchIntervalInBackground: true,
+  });
+
+  const [localJobId, setLocalJobId] = useState<string | null>(null);
+  const mappedJobId = getSourceToJobId(preprocessorId) || null;
+  const jobId = mappedJobId || localJobId;
+  const jobUpdates = getJobUpdates(jobId ?? undefined) ?? [];
+
+  const { mutateAsync: startDownload } = useStartUnifiedDownloadMutation({
+    onSuccess(data, variables) {
+      addSourceToJobId(variables.source, data.job_id);
+      setLocalJobId(data.job_id);
+    },
+  });
 
   const totalBytes = files.reduce((acc, f) => acc + (f.size_bytes || 0), 0);
   const formatSize = (bytes: number): string => {
@@ -215,100 +229,61 @@ const PreprocessorDownloadSection: React.FC<{
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
 
-  const cleanupSubscription = useCallback(() => {
-    if (subscriptionRef.current) {
-      try {
-        subscriptionRef.current();
-      } catch {}
-      subscriptionRef.current = null;
-    }
-  }, []);
+  const terminalStatuses = useMemo(
+    () => new Set(["complete", "completed", "cancelled", "canceled", "error", "failed"]),
+    [],
+  );
 
+  const polledJob = useMemo(() => {
+    if (!jobId) return null;
+    return (polledJobs || []).find((j) => j.job_id === jobId) ?? null;
+  }, [jobId, polledJobs]);
+
+  const polledStatus = (polledJob?.status || "").toLowerCase();
+  const isJobActive =
+    !!jobId &&
+    !!polledJob &&
+    polledJob.category === "download" &&
+    !terminalStatuses.has(polledStatus);
+
+  const isDownloading = starting || (jobUpdates?.length ?? 0) > 0 || isJobActive;
+
+  // When we observe the job complete (via polling), refresh preprocessor queries.
   useEffect(() => {
-    unmountedRef.current = false;
-    return () => {
-      unmountedRef.current = true;
-      cleanupSubscription();
-    };
-  }, [cleanupSubscription]);
-
-  const handleComplete = useCallback(async () => {
-    if (unmountedRef.current) return;
-    cleanupSubscription();
-    setStarting(false);
-    setJobId(null);
-    try {
-      await onDownloaded();
-    } catch {}
-  }, [cleanupSubscription, onDownloaded]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const adoptExisting = async () => {
+    if (!jobId || !polledJob) return;
+    if (!terminalStatuses.has(polledStatus)) return;
+    
+    void (async () => {
       try {
-        const res = await resolveDownload({
-          item_type: "preprocessor",
-          source: preprocessorId,
-        });
-        if (cancelled || unmountedRef.current || !res) return;
-        if (res.downloaded) {
-          await handleComplete();
-          return;
-        }
-        if (res.running && res.job_id) {
-          setJobId(res.job_id);
-          try {
-            const off = await subscribeToJob(
-              res.job_id,
-              preprocessorId,
-              async () => {
-                await handleComplete();
-              },
-            );
-            if (cancelled || unmountedRef.current) {
-              try {
-                off();
-              } catch {}
-            } else {
-              cleanupSubscription();
-              subscriptionRef.current = () => {
-                try {
-                  off();
-                } catch {}
-              };
-            }
-          } catch {}
-        } else {
-          cleanupSubscription();
-          setJobId(null);
-        }
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: PREPROCESSOR_QUERY_KEY(preprocessorId) }),
+        ]);
       } catch {}
-    };
-    adoptExisting();
-    return () => {
-      cancelled = true;
-    };
+      try {
+        await onDownloaded();
+      } catch {}
+      setStarting(false);
+      setCancelling(false);
+    })();
   }, [
-    cleanupSubscription,
-    handleComplete,
+    jobId,
+    polledJob,
+    polledStatus,
+    terminalStatuses,
+    onDownloaded,
+    queryClient,
     preprocessorId,
-    resolveDownload,
-    subscribeToJob,
   ]);
-
-  const wsFilesRecord = wsFilesByPath[preprocessorId] || {};
-  const downloadFiles = Object.values(wsFilesRecord) as DownloadEntry[];
-  const isQueued = downloadingPaths.has(preprocessorId);
-  const isDownloading = isQueued || downloadFiles.length > 0 || !!jobId;
 
   const wsFilesByName = useMemo(() => {
     const map: Record<string, DownloadEntry> = {};
+    const downloadFiles = unifiedDownloadWsUpdatesToFiles(jobUpdates) as any[];
     downloadFiles.forEach((entry) => {
       if (entry.filename) map[entry.filename] = entry;
       if (entry.label && !map[entry.label]) map[entry.label] = entry;
     });
     return map;
-  }, [downloadFiles]);
+  }, [jobUpdates]);
 
   const findWsFile = useCallback(
     (file: { path: string; size_bytes: number; name?: string }) => {
@@ -323,14 +298,9 @@ const PreprocessorDownloadSection: React.FC<{
           return wsFilesByName[key];
         }
       }
-      if (file.size_bytes) {
-        return downloadFiles.find(
-          (entry) => (entry.totalBytes ?? 0) === file.size_bytes,
-        );
-      }
       return undefined;
     },
-    [downloadFiles, wsFilesByName],
+    [wsFilesByName],
   );
 
   const getPercent = useCallback((entry?: DownloadEntry) => {
@@ -352,22 +322,13 @@ const PreprocessorDownloadSection: React.FC<{
     if (starting || isDownloading) return;
     setStarting(true);
     try {
-      const jobIds = await startAndTrackDownload(
-        {
-          item_type: "preprocessor",
-          source: preprocessorId,
-        },
-        async () => {
-          await handleComplete();
-        },
-      );
-      if (!unmountedRef.current && jobIds?.[0]) {
-        setJobId(jobIds[0]);
-      }
+      const res = await startDownload({
+        item_type: "preprocessor",
+        source: preprocessorId,
+      });
+      setLocalJobId(res.job_id);
     } catch {
-      if (!unmountedRef.current) {
-        setStarting(false);
-      }
+      setStarting(false);
     }
   };
 
@@ -375,15 +336,19 @@ const PreprocessorDownloadSection: React.FC<{
     if (!jobId) return;
     try {
       setCancelling(true);
-      await cancelDownload(jobId);
+      await cancelRayJob(jobId);
     } catch {}
-    cleanupSubscription();
-    if (!unmountedRef.current) {
-      setStarting(false);
-      setJobId(null);
-      setCancelling(false);
-    }
+    try {
+      removeJobUpdates(jobId);
+    } catch {}
+    try {
+      removeSourceToJobId(preprocessorId);
+    } catch {}
+    setStarting(false);
+    setCancelling(false);
   };
+
+  const downloadFiles = unifiedDownloadWsUpdatesToFiles(jobUpdates) as any[];
 
   return (
     <div className="mt-6">
@@ -421,7 +386,7 @@ const PreprocessorDownloadSection: React.FC<{
                       {f.path}
                     </div>
                   </div>
-                  <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                  <div className="text-[10px] text-brand-light/80 font-mono shrink-0">
                     {formatSize(fileSizeBytes)}
                   </div>
                 </div>
@@ -446,7 +411,7 @@ const PreprocessorDownloadSection: React.FC<{
                       )}
                       {wsFile.status === "completed" ||
                       wsFile.status === "complete" ? (
-                        <span className="text-green-400">Completed</span>
+                        <span className="text-brand-light/90">Completed</span>
                       ) : (
                         <span className="text-[9px] text-brand-light/60">
                           {wsFile.downloadSpeed
@@ -502,21 +467,11 @@ const PreprocessorFilesSection: React.FC<{
   files: { path: string; size_bytes: number; name?: string }[];
   onRefresh: () => Promise<void>;
 }> = ({ preprocessorId, files, onRefresh }) => {
+  const queryClient = useQueryClient();
   const [deleting, setDeleting] = useState(false);
-  const loadPreprocessors = usePreprocessorsListStore((s) => s.load);
-  const cancelDownload = useDownloadStore((s) => s.cancelDownload);
-  const jobIdToPath = useDownloadStore((s) => s.jobIdToPath);
-
-  const activeJobId = useMemo(() => {
-    for (const [id, mapped] of Object.entries(jobIdToPath)) {
-      if (Array.isArray(mapped)) {
-        if (mapped.includes(preprocessorId)) return id;
-      } else if (mapped === preprocessorId) {
-        return id;
-      }
-    }
-    return null;
-  }, [jobIdToPath, preprocessorId]);
+  const { getSourceToJobId, removeJobUpdates, removeSourceToJobId } =
+    useDownloadJobIdStore();
+  const activeJobId = getSourceToJobId(preprocessorId) ?? null;
 
   const formatSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
@@ -534,13 +489,21 @@ const PreprocessorFilesSection: React.FC<{
     try {
       if (activeJobId) {
         try {
-          await cancelDownload(activeJobId);
+          await cancelRayJob(activeJobId);
+        } catch {}
+        try {
+          removeJobUpdates(activeJobId);
+        } catch {}
+        try {
+          removeSourceToJobId(preprocessorId);
         } catch {}
       }
       await deletePreprocessorApi(preprocessorId);
       await onRefresh();
       try {
-        await loadPreprocessors(true);
+        await queryClient.invalidateQueries({
+          queryKey: PREPROCESSORS_LIST_QUERY_KEY,
+        });
       } catch {}
     } finally {
       setDeleting(false);
@@ -574,7 +537,7 @@ const PreprocessorFilesSection: React.FC<{
                     {f.path}
                   </div>
                 </div>
-                <div className="text-[10px] text-brand-light/80 font-mono flex-shrink-0">
+                <div className="text-[10px] text-brand-light/80 font-mono shrink-0">
                   {formatSize(f.size_bytes || 0)}
                 </div>
               </div>

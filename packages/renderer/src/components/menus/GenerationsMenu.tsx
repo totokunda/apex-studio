@@ -5,12 +5,13 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { LuFolder, LuArrowUpDown, LuRefreshCw } from "react-icons/lu";
 import { cn } from "@/lib/utils";
 import { MediaItem, MediaThumb } from "@/components/media/Item";
 import { getMediaInfo } from "@/lib/media/utils";
-import { deleteFile, listGeneratedMedia } from "@app/preload";
+import { deleteFile, listGeneratedMediaPage } from "@app/preload";
 import { useProjectsStore } from "@/lib/projects";
 import Draggable from "@/components/dnd/Draggable";
 import { RiAiGenerate } from "react-icons/ri";
@@ -42,11 +43,6 @@ import { toast } from "sonner";
 type GenerationMediaType = "video" | "image";
 type SortKey = "name" | "date";
 type SortOrder = "asc" | "desc";
-
-// Simple in-memory cache to avoid refetching and recomputing metadata
-// every time the user navigates away from and back to this menu.
-let cachedGenerationItems: MediaItem[] | null = null;
-let hasLoadedGenerationsOnce = false;
 
 interface DeleteAlertDialogProps {
   onDelete: () => void;
@@ -106,6 +102,8 @@ const nameComparator = (a: MediaItem, b: MediaItem) =>
 const dateComparator = (a: MediaItem, b: MediaItem) =>
   (a.dateAddedMs ?? 0) - (b.dateAddedMs ?? 0);
 
+const GENERATIONS_PAGE_SIZE = 15;
+
 const sortItems = (
   items: MediaItem[],
   sortKey: SortKey,
@@ -128,12 +126,11 @@ const sortItems = (
 };
 
 const GenerationsMenu: React.FC = () => {
-  const [items, setItems] = useState<MediaItem[]>(
-    () => cachedGenerationItems ?? [],
-  );
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [panelHeight, setPanelHeight] = useState<number>(0);
+  const scrollAreaRootRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const [selectedTypes, setSelectedTypes] = useState<
     Set<GenerationMediaType>
   >(new Set());
@@ -144,21 +141,41 @@ const GenerationsMenu: React.FC = () => {
   const [deleteAlertOpen, setDeleteAlertOpen] = useState(false);
   const [deleteItem, setDeleteItem] = useState<MediaItem | null>(null);
   const activeProject = useProjectsStore((s) => s.getActiveProject());
+  const folderUuid = activeProject?.folderUuid ?? null;
   const selectedClipIds = useControlsStore((s) => s.selectedClipIds);
   const getClipById = useClipStore((s) => s.getClipById);
   const updateClip = useClipStore((s) => s.updateClip);
   const addAsset = useClipStore((s) => s.addAsset);
 
-  const loadGenerations = useCallback(async () => {
-    try {
-      setLoading(true);
-      const folderUuid = activeProject?.folderUuid;
-      const list = await listGeneratedMedia(folderUuid);
-      const infoPromises = list.map((it) =>
+  const generationsQueryKey = useMemo(
+    () => ["media", "generated", folderUuid] as const,
+    [folderUuid],
+  );
+
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isFetchingNextPage,
+    hasNextPage,
+    fetchNextPage,
+    refetch,
+  } = useInfiniteQuery({
+    queryKey: generationsQueryKey,
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam }) => {
+      const page = await listGeneratedMediaPage({
+        folderUuid: folderUuid ?? undefined,
+        cursor: pageParam,
+        limit: GENERATIONS_PAGE_SIZE,
+      });
+
+      const infoPromises = page.items.map((it) =>
         getMediaInfo(it.assetUrl, { sourceDir: "apex-cache" }),
       );
       const infos = await Promise.all(infoPromises);
-      const results: MediaItem[] = list.map((it, idx) => ({
+
+      const results: MediaItem[] = page.items.map((it, idx) => ({
         name: it.name,
         type: it.type,
         absPath: it.absPath,
@@ -167,15 +184,22 @@ const GenerationsMenu: React.FC = () => {
         mediaInfo: infos[idx],
         hasProxy: false,
       }));
-      setItems(results);
-      cachedGenerationItems = results;
-      hasLoadedGenerationsOnce = true;
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }, [activeProject?.folderUuid]);
+
+      return { items: results, nextCursor: page.nextCursor };
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    placeholderData: (prev) => {
+      if (prev) return prev;
+    },
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity, // 5 minutes
+  });
+
+  const items = useMemo(() => {
+    const pages = data?.pages ?? [];
+    return pages.flatMap((p) => p.items ?? []);
+  }, [data]);
 
   // Track panel height to size the ScrollArea dynamically
   useEffect(() => {
@@ -196,7 +220,8 @@ const GenerationsMenu: React.FC = () => {
   useEffect(() => {
     const handler = async () => {
       // Always reload from disk so we pick up any newly written engine_results
-      await loadGenerations();
+      queryClient.removeQueries({ queryKey: generationsQueryKey, exact: true });
+      await refetch();
     };
 
     try {
@@ -218,17 +243,37 @@ const GenerationsMenu: React.FC = () => {
         // ignore
       }
     };
-  }, [loadGenerations]);
+  }, [queryClient, generationsQueryKey, refetch]);
 
+  // Infinite scroll: when sentinel becomes visible, fetch the next page.
   useEffect(() => {
-    // Only hit disk the first time (or after explicit refresh via delete),
-    // otherwise hydrate from the cached items when remounting.
-    if (!hasLoadedGenerationsOnce && items.length === 0) {
-      void loadGenerations();
-    } else if (cachedGenerationItems && items.length === 0) {
-      setItems(cachedGenerationItems);
-    }
-  }, [loadGenerations, items.length]);
+    const rootEl = scrollAreaRootRef.current;
+    const sentinelEl = loadMoreSentinelRef.current;
+    if (!rootEl || !sentinelEl) return;
+
+    const viewport = rootEl.querySelector(
+      "[data-radix-scroll-area-viewport]",
+    ) as HTMLElement | null;
+    if (!viewport) return;
+
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const hit = entries.some((e) => e.isIntersecting);
+        if (!hit) return;
+        if (!hasNextPage) return;
+        if (isFetchingNextPage) return;
+        void fetchNextPage();
+      },
+      {
+        root: viewport,
+        rootMargin: "250px",
+        threshold: 0.01,
+      },
+    );
+
+    obs.observe(sentinelEl);
+    return () => obs.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, items.length]);
 
   const displayItems = useMemo(() => {
     const filtered = filterItems(items, selectedTypes);
@@ -290,7 +335,8 @@ const GenerationsMenu: React.FC = () => {
         await deleteFile(target);
 
         // Reload from disk to stay in sync with actual engine_results contents
-        await loadGenerations();
+        queryClient.removeQueries({ queryKey: generationsQueryKey, exact: true });
+        await refetch();
 
         toast.success("Generation deleted", {
           position: "bottom-right",
@@ -306,8 +352,10 @@ const GenerationsMenu: React.FC = () => {
         });
       }
     },
-    [loadGenerations],
+    [queryClient, generationsQueryKey, refetch],
   );
+
+  const loading = isLoading;
 
   return (
     <div ref={panelRef} className="h-full w-full duration-200 ease-out">
@@ -432,20 +480,23 @@ const GenerationsMenu: React.FC = () => {
             className={cn(
               "px-2.5 py-1.5 rounded-md text-brand-light/90 text-[12px] flex bg-brand flex-row items-center gap-x-2 transition-colors",
               "hover:bg-brand-light/10",
-              loading && "opacity-60 cursor-not-allowed",
+              isFetching && "opacity-60 cursor-not-allowed",
             )}
             title="Refresh"
             onClick={() => {
-              if (!loading) {
-                void loadGenerations();
-              }
+              if (isFetching) return;
+              queryClient.removeQueries({
+                queryKey: generationsQueryKey,
+                exact: true,
+              });
+              void refetch();
             }}
-            disabled={loading}
+            disabled={isFetching}
           >
             <LuRefreshCw
               className={cn(
                 "w-[16px] h-[16px]",
-                loading && "animate-spin",
+                isFetching && "animate-spin",
               )}
             />
             <span>Refresh</span>
@@ -479,6 +530,7 @@ const GenerationsMenu: React.FC = () => {
         )}
         {displayItems.length > 0 && (
           <ScrollArea
+            ref={scrollAreaRootRef as any}
             style={{ height: Math.max(0, panelHeight - 72) }}
             className="px-5 py-4 pt-1 dark pb-10"
           >
@@ -542,6 +594,29 @@ const GenerationsMenu: React.FC = () => {
                   </div>
                 </div>
               ))}
+            </div>
+
+            <div className="w-full pt-4 flex flex-col items-center gap-y-2">
+              {hasNextPage && (
+                <button
+                  className={cn(
+                    "px-3 py-1.5 rounded-md text-brand-light/90 text-[12px] flex bg-brand flex-row items-center gap-x-2 transition-colors",
+                    "hover:bg-brand-light/10",
+                    isFetchingNextPage && "opacity-60 cursor-not-allowed",
+                  )}
+                  onClick={() => void fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                >
+                  <LuRefreshCw
+                    className={cn(
+                      "w-[14px] h-[14px]",
+                      isFetchingNextPage && "animate-spin",
+                    )}
+                  />
+                  <span>{isFetchingNextPage ? "Loading..." : "Load more"}</span>
+                </button>
+              )}
+              <div ref={loadMoreSentinelRef} className="h-4 w-full" />
             </div>
           </ScrollArea>
         )}

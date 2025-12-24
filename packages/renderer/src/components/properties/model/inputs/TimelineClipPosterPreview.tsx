@@ -34,6 +34,7 @@ import { getMediaInfo } from "@/lib/media/utils";
 import { remapMaskForMediaDialog } from "@/lib/mask/transformUtils";
 import { ClipTransform, MaskClipProps } from "@/lib/types";
 import { BaseClipApplicator } from "@/components/preview/clips/apply/base";
+import DynamicModelPreview from "@/components/preview/clips/DynamicModelPreview";
 
 // 1. EXTRACTED COMPONENT TO HANDLE STABLE OVERRIDES
 const PosterClipItem = React.memo(({
@@ -63,7 +64,7 @@ const PosterClipItem = React.memo(({
     : 0;
   const relativeStart = startFrame - groupStart;
   const hasOverlap =
-    (clip.type === "video" || clip.type === "image") &&
+    (clip.type === "video" || clip.type === "image" || clip.type === "model") &&
     (clip.groupId ? relativeStart : startFrame) > 0
       ? true
       : false;
@@ -238,6 +239,17 @@ const PosterClipItem = React.memo(({
           rectHeight={rectHeight}
           assetMode={true}
           applicators={applicators}
+        />
+      );
+    case "model":
+      return (
+        <DynamicModelPreview
+          key={clip.clipId}
+          clip={clip}
+          applicators={applicators}
+          overlap={true}
+          rectWidth={rectWidth}
+          rectHeight={rectHeight}
         />
       );
     default:

@@ -153,7 +153,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
             }
           }}
           className={cn(
-            "text-brand-light h-6 w-6 mt-1 border border-brand-light/10 bg-brand-background/90 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute right-2 top-1/2 -translate-y-1/2 p-1 cursor-pointer",
+            "text-brand-light h-6 w-6 mt-1 border border-brand-light/10 bg-brand-background/90 hover:bg-brand-background z-50 transition-all duration-200 rounded-full absolute right-2 top-1/2 -translate-y-1/2 p-1 cursor-pointer",
             canScrollRight ? "block" : "hidden",
           )}
         />

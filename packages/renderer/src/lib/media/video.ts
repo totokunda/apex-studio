@@ -143,10 +143,7 @@ export const getVideoFrameIterator = async (
   if (!mediaInfo.video) throw new Error("Media info not found");
 
   const projectFps = Math.max(1, Math.floor(options.projectFps || 0));
-  const speed = (() => {
-    const s = Number(options?.speed ?? 1);
-    return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
-  })();
+  const speed = 1;
 
   const videoCanBeTransparent = await mediaInfo.video.canBeTransparent();
   const decoderMaybe = getOrCreateVideoDecoder(

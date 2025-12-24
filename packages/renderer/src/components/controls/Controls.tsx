@@ -263,6 +263,20 @@ const Controls = () => {
         return;
       }
 
+      // If the user has selected normal (non-input) text in the UI, prefer native
+      // browser copy/cut behavior over timeline shortcut handling.
+      const hasTextSelection = (() => {
+        try {
+          const sel = window.getSelection?.();
+          if (!sel) return false;
+          if (sel.isCollapsed) return false;
+          // Ignore empty/whitespace-only selections.
+          return sel.toString().trim().length > 0;
+        } catch {
+          return false;
+        }
+      })();
+
       const isMod = e.metaKey || e.ctrlKey;
       const controls = useControlsStore.getState();
       const clipsStore = useClipStore.getState();
@@ -325,6 +339,7 @@ const Controls = () => {
 
       // Copy
       if (isMod && e.key.toLowerCase() === "c") {
+        if (hasTextSelection) return;
         if (selectedIds.length > 0) {
           e.preventDefault();
           clipsStore.copyClips(selectedIds);
@@ -334,6 +349,7 @@ const Controls = () => {
 
       // Cut
       if (isMod && e.key.toLowerCase() === "x") {
+        if (hasTextSelection) return;
         if (selectedIds.length > 0) {
           e.preventDefault();
           clipsStore.cutClips(selectedIds);
@@ -404,7 +420,7 @@ const Controls = () => {
       }
 
       // Zoom shortcuts (viewport)
-      // Cmd/Ctrl + 0 => Zoom to Fit (center content at 75%)
+      // Cmd/Ctrl + 0 => Zoom to Fit
       // Cmd/Ctrl + 5 => 50%
       // Cmd/Ctrl + 1 => 100%
       // Cmd/Ctrl + 2 => 200%
@@ -413,7 +429,7 @@ const Controls = () => {
       if (isMod && (key === "0" || key === "1" || key === "2" || key === "5")) {
         e.preventDefault();
         if (key === "0") {
-          viewport.centerContentAt(75);
+          viewport.zoomToFit();
         } else if (key === "5") {
           viewport.setScalePercent(50);
         } else if (key === "1") {

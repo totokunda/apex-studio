@@ -19,6 +19,9 @@ export const useSettingsStore = create<SettingsState>(
     hfToken: null,
     civitaiApiKey: null,
     backendUrl: null,
+    renderImageSteps: false,
+    renderVideoSteps: false,
+    useFastDownload: true,
 
     // These will be replaced by the middleware with real implementations.
     hydrate: async () => {},
@@ -32,6 +35,9 @@ export const useSettingsStore = create<SettingsState>(
     setHfToken: async () => {},
     setCivitaiApiKey: async () => {},
     setBackendUrl: async () => {},
+    setRenderImageSteps: async () => {},
+    setRenderVideoSteps: async () => {},
+    setUseFastDownload: async () => {},
   })),
 );
 

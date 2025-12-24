@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import "../styles/index.css";
 import {
   ResizableHandle,
@@ -23,12 +23,12 @@ import type { ManifestDocument } from "@/lib/manifest";
 import GlobalContextMenu from "@/components/GlobalContextMenu";
 import { useProjectsStore } from "@/lib/projects";
 import { VideoDecoderManagerProvider } from "@/lib/media/VideoDecoderManagerContext";
-
+import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "@/lib/react-query/queryClient";
+import { useContextMenuStore } from "@/lib/context-menu";
 type ManifestWithType = ManifestDocument & {
   type: "model";
 };
-
-
 
 const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -39,7 +39,6 @@ const App: React.FC = () => {
   const [activeDragItem, setActiveDragItem] = useState<
     MediaItem | Preprocessor | ManifestWithType | null
   >(null);
-
 
   // Disable scrolling while dragging
   useEffect(() => {
@@ -100,6 +99,57 @@ const App: React.FC = () => {
     };
   }, [activeDragItem]);
 
+  // Enable copy for non-editable selected text via a minimal context menu.
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      const sel = window.getSelection?.();
+      if (!sel || sel.isCollapsed) return;
+      const selectedText = sel.toString?.() ?? "";
+      if (!selectedText.trim()) return;
+
+      const node = e.target as Node | null;
+      if (!node) return;
+
+      // Only show this menu when right-click happens *on the selected text*.
+      try {
+        const containsNode =
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          typeof (sel as any).containsNode === "function"
+            ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (sel as any).containsNode(node, true)
+            : true;
+        if (!containsNode) return;
+      } catch {
+        // If containsNode fails, don't hijack the context menu.
+        return;
+      }
+
+      // Don't override when something else already handled it.
+      if (e.defaultPrevented) return;
+
+      e.preventDefault();
+      const shortcut =
+        typeof navigator !== "undefined" &&
+        typeof navigator.platform === "string" &&
+        navigator.platform.toLowerCase().includes("mac")
+          ? "⌘C"
+          : "Ctrl+C";
+      useContextMenuStore.getState().openMenu({
+        position: { x: e.clientX, y: e.clientY },
+        target: { type: "textSelection" },
+        groups: [
+          {
+            id: "edit",
+            items: [{ id: "copy", label: "Copy", action: "copy", shortcut }],
+          },
+        ],
+      });
+    };
+
+    document.addEventListener("contextmenu", onContextMenu, true);
+    return () => document.removeEventListener("contextmenu", onContextMenu, true);
+  }, []);
+
   const handleDragEnd = (_e: DragEndEvent) => {
     setActiveDragItem(null);
   };
@@ -131,6 +181,7 @@ const App: React.FC = () => {
   }
 
   return (
+    <QueryClientProvider client={queryClient}>
     <VideoDecoderManagerProvider>
     <DndContext
       autoScroll={false}
@@ -292,6 +343,7 @@ const App: React.FC = () => {
       </DragOverlay>
     </DndContext>
     </VideoDecoderManagerProvider>
+    </QueryClientProvider>
   );
 };
 

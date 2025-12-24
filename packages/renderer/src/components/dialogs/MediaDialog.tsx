@@ -594,6 +594,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
       const availableWidth = width - padding;
       const availableHeight = height - padding;
 
+
       setSize({
         width: availableWidth,
         height: availableHeight,
@@ -869,6 +870,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
   // For non-image/video clips (or groups containing only non-image/video),
   // we base this on the real editor aspect ratio so layout matches the main editor.
   const previewRect = useMemo(() => {
+    
     if (!isValidClip) {
       return { width: 0, height: 0 };
     }
@@ -876,6 +878,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
     const hasMediaClip = toRender.some(
       (clip) => clip.type === "image" || clip.type === "video",
     );
+
 
     // Non-media-only clips/groups use the editor aspect ratio
     if (!hasMediaClip) {
@@ -885,15 +888,18 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
           : editorAspectRatio.width / editorAspectRatio.height;
       const baseShortSide = BASE_LONG_SIDE;
 
+
       if (!Number.isFinite(ratio) || ratio <= 0) {
         return { width: size.width, height: size.height };
       }
+
 
       return {
         width: baseShortSide * ratio,
         height: baseShortSide,
       };
     }
+
 
     // Image / video clips still use the container-driven size
     return { width: size.width, height: size.height };
@@ -905,6 +911,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
     size.width,
     size.height,
   ]);
+
 
   // Map logical canvas to the actual dialog container size
   const view = useMemo(() => {
@@ -1248,7 +1255,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-4xl w-full h-[80vh] flex flex-col bg-background text-foreground p-0 gap-0 overflow-hidden dark font-poppins border-brand-light/10">
-        <DialogHeader className="px-6 py-6 border-b border-brand-light/10 flex-shrink-0 bg-brand-background">
+        <DialogHeader className="px-6 py-6 border-b border-brand-light/10 shrink-0 bg-brand-background">
           <DialogTitle className="text-start text-[13px] font-medium">
             {" "}
           </DialogTitle>

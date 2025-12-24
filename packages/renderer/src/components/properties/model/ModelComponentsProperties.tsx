@@ -1,5 +1,4 @@
 import { useClipStore } from "@/lib/clip";
-import { useManifest } from "@/lib/manifest/hooks";
 import {
   ManifestComponent,
   ManifestComponentModelPathItem,
@@ -8,6 +7,8 @@ import { ModelClipProps } from "@/lib/types";
 import { useMemo, useCallback, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { LuCheck } from "react-icons/lu";
+import { useManifestQuery } from "@/lib/manifest/queries";
+import { getSchedulerComponentKey } from "@/lib/manifest/componentKey";
 
 interface ModelComponentsPropertiesProps {
   clipId: string;
@@ -35,7 +36,7 @@ const ModelComponentsProperties = ({
     | undefined;
   if (!clip) return null;
 
-  const { data: manifest } = useManifest(
+  const { data: manifest } = useManifestQuery(
     String(clip.manifest?.metadata?.id || ""),
   );
   if (!manifest) return null;
@@ -88,13 +89,14 @@ const ModelComponentsProperties = ({
     if (!components || components.length === 0) return;
 
     // Scheduler default
+    let schedulerIdx = 0;
     components.forEach((comp) => {
       if (
         comp.type === "scheduler" &&
         comp.scheduler_options &&
         comp.scheduler_options.length > 0
       ) {
-        const key = getComponentKey(comp);
+        const key = getSchedulerComponentKey(comp, schedulerIdx++);
         const curr = selectedMap[key] as { name?: string } | undefined;
         const names = comp.scheduler_options.map((o) => String(o.name));
         const hasValid = curr && names.includes(String(curr.name));

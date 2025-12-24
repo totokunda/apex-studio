@@ -46,7 +46,7 @@ import {
 
 import { useInputControlsStore } from "@/lib/inputControl";
 import { useControlsStore } from "@/lib/control";
-import { usePreprocessorsListStore } from "@/lib/preprocessor/list-store";
+import { usePreprocessorsListQuery } from "@/lib/preprocessor/queries";
 import { TbEdit, TbVideo } from "react-icons/tb";
 import { MediaDialog } from "@/components/dialogs/MediaDialog";
 
@@ -157,7 +157,6 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
       if (paths.length === 0) return;
       const before = await listConvertedMedia(getActiveProject()?.folderUuid);
       const existingNames = new Set(before.map((it) => it.name));
-      console.log("before", before, paths);
       await importMediaPaths(paths, undefined, getActiveProject()?.folderUuid);
       const after = await listConvertedMedia(getActiveProject()?.folderUuid);
       const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
@@ -243,9 +242,7 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
           modelInputAsset: true,
         });
         (newClip as VideoClipProps).assetId = asset.id;
-        console.log("asset", asset);
       }
-      console.log("newClip", newClip);
       onChange(newClip);
     },
     [getClipById, onChange],
@@ -352,7 +349,7 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
       align="start"
       sideOffset={20}
       className={cn(
-        "p-2 z-[90] dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-150",
+        "p-2 z-90 dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-150",
         selectedTab === "timeline" ? "w-[600px]" : "w-96",
       )}
       onOpenAutoFocus={() => {
@@ -464,12 +461,9 @@ const VideoInput: React.FC<VideoInputProps> = ({
   );
   const updateModelInput = useClipStore((s) => s.updateModelInput);
   const setClipTransform = useClipStore((s) => s.setClipTransform);
-  const { preprocessors, load } = usePreprocessorsListStore();
-  useEffect(() => {
-    if (preprocessorRef) {
-      void load();
-    }
-  }, [preprocessorRef, load]);
+  const { data: preprocessors = [] } = usePreprocessorsListQuery({
+    enabled: !!preprocessorRef,
+  });
   const resolvedPreprocessorName = useMemo(() => {
     if (!preprocessorRef) return preprocessorName;
     const found = (preprocessors || []).find((p) => p.id === preprocessorRef);

@@ -22,7 +22,8 @@ export type ContextMenuAction =
 
 export type ContextTarget =
   | { type: "clip"; clipIds: string[]; primaryClipId: string; isVideo: boolean }
-  | { type: "timeline"; timelineId: string };
+  | { type: "timeline"; timelineId: string }
+  | { type: "textSelection" };
 
 export interface ContextMenuItem {
   id: string;

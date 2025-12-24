@@ -34,12 +34,19 @@ if (
  * as it receives initialization instructions rather than direct module imports.
  */
 initApp({
-  renderer:
-    process.env.MODE === "development" && !!process.env.VITE_DEV_SERVER_URL
+  renderer: (() => {
+    const useDevServer =
+      process.env.MODE === "development" && !!process.env.VITE_DEV_SERVER_URL;
+    const renderer = useDevServer
       ? new URL(process.env.VITE_DEV_SERVER_URL)
-      : {
-          path: fileURLToPath(import.meta.resolve("@app/renderer")),
-        },
+      : { path: fileURLToPath(import.meta.resolve("@app/renderer")) };
+    console.log(
+      `[entry-point] renderer: ${
+        renderer instanceof URL ? renderer.href : renderer.path
+      }`,
+    );
+    return renderer;
+  })(),
 
   preload: {
     path: fileURLToPath(import.meta.resolve("@app/preload/exposed.mjs")),

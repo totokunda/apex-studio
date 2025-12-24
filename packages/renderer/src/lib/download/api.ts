@@ -58,10 +58,13 @@ export async function startUnifiedDownload(request: {
   manifest_id?: string;
   lora_name?: string;
   component?: string;
+  index?: number;
 }): Promise<
   ConfigResponse<{ job_id: string; status: string; message?: string }>
 > {
-  return await startUnifiedDownloadPreload(request);
+  // remove index from request
+  const { index, ...rest } = request;
+  return await startUnifiedDownloadPreload(rest);
 }
 
 export async function resolveUnifiedDownload(request: {

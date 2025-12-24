@@ -242,6 +242,8 @@ const TimelineMoments: React.FC<TimelineMomentsProps> = React.memo(
 const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  // Dev-only: if timeline HMR updates "stick" visually (react-konva/Electron), we remount the Stage.
+  const [hmrStageKey, setHmrStageKey] = useState(0);
   // Always mount timeline elements; avoid conditional unmounts that can
   // cause rendering glitches in Tauri's WebView. Toggle visibility via data.
 
@@ -290,6 +292,15 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
   const { totalTimelineFrames, timelineDuration } = useControlsStore();
   const preprocessorDragClipRef = useRef<PreprocessorClipProps | null>(null);
   const preprocessorDragKonvaNodeRef = useRef<Konva.Node | null>(null);
+
+  useEffect(() => {
+    if (!import.meta.hot) return;
+    const onTimelineHmr = () => setHmrStageKey((k) => k + 1);
+    import.meta.hot.on("apex:timeline-hmr", onTimelineHmr);
+    return () => {
+      import.meta.hot?.off("apex:timeline-hmr", onTimelineHmr);
+    };
+  }, []);
 
   useEffect(() => {
     const [startFrame, endFrame] = timelineDuration;
@@ -1755,7 +1766,6 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
     [controlStore, setSelectedPreprocessorId],
   );
 
-
   return (
     <div className="relative h-full flex flex-row overflow-hidden">
       {hasClips && <TimelineSidebar clampedScroll={clampedScroll} />}
@@ -1769,6 +1779,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
             {hasClips && (
               <>
                 <Stage
+                  key={hmrStageKey}
                   width={dimensions.stageWidth}
                   height={dimensions.stageHeight}
                   className="border-b border-brand-light/10 bg-brand z-10 relative"
@@ -1786,6 +1797,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
                   >
                     {timelines.map((timeline, index) => (
                       <Timeline
+                      
                         key={timeline.timelineId}
                         scrollY={clampedScroll}
                         timelinePadding={timeline.timelinePadding}

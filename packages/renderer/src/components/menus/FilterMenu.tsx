@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
+import React, { useEffect, useState, useRef, useMemo, useLayoutEffect } from "react";
 import { Filter } from "@/lib/types";
 import Draggable from "@/components/dnd/Draggable";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -8,8 +8,9 @@ import {
   LuChevronRight,
   LuArrowRight,
 } from "react-icons/lu";
-import { useFiltersStore } from "@/lib/filters/store";
 import CategorySidebar from "./CategorySidebar";
+import { useQuery } from "@tanstack/react-query";
+import { fetchFilters } from "@app/preload";
 
 const FilterItem = ({ filter }: { filter: Filter }) => {
   return (
@@ -108,7 +109,7 @@ const FilterCategory: React.FC<{
         </span>
         <button
           onClick={onViewAll}
-          className="flex items-center gap-x-1.5 text-brand-light hover:text-brand-light/70 text-[12px] font-medium cursor-pointer transition-colors rounded-md flex-shrink-0"
+          className="flex items-center gap-x-1.5 text-brand-light hover:text-brand-light/70 text-[12px] font-medium cursor-pointer transition-colors rounded-md shrink-0"
         >
           <span>View all</span>
           <LuArrowRight className="w-3.5 h-3.5" />
@@ -118,7 +119,7 @@ const FilterCategory: React.FC<{
         {showLeftArrow && (
           <button
             onClick={() => scroll("left")}
-            className="absolute -left-3 top-1/2 cursor-pointer -translate-y-1/2 z-[9999] bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
+            className="absolute -left-3 top-1/2 cursor-pointer -translate-y-1/2 z-9999 bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
           >
             <LuChevronLeft className="w-4 h-4 text-brand-light" />
           </button>
@@ -126,7 +127,7 @@ const FilterCategory: React.FC<{
         {showRightArrow && (
           <button
             onClick={() => scroll("right")}
-            className="absolute -right-3 top-1/2 cursor-pointer -translate-y-1/2 z-[9999] bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
+            className="absolute -right-3 top-1/2 cursor-pointer -translate-y-1/2 z-9999 bg-brand hover:bg-brand/80 rounded-full p-1.5 transition-colors shadow-lg border border-brand-light/20"
           >
             <LuChevronRight className="w-4 h-4 text-brand-light" />
           </button>
@@ -141,7 +142,7 @@ const FilterCategory: React.FC<{
           }}
         >
           {filters.map((filter) => (
-            <div key={filter.id} className="flex-shrink-0">
+            <div key={filter.id} className="shrink-0">
               <FilterItem filter={filter} />
             </div>
           ))}
@@ -155,7 +156,34 @@ const CategoryDetailView: React.FC<{
   category: string;
   filters: Filter[];
   onBack: () => void;
-}> = ({ category, filters, onBack }) => {
+  scrollCache: Map<string, number>;
+}> = ({ category, filters, onBack, scrollCache }) => {
+  const scrollAreaRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const root = scrollAreaRef.current;
+    if (!root) return;
+
+    const viewport = root.querySelector(
+      "[data-radix-scroll-area-viewport]",
+    ) as HTMLDivElement | null;
+    if (!viewport) return;
+
+    const key = `filterMenu:category:${category}`;
+    const saved = scrollCache.get(key);
+    if (typeof saved === "number") {
+      viewport.scrollTop = saved;
+    }
+
+    const onScroll = () => {
+      scrollCache.set(key, viewport.scrollTop);
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      viewport.removeEventListener("scroll", onScroll as EventListener);
+    };
+  }, [category, scrollCache]);
+
   return (
     <div className="flex flex-col h-full w-full">
       <div className="px-7 pt-4 pb-4 border-b border-brand/20">
@@ -171,7 +199,7 @@ const CategoryDetailView: React.FC<{
           </span>
         </div>
       </div>
-      <ScrollArea className="flex-1 pb-16">
+      <ScrollArea className="flex-1 pb-16" ref={scrollAreaRef}>
         <div className="px-7 pt-6">
           <div
             className="grid gap-x-2 gap-y-3"
@@ -194,7 +222,18 @@ const CategoryDetailView: React.FC<{
 const FilterMenu = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const { filters, load } = useFiltersStore();
+  const scrollCacheRef = useRef<Map<string, number>>(new Map());
+  const { data: filters = [] } = useQuery({
+    queryKey: ["filters"],
+    queryFn: async () => {
+      const res = await fetchFilters();
+      return res ?? [];
+    },
+    placeholderData: (prev) => prev ?? [],
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
+  });
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [scrollWidth, setScrollWidth] = useState(0);
@@ -229,14 +268,17 @@ const FilterMenu = () => {
   }, [filters, searchQuery]);
 
   const categories = useMemo(() => {
-    setActiveCategory(filters?.[0]?.category || null);
     return [...new Set(filteredFilters.map((filter) => filter.category))];
   }, [filteredFilters]);
 
+  // Keep active category reasonable as data/search changes (overview mode only).
   useEffect(() => {
-    // trigger a single idempotent load; store prevents refetching
-    load();
-  }, [load]);
+    if (selectedCategory) return;
+    setActiveCategory((prev) => {
+      if (prev && categories.includes(prev)) return prev;
+      return categories[0] ?? null;
+    });
+  }, [categories, selectedCategory]);
 
   useEffect(() => {
     const updateWidth = () => {
@@ -273,6 +315,32 @@ const FilterMenu = () => {
       timeouts.forEach(clearTimeout);
       resizeObserver.disconnect();
       window.removeEventListener("resize", updateWidth);
+    };
+  }, [selectedCategory]);
+
+  // Remember & restore scroll position for the overview list (no-jank: restore before paint).
+  useLayoutEffect(() => {
+    if (selectedCategory) return;
+    const root = scrollRef.current;
+    if (!root) return;
+    const viewport = root.querySelector(
+      "[data-radix-scroll-area-viewport]",
+    ) as HTMLDivElement | null;
+    if (!viewport) return;
+    viewportRef.current = viewport;
+
+    const key = "filterMenu:overview";
+    const saved = scrollCacheRef.current.get(key);
+    if (typeof saved === "number") {
+      viewport.scrollTop = saved;
+    }
+
+    const onScroll = () => {
+      scrollCacheRef.current.set(key, viewport.scrollTop);
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      viewport.removeEventListener("scroll", onScroll as EventListener);
     };
   }, [selectedCategory]);
 
@@ -330,6 +398,7 @@ const FilterMenu = () => {
             (f) => f.category === selectedCategory,
           )}
           onBack={() => setSelectedCategory(null)}
+          scrollCache={scrollCacheRef.current}
         />
       </>
     );
@@ -351,7 +420,7 @@ const FilterMenu = () => {
           persistenceKey="sidebar:filter"
         />
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="w-full p-3 rounded flex-shrink-0">
+          <div className="w-full p-3 rounded shrink-0">
             <div className="relative bg-brand text-brand-light rounded-md placeholder:text-brand-light/50 items-center flex w-full p-3 space-x-2 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand-light/30 transition-all">
               <LuSearch className="w-4 h-4 text-brand-light/60" />
               <input

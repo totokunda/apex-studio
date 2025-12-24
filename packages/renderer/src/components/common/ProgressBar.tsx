@@ -18,7 +18,7 @@ export const ProgressBar: React.FC<{
       )}
     >
       <div
-        className={cn("h-full bg-brand transition-all", barClassName)}
+        className={cn("h-full bg-brand-light/50 transition-all", barClassName)}
         style={{ width: `${safe}%` }}
       />
     </div>

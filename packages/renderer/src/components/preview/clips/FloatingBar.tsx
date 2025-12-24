@@ -70,7 +70,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
   const setTool = useViewportStore((s) => s.setTool);
   const setShape = useViewportStore((s) => s.setShape);
   const setScalePercent = useViewportStore((s) => s.setScalePercent);
-  const centerContentAt = useViewportStore((s) => s.centerContentAt);
+  const zoomToFit = useViewportStore((s) => s.zoomToFit);
 
   const drawingTool = useDrawingStore((s) => s.tool);
   const setDrawingTool = useDrawingStore((s) => s.setTool);
@@ -179,7 +179,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                   textValue="Zoom to fit"
                   className="dark text-[12px] font-medium"
                   onClick={() => {
-                    centerContentAt(75);
+                    zoomToFit();
                     setZoomOpen(false);
                   }}
                 >

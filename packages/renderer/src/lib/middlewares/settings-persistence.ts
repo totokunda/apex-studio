@@ -8,6 +8,12 @@ import {
   setCivitaiApiKeySetting,
   getMaskModelSetting,
   setMaskModelSetting,
+  getRenderImageStepsSetting,
+  setRenderImageStepsSetting,
+  getRenderVideoStepsSetting,
+  setRenderVideoStepsSetting,
+  getUseFastDownloadSetting,
+  setUseFastDownloadSetting,
 } from "@app/preload";
 import { getBackendApiUrl, setBackendApiUrl } from "@/lib/config";
 
@@ -35,6 +41,13 @@ export type SettingsState = {
   // Mask model
   maskModel: string | null;
 
+  // Render intermediary steps
+  renderImageSteps: boolean;
+  renderVideoSteps: boolean;
+
+  // Downloads
+  useFastDownload: boolean;
+
   // Actions
   hydrate: () => Promise<void>;
   setCachePath: (value: string | null) => Promise<void>;
@@ -47,6 +60,9 @@ export type SettingsState = {
   setCivitaiApiKey: (value: string | null) => Promise<void>;
   setBackendUrl: (value: string | null) => Promise<void>;
   setMaskModel: (value: string | null) => Promise<void>;
+  setRenderImageSteps: (enabled: boolean) => Promise<void>;
+  setRenderVideoSteps: (enabled: boolean) => Promise<void>;
+  setUseFastDownload: (enabled: boolean) => Promise<void>;
 };
 
 export const withSettingsPersistence =
@@ -61,12 +77,24 @@ export const withSettingsPersistence =
       if (state.initializing || state.initialized) return;
       set({ initializing: true, error: null } as Partial<T>);
       try {
-        const [paths, hfToken, backendRes, civitaiApiKey, maskModel] = await Promise.all([
+        const [
+          paths,
+          hfToken,
+          backendRes,
+          civitaiApiKey,
+          maskModel,
+          renderImageSteps,
+          renderVideoSteps,
+          useFastDownload,
+        ] = await Promise.all([
           getAllPathsSetting().catch(() => ({} as any)),
           getHfTokenSetting().catch(() => null),
           getBackendApiUrl().catch(() => null),
           getCivitaiApiKeySetting().catch(() => null),
           getMaskModelSetting().catch(() => null),
+          getRenderImageStepsSetting().catch(() => false),
+          getRenderVideoStepsSetting().catch(() => false),
+          getUseFastDownloadSetting().catch(() => true),
         ]);
 
         const backendUrl =
@@ -85,6 +113,9 @@ export const withSettingsPersistence =
           civitaiApiKey: civitaiApiKey ?? null,
           backendUrl,
           maskModel: maskModel ?? null,
+          renderImageSteps: Boolean(renderImageSteps),
+          renderVideoSteps: Boolean(renderVideoSteps),
+          useFastDownload: Boolean(useFastDownload),
           initialized: true,
           initializing: false,
           error: null,
@@ -165,6 +196,21 @@ export const withSettingsPersistence =
         void setMaskModelSetting(value ?? null).catch(
           () => undefined,
         );
+      },
+      setRenderImageSteps: async (enabled: boolean) => {
+        const v = Boolean(enabled);
+        set({ renderImageSteps: v } as Partial<T>);
+        void setRenderImageStepsSetting(v).catch(() => undefined);
+      },
+      setRenderVideoSteps: async (enabled: boolean) => {
+        const v = Boolean(enabled);
+        set({ renderVideoSteps: v } as Partial<T>);
+        void setRenderVideoStepsSetting(v).catch(() => undefined);
+      },
+      setUseFastDownload: async (enabled: boolean) => {
+        const v = Boolean(enabled);
+        set({ useFastDownload: v } as Partial<T>);
+        void setUseFastDownloadSetting(v).catch(() => undefined);
       },
     } as T;
 

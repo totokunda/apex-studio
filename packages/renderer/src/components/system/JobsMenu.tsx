@@ -4,31 +4,21 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { useQuery } from "@tanstack/react-query";
 import { ProgressBar } from "@/components/common/ProgressBar";
 import { fetchRayJobs, cancelRayJob, RayJobStatus } from "@/lib/jobs/api";
-import {
-  connectJobWebSocket,
-  disconnectJobWebSocket,
-  subscribeToJobUpdates,
-  subscribeToJobStatus,
-  subscribeToJobErrors,
-  getEngineResult,
-} from "@/lib/engine/api";
 import { LuLoader, LuTrash2 } from "react-icons/lu";
 import { GrTasks } from "react-icons/gr";
 import { useClipStore } from "@/lib/clip";
 import {
-  ClipTransform,
   ModelClipProps,
-  GenerationModelClipProps,
 } from "@/lib/types";
-import { pathToFileURLString } from "@app/preload";
-import { BASE_LONG_SIDE } from "@/lib/settings";
-import { getMediaInfoCached } from "@/lib/media/utils";
 import { useControlsStore } from "@/lib/control";
-import { useViewportStore } from "@/lib/viewport";
+import { useEngineJobClipSync } from "@/hooks/use-engine-job-clip-sync";
+import { useDownloadJobClipSync } from "@/hooks/use-download-job-clip-sync";
 
 const POLL_MS = 2000;
+const RAY_JOBS_QUERY_KEY = ["rayJobs"] as const;
 
 type TrackedJob = RayJobStatus & {
   // Normalized 0..1 progress and last update time
@@ -52,387 +42,83 @@ const JobsMenu: React.FC = () => {
   const [jobsById, setJobsById] = useState<Record<string, TrackedJob>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const { updateClip, addAssetAsync } = useClipStore();
-  const subscribedRef = React.useRef<Map<string, () => void>>(new Map());
   const { fps } = useControlsStore();
   // Poll aggregated Ray jobs
+  const { data: polledJobs = [] } = useQuery<RayJobStatus[]>({
+    queryKey: RAY_JOBS_QUERY_KEY,
+    queryFn: fetchRayJobs,
+    placeholderData: (prev) => prev ?? [],
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: POLL_MS,
+    refetchIntervalInBackground: true,
+  });
+
+
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      const jobs = await fetchRayJobs();
-      if (!mounted) return;
-      const now = Date.now();
-      setJobsById((prev) => {
-        const next: Record<string, TrackedJob> = { ...prev };
+    const now = Date.now();
+    setJobsById((prev) => {
+      const next: Record<string, TrackedJob> = { ...prev };
 
-        for (const job of jobs) {
-          const id = job.job_id;
-          if (!id) continue;
-          const existing = next[id];
-          const latest = (job as any).latest ?? existing?.latest ?? null;
-          const rawProgress =
-            (latest && typeof latest.progress === "number"
-              ? latest.progress
-              : null) ??
-            (typeof (job as any).progress === "number"
-              ? (job as any).progress
-              : null) ??
-            (typeof existing?.progress === "number" ? existing.progress : null);
+      for (const job of polledJobs) {
+        const id = job.job_id;
+        if (!id) continue;
+        const existing = next[id];
+        const latest = (job as any).latest ?? existing?.latest ?? null;
+        const rawProgress =
+          (latest && typeof latest.progress === "number"
+            ? latest.progress
+            : null) ??
+          (typeof (job as any).progress === "number"
+            ? (job as any).progress
+            : null) ??
+          (typeof existing?.progress === "number" ? existing.progress : null);
 
-          next[id] = {
-            ...(existing || {}),
-            ...job,
-            latest,
-            progress: rawProgress,
-            updatedAt: existing?.updatedAt ?? now,
-          };
-        }
-
-        // Optionally prune very old completed/cancelled jobs to keep the list tidy
-        const cutoffMs = now - 60_000;
-        for (const [id, j] of Object.entries(next)) {
-          const s = (j.status || "").toLowerCase();
-          if (
-            (s === "complete" ||
-              s === "completed" ||
-              s === "cancelled" ||
-              s === "canceled" ||
-              s === "error") &&
-            j.updatedAt < cutoffMs
-          ) {
-            delete next[id];
-          }
-        }
-
-        return next;
-      });
-    };
-
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => {
-      mounted = false;
-      clearInterval(id);
-    };
-  }, []);
-
-  // Sync jobs to clip store to ensure background updates
-  useEffect(() => {
-    const clips = useClipStore.getState().clips;
-    const getAssetById = useClipStore.getState().getAssetById;
-    const activeJobs = Object.values(jobsById);
-
-    // Manage WebSocket subscriptions for active engine jobs
-    const activeEngineJobIds = new Set(
-      activeJobs
-        .filter((j) => {
-          const s = (j.status || "").toLowerCase();
-          const isActive = ![
-            "complete",
-            "completed",
-            "cancelled",
-            "canceled",
-            "error",
-            "failed",
-          ].includes(s);
-          return isActive && j.category === "engine" && j.job_id;
-        })
-        .map((j) => j.job_id),
-    );
-
-    // Connect to new jobs
-    activeEngineJobIds.forEach((jobId) => {
-      if (!subscribedRef.current.has(jobId)) {
-        const setup = async () => {
-          try {
-            await connectJobWebSocket(jobId);
-            
-            const unsubUpdate = subscribeToJobUpdates(jobId, (data) => {
-       
-              setJobsById((prev) => {
-                const job = prev[jobId];
-                if (!job) return prev;
-                
-                const now = Date.now();
-                const latest = job.latest || {};
-                const newLatest = {
-                  ...latest,
-                  progress: typeof data.progress === 'number' ? data.progress : latest.progress,
-                  message: data.message || data.step || latest.message,
-                  status: data.status || latest.status,
-                  metadata: { ...latest.metadata, ...(data.metadata || {}) }
-                };
-
-                return {
-                  ...prev,
-                  [jobId]: {
-                    ...job,
-                    status: data.status || job.status,
-                    progress: typeof data.progress === 'number' ? data.progress : job.progress,
-                    message: data.message || job.message,
-                    latest: newLatest,
-                    updatedAt: now,
-                  },
-                };
-              });
-
-            });
-
-            const unsubStatus = subscribeToJobStatus(jobId, (data) => {
-              setJobsById((prev) => {
-                const job = prev[jobId];
-                if (!job) return prev;
-                return {
-                  ...prev,
-                  [jobId]: {
-                    ...job,
-                    status: data.status || job.status,
-                    updatedAt: Date.now(),
-                  },
-                };
-              });
-            });
-
-            const unsubError = subscribeToJobErrors(jobId, (data) => {
-              setJobsById((prev) => {
-                const job = prev[jobId];
-                if (!job) return prev;
-                return {
-                  ...prev,
-                  [jobId]: {
-                    ...job,
-                    status: "failed",
-                    error: data.error || data.message || "Unknown error",
-                    updatedAt: Date.now(),
-                  },
-                };
-              });
-            });
-
-            const cleanup = () => {
-              unsubUpdate();
-              unsubStatus();
-              unsubError();
-              disconnectJobWebSocket(jobId).catch(() => {});
-            };
-
-            subscribedRef.current.set(jobId, cleanup);
-          } catch (err) {
-            console.error(`Failed to connect to websocket for job ${jobId}`, err);
-          }
+        next[id] = {
+          ...(existing || {}),
+          ...job,
+          latest,
+          progress: rawProgress,
+          updatedAt: existing?.updatedAt ?? now,
         };
-        setup();
       }
+
+      // Optionally prune very old completed/cancelled jobs to keep the list tidy
+      const cutoffMs = now - 60_000;
+      for (const [id, j] of Object.entries(next)) {
+        const s = (j.status || "").toLowerCase();
+        if (
+          (s === "complete" ||
+            s === "completed" ||
+            s === "cancelled" ||
+            s === "canceled" ||
+            s === "error") &&
+          j.updatedAt < cutoffMs
+        ) {
+          delete next[id];
+        }
+      }
+
+      return next;
     });
+  }, [polledJobs]);
 
-    // Cleanup finished jobs
-    for (const [jobId, cleanup] of subscribedRef.current.entries()) {
-      if (!activeEngineJobIds.has(jobId)) {
-        cleanup();
-        subscribedRef.current.delete(jobId);
-      }
-    }
+  useEngineJobClipSync({
+    jobsById,
+    setJobsById,
+    updateClip,
+    addAssetAsync,
+    fps,
+  });
 
-    activeJobs.forEach(async (job) => {
-      if (!job.job_id) return;
-
-
-      // Find model clips tracking this job
-      const clip = clips.find(
-        (c) =>
-          c.type === "model" &&
-          (c as ModelClipProps).activeJobId === job.job_id,
-      ) as ModelClipProps | undefined;
-
-      if (!clip) return;
-
-      const status = (job.status || "").toLowerCase();
-      let newStatus: "pending" | "running" | "complete" | "failed" | undefined;
-
-      if (status === "queued") newStatus = "pending";
-      else if (status === "running" || status === "processing" || status === "preview")
-        newStatus = "running";
-      else if (status === "complete" || status === "completed")
-        newStatus = "complete";
-      else if (status === "error" || status === "failed") newStatus = "failed";
-
-      const meta = job.latest?.metadata || {};
-
-      let fileUrl: string | undefined;
-      const previewPath = meta.preview_path;
-      
-      if (previewPath) {
-        fileUrl = pathToFileURLString(previewPath);
-      }
-
-      const patch: Partial<ModelClipProps> = {};
-      let needsUpdate = false;
-  
-      // Update basic status
-      if (newStatus && clip.modelStatus !== newStatus) {
-        patch.modelStatus = newStatus;
-        needsUpdate = true;
-      }
-
-      // Update preview path
-      if (fileUrl && clip.previewPath !== fileUrl) {
-        patch.previewPath = fileUrl;
-        needsUpdate = true;
-        const asset = await addAssetAsync({ path:fileUrl }, "apex-cache");
-        // get the duration from the asset
-        const mediaInfo = getMediaInfoCached(asset.path);
-        if (mediaInfo) {
-          // update the duration of the clip
-          const duration = mediaInfo.duration;
-          if (typeof duration === "number" && duration > 0) {
-            let newEndFrame = clip.startFrame + (duration * fps)
-            let newStartFrame = clip.startFrame
-            let newDuration = (newEndFrame - newStartFrame) / fps;
-        
-            if (newDuration !== duration) {
-              patch.endFrame = Math.floor(newEndFrame);
-            }
-          }
-        }
-        patch.assetId = asset.id;
-        patch.trimEnd = 0;
-        patch.trimStart = 0;
-      }
-
-      // Update generations
-      const gens = clip.generations || [];
-      let gen: GenerationModelClipProps | null = null;
-      let newGen: GenerationModelClipProps | null = null;
-      const genIndex = gens.findIndex((g) => g.jobId === job.job_id);
-      let genUpdate = false;
-
-      if (genIndex >= 0) {
-        gen = gens[genIndex];
-        genUpdate = false;
-        newGen = { ...gen };
-      }
-
-        if (newStatus && gen && gen.modelStatus !== newStatus && newGen) {
-          newGen.modelStatus = newStatus;
-          genUpdate = true;
-        }
-
-        if (newStatus === "complete" && newGen) {
-            newGen.modelStatus = "complete";
-            newGen.assetId = patch.assetId ?? "";
-            patch.activeJobId = undefined; // Clear active job on completion
-            needsUpdate = true;
-            genUpdate = true;
-            window.dispatchEvent(new CustomEvent("generations-menu-reload", { detail: { jobId: job.job_id } }));
-        }
-
-
-      // Ensure newly completed clips have a sane transform/originalTransform so that
-      // downstream previews/layout tools don't see undefined transforms.
-
-      if (patch.assetId) {
-        const hasTransform = !!clip.transform;
-        const hasOriginalTransform = !!clip.originalTransform;
-        const asset = getAssetById(patch.assetId);
-
-        if (!hasTransform || !hasOriginalTransform || !gen?.transform) {
-          
-          let nativeW =
-            (asset && typeof asset.width === "number" ? asset.width : 0) ||
-            // @ts-ignore - mediaWidth may exist on model clips when set by DynamicModelPreview
-            (clip as any).mediaWidth ||
-            BASE_LONG_SIDE;
-          let nativeH =
-            (asset && typeof asset.height === "number" ? asset.height : 0) ||
-            // @ts-ignore - mediaHeight may exist on model clips when set by DynamicModelPreview
-            (clip as any).mediaHeight ||
-            BASE_LONG_SIDE;
-
-          if (!Number.isFinite(nativeW) || nativeW <= 0) nativeW = BASE_LONG_SIDE;
-          if (!Number.isFinite(nativeH) || nativeH <= 0) nativeH = BASE_LONG_SIDE;
-
-          const ratio =
-            nativeH > 0 && Number.isFinite(nativeW / nativeH)
-              ? nativeW / nativeH
-              : 1;
-
-          // Mirror the preview rect logic: keep the short side at BASE_LONG_SIDE and
-          // scale the long side by the aspect ratio.
-          const width = BASE_LONG_SIDE * ratio;
-          const height = BASE_LONG_SIDE;
-
-          const baseTransform: ClipTransform = {
-            x: 0,
-            y: 0,
-            width,
-            height,
-            scaleX: 1,
-            scaleY: 1,
-            rotation: 0,
-            cornerRadius: 0,
-            opacity: 100,
-            crop: { x: 0, y: 0, width: 1, height: 1 },
-          };
-          (patch as any).transform = baseTransform;
-          (patch as any).originalTransform = { ...baseTransform };
-          patch.mediaWidth = nativeW;
-          patch.mediaHeight = nativeH;
-          patch.mediaAspectRatio = nativeW / nativeH;
-          if (newGen) newGen.transform = baseTransform;
-          genUpdate = true;
-          needsUpdate = true;
-
-          // If this model clip is the only *media* clip on the timeline,
-          // align the viewport aspect ratio with the clip's native aspect
-          // ratio, mirroring the behavior used when adding the first media
-          // clip in TimelineEditor.
-          try {
-            const allClips = useClipStore.getState().clips;
-            const hasOtherMediaClips = allClips.some((c) => {
-              const isMedia =
-                c.type === "video" ||
-                c.type === "image" ||
-                (c.type === "model" && (c as ModelClipProps).assetId);
-              return isMedia && c.clipId !== clip.clipId;
-            });
-
-            if (!hasOtherMediaClips) {
-              const w = Number(nativeW);
-              const h = Number(nativeH);
-              if (
-                Number.isFinite(w) &&
-                Number.isFinite(h) &&
-                w > 0 &&
-                h > 0
-              ) {
-                const gcd = (a: number, b: number): number =>
-                  b === 0 ? a : gcd(b, a % b);
-                const g = gcd(Math.round(w), Math.round(h)) || 1;
-                const id = `${Math.round(w / g)}:${Math.round(h / g)}`;
-                useViewportStore
-                  .getState()
-                  .setAspectRatio({
-                    width: Math.round(w),
-                    height: Math.round(h),
-                    id,
-                  });
-              }
-            }
-          } catch {}
-        }
-      }
-
-      if (genUpdate && newGen) {
-        const newGens = [...gens];
-        newGens[genIndex] = newGen;
-        patch.generations = newGens;
-        needsUpdate = true;
-      }
-
-      if (needsUpdate || genUpdate) {
-        updateClip(clip.clipId, patch);
-      }
-    });
-  }, [jobsById, updateClip, addAssetAsync]);
+  useDownloadJobClipSync({
+    jobsById,
+    setJobsById,
+    polledJobs: polledJobs.map((j) => ({
+      ...j,
+      updatedAt: Date.now(),
+    })),
+  });
 
   // When a component card cancels a download, it dispatches a `jobs-menu-reload`
   // event with the associated jobId. Mark that job as canceled locally so it
@@ -479,8 +165,46 @@ const JobsMenu: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const handler = (e: any) => {
+      try {
+        const detail = e?.detail || {};
+        const jobId: string | undefined = detail.jobId;
+        if (!jobId) return;
+
+        const clips = useClipStore.getState().clips || [];
+        for (const c of clips) {
+          if (!c || c.type !== "model") continue;
+          const modelClip = c as ModelClipProps;
+          if (modelClip.activeJobId && modelClip.activeJobId === jobId) {
+            updateClip(modelClip.clipId, { modelStatus: undefined } as any);
+          }
+        }
+      } catch {
+        // no-op
+      }
+    };
+
+    try {
+      window.addEventListener("clear-job-id", handler as EventListener);
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      try {
+        window.removeEventListener("clear-job-id", handler as EventListener);
+      } catch {
+        // ignore
+      }
+    };
+  }, [updateClip]);
+
   const activeJobs = useMemo(() => {
-    const all = Object.values(jobsById);
+    const all = [...polledJobs].map((j) => ({
+      ...j,
+      updatedAt: Date.now(),
+    }));
     return all
       .filter((j) => {
         const s = (j.status || "").toLowerCase();
@@ -494,7 +218,7 @@ const JobsMenu: React.FC = () => {
         ].includes(s);
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [jobsById]);
+  }, [polledJobs]);
 
   const activeCount = activeJobs.length;
 
@@ -503,6 +227,8 @@ const JobsMenu: React.FC = () => {
     setBusyIds((prev) => new Set(prev).add(jobId));
     try {
       await cancelRayJob(jobId);
+      
+      window.dispatchEvent(new CustomEvent("clear-job-id", { detail: { jobId: jobId } }));
       setJobsById((prev) => {
         const existing = prev[jobId];
         if (!existing) return prev;
@@ -551,7 +277,7 @@ const JobsMenu: React.FC = () => {
         onClick={(e) => {
           e.stopPropagation();
           handleCancel(job.job_id);
-        }}
+        }} 
         disabled={isCancelling}
         aria-label="Cancel job"
       >

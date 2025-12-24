@@ -10,7 +10,6 @@ import { allowExternalUrls } from "./modules/ExternalUrls.js";
 import { chromeDevToolsExtension } from "./modules/ChromeDevToolsExtension.js";
 import { createNativeFileDialogModule } from "./modules/NativeFileDialog.js";
 import { apexApi } from "./modules/ApexApi.js";
-import { persistenceModule } from "./modules/PersistenceModule.js";
 import { settingsModule } from "./modules/SettingsModule.js";
 import { jsonPersistenceModule } from "./modules/JSONPersistenceModule.js";
 import { appDirProtocol } from "./modules/AppDirProtocol.js";
@@ -28,7 +27,9 @@ export async function initApp(initConfig: AppInitConfig) {
     .init(
       createWindowManagerModule({
         initConfig,
-        openDevTools: import.meta.env.DEV,
+        // main/preload are built even in dev-mode, so import.meta.env.DEV isn't reliable here.
+        // If the renderer is a dev-server URL, open devtools to surface HMR/runtime errors.
+        openDevTools: initConfig.renderer instanceof URL,
       }),
     )
     .init(terminateAppOnLastWindowClose())

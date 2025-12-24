@@ -9,9 +9,9 @@ import { useClipStore } from "@/lib/clip";
 import { ModelClipProps } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { generatePosterCanvas } from "@/lib/media/timeline";
-import { getMediaInfo } from "@/lib/media/utils";
+import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import { pathToFileURLString } from "@app/preload";
-import { BASE_LONG_SIDE } from "@/lib/settings";
+import { useControlsStore } from "@/lib/control";
 
 interface ModelGenerationPropertiesProps {
   clipId: string;
@@ -25,7 +25,8 @@ export const ModelGenerationProperties: React.FC<
   const updateModelInput = useClipStore((s) => s.updateModelInput);
   const setClipTransform = useClipStore((s) => s.setClipTransform);
   const getAssetById = useClipStore((s) => s.getAssetById);
-  const addAsset = useClipStore((s) => s.addAsset);
+
+  const fps = useControlsStore((s) => s.fps);
   const generations = useMemo(
     () => clip?.generations ?? [],
     [clip?.generations],
@@ -72,12 +73,10 @@ export const ModelGenerationProperties: React.FC<
       // Prevent re-selecting the already selected generation
       if (index === selectedIndex) return;
       const gen = visibleGenerations[index];
-      if (!gen) return;
-      let fileUrl = normalizeToFileUrl(gen.src);
-      if (!fileUrl) return;
-      const asset = addAsset({ path: fileUrl}, "apex-cache");
 
-      if (!fileUrl) return;
+      if (!gen) return;
+
+
       try {
         // Persist current clip transform into the previously selected generation entry (if any)
         let updates: Partial<ModelClipProps> = { assetId: gen.assetId };
@@ -100,6 +99,12 @@ export const ModelGenerationProperties: React.FC<
         // When switching to a generation: derive width/height from the asset's
         // intrinsic dimensions only, and clamp the long side to BASE_LONG_SIDE
         // while preserving aspect ratio (asset is the single source of truth).
+        // update endFrame based on the duration of the generation
+        const mediaInfo = getMediaInfoCached(gen.assetId);
+        if (mediaInfo && mediaInfo.duration) {
+          let newDuration = Math.floor(mediaInfo.duration * fps);
+          updates.endFrame = clip.startFrame + newDuration;
+        }
         
         if (gen.transform) {
           updates.transform = {...gen.transform};

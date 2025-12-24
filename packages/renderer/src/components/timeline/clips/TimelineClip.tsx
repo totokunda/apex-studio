@@ -272,8 +272,7 @@ const TimelineClip: React.FC<
   const { applyFilters } = useWebGLFilters();
   const [forceRerenderCounter, setForceRerenderCounter] = useState(0);
   // Manifest data for model clips
-  const loadManifest = useManifestStore((s) => s.loadManifest);
-  const getLoadedManifest = useManifestStore((s) => s.getLoadedManifest);
+  
   const [modelUiCounts, setModelUiCounts] = useState<Record<
     string,
     number
@@ -355,7 +354,7 @@ const TimelineClip: React.FC<
     };
 
     computeCounts((currentClip as ModelClipProps)?.manifest);
-  }, [currentClip, loadManifest, getLoadedManifest]);
+  }, [currentClip]);
 
   const restoreWindowIfChanged = useCallback((anchorStartFrame: number) => {
     try {

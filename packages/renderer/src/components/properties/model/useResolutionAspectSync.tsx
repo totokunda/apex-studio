@@ -43,29 +43,69 @@ export function useResolutionAspectSync(opts: {
     [],
   );
 
-  const computeWidthFromAR = useCallback(
-    (heightVal: number, aspectOverride?: string) => {
+  const computeDimsFromResolutionAndAR = useCallback(
+    (resBaseline: number, aspectVal: string) => {
+      const heightInput = getInputById("height") as any;
       const widthInput = getInputById("width") as any;
       const arInput = getInputById("aspect_ratio") as any;
-      const arOpt: any = getSelectedOption(arInput, aspectOverride);
-      if ((aspectOverride ?? String(arInput?.value)) === "custom") {
-        const currentWidth = Number(
-          (widthInput as any)?.value ?? (widthInput as any)?.default ?? NaN,
-        );
-        return Number.isFinite(currentWidth)
-          ? Math.round(currentWidth)
-          : Math.round(heightVal);
-      }
+      if (!heightInput || !widthInput) return null;
+
+      // If AR is custom, respect manual sizing (auto-sync should not run in that mode)
+      if (String(aspectVal) === "custom") return null;
+
+      const arOpt: any = getSelectedOption(arInput, aspectVal);
       const rw = Number(arOpt?.ratio_w ?? 16) || 16;
       const rh = Number(arOpt?.ratio_h ?? 9) || 9;
-      const rawWidth = heightVal * (rw / rh);
-      const snapped = snapToStep(
-        rawWidth,
+      const aspect = rw / rh;
+
+      // Special case: SD (512) should keep the *longer* side fixed at 512.
+      // This avoids width/height max-clamps forcing the UI back to 512x512.
+      const useLongerSideBaseline = Math.round(resBaseline) === 512;
+
+      let targetW: number;
+      let targetH: number;
+
+      if (useLongerSideBaseline) {
+        // Longer side = baseline
+        if (aspect >= 1) {
+          // Landscape: width longer
+          targetW = resBaseline;
+          targetH = resBaseline / aspect;
+        } else {
+          // Portrait: height longer
+          targetH = resBaseline;
+          targetW = resBaseline * aspect;
+        }
+      } else {
+        // Default behavior: baseline is for the *shorter* side
+        if (aspect >= 1) {
+          // Landscape: height shorter
+          targetH = resBaseline;
+          targetW = resBaseline * aspect;
+        } else {
+          // Portrait: width shorter
+          targetW = resBaseline;
+          targetH = resBaseline / aspect;
+        }
+      }
+
+      const snappedH = snapToStep(
+        targetH,
+        heightInput?.step,
+        heightInput?.min,
+        heightInput?.max,
+      );
+      const snappedW = snapToStep(
+        targetW,
         widthInput?.step,
         widthInput?.min,
         widthInput?.max,
       );
-      return Math.max(1, Math.round(snapped));
+
+      return {
+        height: Math.max(1, Math.round(snappedH)),
+        width: Math.max(1, Math.round(snappedW)),
+      };
     },
     [getInputById, getSelectedOption, snapToStep],
   );
@@ -78,7 +118,8 @@ export function useResolutionAspectSync(opts: {
       if (!heightInput || !widthInput) return;
       const selected = getSelectedOption(resInput, newVal) as any;
 
-      // Interpret resolution as the target for the *shorter* side.
+      // Typically resolution is the target for the *shorter* side, but SD (512)
+      // should keep the *longer* side fixed at 512 to avoid max-clamps.
       const resBaselineRaw = Number(
         selected?.value ?? newVal ?? heightInput?.default ?? 1024,
       );
@@ -87,6 +128,7 @@ export function useResolutionAspectSync(opts: {
         Number.isFinite(resBaselineRaw) && resBaselineRaw > 0
           ? resBaselineRaw
           : 1024;
+      const useLongerSideBaseline = Math.round(resBaseline) === 512;
 
       // Current dimensions (fall back to defaults)
       const currentHeightRaw = Number(
@@ -105,46 +147,63 @@ export function useResolutionAspectSync(opts: {
       let widthInt: number;
 
       if (hasValidCurrentDims) {
-        // Preserve current aspect ratio and scale so that the *shorter* side
-        // matches the selected resolution baseline.
+        // Preserve current aspect ratio and scale so that either:
+        // - default: the *shorter* side matches the selected resolution baseline
+        // - SD (512): the *longer* side matches the selected resolution baseline
         const longer = Math.max(currentWidthRaw, currentHeightRaw);
         const shorter = Math.min(currentWidthRaw, currentHeightRaw);
         if (longer <= 0 || shorter <= 0) return;
 
-        const scale = resBaseline / shorter;
-        const targetShorter = resBaseline;
+        const scaleDenom = useLongerSideBaseline ? longer : shorter;
+        const scale = resBaseline / scaleDenom;
         const targetLonger = longer * scale;
+        const targetShorter = shorter * scale;
+        const isHeightLonger = currentHeightRaw >= currentWidthRaw;
 
-        const snappedShorter = snapToStep(
-          targetShorter,
+        const targetHeight = isHeightLonger ? targetLonger : targetShorter;
+        const targetWidth = isHeightLonger ? targetShorter : targetLonger;
+
+        const snappedHeight = snapToStep(
+          targetHeight,
           heightInput?.step,
           heightInput?.min,
           heightInput?.max,
         );
-        const snappedLonger = snapToStep(
-          targetLonger,
+        const snappedWidth = snapToStep(
+          targetWidth,
           widthInput?.step,
           widthInput?.min,
           widthInput?.max,
         );
 
-        const finalShorter = Math.max(1, Math.round(snappedShorter));
-        const finalLonger = Math.max(1, Math.round(snappedLonger));
-
-        const isHeightLonger = currentHeightRaw >= currentWidthRaw;
-
-        heightInt = isHeightLonger ? finalLonger : finalShorter;
-        widthInt = isHeightLonger ? finalShorter : finalLonger;
+        heightInt = Math.max(1, Math.round(snappedHeight));
+        widthInt = Math.max(1, Math.round(snappedWidth));
       } else {
         // Fallback: derive from aspect ratio selector using resolution baseline
-        const heightSnapped = snapToStep(
-          resBaseline,
-          heightInput?.step,
-          heightInput?.min,
-          heightInput?.max,
-        );
-        heightInt = Math.max(1, Math.round(heightSnapped));
-        widthInt = computeWidthFromAR(heightInt);
+        const arInput = getInputById("aspect_ratio") as any;
+        const arVal = String(arInput?.value ?? arInput?.default ?? "");
+        const dims =
+          computeDimsFromResolutionAndAR(resBaseline, arVal) ??
+          (() => {
+            const heightSnapped = snapToStep(
+              resBaseline,
+              heightInput?.step,
+              heightInput?.min,
+              heightInput?.max,
+            );
+            const widthSnapped = snapToStep(
+              resBaseline,
+              widthInput?.step,
+              widthInput?.min,
+              widthInput?.max,
+            );
+            return {
+              height: Math.max(1, Math.round(heightSnapped)),
+              width: Math.max(1, Math.round(widthSnapped)),
+            };
+          })();
+        heightInt = dims.height;
+        widthInt = dims.width;
       }
 
       // Prevent auto-sync effect from overriding our maintained ratio
@@ -152,43 +211,48 @@ export function useResolutionAspectSync(opts: {
       updateModelInput(clipId, "height", { value: String(heightInt) });
       updateModelInput(clipId, "width", { value: String(widthInt) });
     },
-    [clipId, computeWidthFromAR, getInputById, getSelectedOption, snapToStep, updateModelInput],
+    [
+      clipId,
+      computeDimsFromResolutionAndAR,
+      getInputById,
+      getSelectedOption,
+      snapToStep,
+      updateModelInput,
+    ],
   );
 
   const handleAspectRatioChange = useCallback(
     (newVal: string) => {
-      const heightInput = getInputById("height") as any;
       const resInput = getInputById("resolution") as any;
-      let heightNow = Number(
-        heightInput?.value ?? heightInput?.default ?? 1024,
+      const heightInput = getInputById("height") as any;
+      const widthInput = getInputById("width") as any;
+      if (!heightInput || !widthInput) return;
+
+      const resOpt = getSelectedOption(resInput);
+      const resBaselineRaw = Number(
+        (resOpt as any)?.value ??
+          resInput?.value ??
+          resInput?.default ??
+          heightInput?.default ??
+          1024,
       );
-      if (!Number.isFinite(heightNow)) {
-        const resSelected = getSelectedOption(resInput);
-        heightNow =
-          Number(
-            (resSelected as any)?.height ??
-              resInput?.value ??
-              resInput?.default ??
-              1024,
-          ) || 1024;
-      }
-      const heightSnapped = snapToStep(
-        heightNow,
-        heightInput?.step,
-        heightInput?.min,
-        heightInput?.max,
-      );
-      const heightInt = Math.max(1, Math.round(heightSnapped));
-      // Ensure height is updated so the UI reflects recalculation alongside width
-      updateModelInput(clipId, "height", { value: String(heightInt) });
-      const widthInt = computeWidthFromAR(heightInt, newVal);
-      updateModelInput(clipId, "width", { value: String(widthInt) });
+      const resBaseline =
+        Number.isFinite(resBaselineRaw) && resBaselineRaw > 0
+          ? resBaselineRaw
+          : 1024;
+
+      const dims = computeDimsFromResolutionAndAR(resBaseline, newVal);
+      if (!dims) return;
+
+      updateModelInput(clipId, "height", { value: String(dims.height) });
+      updateModelInput(clipId, "width", { value: String(dims.width) });
     },
-    [clipId, computeWidthFromAR, getInputById, getSelectedOption, snapToStep, updateModelInput],
+    [clipId, computeDimsFromResolutionAndAR, getInputById, getSelectedOption, updateModelInput],
   );
 
-  // Sync effect: ensure height and width reflect selected resolution and aspect ratio,
-  // scaling by whichever side (height or width) is currently *shorter*.
+  // Sync effect: ensure height and width reflect selected resolution and aspect ratio.
+  // Default behavior: resolution targets the *shorter* side.
+  // SD (512) special-case: resolution targets the *longer* side (keeps longer side at 512).
   useEffect(() => {
     const resInput = getInputById("resolution") as any;
     const arInput = getInputById("aspect_ratio") as any;
@@ -214,81 +278,6 @@ export function useResolutionAspectSync(opts: {
         ? resBaselineRaw
         : 1024;
 
-    const currentHeightRaw = Number(
-      heightInput?.value ?? heightInput?.default ?? NaN,
-    );
-    const currentWidthRaw = Number(
-      widthInput?.value ?? widthInput?.default ?? NaN,
-    );
-
-    const hasValidCurrentDims =
-      Number.isFinite(currentHeightRaw) &&
-      currentHeightRaw > 0 &&
-      Number.isFinite(currentWidthRaw) &&
-      currentWidthRaw > 0;
-
-    // If we don't yet have valid explicit dimensions, fall back to
-    // aspect-ratio-based computation using the resolution baseline.
-    if (!hasValidCurrentDims) {
-      const heightSnapped = snapToStep(
-        resBaseline,
-        heightInput?.step,
-        heightInput?.min,
-        heightInput?.max,
-      );
-      const fallbackHeight = Math.max(1, Math.round(heightSnapped));
-      const fallbackWidth = computeWidthFromAR(fallbackHeight, arVal);
-
-      const currentHeight = Number(
-        heightInput?.value ?? heightInput?.default ?? NaN,
-      );
-      const currentWidth = Number(
-        widthInput?.value ?? widthInput?.default ?? NaN,
-      );
-
-      if (
-        Number.isFinite(fallbackHeight) &&
-        fallbackHeight !== currentHeight
-      ) {
-        updateModelInput(clipId, "height", { value: String(fallbackHeight) });
-      }
-      if (Number.isFinite(fallbackWidth) && fallbackWidth !== currentWidth) {
-        updateModelInput(clipId, "width", { value: String(fallbackWidth) });
-      }
-      return;
-    }
-
-    // Scale by whichever side is currently shorter so that the shorter side
-    // matches the selected resolution baseline.
-    const longer = Math.max(currentHeightRaw, currentWidthRaw);
-    const shorter = Math.min(currentHeightRaw, currentWidthRaw);
-    if (longer <= 0 || shorter <= 0) return;
-
-    const scale = resBaseline / shorter;
-    const targetShorter = resBaseline;
-    const targetLonger = longer * scale;
-
-    const isHeightLonger = currentHeightRaw >= currentWidthRaw;
-
-    const targetHeight = isHeightLonger ? targetLonger : targetShorter;
-    const targetWidth = isHeightLonger ? targetShorter : targetLonger;
-
-    const snappedHeight = snapToStep(
-      targetHeight,
-      heightInput?.step,
-      heightInput?.min,
-      heightInput?.max,
-    );
-    const snappedWidth = snapToStep(
-      targetWidth,
-      widthInput?.step,
-      widthInput?.min,
-      widthInput?.max,
-    );
-
-    const nextHeightInt = Math.max(1, Math.round(snappedHeight));
-    const nextWidthInt = Math.max(1, Math.round(snappedWidth));
-
     const currentHeight = Number(
       heightInput?.value ?? heightInput?.default ?? NaN,
     );
@@ -296,15 +285,18 @@ export function useResolutionAspectSync(opts: {
       widthInput?.value ?? widthInput?.default ?? NaN,
     );
 
-    if (Number.isFinite(nextHeightInt) && nextHeightInt !== currentHeight) {
-      updateModelInput(clipId, "height", { value: String(nextHeightInt) });
+    const dims = computeDimsFromResolutionAndAR(resBaseline, arVal);
+    if (!dims) return;
+
+    if (Number.isFinite(dims.height) && dims.height !== currentHeight) {
+      updateModelInput(clipId, "height", { value: String(dims.height) });
     }
-    if (Number.isFinite(nextWidthInt) && nextWidthInt !== currentWidth) {
-      updateModelInput(clipId, "width", { value: String(nextWidthInt) });
+    if (Number.isFinite(dims.width) && dims.width !== currentWidth) {
+      updateModelInput(clipId, "width", { value: String(dims.width) });
     }
   }, [
     clipId,
-    computeWidthFromAR,
+    computeDimsFromResolutionAndAR,
     getInputById,
     getSelectedOption,
     snapToStep,

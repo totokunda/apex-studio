@@ -318,7 +318,6 @@ const GlobalContextMenu: React.FC = () => {
               },
             });
 
-            console.log("result", result);
 
             if (result instanceof Blob) {
               const buf = new Uint8Array(await result.arrayBuffer());
@@ -367,6 +366,30 @@ const GlobalContextMenu: React.FC = () => {
   );
 
   const onSelect = (action: string) => {
+    if (target?.type === "textSelection") {
+      if (action === "copy") {
+        try {
+          // Prefer the browser's native selection copy.
+          const ok = document.execCommand?.("copy");
+          if (ok) {
+            closeMenu();
+            return;
+          }
+        } catch {
+          // fall through
+        }
+        try {
+          const sel = window.getSelection?.();
+          const text = sel?.toString?.() ?? "";
+          if (text.trim()) navigator.clipboard?.writeText?.(text);
+        } catch {
+          // swallow
+        }
+      }
+      closeMenu();
+      return;
+    }
+
     if (target?.type === "clip") {
       const ids = target.clipIds;
       if (action === "copy") clipsStore.copyClips(ids);
@@ -447,7 +470,7 @@ const GlobalContextMenu: React.FC = () => {
                     className={cn(
                       "w-full px-2.5 py-1.5 text-left text-[11.5px] flex items-center rounded justify-between hover:bg-brand-light/10 text-brand-light",
                       item.disabled &&
-                        "opacity-50 !cursor-default hover:bg-brand",
+                        "opacity-50 cursor-default! hover:bg-brand",
                     )}
                   >
                     <span>{item.label}</span>

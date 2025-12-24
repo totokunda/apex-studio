@@ -39,7 +39,7 @@ import {
   bumpMediaLibraryVersion,
 } from "@/lib/media/library";
 import { useInputControlsStore } from "@/lib/inputControl";
-import { usePreprocessorsListStore } from "@/lib/preprocessor/list-store";
+import { usePreprocessorsListQuery } from "@/lib/preprocessor/queries";
 import { useControlsStore } from "@/lib/control";
 import { TbEdit, TbPhoto } from "react-icons/tb";
 import { MediaDialog } from "@/components/dialogs/MediaDialog";
@@ -275,7 +275,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
       align="start"
       sideOffset={20}
       className={cn(
-        "p-2 z-[90] dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-150",
+        "p-2 z-90 dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-150",
         selectedTab === "timeline" ? "w-[600px]" : "w-96",
       )}
       onOpenAutoFocus={() => {
@@ -502,6 +502,9 @@ const ImageInput: React.FC<ImageInputProps> = ({
   applyPreprocessorInitial,
   onChangeComposite,
 }) => {
+  // Each ImageInput instance must have a unique droppable id; otherwise DnD-kit
+  // can't distinguish which slot is being hovered/dropped on in ImageInputList.
+  const droppableId = useMemo(() => `image-input:${inputId}`, [inputId]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const [stageSize, setStageSize] = useState<{ w: number; h: number }>({
@@ -517,7 +520,9 @@ const ImageInput: React.FC<ImageInputProps> = ({
   );
   const updateModelInput = useClipStore((s) => s.updateModelInput);
   const setClipTransform = useClipStore((s) => s.setClipTransform);
-  const { preprocessors, load } = usePreprocessorsListStore();
+  const { data: preprocessors = [] } = usePreprocessorsListQuery({
+    enabled: !!preprocessorRef,
+  });
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const { focusFrameByInputId } = useInputControlsStore();
   const focusFrameForInput = focusFrameByInputId[inputId] ?? 0;
@@ -532,11 +537,6 @@ const ImageInput: React.FC<ImageInputProps> = ({
     return true;
   }, [value, getClipById]);
 
-  useEffect(() => {
-    if (preprocessorRef) {
-      void load();
-    }
-  }, [preprocessorRef, load]);
   const resolvedPreprocessorName = useMemo(() => {
     if (!preprocessorRef) return preprocessorName;
     const found = (preprocessors || []).find((p) => p.id === preprocessorRef);
@@ -893,7 +893,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
       const overId = event.over?.id as string | undefined;
       const isValid =
         !!data && (data.type === "image" || data.type === "video");
-      setIsOverDropZone(isValid && overId === "image-input");
+      setIsOverDropZone(isValid && overId === droppableId);
     },
     onDragCancel: () => {
       setIsOverDropZone(false);
@@ -903,7 +903,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
       const data = event.active?.data?.current as MediaItem | undefined;
       const isValid =
         !!data && (data.type === "image" || data.type === "video");
-      if (isValid && overId === "image-input") {
+      if (isValid && overId === droppableId) {
         const assetUrl = (data as MediaItem).assetUrl;
         const targetClipId = `media:${assetUrl}`;
         const isSame = value && value.clipId === targetClipId;
@@ -1182,7 +1182,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
   }, [value, liveTimelineClip, emitSelection]);
 
   return (
-    <Droppable className="w-full" id="image-input" accepts={["media"]}>
+    <Droppable className="w-full" id={droppableId} accepts={["media"]}>
       <div
         ref={divRef}
         className="flex flex-col items-start w-full gap-y-1 min-w-0   h-full"
