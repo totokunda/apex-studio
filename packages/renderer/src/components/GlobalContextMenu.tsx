@@ -275,6 +275,7 @@ const GlobalContextMenu: React.FC = () => {
           const targetH = baseH;
           const targetW = Math.max(1, Math.round(targetH * aspect));
 
+ 
           const prepared = prepareExportClipsForValue(
             clip as AnyClipProps,
             {

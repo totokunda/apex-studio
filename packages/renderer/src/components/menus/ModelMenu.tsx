@@ -24,11 +24,12 @@ import {
   LuLoader,
   LuPlus,
   LuRefreshCw,
+  LuCircleSlash,
 } from "react-icons/lu";
 import { TbWorldDownload } from "react-icons/tb";
 import Draggable from "../dnd/Draggable";
 import { useManifestStore } from "@/lib/manifest/store";
-import { extractAllDownloadableDefaultPaths, extractAllDownloadablePaths } from "@/lib/manifest/api";
+import { extractAllDownloadablePaths } from "@/lib/manifest/api";
 
 import ModelPage from "../models/ModelPage";
 // check
@@ -44,7 +45,6 @@ import { v4 as uuidv4 } from "uuid";
 import { useQuery, useQueryClient} from "@tanstack/react-query";
 import { useManifestQuery } from "@/lib/manifest/queries";
 import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
-import { useStartUnifiedDownloadMutation } from "@/lib/download/mutations";
 
 export const ModelItem: React.FC<{
   manifest: ManifestDocument;
@@ -58,7 +58,7 @@ export const ModelItem: React.FC<{
   const [isStartingDownload, setIsStartingDownload] = useState(false);
   const { data: manifestData } = useManifestQuery(initialManifest.metadata?.id || "");
   const manifest = manifestData ?? initialManifest;
-  const {getSourceToJobId, getJobUpdates, addSourceToJobId,  addJobIdToParts, addJobIdToManifestId} = useDownloadJobIdStore();
+  const {getSourceToJobId, getJobUpdates} = useDownloadJobIdStore();
 
   const isVideoDemo = React.useMemo(() => {
     const value = (manifest.metadata?.demo_path || "").toLowerCase();
@@ -83,22 +83,7 @@ export const ModelItem: React.FC<{
     return extractAllDownloadablePaths(manifest);
   }, [manifest]);
 
-  const allDownloadableDefaultPaths = useMemo(() => {
-    return extractAllDownloadableDefaultPaths(manifest);
-  }, [manifest]);
 
-
-  const { mutate: startDownload } = useStartUnifiedDownloadMutation({
-    onSuccess(data, variables) {
-      addSourceToJobId(variables.source, data.job_id);
-      if (variables.index !== undefined) {
-        addJobIdToParts(data.job_id, [`spec.${variables.item_type}s.${variables.index}`, "downloaded"]);
-      } else {
-        addJobIdToParts(data.job_id, [`spec.${variables.item_type}s`, "downloaded"]);
-      }
-      addJobIdToManifestId(data.job_id, manifest.metadata?.id || ""); 
-    },
-  });
   
   const isDownloading = allDownloadablePaths.some((path) => {
       const jobId = getSourceToJobId(path.path);
@@ -154,16 +139,6 @@ export const ModelItem: React.FC<{
   }, [manifest.metadata?.tags]);
 
 
-  const handleDownloadAll = useCallback(async () => {
-    setIsStartingDownload(true);
-    for (const path of allDownloadableDefaultPaths) {
-        await startDownload({
-          item_type: path.type as "component" | "lora" | "preprocessor",
-          source: path.path,
-          index: path.index,
-        });
-    }
-  }, [allDownloadableDefaultPaths, startDownload]);
 
   useEffect(() => {
     if (isDownloading) {
@@ -252,7 +227,7 @@ export const ModelItem: React.FC<{
       className={cn(
         "flex flex-col transition-all font-poppins duration-200 rounded-md relative bg-brand border border-brand-light/5 shadow-md cursor-grab active:cursor-grabbing",
         {
-          "w-48": true,
+          "w-60": true,
           "opacity-[0.975]": isDragging,
         },
       )}
@@ -276,24 +251,22 @@ export const ModelItem: React.FC<{
         </Draggable>
       )}
       {!isDragging && (
-        <div className="flex items-center gap-x-1 w-full p-3 pt-0">
+        <div className="flex items-center gap-x-1 w-full p-3 pt-0 justify-between">
           <button
             onClick={() => {
               setSelectedManifestId(manifest.metadata?.id || "");
             }}
             type="button"
-            className="text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light flex-1 hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1"
+            className="text-[10px] font-medium w-1/2 flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light  hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1.5"
             title="Show more info"
           >
-            <LuInfo className="w-3 h-3" />
-            <span>Info</span>
+            {allDownloaded ? <LuInfo className="w-3 h-3" /> : <LuDownload className="w-3 h-3" />}
+            <span>
+              {allDownloaded ? "Info" : "Download"}
+            </span>
           </button>
-          <button
+          {<button
             onClick={async () => {
-              if (!allDownloaded) {
-                await handleDownloadAll();
-                return;
-              }
               try {
                 const controls = useControlsStore.getState();
                 const clipStore = useClipStore.getState();
@@ -372,16 +345,12 @@ export const ModelItem: React.FC<{
               } catch {}
             }}
             type="button"
-            disabled={isStartingDownload || isDownloading}
+            disabled={!allDownloaded}
             className={cn(
-              "text-[10px] font-medium flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded px-2 py-1 border flex-1 text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10",
+              "text-[10px] font-medium disabled:opacity-50 disabled:cursor-default! w-1/2 flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded px-2 py-1.5 border text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10",
             )}
             title={
-              allDownloaded
-                ? "Add clip at playhead"
-                : isStartingDownload || isDownloading
-                  ? "Downloading"
-                  : "Download default variant"
+              allDownloaded ? "Add clip at playhead" : "No Weights"  
             }
           >
             {allDownloaded ? (
@@ -389,16 +358,12 @@ export const ModelItem: React.FC<{
             ) : isStartingDownload || isDownloading ? (
               <LuLoader className="w-3 h-3 animate-spin" />
             ) : (
-              <LuDownload className="w-3 h-3" />
+              <LuCircleSlash className="w-3 h-3" />
             )}
             <span>
-              {allDownloaded
-                ? "Add Clip"
-                : isStartingDownload || isDownloading
-                  ? "Downloading"
-                  : "Download"}
+              {allDownloaded ? "Add Clip" : "No Weights"}
             </span>
-          </button>
+          </button>}
         </div>
       )}
     </div>
@@ -567,7 +532,7 @@ const CategoryDetailView: React.FC<{
           <div
             className="grid gap-x-2 gap-y-3"
             style={{
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
             }}
           >
             {manifests.map((manifest) => (

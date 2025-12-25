@@ -118,12 +118,13 @@ export const getVideoFrameIterator = async (
     mediaInfo = MediaCache.getState().getMedia(path);
   }
 
+  let originalPath = path;
+
   if (options?.useOriginal) {
     try {
       const fsPath = fileURLToPath(path);
       const originalFsPath = await resolveOriginalPath(fsPath);
       if (originalFsPath !== fsPath) {
-        console.log(path, originalFsPath, pathToFileURL(originalFsPath));
         path = pathToFileURL(originalFsPath);
       }
     } catch (e) {
@@ -132,9 +133,14 @@ export const getVideoFrameIterator = async (
     }
   }
 
-  if (!mediaInfo ) {
+  if (!mediaInfo) {
     // fetch media info
-    mediaInfo = await getMediaInfo(path);
+    try {
+      mediaInfo = await getMediaInfo(path);
+    } catch (e) {
+      // fallback to original path
+      mediaInfo = await getMediaInfo(originalPath);
+    }
   }
 
   // Ensure we use the resolved path (e.g. if swapped to original)
@@ -143,7 +149,7 @@ export const getVideoFrameIterator = async (
   if (!mediaInfo.video) throw new Error("Media info not found");
 
   const projectFps = Math.max(1, Math.floor(options.projectFps || 0));
-  const speed = 1;
+  const speed = options.speed || 1;
 
   const videoCanBeTransparent = await mediaInfo.video.canBeTransparent();
   const decoderMaybe = getOrCreateVideoDecoder(
@@ -211,6 +217,7 @@ export const getVideoFrameIterator = async (
         } else {
           out = prev; // stream ended: hold last if available
         }
+ 
 
         decoder.lastAccessTs = nowMs();
         yield out ?? null;

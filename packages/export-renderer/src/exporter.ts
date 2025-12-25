@@ -444,8 +444,7 @@ export async function exportSequence(
 
   // Persistent export cache: for audio/video exports with an explicit output filename,
   // short-circuit if we've already exported the exact same content/options before.
-  const canUsePersistentCache =
-    (mode === "video" || mode === "audio") &&
+  const canUsePersistentCache = (mode === "video" || mode === "audio") &&
     typeof filename === "string" &&
     filename.length > 0;
 
@@ -669,7 +668,7 @@ export async function exportSequence(
             projectFps: Math.max(1, fps),
             startIndex: currentSourceIndex,
             endIndex: spanEndSourceIndex,
-            speed,
+            speed: 1,
             useOriginal: true,
           });
           ctxIter = {
@@ -1173,6 +1172,7 @@ export async function exportClip(
       ensureResources?: () => Promise<void>;
     }>;
 
+
     if (workingClip.type === "image") {
       await renderer.blitImage(
         workingClip as unknown as BlitImageClipProps,
@@ -1274,7 +1274,7 @@ export async function exportClip(
           projectFps: Math.max(1, fps),
           startIndex: currentSourceIndex,
           endIndex: spanEndSourceIndex,
-          speed,
+          speed:1,
           useOriginal: true,
         });
         ctxIter = {

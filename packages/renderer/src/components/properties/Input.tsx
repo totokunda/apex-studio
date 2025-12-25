@@ -84,11 +84,13 @@ const Input: React.FC<InputProps<string>> = ({
 
   return (
     <div className="flex flex-col items-start w-full gap-y-1 min-w-0">
-      {(label || description) && (
+      {(label || description || emptyLabel) && (
         <div className="flex items-center gap-1.5 w-full text-start mb-0.5">
-          {label && (
-            <label className="text-brand-light text-[10.5px] font-medium">
-              {label}
+          {(label || emptyLabel) && (
+            <label className={cn("text-brand-light text-[10.5px] font-medium", {
+              "text-transparent": emptyLabel,
+            })}>
+              {emptyLabel ? "Empty" : label}
             </label>
           )}
           {description && (
@@ -111,8 +113,7 @@ const Input: React.FC<InputProps<string>> = ({
           )}
         </div>
       )}
-      {emptyLabel && <span className="mb-3"></span>}
-
+    
       <div className="relative w-full flex flex-row items-center min-w-0">
         {startLogo && (
           <span className="text-brand-light/50 font-medium text-[11px] absolute left-2 top-1/2 -translate-y-1/2">

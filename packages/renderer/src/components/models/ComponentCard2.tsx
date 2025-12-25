@@ -275,11 +275,12 @@ const SchedulerSection: React.FC<{
               {option}
             </TabsTrigger>
           ))}</TabsList>
-          <TabsContent className="mt-1" value={selectedOption}>  
+            
             <div className=" bg-brand-background border border-brand-light/10 rounded-md p-3 " > {schedulerOptions?.map((option) => (
+              <TabsContent className="mt-1" value={option.label ?? ""}>  
             <SchedulerConfigPathItem manifestId={manifestId} componentIndex={componentIndex} key={option.name} option={option} configPath={option.config_path} isConfigPathDownloaded={isConfigPathDownloaded} />
+            </TabsContent>
           ))}</div>
-          </TabsContent>
         </Tabs>
 
       </div>

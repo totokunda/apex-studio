@@ -224,7 +224,7 @@ const LoraDownloadRow: React.FC<{
           <div className="text-brand-light text-[11px] font-medium truncate break-all text-start">
             {label}
           </div>
-          <div className="text-[10px] text-brand-light/70 font-mono truncate break-all text-start mt-0.5">
+          <div className="text-[10px] text-brand-light/70 font-mono text-start mt-0.5">
             {path}
           </div>
         </div>

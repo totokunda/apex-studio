@@ -80,14 +80,6 @@ export function useDownloadJobClipSync<TJob extends JobLike>(params: {
 
         if (!isTerminal) continue;
 
-        // Run cleanup for terminal jobs (idempotent; safe to repeat).
-        try {
-          removeJobUpdates(jobId);
-        } catch {}
-        try {
-          removeSourceByJobId(jobId);
-        } catch {}
-
         // Only refresh manifests once per completed job.
         // - Prefer edge-triggered: status becomes terminal.
         // - Also allow a one-time refresh if the app restarts and we see a terminal job
@@ -130,6 +122,17 @@ export function useDownloadJobClipSync<TJob extends JobLike>(params: {
           // otherwise retry on every tick and can overwhelm the API server.
           refreshedManifestByJobIdRef.current.add(jobId);
           refreshingManifestByJobIdRef.current.delete(jobId);
+
+          // After we refresh (or attempt to), cleanup terminal-job tracking.
+          // We run this after refresh so the UI doesn't drop the job before the
+          // manifest cache is updated.
+          try {
+            removeJobUpdates(jobId);
+          } catch {}
+          try {
+            removeSourceByJobId(jobId);
+          } catch {}
+
           try {
             removeJobIdToManifestId(jobId);
           } catch {}

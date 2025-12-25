@@ -391,6 +391,10 @@ const TopBar: React.FC<TopBarProps> = () => {
         return hasAsset || hasSrcGeneration;
       }
 
+      if (clip.type === "draw" || clip.type === "text" || clip.type === "shape") {
+        return true;
+      }
+
       return false;
     };
 

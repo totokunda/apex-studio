@@ -3,6 +3,7 @@ import _ from "lodash";
 import type { AnyClipProps, ModelClipProps, TimelineProps } from "@/lib/types";
 import { getPreviewPath, savePreviewImage } from "@app/preload";
 import { getPathExists } from "@app/preload";
+import { cleanupOldPreviews } from "@app/preload";
 import { getMediaInfoCached } from "@/lib/media/utils";
 import { exportClip, exportSequence } from "@app/export-renderer";
 import type { ManifestComponent } from "@/lib/manifest/api";
@@ -25,12 +26,74 @@ const EXPORT_CACHE_MAX_ENTRIES = 256;
 declare global {
   interface Window {
     __apexModelExportCache__?: Map<string, ExportCacheEntry>;
+    __apexPreviewCleanupTimer__?: number;
   }
 }
 
 let fallbackExportResultCache:
   | Map<string, ExportCacheEntry>
   | undefined;
+
+const DEFAULT_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Starts a best-effort background cleanup that deletes preview files older than `maxAgeMs`
+ * from the app's preview folder. Safe to call multiple times (it only schedules once).
+ */
+export const startPreviewFolderAutoCleanup = (options?: {
+  /**
+   * Delete preview files older than this age. Defaults to 24 hours.
+   */
+  maxAgeMs?: number;
+  /**
+   * How often to run the cleanup. Defaults to 24 hours.
+   */
+  intervalMs?: number;
+  /**
+   * Delay before first cleanup run. Defaults to 24 hours.
+   */
+  initialDelayMs?: number;
+  /**
+   * If true, run a cleanup immediately in addition to scheduling.
+   */
+  runImmediately?: boolean;
+}): void => {
+  const maxAgeMs =
+    typeof options?.maxAgeMs === "number" && Number.isFinite(options.maxAgeMs)
+      ? Math.max(0, options.maxAgeMs)
+      : DEFAULT_PREVIEW_MAX_AGE_MS;
+  const intervalMs =
+    typeof options?.intervalMs === "number" && Number.isFinite(options.intervalMs)
+      ? Math.max(10_000, options.intervalMs)
+      : DEFAULT_PREVIEW_MAX_AGE_MS;
+  const initialDelayMs =
+    typeof options?.initialDelayMs === "number" &&
+    Number.isFinite(options.initialDelayMs)
+      ? Math.max(0, options.initialDelayMs)
+      : DEFAULT_PREVIEW_MAX_AGE_MS;
+
+  const runOnce = async () => {
+    try {
+      await cleanupOldPreviews({ maxAgeMs });
+    } catch {
+      // ignore
+    }
+  };
+
+  if (options?.runImmediately) {
+    void runOnce();
+  }
+
+  if (typeof window === "undefined") return;
+  if (window.__apexPreviewCleanupTimer__ != null) return;
+
+  const timer = window.setTimeout(function tick() {
+    void runOnce();
+    window.__apexPreviewCleanupTimer__ = window.setTimeout(tick, intervalMs);
+  }, initialDelayMs);
+
+  window.__apexPreviewCleanupTimer__ = timer;
+};
 
 const getExportCacheMap = (): Map<string, ExportCacheEntry> => {
   if (typeof window !== "undefined") {
@@ -114,7 +177,6 @@ export interface GenerateContext {
     success: (msg: string) => void;
     error: (msg: string) => void;
   };
-  setEngineJobId: (id: any) => void;
   setSelectedTab: (tab: string) => void;
 }
 
@@ -198,6 +260,9 @@ const buildSelectedComponentDefaults = (manifest: any): Record<string, any> => {
 };
 
 export const runModelGeneration = async (ctx: GenerateContext) => {
+  // Start preview cleanup timer once per session (best-effort).
+  startPreviewFolderAutoCleanup({ runImmediately: true });
+
   const {
     clipId,
     clip,
@@ -216,7 +281,6 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
     startEngineTracking,
     updateClip,
     toast,
-    setEngineJobId,
     setSelectedTab,
   } = ctx;
 
@@ -280,7 +344,11 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           },
         );
 
+
+
         const { exportClips, width, height } = prepared;
+
+        
 
         let absolutePath: string | null = null;
         const frame =
@@ -398,7 +466,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         {
           clearMasks: isMapTarget,
           useMediaDimensionsForExport: true,
-          useOriginalTransform: true,
+          useOriginalTransform: value.type !== "group",
           applyCentering: true,
           dimensionsFrom: "clip",
         },
@@ -475,6 +543,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
               absolutePath = result;
             }
           } else {
+
             const result = await exportSequence({
               mode: "video",
               width: width,
@@ -815,6 +884,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     const activeJobId = uuidv4();
 
+
     const res = await runEngine({
       manifest_id: manifestId,
       inputs: engineInputs,
@@ -825,14 +895,14 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
       toast.success(
         `Generation started for ${(clip as ModelClipProps)?.manifest?.metadata?.name}`,
       );
-      const returnedJobId = (res.data as any)?.job_id || clipId;
-      setEngineJobId(returnedJobId);
-      if (returnedJobId) {
+      const returnedJobId = (res.data as any)?.job_id;
+      const effectiveJobId = returnedJobId || activeJobId || clipId;
+      if (effectiveJobId) {
         try {
-          await clearEngineJob(returnedJobId);
+          await clearEngineJob(effectiveJobId);
         } catch {}
         try {
-          await startEngineTracking(returnedJobId);
+          await startEngineTracking(effectiveJobId);
         } catch {}
       }
       try {
@@ -856,7 +926,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         
         const existingGenerations = (clip as ModelClipProps)?.generations ?? [];
         const newGeneration = {
-          jobId: activeJobId,
+          jobId: effectiveJobId,
           modelStatus: "pending" as const,
           assetId: undefined,
           createdAt: Date.now(),
@@ -866,7 +936,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         };
         if (clipId) {
           updateClip(clipId, {
-            activeJobId: activeJobId,
+            activeJobId: effectiveJobId,
             modelStatus: "pending",
             generations: [...existingGenerations, newGeneration],
           } as any);

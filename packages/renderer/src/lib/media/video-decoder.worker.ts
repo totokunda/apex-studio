@@ -409,6 +409,7 @@ function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
 
   const frameTime = frame.timestamp / 1e6;
 
+  
   // 1. Cache
   cacheFrame(state, frame);
 
@@ -482,6 +483,9 @@ async function cacheKeyPackets(state: AssetState) {
 
 // Handler factory – binds an assetId so multiple assets can run concurrently.
 const createFrameHandler = (assetId: string) => (frame: VideoFrame) => {
+
+  console.log("createFrameHandler", assetId, frame.timestamp);
+  
   const state = assetStates.get(assetId);
   if (!state) {
     frame.close();
@@ -761,6 +765,7 @@ async function handleSeek(
 ) {
 
   const id = assetId;
+ 
   if (!id) return;
   const state = assetStates.get(id);
   if (!state || !state.decoder || !state.sink) return;
@@ -792,6 +797,7 @@ async function handleSeek(
 
   // 1. Cache Hit
   const cached = findCachedFrame(state, timestamp);
+  console.log("handleSeek cached", id, timestamp, cached);
   if (cached) {
     postFrame(id, cached, requestId);
     // @ts-ignore
@@ -818,17 +824,18 @@ async function handleSeek(
     verifyKeyPackets: true,
   });
 
+
   if (!currentPacket) return;
 
   if (!state.keyPacketCache.has(currentPacket.timestamp)) {
     state.keyPacketCache.set(currentPacket.timestamp, currentPacket);
   }
 
+
   if (state.currentRequestId !== requestId) return;
 
-  if ((state.decoder.state as string) === "closed") return;
 
-  state.decoder.reset();
+  if ((state.decoder.state as string) === "closed") return;
 
   if (state.config) state.decoder.configure(state.config);
   if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
@@ -872,6 +879,8 @@ async function handleSeek(
     }
     throw e;
   }
+
+
   if (currentPacket.sideData?.alpha) {
     ensureAlphaDecoder(state, id);
     if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
@@ -883,13 +892,14 @@ async function handleSeek(
     }
   }
 
-
   if (isFastScrubbing) {
     state.showingPreview = true;
     await new Promise((r) => setTimeout(r, 80));
-    if (state.currentRequestId !== requestId) return;
+    //if (state.currentRequestId !== requestId) return;
     state.showingPreview = false;
   }
+
+  
 
   const packets = state.sink.packets(currentPacket);
   for await (const packet of packets) {
@@ -901,7 +911,8 @@ async function handleSeek(
       if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
         try {
           state.alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
-        } catch {
+        } catch (e) {
+          console.log(state.alphaDecoder, "alpha decode error", e);
           // ignore
         }
       }
@@ -910,6 +921,7 @@ async function handleSeek(
     if (state.currentRequestId !== requestId) break;
     if (packet.timestamp > timestamp + 0.1) break;
   }
+
 
   if (forceAccurate) {
     await state.decoder.flush();

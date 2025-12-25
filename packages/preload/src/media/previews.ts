@@ -17,6 +17,59 @@ async function ensurePreviewDir(): Promise<{
   return { root, previewsAbs };
 }
 
+async function cleanupOldPreviews(options?: {
+  maxAgeMs?: number;
+}): Promise<{ deleted: number; scanned: number; previewsAbs: string }> {
+  const { previewsAbs } = await ensurePreviewDir();
+  const maxAgeMs =
+    typeof options?.maxAgeMs === "number" && Number.isFinite(options.maxAgeMs)
+      ? Math.max(0, options.maxAgeMs)
+      : 24 * 60 * 60 * 1000;
+
+  const cutoff = Date.now() - maxAgeMs;
+  let deleted = 0;
+  let scanned = 0;
+
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = await fsp.readdir(previewsAbs, { withFileTypes: true });
+  } catch {
+    return { deleted: 0, scanned: 0, previewsAbs };
+  }
+
+  for (const ent of entries) {
+    // Only consider direct children of the previews directory.
+    const name = ent?.name;
+    if (!name) continue;
+    if (name === "." || name === "..") continue;
+
+    const abs = join(previewsAbs, name);
+    scanned += 1;
+
+    try {
+      const st = await fsp.lstat(abs);
+      const ts =
+        st.birthtime?.getTime?.() ??
+        st.mtime?.getTime?.() ??
+        st.ctime?.getTime?.() ??
+        0;
+      if (!Number.isFinite(ts) || ts <= 0) continue;
+      if (ts > cutoff) continue;
+
+      if (ent.isDirectory()) {
+        await fsp.rm(abs, { recursive: true, force: true });
+      } else {
+        await fsp.rm(abs, { force: true });
+      }
+      deleted += 1;
+    } catch {
+      // ignore per-entry issues (permissions, races, etc.)
+    }
+  }
+
+  return { deleted, scanned, previewsAbs };
+}
+
 async function savePreviewImage(
   data: ArrayBuffer | Uint8Array | string,
   options?: { fileNameHint?: string },
@@ -1051,6 +1104,7 @@ async function getPreviewPath(
 
 export {
   ensurePreviewDir,
+  cleanupOldPreviews,
   savePreviewImage,
   saveImageToPath,
   savePreviewAudio,

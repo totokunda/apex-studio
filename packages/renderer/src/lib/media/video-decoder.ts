@@ -742,6 +742,7 @@ export class VideoDecoderManager {
                 client.onReady = handlers.onReady;
             }
         }
+    
     }
 
     /**
@@ -758,7 +759,6 @@ export class VideoDecoderManager {
         return new Promise<void>((resolve, reject) => {
             client.pendingSeeks.set(reqId, { resolve, reject });
 
-            
             this.worker.postMessage({
                 type: "seek",
                 assetId,

@@ -44,6 +44,13 @@ interface ConfigResponse<T> {
   error?: string;
 }
 
+interface UploadCacheEntry {
+  remoteAbs: string;
+  sha256: string;
+  size: number;
+  mtimeMs: number;
+}
+
 export class ApexApi implements AppModule {
   private app: App | null = null;
   private backendUrl: string = "http://127.0.0.1:8765";
@@ -56,7 +63,7 @@ export class ApexApi implements AppModule {
       id: string;
     }
   > = new Map();
-  private uploadCache: Map<string, string> = new Map(); // localAbsPath -> remoteAbsPath
+  private uploadCache: Map<string, UploadCacheEntry> = new Map(); // localAbsPath -> uploaded file metadata
   private remoteCachePath: string | null = null; // backend-reported cache path
   private loopbackAppearsRemote: boolean = false; // true when localhost is actually a tunnel to a remote backend
   private probeInFlight: Promise<ConfigResponse<null>> | null = null;
@@ -171,8 +178,8 @@ export class ApexApi implements AppModule {
           return { success: true, data: { shouldUpload: false } };
         const abs = this.#resolveLocalPath(String(inputPath || ""));
         if (!abs) return { success: true, data: { shouldUpload: false } };
-        const cached = this.uploadCache.get(abs);
-        return { success: true, data: { shouldUpload: !cached } };
+        const isCached = await this.#hasValidUploadedCache(abs);
+        return { success: true, data: { shouldUpload: !isCached } };
       } catch (error) {
         // Sensible default on timeout/errors: do not auto-upload.
         return { success: true, data: { shouldUpload: false } };
@@ -184,13 +191,26 @@ export class ApexApi implements AppModule {
       try {
         const abs = this.#resolveLocalPath(String(inputPath || ""));
         if (!abs) return { success: true, data: { isUploaded: false } };
-        const cached = this.uploadCache.get(abs);
-        return { success: true, data: { isUploaded: !!cached } };
+        const isUploaded = await this.#hasValidUploadedCache(abs);
+        return { success: true, data: { isUploaded } };
       } catch (error) {
         // Sensible default on timeout/errors: treat as not uploaded.
         return { success: true, data: { isUploaded: false } };
       }
     });
+  }
+
+  async #hasValidUploadedCache(absPath: string): Promise<boolean> {
+    const cached = this.uploadCache.get(absPath);
+    if (!cached?.sha256) return false;
+    try {
+      const st = await fs.promises.stat(absPath);
+      if (st.size !== cached.size || st.mtimeMs !== cached.mtimeMs) return false;
+      const shaNow = await this.#sha256File(absPath);
+      return shaNow === cached.sha256;
+    } catch {
+      return false;
+    }
   }
 
   private registerConfigHandlers(): void {
@@ -1618,8 +1638,21 @@ export class ApexApi implements AppModule {
     if (!this.#isRemoteBackend()) return null;
     const abs = this.#resolveLocalPath(localPathOrUrl);
     if (!abs) return null;
+    const st = await fs.promises.stat(abs);
+    const size = st.size;
+    const mtimeMs = st.mtimeMs;
+
+    let sha: string | null = null;
     const cached = this.uploadCache.get(abs);
-    if (cached) return cached;
+    // Only reuse cached uploads if we can prove the local content is identical.
+    if (cached && cached.sha256 && cached.size === size && cached.mtimeMs === mtimeMs) {
+      try {
+        sha = await this.#sha256File(abs);
+        if (sha === cached.sha256) return cached.remoteAbs;
+      } catch {
+        // If hashing fails, do not assume cache hit.
+      }
+    }
     // Ensure backend is reachable before attempting to upload, and update
     // our remote/local detection at the same time.
     const probe = await this.#probeBackendLocality();
@@ -1635,8 +1668,6 @@ export class ApexApi implements AppModule {
 
     const fileName = path.basename(abs);
 
-    const { size } = await fs.promises.stat(abs);
-
     if (size > MAX_UPLOAD_BYTES) {
       const fileGiB = (size / 1024 ** 3).toFixed(2);
       const limitGiB = (MAX_UPLOAD_BYTES / 1024 ** 3).toFixed(2);
@@ -1650,9 +1681,8 @@ export class ApexApi implements AppModule {
     // - Path is inside the apex-cache scope (server-side).
     // - Name is content-addressed to dedupe across repeated uploads.
     let destRel = `uploads/${crypto.randomUUID()}-${fileName}`;
-    let sha: string | null = null;
     try {
-      sha = await this.#sha256File(abs);
+      sha = sha || (await this.#sha256File(abs));
       const ext = path.extname(fileName || "");
       destRel = `uploads/by-hash/${sha}${ext}`;
     } catch {
@@ -1670,7 +1700,9 @@ export class ApexApi implements AppModule {
         });
         if (match.exists && match.matches) {
           const remoteAbs = this.#joinRemote(remoteCacheBase, destRel);
-          this.uploadCache.set(abs, remoteAbs);
+          if (sha) {
+            this.uploadCache.set(abs, { remoteAbs, sha256: sha, size, mtimeMs });
+          }
           return remoteAbs;
         }
         // If the deterministic path is occupied by different content, avoid
@@ -1683,7 +1715,7 @@ export class ApexApi implements AppModule {
         const exists = await this.#remoteApexCacheFileExists(destRel);
         if (exists) {
           const remoteAbs = this.#joinRemote(remoteCacheBase, destRel);
-          this.uploadCache.set(abs, remoteAbs);
+          // Without a sha, we can't safely reuse this mapping if the local file changes.
           return remoteAbs;
         }
       }
@@ -1744,7 +1776,9 @@ export class ApexApi implements AppModule {
       remoteCacheBase as string,
       relReturned as string,
     );
-    this.uploadCache.set(abs, remoteAbs);
+    if (sha) {
+      this.uploadCache.set(abs, { remoteAbs, sha256: sha, size, mtimeMs });
+    }
     return remoteAbs;
   }
 

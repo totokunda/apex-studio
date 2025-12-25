@@ -66,6 +66,7 @@ async function loadCachedImage(effectiveSrc: string): Promise<HTMLImageElement> 
         // Even if media info fetching fails, still attempt to load the image.
         im.src = effectiveSrc;
       });
+
   });
 
   imageElementCache.set(effectiveSrc, promise);
@@ -443,6 +444,7 @@ export class KonvaExportRenderer {
     // 2. Load Image (cached by effectiveSrc)
     const img = await loadCachedImage(effectiveSrc);
 
+
     // 3. Prepare high-quality texture
     // Use natural dimensions to preserve maximum quality.
     const texWidth = Math.max(1, img.naturalWidth);
@@ -458,6 +460,7 @@ export class KonvaExportRenderer {
     // @ts-ignore
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, 0, 0, texWidth, texHeight);
+    const data = ctx.getImageData(0, 0, texWidth, texHeight);
 
     // 4. Apply Masks
     if (Array.isArray(clip.masks) && clip.masks.length > 0) {

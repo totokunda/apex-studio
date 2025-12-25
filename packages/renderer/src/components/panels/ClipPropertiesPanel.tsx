@@ -75,7 +75,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const { clearJob, stopTracking } = usePreprocessorJobActions();
   const { startTracking: startEngineTracking, stopTracking: stopEngineTracking, clearJob: clearEngineJob } = useEngineJobActions();
   const [isPreparingGeneration, setIsPreparingGeneration] = useState(false);
-  const [engineJobId, setEngineJobId] = useState<string | null>(null);
   const getModelValues = useClipStore((s) => s.getModelValues);
   const getRawModelValues = useClipStore((s) => s.getRawModelValues);
   const hasFrameInterpolate = useMemo(() => {
@@ -269,9 +268,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     return false;
   }, [clip?.type]);
 
-  // Engine job tracking is started explicitly when a run begins
-  const effectiveJobId = engineJobId || (hasModel ? (clipId ?? null) : null);
-  const { isProcessing: isEngineProcessing, isComplete: isEngineComplete, isFailed: isEngineFailed } = useEngineJob(effectiveJobId, false);
+  // Engine job tracking is started explicitly when a run begins; bind UI strictly to this clip's active job.
+  const activeEngineJobId = (clip as ModelClipProps | undefined)?.activeJobId ?? null;
+  const { isProcessing: isEngineProcessing, isComplete: isEngineComplete, isFailed: isEngineFailed } = useEngineJob(activeEngineJobId, false);
 
   const clipSignature = JSON.stringify(getModelValues(clipId));
 
@@ -522,22 +521,44 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     }
   }, [clipId, hasLine, hasMask, hasTransform, hasAudio, hasDuration, hasAppearance, hasAdjust, hasPreprocessorDuration, tool, (clip as ModelClipProps | undefined)?.modelStatus, hasFrameInterpolate]);
 
-  // Reflect engine job lifecycle into clip.modelStatus for internal gating
+  // Reflect engine job lifecycle into *this clip's* modelStatus for internal gating.
+  // Important: only do this when the clip actually has an active engine job id,
+  // and only write when the status would actually change (prevents update loops).
+  const currentModelStatus = (clip as ModelClipProps | undefined)?.modelStatus;
+  const clipHasResult = !!(
+    (clip as ModelClipProps | undefined)?.assetId ||
+    (clip as ModelClipProps | undefined)?.previewPath
+  );
   useEffect(() => {
     if (!clipId) return;
-    if (isEngineProcessing) { 
-      updateClip(clipId, { modelStatus: 'running' });
+    if (!hasModel) return;
+    if (!activeEngineJobId) return;
+
+    let nextStatus: ModelClipProps["modelStatus"] | undefined;
+    if (isEngineProcessing) {
+      nextStatus = "running";
     } else if (isEngineComplete) {
       // Only mark complete once the result is actually present on the clip.
       // Otherwise keep it running until the timeline has something to render.
-      const modelClip = clip as ModelClipProps | undefined;
-      const hasResult = !!(modelClip?.assetId || modelClip?.previewPath);
-      if (hasResult) updateClip(clipId, { modelStatus: 'complete' });
-      else updateClip(clipId, { modelStatus: 'running' });
+      nextStatus = clipHasResult ? "complete" : "running";
     } else if (isEngineFailed) {
-      updateClip(clipId, { modelStatus: 'failed' });
+      nextStatus = "failed";
     }
-  }, [clipId, isEngineProcessing, isEngineComplete, isEngineFailed, updateClip]);
+
+    if (!nextStatus) return;
+    if (currentModelStatus === nextStatus) return;
+    updateClip(clipId, { modelStatus: nextStatus } as any);
+  }, [
+    clipId,
+    hasModel,
+    activeEngineJobId,
+    isEngineProcessing,
+    isEngineComplete,
+    isEngineFailed,
+    clipHasResult,
+    currentModelStatus,
+    updateClip,
+  ]);
 
   const [isPreparingPreprocessor, setIsPreparingPreprocessor] = useState(false);
 
@@ -597,7 +618,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         startEngineTracking,
         updateClip,
         toast,
-        setEngineJobId,
         setSelectedTab,
       });
     } finally {
@@ -618,14 +638,16 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     clearEngineJob,
     startEngineTracking,
     updateClip,
-    setEngineJobId,
     setSelectedTab,
   ]);
 
-  const isModelRunning = clip && (clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending';
+  const isModelRunning =
+    !!clip &&
+    (((clip as ModelClipProps | undefined)?.modelStatus === 'running') ||
+      ((clip as ModelClipProps | undefined)?.modelStatus === 'pending'));
 
   const handleStopGeneration = useCallback(async () => {
-    const targetJobId = engineJobId || (clip as ModelClipProps)?.activeJobId;
+    const targetJobId = (clip as ModelClipProps)?.activeJobId;
     if (!targetJobId) {
       updateClip(clipId, { modelStatus: undefined });
       return;
@@ -648,7 +670,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     try { await stopEngineTracking(targetJobId); } catch {}
     try { clearEngineJob(targetJobId); } catch {}
     try { if (clipId) updateClip(clipId, { modelStatus: undefined }); } catch {}
-  }, [clipId, engineJobId, stopEngineTracking, clearEngineJob, (clip as ModelClipProps)?.activeJobId]);
+  }, [clipId, stopEngineTracking, clearEngineJob, (clip as ModelClipProps)?.activeJobId]);
 
   const height = useMemo(() => {
     if (hasValidPreprocessor || hasModel) {

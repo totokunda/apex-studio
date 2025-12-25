@@ -11,7 +11,6 @@ import type {
 import { BASE_LONG_SIDE } from "@/lib/settings";
 import {
   getMediaInfoCached,
-  convertUserDataPath,
   convertApexCachePath,
 } from "@/lib/media/utils";
 import type { Canvas, ExportClip } from "@app/export-renderer";
@@ -259,9 +258,16 @@ export function prepareExportClipsForValue(
     };
     const mediaInfo = getMediaInfoCached(asset.path);
     value.src = asset.path
-    const transform = useOriginalTransform
+    let transform = useOriginalTransform
       ? (value as any).originalTransform
       : (value as any).transform;
+
+    if (transform && !transform?.width && useOriginalTransform) {
+      transform.width = value.transform?.width
+    }
+    if (transform && !transform?.height && useOriginalTransform) {
+      transform.height = value.transform?.height;
+    }
 
     if (!mediaInfo) {
       // Mirror previous behavior: if media info is missing, skip this value
@@ -273,9 +279,10 @@ export function prepareExportClipsForValue(
       };
     }
 
+
     if (dimensionsFrom === "clip") {
-      width = transform?.width ?? mediaInfo?.image?.width ?? 0;
-      height = transform?.height ?? mediaInfo?.image?.height ?? 0;
+      width = (transform?.width && transform.width !== 0) ? transform.width : (mediaInfo?.image?.width ?? 0);
+      height = (transform?.height && transform.height !== 0) ? transform.height : (mediaInfo?.image?.height ?? 0);
     }
   } else if (isVideo) {
     const asset = getAssetById(value.assetId);
@@ -399,6 +406,7 @@ export function prepareExportClipsForValue(
 
       return newClip;
     });
+    console.log(clips);
   }  else {
     offsetStart = value.startFrame ?? 0;
     if (value.type === "video") {
@@ -791,5 +799,6 @@ export function prepareExportClipsForValue(
       );
     }
   }
+
   return { exportClips, width, height, offsetStart };
 }

@@ -943,7 +943,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         (updatedClip as VideoClipProps | ImageClipProps).masks = masks;
       }
 
-      if (!current.originalTransform) {
+      if (!current.originalTransform && next.width > 0 && next.height > 0) {
         updatedClip.originalTransform = { ...next, x: 0, y: 0 };
       }
       const newClips = [...state.clips];

@@ -953,6 +953,7 @@ const VideoPreview: React.FC<
     if (currentlyPlaying) return;
     
     const info = getTargetFrameInfo();
+
     if (!info) return;
 
     const { timestamp, targetFrame } = info;
@@ -986,8 +987,7 @@ const VideoPreview: React.FC<
 
 
   useEffect(() => {
-    let active = true;
-
+    
     const configureDecoders = async () => {
       const ids = new Set<string>();
       if (assetId) ids.add(assetId);
@@ -995,18 +995,18 @@ const VideoPreview: React.FC<
         if (p.assetId) ids.add(p.assetId);
       });
 
+    
       for (const id of ids) {
         try {
           let info = getMediaInfoCached(id);
           const asset = getAssetById(id);
-
           if (!info && asset?.path) {
             info = await getMediaInfo(asset.path, {
               sourceDir: clip.type === "video" ? "user-data" : "apex-cache",
             });
           }
-          
-          if (!active || !info || !asset) continue;
+
+          if (!info || !asset) continue;
 
           // If this is the currently-selected source, publish the mediaInfo into React
           // state immediately so sizing updates before the first frame renders.
@@ -1016,7 +1016,8 @@ const VideoPreview: React.FC<
           }
 
           const config = info.videoDecoderConfig;
-          if (!active || !config) continue;
+          if (!config) continue;
+
 
           const logicalId = makeDecoderId(id);
 
@@ -1025,6 +1026,7 @@ const VideoPreview: React.FC<
             timestamp: number;
             duration: number;
           }) => {
+            console.log("onFrame", id, data);
             drawWrappedCanvas(data, decoderMaskFrameRef.current);
           };
 
@@ -1032,7 +1034,15 @@ const VideoPreview: React.FC<
             console.error("[VideoDecoderManager] Error", id, e);
 
           if (decoderManager.hasAsset(logicalId)) {
+            
             decoderManager.updateAssetHandlers(logicalId, { onFrame, onError });
+            // Trigger seek for existing decoders since onReady won't be called
+
+            try {
+            await seekToCurrentFrame(true);
+            } catch (e) {
+              console.error("Error seeking to current frame", id, e);
+            }
           } else {
             const activeProject = getActiveProject();
             decoderManager.addAsset(asset, {
@@ -1055,9 +1065,7 @@ const VideoPreview: React.FC<
 
     void configureDecoders();
 
-    return () => {
-      active = false;
-    };
+   
   }, [
     assetId,
     clip?.preprocessors,
@@ -1069,7 +1077,7 @@ const VideoPreview: React.FC<
 
   useEffect(() => {
     void seekToCurrentFrame();
-  }, [seekToCurrentFrame]);
+  }, [seekToCurrentFrame, mediaInfoVersion]);
 
   const startRendering = useCallback(async () => {
     if (!canvasRef.current) return;
@@ -1604,6 +1612,7 @@ const VideoPreview: React.FC<
       height: c.height * displayHeight,
     };
   }, [clipTransform?.crop, displayWidth, displayHeight]);
+
 
 
 
