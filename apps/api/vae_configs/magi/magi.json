@@ -1,0 +1,22 @@
+{
+  "_class_name": "AutoencoderKLMagi",
+  "_diffusers_version": "0.28.2",
+  "ddconfig": {
+    "conv_last_layer": true,
+    "depth": 24,
+    "double_z": true,
+    "embed_dim": 1024,
+    "in_chans": 3,
+    "ln_in_attn": true,
+    "mlp_ratio": 4,
+    "norm_code": false,
+    "num_heads": 16,
+    "patch_length": 4,
+    "patch_size": 8,
+    "qkv_bias": true,
+    "video_length": 16,
+    "video_size": 256,
+    "z_chans": 16
+  },
+  "model_type": "vit"
+}

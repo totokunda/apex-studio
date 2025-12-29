@@ -1,0 +1,257 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: ltx-text-to-video-13b-0.9.8-distilled-1.0.0
+  model: ltx
+  name: LTX Text to Video 13B 0.9.8 Distilled 1.0.0
+  version: 1.0.0
+  description: LTX-Video is a text-to-video generation model developed by Lightricks.
+  tags:
+  - ltx
+  - 13b
+  - 0.9.8
+  - distilled
+  - t2v
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: https://preview.redd.it/create-stunning-image-to-video-motion-pictures-with-ltx-v0-375l5s3bec6e1.png?width=1080&crop=smart&auto=webp&s=0f7782e66ca66ab086c29099ae29bb7fefc598ed
+  categories:
+  - text-to-video
+spec:
+  engine: ltx
+  model_type: x2v
+  engine_type: torch
+  denoise_type: base
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: RectifiedFlowScheduler
+    scheduler_options:
+    - name: RectifiedFlowScheduler
+      label: Rectified Flow Scheduler
+      description: The Rectified Flow Scheduler is a scheduler for the LTX Text to Video model.
+      base: src.scheduler.rf.RectifiedFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        base_resolution: null
+        target_shift_terminal: null
+        sampler: "LinearQuadratic"
+        shifting: null
+        shift: null
+  - type: vae
+    base: ltx
+    label: LTX VAE
+    model_path: 
+    - path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.8-distilled.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28610000000
+  - type: text_encoder
+    name: ltx/text_encoder
+    label: LTX Text Encoder
+    base: T5EncoderModel
+    model_path: 
+    - path: PixArt-alpha/PixArt-XL-2-1024-MS/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 19053695074
+    config_path: https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS/resolve/main/text_encoder/config.json
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: PixArt-alpha/PixArt-XL-2-1024-MS
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: transformer
+    base: ltx.base
+    label: LTX Transformer
+    model_path: 
+    - path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.8-distilled.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28610000000
+    - path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.8-distilled-fp8.safetensors
+      variant: fp8
+      precision: fp8
+      type: safetensors
+      file_size: 15710000000
+  - type: helper
+    base: ltx.patchifier
+    patch_size: 1
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 1
+      guidance_scale_stg: 0
+      guidance_rescale: 1
+      timesteps: [1.0000, 0.9937, 0.9875, 0.9812, 0.9750, 0.9094, 0.7250]
+      return_latents: false
+      text_encoder_kwargs:
+        max_sequence_length: 256
+        use_attention_mask: true
+        pad_with_zero: false
+        clean_text: false
+      offload: true
+      render_on_step: false
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - stg_scale
+        - - seed
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: HD
+        value: 720
+      - name: Full HD
+        value: 1024
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: "1:1"
+      options:
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 7
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 720
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1280
+      min: 256
+      max: 8192
+      step: 64
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: stg_scale
+      label: STG Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1
+      min: 0.1
+      max: 15.0
+      step: 0.5

@@ -1,0 +1,55 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-lynx-14b-1.0.0.v1.yml",
+        "model_type": "lynx",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.UniPCMultistepScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/94e26df96dd3f147a7f094b7cdfb489857ab9602280c8b1e4297a7a64a01acd1_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "UniPCMultistepScheduler"
+            },
+            "wan/vae": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Wan-AI_Wan2.2-I2V-A14B-Diffusers/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/99cce76530692a83b04b80e4f05489c2e8a0ad9a1f177951777c10e5f06e6c13_umt5-xxl-enc-fp8_e4m3fn.safetensors",
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/a01ed8e70bba3287f7e80354b58d04f6e83b80664c9b08339c9331b01b37d160_Wan2_1-T2V-14B_fp8_e4m3fn_scaled_KJ.safetensors",
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "lynx": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/ByteDance_lynx/lynx_full",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "subject_image": "assets/c283c1e8-d504-44d1-b255-a2df75c31510-148ed2c6-158d-4f5e-b5be-ccb172b720bc_subject_image_0_1.png",
+        "prompt": "A man strides down a futuristic fashion runway wearing extreme avant-garde couture that defies conventional design. His outfit is sculptural and surreal: exaggerated proportions, asymmetrical layers, floating fabric panels, and rigid geometric elements fused with flowing translucent materials. Iridescent textures shift between chrome, obsidian, and oil-slick colors as he moves. The clothing appears partially engineered rather than sewn, with gravity-defying shapes and sharp architectural lines. His expression is stoic and otherworldly, posture confident and deliberate.\n\nThe runway is minimalist and dark, illuminated by dramatic overhead spotlights and sharp rim lighting that carve out the silhouette of the outfit. Reflections ripple across a glossy black floor. The audience fades into abstract shadows, punctuated by flashes of light. Cinematic, editorial fashion photography, experimental haute couture, boundary-pushing design, ultra-detailed, high contrast, modern art-fashion aesthetic.",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "resolution": 480,
+        "aspect_ratio": "custom",
+        "num_inference_steps": 8,
+        "height": 480,
+        "width": 848,
+        "seed": 703410865,
+        "guidance_scale": 1,
+        "duration": "3s"
+    }
+}

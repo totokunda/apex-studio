@@ -1,0 +1,53 @@
+{
+    "engine_kwargs": {
+        "engine_type": "qwenimage",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/image/qwenimage-edit-1.0.0.v1.yml",
+        "model_type": "edit",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/ea6dd8c6b611e97ecd93e1f5ca5a9ad64f2a3b8e31bd11d4435a7552bc0f8cfb_scheduler_config.json",
+                "type": "scheduler",
+                "label": "FlowMatch Euler Discrete Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler",
+                "description": "The FlowMatch Euler Discrete Scheduler is a scheduler for the QwenImage Edit model."
+            },
+            "vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "GGUF_Q8_0",
+                "precision": "q8_0",
+                "type": "gguf"
+            },
+            "image.processor": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "image": "assets/101f4f51129a236e1ec00163229c859281afd777ef5c9c3677ce36ed36ba08e6.png",
+        "prompt": "The woman has deep dark skin and she is wearing a green hat. ",
+        "negative_prompt": " ",
+        "resolution": "custom",
+        "aspect_ratio": "custom",
+        "num_inference_steps": 40,
+        "height": 1024,
+        "width": 1424,
+        "seed": 1383438904,
+        "true_cfg_scale": 4,
+        "duration": "5s"
+    }
+}

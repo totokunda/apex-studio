@@ -1,0 +1,55 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.1-14b-vace-reference-to-video-1.0.0.v1.yml",
+        "model_type": "vace",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.UniPCMultistepScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/8e9d0b737f7f1e7ea17e249d848ff6de742b426f628a0f0cff30d159469dd1ea_scheduler_config.json",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "UniPCMultistepScheduler",
+                "description": "The UniPC Multistep Scheduler is used for WAN 2.1 14B T2I.",
+                "config": {
+                    "flow_shift": 5.0
+                }
+            },
+            "wan/vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "reference_images": [
+            "/home/tosin_coverquick_co/apex-diffusion/cache/uploads/by-hash/08d286538f4353b1175ad1f191bd41ec5d0f93c0e4bbf075c030c74277c8250e.png",
+            "/home/tosin_coverquick_co/apex-diffusion/cache/uploads/by-hash/2e56a164f4e764b4744a128de349bd8c886198ab72f0c2afcaa9681bf6a23265.png"
+        ],
+        "prompt": "A man stands shoulder to shoulder with an astronaut in a fully sealed spacesuit, their faces turned toward each other in a brutal standoff, eyes blazing with unrestrained rage, the air thick with hostility.",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "resolution": 720,
+        "aspect_ratio": "16:9",
+        "num_inference_steps": 4,
+        "height": 720,
+        "width": 1280,
+        "seed": 867770561,
+        "guidance_scale": 1,
+        "conditioning_scale": 1,
+        "duration": "5.041666666666667s"
+    }
+}

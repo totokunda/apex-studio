@@ -1,0 +1,66 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.2-14b-animate-1.0.0.v1.yml",
+        "model_type": "animate",
+        "selected_components": {
+            "scheduler": {
+                "name": "UniPCMultistepScheduler",
+                "base": "diffusers.UniPCMultistepScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/1816b6f499bd08f3cdfb53052321791af7dd4c2c1e47b03bf061bb894912e7bc_scheduler_config.json",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "UniPCMultistepScheduler",
+                "description": "The UniPC Multistep Scheduler is used for WAN 2.2 14B Speech to Video."
+            },
+            "wan/vae": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Wan-AI_Wan2.2-I2V-A14B-Diffusers/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/99cce76530692a83b04b80e4f05489c2e8a0ad9a1f177951777c10e5f06e6c13_umt5-xxl-enc-fp8_e4m3fn.safetensors",
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/4d070faacff0a3bfc145235c1eb9432a1451c06f5be5da155a6d51fe16c58348_Wan2_2-Animate-14B_fp8_scaled_e4m3fn_KJ_v2.safetensors",
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "image_processor": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Wan-AI_Wan2.2-Animate-14B-Diffusers/image_processor",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "image_encoder": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Wan-AI_Wan2.2-Animate-14B-Diffusers/image_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "flash"
+    },
+    "inputs": {
+        "mode": "animate",
+        "image": "assets/e683856bbd100e4e40f45fe50fe1ebfd43309caa6c7d04051e9f6962ecab1cac.png",
+        "pose_video": "assets/result.mp4",
+        "face_video": "assets/result.mp4",
+        "prompt": "The man does the actions in the video.",
+        "negative_prompt": "",
+        "resolution": 480,
+        "num_inference_steps": 4,
+        "aspect_ratio": "custom",
+        "height": 896,
+        "width": 448,
+        "seed": 384832194,
+        "guidance_scale": 1,
+        "duration": "3.5s"
+    }
+}

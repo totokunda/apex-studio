@@ -1,0 +1,42 @@
+{
+    "engine_kwargs": {
+        "engine_type": "seedvr",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/upscalers/seedvr2-7b.yml",
+        "model_type": "upscale",
+        "selected_components": {
+            "seedvr2/vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "pth"
+            },
+            "transformer": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "image": "assets/cd5ac536e8559e500ce77c6025d9dd19c319742d1464594b16d0d22ae34ac63c.png",
+        "resolution": 1080,
+        "aspect_ratio": "custom",
+        "height": 1088,
+        "width": 1888,
+        "num_inference_steps": 1,
+        "seed": 1755894762,
+        "color_fix": false,
+        "cfg_scale": 1,
+        "cfg_rescale": 0,
+        "cond_noise_scale": 0.1,
+        "vae_conv_max_mem": 0.5,
+        "vae_norm_max_mem": 0.5,
+        "vae_split_size": 4,
+        "vae_memory_device": "same",
+        "use_chunking": false,
+        "chunk_frames": 33,
+        "chunk_overlap": 8,
+        "duration": "5s"
+    }
+}

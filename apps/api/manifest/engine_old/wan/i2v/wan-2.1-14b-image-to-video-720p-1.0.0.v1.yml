@@ -1,0 +1,48 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  name: Wan 2.1 14B Image to Video 720p
+  version: 1.0.0
+  description: Wan 2.1 14B is a 14B parameter model for image-to-video generation
+    at 720p resolution.
+  tags:
+  - wan
+  - i2v
+  - 14b
+  - 2.1
+  - 720p
+spec:
+  engine: wan
+  model_type: i2v
+  components:
+  - type: scheduler
+    base: diffusers.UniPCMultistepScheduler
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P-Diffusers/resolve/main/scheduler/scheduler_config.json
+  - type: vae
+    name: wan/vae
+    base: wan
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/vae
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: wan/text_encoder
+    base: UMT5EncoderModel
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: transformer
+    base: wan.base
+    model_path: Wan-AI/Wan2.1-I2V-14B-720P-Diffusers/transformer
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P-Diffusers/resolve/main/transformer/config.json
+  - type: helper
+    base: clip
+    name: wan/clip
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_encoder
+    preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
+    processor_class: CLIPImageProcessor
+    model_class: CLIPVisionModel
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      return_latents: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}

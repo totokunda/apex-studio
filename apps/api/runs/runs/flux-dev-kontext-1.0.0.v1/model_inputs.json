@@ -1,0 +1,54 @@
+{
+    "engine_kwargs": {
+        "engine_type": "flux",
+        "yaml_path": "/home/divineade/apex/manifest/engine/flux/flux-dev-kontext-1.0.0.v1.yml",
+        "model_type": "kontext",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/ext_diviade_gmail_com/apex-diffusion/configs/a16d159d8d0e3a3f2d90a955f108aa876f124deaec666470448cbc2d9edc0765_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler"
+            },
+            "vae": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/black-forest-labs_FLUX.1-dev/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/black-forest-labs_FLUX.1-dev/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder_2": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/black-forest-labs_FLUX.1-dev/text_encoder_2",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/black-forest-labs_FLUX.1-Kontext-dev/transformer",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "image": "assets/22425c6c-79bb-4323-bdce-11d4ef99defd-95523916-c4bd-4c1f-9f44-b36acf7b1774_image_0_3.png",
+        "prompt": "Change the character to be a woman with long blond hair, freckles with a stern look on her face ",
+        "resolution": "custom",
+        "aspect_ratio": "custom",
+        "num_inference_steps": 40,
+        "height": 1024,
+        "width": 590,
+        "seed": 3900145041,
+        "true_cfg_scale": 1,
+        "duration": "5s"
+    }
+}

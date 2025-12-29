@@ -1,0 +1,64 @@
+{
+    "engine_kwargs": {
+        "engine_type": "hidream",
+        "yaml_path": "/home/divineade/apex/manifest/engine/hidream/hidream-i1-full-text-to-image-1.0.0.v1.yml",
+        "model_type": "t2i",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.UniPCMultistepScheduler",
+                "config_path": "/home/ext_diviade_gmail_com/apex-diffusion/configs/eb36da2eacd74d92d3a3783af3fcb4c594d557671ee064862ce4e3689084d994_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "UniPCMultistepScheduler"
+            },
+            "vae": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/HiDream-ai_HiDream-I1-Full/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/HiDream-ai_HiDream-I1-Full/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder_2": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/HiDream-ai_HiDream-I1-Full/text_encoder_2",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder_3": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/HiDream-ai_HiDream-I1-Full/text_encoder_3",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "llama": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/meta-llama_Llama-3.1-8B-Instruct",
+                "variant": "default"
+            },
+            "transformer": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/HiDream-ai_HiDream-I1-Full/transformer",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "Ultra-detailed cinematic photograph of a young man standing on a rainy city street, wearing a black leather jacket and hoodie, neon lights reflecting on wet asphalt at night. \nSoft natural lighting with dynamic shadows, shallow depth of field, 85mm lens look, f/1.8, HDR, global illumination. \nHighly realistic skin texture, sharp focus, film grain, dramatic composition, rule of thirds. \nColor-graded, professional photography, 8K resolution, hyper-realistic.",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "resolution": 720,
+        "aspect_ratio": "16:9",
+        "num_inference_steps": 50,
+        "height": 704,
+        "width": 1280,
+        "seed": 722364033,
+        "guidance_scale": 5,
+        "duration": "5s"
+    }
+}

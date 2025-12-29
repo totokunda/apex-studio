@@ -1,0 +1,54 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.1-14b-scail-1.0.0.v1.yml",
+        "model_type": "scail",
+        "selected_components": {
+            "scheduler": {
+                "name": "UniPCMultistepScheduler",
+                "base": "diffusers.UniPCMultistepScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/00ce4c8fc5a7a13a69ef4aca11a3da4fd6083e295a27e3a1280020e496128950_scheduler_config.json",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "UniPCMultistepScheduler",
+                "description": "The UniPC Multistep Scheduler is used for WAN 2.1 14B SCAIL."
+            },
+            "wan/vae_2.2": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "clip": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "flash"
+    },
+    "inputs": {
+        "image": "assets/101f4f51129a236e1ec00163229c859281afd777ef5c9c3677ce36ed36ba08e6.png",
+        "pose_video": "assets/2f0365971501cebc88347546b4e9e8d2bd7eaedc2d259368add65c7a667c1e44.mp4",
+        "prompt": "The woman makes the gestures and facial expression as she waves her hands. ",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "aspect_ratio": "custom",
+        "num_inference_steps": 4,
+        "height": 480,
+        "width": 832,
+        "seed": 162137742,
+        "guidance_scale": 1,
+        "use_video_duration": true,
+        "duration": "5s"
+    }
+}

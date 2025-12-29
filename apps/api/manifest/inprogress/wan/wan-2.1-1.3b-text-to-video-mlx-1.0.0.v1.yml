@@ -1,0 +1,269 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2.1-1.3b-t2v-mlx
+  model: wan
+  name: Wan 2.1 1.3B Text to Video (MLX)
+  version: 1.0.0
+  description: Wan 2.1 1.3B is a compact MLX-based text-to-video model for efficient
+    generation.
+  tags:
+  - wan
+  - t2v
+  - 1.3b
+  - '2.1'
+  - mlx
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQFbNCydrdJtRmEon19V3wXTylU8bZJwh-1HA&s
+spec:
+  fps: 16
+  max_duration_secs: 5
+  engine: wan
+  model_type: t2v
+  engine_type: mlx
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: UniPCMultistepScheduler
+    scheduler_options:
+    - name: UniPCMultistepScheduler
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is a scheduler for the Wan 2.1 1.3B
+        Text to Video model.
+      base: src.mlx.scheduler.unipc.UniPCMultistepScheduler
+      config_path: https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers/resolve/main/scheduler/scheduler_config.json
+    - name: EulerDiscreteScheduler
+      label: Euler Discrete Scheduler
+      description: The Euler Discrete Scheduler is a scheduler for the Wan 2.1 1.3B
+        Text to Video model.
+      base: diffusers.EulerDiscreteScheduler
+  - type: vae
+    name: wan/vae
+    label: Wan VAE
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 24
+      file_size: 507592616
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: wan/text_encoder
+    label: UMT5 Text Encoder
+    base: UMT5EncoderModel
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 24
+      file_size: 22723695074
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: transformer
+    label: Wan T2V Transformer (MLX)
+    base: mlx.wan.base
+    model_path:
+    - path: Wan-AI/Wan2.1-T2V-1.3B-Diffusers/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 24
+      file_size: 5676144409
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers/resolve/main/transformer/config.json
+  defaults:
+    run:
+      width: 832
+      duration: 16
+      fps: 16
+      num_inference_steps: 30
+      num_videos: 1
+      guidance_scale: 5.0
+      use_cfg_guidance: true
+      return_latents: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+      offload: true
+      timesteps_as_indices: true
+      boundary_ratio: 0.875
+      expand_timesteps: false
+      render_on_step: false
+  ui:
+    floating_panel:
+      regions:
+        top:
+          inputs:
+          - prompt
+          flow: column
+        middle:
+          inputs:
+          - resolution
+          - aspect_ratio
+          flow: row
+        bottom:
+          inputs:
+          - num_inference_steps
+          flow: row
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+        - - negative_prompt
+    - name: layout
+      label: Layout
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+    - name: canvas
+      label: Canvas
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - seed
+        - - guidance_scale
+        - - use_cfg_guidance
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: The text prompt describing the video content to generate.
+      placeholder: A beautiful woman with long brown hair and blue eyes.
+      type: text
+      panel: prompting
+      required: true
+      floating_panel: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what you want to avoid in the generation
+      placeholder: blurry, low quality, distorted, artifacts.
+      type: text
+      panel: prompting
+      required: false
+      default: blurry, low quality, distorted, artifacts
+      floating_panel: false
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: layout
+      type: select
+      default: 480
+      options:
+      - name: SD 
+        value: 480
+      - name: Custom
+        value: custom
+      floating_panel: true
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: layout
+      type: select
+      default: "16:9"
+      options:
+      - name: Wide 
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical 
+        value: "9:16"  
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square 
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic 
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+      floating_panel: true
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+      floating_panel: false
+    - id: height
+      label: Height
+      description: Output video height
+      type: number
+      value_type: integer
+      panel: canvas
+      default: 480
+      min: 256
+      max: 4096
+      step: 1
+    - id: width
+      label: Width
+      description: Output video width
+      type: number
+      value_type: integer
+      panel: canvas
+      default: 832
+      min: 256
+      max: 8192
+      step: 1
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      description: How strongly to follow the prompt (higher = more adherence)
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: use_cfg_guidance
+      label: Use CFG Guidance
+      type: boolean
+      panel: sampling
+      required: false
+      default: true
+  save:
+    safe_serialization: true
+    max_shard_size: 5GB

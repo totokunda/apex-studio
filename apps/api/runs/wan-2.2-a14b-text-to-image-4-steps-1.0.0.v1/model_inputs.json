@@ -1,0 +1,53 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/divineade/apex/manifest/engine/wan/wan-2.2-a14b-text-to-image-4-steps-1.0.0.v1.yml",
+        "model_type": "t2v",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.UniPCMultistepScheduler",
+                "config_path": "/home/ext_diviade_gmail_com/apex-diffusion/configs/9bcf6ca67780d1db310af5d300a504eb1cac05165ed5d990ba83537160b57eb6_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "UniPCMultistepScheduler"
+            },
+            "wan/vae_2.2": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Wan-AI_Wan2.2-I2V-A14B-Diffusers/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Wan-AI_Wan2.1-I2V-14B-480P-Diffusers/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "high_noise_transformer": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/d7bc3a77364b57cbdf51b2d26ed84368d85339bff907dbb97068f53ab534d694_Wan2.2-T2V-A14B-HighNoise-Q3_K_S.gguf",
+                "variant": "GGUF_Q3_K_S",
+                "precision": "q3_k_s",
+                "type": "gguf"
+            },
+            "low_noise_transformer": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/7be2d844c9e4e313619edbd22c794bfdc46bcaf755d7e4dff1863a760f611be2_Wan2.2-T2V-A14B-LowNoise-Q3_K_S.gguf",
+                "variant": "GGUF_Q3_K_S",
+                "precision": "q3_k_s",
+                "type": "gguf"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "An ancient mythical realm bathed in radiant gold, deep amethyst, glowing turquoise, and molten orange light. Vast floating temples carved with runes hover above a luminous valley as the camera drifts forward like a divine presence. A legendary figure crowned with softly glowing sigils walks across a bridge of light, each step releasing waves of shimmering energy and stardust. Colossal crystal trees pulse with inner color, waterfalls of liquid light pour into the sky below, and mythical symbols briefly blaze across the air before fading. The scene feels sacred and otherworldly, with rich saturated colors, ethereal glow, smooth motion, and a timeless mythic atmosphere, ultra-detailed and cinematic.",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "resolution": 720,
+        "aspect_ratio": "1:1",
+        "height": 704,
+        "width": 704,
+        "seed": 2027278549,
+        "boundary_ratio": 0.875,
+        "duration": "5s"
+    }
+}

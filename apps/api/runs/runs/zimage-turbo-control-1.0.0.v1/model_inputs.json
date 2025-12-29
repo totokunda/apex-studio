@@ -1,0 +1,47 @@
+{
+    "engine_kwargs": {
+        "engine_type": "zimage",
+        "yaml_path": "/home/divineade/apex/manifest/engine/zimage/zimage-turbo-control-1.0.0.v1.yml",
+        "model_type": "control",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/ext_diviade_gmail_com/apex-diffusion/components/309fddec5ebc49a8aefab205fe7dff824cca5ac413726b93cdd87b078cd60423_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler"
+            },
+            "vae": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Tongyi-MAI_Z-Image-Turbo/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Tongyi-MAI_Z-Image-Turbo/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Tongyi-MAI_Z-Image-Turbo/transformer",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "control_image": "assets/2efddf49-aa2c-4210-a429-cfb457ff63b7-b8abde18-5395-4a7c-8b5b-b79c85584a33_control_image_0_4.png",
+        "control_context_scale": 1,
+        "prompt": "An mma fighter in an octagon ",
+        "resolution": "custom",
+        "aspect_ratio": "custom",
+        "height": 832,
+        "width": 480,
+        "seed": 2115956649,
+        "duration": "5s"
+    }
+}

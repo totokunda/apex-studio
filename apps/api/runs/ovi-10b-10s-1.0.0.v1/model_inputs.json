@@ -1,0 +1,76 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/ovi-10b-10s-1.0.0.v1.yml",
+        "model_type": "ovi",
+        "selected_components": {
+            "transformer_scheduler": {
+                "name": "transformer_scheduler",
+                "base": "src.scheduler.unipc.UniPCMultistepScheduler",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "transformer_scheduler_unipc",
+                "description": "The UniPC Multistep Scheduler is used for Ovi 10B.",
+                "config": {
+                    "shift": 1.0,
+                    "num_train_timesteps": 1000
+                }
+            },
+            "audio_scheduler": {
+                "name": "audio_scheduler",
+                "base": "src.scheduler.unipc.UniPCMultistepScheduler",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "audio_scheduler_unipc",
+                "description": "The UniPC Multistep Scheduler is used for Ovi 10B.",
+                "config": {
+                    "shift": 1.0,
+                    "num_train_timesteps": 1000
+                }
+            },
+            "transformer_vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "audio_vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "audio_vae_extra_model_path": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "960x960_10s": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "A space scene unfolds in utter darkness, illuminated only by a flickering emergency light from a distant spacecraft. A lone man floats helplessly in open space, his white astronaut suit scarred and rimmed with ice, the fabric stiff and swollen from failing pressure seals. His helmet visor is fractured, spiderweb cracks radiating across the glass as frost creeps inward. Inside, his eyes are bloodshot and bulging with terror, veins visible along his temples as condensation smears and freezes with every desperate breath. His body jerks erratically, limbs moving in slow, weightless spasms as panic overtakes him. He claws at his helmet, fingers scraping uselessly against the glass as he screams, <S>the man shrieks: No\u2014no\u2014please\u2014I can\u2019t breathe\u2014<E> his voice warping into static as the transmission breaks apart. His chest convulses violently, breaths coming faster, thinner, until they are barely there at all. The endless void presses in around him, stars sharp and indifferent, while the blue curve of Earth hangs impossibly far below\u2014beautiful, unreachable, and silent. <AUDCAP>Distorted, echoing male screams choked by gasps and wheezing, punctuated by rapid, escalating warning alarms, a heartbeat-like thump inside the helmet, rising electronic shrill tones, then sudden audio dropouts into suffocating vacuum silence.<ENDAUDCAP>",
+        "negative_prompt": "jitter, bad hands, blur, distortion",
+        "audio_negative_prompt": "robotic, muffled, echo, distorted",
+        "aspect_ratio": "16:9",
+        "num_inference_steps": 50,
+        "height": 1024,
+        "width": 1824,
+        "seed": 2337590399,
+        "video_guidance_scale": 4,
+        "audio_guidance_scale": 3,
+        "shift": 5,
+        "easy_cache_thresh": 0.05,
+        "easy_cache_ret_steps": 10,
+        "duration": "10s"
+    }
+}

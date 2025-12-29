@@ -1,0 +1,19 @@
+{
+  "_class_name": "LTXVideoTransformer3DModel",
+  "_diffusers_version": "0.32.0.dev0",
+  "activation_fn": "gelu-approximate",
+  "attention_bias": true,
+  "attention_head_dim": 64,
+  "attention_out_bias": true,
+  "caption_channels": 4096,
+  "cross_attention_dim": 2048,
+  "in_channels": 128,
+  "norm_elementwise_affine": false,
+  "norm_eps": 1e-06,
+  "num_attention_heads": 32,
+  "num_layers": 28,
+  "out_channels": 128,
+  "patch_size": 1,
+  "patch_size_t": 1,
+  "qk_norm": "rms_norm_across_heads"
+}

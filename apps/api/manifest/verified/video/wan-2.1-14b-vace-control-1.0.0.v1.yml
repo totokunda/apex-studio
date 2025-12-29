@@ -1,0 +1,334 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2.1-14b-vace-control
+  model: wan
+  name: Wan 2.1 14B VACE Control
+  version: 1.0.0
+  description: Wan 2.1 14B VACE is a 14B parameter model for video editing.
+  tags:
+  - wan
+  - vace
+  - 14b
+  - '2.1'
+  author: Wan AI
+  license: Apache-2.0
+  demo_path: models/vace-control.mp4
+  categories:
+  - control
+spec:
+  engine: wan
+  model_type: vace
+  engine_type: torch
+  denoise_type: base
+  default_duration_secs: 5.0
+  min_duration_secs: 1.0
+  fps: 16
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  loras:
+  - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors
+    scale: 0.0
+    name: lightx2v_lora
+    label: Lightx2v LoRA
+    component: transformer
+    verified: true
+  - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Phantom_Wan_14B_FusionX_LoRA.safetensors
+    scale: 1.0
+    name: fusionx_lora
+    label: FusionX LoRA
+    component: transformer
+    verified: true
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: UniPCMultistepScheduler
+    scheduler_options:
+    - name: UniPCMultistepScheduler
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for WAN 2.1 14B T2I.
+      base: diffusers.UniPCMultistepScheduler
+      config:
+        flow_shift: 5.0
+      config_path: https://huggingface.co/Wan-AI/Wan2.1-VACE-14B-diffusers/resolve/main/scheduler/scheduler_config.json
+  - type: vae
+    name: wan/vae
+    label: Wan VAE
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 11361874539
+    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 6731333792
+    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
+  - type: transformer
+    base: wan.vace
+    label: Wan Transformer
+    model_path:
+    - path: Wan-AI/Wan2.1-VACE-14B-diffusers/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 63252425327
+    - path: spacepxl/Wan2.1_VACE_14B_fp8_scaled/wan2.1_vace_14B_fp8_scaled.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 17578334838
+    - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 18663274400
+    - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 14522587040
+    - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q5_1.gguf
+      variant: GGUF_Q5_1
+      precision: q5_1
+      type: gguf
+      file_size: 13320452000
+    - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 13037336480
+    - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 12464224160
+    - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 12251887520
+    - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 11639453600
+    - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 10552539040
+    - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 7844059040
+    config_path: Wan-AI/Wan2.1-VACE-14B-diffusers/transformer/config.json
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: input_video
+      label: Input Video
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - conditioning_scale
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: video
+      label: Video
+      description: The video to be used for the generation.
+      type: video
+      panel: input_video
+      required: false
+      scale_by: resolution
+      map_h: height
+      map_w: width
+      max_duration_seconds: 10
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to edit.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 720
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: conditioning_scale
+      label: Conditioning Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 0.0
+      max: 15.0
+      step: 0.1

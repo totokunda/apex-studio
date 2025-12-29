@@ -1,0 +1,65 @@
+{
+    "engine_kwargs": {
+        "engine_type": "qwenimage",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/image/nunchaku-qwenimage-lightning-8steps-1.0.0.v1.yml",
+        "model_type": "t2i",
+        "selected_components": {
+            "scheduler": {
+                "name": "FlowMatchEulerDiscreteScheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "type": "scheduler",
+                "label": "FlowMatch Euler Discrete Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler",
+                "description": "The FlowMatch Euler Discrete Scheduler is a scheduler for the QwenImage T2I model.",
+                "config": {
+                    "base_image_seq_len": 256,
+                    "base_shift": 1.0986122886681098,
+                    "invert_sigmas": false,
+                    "max_image_seq_len": 8192,
+                    "max_shift": 1.0986122886681098,
+                    "num_train_timesteps": 1000,
+                    "shift": 1.0,
+                    "shift_terminal": "None",
+                    "stochastic_sampling": false,
+                    "time_shift_type": "exponential",
+                    "use_beta_sigmas": false,
+                    "use_dynamic_shifting": true,
+                    "use_exponential_sigmas": false,
+                    "use_karras_sigmas": false
+                }
+            },
+            "vae": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Qwen_Qwen-Image/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Qwen_Qwen-Image/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "INT4_R128",
+                "precision": "int4",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "A highly realistic, NASA-style space photograph captured from low orbit. An astronaut in a modern EVA suit drifts slowly against the blackness of space, tethered to an unseen spacecraft. The suit is utilitarian and slightly worn, with visible fabric stitching, scuff marks, mission patches, and subtle dust particles. Earth curves below with accurate scale, thin atmospheric limb glowing faint blue, cloud systems and ocean patterns clearly visible. Sunlight is harsh and directional, creating strong contrast between bright highlights and deep shadow, with no exaggerated colors. The background is a sparse star field, dim and physically accurate. No nebulae or fantasy elements. Natural camera exposure, realistic reflections in the helmet visor, true-to-life color balance, documentary photography style, ISS EVA reference, ultra-high detail, photorealistic.",
+        "negative_prompt": null,
+        "resolution": 1024,
+        "aspect_ratio": "custom",
+        "height": 1024,
+        "width": 1024,
+        "seed": 42,
+        "num_inference_steps": 8,
+        "true_cfg_scale": 1,
+        "guidance_scale": 1,
+        "duration": "5s"
+    }
+}

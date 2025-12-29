@@ -1,0 +1,52 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.1-14b-vace-control-1.0.0.v1.yml",
+        "model_type": "vace",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.UniPCMultistepScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/8e9d0b737f7f1e7ea17e249d848ff6de742b426f628a0f0cff30d159469dd1ea_scheduler_config.json",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "UniPCMultistepScheduler",
+                "description": "The UniPC Multistep Scheduler is used for WAN 2.1 14B T2I.",
+                "config": {
+                    "flow_shift": 5.0
+                }
+            },
+            "wan/vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sage"
+    },
+    "inputs": {
+        "video": "assets/ac267882e4f67b65ec8e758a7133bf555d9268745ebae81f04293ee3a731d180.mp4",
+        "prompt": "A woman with red hair is holding a plate of cookies as she eagerly tries to give them to the person holding the camera.",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "resolution": 720,
+        "aspect_ratio": "9:16",
+        "num_inference_steps": 8,
+        "height": 1280,
+        "width": 720,
+        "seed": 3323368650,
+        "guidance_scale": 1,
+        "conditioning_scale": 1,
+        "duration": "5s"
+    }
+}

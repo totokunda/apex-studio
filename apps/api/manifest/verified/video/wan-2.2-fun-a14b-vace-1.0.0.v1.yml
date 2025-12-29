@@ -1,0 +1,486 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2-2-fun-a14b-vace
+  model: wan
+  name: Wan 2.2 Fun A14B VACE
+  version: 1.0.0
+  description: Wan 2.2 A14B Fun is a 14B parameter model for controllable video generation, very experimental in the Wan family.
+  tags:
+  - wan
+  - fun
+  - vace
+  - 14b
+  - '2.2'
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: models/wan-fun-vace-2.2.mp4
+  categories:
+  - control
+spec:
+  engine: wan
+  model_type: fun_vace
+  engine_type: torch
+  denoise_type: moe
+  default_duration_secs: 5.0
+  min_duration_secs: 1.0
+  fps: 16
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  loras:
+  - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/high_noise_model.safetensors
+    scale: 0.125
+    verified: true
+    name: high_noise_lightning_lora
+    label: High Noise Lightning LoRA
+    component: high_noise_transformer
+  - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/low_noise_model.safetensors
+    scale: 0.125
+    verified: true
+    name: low_noise_lightning_lora
+    label: Low Noise Lightning LoRA
+    component: low_noise_transformer
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchScheduler
+    scheduler_options:
+    - name: FlowMatchScheduler
+      label: FlowMatch Scheduler
+      description: The FlowMatch Scheduler is used for WAN 2.2 A14B Fun Control.
+      base: src.scheduler.FlowMatchScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 12.0
+        base_shift: 0.5
+        max_shift: 1.15
+        base_image_seq_len: 256
+        max_image_seq_len: 4096
+        use_dynamic_shifting: false
+  - type: vae
+    label: WAN VAE
+    name: wan/vae
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae/config.json
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 11361874539
+    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 6731333792
+    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
+  - type: transformer
+    label: High Noise Transformer
+    name: high_noise_transformer
+    base: wan.fun_vace
+    extra_kwargs:
+      load_from_config: true
+    model_path:
+    - path: alibaba-pai/Wan2.2-VACE-Fun-A14B/high_noise_model
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 34675325325
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 18663274400
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 15
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 13037336480
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 12464224160
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 12251887520
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 11639453600
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 10552539040
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 10327095200
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 8636061600
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 7844059040
+    config_path: alibaba-pai/Wan2.2-VACE-Fun-A14B/high_noise_model/config.json
+  - type: transformer
+    label: Low Noise Transformer
+    name: low_noise_transformer
+    base: wan.fun_vace
+    extra_kwargs:
+      load_from_config: true
+    model_path:
+    - path: alibaba-pai/Wan2.2-VACE-Fun-A14B/low_noise_model
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 34675325325
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 18663274400
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 14522587040
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 13037336480
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 12464224160
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 12251887520
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 11639453600
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 10552539040
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 10327095200
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 8636061600
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/LowNoise/Wan2.2-VACE-Fun-A14B-low-noise-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 7844059040
+    config_path: alibaba-pai/Wan2.2-VACE-Fun-A14B/low_noise_model/config.json
+  - type: helper
+    base: camera
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      boundary_ratio: 0.9
+      return_latents: false
+      text_encoder_kwargs: {}
+      use_attention_mask: true
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: start_end_images
+      label: Start End Images
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - start_image
+        - - end_image
+    - name: subject_ref_images
+      label: Subject Reference Images
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - subject_ref_images
+    - name: control_video
+      label: Control Video
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - control_video
+    - name: masking_inputs
+      label: Mask Inputs
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - video
+        - - mask_video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - high_noise_guidance_scale
+        - - low_noise_guidance_scale
+        - - seed
+        - - boundary_ratio
+    inputs:
+    - id: subject_ref_images
+      label: Subject Reference Images
+      description: The subject reference images to use for the generation.
+      type: image_list
+      panel: subject_ref_images
+      required: false
+      max_images: 3
+    - id: start_image
+      label: Start Image
+      description: The start image to use for the generation.
+      type: image
+      panel: start_end_images
+      required: false
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: end_image
+      label: End Image
+      description: The end image to use for the generation.
+      type: image
+      panel: start_end_images
+      required: false
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: control_video
+      label: Control Video
+      description: The control video to use for the generation.
+      type: video
+      panel: control_video
+      required: false
+    - id: video
+      label: Video
+      description: The control video to use for the generation.
+      type: video
+      panel: masking_inputs
+      required: false
+    - id: mask_video
+      label: Mask
+      description: The masked video to use for the generation.
+      type: image
+      panel: masking_inputs
+      required: false
+    - id: subject_reference_images
+      label: Subject Reference Images
+      description: The subject reference images to use for the generation.
+      type: image_list
+      panel: subject_ref_images
+      required: false
+      max_images: 3
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 720
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1280
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: high_noise_guidance_scale
+      label: High Noise Guidance Scale
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
+      step: 0.1
+    - id: low_noise_guidance_scale
+      label: Low Noise Guidance Scale
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3.0
+      min: 1.0
+      max: 15.0
+      step: 0.1
+    - id: boundary_ratio
+      label: Boundary Ratio
+      description: The ratio of the boundary of the image
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 0.875
+      min: 0.0
+      max: 1.0
+      step: 0.01

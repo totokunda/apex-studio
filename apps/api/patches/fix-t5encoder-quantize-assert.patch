@@ -1,0 +1,16 @@
+diff --git a/thirdparty/llama.cpp/src/llama-quant.cpp b/thirdparty/llama.cpp/src/llama-quant.cpp
+index 0000000..0000000 100644
+--- a/thirdparty/llama.cpp/src/llama-quant.cpp
++++ b/thirdparty/llama.cpp/src/llama-quant.cpp
+@@ -724,7 +724,9 @@
+         const auto & n_head_kv_iter = model.hparams.n_head_kv_arr.begin();
+         // attention layers have a non-zero number of kv heads
+         int32_t n_attn_layer = model.hparams.n_layer - std::count(n_head_kv_iter, n_head_kv_iter + model.hparams.n_layer, 0);
+-        if (llama_model_has_encoder(&model)) {
++        // Multiply by 3 only for models that have both encoder and decoder (full T5),
++        // not for encoder-only architectures like T5ENCODER
++        if (llama_model_has_encoder(&model) && llama_model_has_decoder(&model)) {
+             n_attn_layer *= 3;
+         }
+         GGML_ASSERT((qs.n_attention_wv == n_attn_layer - pruned_attention_w) && "n_attention_wv is unexpected");
+

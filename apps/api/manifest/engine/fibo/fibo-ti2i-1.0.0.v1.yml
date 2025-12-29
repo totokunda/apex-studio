@@ -1,0 +1,260 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: fibo-ti2i
+  model: fibo
+  name: Fibo TI2I
+  version: 1.0.0
+  description: Fibo is an 8B parameter model for text-to-image and image edit generation powered
+    by Bria.
+  tags:
+  - fibo
+  - ti2i
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: https://cdn.shopify.com/s/files/1/0093/8541/0645/files/untitled_first_abstract_watercolor_by_wassily_kandinsky_c.jpg?v=1639393508
+  categories:
+  - text-to-image 
+  - image-edit
+spec:
+  engine: fibo
+  model_type: ti2i
+  engine_type: torch
+  denoise_type: base
+  attention_types:
+  - sdpa
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler is a scheduler for the Fibo
+        TI2I model.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: briaai/FIBO/scheduler/scheduler_config.json
+  - type: vae
+    label: Fibo VAE
+    base: wan
+    model_path:
+    - path: briaai/FIBO/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 2818779509
+  - type: text_encoder
+    label: Fibo Text Encoder
+    base: SmolLM3ForCausalLM
+    model_path:
+    - path: briaai/FIBO/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 24
+      file_size: 6150263949
+    tokenizer_class: PreTrainedTokenizerFast
+    tokenizer_name: briaai/FIBO
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: transformer
+    label: Fibo Transformer
+    base: fibo.base
+    model_path:
+    - path: briaai/FIBO/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 16571862719
+  - type: helper
+    name: prompt_gen
+    label: Fibo JSON Prompt Generator
+    base: fibo.prompt_gen
+    model_path:
+    - path: briaai/FIBO-vlm
+      type: safetensors
+      file_size: 8891672453
+  defaults:
+    run:
+      num_inference_steps: 40
+      return_latents: false
+      text_encoder_kwargs:
+        add_special_tokens: false
+        clean_text: false
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: input
+      label: Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: image
+      label: Image
+      description: The input image to edit.
+      type: image
+      panel: input
+      required: false
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: prompt
+      label: Prompt
+      description: The prompt to create or edit the image. This can be a string or
+        JSON.
+      placeholder: A beautiful woman with long brown hair and blue eyes.
+      type: text
+      panel: prompting
+      required: false
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what you want to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: ''
+    - id: structured_prompt
+      label: Structured Prompt
+      description: The structured prompt to edit the image. This should be a valid
+        JSON object.
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: ''
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+      - name: Ultra HD
+        value: 1024
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: "16:9"
+      options:
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 40
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5

@@ -1,0 +1,48 @@
+{
+    "engine_kwargs": {
+        "engine_type": "flux",
+        "yaml_path": "/home/divineade/apex/manifest/engine/flux/srpo-text-to-image-1.0.0.v1.yml",
+        "model_type": "t2i",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/ext_diviade_gmail_com/apex-diffusion/configs/e82f4046dfd20d0591925b8ed2d85a3f97d59849072de707304fa42a2e145f0d_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler"
+            },
+            "vae": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/black-forest-labs_FLUX.1-dev/vae",
+                "variant": "default"
+            },
+            "text_encoder": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/black-forest-labs_FLUX.1-dev/text_encoder",
+                "variant": "default"
+            },
+            "text_encoder_2": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/black-forest-labs_FLUX.1-dev/text_encoder_2",
+                "variant": "default"
+            },
+            "transformer": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/tencent_SRPO",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "Ultra-detailed cinematic photograph of a young man standing on a rainy city street, wearing a black leather jacket and hoodie, neon lights reflecting on wet asphalt at night. \nSoft natural lighting with dynamic shadows, shallow depth of field, 85mm lens look, f/1.8, HDR, global illumination. \nHighly realistic skin texture, sharp focus, film grain, dramatic composition, rule of thirds. \nColor-graded, professional photography, 8K resolution, hyper-realistic.",
+        "resolution": 720,
+        "aspect_ratio": "16:9",
+        "num_inference_steps": 50,
+        "height": 704,
+        "width": 1280,
+        "seed": 1763104531,
+        "true_cfg_scale": 1,
+        "guidance_scale": 3.5,
+        "duration": "5s"
+    }
+}

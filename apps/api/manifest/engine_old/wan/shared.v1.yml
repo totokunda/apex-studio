@@ -1,0 +1,41 @@
+api_version: apex/v1
+kind: SharedComponents
+metadata:
+  name: wan-shared
+  description: Shared Wan Components
+spec:
+  components:
+  - type: vae
+    name: wan/vae
+    base: wan
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/vae
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: vae
+    name: wan/vae_2.2
+    base: wan
+    model_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+    config_path: https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers/resolve/main/vae/config.json
+  - type: vae
+    name: wan/vae_fflf
+    base: wan
+    model_path: Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers/vae
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: wan/text_encoder
+    base: UMT5EncoderModel
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: helper
+    base: clip
+    name: wan/clip
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_encoder
+    preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
+    processor_class: CLIPImageProcessor
+    model_class: CLIPVisionModel
+  - type: helper
+    base: clip
+    name: wan/clip_fflf
+    model_path: Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers/image_encoder
+    preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers/resolve/main/image_processor/preprocessor_config.json
+    processor_class: CLIPImageProcessor
+    model_class: CLIPVisionModel

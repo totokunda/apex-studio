@@ -1,0 +1,54 @@
+{
+    "engine_kwargs": {
+        "engine_type": "zimage",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/image/zimage-turbo-control-1.0.0.v1.yml",
+        "model_type": "control",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/309fddec5ebc49a8aefab205fe7dff824cca5ac413726b93cdd87b078cd60423_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler"
+            },
+            "vae": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Tongyi-MAI_Z-Image-Turbo/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Tongyi-MAI_Z-Image-Turbo/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Tongyi-MAI_Z-Image-Turbo/transformer",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "zimage_turbo_fun_controlnet_union_2_0": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/2e83c3999ed03935f1fe52079f03b7782e4abfe12a633061c6eeae44bb7db6b5_Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "inpaint_image": "assets/aa8c424b-bfc9-441b-a63c-04fc2c5cf803-e7874b7d-020f-496c-a2e6-aafe16393a91_inpaint_image_0_3.png",
+        "mask_image": "assets/729fce68-ea31-40d1-8453-23e74c62e8da-e7874b7d-020f-496c-a2e6-aafe16393a91_mask_image_0_3.png",
+        "control_context_scale": 0.65,
+        "prompt": "A gorilla is sitting on the couch next to the man holding the gun hunched over in deep thought. ",
+        "resolution": "custom",
+        "aspect_ratio": "custom",
+        "height": 1280,
+        "width": 836,
+        "seed": 2182869797,
+        "duration": "5s"
+    }
+}

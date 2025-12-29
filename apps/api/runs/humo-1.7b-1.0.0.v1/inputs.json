@@ -1,0 +1,55 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/engine/wan/humo-1.7b-1.0.0.v1.yml",
+        "model_type": "humo",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "src.scheduler.unipc.UniPCMultistepScheduler",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "UniPCMultistepScheduler"
+            },
+            "wan/vae": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Wan-AI_Wan2.1-I2V-14B-480P-Diffusers/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "wan/text_encoder": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Wan-AI_Wan2.1-I2V-14B-480P-Diffusers/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/320652cb404e5a770ea28557530cd62f6b21286608920a99daab82e40e35c4dc_ema.pth",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "wan.humo_audio_processor": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/openai_whisper-large-v3",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "audio": "assets/a8d359d4-6621-4a2c-a57d-0dfbbe7e3b6d-c0a8c7dd-4c2b-466d-b3c4-a99cf8a436df_audio_2.mp3",
+        "prompt": "A woman with red hair is smiling as she happily says this cake is great then winks. ",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "resolution": 480,
+        "aspect_ratio": "wide",
+        "num_inference_steps": 50,
+        "height": 480,
+        "width": 832,
+        "seed": 1761793965,
+        "guidance_scale_a": 5,
+        "guidance_scale_t": 5.5,
+        "duration": "6.041666666666667s"
+    }
+}

@@ -1,0 +1,64 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.2-fun-a14b-control-1.0.0.v1.yml",
+        "model_type": "fun_control",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "src.scheduler.FlowMatchScheduler",
+                "type": "scheduler",
+                "label": "FlowMatch Scheduler",
+                "default": "FlowMatchScheduler",
+                "description": "The FlowMatch Scheduler is used for WAN 2.2 A14B Fun Control.",
+                "config": {
+                    "num_train_timesteps": 1000,
+                    "shift": 5.0,
+                    "base_shift": 0.5,
+                    "max_shift": 1.15,
+                    "base_image_seq_len": 256,
+                    "max_image_seq_len": 4096,
+                    "use_dynamic_shifting": false
+                }
+            },
+            "wan/vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "high_noise_transformer": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "low_noise_transformer": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sage"
+    },
+    "inputs": {
+        "ref_image": "assets/df6652c91f9ada85b831db5a5683ae89c8761439f8c705ac053b0870730d2c76.png",
+        "control_video": "assets/a11dae9419c255cf6aaa6143fa112c6553602d64cb68d4f8b6c331f38ccab03f.mp4",
+        "prompt": "The man dances passionately and with vigour and vibrant emotion with each step. ",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "resolution": 720,
+        "aspect_ratio": "9:16",
+        "num_inference_steps": 4,
+        "height": 1280,
+        "width": 704,
+        "seed": 181697969,
+        "high_noise_guidance_scale": 1,
+        "low_noise_guidance_scale": 1,
+        "boundary_ratio": 0.875,
+        "duration": "5.041666666666667s"
+    }
+}

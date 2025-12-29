@@ -1,0 +1,66 @@
+{
+    "engine_kwargs": {
+        "engine_type": "hunyuanvideo15",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/hunyuanvideo-1.5-i2v-1.0.0.v1.yml",
+        "model_type": "ti2v",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "src.scheduler.flow.FlowMatchDiscreteScheduler",
+                "type": "scheduler",
+                "label": "FlowMatch Discrete Scheduler",
+                "default": "FlowMatchDiscreteScheduler",
+                "description": "The FlowMatch Discrete Scheduler is a scheduler for the HunyuanVideo 1.5 model.",
+                "config": {
+                    "shift": 7.0,
+                    "num_train_timesteps": 1000,
+                    "reverse": true,
+                    "solver": "euler"
+                }
+            },
+            "vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "FP8_DISTILLED",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "vision_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "byt5_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sage"
+    },
+    "inputs": {
+        "prompt": "A silent standoff shatters as one man lunges forward, rain bursting outward in slow motion on impact. Neon signs flicker violently, casting strobing cyan and violet light across their faces. The second man pivots and counters, coats snapping through the air as they collide. Steam erupts from ground vents, swirling chaotically around their bodies. The camera snaps into a fast handheld dolly, circling the fight with dynamic parallax and brief motion blur during strikes. Puddles splash underfoot, droplets flying toward the lens. Lighting pulses with each movement, reflections smearing across wet pavement. Maintain facial identity and realism while increasing kinetic energy. High-impact choreography, dramatic camera motion, intense rain interaction, neo-noir action aesthetic, cinematic realism, visceral momentum.",
+        "reference_image": "assets/ad1995651a0d647aae0b7549f92c9b2cf2fa374fc83e95a8d1eceea157758bd9.png",
+        "num_inference_steps": 50,
+        "seed": 1737140257,
+        "guidance_scale": 1,
+        "guidance_rescale": 0,
+        "resolution": 720,
+        "aspect_ratio": "custom",
+        "height": 720,
+        "width": 1280,
+        "enable_cache": true,
+        "cache_start_step": 11,
+        "cache_end_step": 45,
+        "duration": "5s"
+    }
+}

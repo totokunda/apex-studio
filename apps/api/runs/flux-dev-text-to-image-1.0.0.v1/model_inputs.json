@@ -1,0 +1,50 @@
+{
+    "engine_kwargs": {
+        "engine_type": "flux",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/image/flux-dev-text-to-image-1.0.0.v1.yml",
+        "model_type": "t2i",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/e82f4046dfd20d0591925b8ed2d85a3f97d59849072de707304fa42a2e145f0d_scheduler_config.json",
+                "type": "scheduler",
+                "label": "FlowMatch Euler Discrete Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler",
+                "description": "The FlowMatch Euler Discrete Scheduler is used for Flux Dev."
+            },
+            "vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default"
+            },
+            "text_encoder_2": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "GGUF_Q8_0",
+                "precision": "q8_0",
+                "type": "gguf"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "A cinematic freeze-frame of a violent rooftop fight at night. Two men collide in mid-motion, one swinging a powerful punch while the other recoils, rain exploding outward from the impact. The city skyline looms behind them, skyscraper lights streaked into glowing bokeh by shallow depth of field. Harsh white floodlights and deep blue shadows carve sharp contrast across soaked clothing and strained muscles. Wind whips fabric and loose debris into the air as clouds race overhead. Shot from a dramatic low angle, capturing raw motion and intensity. Ultra-realistic faces, hyper-detailed rain droplets, cinematic lighting, high shutter speed action freeze, neo-noir atmosphere, high-end action film still, 8K realism.",
+        "resolution": 720,
+        "aspect_ratio": "16:9",
+        "num_inference_steps": 50,
+        "height": 704,
+        "width": 1280,
+        "seed": 905935453,
+        "true_cfg_scale": 1,
+        "guidance_scale": 3.5,
+        "duration": "5s"
+    }
+}

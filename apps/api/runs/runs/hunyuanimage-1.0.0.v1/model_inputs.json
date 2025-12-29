@@ -1,0 +1,53 @@
+{
+    "engine_kwargs": {
+        "engine_type": "hunyuanimage",
+        "yaml_path": "/home/divineade/apex/manifest/engine/hunyuanimage/hunyuanimage-1.0.0.v1.yml",
+        "model_type": "t2i",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/ext_diviade_gmail_com/apex-diffusion/components/e52e3cfb1bd7151e4dee98fdb9c98bb6dcee9c977b98532bc490079a0f38d3f5_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler"
+            },
+            "vae": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/hunyuanvideo-community_HunyuanImage-2.1-Diffusers/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/hunyuanvideo-community_HunyuanImage-2.1-Diffusers/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder_2": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/hunyuanvideo-community_HunyuanImage-2.1-Diffusers/text_encoder_2",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/9fa0f8ed6c5895cf1b347dd25064efb44b7b91018aee8d34c761903513537751_HunyuanImage2.1-Q2_K.gguf",
+                "variant": "q2_k",
+                "precision": "q2_k",
+                "type": "gguf"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "A woman smiling",
+        "resolution": 720,
+        "aspect_ratio": "custom",
+        "num_inference_steps": 40,
+        "height": 704,
+        "width": 704,
+        "seed": 2973975280,
+        "distilled_guidance_scale": 3.25,
+        "duration": "5s"
+    }
+}
