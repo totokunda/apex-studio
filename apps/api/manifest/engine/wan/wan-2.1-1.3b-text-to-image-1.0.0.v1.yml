@@ -1,0 +1,224 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2-1-1.3b-text-to-image
+  model: wan
+  name: Wan 2.1 1.3B Text to Image
+  version: 1.0.0
+  description: Wan 2.1 1.3B is a 1.3B parameter model for text-to-image generation.
+  tags:
+  - wan
+  - t2i
+  - 1.3b
+  - '2.1'
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: https://preview.redd.it/wan-2-2-text-to-image-workflow-v0-gahw42yqkrgf1.png?width=640&crop=smart&auto=webp&s=6fec70fe08d915484f216a6c38520c22b2dc1db7
+  categories:
+  - text-to-image
+spec:
+  engine: wan
+  model_type: t2i
+  denoise_type: base
+  engine_type: torch
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: UniPCMultistepScheduler
+    scheduler_options:
+    - name: UniPCMultistepScheduler
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for WAN 2.1 1.3B T2I.
+      base: diffusers.UniPCMultistepScheduler
+      config_path: Wan-AI/Wan2.1-T2V-1.3B-Diffusers/scheduler/scheduler_config.json
+  - type: vae
+    name: wan/vae
+    label: Wan VAE
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: wan/text_encoder
+    base: UMT5EncoderModel
+    label: UMT5 Text Encoder
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 22723695074
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: transformer
+    base: wan.base
+    label: Wan Transformer
+    model_path:
+    - path: Wan-AI/Wan2.1-T2V-1.3B-Diffusers/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 5676144409
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers/resolve/main/transformer/config.json
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 1024
+      options:
+      - name: HD
+        value: 720
+      - name: Ultra HD
+        value: 1024
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: "16:9"
+      options:
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5

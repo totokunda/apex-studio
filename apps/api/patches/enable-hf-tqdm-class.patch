@@ -1,0 +1,183 @@
+diff --git a/huggingface_hub/file_download.py b/huggingface_hub/file_download.py
+index 0000000..0000000 100644
+--- a/huggingface_hub/file_download.py
++++ b/huggingface_hub/file_download.py
+@@
+-from typing import Any, BinaryIO, Dict, Literal, NoReturn, Optional, Tuple, Union
++from typing import Any, BinaryIO, Dict, Literal, NoReturn, Optional, Tuple, Union, Type
+@@
+-def hf_hub_download(
++def hf_hub_download(
+     repo_id: str,
+     filename: str,
+     *,
+     subfolder: Optional[str] = None,
+     repo_type: Optional[str] = None,
+@@
+     local_dir: Union[str, Path, None] = None,
+     user_agent: Union[Dict, str, None] = None,
+     force_download: bool = False,
+     proxies: Optional[Dict] = None,
+     etag_timeout: float = constants.DEFAULT_ETAG_TIMEOUT,
+     token: Union[bool, str, None] = None,
+     local_files_only: bool = False,
+     headers: Optional[Dict[str, str]] = None,
+     endpoint: Optional[str] = None,
+     resume_download: Optional[bool] = None,
+     force_filename: Optional[str] = None,
+     local_dir_use_symlinks: Union[bool, Literal["auto"]] = "auto",
++    tqdm_class: Optional[Type[tqdm]] = None,
+ ) -> str:
+@@
+-        return _hf_hub_download_to_local_dir(
++        return _hf_hub_download_to_local_dir(
+             # Destination
+             local_dir=local_dir,
+             # File info
+             repo_id=repo_id,
+             repo_type=repo_type,
+             filename=filename,
+             revision=revision,
+             # HTTP info
+             endpoint=endpoint,
+             etag_timeout=etag_timeout,
+             headers=hf_headers,
+             proxies=proxies,
+             token=token,
+             # Additional options
+             cache_dir=cache_dir,
+             force_download=force_download,
+             local_files_only=local_files_only,
++            tqdm_class=tqdm_class,
+         )
+     else:
+-        return _hf_hub_download_to_cache_dir(
++        return _hf_hub_download_to_cache_dir(
+             # Destination
+             cache_dir=cache_dir,
+             # File info
+             repo_id=repo_id,
+             filename=filename,
+             repo_type=repo_type,
+             revision=revision,
+             # HTTP info
+             endpoint=endpoint,
+             etag_timeout=etag_timeout,
+             headers=hf_headers,
+             proxies=proxies,
+             token=token,
+             # Additional options
+             local_files_only=local_files_only,
+             force_download=force_download,
++            tqdm_class=tqdm_class,
+         )
+@@
+-def _hf_hub_download_to_cache_dir(
++def _hf_hub_download_to_cache_dir(
+     *,
+     # Destination
+     cache_dir: str,
+     # File info
+     repo_id: str,
+     filename: str,
+     repo_type: str,
+     revision: str,
+     # HTTP info
+     endpoint: Optional[str],
+     etag_timeout: float,
+     headers: Dict[str, str],
+     proxies: Optional[Dict],
+     token: Optional[Union[bool, str]],
+     # Additional options
+     local_files_only: bool,
+     force_download: bool,
++    tqdm_class: Optional[Type[tqdm]] = None,
+ ) -> str:
+@@
+-        _download_to_tmp_and_move(
++        _download_to_tmp_and_move(
+             incomplete_path=Path(blob_path + ".incomplete"),
+             destination_path=Path(blob_path),
+             url_to_download=url_to_download,
+             proxies=proxies,
+             headers=headers,
+             expected_size=expected_size,
+             filename=filename,
+             force_download=force_download,
+             etag=etag,
+             xet_file_data=xet_file_data,
++            tqdm_class=tqdm_class,
+         )
+@@
+-def _hf_hub_download_to_local_dir(
++def _hf_hub_download_to_local_dir(
+     *,
+     # Destination
+     local_dir: Union[str, Path],
+     # File info
+     repo_id: str,
+     repo_type: str,
+     filename: str,
+     revision: str,
+     # HTTP info
+     endpoint: Optional[str],
+     etag_timeout: float,
+     headers: Dict[str, str],
+     proxies: Optional[Dict],
+     token: Union[bool, str, None],
+     # Additional options
+     cache_dir: str,
+     force_download: bool,
+     local_files_only: bool,
++    tqdm_class: Optional[Type[tqdm]] = None,
+ ) -> str:
+@@
+-        _download_to_tmp_and_move(
++        _download_to_tmp_and_move(
+             incomplete_path=paths.incomplete_path(etag),
+             destination_path=paths.file_path,
+             url_to_download=url_to_download,
+             proxies=proxies,
+             headers=headers,
+             expected_size=expected_size,
+             filename=filename,
+             force_download=force_download,
+             etag=etag,
+             xet_file_data=xet_file_data,
++            tqdm_class=tqdm_class,
+         )
+@@
+-def _download_to_tmp_and_move(
++def _download_to_tmp_and_move(
+     incomplete_path: Path,
+     destination_path: Path,
+     url_to_download: str,
+     proxies: Optional[Dict],
+     headers: Dict[str, str],
+     expected_size: Optional[int],
+     filename: str,
+     force_download: bool,
+     etag: Optional[str],
+     xet_file_data: Optional[XetFileData],
++    tqdm_class: Optional[Type[tqdm]] = None,
+ ) -> None:
+@@
+-            http_get(
++            # Build a progress bar instance if provided
++            _tqdm_bar = None
++            if tqdm_class is not None:
++                try:
++                    _tqdm_bar = tqdm_class(total=expected_size, desc=filename)
++                except Exception:
++                    _tqdm_bar = None
++
++            http_get(
+                 url_to_download,
+                 f,
+                 proxies=proxies,
+                 resume_size=resume_size,
+                 headers=headers,
+                 expected_size=expected_size,
++                _tqdm_bar=_tqdm_bar,
+             )
+

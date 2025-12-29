@@ -1,0 +1,46 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  name: Wan 2.1 1.3B Recam
+  version: 1.0.0
+  description: Wan 2.1 1.3B is a 1.3B parameter model for recam generation.
+  tags:
+  - wan
+  - recam
+  - 1.3b
+  - '2.1'
+spec:
+  engine: wan
+  model_type: recam
+  denoise_type: recam
+  engine_type: torch
+  components:
+  - type: scheduler
+    base: diffusers.UniPCMultistepScheduler
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers/resolve/main/scheduler/scheduler_config.json
+  - type: vae
+    name: wan/vae
+    base: wan
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/vae
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: wan/text_encoder
+    base: UMT5EncoderModel
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: transformer
+    base: wan.recam
+    model_path: /mnt/localssd/apex-diffusion/components/KwaiVGI/ReCamMaster-Wan2.1/resolve/main/step20000.ckpt
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers/resolve/main/transformer/config.json
+    config:
+      _class_name: WanRecamTransformer3DModel
+  - type: helper
+    base: wan.recam
+    cam_type: 1
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 5.0
+      return_latents: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}

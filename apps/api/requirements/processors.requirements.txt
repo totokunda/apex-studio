@@ -1,0 +1,19 @@
+raft
+insightface==0.7.3
+git+https://github.com/xinyu1205/recognize-anything.git
+fairscale
+pycocotools
+retinaface-py==0.0.2
+git+https://github.com/facebookresearch/sam2.git
+facexlib
+trimesh
+mediapipe
+numpy==1.26.4
+Cython>=0.29.36
+opendr
+rtree
+mmengine
+ptlflow
+rembg
+decord; sys_platform == "linux" or sys_platform == "win32"
+eva-decord; sys_platform == "darwin"

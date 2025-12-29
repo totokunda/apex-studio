@@ -1,0 +1,342 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: ovi-10b-5s
+  model: wan
+  name: Ovi 10B 5s
+  version: 1.0.0
+  description: Ovi 10B is a 10B parameter model for text-to-video and image to video generation capable of generating 5s videos.
+  tags:
+  - ovi
+  - t2v
+  - i2v
+  - 10b
+  - 5s
+  author: Character AI
+  license: Apache-2.0
+  demo_path: https://github.com/user-attachments/assets/191f51fb-ef5a-4197-b26f-a5369dc2c007
+  categories:
+  - text-to-video
+  - image-to-video
+spec:
+  engine: wan
+  model_type: ovi
+  engine_type: torch
+  max_duration_secs: 5.0
+  min_duration_secs: 5.0
+  fps: 24
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+  attention_types:
+  - sdpa
+  - flash
+  components:
+  - type: scheduler
+    name: transformer_scheduler
+    label: Transformer Scheduler
+    default: transformer_scheduler_unipc
+    scheduler_options:
+    - name: transformer_scheduler_unipc
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for Ovi 10B.
+      base: src.scheduler.unipc.UniPCMultistepScheduler
+      config:
+        shift: 1.0
+        num_train_timesteps: 1000
+  - type: scheduler
+    name: audio_scheduler
+    label: Audio Scheduler
+    default: audio_scheduler_unipc
+    scheduler_options:
+    - name: audio_scheduler_unipc
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for Ovi 10B.
+      base: src.scheduler.unipc.UniPCMultistepScheduler
+      config:
+        shift: 1.0
+        num_train_timesteps: 1000
+  - type: vae
+    name: transformer_vae
+    label: Wan VAE
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.2-TI2V-5B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: vae
+    name: audio_vae
+    label: Audio VAE
+    base: mmaudio
+    extra_kwargs:
+      require_conversion: true
+    model_path:
+    - path: hkchengrex/MMAudio/ext_weights/best_netG.pt
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: extra_model_path
+    name: audio_vae_extra_model_path
+    label: Audio VAE Extra Model Path
+    component: audio_vae
+    model_path:
+    - path: hkchengrex/MMAudio/ext_weights/v1-16.pth
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: text_encoder
+    name: wan/text_encoder
+    base: UMT5EncoderModel
+    label: UMT5 Text Encoder
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 22723695074
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: transformer
+    base: wan.ovi
+    label: Ovi Transformer
+    name: 960x960_5s
+    model_path:
+    - path: chetwinlow1/Ovi/model_960x960.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+    config:
+      video:
+        "patch_size": [1, 2, 2]
+        "model_type": "t2v"
+        "dim": 3072
+        "ffn_dim": 14336
+        "freq_dim": 256
+        "num_heads": 24
+        "num_layers": 30
+        "in_dim": 48 
+        "out_dim": 48 
+        "text_len": 512 
+        "window_size": [-1, -1]
+        "qk_norm": true
+        "cross_attn_norm": true
+        "eps": 0.000001
+      audio:
+        "patch_size": [1]
+        "model_type": "t2a"
+        "dim": 3072
+        "ffn_dim": 14336
+        "freq_dim": 256
+        "num_heads": 24
+        "num_layers": 30
+        "in_dim": 20 
+        "out_dim": 20 
+        "text_len": 512 
+        "window_size": [-1, -1]
+        "qk_norm": true
+        "cross_attn_norm": true
+        "eps": 0.000001
+        "temporal_rope_scaling_factor": 0.19676 
+  defaults:
+    run:
+      num_inference_steps: 50
+      video_guidance_scale: 4.0
+      audio_guidance_scale: 3.0
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: image
+      label: Image
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+        - - audio_negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - video_guidance_scale
+        - - audio_guidance_scale
+        - - seed
+        - - shift
+    inputs:
+    - id: image
+      label: Image
+      description: The input image to generate a video from.
+      type: image
+      panel: image
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate using the <S> and <E> tags for start and end of the text.
+      placeholder: A man in the video grumbles angrily and says <S>I love open source. I can goon to whatever I want.<E> in a deep low voice.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: jitter, bad hands, blur, distortion
+    - id: audio_negative_prompt
+      label: Audio Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: robotic, muffled, echo, distorted
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: robotic, muffled, echo, distorted
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 960
+      options:
+      - name: Full HD
+        value: 960
+      - name: HD
+        value:  720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: "1:1"
+      options:
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 960
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 960
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: video_guidance_scale
+      label: Video Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: audio_guidance_scale
+      label: Audio Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: shift
+      label: Scheduler Shift
+      description: Shift for the scheduler
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5

@@ -1,0 +1,27 @@
+{
+  "name": "@app/export-renderer",
+  "private": true,
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "konva": "^9.3.22"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2",
+    "vite": "7.1.6"
+  }
+}

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling>=1.21", "hatch-requirements-txt>=0.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "apex-engine"
+version = "0.0.1"
+description = "Apex Engine"
+requires-python = ">=3.10"
+# deps come from requirements.txt via the hatch plugin:
+dynamic = ["dependencies"]
+
+# your console script (points at importable module path)
+[project.scripts]
+apex-engine = "src.__main__:app"
+
+[tool.hatch.metadata.hooks.requirements_txt]
+files = ["requirements.txt"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "requirements.txt", "pyproject.toml", "README.md", "LICENSE"]

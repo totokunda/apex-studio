@@ -1,0 +1,67 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  name: StepVideo 30B Text to Video
+  version: 1.0.0
+  description: StepVideo 30B is a 30B parameter model for text-to-video generation.
+  tags:
+  - stepvideo
+  - t2v
+  - 30b
+spec:
+  engine: stepvideo
+  model_type:
+  - t2v
+  engine_type: torch
+  denoise_type: base
+  components:
+  - type: scheduler
+    base: src.scheduler.FlowMatchScheduler
+    config:
+      sigma_min: 0.0
+      extra_one_step: true
+      shift: 13.0
+      reverse_sigmas: true
+      num_train_timesteps: 1
+  - type: vae
+    name: stepvideo/vae
+    base: stepvideo
+    model_path: stepfun-ai/stepvideo-t2v/vae/vae_v2.safetensors
+    config_path: vae_configs/stepvideo/stepvideo_v2.json
+    key_map:
+      decoder.conv_out.: decoder.conv_out.conv.
+  - type: text_encoder
+    name: stepvideo/text_encoder
+    base: BertModel
+    model_path: stepfun-ai/stepvideo-t2v/hunyuan_clip/clip_text_encoder
+    tokenizer_class: BertTokenizer
+    tokenizer_name: stepfun-ai/stepvideo-t2v
+    tokenizer_kwargs:
+      subfolder: hunyuan_clip/tokenizer
+    extra_kwargs:
+      add_pooling_layer: false
+    key_map:
+      bert.: ''
+  - type: transformer
+    base: stepvideo.base
+    model_path: stepfun-ai/stepvideo-t2v/transformer
+    config_path: transformer_configs/stepvideo/stepvideo_t2v.json
+    extra_kwargs:
+      model_type: t2v
+  - type: helper
+    base: stepvideo.text_encoder
+    name: stepvideo/text_encoder_llm
+    config_path: https://huggingface.co/stepfun-ai/stepvideo-t2v/resolve/main/step_llm/config.json
+    model_path: stepfun-ai/stepvideo-t2v/step_llm
+    tokenizer_path: https://huggingface.co/stepfun-ai/stepvideo-t2v/resolve/main/step_llm/step1_chat_tokenizer.model
+  defaults:
+    run:
+      num_inference_steps: 30
+      return_latents: false
+      text_encoder_kwargs:
+        use_token_type_ids: false
+        use_position_ids: false
+        max_sequence_length: 77
+        use_attention_mask: true
+        pad_with_zero: false
+        clean_text: false

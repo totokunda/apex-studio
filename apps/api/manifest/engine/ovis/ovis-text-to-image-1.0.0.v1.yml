@@ -1,0 +1,206 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: ovis-text-to-image
+  model: ovis
+  name: Ovis Text to Image
+  version: 1.0.0
+  description: Ovis is a 12B parameter model for text-to-image generation.
+  tags:
+  - ovis
+  - t2i
+  author: AIDC AI
+  license: Apache-2.0
+  demo_path: https://www.mlexpert.io/_next/image?url=%2Fimages%2Fblog%2Fflux-1-dev%2Fwoman.png&w=2048&q=75
+  categories:
+  - text-to-image
+spec:
+  engine: ovis
+  model_type: t2i
+  engine_type: torch
+  denoise_type: base
+  attention_types:
+  - sdpa
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler is used for Ovis.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: AIDC-AI/Ovis-Image-7B/scheduler/scheduler_config.json
+  - type: vae
+    label: Ovis VAE
+    base: auto
+    model_path:
+    - path: AIDC-AI/Ovis-Image-7B/vae
+      variant: default
+      file_size: 167667722
+  - type: text_encoder
+    name: text_encoder
+    label: Ovis Text Encoder
+    base: Qwen3Model
+    model_path:
+    - path: AIDC-AI/Ovis-Image-7B/text_encoder
+      variant: default
+      file_size: 246144965
+    tokenizer_class: Qwen2Tokenizer
+    tokenizer_name: AIDC-AI/Ovis-Image-7B
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: transformer
+    label: Ovis Transformer
+    base: ovis.base
+    config_path: AIDC-AI/Ovis-Image-7B/transformer/config.json
+    model_path:
+    - path: AIDC-AI/Ovis-Image-7B/transformer
+      variant: default
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 5.0
+      return_latents: false
+      joint_attention_kwargs: {}
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what you want to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+      - name: Ultra HD 
+        value: 1024
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: "16:9"
+      options:
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3.5
+      min: 1.0
+      max: 15.0
+      step: 0.5
