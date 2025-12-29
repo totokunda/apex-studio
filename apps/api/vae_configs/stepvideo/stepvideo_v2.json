@@ -1,0 +1,20 @@
+{
+    "_class_name": "AutoencoderKL",
+    "z_channels": 64,
+    "in_channels": 3,
+    "out_channels": 3,
+    "version": 2,
+    "encoder_ch": 32,
+    "encoder_ch_mult": [4, 8, 16, 16],
+    "encoder_num_res_blocks": 2,
+    "encoder_double_z": true,
+    "encoder_down_sampling_layer": [1, 2],
+    "encoder_resamp_with_conv": true,
+    "decoder_ch": 128,
+    "decoder_ch_mult": [1, 2, 4, 4],
+    "decoder_num_res_blocks": 2,
+    "decoder_temporal_up_layers": [2, 3],
+    "decoder_temporal_downsample": 4,
+    "decoder_resamp_with_conv": true,
+    "scaling_factor": 1.0
+}

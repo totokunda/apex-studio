@@ -1,0 +1,17 @@
+[package]
+name = "apex_download_rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "apex_download_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "gzip", "brotli", "deflate"] }
+tokio = { version = "1.39", features = ["rt-multi-thread", "time", "fs", "io-util"] }
+futures = "0.3"
+rand = "0.8"
+
+

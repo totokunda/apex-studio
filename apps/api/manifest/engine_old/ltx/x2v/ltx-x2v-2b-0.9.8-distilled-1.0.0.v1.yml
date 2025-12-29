@@ -1,0 +1,55 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  name: LTX X2V 2B 0.9.8 Distilled
+  version: 1.0.0
+  description: LTX X2V 2B 0.9.8 Distilled is a 2B parameter model for any-to-video generation.
+  tags:
+  - ltx
+  - x2v
+  - 2b
+  - 0.9.8
+  - distilled
+spec:
+  engine: ltx
+  model_type:
+  - t2v
+  - i2v
+  - control
+  engine_type: torch
+  components:
+  - type: text_encoder
+    name: ltx/text_encoder
+    base: T5EncoderModel
+    model_path: PixArt-alpha/PixArt-XL-2-1024-MS/text_encoder
+    config_path: https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS/resolve/main/text_encoder/config.json
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: PixArt-alpha/PixArt-XL-2-1024-MS
+  - type: scheduler
+    base: diffusers.FlowMatchEulerDiscreteScheduler
+    config_path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/scheduler/scheduler_config.json
+  - type: vae
+    base: ltx
+    model_path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.6-dev-04-25.safetensors
+  - type: transformer
+    base: ltx.base
+    model_path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.6-dev-04-25.safetensors
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 1
+      return_latents: false
+      timesteps: [1.0000, 0.9937, 0.9875, 0.9812, 0.9750, 0.9094, 0.7250]
+      guidance_scale_stg: 0
+      guidance_rescale: 1
+      text_encoder_kwargs:
+        max_sequence_length: 256
+        use_attention_mask: true
+        pad_with_zero: false
+        clean_text: false
+      offload: true
+      render_on_step: false
+      generator: null
+  save:
+    safe_serialization: true
+    max_shard_size: 5GB

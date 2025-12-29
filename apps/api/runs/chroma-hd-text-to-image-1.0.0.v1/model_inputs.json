@@ -1,0 +1,44 @@
+{
+    "engine_kwargs": {
+        "engine_type": "chroma",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/image/chroma-hd-text-to-image-1.0.0.v1.yml",
+        "model_type": "t2i",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/63cbb581933b28ba955a68141d61b4f7b40f6551a7ae321c024e5fe02db047ef_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler"
+            },
+            "vae": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/lodestones_Chroma1-HD/vae",
+                "variant": "default"
+            },
+            "text_encoder": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/lodestones_Chroma1-HD/text_encoder",
+                "variant": "default"
+            },
+            "transformer": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/lodestones_Chroma1-HD/transformer",
+                "variant": "default"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "A professional glamour portrait of a confident woman seated in a vintage armchair, photographed in soft golden hour light streaming through a tall window. The atmosphere feels warm and inviting, with subtle background blur that isolates the subject. She wears an elegant, form-fitting silk dress in muted tones that harmonize with the textured interior walls. Her pose is natural yet refined\u2014shoulders angled, chin gently lifted toward the light, hands relaxed. The composition follows the rule of thirds, with negative space balanced by the curve of the chair. Lighting is diffused and flattering, highlighting skin tone without harsh shadows. Shot on a DSLR with an 85mm f/1.4 lens, shallow depth of field, crisp focus on the eyes. Post-processing is minimal: smooth skin tones, soft contrast, realistic colors. The overall mood conveys elegance, intimacy, and trust between subject and photographer.",
+        "negative_prompt": "blurry, low quality, distorted, artifacts",
+        "resolution": 1024,
+        "aspect_ratio": "1:1",
+        "num_inference_steps": 50,
+        "height": 1024,
+        "width": 1024,
+        "seed": 2156347214,
+        "true_cfg_scale": 4,
+        "guidance_scale": 3,
+        "duration": "5s"
+    }
+}

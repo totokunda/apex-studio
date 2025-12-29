@@ -1,0 +1,206 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: magi-1-text-to-video
+  model: magi
+  name: MAGI-1 Text to Video
+  version: 1.0.0
+  description: MAGI-1 is an autoregressive video generation model for high-quality text-to-video synthesis.
+  tags:
+  - magi
+  - t2v
+  - autoregressive
+  author: Apex AI
+  license: Apache-2.0
+  categories:
+  - text-to-video
+spec:
+  engine: magi
+  model_type: t2v
+  engine_type: torch
+  denoise_type: base
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler is used for MAGI-1 T2V.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: tolgacangoz/MAGI-1-T2V-4.5B-Diffusers/scheduler/scheduler_config.json
+  - type: vae
+    label: MAGI VAE
+    base: magi
+    model_path:
+    - path: tolgacangoz/MAGI-1-T2V-4.5B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 2462161000
+  - type: text_encoder
+    label: MAGI Text Encoder
+    base: T5EncoderModel
+    model_path:
+    - path: tolgacangoz/MAGI-1-T2V-4.5B-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 19053695074
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: tolgacangoz/MAGI-1-T2V-4.5B-Diffusers
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: transformer
+    label: MAGI Transformer
+    name: transformer
+    base: magi.base
+    model_path:
+    - path: tolgacangoz/MAGI-1-T2V-4.5B-Diffusers/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 8945217553
+    - path: tolgacangoz/MAGI-1-T2V-24B-Diffusers/transformer
+      variant: variant_24b
+      precision: fp16
+      type: safetensors
+      file_size: 47861217553
+    config_path: tolgacangoz/MAGI-1-T2V-4.5B-Diffusers/transformer/config.json
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 5.0
+      return_latents: false
+      timesteps_as_indices: true
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - cfg_number
+        - - seed
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate.
+      placeholder: A serene landscape with flowing water and mountains.
+      type: text
+      panel: prompting
+      required: true
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: Ultra HD
+        value: 1024
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: "1:1"
+      options:
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of generation steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: cfg_number
+      label: CFG Number
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3.0
+      min: 1.0
+      max: 15.0
+      step: 0.1

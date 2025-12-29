@@ -1,0 +1,53 @@
+{
+    "engine_kwargs": {
+        "engine_type": "flashvsr",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/upscalers/flashvsr-1.1-tiny.yml",
+        "model_type": "upscale",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "src.scheduler.flow.FlowMatchScheduler",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "FlowMatchScheduler",
+                "description": "The UniPC Multistep Scheduler is used for FlashVSR 1.1 Full.",
+                "config": {
+                    "shift": 5.0,
+                    "sigma_min": 0.0,
+                    "extra_one_step": true
+                }
+            },
+            "wan/vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "extra_model_path": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "video": "assets/1432566ce5b51dc0ced95d61055c48c3caf51cb13034953457eacf452be9e5a1.mp4",
+        "height": 1088,
+        "width": 1920,
+        "aspect_ratio": "custom",
+        "resolution": 1080,
+        "seed": 281231807,
+        "local_range": 11,
+        "color_fix": true,
+        "sparse_ratio": 1.5,
+        "guidance_scale": 1,
+        "continuous_decode": false,
+        "duration": "4.666666666666667s"
+    }
+}

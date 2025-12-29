@@ -1,0 +1,45 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.2-5b-text-to-image-to-video-turbo.1.0.0.v1.yml",
+        "model_type": "t2v",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.UniPCMultistepScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/429847d82b9bd448e23381b27ec2126be783de4abe89ef6a7087647600e17877_scheduler_config.json",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "UniPCMultistepScheduler",
+                "description": "The UniPC Multistep Scheduler is used for WAN 2.2 A14B I2V."
+            },
+            "vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "GGUF_Q8_0",
+                "precision": "q8_0",
+                "type": "gguf"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "A tense, otherworldly confrontation unfolds in a vast, dimly lit space hangar drifting above a distant planet. A man stands face-to-face with an astronaut encased in a pristine, fully sealed white spacesuit, the helmet visor reflecting swirling nebula light. They are motionless at first, locked in an unbroken stare filled with raw, restrained rage\u2014subtle muscle tension in the man\u2019s jaw, faint fog forming inside the astronaut\u2019s visor with each controlled breath. Soft gravity dust floats between them in slow motion, illuminated by cold blue rim light and warm amber highlights from distant warning beacons. The camera slowly pushes in, orbiting them as the tension thickens, fabric fibers, metal scratches, and suit seams rendered in hyper-real detail. Ambient particles drift, light flickers across steel walls, and a low cinematic hum vibrates through the scene. Epic sci-fi realism, dramatic lighting, shallow depth of field, volumetric light rays, slow cinematic motion, ultra-detailed textures, immersive atmosphere, high-end film still brought to life.",
+        "resolution": 720,
+        "aspect_ratio": "16:9",
+        "num_inference_steps": 4,
+        "height": 736,
+        "width": 1280,
+        "seed": 2420858400,
+        "duration": "5s"
+    }
+}

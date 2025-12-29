@@ -1,0 +1,43 @@
+category: Depth and Normal
+class: DepthAnythingDetector
+description: State-of-the-art monocular depth estimation that works reliably across
+  diverse scenes and conditions. Trained on massive datasets to handle any image type
+  from indoor scenes to outdoor landscapes. Produces accurate relative depth maps
+  showing distance from camera.
+module: src.preprocess.depth_anything.transformers
+name: Depth Anything
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+supports_image: true
+supports_video: true
+files:
+- path: depth_anything/models--LiheYoung--depth-anything-large-hf/blobs/bc27360a3e6906e5ddd8f618e2dcde11362327361918b8f76793e42e25de31b3
+  name: model.safetensors
+  size_bytes: 1341322868

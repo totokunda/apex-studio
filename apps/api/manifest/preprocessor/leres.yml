@@ -1,0 +1,66 @@
+category: Depth and Normal
+class: LeresDetector
+description: Learning to Recover Shape (LeReS) for monocular depth estimation with
+  optional boost mode for higher accuracy. Excels at recovering fine geometric details
+  and sharp depth boundaries. Particularly effective for architectural scenes and
+  objects with complex geometry.
+module: src.preprocess.leres
+name: LeReS Depth
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+- default: 0.0
+  description: The first threshold parameter for depth map refinement. Controls the
+    lower bound of depth value adjustments. Set to 0.0 for automatic calculation.
+  display_name: Threshold A
+  max: 1.0
+  min: 0.0
+  name: thr_a
+  type: float
+- default: 0.0
+  description: The second threshold parameter for depth map refinement. Controls the
+    upper bound of depth value adjustments. Set to 0.0 for automatic calculation.
+  display_name: Threshold B
+  max: 1.0
+  min: 0.0
+  name: thr_b
+  type: float
+- default: false
+  description: When enabled, uses a more powerful model variant for improved depth
+    estimation accuracy at the cost of increased processing time and memory usage.
+  display_name: Boost Mode
+  name: boost
+  type: bool
+supports_image: true
+supports_video: true
+files:
+- path: lllyasviel/Annotators/res101.pth
+  size_bytes: 530760553
+- path: lllyasviel/Annotators/latest_net_G.pth
+  size_bytes: 318268048

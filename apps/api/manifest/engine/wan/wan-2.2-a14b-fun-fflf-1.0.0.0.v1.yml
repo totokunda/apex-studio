@@ -1,0 +1,374 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2-2-a14b-fun-fflf
+  model: wan
+  name: Wan 2.2 A14B Fun FFLF
+  version: 1.0.0
+  description: Wan 2.2 A14B is a 14B parameter model for fun first frame last frame generation.
+  tags:
+  - wan
+  - fflf
+  - moe
+  - '2.2'
+  - fun
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: https://preview.redd.it/wan-2-2-text2image-custom-workflow-v0-064bbacggggf1.png?width=640&crop=smart&auto=webp&s=6d76d4db328afa16d96720282d9f11fe926b95f2
+  categories:
+    - first-frame-last-frame
+spec:
+  engine: wan
+  model_type: fflf
+  denoise_type: moe
+  engine_type: torch
+  components:
+  - type: scheduler
+    label: Scheduler
+    name: FlowMatchScheduler
+    scheduler_options:
+    - name: FlowMatchScheduler
+      description: The FlowMatch  Scheduler is used for WAN 2.2 A14B Fun FFLF.
+      base: src.scheduler.FlowMatchScheduler
+      config:
+        shift: 3.0
+        sigma_min: 0.0
+        extra_one_step: true
+    config:
+      shift: 3.0
+      sigma_min: 0.0
+      extra_one_step: true
+  - type: vae
+    name: wan/vae_fflf
+    label: WAN VAE
+    base: wan
+    model_path: 
+    - path: Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: wan/text_encoder
+    base: UMT5EncoderModel
+    model_path: 
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 22723695074
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: transformer
+    label: High Noise Transformer
+    name: high_noise_transformer
+    base: wan.base
+    model_path:
+    - path: alibaba-pai/Wan2.2-Fun-A14B-Inp/high_noise_model
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28654175562
+    - path: https://huggingface.co/QuantStack/Wan2.2-Fun-A14B-InP-GGUF/resolve/main/HighNoise/Wan2.2-Fun-A14B-InP_HighNoise-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 8
+      file_size: 5707862016
+    - path: https://huggingface.co/QuantStack/Wan2.2-Fun-A14B-InP-GGUF/resolve/main/HighNoise/Wan2.2-Fun-A14B-InP_HighNoise-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 12
+      file_size: 9395240960
+    - path: https://huggingface.co/QuantStack/Wan2.2-Fun-A14B-InP-GGUF/resolve/main/HighNoise/Wan2.2-Fun-A14B-InP_HighNoise-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+      file_size: 12884901888
+    - path: https://huggingface.co/QuantStack/Wan2.2-Fun-A14B-InP-GGUF/resolve/main/HighNoise/Wan2.2-Fun-A14B-InP_HighNoise-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 20
+      file_size: 16540475392
+    config_path: alibaba-pai/Wan2.2-Fun-A14B-Inp/high_noise_model/config.json
+    config:
+      _class_name: WanFunTransformer3DModel
+      qk_norm: rms_norm_across_heads
+  - type: transformer
+    label: Low Noise Transformer
+    name: low_noise_transformer
+    base: wan.base
+    model_path:
+    - path: alibaba-pai/Wan2.2-Fun-A14B-Inp/low_noise_model
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28654175562
+    - path: https://huggingface.co/QuantStack/Wan2.2-Fun-A14B-InP-GGUF/resolve/main/LowNoise/Wan2.2-Fun-A14B-InP_LowNoise-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 8
+      file_size: 5707862016
+    - path: https://huggingface.co/QuantStack/Wan2.2-Fun-A14B-InP-GGUF/resolve/main/LowNoise/Wan2.2-Fun-A14B-InP_LowNoise-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 12
+      file_size: 9395240960
+    - path: https://huggingface.co/QuantStack/Wan2.2-Fun-A14B-InP-GGUF/resolve/main/LowNoise/Wan2.2-Fun-A14B-InP_LowNoise-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+      file_size: 12884901888
+    - path: https://huggingface.co/QuantStack/Wan2.2-Fun-A14B-InP-GGUF/resolve/main/LowNoise/Wan2.2-Fun-A14B-InP_LowNoise-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 20
+      file_size: 16540475392
+    config_path: alibaba-pai/Wan2.2-Fun-A14B-Inp/low_noise_model/config.json
+    config:
+      _class_name: WanFunTransformer3DModel
+      qk_norm: rms_norm_across_heads
+  - type: helper
+    base: clip
+    name: wan/clip
+    model_path: 
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 1264218342
+    preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
+    processor_class: CLIPImageProcessor
+    model_class: CLIPVisionModel
+  - type: helper
+    base: camera
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      return_latents: false
+      timesteps_as_indices: true
+      boundary_ratio: 0.875
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: input
+      label: Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - first_frame
+        - - last_frame
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - high_noise_guidance_scale
+        - - low_noise_guidance_scale
+        - - seed
+        - - boundary_ratio
+    inputs:
+    - id: first_frame
+      label: First Frame
+      description: The first frame of the video to generate.
+      type: image
+      panel: input
+      required: true
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: last_frame
+      label: Last Frame
+      description: The last frame of the video to generate.
+      type: image
+      panel: input
+      required: true
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: Ultra HD
+        value: 1024
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: 61
+      options:
+      - name: Square
+        value: 61
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: 969
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: 556
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: 184
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: high_noise_guidance_scale
+      label: High Noise Guidance Scale
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
+      step: 0.1
+    - id: low_noise_guidance_scale
+      label: Low Noise Guidance Scale
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3.0
+      min: 1.0
+      max: 15.0
+      step: 0.1
+    - id: boundary_ratio
+      label: Boundary Ratio
+      description: The ratio of the boundary of the image
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 0.875
+      min: 0.0
+      max: 1.0
+      step: 0.01

@@ -1,0 +1,53 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  name: SkyReels 1.3B Image to Video 540p
+  version: 1.0.0
+  description: SkyReels 1.3B is a 1.3B parameter model for image-to-video generation.
+  tags:
+  - skyreels
+  - i2v
+  - 1.3b
+spec:
+  engine: skyreels
+  model_type:
+  - i2v
+  engine_type: torch
+  denoise_type: base
+  components:
+  - type: scheduler
+    name: skyreels/scheduler
+    base: src.scheduler.UniPCMultistepScheduler
+    config:
+      shift: 8.0
+      num_train_timesteps: 1000
+      use_dynamic_shifting: false
+  - type: vae
+    name: skyreels/vae
+    base: wan
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/vae
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: skyreels/text_encoder
+    base: UMT5EncoderModel
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: helper
+    base: clip
+    name: skyreels/clip
+    model_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_encoder
+    preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
+    processor_class: CLIPImageProcessor
+    model_class: CLIPVisionModel
+  - type: transformer
+    base: skyreels.base
+    model_path: Skywork/SkyReels-V2-I2V-1.3B-540P
+    config_path: transformer_configs/skyreels/skyreels_i2v_1.3b.json
+    file_pattern: '*.safetensors'
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      return_latents: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}

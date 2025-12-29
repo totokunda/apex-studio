@@ -1,0 +1,50 @@
+category: Depth and Normal
+class: ZoeDepthAnythingDetector
+description: 'Combines ZoeDepth''s metric depth capabilities with Depth Anything''s
+  robust feature extraction. Best of both worlds: metric scale accuracy with superior
+  generalization across diverse scenes. Handles challenging conditions better than
+  standard ZoeDepth. Ideal when you need both metric accuracy and reliability across
+  varied content.'
+module: src.preprocess.zoe.transformers
+name: ZoeDepth Anything
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+supports_image: true
+supports_video: true
+files:
+- path: huggingface/hub/models--Intel--zoedepth-nyu-kitti/blobs/c5494fa0938f18d71e215e245472470c3aefebd7b434abd89750e5ae4008e2dc
+  name: model.safetensors
+  size_bytes: 1380374404
+- path: huggingface/hub/models--Intel--zoedepth-nyu-kitti/blobs/d17dd54c24e07e4a201ad0791c8a16c2cc9f7eaa
+  name: preprocessor_config.json
+  size_bytes: 723
+- path: huggingface/hub/models--Intel--zoedepth-nyu-kitti/blobs/e8532797bf1f6a13d451c3be04f03e1887f27420
+  name: config.json
+  size_bytes: 2225

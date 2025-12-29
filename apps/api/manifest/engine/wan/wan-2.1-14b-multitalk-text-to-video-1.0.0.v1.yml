@@ -1,0 +1,315 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2-1-14b-multitalk-text-to-video
+  model: wan
+  name: Wan 2.1 14B MultiTalk Text to Video
+  version: 1.0.0
+  description: Wan 2.1 14B MultiTalk is a 14B parameter model for text-to-video generation.
+  tags:
+  - wan
+  - multitalk
+  - 14b
+  - '2.1'
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: https://packaged-media.redd.it/lj2vzpt13qbf1/pb/m2-res_720p.mp4?m=DASHPlaylist.mpd&v=1&e=1763694000&s=dea93f505fea01fd79a15be07526942a6a24a37e
+spec:
+  engine: wan
+  model_type: multitalk
+  denoise_type: base
+  engine_type: torch
+  loras:
+  - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors
+    scale: 1.0
+    name: lightx2v_lora
+    label: Lightx2v LoRA
+    component: transformer
+    verified: true
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchScheduler
+    scheduler_options:
+    - name: FlowMatchScheduler
+      label: FlowMatch Scheduler
+      description: The FlowMatch Scheduler is used for WAN 2.1 14B MultiTalk Text to Video.
+      base: src.scheduler.FlowMatchScheduler
+    config:
+      shift: 7.0
+      sigma_max: 1.0
+      sigma_min: 0.001
+      inverse_timesteps: false
+      extra_one_step: false
+      reverse_sigmas: false
+  - type: vae
+    name: wan/vae
+    base: wan
+    model_path: 
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: wan/text_encoder
+    base: UMT5EncoderModel
+    model_path: 
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 22723695074
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: transformer
+    base: wan.multitalk
+    model_path: 
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 57154175562
+    converted_model_path: multitalk
+    extra_model_paths:
+    - https://huggingface.co/MeiGen-AI/MeiGen-MultiTalk/resolve/main/multitalk.safetensors
+  - type: helper
+    base: wan.multitalk
+    model_path: 
+    - path: TencentGameMate/chinese-wav2vec2-base
+  - type: helper
+    base: clip
+    name: wan/clip
+    model_path: 
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 1264218342
+    preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
+    processor_class: CLIPImageProcessor
+    model_class: CLIPVisionModel
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      boundary_ratio: 0.9
+      return_latents: false
+      text_encoder_kwargs: {}
+      use_attention_mask: true
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: image_input
+      label: Image Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: audio_input_1
+      label: Audio 1
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - person_1_audio
+    - name: audio_input_2
+      label: Audio 2
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - person_2_audio
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - audio_guidance_scale
+        - - seed
+        - - boundary_ratio
+    inputs:
+    - id: image
+      label: Image
+      description: The image to use for the generation.
+      type: image
+      panel: image
+      required: true
+    - id: person_1_audio
+      label: Audio
+      description: The audio to use for the generation.
+      type: audio
+      panel: person_1_audio
+      required: true
+    - id: person_2_audio
+      label: Audio
+      description: The audio to use for the generation.
+      type: audio
+      panel: person_2_audio
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: Ultra HD
+        value: 1024
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: 61
+      options:
+      - name: Square
+        value: 61
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: 969
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: 556
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: 184
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: audio_guidance_scale
+      label: Audio Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: boundary_ratio
+      label: Boundary Ratio
+      description: The ratio of the boundary of the image
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 0.875
+      min: 0.0
+      max: 1.0
+      step: 0.01

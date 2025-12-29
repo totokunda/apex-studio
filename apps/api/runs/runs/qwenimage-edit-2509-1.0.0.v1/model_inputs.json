@@ -1,0 +1,56 @@
+{
+    "engine_kwargs": {
+        "engine_type": "qwenimage",
+        "yaml_path": "/home/divineade/apex/manifest/engine/qwenimage/qwenimage-edit-2509-1.0.0.v1.yml",
+        "model_type": "edit_plus",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/ext_diviade_gmail_com/apex-diffusion/components/6b6901cdfd79bbed3fc864a259865581ced07007f275a003bd588f99fc176c58_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler"
+            },
+            "vae": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Qwen_Qwen-Image/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Qwen_Qwen-Image/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Qwen_Qwen-Image-Edit-2509/transformer",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "image.processor": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Qwen_Qwen-Image-Edit-2509/processor",
+                "type": "safetensors"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "image_list": [
+            "/home/ext_diviade_gmail_com/apex-diffusion/cache/uploads/def49c48-1a6b-4b46-9cd9-a0667d69e161-8aa87439-0b8d-4ffe-bec6-95d66d84a515_image_list_0_4.png",
+            "/home/ext_diviade_gmail_com/apex-diffusion/cache/uploads/00d66a9e-131e-4c00-9ea9-4da2af4d6997-8aa87439-0b8d-4ffe-bec6-95d66d84a515_image_list_0_5.png"
+        ],
+        "prompt": "Have the man pet the dog besides him as the dog looks up him ",
+        "negative_prompt": "blurry, low quality, distorted, artifacts",
+        "resolution": 768,
+        "aspect_ratio": "1:1",
+        "num_inference_steps": 50,
+        "height": 768,
+        "width": 768,
+        "seed": 3939901343,
+        "true_cfg_scale": 4,
+        "duration": "5s"
+    }
+}

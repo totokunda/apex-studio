@@ -1,0 +1,53 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  name: Flux Krea Text to Image
+  version: 1.0.0
+  description: Flux is a 12B parameter model for text-to-image generation.
+  tags:
+  - flux
+  - krea
+  - t2i
+spec:
+  engine: flux
+  model_type: t2i
+  engine_type: torch
+  denoise_type: base
+  components:
+  - type: scheduler
+    base: diffusers.FlowMatchEulerDiscreteScheduler
+    config_path: black-forest-labs/FLUX.1-Krea-dev/scheduler/scheduler_config.json
+  - type: vae
+    base: auto
+    model_path: black-forest-labs/FLUX.1-dev/vae
+  - type: text_encoder
+    name: text_encoder
+    base: CLIPTextModel
+    model_path: black-forest-labs/FLUX.1-dev/text_encoder
+    tokenizer_class: CLIPTokenizer
+    tokenizer_name: openai/clip-vit-large-patch14
+  - type: text_encoder
+    name: text_encoder_2
+    base: T5EncoderModel
+    model_path: black-forest-labs/FLUX.1-dev/text_encoder_2
+    tokenizer_class: T5TokenizerFast
+    tokenizer_name: director432/Flux1-T5Encoder
+  - type: transformer
+    base: flux.base
+    model_path: black-forest-labs/FLUX.1-Krea-dev/transformer
+  defaults:
+    run:
+      num_inference_steps: 40
+      guidance_scale: 5.0
+      return_latents: false
+      text_encoder_kwargs: 
+        add_special_tokens: false
+        clean_text: false
+        max_sequence_length: 77
+        pad_with_zero: false
+      text_encoder_2_kwargs:
+        add_special_tokens: false
+        clean_text: false
+        pad_with_zero: false
+        max_sequence_length: 512
+      attention_kwargs: {}

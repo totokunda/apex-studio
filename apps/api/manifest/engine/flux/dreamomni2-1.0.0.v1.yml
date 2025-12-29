@@ -1,0 +1,320 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: dreamomni2-1.0.0.v1
+  model: flux
+  name: DreamOmni2
+  version: 1.0.0
+  description: DreamOmni2 is a 12B parameter model for image generation and editing.
+  tags:
+  - dreamomni2
+  author: Apex AI, xiabs
+  license: Apache-2.0
+  demo_path: https://pbihao.github.io/projects/DreamOmni2/multi_2_ref/7/ref_0.jpg
+  categories:
+  - image-edit
+spec:
+  engine: flux
+  model_type: dreamomni2
+  engine_type: torch
+  denoise_type: base
+  engine_kwargs:
+    auto_apply_loras: false
+  attention_types:
+  - sdpa
+  loras:
+  - source: https://huggingface.co/xiabs/DreamOmni2/resolve/main/gen_lora/pytorch_lora_weights.safetensors
+    scale: 1.0
+    name: gen
+    label: Generation LoRA
+    required: true
+  - source: https://huggingface.co/xiabs/DreamOmni2/resolve/main/edit_lora/pytorch_lora_weights.safetensors
+    scale: 1.0
+    name: edit
+    label: Editing LoRA
+    required: true
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: Scheduler for DreamOmni2.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: black-forest-labs/FLUX.1-Kontext-dev/scheduler/scheduler_config.json
+  - type: vae
+    label: Flux VAE
+    base: auto
+    model_path:
+    - path: black-forest-labs/FLUX.1-dev/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 167667722
+  - type: text_encoder
+    name: text_encoder
+    label: CLIP Text Encoder
+    base: CLIPTextModel
+    model_path:
+    - path: black-forest-labs/FLUX.1-dev/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 246144965
+    tokenizer_class: CLIPTokenizer
+    tokenizer_name: black-forest-labs/FLUX.1-dev
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: text_encoder
+    name: text_encoder_2
+    label: T5 Text Encoder
+    base: T5EncoderModel
+    model_path:
+    - path: black-forest-labs/FLUX.1-dev/text_encoder_2
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 9524669251
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: black-forest-labs/FLUX.1-dev
+    tokenizer_kwargs:
+      subfolder: tokenizer_2
+  - type: transformer
+    label: Flux Transformer
+    base: flux.base
+    model_path:
+    - path: black-forest-labs/FLUX.1-Kontext-dev/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 23803075754
+  - type: helper
+    label: LLM Model
+    base: Qwen2_5_VLForConditionalGeneration
+    module: transformers
+    name: llm
+    model_path:
+    - path: xiabs/DreamOmni2/vlm-model
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 16600354900
+  - type: helper
+    label: LLM Processor
+    base: Qwen2_5_VLProcessor
+    module: transformers
+    name: llm_processor
+    model_path:
+    - path: xiabs/DreamOmni2/vlm-model
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 16600354900
+  defaults:
+    run:
+      num_inference_steps: 40
+      guidance_scale: 5.0
+      return_latents: false
+      text_encoder_kwargs:
+        clean_text: false
+        max_sequence_length: 77
+        pad_with_zero: false
+        add_special_tokens: true
+      text_encoder_2_kwargs:
+        add_special_tokens: true
+        clean_text: false
+        pad_with_zero: false
+        max_sequence_length: 512
+      joint_attention_kwargs: {}
+  ui:
+    panels:
+    - name: task
+      label: ''
+      collapsible: false
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - task
+    - name: input
+      label: Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image_list
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - true_cfg_scale
+        - - seed
+    inputs:
+    - id: task
+      type: select
+      label: Task
+      description: Select the task to perform.
+      panel: task
+      default: editing
+      options:
+      - name: Generation
+        value: generation
+      - name: Editing
+        value: editing
+    - id: image_list
+      label: Image List
+      description: Select the images to use for the generation.
+      panel: input
+      type: image_list
+      required: false
+      min: 1
+      max: 5
+    - id: prompt
+      label: Prompt
+      description: The text prompt describing desired output.
+      placeholder: A cinematic portrait in soft lighting.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what you want to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 1024
+      options:
+      - name: HD
+        value: 720
+      - name: Ultra HD
+        value: 1024
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: "1:1"
+      options:
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: true_cfg_scale
+      label: True CFG Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: guidance_scale
+      label: Guidance Scale
+      description: Guidance scale for the generation.
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3.5
+      min: 1.0
+      max: 15.0
+      step: 0.5

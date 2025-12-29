@@ -1,0 +1,24 @@
+{
+  "_class_name": "HunyuanVideoTransformer3DModel",
+  "_diffusers_version": "0.32.0.dev0",
+  "attention_head_dim": 128,
+  "guidance_embeds": true,
+  "in_channels": 16,
+  "mlp_ratio": 4.0,
+  "num_attention_heads": 24,
+  "num_layers": 20,
+  "num_refiner_layers": 2,
+  "num_single_layers": 40,
+  "out_channels": 16,
+  "patch_size": 2,
+  "patch_size_t": 1,
+  "pooled_projection_dim": 768,
+  "qk_norm": "rms_norm",
+  "rope_axes_dim": [
+    16,
+    56,
+    56
+  ],
+  "rope_theta": 256.0,
+  "text_embed_dim": 4096
+}

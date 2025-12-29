@@ -1,0 +1,36 @@
+# Example YAML manifest with compute requirements that excludes Hopper GPUs
+# This is useful when you have issues specific to sm_90 (H100) architecture
+
+api_version: apex/v1
+kind: Model
+metadata:
+  id: example-model-no-hopper
+  name: Example Model (No Hopper Support)
+  version: 1.0.0
+  description: Example showing how to exclude Hopper GPUs from running a model
+
+spec:
+  engine: example
+  model_type: example
+  
+  # Compute requirements with architecture exclusions
+  compute_requirements:
+    # Require at least Turing generation
+    min_cuda_compute_capability: 7.5
+    
+    # Support CUDA and CPU
+    supported_compute_types:
+    - cuda
+    - cpu
+    
+    # Exclude Hopper architecture due to known issues
+    excluded_cuda_architectures:
+    - sm_90  # H100, H800
+    
+    # Note: You could also use allowed_cuda_architectures instead:
+    # allowed_cuda_architectures:
+    # - sm_75  # Turing: RTX 2080, RTX 2080 Ti
+    # - sm_80  # Ampere: A100
+    # - sm_86  # Ampere: RTX 3090, RTX 3080
+    # - sm_89  # Ada Lovelace: RTX 4090, L4, L40
+

@@ -1,0 +1,87 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: kandinsky-i2v-pro-5s
+  model: kandinsky
+  name: Kandinsky 5.0 Pro Image to Video (5s)
+  version: 1.0.0
+  description: Kandinsky 5.0 Pro image-to-video (5s) diffusers model
+  tags: 
+  - image-to-video
+  - kandinsky5
+  - pro
+  categories:
+  - image-to-video
+  demo_path: https://cdn.shopify.com/s/files/1/0093/8541/0645/files/untitled_first_abstract_watercolor_by_wassily_kandinsky_c.jpg
+spec:
+  engine: kandinsky5
+  model_type: i2v
+  engine_type: torch
+  denoise_type: base
+  components:
+    - type: transformer
+      name: transformer
+      base: kandinsky5.base
+      extra_kwargs:
+        attention_backend: flex
+      model_path:
+        - path: kandinskylab/Kandinsky-5.0-I2V-Pro-sft-5s-Diffusers/transformer
+          variant: default
+          precision: bf16
+          type: safetensors
+          resource_requirements:
+            min_vram_gb: 16
+    - type: vae
+      name: vae
+      base: hunyuanvideo
+      model_path:
+        - path: kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers/vae
+          variant: default
+          precision: fp16
+          type: safetensors
+          resource_requirements:
+            min_vram_gb: 8
+    - type: text_encoder
+      name: text_encoder
+      base: Qwen2_5_VLForConditionalGeneration
+      model_path:
+        - path: kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers/text_encoder
+          variant: default
+          precision: bf16
+          type: safetensors
+          resource_requirements:
+            min_vram_gb: 8
+      tokenizer_path: kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers/tokenizer
+      tokenizer_class: Qwen2VLProcessor
+    - type: text_encoder
+      name: text_encoder_2
+      base: CLIPTextModel
+      model_path:
+        - path: kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers/text_encoder_2
+          variant: default
+          precision: bf16
+          type: safetensors
+          resource_requirements:
+            min_vram_gb: 4
+      tokenizer_kwargs:
+        subfolder: tokenizer_2
+      tokenizer_class: CLIPTokenizer
+      tokenizer_name: kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers
+    - type: scheduler
+      name: scheduler
+      base: FlowMatchEulerDiscreteScheduler
+      scheduler_options:
+        - name: FlowMatchEulerDiscreteScheduler
+          label: FlowMatch Euler Discrete Scheduler
+          description: The FlowMatch Euler Discrete Scheduler is a scheduler for the Kandinsky 5.0 T2V Pro 5s model.
+          base: diffusers.FlowMatchEulerDiscreteScheduler
+          config_path: kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers/scheduler/scheduler_config.json
+  defaults:
+    run:
+      height: 512
+      width: 768
+      num_frames: 121
+      num_inference_steps: 50
+      guidance_scale: 5.0
+      num_videos_per_prompt: 1
+      output_type: pil

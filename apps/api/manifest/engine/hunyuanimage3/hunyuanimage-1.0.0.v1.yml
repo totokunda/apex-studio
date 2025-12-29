@@ -1,0 +1,292 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: hunyuanimage3-t2i
+  model: hunyuanimage3
+  name: HunyuanImage 3.0 Text-to-Image
+  version: 1.0.0
+  description: HunyuanImage 3.0 is an 80B parameter mixture of experts model for text to image
+    generation.
+  tags:
+  - moe
+  - hunyuanimage3
+  - t2i
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: https://github.com/Tencent-Hunyuan/HunyuanImage-3.0/raw/main/assets/banner.png
+  categories:
+  - text-to-image
+spec:
+  engine: hunyuanimage3
+  model_type: t2i
+  engine_type: torch
+  denoise_type: base
+  attention_types:
+  - sdpa
+  - flash
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchDiscreteScheduler
+      label: FlowMatch Discrete Scheduler
+      description: The FlowMatch Discrete Scheduler is a scheduler for the
+        HunyuanImage 3.0 model.
+      base: src.scheduler.flow.FlowMatchDiscreteScheduler
+      config:
+        shift: 3.0
+        num_train_timesteps: 1000
+        reverse: true
+        solver: "euler"
+  - type: vae
+    label: HunyuanImage VAE
+    base: hunyuanimage3
+    model_path:
+    - path: tencent/HunyuanImage-3.0
+      variant: default
+      key_map:
+        "vae.": ""
+      extra_kwargs:
+        load_from_config: true
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 168600103513
+    - path: /home/tosin_coverquick_co/apex-diffusion/gguf/hunyuanimage3_q6.Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 69508089824
+    - path: /home/tosin_coverquick_co/apex-diffusion/gguf/hunyuanimage3_q4.Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 48469837696
+    - path: /home/tosin_coverquick_co/apex-diffusion/gguf/hunyuanimage3_q2.Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 29750790016
+  - type: transformer
+    label: HunyuanImage Transformer
+    base: hunyuanimage3.base
+    offloading_module: model
+    config_path: tencent/HunyuanImage-3.0/config.json
+    model_path:
+    - path: tencent/HunyuanImage-3.0
+      extra_kwargs:
+        load_from_config: true
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 80
+        recommended_vram_gb: 240
+      file_size: 168600103513
+    - path: /home/tosin_coverquick_co/apex-diffusion/gguf/hunyuanimage3_q6.Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 69508089824
+    - path: /home/tosin_coverquick_co/apex-diffusion/gguf/hunyuanimage3_q4.Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 48469837696
+    - path: /home/tosin_coverquick_co/apex-diffusion/gguf/hunyuanimage3_q2.Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 29750790016
+  - type: helper
+    label: HunyuanImage 3.0 Tokenizer
+    base: PreTrainedTokenizerFast
+    module: transformers
+    name: tokenizer
+    model_path:
+    - path: /home/tosin_coverquick_co/apex-diffusion/components/HunyuanImage-3.0
+      variant: default
+      precision: fp16
+      type: safetensors
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      guidance_rescale: 0.0
+      width: 1024
+      use_system_prompt: "None"
+      drop_think: false
+      bot_task: "image"
+      return_latents: false
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - guidance_rescale
+        - - seed
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: The prompt for text-to-image generation.
+      placeholder: A serene lake surrounded by pine trees at sunrise, ultra realistic.
+      type: text
+      panel: prompting
+      required: true
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 0.0
+      max: 10.0
+      step: 0.1
+    - id: guidance_rescale
+      label: Guidance Rescale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 0.0
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 1024
+      options:
+      - name: Ultra HD
+        value: 1024
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: "1:1"
+      options:
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64

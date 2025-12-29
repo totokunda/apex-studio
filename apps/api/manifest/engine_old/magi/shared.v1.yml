@@ -1,0 +1,20 @@
+api_version: apex/v1
+kind: SharedComponents
+metadata:
+  name: magi-shared
+  description: Shared MAGI Components
+spec:
+  components:
+  - type: text_encoder
+    name: magi/text_encoder
+    base: T5EncoderModel
+    model_path: tolgacangoz/MAGI-1-T2V-4.5B-distill-Diffusers/text_encoder
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: tolgacangoz/MAGI-1-T2V-4.5B-distill-Diffusers
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: vae
+    name: magi/vae
+    base: magi
+    model_path: sand-ai/MAGI-1/ckpt/vae
+    config_path: vae_configs/magi/magi.json

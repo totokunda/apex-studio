@@ -1,0 +1,299 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2-2-14b-speech-to-video
+  model: wan
+  name: Wan 2.2 14B Speech to Video
+  version: 1.0.0
+  description: Wan 2.2 14B is a 14B parameter model for speech-to-video generation.
+  tags:
+  - wan
+  - s2v
+  - 14b
+  - '2.2'
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: https://preview.redd.it/wan-2-2-text-to-image-workflow-v0-gahw42yqkrgf1.png?width=640&crop=smart&auto=webp&s=6fec70fe08d915484f216a6c38520c22b2dc1db7
+  categories:
+  - audio-to-video
+spec:
+  fps: 16
+  engine: wan
+  model_type: s2v
+  engine_type: torch
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: UniPCMultistepScheduler
+    scheduler_options:
+    - name: UniPCMultistepScheduler
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for WAN 2.2 14B Speech to
+        Video.
+      base: diffusers.UniPCMultistepScheduler
+      config_path: tolgacangoz/Wan2.2-S2V-14B-Diffusers/scheduler/scheduler_config.json
+  - type: vae
+    name: wan/vae
+    label: Wan VAE
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: wan/text_encoder
+    base: UMT5EncoderModel
+    label: UMT5 Text Encoder
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 22723695074
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: transformer
+    base: wan.s2v
+    label: Wan Transformer
+    model_path:
+    - path: tolgacangoz/Wan2.2-S2V-14B-Diffusers/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 32591757808
+  - type: helper
+    name: audio_processor
+    label: Audio Processor
+    base: Wav2Vec2FeatureExtractor
+    module: transformers
+    model_path:
+    - path: tolgacangoz/Wan2.2-S2V-14B-Diffusers/audio_processor
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 1841
+  - type: helper
+    name: audio_encoder
+    label: Audio Encoder
+    base: Wav2Vec2ForCTC
+    module: transformers
+    model_path:
+    - path: tolgacangoz/Wan2.2-S2V-14B-Diffusers/audio_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 1261945024
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      return_latents: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: audio
+      label: Audio
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - audio
+        - - sampling_rate
+    - name: image_input
+      label: Media
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: pose_video
+      label: Control Video
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - pose_video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: audio
+      label: Audio
+      description: The audio to condition on.
+      type: audio
+      panel: audio
+      required: true
+    - id: sampling_rate
+      label: Sampling Rate
+      description: The sampling rate of the audio.
+      type: number
+      panel: audio
+      required: true
+      default: 16000
+      min: 8000
+      max: 48000
+      step: 1000
+    - id: image
+      label: Image
+      description: The image to condition on.
+      type: image
+      panel: image_input
+      required: true
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: pose_video
+      label: Pose Video
+      description: The pose video to condition on.
+      preprocessor_ref: dwpose
+      type: video+preprocessor
+      panel: pose_video
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: SD
+        value: 480
+      - name: HD
+        value: 720
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: "1:1"
+      options:
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 480
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 832
+      min: 256
+      max: 8192
+      step: 64
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5

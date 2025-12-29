@@ -1,0 +1,72 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/engine/wan/ovi-10b-10s-1.0.0.v1.yml",
+        "model_type": "ovi",
+        "selected_components": {
+            "transformer_scheduler": {
+                "name": "transformer_scheduler",
+                "base": "src.scheduler.unipc.UniPCMultistepScheduler",
+                "type": "scheduler",
+                "label": "Transformer Scheduler",
+                "default": "transformer_scheduler_unipc"
+            },
+            "audio_scheduler": {
+                "name": "audio_scheduler",
+                "base": "src.scheduler.unipc.UniPCMultistepScheduler",
+                "type": "scheduler",
+                "label": "Audio Scheduler",
+                "default": "audio_scheduler_unipc"
+            },
+            "transformer_vae": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Wan-AI_Wan2.2-TI2V-5B-Diffusers/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "audio_vae": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/31c334dd133f1e34f1184cc0ad2703e3a23a19603ddcd87222a805068b455469_best_netG.pt",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "wan/text_encoder": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/Wan-AI_Wan2.1-I2V-14B-480P-Diffusers/text_encoder",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "960x960_10s": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/fce0e8a4bc65060930ca5c9cf64e36ee0305b20d7653c3f1f0f88056013ef656_model_960x960_10s.safetensors",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "960x960_5s": {
+                "path": "/home/tosin_coverquick_co/apex-diffusion/components/d4b127dccf1669f480502cd5ff3a2e9a584d97b9c794bd5b315e5b6b60911dd8_model_960x960.safetensors",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "scheduler": {
+                "name": "transformer_scheduler_unipc",
+                "base": "src.scheduler.unipc.UniPCMultistepScheduler"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "prompt": "A young woman with light brown hair pulled into two buns with purple scrunchies, wearing a grey turtleneck, holds a bottle of foundation and speaks to the camera. Beside her, an older woman with blonde, wavy hair and a grey ribbed sweater smiles, looking at the younger woman. The background features white shelves adorned with plants, candles, and a small globe. The younger woman gestures with the foundation bottle as she says, <S>So first things first, we're gonna do foundation, because now I actually have time.<E> She then looks directly at the camera, gesturing with her hands, and continues, <S>With Ovi's ten seconds, you've probably seen this look evolve in real time instead of a jump cut mess.<E> She pauses briefly, then adds, <S>In every clip before, I was sprint blending.<E> She smiles broadly at the camera. Audio: Clear, friendly female voices, with the younger woman's voice being upbeat and the older woman's voice gentle and pleased.",
+        "negative_prompt": "jitter, bad hands, blur, distortion",
+        "audio_negative_prompt": "robotic, muffled, echo, distorted",
+        "aspect_ratio": "1:1",
+        "num_inference_steps": 50,
+        "height": 960,
+        "width": 960,
+        "seed": 3454727376,
+        "video_guidance_scale": 4,
+        "audio_guidance_scale": 3,
+        "shift": 5,
+        "duration": "10s"
+    }
+}

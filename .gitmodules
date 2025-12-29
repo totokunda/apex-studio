@@ -13,3 +13,6 @@
 [submodule "thirdparty/VideoX-Fun"]
 	path = apps/api/thirdparty/VideoX-Fun
 	url = https://github.com/aigc-apps/VideoX-Fun.git
+[submodule "clut-filters"]
+	path = apps/app/packages/renderer/public/filters
+	url = https://github.com/totokunda/clut-filters.git

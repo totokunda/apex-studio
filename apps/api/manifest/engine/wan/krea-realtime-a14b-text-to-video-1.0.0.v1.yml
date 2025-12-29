@@ -1,0 +1,185 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: krea-realtime-a14b-text-to-video
+  model: wan
+  name: Krea Realtime A14B Text to Video
+  version: 1.0.0
+  description: Krea Realtime A14B is a 14B parameter model for text-to-video generation.
+  tags:
+  - wan
+  - causal
+  - 14b
+  - krea
+  - realtime
+  author: Krea AI
+  license: Apache-2.0
+  demo_path: https://preview.redd.it/wan-2-2-text2image-custom-workflow-v0-064bbacggggf1.png?width=640&crop=smart&auto=webp&s=6d76d4db328afa16d96720282d9f11fe926b95f2
+  categories:
+  - text-to-video
+spec:
+  engine: wan
+  model_type: causal
+  engine_type: torch
+  denoise_type: base
+  default_duration_secs: 5.0
+  min_duration_secs: 1.0
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+  fps: 16
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchScheduler
+    scheduler_options:
+    - name: FlowMatchScheduler
+      label: FlowMatch Scheduler
+      description: The FlowMatch Scheduler is used for Krea Realtime A14B Text to Video.
+      base: src.scheduler.FlowMatchScheduler
+    config:
+      shift: 8.0
+      sigma_min: 0.0
+      extra_one_step: true
+  - type: vae
+    label: Krea Realtime VAE
+    name: krea/vae
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 22723695074
+    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
+  - type: transformer
+    label: Krea Realtime Transformer
+    name: krea
+    base: wan.causal
+    config_path: transformer_configs/wan/wan_t2v_causal_14b.json
+    model_path:
+    - path: krea/krea-realtime-video/krea-realtime-video-14b.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+  defaults:
+    run:
+      num_inference_steps: 4
+      return_latents: false
+      timesteps_as_indices: true
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - seed
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: "16:9"
+      options:
+      - name: Square
+        value: "1:1"
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: "16:9"
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: "9:16"
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: "4:3"
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 480
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 832
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false

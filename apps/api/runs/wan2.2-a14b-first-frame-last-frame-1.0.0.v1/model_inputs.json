@@ -1,0 +1,56 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/wan2.2-a14b-first-frame-last-frame-1.0.0.v1.yml",
+        "model_type": "fflf",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.UniPCMultistepScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/f37b560385e415fa0c95f9e6d76ce9e5df8c4376d663fbaa7cc4103f2c9fc4d4_scheduler_config.json",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "UniPCMultistepScheduler",
+                "description": "The UniPC Multistep Scheduler is used for WAN 2.2 A14B I2V."
+            },
+            "wan/vae_2.2": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "high_noise_transformer": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "low_noise_transformer": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sage"
+    },
+    "inputs": {
+        "first_frame": "assets/8409ff4ec79b4430ae1348b5d9dd46f9f94d213a9a3c1088b3ed4b8873b7d124.png",
+        "last_frame": "assets/a917405d9d2adf12dfb3167d1b95ea8c299e6127695f6ea1bd2e07f6402735e1.png",
+        "prompt": "The camera pans and zooms out to show the astronaut with the entirety of earth beneath him. ",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "resolution": "custom",
+        "aspect_ratio": "custom",
+        "num_inference_steps": 4,
+        "height": 1024,
+        "width": 1024,
+        "seed": 3278957663,
+        "high_noise_guidance_scale": 1,
+        "low_noise_guidance_scale": 1,
+        "boundary_ratio": 0.875,
+        "duration": "5s"
+    }
+}

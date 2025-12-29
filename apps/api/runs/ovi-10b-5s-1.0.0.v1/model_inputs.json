@@ -1,0 +1,78 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/ovi-10b-5s-1.0.0.v1.yml",
+        "model_type": "ovi",
+        "selected_components": {
+            "transformer_scheduler": {
+                "name": "transformer_scheduler",
+                "base": "src.scheduler.unipc.UniPCMultistepScheduler",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "transformer_scheduler_unipc",
+                "description": "The UniPC Multistep Scheduler is used for Ovi 10B.",
+                "config": {
+                    "shift": 1.0,
+                    "num_train_timesteps": 1000
+                }
+            },
+            "audio_scheduler": {
+                "name": "audio_scheduler",
+                "base": "src.scheduler.unipc.UniPCMultistepScheduler",
+                "type": "scheduler",
+                "label": "UniPC Multistep Scheduler",
+                "default": "audio_scheduler_unipc",
+                "description": "The UniPC Multistep Scheduler is used for Ovi 10B.",
+                "config": {
+                    "shift": 1.0,
+                    "num_train_timesteps": 1000
+                }
+            },
+            "transformer_vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "audio_vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "audio_vae_extra_model_path": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "960x960_5s": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "image": "assets/ff01925282087026b76edf91b3b151104b4def03140572a9cb04531935a5f0cf.png",
+        "prompt": "An indoor scene features a lone man centered in the frame, standing still against a plain, softly lit off-white wall. The background is minimal and uncluttered, with smooth texture and no visible objects, creating a quiet, empty atmosphere. The man wears a dark gray hoodie layered over a shirt, the fabric slightly worn and natural. He looks directly toward the camera with a tense, focused expression\u2014brows subtly furrowed, lips parted as if fighting the cold air in his lungs. His eyes appear serious and intent, reflecting a restrained emotion rather than overt panic. He begins to sing softly, <S>baby it\u2019s cold outside.<E> holding the words with deliberate slowness, as if testing each breath. The stillness of the room amplifies his presence, the plain wall behind him emphasizing isolation and vulnerability. <AUDCAP>Clear, intimate male singing at close range, low and controlled, with faint room echo and subtle breathing between words, no music, no background noise.<ENDAUDCAP>",
+        "negative_prompt": "jitter, bad hands, blur, distortion",
+        "audio_negative_prompt": "robotic, muffled, echo, distorted",
+        "resolution": 960,
+        "aspect_ratio": "1:1",
+        "num_inference_steps": 50,
+        "height": 960,
+        "width": 960,
+        "seed": 2188916442,
+        "video_guidance_scale": 4,
+        "audio_guidance_scale": 3,
+        "shift": 5,
+        "easy_cache_thresh": 0.05,
+        "easy_cache_ret_steps": 10,
+        "duration": "5s"
+    }
+}

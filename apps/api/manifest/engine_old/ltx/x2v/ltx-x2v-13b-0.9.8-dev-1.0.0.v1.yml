@@ -1,0 +1,71 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  name: LTX X2V 13B 0.9.8 Dev
+  version: 1.0.0
+  description: LTX X2V 13B 0.9.8 Dev is a 13B parameter model for any-to-video
+    generation.
+  tags:
+  - ltx
+  - x2v
+  - 13b
+  - 0.9.8
+  - dev
+spec:
+  engine: ltx
+  model_type:
+  - t2v
+  - i2v
+  - v2v
+  - control
+  engine_type: torch
+  denoise_type: base
+  components:
+  - type: text_encoder
+    name: ltx/text_encoder
+    base: T5EncoderModel
+    model_path: PixArt-alpha/PixArt-XL-2-1024-MS/text_encoder
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: PixArt-alpha/PixArt-XL-2-1024-MS
+  - type: scheduler
+    base: src.scheduler.rf.RectifiedFlowScheduler
+    config:
+      num_train_timesteps: 1000
+      base_resolution: null
+      target_shift_terminal: null
+      sampler: "LinearQuadratic"
+      shifting: null
+      shift: null
+  - type: vae
+    base: ltx
+    model_path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.8-dev.safetensors
+  - type: transformer
+    base: ltx.base
+    model_path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.8-dev.safetensors
+  - type: helper
+    base: ltx.patchifier
+    patch_size: 1
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: [1, 1, 6, 8, 6, 1, 1]
+      stg_scale: [0, 0, 4, 4, 4, 2, 1]
+      rescaling_scale: [1, 1, 0.5, 0.5, 1, 1, 1]
+      guidance_timesteps: [1.0, 0.996,  0.9933, 0.9850, 0.9767, 0.9008, 0.6180]
+      decode_timestep: 0.05
+      decode_noise_scale: 0.025
+      skip_block_list: []
+      skip_layer_strategy: null
+      skip_final_inference_steps: 0
+      cfg_star_rescale: true
+      return_latents: false
+      text_encoder_kwargs:
+        max_sequence_length: 256
+        use_attention_mask: true
+        pad_with_zero: false
+        clean_text: false
+      offload: true
+      render_on_step: false
+  save:
+    safe_serialization: true
+    max_shard_size: 5GB

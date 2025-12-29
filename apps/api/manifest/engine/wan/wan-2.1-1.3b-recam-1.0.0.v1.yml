@@ -1,0 +1,297 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2-1-1-3b-recam
+  model: wan
+  name: Wan 2.1 1.3B Recam
+  version: 1.0.0
+  description: Wan 2.1 1.3B is a 1.3B parameter model for recam generation.
+  tags:
+  - wan
+  - recam
+  - 1.3b
+  - '2.1'
+  author: Wan-AI
+  license: Apache-2.0
+  demo_path: https://preview.redd.it/wan-2-2-text-to-image-workflow-v0-gahw42yqkrgf1.png?width=640&crop=smart&auto=webp&s=6fec70fe08d915484f216a6c38520c22b2dc1db7
+  categories:
+  - camera-motion
+spec:
+  engine: wan
+  model_type: recam
+  default_duration_secs: 5.0
+  min_duration_secs: 1.0
+  max_duration_secs: 5.0
+  fps: 30
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - xformers
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchScheduler
+    scheduler_options:
+    - name: FlowMatchScheduler
+      label: FlowMatch Scheduler
+      description: The UniPC Multistep Scheduler is used for WAN 2.1 1.3B Recam.
+      base: src.scheduler.flow.FlowMatchScheduler
+      config:
+        shift: 5.0
+        sigma_min: 0.0
+        extra_one_step: true
+  - type: vae
+    name: wan/vae
+    label: Wan VAE
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
+  - type: text_encoder
+    name: wan/text_encoder
+    base: UMT5EncoderModel
+    label: UMT5 Text Encoder
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 22723695074
+    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/text_encoder/config.json
+  - type: transformer
+    base: wan.recam
+    label: Wan Recam Transformer
+    model_path:
+    - path: KlingTeam/ReCamMaster-Wan2.1/step20000.ckpt
+      variant: default
+      precision: fp16
+      type: safetensors
+    config:
+      dim: 1536
+      eps: 0.000001
+      ffn_dim: 8960
+      freq_dim: 256
+      in_dim: 16
+      num_heads: 12
+      num_layers: 30
+      out_dim: 16
+      text_dim: 4096
+      has_image_input: false
+      patch_size: [1, 2, 2]
+  - type: helper
+    base: wan.recam
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 5.0
+      return_latents: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: input
+      label: Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - source_video
+    - name: camera
+      label: Camera
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - cam_type
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - aspect_ratio
+        - - resolution
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: source_video
+      label: Video
+      description: Select the video to use for the generation.
+      type: video
+      panel: input
+      required: true
+      max_duration_secs: 5.0625
+    - id: cam_type
+      label: Camera Type
+      description: Select the type of camera motion.
+      type: select
+      panel: camera
+      required: true
+      options:
+      - name: Pan Right
+        value: 1
+      - name: Pan Left
+        value: 2
+      - name: Tilt Up 
+        value: 3
+      - name: Tilt Down
+        value: 4
+      - name: Zoom In
+        value: 5
+      - name: Zoom Out
+        value: 6
+      - name: Translate Up (with rotation)
+        value: 7
+      - name: Translate Down (with rotation)
+        value: 8
+      - name: Arc Left (with rotation)
+        value: 9
+      - name: Arc Right (with rotation)
+        value: 10
+    - id: prompt
+      label: Prompt
+      description: Describe the desired camera motion or scene change.
+      placeholder: A smooth cinematic dolly zoom across a bustling city street.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: jittery, shaky, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 26
+        ratio_h: 15
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 15
+        ratio_h: 26
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video.
+      type: select
+      panel: size
+      required: false
+      options:
+      - name: "480p"
+        value: 480
+      - name: "720p"
+        value: 720
+      default: 480p
+    - id: height  
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 480
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 832
+      min: 256
+      max: 8192 
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5

@@ -1,0 +1,44 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  name: QwenImage Edit
+  version: 1.0.0
+  description: QwenImage is a 20B parameter model for image editing.
+  tags:
+  - qwenimage
+  - edit
+spec:
+  engine: qwenimage
+  model_type: edit
+  engine_type: torch
+  denoise_type: base
+  components:
+  - type: scheduler
+    base: diffusers.FlowMatchEulerDiscreteScheduler
+    config_path: https://huggingface.co/Qwen/Qwen-Image-Edit/resolve/main/scheduler/scheduler_config.json
+  - type: vae
+    base: qwenimage
+    model_path: Qwen/Qwen-Image/vae
+  - type: text_encoder
+    base: Qwen2_5_VLForConditionalGeneration
+    model_path: Qwen/Qwen-Image-Edit/text_encoder
+    tokenizer_class: Qwen2Tokenizer
+    tokenizer_name: Qwen/Qwen-Image-Edit
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: transformer
+    base: qwenimage.base
+    model_path: Qwen/Qwen-Image-Edit/transformer
+  - type: helper
+    name: image.processor
+    module: transformers.models.qwen2_vl.processing_qwen2_vl
+    base: Qwen2VLProcessor
+    model_path: Qwen/Qwen-Image-Edit/processor
+  defaults:
+    run:
+      num_inference_steps: 40
+      return_latents: false
+      text_encoder_kwargs: 
+        add_special_tokens: false
+        clean_text: false
+      attention_kwargs: {}

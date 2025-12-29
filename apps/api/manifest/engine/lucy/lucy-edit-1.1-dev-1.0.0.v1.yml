@@ -1,0 +1,230 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: lucy-edit-1.1-dev
+  model: lucy
+  name: Lucy Edit 1.1 Dev
+  version: 1.0.0
+  description: Lucy Edit 1.1 Dev is a video-to-video editing model based on Wan.
+  tags:
+  - lucy
+  - edit
+  - video-to-video
+  author: Decart AI
+  license: Apache-2.0
+  categories:
+  - video-edit
+  demo_path: https://bluelightningtv.com/wp-content/uploads/2025/09/woman-leather-jacket-crop-top-smiles-art-studio-paintings-sunset.png
+spec:
+  engine: lucy
+  model_type: edit
+  engine_type: torch
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: Flow Match Euler Discrete Scheduler
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: decart-ai/Lucy-Edit-1.1-Dev/scheduler/scheduler_config.json
+  - type: vae
+    name: lucy/vae
+    label: Lucy VAE
+    base: wan
+    model_path:
+    - path: decart-ai/Lucy-Edit-1.1-Dev/vae
+      variant: default
+      precision: fp16
+      file_size: 2818779509
+  - type: text_encoder
+    name: lucy/text_encoder
+    base: UMT5EncoderModel
+    label: UMT5 Text Encoder
+    tokenizer_class: PreTrainedTokenizerFast
+    tokenizer_name: decart-ai/Lucy-Edit-1.1-Dev
+    tokenizer_kwargs:
+      subfolder: tokenizer
+    model_path:
+    - path: decart-ai/Lucy-Edit-1.1-Dev/text_encoder
+      variant: default
+      precision: fp16
+      file_size: 11361874539
+  - type: transformer
+    base: wan.base
+    label: Lucy Transformer
+    model_path:
+    - path: decart-ai/Lucy-Edit-1.1-Dev/transformer
+      variant: default
+      precision: fp16
+      file_size: 20001595375
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 5.0
+      fps: 24
+      duration: 81
+      boundary_ratio: null
+      text_encoder_kwargs: 
+        use_attention_mask: true
+        max_sequence_length: 512
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: input
+      label: Input
+      collapsible: false
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: video
+      label: Input Video
+      description: The video to edit.
+      type: video
+      panel: input
+      map_h: height
+      map_w: width  
+      scale_by: resolution
+      required: true
+    - id: prompt
+      label: Prompt
+      description: Describe the edit you want to make.
+      placeholder: Change the background to a cyberpunk city.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      type: text
+      panel: advanced_prompting
+      required: false
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: Ultra HD
+        value: 1024
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: 61
+      options:
+      - name: Square
+        value: 61
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: 969
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: 556
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: 184
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 64
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: settings
+      default: 5.0
+      min: 1.0
+      max: 20.0
+      step: 0.5
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility.
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false

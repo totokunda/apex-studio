@@ -1,0 +1,21 @@
+{
+    "_class_name": "StepVideoModel",
+    "_diffusers_version": "0.31.0",
+    "attention_head_dim": 128,
+    "attention_type": "parallel",
+    "caption_channels": [
+      6144,
+      1024
+    ],
+    "dropout": 0.0,
+    "in_channels": 64,
+    "norm_elementwise_affine": false,
+    "norm_eps": 1e-06,
+    "norm_type": "ada_norm_single",
+    "num_attention_heads": 48,
+    "num_layers": 48,
+    "out_channels": 64,
+    "patch_size": 1,
+    "use_additional_conditions": true,
+    "model_type": "i2v"
+  }

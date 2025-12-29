@@ -1,0 +1,50 @@
+{
+    "engine_kwargs": {
+        "engine_type": "flux2",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/image/flux2-dev-text-to-image-edit-turbo-1.0.0.v1.yml",
+        "model_type": "ti2i",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/4b2cec2794947dc94a1eba03184663476b9c0a2a083515bda77f5d8a8438e11d_scheduler_config.json",
+                "type": "scheduler",
+                "label": "FlowMatch Euler Discrete Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler",
+                "description": "The FlowMatch Euler Discrete Scheduler is used for Flux Dev."
+            },
+            "vae": {
+                "variant": "default"
+            },
+            "text_encoder": {
+                "variant": "default"
+            },
+            "vision_encoder": {
+                "variant": "GGUF_BF16",
+                "precision": "bf16",
+                "type": "gguf"
+            },
+            "transformer": {
+                "variant": "default"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "image": [
+            "/home/tosin_coverquick_co/apex-diffusion/cache/uploads/by-hash/e50feee7ef9448e545baf83ce811f529ab53640c25ab369ff3bd81a8e42cb4ef.png",
+            "/home/tosin_coverquick_co/apex-diffusion/cache/uploads/by-hash/8896d567d45c6eb2fde77476f7a630e2fd67f68cd4837c9819744e4bcb5d53af.png",
+            "/home/tosin_coverquick_co/apex-diffusion/cache/uploads/by-hash/9a31a65e757a16432bde8857f175c475495bcdea31e5cbb057ae3a00821dd929.png"
+        ],
+        "prompt": "Make all three of them stand together in a row smiling to the camera as friends with their hands on each others backs. ",
+        "resolution": 720,
+        "aspect_ratio": "custom",
+        "num_inference_steps": 8,
+        "height": 736,
+        "width": 1280,
+        "seed": 758632600,
+        "guidance_scale": 3.5,
+        "duration": "5s"
+    }
+}

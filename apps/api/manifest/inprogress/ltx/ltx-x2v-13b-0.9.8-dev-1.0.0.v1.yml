@@ -1,0 +1,363 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: ltx-x2v-13b-0.9.8-dev
+  model: ltx
+  name: LTX X2V 13B 0.9.8 Dev
+  version: 1.0.0
+  description: LTX X2V 13B 0.9.8 Dev is a 13B parameter model for any-to-video generation.
+  tags:
+  - ltx
+  - x2v
+  - 13b
+  - 0.9.8
+  - dev
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: https://cdn.prod.website-files.com/65d223d9a3a3059b74d848b0/684eafb2a2f854b06efe8bcc_ltxv-cover.webp
+spec:
+  engine: ltx
+  model_type:
+  - t2v
+  - i2v
+  - v2v
+  - control
+  engine_type: torch
+  denoise_type: base
+  components:
+  - type: text_encoder
+    name: text_encoder
+    label: T5 Text Encoder
+    base: T5EncoderModel
+    model_path:
+    - path: PixArt-alpha/PixArt-XL-2-1024-MS/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 19049290394
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: PixArt-alpha/PixArt-XL-2-1024-MS
+  - type: scheduler
+    label: Scheduler
+    default: RectifiedFlowScheduler
+    scheduler_options:
+    - name: RectifiedFlowScheduler
+      label: Rectified Flow Scheduler
+      description: The Rectified Flow Scheduler is a scheduler for the LTX X2V 13B
+        0.9.8 Dev model.
+      base: src.scheduler.rf.RectifiedFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        base_resolution: null
+        target_shift_terminal: null
+        sampler: LinearQuadratic
+        shifting: null
+        shift: null
+  - type: vae
+    label: LTX VAE
+    base: ltx
+    model_path:
+    - path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.8-dev.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 24
+      file_size: 28579183340
+  - type: transformer
+    label: LTX Transformer
+    base: ltx.base
+    model_path:
+    - path: https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.8-dev.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 32
+      file_size: 28579183340
+  - type: helper
+    label: LTX Patchifier
+    base: ltx.patchifier
+    patch_size: 1
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale:
+      - 1
+      - 1
+      - 6
+      - 8
+      - 6
+      - 1
+      - 1
+      stg_scale:
+      - 0
+      - 0
+      - 4
+      - 4
+      - 4
+      - 2
+      - 1
+      rescaling_scale:
+      - 1
+      - 1
+      - 0.5
+      - 0.5
+      - 1
+      - 1
+      - 1
+      guidance_timesteps:
+      - 1.0
+      - 0.996
+      - 0.9933
+      - 0.985
+      - 0.9767
+      - 0.9008
+      - 0.618
+      decode_timestep: 0.05
+      decode_noise_scale: 0.025
+      skip_block_list: []
+      skip_layer_strategy: null
+      skip_final_inference_steps: 0
+      cfg_star_rescale: true
+      return_latents: false
+      text_encoder_kwargs:
+        max_sequence_length: 256
+        use_attention_mask: true
+        pad_with_zero: false
+        clean_text: false
+      offload: true
+      render_on_step: false
+  ui:
+    floating_panel:
+      regions:
+        top:
+          inputs:
+          - prompt
+          flow: column
+        middle:
+          inputs:
+          - height
+          - width
+          flow: row
+        bottom:
+          inputs:
+          - num_inference_steps
+          flow: row
+    panels:
+    - name: media
+      label: Media
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - video
+        - - audio
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+        - - negative_prompt
+    - name: canvas
+      label: Canvas
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - height
+          - width
+        - - duration
+          - fps
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - skip_final_inference_steps
+        - - seed
+    - name: guidance
+      label: Guidance
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - guidance_scale
+          - cfg_star_rescale
+        - - stg_scale
+          - rescaling_scale
+    - name: decoding
+      label: Decoding
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - decode_timestep
+          - decode_noise_scale
+    inputs:
+    - id: video
+      label: Input Video
+      description: Enter the input video for the generation.
+      type: video
+      panel: media
+      required: false
+      floating_panel: true
+    - id: audio
+      label: Input Audio
+      description: Enter the input audio for the generation.
+      type: audio
+      panel: media
+      required: false
+      floating_panel: true
+    - id: image
+      label: Input Image
+      description: Enter the input image for the generation.
+      type: image
+      panel: media
+      required: false
+      floating_panel: true
+    - id: prompt
+      label: Prompt
+      type: text
+      panel: prompting
+      placeholder: A beautiful woman with long brown hair and blue eyes.
+      description: Enter the prompt for the generation.
+      required: true
+      floating_panel: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what you want to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts.
+      type: text
+      panel: prompting
+      required: false
+      default: blurry, low quality, distorted, artifacts
+    - id: height
+      label: Height
+      description: Enter the height of the output video.
+      type: number
+      value_type: integer
+      panel: canvas
+      default: 480
+      min: 256
+      max: 4096
+      step: 1
+      floating_panel: true
+    - id: width
+      label: Width
+      description: Enter the width of the output video.
+      type: number
+      value_type: integer
+      panel: canvas
+      default: 832
+      min: 256
+      max: 8192
+      step: 1
+      floating_panel: true
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps (higher = better quality but slower).
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 5
+      floating_panel: false
+    - id: seed
+      label: Seed
+      description: Enter a random seed for reproducible generation.
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      description: How strongly to follow the prompt.
+      type: number+slider
+      value_type: float
+      panel: guidance
+      required: false
+      default: 3.0
+      min: 0.0
+      max: 15.0
+      step: 0.5
+    - id: stg_scale
+      label: STG Scale
+      type: number+slider
+      value_type: float
+      panel: guidance
+      required: false
+      default: 1.0
+      min: 0.0
+      max: 10.0
+      step: 0.5
+    - id: rescaling_scale
+      label: Rescaling Scale
+      type: number+slider
+      value_type: float
+      panel: guidance
+      required: false
+      default: 1.0
+      min: 0.0
+      max: 10.0
+      step: 0.5
+    - id: decode_timestep
+      label: Decode Timestep
+      type: number+slider
+      value_type: float
+      panel: decoding
+      required: false
+      default: 0.05
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: decode_noise_scale
+      label: Decode Noise Scale
+      type: number+slider
+      value_type: float
+      panel: decoding
+      required: false
+      default: 0.025
+      min: 0.0
+      max: 1.0
+      step: 0.005
+    - id: skip_final_inference_steps
+      label: Skip Final Inference Steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      required: false
+      default: 0
+      min: 0
+      max: 100
+      step: 1
+    - id: cfg_star_rescale
+      label: CFG* Rescale
+      type: boolean
+      panel: guidance
+      required: false
+      default: true
+  save:
+    safe_serialization: true
+    max_shard_size: 5GB

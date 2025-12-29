@@ -1,0 +1,53 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  name: Hunyuan 13B Text to Video
+  version: 1.0.0
+  description: Hunyuan 13B is a 13B parameter model for text-to-video generation.
+  tags:
+  - hunyuan
+  - t2v
+  - 13b
+spec:
+  engine: hunyuan
+  model_type: t2v
+  engine_type: torch
+  denoise_type: base
+  components:
+  - type: scheduler
+    base: diffusers.FlowMatchEulerDiscreteScheduler
+    config_path: https://huggingface.co/hunyuanvideo-community/HunyuanVideo/resolve/main/scheduler/scheduler_config.json
+  - type: vae
+    name: hunyuan/vae
+    base: hunyuanvideo
+    model_path: hunyuanvideo-community/HunyuanVideo/vae
+    config_path: https://huggingface.co/hunyuanvideo-community/HunyuanVideo/resolve/main/vae/config.json
+  - type: text_encoder
+    name: hunyuan/text_encoder
+    base: CLIPTextModel
+    model_path: hunyuanvideo-community/HunyuanVideo/text_encoder_2
+    config_path: https://huggingface.co/hunyuanvideo-community/HunyuanVideo/resolve/main/text_encoder_2/config.json
+    tokenizer_name: hunyuanvideo-community/HunyuanVideo
+    tokenizer_class: AutoTokenizer
+    tokenizer_kwargs:
+      subfolder: tokenizer_2
+  - type: transformer
+    base: hunyuanvideo.base
+    model_path: hunyuanvideo-community/HunyuanVideo/transformer
+    config_path: https://huggingface.co/hunyuanvideo-community/HunyuanVideo/resolve/main/transformer/config.json
+  - type: helper
+    base: hunyuanvideo.llama
+    name: hunyuan/llama/t2v
+    model_path: hunyuanvideo-community/HunyuanVideo/text_encoder
+    config_path: https://huggingface.co/hunyuanvideo-community/HunyuanVideo/resolve/main/text_encoder/config.json
+    tokenizer_name: hunyuanvideo-community/HunyuanVideo
+    tokenizer_class: AutoTokenizer
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  defaults:
+    run:
+      num_inference_steps: 50
+      return_latents: false
+      text_encoder_kwargs:
+        output_type: pooler_output
+      attention_kwargs: {}

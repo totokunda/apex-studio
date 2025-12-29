@@ -1,0 +1,486 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: hunyuanvideo15-i2v
+  model: hunyuanvideo15
+  name: HunyuanVideo 1.5 Image-to-Video
+  version: 1.0.0
+  description: HunyuanVideo 1.5 is a 8.3B parameter model for text/image-to-video
+    generation.
+  tags:
+  - hunyuanvideo15
+  - i2v
+  author: Tencent
+  license: Apache-2.0
+  demo_path: models/hunyuan-video-15-i2v.mp4
+  categories:
+  - image-to-video
+spec:
+  engine: hunyuanvideo15
+  model_type: ti2v
+  engine_type: torch
+  default_duration_secs: 5.0
+  min_duration_secs: 1.0
+  fps: 24
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+  attention_types:
+  - sdpa
+  - flash
+  - sage
+  - flash3
+  - flex-block-attn
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchDiscreteScheduler
+      label: FlowMatch Discrete Scheduler
+      description: The FlowMatch Discrete Scheduler is a scheduler for the HunyuanVideo
+        1.5 model.
+      base: src.scheduler.flow.FlowMatchDiscreteScheduler
+      config:
+        shift: 7.0
+        num_train_timesteps: 1000
+        reverse: true
+        solver: euler
+  - type: vae
+    label: HunyuanImage VAE
+    base: hunyuanvideo15
+    model_path:
+    - path: tencent/HunyuanVideo-1.5/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 16
+      file_size: 5042561442
+  - type: transformer
+    label: HunyuanVideo Transformer
+    base: hunyuanvideo15.base
+    model_path:
+    - path: tencent/HunyuanVideo-1.5/transformer/720p_i2v
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 33306633160
+    - path: tencent/HunyuanVideo-1.5/transformer/480p_i2v_step_distilled
+      variant: STEP_DISTILLED
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 33325524303
+    - path: tencent/HunyuanVideo-1.5/transformer/720p_i2v_distilled
+      variant: DISTILLED
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 33306633160
+    - path: Comfy-Org/HunyuanVideo_1.5_repackaged/split_files/diffusion_models/hunyuanvideo1.5_720p_i2v_cfg_distilled_fp8_scaled.safetensors
+      variant: FP8_DISTILLED
+      precision: fp8
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 8330399746
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q8_0.gguf
+      variant: GGUF_Q8_0_DISTILLED
+      precision: q8_0
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 8995313888
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q6_K.gguf
+      variant: GGUF_Q6_K_DISTILLED
+      precision: q6_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 7024833760
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S_DISTILLED
+      precision: q5_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 5940802784
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M_DISTILLED
+      precision: q5_k_m
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 6121288928
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M_DISTILLED
+      precision: q4_k_m
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 5090407648
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S_DISTILLED
+      precision: q4_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 4920538336
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 8995313888
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 7024833760
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 5940802784
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 6121288928
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 5090407648
+    - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 4920538336
+    config_path: tencent/HunyuanVideo-1.5/transformer/720p_i2v/config.json
+  - type: helper
+    label: Qwen2.5 VL Text Encoder
+    base: hunyuanvideo15.text
+    name: text_encoder
+    text_encoder_type: llm
+    tokenizer_type: llm
+    hidden_state_skip_layer: 2
+    apply_final_norm: false
+    prompt_template: li-dit-encode-image-json
+    prompt_template_video: li-dit-encode-video-json
+    config_path: Qwen/Qwen2.5-VL-7B-Instruct/config.json
+    tokenizer_path: Qwen/Qwen2.5-VL-7B-Instruct
+    model_path:
+    - path: Qwen/Qwen2.5-VL-7B-Instruct
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 24
+      file_size: 16595981281 
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 24
+      file_size: 8098524032
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+      file_size: 6254197632
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 4
+        recommended_vram_gb: 8
+      file_size: 4457767808
+  - type: helper
+    label: HunyuanVideo Vision Encoder
+    base: hunyuanvideo15.vision
+    name: vision_encoder
+    vision_encoder_type: siglip
+    vision_encoder_precision: fp16
+    processor_type: null
+    processor_path: null
+    output_key: null
+    model_path:
+    - path: Runware/FLUX.1-Redux-dev
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 24
+      file_size: 1115066805
+  - type: helper
+    label: HunyuanVideo Prompt Format
+    base: hunyuanvideo15.prompt_format
+    name: prompt_format
+    font_path: multimodalart/glyph-sdxl-v2-byt5-small/assets/multilingual_10-lang_idx.json
+    color_path: multimodalart/glyph-sdxl-v2-byt5-small/assets/color_idx.json
+  - type: text_encoder
+    label: HunyuanVideo ByT5 Encoder
+    base: T5EncoderModel
+    name: byt5_encoder
+    tokenizer_class: ByT5Tokenizer
+    tokenizer_name: google/byt5-small
+    model_path:
+    - path: multimodalart/glyph-sdxl-v2-byt5-small/model.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 24
+      file_size: 877272248
+  defaults:
+    run:
+      num_inference_steps: 50
+      return_latents: false
+      enable_cache: false
+      resolution: 480p
+      guidance_scale: 1.0
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: image
+      label: Image
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - reference_image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - guidance_rescale
+        - - seed
+    - name: cache 
+      label: Cache
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - enable_cache
+        - - cache_start_step
+        - - cache_end_step
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: The prompt for image-to-video generation.
+      placeholder: A serene lake surrounded by pine trees at sunrise, ultra realistic.
+      type: text
+      panel: prompting
+      required: true
+    - id: reference_image
+      label: Reference Image
+      description: The reference image for image-to-video generation.
+      type: image
+      panel: image
+      required: true
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 0.0
+      max: 10.0
+      step: 0.1
+    - id: guidance_rescale
+      label: Guidance Rescale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 0.0
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: SD
+        value: 480
+      - name: HD
+        value: 720
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 480
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 832
+      min: 256
+      max: 8192
+      step: 16
+    - id: enable_cache
+      label: Use Cache
+      description: Use cache for the generation
+      type: boolean
+      panel: sampling
+      default: false
+      required: false
+    - id: cache_start_step
+      label: Cache Start Step
+      description: The start step for the cache
+      type: number
+      value_type: integer
+      panel: cache
+      default: 11
+      min: 1
+      max: 100
+      step: 1
+    - id: cache_end_step
+      label: Cache End Step
+      description: The end step for the cache
+      type: number
+      value_type: integer
+      panel: cache
+      default: 45
+      min: 1
+      max: 100
+      step: 1

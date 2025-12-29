@@ -1,0 +1,68 @@
+{
+    "engine_kwargs": {
+        "engine_type": "wan",
+        "yaml_path": "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.1-14b-infinitetalk-1.0.0.v1.yml",
+        "model_type": "multitalk",
+        "selected_components": {
+            "scheduler": {
+                "name": "FlowMatchScheduler",
+                "base": "src.scheduler.FlowMatchScheduler",
+                "type": "scheduler",
+                "label": "FlowMatch Scheduler",
+                "default": "FlowMatchScheduler",
+                "config": {
+                    "shift": 7.0,
+                    "sigma_max": 1.0,
+                    "sigma_min": 0.001,
+                    "inverse_timesteps": false,
+                    "extra_one_step": false,
+                    "reverse_sigmas": false
+                },
+                "description": "The FlowMatch Scheduler is used for WAN 2.1 14B MultiTalk Text to Video."
+            },
+            "wan/vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "infinitetalk_transformer": {
+                "variant": "FP8",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "extra_model_path": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "helper": {},
+            "wan/clip": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "flash"
+    },
+    "inputs": {
+        "video": "assets/7a3e03046b3dd65fdf19f962d1ef1411babd5aa1e766385d7b66f1544d3fbf73.mp4",
+        "person_1_audio": "assets/8449d866d80db6fb177080b24ea523ee9a67af29db5476e4400164afe58bc1d2.mp3",
+        "prompt": "The woman is raving about how great her cake is. ",
+        "negative_prompt": "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+        "resolution": 480,
+        "aspect_ratio": 969,
+        "num_inference_steps": 8,
+        "height": 480,
+        "width": 848,
+        "seed": 3833932594,
+        "guidance_scale": 1,
+        "audio_guidance_scale": 4,
+        "duration": "4.5s"
+    }
+}

@@ -1,0 +1,40 @@
+{
+    "_class_name": "WanApexFramepackTransformer3DModel",
+    "_diffusers_version": "0.35.0.dev0",
+    "added_kv_proj_dim": null,
+    "attention_head_dim": 128,
+    "context_decay_max": 0.5,
+    "context_decay_min": 0.1,
+    "context_decay_steps": 1000,
+    "cross_attn_norm": true,
+    "eps": 1e-06,
+    "ffn_dim": 13824,
+    "framepack_compressors": {
+      "1": "k1h2w2",
+      "2": "k2h4w4",
+      "4": "k4h8w8",
+      "8": "k8h16w16"
+    },
+    "framepack_schedule": "Schedule_F2K1_G9_F1K1F2K2F16K4F32K8",
+    "freq_dim": 256,
+    "image_dim": null,
+    "in_channels": 16,
+    "model_categories": [
+      ""
+    ],
+    "moe_top_k": 1,
+    "num_attention_heads": 40,
+    "num_layers": 40,
+    "num_style_tokens": 0,
+    "out_channels": 16,
+    "patch_size": [
+      1,
+      2,
+      2
+    ],
+    "qk_norm": "rms_norm_across_heads",
+    "rope_max_seq_len": 1024,
+    "text_dim": 4096,
+    "use_moe": false
+  }
+  

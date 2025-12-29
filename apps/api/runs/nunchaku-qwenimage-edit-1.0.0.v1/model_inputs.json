@@ -1,0 +1,53 @@
+{
+    "engine_kwargs": {
+        "engine_type": "qwenimage",
+        "yaml_path": "/home/divineade/apex/manifest/engine/qwenimage/nunchaku-qwenimage-edit-1.0.0.v1.yml",
+        "model_type": "edit",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/ext_diviade_gmail_com/apex-diffusion/configs/ddad6fcc41e8f75ee9d69bc659fc405da69b4c0cb68c25286a5bbb23cba6fa2c_scheduler_config.json",
+                "type": "scheduler",
+                "label": "Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler"
+            },
+            "vae": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Qwen_Qwen-Image/vae",
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Qwen_Qwen2.5-VL-7B-Instruct",
+                "variant": "default",
+                "precision": "fp8",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/7e172dd39d42a4b5f00cc2cb44ad014ddaf65f762f19b980a2830c79c63f89dd_svdq-int4_r32-qwen-image-edit.safetensors",
+                "variant": "int4_r32",
+                "precision": "int4",
+                "type": "safetensors"
+            },
+            "image.processor": {
+                "path": "/home/ext_diviade_gmail_com/apex-diffusion/components/Qwen_Qwen-Image-Edit/processor",
+                "type": "safetensors"
+            }
+        },
+        "attention_type": "sdpa"
+    },
+    "inputs": {
+        "image": "assets/309ce2ad-fbbc-477a-836d-da774532ba1b-6f142c1b-8f49-4303-84b3-7c3b119ca383_image_0_10.png",
+        "prompt": "turn the dog into a cat ",
+        "negative_prompt": " ",
+        "resolution": "custom",
+        "aspect_ratio": "custom",
+        "num_inference_steps": 20,
+        "height": 720,
+        "width": 1081,
+        "seed": 4146970652,
+        "true_cfg_scale": 4,
+        "duration": "5s"
+    }
+}

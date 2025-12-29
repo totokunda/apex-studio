@@ -1,0 +1,371 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2-1-14b-scail
+  model: wan
+  name: Wan 2.1 14B SCAIL
+  version: 1.0.0
+  description: Wan 2.1 14B is a 14B parameter model for SCAIL generation for character animation
+    using a pose video.
+  tags:
+  - wan
+  - scail
+  - 14b
+  - '2.1'
+  - character
+  - animation
+  - pose
+  author: Wan-AI
+  license: Apache-2.0
+  demo_path: models/wan-2.1-scail.mp4
+  categories:
+  - control
+spec:
+  engine: wan
+  model_type: scail
+  denoise_type: base
+  default_duration_secs: 5.0
+  min_duration_secs: 1.0
+  engine_type: torch
+  fps: 16
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  loras:
+    - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors
+      scale: 1.0
+      name: lightx2v_lora
+      label: Lightx2v LoRA
+      component: transformer
+      verified: true
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: UniPCMultistepScheduler
+    scheduler_options:
+    - name: UniPCMultistepScheduler
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for WAN 2.1 14B SCAIL.
+      base: diffusers.UniPCMultistepScheduler
+      config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/scheduler/scheduler_config.json
+  - type: vae
+    label: WAN VAE
+    name: wan/vae_2.2
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 11361874539
+    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 6731333792
+    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
+  - type: transformer
+    base: wan.scail
+    label: Scail Transformer
+    model_path:
+    - path: Kijai/WanVideo_comfy/SCAIL/Wan21-14B-SCAIL-preview_comfy_bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: Kijai/WanVideo_comfy_fp8_scaled/SCAIL/Wan21-14B-SCAIL-preview_fp8_e4m3fn_scaled_KJ.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 18144988672
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 14234127872
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q5_1.gguf
+      variant: GGUF_Q5_1
+      precision: q5_1
+      type: gguf
+      file_size: 13098716672
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 12744003072
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 12266409472
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 12089462272
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 11341532672
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q4_1.gguf
+      variant: GGUF_Q4_1
+      precision: q4_1
+      type: gguf
+      file_size: 11080207872
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 10437955072
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 10247900672
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 8587382272
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 7926287872
+    - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      file_size: 6499241472
+    config:
+      dim: 5120
+      eps: 0.000001
+      ffn_dim: 13824
+      freq_dim: 256
+      in_dim: 20
+      model_type: "i2v"
+      num_heads: 40
+      num_layers: 40
+      out_dim: 16
+      text_len: 512
+  - type: helper
+    base: clip
+    label: CLIP Image Encoder
+    name: clip
+    model_path:
+    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 1264218342
+    preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
+    processor_class: CLIPImageProcessor
+    model_class: CLIPVisionModel
+  defaults:
+    run:
+      num_inference_steps: 40
+      guidance_scale: 5.0
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: input
+      label: Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+        - - pose_video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - aspect_ratio
+        - - resolution
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+        - - use_video_duration
+    inputs:
+    - id: image
+      label: Image
+      description: The input image to generate a video from.
+      type: image
+      panel: input
+      required: true
+    - id: pose_video
+      label: Video
+      description: The input video to generate a video from.
+      type: video+preprocessor
+      preprocessor_ref: dwpose_nlf
+      panel: input
+      required: true
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate a video from.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: SD
+        value: 480
+      - name: HD
+        value: 720
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 26
+        ratio_h: 15
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 15
+        ratio_h: 26
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 480
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 832
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: use_video_duration
+      label: Use Video Duration
+      description: Use the duration of the video to determine the number of frames
+      type: boolean
+      panel: sampling
+      required: false
+      default: true
