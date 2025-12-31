@@ -1,6 +1,9 @@
 name: Build and Release Apex Studio
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       draft:
@@ -11,7 +14,7 @@ on:
       skip_python:
         description: 'Skip Python bundling (use cached)'
         required: false
-        default: false
+        default: 'false'
         type: boolean
 
 concurrency:
