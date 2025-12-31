@@ -1,20 +1,17 @@
 name: Build and Release Apex Studio
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       draft:
         description: 'Create draft release'
         required: false
-        default: 'true'
+        default: true
         type: boolean
       skip_python:
         description: 'Skip Python bundling (use cached)'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 concurrency:
