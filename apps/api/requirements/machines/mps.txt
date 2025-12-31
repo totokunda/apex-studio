@@ -1,0 +1,8 @@
+# macOS / Apple Silicon (Metal / "MPS" style workflows)
+-r ../requirements.txt
+-r ../processors.requirements.txt
+
+mlx
+rembg[cpu]
+
+
