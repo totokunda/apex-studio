@@ -431,6 +431,9 @@ class SeedVRUpscaleEngine(BaseEngine):
         if offload:
             self._offload("vae")
         
+        # Synchronize before clearing cache for consistent memory behavior
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         empty_cache()
 
         return latents
@@ -486,6 +489,9 @@ class SeedVRUpscaleEngine(BaseEngine):
         if offload:
             self._offload("vae")
         
+        # Synchronize before clearing cache for consistent memory behavior
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         empty_cache()
 
         return samples
@@ -685,6 +691,7 @@ class SeedVRUpscaleEngine(BaseEngine):
         cfg_rescale: float,
         num_steps: int,
         dit_offload: bool = True,
+        decode: bool = True,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> List[Tensor]:
         """
@@ -699,10 +706,12 @@ class SeedVRUpscaleEngine(BaseEngine):
             cfg_rescale: CFG rescale factor
             num_steps: Number of sampling steps
             dit_offload: Whether to offload transformer after inference
+            decode: Whether to VAE decode at the end (True) or return output latents (False)
             progress_callback: Optional progress callback
 
         Returns:
-            List of generated latent tensors
+            If decode=True: list of decoded samples [C, T, H, W] (or [C, H, W] for single frame).
+            If decode=False: list of output latents [T, H, W, C].
         """
         batch_size = len(noises)
 
@@ -715,10 +724,6 @@ class SeedVRUpscaleEngine(BaseEngine):
         if self.transformer is None:
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
-
-        # Enter eval mode
-        was_training = self.transformer.training
-        self.transformer.eval()
 
         # Flatten for batched processing
         latents, latent_shapes = self._flatten_latents(noises)
@@ -777,22 +782,42 @@ class SeedVRUpscaleEngine(BaseEngine):
                     lp = (i + 1) / num_steps
                     progress_callback(lp, f"SeedVR Sampling {int(lp * 100)}%")
 
-        # Restore training mode
-        self.transformer.train(was_training)
-
         if dit_offload:
             self._offload("transformer")
 
-        # Unflatten and decode
+        # Unflatten
         latents = self._unflatten_latents(latents, latent_shapes)
+
+        if not decode:
+            # Final synchronization and cache clear
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            gc.collect()
+            empty_cache()
+            safe_emit_progress(progress_callback, 1.0, "SeedVR sampling complete")
+            return latents
+        
+        # Synchronize and clear cache before VAE decode
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        gc.collect()
         empty_cache()
 
         # VAE decode
         self.to_device(self.vae)
         samples = self._seedvr_vae_decode(latents, offload=dit_offload)
+        
+        # Free latents after decoding
+        del latents
 
         if dit_offload:
             self._offload("vae")
+        
+        # Final synchronization and cache clear
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        gc.collect()
+        empty_cache()
 
         safe_emit_progress(progress_callback, 1.0, "SeedVR sampling complete")
 
@@ -910,21 +935,69 @@ class SeedVRUpscaleEngine(BaseEngine):
             self.logger.info(f"Chunking enabled: {total_frames} frames -> chunks of {chunk_frames} with {chunk_overlap} overlap")
             safe_emit_progress(progress_callback, 0.12, "Splitting video into chunks")
             
-            # Split video into chunks
-            chunks, chunk_indices = self._split_video_into_chunks(
+            # Split video into chunks - extract chunk data as CPU tensors to avoid holding GPU memory
+            chunks_cpu, chunk_indices = self._split_video_into_chunks(
                 video_tensor, chunk_frames, chunk_overlap
             )
+            # Move chunks to CPU immediately to free GPU memory
+            chunks_cpu = [c.cpu() for c in chunks_cpu]
             
-            processed_chunks = []
-            num_chunks = len(chunks)
-            # Reserve [0.20, 0.88] for chunk processing (encode + sampling + decode)
-            chunks_overall_start = 0.20
-            chunks_overall_end = 0.88
+            # Move input video to CPU - we only need it for color fix at the end
+            input_video_for_colorfix = input_video_for_colorfix.cpu()
             
-            for chunk_idx, (chunk, (start, end)) in enumerate(zip(chunks, chunk_indices)):
-                self.logger.info(f"Processing chunk {chunk_idx + 1}/{len(chunks)} (frames {start}-{end})")
+            # Free the original GPU video tensor
+            del video_tensor
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            gc.collect()
+            empty_cache()
 
-                # Map this chunk into the overall progress span
+            num_chunks = len(chunks_cpu)
+
+            # -----------------------------------------------------------------
+            # Phase 1: pad all chunks (CPU) then VAE-encode all chunks (single call)
+            # -----------------------------------------------------------------
+            safe_emit_progress(progress_callback, 0.16, "Padding chunks")
+            padded_chunks_cpu: List[Tensor] = []
+            chunk_original_lens: List[int] = []
+            for chunk in chunks_cpu:
+                chunk_padded, chunk_original_len = self._pad_video_frames(chunk, sp_size)
+                padded_chunks_cpu.append(chunk_padded)
+                chunk_original_lens.append(chunk_original_len)
+
+            # We no longer need the raw chunks list
+            del chunks_cpu
+            gc.collect()
+
+            safe_emit_progress(progress_callback, 0.20, "Encoding all chunk latents")
+            cond_latents_all = self._seedvr_vae_encode(
+                padded_chunks_cpu,
+                offload=True,
+                conv_max_mem=vae_conv_max_mem,
+                norm_max_mem=vae_norm_max_mem,
+                split_size=vae_split_size,
+                memory_device=vae_memory_device,
+            )
+
+            # Free padded inputs and move condition latents to CPU to reduce VRAM
+            del padded_chunks_cpu
+            cond_latents_all = [lat.cpu() for lat in cond_latents_all]
+            gc.collect()
+            empty_cache()
+
+            # -----------------------------------------------------------------
+            # Phase 2: process each chunk output (sampling in latent space)
+            # -----------------------------------------------------------------
+            self.logger.info("Sampling chunks (latents only)...")
+            output_latents_cpu: List[Tensor] = []
+
+            # Reserve [0.28, 0.80] for per-chunk sampling
+            chunks_overall_start = 0.28
+            chunks_overall_end = 0.80
+
+            for chunk_idx, (start, end) in enumerate(chunk_indices):
+                self.logger.info(f"Sampling chunk {chunk_idx + 1}/{num_chunks} (frames {start}-{end})")
+
                 chunk_start_p = chunks_overall_start + (chunk_idx / max(1, num_chunks)) * (
                     chunks_overall_end - chunks_overall_start
                 )
@@ -933,46 +1006,41 @@ class SeedVRUpscaleEngine(BaseEngine):
                 )
                 chunk_progress = make_mapped_progress(progress_callback, chunk_start_p, chunk_end_p)
                 chunk_progress(0.0, f"Chunk {chunk_idx + 1}/{num_chunks}: preparing")
-                
-                # Pad chunk frames if needed
-                chunk_padded, chunk_original_len = self._pad_video_frames(chunk, sp_size)
-                
-                # VAE encode
-                chunk_progress(0.08, f"Chunk {chunk_idx + 1}/{num_chunks}: encoding latents")
-                cond_latents = self._seedvr_vae_encode(
-                    [chunk_padded], offload=True,
-                    conv_max_mem=vae_conv_max_mem, norm_max_mem=vae_norm_max_mem,
-                    split_size=vae_split_size, memory_device=vae_memory_device
-                )
-                
+
+                # Move this chunk's condition latent to GPU only when needed
+                cond_latent = cond_latents_all[chunk_idx].to(device=self.device)
+
                 # Generate noise (use seed offset for reproducibility across chunks)
                 chunk_seed = seed + chunk_idx if seed is not None else None
                 if chunk_seed is not None:
                     torch.manual_seed(chunk_seed)
                     if torch.cuda.is_available():
                         torch.cuda.manual_seed_all(chunk_seed)
-                
-                chunk_progress(0.18, f"Chunk {chunk_idx + 1}/{num_chunks}: initializing noise")
-                noises = [torch.randn_like(latent) for latent in cond_latents]
-                aug_noises = [torch.randn_like(latent) for latent in cond_latents]
-                
-                # Add noise to condition latents
+
+                chunk_progress(0.12, f"Chunk {chunk_idx + 1}/{num_chunks}: initializing noise")
+                noises = [torch.randn_like(cond_latent)]
+                aug_noises = [torch.randn_like(cond_latent)]
+
                 noised_cond_latents = [
                     self._add_cond_noise(latent, aug_noise, cond_noise_scale)
-                    for latent, aug_noise in zip(cond_latents, aug_noises)
+                    for latent, aug_noise in zip([cond_latent], aug_noises)
                 ]
-                
-                # Build conditions
+                del aug_noises
+
                 conditions = [
-                    self._get_condition(noise, cond_latent)
-                    for noise, cond_latent in zip(noises, noised_cond_latents)
+                    self._get_condition(noise, cond_latent_)
+                    for noise, cond_latent_ in zip(noises, noised_cond_latents)
                 ]
+                del noised_cond_latents, cond_latent
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                empty_cache()
 
                 # Reserve a sub-span inside the chunk for sampling
-                chunk_sampling_progress = make_mapped_progress(chunk_progress, 0.22, 0.95)
+                chunk_sampling_progress = make_mapped_progress(chunk_progress, 0.18, 0.98)
 
-                # Run inference for this chunk
-                samples = self._inference(
+                # Run inference for this chunk (latents only; decode later)
+                out_latents = self._inference(
                     noises=noises,
                     conditions=conditions,
                     text_pos_embeds=text_pos_embeds,
@@ -980,46 +1048,86 @@ class SeedVRUpscaleEngine(BaseEngine):
                     cfg_scale=cfg_scale,
                     cfg_rescale=cfg_rescale,
                     num_steps=num_inference_steps,
-                    dit_offload=offload,
+                    dit_offload=False,
+                    decode=False,
                     progress_callback=chunk_sampling_progress,
                 )
-                
-                # Process chunk output
-                chunk_progress(0.96, f"Chunk {chunk_idx + 1}/{num_chunks}: post-processing")
-                for sample in samples:
-                    if sample.ndim == 3:
-                        sample = sample.unsqueeze(1)
-                    sample = rearrange(sample, "c t h w -> t c h w")
-                    
-                    # Trim to original chunk length
-                    if sample.shape[0] > chunk_original_len:
-                        sample = sample[:chunk_original_len]
-                    
-                    processed_chunks.append(sample)
-                
-                # Clear memory between chunks
-                del cond_latents, noises, aug_noises, noised_cond_latents, conditions, samples
+
+                # Free per-chunk inputs after inference
+                del noises, conditions
+
+                # Move output latents to CPU immediately to free VRAM
+                for latent in out_latents:
+                    output_latents_cpu.append(latent.cpu())
+                del out_latents
+
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
                 gc.collect()
                 empty_cache()
+
+            # Free condition latents after sampling all chunks
+            del cond_latents_all
+            gc.collect()
+            empty_cache()
+
+            # -----------------------------------------------------------------
+            # Phase 3: decode chunk outputs, then blend on CPU
+            # -----------------------------------------------------------------
+            safe_emit_progress(progress_callback, 0.82, "Decoding chunk outputs")
+            decoded_chunks = self._seedvr_vae_decode(
+                output_latents_cpu,
+                offload=True,
+                conv_max_mem=vae_conv_max_mem,
+                norm_max_mem=vae_norm_max_mem,
+                split_size=vae_split_size,
+                memory_device=vae_memory_device,
+            )
+            del output_latents_cpu
+            gc.collect()
+            empty_cache()
+
+            processed_chunks: List[Tensor] = []
+            for sample, chunk_original_len in zip(decoded_chunks, chunk_original_lens):
+                if sample.ndim == 3:
+                    sample = sample.unsqueeze(1)
+                sample = rearrange(sample, "c t h w -> t c h w")
+                if sample.shape[0] > chunk_original_len:
+                    sample = sample[:chunk_original_len]
+                processed_chunks.append(sample.cpu())
+
+            del decoded_chunks, chunk_original_lens
+            gc.collect()
             
-            # Blend chunks together
+            # Blend chunks together (all on CPU now)
             self.logger.info("Blending chunks...")
             safe_emit_progress(progress_callback, 0.90, "Blending chunks")
             blended_sample = self._blend_chunks(processed_chunks, chunk_indices, total_frames, chunk_overlap)
             
-            # Apply color fix if requested
+            # Free processed chunks after blending
+            del processed_chunks
+            gc.collect()
+            
+            # Apply color fix if requested (both tensors already on CPU)
             if color_fix:
                 safe_emit_progress(progress_callback, 0.92, "Applying color correction")
                 blended_sample = wavelet_reconstruction(
-                    blended_sample.cpu(),
-                    input_video_for_colorfix.cpu().permute(1, 0, 2, 3),
+                    blended_sample,
+                    input_video_for_colorfix.permute(1, 0, 2, 3),
                 )
+            
+            # Free input video after color fix
+            del input_video_for_colorfix
+            gc.collect()
             
             # Convert to output format
             safe_emit_progress(progress_callback, 0.95, "Converting output frames")
             blended_sample = rearrange(blended_sample, "t c h w -> t h w c")
             blended_sample = blended_sample.clamp(-1, 1).mul(0.5).add(0.5).mul(255).round()
             blended_sample = blended_sample.to(torch.uint8).cpu().numpy()
+            
+            if offload:
+                self._offload("transformer")
             
             # Convert to PIL images
             output_frames = []

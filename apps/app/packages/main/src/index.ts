@@ -13,13 +13,19 @@ import { apexApi } from "./modules/ApexApi.js";
 import { settingsModule } from "./modules/SettingsModule.js";
 import { jsonPersistenceModule } from "./modules/JSONPersistenceModule.js";
 import { appDirProtocol } from "./modules/AppDirProtocol.js";
+import { pythonProcess } from "./modules/PythonProcess.js";
 
 export async function initApp(initConfig: AppInitConfig) {
+  // Check if we're in development mode (renderer is a URL, not a file)
+  const isDev = initConfig.renderer instanceof URL;
+
   let moduleRunner = createModuleRunner()
     // Ensure single instance lock before any window creation
     .init(disallowMultipleAppInstance())
     // Register 'app://' protocol before app is ready and before creating the window
     .init(appDirProtocol())
+    // Python process management - starts bundled API in production
+    .init(pythonProcess({ devMode: isDev, autoStart: !isDev }))
     // Core backend IPC and persistence should be ready before any renderer windows load
     .init(apexApi())
     .init(jsonPersistenceModule())

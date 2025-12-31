@@ -336,7 +336,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
   return (
     <div
       ref={containerRef}
-      className="fixed inset-0 z-[9999] bg-black"
+      className="fixed inset-0 z-9999 bg-black"
       onMouseMove={handleMouseMove}
     >
       <Stage
@@ -355,21 +355,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
               fill={"#000000"}
             />
             {sortClips(filterClips(clips)).map((clip) => {
-              if (clip.type === "group") return null;
-              const startFrame = clip.startFrame || 0;
-              const hasOverlap =
-                (clip.type === "video" || clip.type === "image") &&
-                startFrame > 0
-                  ? true
-                  : false;
-              const clipAtFrame = clipWithinFrame(
-                clip,
-                focusFrame,
-                hasOverlap,
-                1,
-              );
               const clipAtFrameNoOverlap = clipWithinFrame(clip, focusFrame);
-              if (!clipAtFrame) return null;
 
               // Get applicators for clips that support effects (video, image, etc.)
               const applicators = getClipApplicators(clip.clipId);
@@ -384,6 +370,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
                       rectHeight={rectHeight}
                       applicators={applicators}
                       overlap={clipAtFrameNoOverlap}
+                      hidden={!clipAtFrameNoOverlap}
                     />
                   );
                 case "image":
@@ -449,7 +436,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
 
       {/* Floating control bar */}
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent transition-opacity duration-300 ${
+        className={`absolute bottom-0 left-0 right-0 bg-linear-to-t from-black/80 to-transparent transition-opacity duration-300 ${
           showControls ? "opacity-100" : "opacity-0"
         }`}
       >

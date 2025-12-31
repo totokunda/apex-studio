@@ -373,7 +373,7 @@ const MediaDialogClipItem = React.memo(({
       return (
         <VideoPreview
           key={clip.clipId}
-          {...(clip as any)}
+          {...{...(clip as any), hidden: false}}
           overrideClip={overrideToUse}
           rectWidth={previewWidth}
           rectHeight={previewHeight}
@@ -389,7 +389,7 @@ const MediaDialogClipItem = React.memo(({
       return (
         <ImagePreview
           key={clip.clipId}
-          {...(clip as any)}
+          {...{...(clip as any), hidden: false}}
           overrideClip={overrideToUse}
           rectWidth={previewWidth}
           rectHeight={previewHeight}
@@ -404,7 +404,7 @@ const MediaDialogClipItem = React.memo(({
       return (
         <ShapePreview
           key={clip.clipId}
-          {...(clip as any)}
+          {...{...(clip as any), hidden: false}}
           rectWidth={previewWidth}
           rectHeight={previewHeight}
           applicators={applicators}
@@ -415,7 +415,7 @@ const MediaDialogClipItem = React.memo(({
       return (
         <TextPreview
           key={clip.clipId}
-          {...(clip as any)}
+          {...{...(clip as any), hidden: false}}
           rectWidth={previewWidth}
           rectHeight={previewHeight}
           applicators={applicators}
@@ -426,7 +426,7 @@ const MediaDialogClipItem = React.memo(({
       return (
         <DrawingPreview
           key={clip.clipId}
-          {...(clip as any)}
+          {...{...(clip as any), hidden: false}}
           rectWidth={previewWidth}
           rectHeight={previewHeight}
           assetMode={true}
