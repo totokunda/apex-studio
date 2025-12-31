@@ -209,4 +209,4 @@ packages/renderer/public/filters
 
 .env
 
-.github/workflows/build-release.yml
+.github/workflows/*
