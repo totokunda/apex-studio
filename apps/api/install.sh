@@ -1,0 +1,1 @@
+python3 /Users/tosinkuye/apex-workspace/apex-studio/apps/api/scripts/bundle_python.py --platform darwin --cuda cpu --no-pyinstaller --output /tmp/apex-bundle-test-cpu3

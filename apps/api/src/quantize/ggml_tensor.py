@@ -1,6 +1,7 @@
 import torch
 from typing import Any, Optional, Iterable
 
+
 class GGMLTensor(torch.Tensor):
     """
     A safe torch.Tensor subclass that carries GGUF metadata:
@@ -48,10 +49,9 @@ class GGMLTensor(torch.Tensor):
         out.tensor_shape = torch.Size(getattr(self, "tensor_shape", base.shape))
         out.dequant_dtype = getattr(self, "dequant_dtype", None)
         out.patches = list(getattr(self, "patches", []))
-        
+
         return out
-    
-    
+
     @property
     def base_dtype(self) -> torch.dtype:
         return super().dtype

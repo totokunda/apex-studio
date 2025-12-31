@@ -27,6 +27,7 @@ from typing import Any, Optional, Sequence
 from PIL import Image
 import torch
 from tqdm import tqdm
+
 # Ensure `import src...` works when running as a script.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
@@ -81,7 +82,9 @@ def _read_prompts_csv(csv_path: Path) -> Sequence[dict[str, str]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate images for prompts.csv using zimage-turbo manifest.")
+    parser = argparse.ArgumentParser(
+        description="Generate images for prompts.csv using zimage-turbo manifest."
+    )
     parser.add_argument(
         "--prompts-csv",
         default=str(Path("manifest/verified/prompts.csv")),
@@ -180,7 +183,7 @@ def main() -> int:
             "guidance_scale": float(args.guidance_scale),
             "offload": False,
         }
-        
+
         if args.num_inference_steps is not None:
             run_kwargs["num_inference_steps"] = int(args.num_inference_steps)
 
@@ -204,5 +207,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

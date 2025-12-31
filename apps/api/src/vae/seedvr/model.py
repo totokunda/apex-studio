@@ -17,7 +17,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.models.attention_processor import Attention, SpatialNorm
-from diffusers.models.autoencoders.vae import DecoderOutput, DiagonalGaussianDistribution
+from diffusers.models.autoencoders.vae import (
+    DecoderOutput,
+    DiagonalGaussianDistribution,
+)
 from diffusers.models.downsampling import Downsample2D
 from diffusers.models.lora import LoRACompatibleConv
 from diffusers.models.modeling_outputs import AutoencoderKLOutput
@@ -50,6 +53,7 @@ from src.vae.seedvr.modules.types import (
     _memory_device_t,
     _receptive_field_t,
 )
+
 
 class Upsample3D(Upsample2D):
     """A 3D upsampling layer with an optional convolution."""
@@ -122,7 +126,9 @@ class Upsample3D(Upsample2D):
         if self.slicing:
             split_size = hidden_states.size(2) // 2
             hidden_states = list(
-                hidden_states.split([split_size, hidden_states.size(2) - split_size], dim=2)
+                hidden_states.split(
+                    [split_size, hidden_states.size(2) - split_size], dim=2
+                )
             )
         else:
             hidden_states = [hidden_states]
@@ -184,7 +190,11 @@ class Downsample3D(Downsample2D):
             conv = init_causal_conv3d(
                 self.channels,
                 self.out_channels,
-                kernel_size=(self.temporal_kernel, self.spatial_kernel, self.spatial_kernel),
+                kernel_size=(
+                    self.temporal_kernel,
+                    self.spatial_kernel,
+                    self.spatial_kernel,
+                ),
                 stride=(self.temporal_ratio, self.spatial_ratio, self.spatial_ratio),
                 padding=(
                     1 if self.temporal_down else 0,
@@ -196,7 +206,11 @@ class Downsample3D(Downsample2D):
         elif type(conv) is nn.AvgPool2d:
             assert self.channels == self.out_channels
             conv = nn.AvgPool3d(
-                kernel_size=(self.temporal_ratio, self.spatial_ratio, self.spatial_ratio),
+                kernel_size=(
+                    self.temporal_ratio,
+                    self.spatial_ratio,
+                    self.spatial_ratio,
+                ),
                 stride=(self.temporal_ratio, self.spatial_ratio, self.spatial_ratio),
             )
         else:
@@ -223,7 +237,9 @@ class Downsample3D(Downsample2D):
 
         if self.use_conv and self.padding == 0 and self.spatial_down:
             pad = (0, 1, 0, 1)
-            hidden_states = safe_pad_operation(hidden_states, pad, mode="constant", value=0)
+            hidden_states = safe_pad_operation(
+                hidden_states, pad, mode="constant", value=0
+            )
 
         assert hidden_states.shape[1] == self.channels
 
@@ -290,7 +306,11 @@ class ResnetBlock3D(ResnetBlock2D):
             )
 
     def forward(
-        self, input_tensor, temb, memory_state: MemoryState = MemoryState.DISABLED, **kwargs
+        self,
+        input_tensor,
+        temb,
+        memory_state: MemoryState = MemoryState.DISABLED,
+        **kwargs,
     ):
         hidden_states = input_tensor
 
@@ -556,7 +576,9 @@ class UNetMidBlock3D(nn.Module):
         time_receptive_field: _receptive_field_t = "half",
     ):
         super().__init__()
-        resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+        resnet_groups = (
+            resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+        )
         self.add_attention = add_attention
 
         # there is always at least one resnet
@@ -596,10 +618,14 @@ class UNetMidBlock3D(nn.Module):
                         rescale_output_factor=output_scale_factor,
                         eps=resnet_eps,
                         norm_num_groups=(
-                            resnet_groups if resnet_time_scale_shift == "default" else None
+                            resnet_groups
+                            if resnet_time_scale_shift == "default"
+                            else None
                         ),
                         spatial_norm_dim=(
-                            temb_channels if resnet_time_scale_shift == "spatial" else None
+                            temb_channels
+                            if resnet_time_scale_shift == "spatial"
+                            else None
                         ),
                         residual_connection=True,
                         bias=True,
@@ -630,7 +656,9 @@ class UNetMidBlock3D(nn.Module):
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
-    def forward(self, hidden_states, temb=None, memory_state: MemoryState = MemoryState.DISABLED):
+    def forward(
+        self, hidden_states, temb=None, memory_state: MemoryState = MemoryState.DISABLED
+    ):
         video_length, frame_height, frame_width = hidden_states.size()[-3:]
         hidden_states = self.resnets[0](hidden_states, temb, memory_state=memory_state)
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
@@ -718,7 +746,9 @@ class Encoder3D(nn.Module):
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
             # [Override] to support temporal down block design
-            is_temporal_down_block = i >= len(block_out_channels) - self.temporal_down_num - 1
+            is_temporal_down_block = (
+                i >= len(block_out_channels) - self.temporal_down_num - 1
+            )
             # Note: take the last ones
 
             assert down_block_type == "DownEncoderBlock3D"
@@ -748,7 +778,13 @@ class Encoder3D(nn.Module):
 
             self.conv_extra_cond.append(
                 zero_module(
-                    nn.Conv3d(extra_cond_dim, output_channel, kernel_size=1, stride=1, padding=0)
+                    nn.Conv3d(
+                        extra_cond_dim,
+                        output_channel,
+                        kernel_size=1,
+                        stride=1,
+                        padding=0,
+                    )
                 )
                 if self.extra_cond_dim is not None and self.extra_cond_dim > 0
                 else None
@@ -777,7 +813,11 @@ class Encoder3D(nn.Module):
 
         conv_out_channels = 2 * out_channels if double_z else out_channels
         self.conv_out = init_causal_conv3d(
-            block_out_channels[-1], conv_out_channels, 3, padding=1, inflation_mode=inflation_mode
+            block_out_channels[-1],
+            conv_out_channels,
+            3,
+            padding=1,
+            inflation_mode=inflation_mode,
         )
 
         self.gradient_checkpointing = gradient_checkpoint
@@ -802,10 +842,15 @@ class Encoder3D(nn.Module):
             # [Override] add extra block and extra cond
             for down_block, extra_block in zip(self.down_blocks, self.conv_extra_cond):
                 sample = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(down_block), sample, memory_state, use_reentrant=False
+                    create_custom_forward(down_block),
+                    sample,
+                    memory_state,
+                    use_reentrant=False,
                 )
                 if extra_block is not None:
-                    sample = sample + safe_interpolate_operation(extra_block(extra_cond), size=sample.shape[2:])
+                    sample = sample + safe_interpolate_operation(
+                        extra_block(extra_cond), size=sample.shape[2:]
+                    )
 
             # middle
             sample = self.mid_block(sample, memory_state=memory_state)
@@ -820,7 +865,9 @@ class Encoder3D(nn.Module):
             for down_block, extra_block in zip(self.down_blocks, self.conv_extra_cond):
                 sample = down_block(sample, memory_state=memory_state)
                 if extra_block is not None:
-                    sample = sample + safe_interpolate_operation(extra_block(extra_cond), size=sample.shape[2:])
+                    sample = sample + safe_interpolate_operation(
+                        extra_block(extra_cond), size=sample.shape[2:]
+                    )
 
             # middle
             sample = self.mid_block(sample, memory_state=memory_state)
@@ -951,7 +998,11 @@ class Decoder3D(nn.Module):
             )
         self.conv_act = nn.SiLU()
         self.conv_out = init_causal_conv3d(
-            block_out_channels[0], out_channels, 3, padding=1, inflation_mode=inflation_mode
+            block_out_channels[0],
+            out_channels,
+            3,
+            padding=1,
+            inflation_mode=inflation_mode,
         )
 
         self.gradient_checkpointing = gradient_checkpoint
@@ -977,7 +1028,9 @@ class Decoder3D(nn.Module):
                 return custom_forward
 
             if is_torch_version(">=", "1.11.0"):
-                sample = self.mid_block(sample, latent_embeds, memory_state=memory_state)
+                sample = self.mid_block(
+                    sample, latent_embeds, memory_state=memory_state
+                )
                 sample = sample.to(upscale_dtype)
 
                 # up
@@ -991,13 +1044,18 @@ class Decoder3D(nn.Module):
                     )
             else:
                 # middle
-                sample = self.mid_block(sample, latent_embeds, memory_state=memory_state)
+                sample = self.mid_block(
+                    sample, latent_embeds, memory_state=memory_state
+                )
                 sample = sample.to(upscale_dtype)
 
                 # up
                 for up_block in self.up_blocks:
                     sample = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(up_block), sample, latent_embeds, memory_state
+                        create_custom_forward(up_block),
+                        sample,
+                        latent_embeds,
+                        memory_state,
                     )
         else:
             # middle
@@ -1014,7 +1072,6 @@ class Decoder3D(nn.Module):
         sample = self.conv_out(sample, memory_state=memory_state)
 
         return sample
-
 
 
 class SeedVR2AutoencoderKL(nn.Module):
@@ -1048,16 +1105,23 @@ class SeedVR2AutoencoderKL(nn.Module):
         *args,
         **kwargs,
     ):
-        extra_cond_dim = kwargs.pop("extra_cond_dim") if "extra_cond_dim" in kwargs else None
+        extra_cond_dim = (
+            kwargs.pop("extra_cond_dim") if "extra_cond_dim" in kwargs else None
+        )
         self.slicing_sample_min_size = slicing_sample_min_size
-        self.slicing_latent_min_size = slicing_sample_min_size // (2**temporal_scale_num)
+        self.slicing_latent_min_size = slicing_sample_min_size // (
+            2**temporal_scale_num
+        )
 
         super().__init__(
             in_channels=in_channels,
             out_channels=out_channels,
             # [Override] make sure it can be normally initialized
             down_block_types=tuple(
-                [down_block_type.replace("3D", "2D") for down_block_type in down_block_types]
+                [
+                    down_block_type.replace("3D", "2D")
+                    for down_block_type in down_block_types
+                ]
             ),
             up_block_types=tuple(
                 [up_block_type.replace("3D", "2D") for up_block_type in up_block_types]
@@ -1136,7 +1200,9 @@ class SeedVR2AutoencoderKL(nn.Module):
             self.decoder.mid_block.attentions = torch.nn.ModuleList([None])
 
     @apply_forward_hook
-    def encode(self, x: torch.FloatTensor, return_dict: bool = True) -> AutoencoderKLOutput:
+    def encode(
+        self, x: torch.FloatTensor, return_dict: bool = True
+    ) -> AutoencoderKLOutput:
         h = self.slicing_encode(x)
         posterior = DiagonalGaussianDistribution(h)
 
@@ -1160,7 +1226,9 @@ class SeedVR2AutoencoderKL(nn.Module):
         self, x: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED
     ) -> torch.Tensor:
         _x = x.to(self.device)
-        _x = causal_conv_slice_inputs(_x, self.slicing_sample_min_size, memory_state=memory_state)
+        _x = causal_conv_slice_inputs(
+            _x, self.slicing_sample_min_size, memory_state=memory_state
+        )
         h = self.encoder(_x, memory_state=memory_state)
         if self.quant_conv is not None:
             output = self.quant_conv(h, memory_state=memory_state)
@@ -1173,7 +1241,9 @@ class SeedVR2AutoencoderKL(nn.Module):
         self, z: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED
     ) -> torch.Tensor:
         _z = z.to(self.device)
-        _z = causal_conv_slice_inputs(_z, self.slicing_latent_min_size, memory_state=memory_state)
+        _z = causal_conv_slice_inputs(
+            _z, self.slicing_latent_min_size, memory_state=memory_state
+        )
         if self.post_quant_conv is not None:
             _z = self.post_quant_conv(_z, memory_state=memory_state)
         output = self.decoder(_z, memory_state=memory_state)
@@ -1182,8 +1252,13 @@ class SeedVR2AutoencoderKL(nn.Module):
 
     def slicing_encode(self, x: torch.Tensor) -> torch.Tensor:
         sp_size = 1
-        if self.use_slicing and (x.shape[2] - 1) > self.slicing_sample_min_size * sp_size:
-            x_slices = x[:, :, 1:].split(split_size=self.slicing_sample_min_size * sp_size, dim=2)
+        if (
+            self.use_slicing
+            and (x.shape[2] - 1) > self.slicing_sample_min_size * sp_size
+        ):
+            x_slices = x[:, :, 1:].split(
+                split_size=self.slicing_sample_min_size * sp_size, dim=2
+            )
             encoded_slices = [
                 self._encode(
                     torch.cat((x[:, :, :1], x_slices[0]), dim=2),
@@ -1200,8 +1275,13 @@ class SeedVR2AutoencoderKL(nn.Module):
 
     def slicing_decode(self, z: torch.Tensor) -> torch.Tensor:
         sp_size = 1
-        if self.use_slicing and (z.shape[2] - 1) > self.slicing_latent_min_size * sp_size:
-            z_slices = z[:, :, 1:].split(split_size=self.slicing_latent_min_size * sp_size, dim=2)
+        if (
+            self.use_slicing
+            and (z.shape[2] - 1) > self.slicing_latent_min_size * sp_size
+        ):
+            z_slices = z[:, :, 1:].split(
+                split_size=self.slicing_latent_min_size * sp_size, dim=2
+            )
             decoded_slices = [
                 self._decode(
                     torch.cat((z[:, :, :1], z_slices[0]), dim=2),
@@ -1223,7 +1303,10 @@ class SeedVR2AutoencoderKL(nn.Module):
         raise NotImplementedError
 
     def forward(
-        self, x: torch.FloatTensor, mode: Literal["encode", "decode", "all"] = "all", **kwargs
+        self,
+        x: torch.FloatTensor,
+        mode: Literal["encode", "decode", "all"] = "all",
+        **kwargs,
     ):
         # x: [b c t h w]
         if mode == "encode":
@@ -1239,8 +1322,7 @@ class SeedVR2AutoencoderKL(nn.Module):
 
 
 class SeedVR2AutoencoderKLWrapper(SeedVR2AutoencoderKL, diffusers.AutoencoderKL):
-    
-    
+
     def __init__(
         self,
         in_channels: int = 3,
@@ -1346,8 +1428,12 @@ class SeedVR2AutoencoderKLWrapper(SeedVR2AutoencoderKL, diffusers.AutoencoderKL)
             if isinstance(module, InflatedCausalConv3d):
                 module.set_memory_device(memory_device)
 
-    def set_memory_limit(self, conv_max_mem: Optional[float], norm_max_mem: Optional[float]):
+    def set_memory_limit(
+        self, conv_max_mem: Optional[float], norm_max_mem: Optional[float]
+    ):
         set_norm_limit(norm_max_mem)
         for m in self.modules():
             if isinstance(m, InflatedCausalConv3d):
-                m.set_memory_limit(conv_max_mem if conv_max_mem is not None else float("inf"))
+                m.set_memory_limit(
+                    conv_max_mem if conv_max_mem is not None else float("inf")
+                )

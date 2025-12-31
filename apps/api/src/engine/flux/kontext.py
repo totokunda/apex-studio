@@ -89,7 +89,9 @@ class FluxKontextEngine(FluxShared):
         safe_emit_progress(progress_callback, 0.24, "Loading image")
         image = self._load_image(image)
         if resize_to_preferred_resolution:
-            safe_emit_progress(progress_callback, 0.26, "Resizing image to preferred resolution")
+            safe_emit_progress(
+                progress_callback, 0.26, "Resizing image to preferred resolution"
+            )
             image = self.resize_to_preferred_resolution(image)
             width, height = image.size
         else:
@@ -174,7 +176,9 @@ class FluxKontextEngine(FluxShared):
         else:
             guidance = None
 
-        safe_emit_progress(progress_callback, 0.49, "Preparing guidance / IP-Adapter embeds")
+        safe_emit_progress(
+            progress_callback, 0.49, "Preparing guidance / IP-Adapter embeds"
+        )
         if (ip_adapter_image is not None or ip_adapter_image_embeds is not None) and (
             negative_ip_adapter_image is None
             and negative_ip_adapter_image_embeds is None

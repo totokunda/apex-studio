@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from diffusers.models.modeling_utils import ModelMixin
 from .base import TRANSFORMERS_REGISTRY
+
 try:
     from loguru import logger  # type: ignore
 except Exception:  # pragma: no cover

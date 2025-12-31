@@ -2,7 +2,7 @@ import torch
 from typing import Iterable, List, Tuple, Sequence
 
 from .ggml_tensor import GGMLTensor
-from .scaled_layer import FPScaledTensor # type: ignore
+from .scaled_layer import FPScaledTensor  # type: ignore
 
 
 def ggml_cat(tensors: Iterable[torch.Tensor], dim: int = 0) -> torch.Tensor:

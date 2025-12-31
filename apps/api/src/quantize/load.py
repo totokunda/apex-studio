@@ -76,7 +76,6 @@ MISTRAL_SD_MAP = {
     "ffn_gate": "mlp.gate_proj",
     "ffn_norm": "post_attention_layernorm",
     "patch_embd": "patch_conv",
-
     # Common non-block tensors (kept for completeness / parity with LLAMA_SD_MAP)
     "token_embd": "language_model.embed_tokens",
     "output_norm": "language_model.norm",
@@ -84,7 +83,7 @@ MISTRAL_SD_MAP = {
     "mm.1": "multi_modal_projector.linear_1",
     "mm.2": "multi_modal_projector.linear_2",
     "mm.input_norm": "multi_modal_projector.norm",
-    "mm.patch_merger": "multi_modal_projector.patch_merger.merging_layer"
+    "mm.patch_merger": "multi_modal_projector.patch_merger.merging_layer",
 }
 
 MISTRAL_VISION_SD_MAP = {
@@ -93,17 +92,14 @@ MISTRAL_VISION_SD_MAP = {
     "v.patch_embd": "vision_tower.patch_conv",
     "v.pre_ln": "vision_tower.ln_pre",
     "v.token_embd.img_break": "vision_tower.token_embd.img_break",
-
     # attention
     "attn_q": "attention.q_proj",
     "attn_k": "attention.k_proj",
     "attn_v": "attention.v_proj",
     "attn_out": "attention.o_proj",
-
     # norms (Pixtral HF naming)
     "ln1": "attention_norm",
     "ln2": "ffn_norm",
-
     # feed-forward
     "ffn_up": "feed_forward.up_proj",
     "ffn_down": "feed_forward.down_proj",
@@ -137,17 +133,17 @@ def load_text_encoder_gguf(
     device: str = "cpu",
     **kwargs,
 ):
-    
+
     if key_map is None:
         key_map = "t5"
-    
+
     if isinstance(dequant_dtype, str):
         dequant_dtype = convert_str_dtype(dequant_dtype)
     reader = gguf.GGUFReader(path)
     state_dict: Dict[str, GGMLTensor] = {}
     qtype_dict: Dict[str, int] = {}
     dev = torch.device(device)
-    
+
     for tensor in tqdm(reader.tensors):
         name = remap_key(tensor.name, key_map)
         shape = torch.Size(tuple(int(v) for v in reversed(tensor.shape)))
@@ -160,7 +156,9 @@ def load_text_encoder_gguf(
             if dev.type != "cpu" and torch_tensor.device.type == "cpu":
                 if dev.type == "cuda":
                     try:
-                        torch_tensor = torch_tensor.pin_memory().to(dev, non_blocking=True)
+                        torch_tensor = torch_tensor.pin_memory().to(
+                            dev, non_blocking=True
+                        )
                     except Exception:
                         torch_tensor = torch_tensor.to(dev)
                 else:
@@ -174,7 +172,7 @@ def load_text_encoder_gguf(
                 ),
                 tensor_type=tensor.tensor_type,
                 tensor_shape=shape,
-                dequant_dtype=dequant_dtype
+                dequant_dtype=dequant_dtype,
             )
 
         state_dict[name] = ggml_tensor

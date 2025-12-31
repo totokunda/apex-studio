@@ -270,7 +270,6 @@ const SplitButton = () => {
       const clip = getClipById(clipId);
       if (clip) {
         splitClip(focusFrame, clipId);
-        setFocusFrame(focusFrame + 1);
       }
     });
   }, [disabled, splitClip, focusFrame, selectedClipIds]);

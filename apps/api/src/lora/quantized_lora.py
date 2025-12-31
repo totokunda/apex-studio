@@ -57,7 +57,9 @@ class QuantizedLinearLora(lora_layer.Linear):
             compute_dtype = getattr(base_layer, "dequant_dtype", None) or torch.bfloat16
         else:
             # Fallback to the original behavior
-            w = getattr(base_layer, "weight", None) or getattr(base_layer, "qweight", None)
+            w = getattr(base_layer, "weight", None) or getattr(
+                base_layer, "qweight", None
+            )
             if w is None:
                 return
             compute_dtype = w.dtype
@@ -67,7 +69,9 @@ class QuantizedLinearLora(lora_layer.Linear):
         # Move only this adapter's parameters; other adapters may live elsewhere.
         for adapter_layer_name in self.adapter_layer_names + self.other_param_names:
             adapter_layer = getattr(self, adapter_layer_name, None)
-            if not isinstance(adapter_layer, (nn.ModuleDict, nn.ParameterDict, BufferDict)):
+            if not isinstance(
+                adapter_layer, (nn.ModuleDict, nn.ParameterDict, BufferDict)
+            ):
                 continue
             if adapter_name not in adapter_layer:
                 continue
@@ -227,7 +231,9 @@ def _dispatch_default_with_quant(
             )
             kwargs["fan_in_fan_out"] = lora_config.fan_in_fan_out = True
         kwargs.update(lora_config.loftq_config)
-        return lora_layer.Linear(target, adapter_name, is_target_conv_1d_layer=True, **kwargs)
+        return lora_layer.Linear(
+            target, adapter_name, is_target_conv_1d_layer=True, **kwargs
+        )
 
     # No compatible type found.
     return None
@@ -240,18 +246,22 @@ def patch_peft_for_quantized_lora() -> None:
     Safe to call multiple times; the assignment is idempotent.
     """
     # Patch the layer-level dispatcher.
-    if getattr(lora_layer.dispatch_default, "__name__", "") != "_dispatch_default_with_quant":
+    if (
+        getattr(lora_layer.dispatch_default, "__name__", "")
+        != "_dispatch_default_with_quant"
+    ):
         lora_layer.dispatch_default = _dispatch_default_with_quant  # type: ignore[assignment]
 
     # Also patch the LoraModel-level reference used in `_create_new_module`.
     try:
         from peft.tuners.lora import model as lora_model  # type: ignore
 
-        if getattr(lora_model, "dispatch_default", None) is not _dispatch_default_with_quant:
+        if (
+            getattr(lora_model, "dispatch_default", None)
+            is not _dispatch_default_with_quant
+        ):
             lora_model.dispatch_default = _dispatch_default_with_quant  # type: ignore[assignment]
     except Exception:
         # If PEFT internals change, we don't want to hard-crash; in that case
         # only the layer-level patch will be active.
         pass
-
-

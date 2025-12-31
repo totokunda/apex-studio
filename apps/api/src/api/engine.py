@@ -94,8 +94,7 @@ def run_engine(request: RunEngineRequest):
 
     try:
         from .ray_tasks import run_engine_from_manifest  # lazy import to avoid cycles
-        
- 
+
         ref = run_engine_from_manifest.options(**resources).remote(
             manifest_path,
             job_id,

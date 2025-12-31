@@ -672,7 +672,9 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
         progress_callback = kwargs.pop("progress_callback", progress_callback)
 
         safe_emit_progress(
-            progress_callback, 0.0, "Starting HunyuanVideo 1.5 text/image-to-video pipeline"
+            progress_callback,
+            0.0,
+            "Starting HunyuanVideo 1.5 text/image-to-video pipeline",
         )
         device = self.device
 
@@ -743,8 +745,7 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
             batch_size = len(prompt)
         else:
             batch_size = 1
-            
-        
+
         logger.info(f"{getattr(self, 'text_encoder', None)} text encoder")
 
         if getattr(self, "text_encoder", None) is None:
@@ -780,13 +781,17 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
                 safe_emit_progress(progress_callback, 0.14, "Loading text encoder 2")
                 self.load_component_by_name("text_encoder_2")
                 if getattr(self, "text_encoder_2", None) is not None:
-                    safe_emit_progress(progress_callback, 0.15, "Moving text encoder 2 to device")
+                    safe_emit_progress(
+                        progress_callback, 0.15, "Moving text encoder 2 to device"
+                    )
                     self.to_device(self.text_encoder_2)
             except Exception:
                 self.text_encoder_2 = None
 
         if getattr(self, "text_encoder_2", None) is not None:
-            safe_emit_progress(progress_callback, 0.16, "Encoding prompt (text encoder 2)")
+            safe_emit_progress(
+                progress_callback, 0.16, "Encoding prompt (text encoder 2)"
+            )
             (
                 prompt_embeds_2,
                 negative_prompt_embeds_2,
@@ -866,7 +871,9 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
         )
         safe_emit_progress(progress_callback, 0.34, "Latents initialized")
 
-        safe_emit_progress(progress_callback, 0.35, "Preparing conditioning (VAE / vision)")
+        safe_emit_progress(
+            progress_callback, 0.35, "Preparing conditioning (VAE / vision)"
+        )
         self.load_component_by_type("vae")
         self.to_device(self.vae)
         image_cond = self.get_image_condition_latents(
@@ -1045,7 +1052,9 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
                 video_frames, output_type="pil"
             )
 
-        safe_emit_progress(progress_callback, 1.0, "Completed HunyuanVideo 1.5 TI2V pipeline")
+        safe_emit_progress(
+            progress_callback, 1.0, "Completed HunyuanVideo 1.5 TI2V pipeline"
+        )
         return video_frames
 
     def vae_decode(self, latents, offload=True):

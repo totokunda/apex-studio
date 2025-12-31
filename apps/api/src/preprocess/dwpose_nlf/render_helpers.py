@@ -17,20 +17,20 @@ def process_data_to_COCO_format(joints):
     dim = joints.shape[1]  # 2D or 3D
 
     mapping = {
-        15: 0,   # head
-        12: 1,   # neck
-        17: 2,   # left shoulder
-        16: 5,   # right shoulder
-        19: 3,   # left elbow
-        18: 6,   # right elbow
-        21: 4,   # left hand
-        20: 7,   # right hand
-        2: 8,    # left pelvis
-        1: 11,   # right pelvis
-        5: 9,    # left knee
-        4: 12,   # right knee
-        8: 10,   # left feet
-        7: 13,   # right feet
+        15: 0,  # head
+        12: 1,  # neck
+        17: 2,  # left shoulder
+        16: 5,  # right shoulder
+        19: 3,  # left elbow
+        18: 6,  # right elbow
+        21: 4,  # left hand
+        20: 7,  # right hand
+        2: 8,  # left pelvis
+        1: 11,  # right pelvis
+        5: 9,  # left knee
+        4: 12,  # right knee
+        8: 10,  # left feet
+        7: 13,  # right feet
     }
 
     new_joints = np.zeros((18, dim), dtype=joints.dtype)
@@ -44,7 +44,7 @@ def get_single_pose_cylinder_specs(args):
     """渲染单个pose的辅助函数，用于并行处理"""
     idx, pose, focal, princpt, height, width, colors, limb_seq, draw_seq = args
     cylinder_specs = []
-    
+
     for joints3d in pose:  # 多人
         joints3d = joints3d.cpu().numpy()
         joints3d = process_data_to_COCO_format(joints3d)
@@ -54,19 +54,35 @@ def get_single_pose_cylinder_specs(args):
             if np.sum(joints3d[start]) == 0 or np.sum(joints3d[end]) == 0:
                 continue
             else:
-                cylinder_specs.append((joints3d[start], joints3d[end], colors[line_idx]))
+                cylinder_specs.append(
+                    (joints3d[start], joints3d[end], colors[line_idx])
+                )
     return cylinder_specs
 
-def draw_pose(pose, H, W, show_feet=False, show_body=True, show_hand=True, show_face=True, show_cheek=False, dw_bgr=False, dw_hand=False, aug_body_draw=False, optimized_face=False):
+
+def draw_pose(
+    pose,
+    H,
+    W,
+    show_feet=False,
+    show_body=True,
+    show_hand=True,
+    show_face=True,
+    show_cheek=False,
+    dw_bgr=False,
+    dw_hand=False,
+    aug_body_draw=False,
+    optimized_face=False,
+):
     final_canvas = np.zeros(shape=(H, W, 3), dtype=np.uint8)
     for i in range(len(pose["bodies"]["candidate"])):
         canvas = np.zeros(shape=(H, W, 3), dtype=np.uint8)
         bodies = pose["bodies"]
-        faces = pose["faces"][i:i+1]
-        hands = pose["hands"][2*i:2*i+2]
+        faces = pose["faces"][i : i + 1]
+        hands = pose["hands"][2 * i : 2 * i + 2]
         candidate = bodies["candidate"][i]
-        subset = bodies["subset"][i:i+1]   # subset是认为的有效点
-        
+        subset = bodies["subset"][i : i + 1]  # subset是认为的有效点
+
         if show_body:
             if len(subset[0]) <= 18 or show_feet == False:
                 if aug_body_draw:
@@ -78,8 +94,17 @@ def draw_pose(pose, H, W, show_feet=False, show_body=True, show_hand=True, show_
             if dw_bgr:
                 canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
         if show_cheek:
-            assert show_body == False, "show_cheek and show_body cannot be True at the same time"
-            canvas = util.draw_bodypose_augmentation(canvas, candidate, subset,  drop_aug=True, shift_aug=False, all_cheek_aug=True)
+            assert (
+                show_body == False
+            ), "show_cheek and show_body cannot be True at the same time"
+            canvas = util.draw_bodypose_augmentation(
+                canvas,
+                candidate,
+                subset,
+                drop_aug=True,
+                shift_aug=False,
+                all_cheek_aug=True,
+            )
         if show_hand:
             if not dw_hand:
                 canvas = util.draw_handpose_lr(canvas, hands)
@@ -91,28 +116,60 @@ def draw_pose(pose, H, W, show_feet=False, show_body=True, show_hand=True, show_
     return final_canvas
 
 
-def draw_pose_to_canvas_np(poses, pool, H, W, reshape_scale, show_feet_flag=False, show_body_flag=True, show_hand_flag=True, show_face_flag=True, show_cheek_flag=False, dw_bgr=False, dw_hand=False, aug_body_draw=False):
+def draw_pose_to_canvas_np(
+    poses,
+    pool,
+    H,
+    W,
+    reshape_scale,
+    show_feet_flag=False,
+    show_body_flag=True,
+    show_hand_flag=True,
+    show_face_flag=True,
+    show_cheek_flag=False,
+    dw_bgr=False,
+    dw_hand=False,
+    aug_body_draw=False,
+):
     canvas_np_lst = []
     for pose in poses:
         if reshape_scale > 0:
             pool.apply_random_reshapes(pose)
-        canvas = draw_pose(pose, H, W, show_feet_flag, show_body_flag, show_hand_flag, show_face_flag, show_cheek_flag, dw_bgr, dw_hand, aug_body_draw, optimized_face=True)
+        canvas = draw_pose(
+            pose,
+            H,
+            W,
+            show_feet_flag,
+            show_body_flag,
+            show_hand_flag,
+            show_face_flag,
+            show_cheek_flag,
+            dw_bgr,
+            dw_hand,
+            aug_body_draw,
+            optimized_face=True,
+        )
         canvas_np_lst.append(canvas)
     return canvas_np_lst
 
 
 def collect_smpl_poses(data):
-    uncollected_smpl_poses = [item['nlfpose'] for item in data]
+    uncollected_smpl_poses = [item["nlfpose"] for item in data]
     smpl_poses = [[] for _ in range(len(uncollected_smpl_poses))]
     for frame_idx in range(len(uncollected_smpl_poses)):
-        for person_idx in range(len(uncollected_smpl_poses[frame_idx])):  # 每个人（每个bbox）只给出一个pose
-            if len(uncollected_smpl_poses[frame_idx][person_idx]) > 0:    # 有返回的骨骼
-                smpl_poses[frame_idx].append(uncollected_smpl_poses[frame_idx][person_idx][0])
+        for person_idx in range(
+            len(uncollected_smpl_poses[frame_idx])
+        ):  # 每个人（每个bbox）只给出一个pose
+            if len(uncollected_smpl_poses[frame_idx][person_idx]) > 0:  # 有返回的骨骼
+                smpl_poses[frame_idx].append(
+                    uncollected_smpl_poses[frame_idx][person_idx][0]
+                )
             else:
-                smpl_poses[frame_idx].append(torch.zeros((24, 3), dtype=torch.float32))  # 没有检测到人，就放一个全0的
+                smpl_poses[frame_idx].append(
+                    torch.zeros((24, 3), dtype=torch.float32)
+                )  # 没有检测到人，就放一个全0的
 
     return smpl_poses
-
 
 
 def scale_image_hw_keep_size(img, scale_h, scale_w):
@@ -149,9 +206,12 @@ def scale_image_hw_keep_size(img, scale_h, scale_w):
         x_end_dst = x_start_dst + new_W
 
     # 将 scaled 映射到 result
-    result[y_start_dst:y_end_dst, x_start_dst:x_end_dst] = scaled[y_start_src:y_end_src, x_start_src:x_end_src]
+    result[y_start_dst:y_end_dst, x_start_dst:x_end_dst] = scaled[
+        y_start_src:y_end_src, x_start_src:x_end_src
+    ]
 
     return result
+
 
 def flatten_specs(specs_list):
     """把 specs_list 拉平为 numpy 数组 + 索引表"""
@@ -161,7 +221,7 @@ def flatten_specs(specs_list):
     for specs in specs_list:
         frame_offset.append(offset)
         frame_count.append(len(specs))
-        for (s, e, c) in specs:
+        for s, e, c in specs:
             starts.append(s)
             ends.append(e)
             colors.append(c)
@@ -193,11 +253,11 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
     light_dir = ti.Vector([0.0, 0.0, 1.0])
 
     c_start = ti.Vector.field(3, dtype=ti.f32, shape=total_cyl)
-    c_end   = ti.Vector.field(3, dtype=ti.f32, shape=total_cyl)
-    c_rgba  = ti.Vector.field(4, dtype=ti.f32, shape=total_cyl)
-    n_cyl   = ti.field(dtype=ti.i32, shape=())  # 实际数量
+    c_end = ti.Vector.field(3, dtype=ti.f32, shape=total_cyl)
+    c_rgba = ti.Vector.field(4, dtype=ti.f32, shape=total_cyl)
+    n_cyl = ti.field(dtype=ti.i32, shape=())  # 实际数量
     f_offset = ti.field(dtype=ti.i32, shape=n_frames)
-    f_count  = ti.field(dtype=ti.i32, shape=n_frames)
+    f_count = ti.field(dtype=ti.i32, shape=n_frames)
     frame_id = ti.field(dtype=ti.i32, shape=())  # 当前帧号
     z_min_field = ti.field(dtype=ti.f32, shape=())
     z_max_field = ti.field(dtype=ti.f32, shape=())
@@ -249,9 +309,18 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
     @ti.func
     def get_normal(p):
         e = 1e-3
-        dx = scene_sdf(p + ti.Vector([e, 0.0, 0.0]))[0] - scene_sdf(p - ti.Vector([e, 0.0, 0.0]))[0]
-        dy = scene_sdf(p + ti.Vector([0.0, e, 0.0]))[0] - scene_sdf(p - ti.Vector([0.0, e, 0.0]))[0]
-        dz = scene_sdf(p + ti.Vector([0.0, 0.0, e]))[0] - scene_sdf(p - ti.Vector([0.0, 0.0, e]))[0]
+        dx = (
+            scene_sdf(p + ti.Vector([e, 0.0, 0.0]))[0]
+            - scene_sdf(p - ti.Vector([e, 0.0, 0.0]))[0]
+        )
+        dy = (
+            scene_sdf(p + ti.Vector([0.0, e, 0.0]))[0]
+            - scene_sdf(p - ti.Vector([0.0, e, 0.0]))[0]
+        )
+        dz = (
+            scene_sdf(p + ti.Vector([0.0, 0.0, e]))[0]
+            - scene_sdf(p - ti.Vector([0.0, 0.0, e]))[0]
+        )
         n = ti.Vector([dx, dy, dz])
         return n.normalized()
 
@@ -267,7 +336,9 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
 
     @ti.kernel
     def render():
-        depth_near, depth_far = ti.max(z_min_field[None], 0.1), ti.min(z_max_field[None] + 6000, 20000)  # 能渲染出来的点，最大12000
+        depth_near, depth_far = ti.max(z_min_field[None], 0.1), ti.min(
+            z_max_field[None] + 6000, 20000
+        )  # 能渲染出来的点，最大12000
         for y, x in img:
             ro, rd = pixel_to_ray(x, y)
             t = znear
@@ -276,11 +347,11 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
                 p = ro + rd * t
                 d, col = scene_sdf(p)
                 if d < 1e-3:
-                #     n = get_normal(p)
-                #     diff = max(n.dot(-light_dir), 0.0)
-                #     lit = 0.3 + 0.7 * diff
-                #     col_out = ti.Vector([col.x * lit, col.y * lit, col.z * lit, col.w])
-                #     break
+                    #     n = get_normal(p)
+                    #     diff = max(n.dot(-light_dir), 0.0)
+                    #     lit = 0.3 + 0.7 * diff
+                    #     col_out = ti.Vector([col.x * lit, col.y * lit, col.z * lit, col.w])
+                    #     break
 
                     n = get_normal(p)
                     diff = max(n.dot(-light_dir), 0.0)
@@ -288,7 +359,9 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
                     # === Blinn-Phong 镜面反射 ===
                     view_dir = -rd.normalized()
                     half_dir = (view_dir + -light_dir).normalized()
-                    spec = max(n.dot(half_dir), 0.0) ** 32   # shininess=32，越小越散，越大越锐
+                    spec = (
+                        max(n.dot(half_dir), 0.0) ** 32
+                    )  # shininess=32，越小越散，越大越锐
 
                     depth_factor = 1.0 - (p.z - depth_near) / (depth_far - znear)
                     depth_factor = ti.max(0.0, ti.min(1.0, depth_factor))
@@ -300,10 +373,14 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
                     # 镜面高光（叠加到原有结果上）
                     highlight = ti.Vector([1.0, 1.0, 1.0]) * (0.5 * spec) * depth_factor
 
-                    col_out = ti.Vector([base.x + highlight.x,
-                                        base.y + highlight.y,
-                                        base.z + highlight.z,
-                                        col.w])
+                    col_out = ti.Vector(
+                        [
+                            base.x + highlight.x,
+                            base.y + highlight.y,
+                            base.z + highlight.z,
+                            col.w,
+                        ]
+                    )
                     break
 
                 if t > zfar:
@@ -321,9 +398,8 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
         # print(f"Frame {f} time: {end_time - start_time} seconds")
         arr8 = (arr * 255).astype(np.uint8)
         frames_np_rgba.append(arr8)
-        
-    return frames_np_rgba
 
+    return frames_np_rgba
 
 
 def p3d_single_p2d(points, intrinsic_matrix):
@@ -335,7 +411,9 @@ def p3d_single_p2d(points, intrinsic_matrix):
     return np.array([u_np, v_np])
 
 
-def shift_dwpose_according_to_nlf(smpl_poses, aligned_poses, ori_intrinstics, modified_intrinstics, height, width):
+def shift_dwpose_according_to_nlf(
+    smpl_poses, aligned_poses, ori_intrinstics, modified_intrinstics, height, width
+):
     ########## warning: 会改变body； shift 之后 body是不准的 ##########
     for i in range(len(smpl_poses)):
         persons_joints_list = smpl_poses[i]
@@ -347,9 +425,24 @@ def shift_dwpose_according_to_nlf(smpl_poses, aligned_poses, ori_intrinstics, mo
             left_hand = poses_list["hands"][2 * person_idx + 1]
             candidate = poses_list["bodies"]["candidate"][person_idx]
             # 注意，这里不是coco format
-            person_joint_15_2d_shift = p3d_single_p2d(person_joints[15], modified_intrinstics) - p3d_single_p2d(person_joints[15], ori_intrinstics) if person_joints[15, 2] > 0.01 else np.array([0.0, 0.0])  # face
-            person_joint_20_2d_shift = p3d_single_p2d(person_joints[20], modified_intrinstics) - p3d_single_p2d(person_joints[20], ori_intrinstics) if person_joints[20, 2] > 0.01 else np.array([0.0, 0.0])  # right hand
-            person_joint_21_2d_shift = p3d_single_p2d(person_joints[21], modified_intrinstics) - p3d_single_p2d(person_joints[21], ori_intrinstics) if person_joints[21, 2] > 0.01 else np.array([0.0, 0.0])  # left hand
+            person_joint_15_2d_shift = (
+                p3d_single_p2d(person_joints[15], modified_intrinstics)
+                - p3d_single_p2d(person_joints[15], ori_intrinstics)
+                if person_joints[15, 2] > 0.01
+                else np.array([0.0, 0.0])
+            )  # face
+            person_joint_20_2d_shift = (
+                p3d_single_p2d(person_joints[20], modified_intrinstics)
+                - p3d_single_p2d(person_joints[20], ori_intrinstics)
+                if person_joints[20, 2] > 0.01
+                else np.array([0.0, 0.0])
+            )  # right hand
+            person_joint_21_2d_shift = (
+                p3d_single_p2d(person_joints[21], modified_intrinstics)
+                - p3d_single_p2d(person_joints[21], ori_intrinstics)
+                if person_joints[21, 2] > 0.01
+                else np.array([0.0, 0.0])
+            )  # left hand
 
             face[:, 0] += person_joint_15_2d_shift[0] / width
             face[:, 1] += person_joint_15_2d_shift[1] / height
@@ -359,4 +452,3 @@ def shift_dwpose_according_to_nlf(smpl_poses, aligned_poses, ori_intrinstics, mo
             left_hand[:, 1] += person_joint_21_2d_shift[1] / height
             candidate[:, 0] += person_joint_15_2d_shift[0] / width
             candidate[:, 1] += person_joint_15_2d_shift[1] / height
-

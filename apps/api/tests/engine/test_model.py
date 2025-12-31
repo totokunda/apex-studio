@@ -1,7 +1,8 @@
 from dotenv import load_dotenv
+
 load_dotenv()
 from src.engine.registry import UniversalEngine
-import json 
+import json
 from diffusers.utils import export_to_video
 import numpy as np
 from typing import Optional
@@ -14,12 +15,15 @@ import io
 from huggingface_hub import get_token
 import subprocess
 import shutil
+
 torch.set_printoptions(threshold=10000, linewidth=300)
 
-directory = "/home/tosin_coverquick_co/apex/runs/flux2-dev-text-to-image-edit-turbo-1.0.0.v1"
+directory = (
+    "/home/tosin_coverquick_co/apex/runs/flux2-dev-text-to-image-edit-turbo-1.0.0.v1"
+)
 
 with open(os.path.join(directory, "model_inputs.json"), "r") as f:
-   data = json.load(f)
+    data = json.load(f)
 
 engine_kwargs = data["engine_kwargs"]
 
@@ -29,12 +33,11 @@ for input_key, input_value in inputs.items():
         inputs[input_key] = os.path.join(directory, input_value)
 
 import time
+
 start_time = time.perf_counter()
 engine = UniversalEngine(**engine_kwargs)
 
-out = engine.run(
-    **inputs
-)
+out = engine.run(**inputs)
 out[0].save("output.png")
 
 exit()
@@ -48,7 +51,9 @@ export_to_video(out[0], video_only_path, fps=25, quality=8)
 
 ffmpeg = shutil.which("ffmpeg")
 if ffmpeg is None:
-    raise RuntimeError("ffmpeg not found on PATH; install ffmpeg to mux audio into the output video.")
+    raise RuntimeError(
+        "ffmpeg not found on PATH; install ffmpeg to mux audio into the output video."
+    )
 
 # Mux (and if needed, transcode) audio into the generated video.
 subprocess.run(

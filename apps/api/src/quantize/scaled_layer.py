@@ -35,6 +35,7 @@ def get_fp_maxval(
     maxval = mantissa * 2 ** (2**E - 1 - bias)
     return maxval
 
+
 def quantize_to_fp8(
     x: torch.Tensor,
     bits: int = 8,
@@ -112,6 +113,7 @@ def quantize_to_fp4(
 
     return q, scales
 
+
 def dequantize_from_fp4(
     q: torch.Tensor,
     scales: torch.Tensor,
@@ -121,7 +123,7 @@ def dequantize_from_fp4(
     q: int8 tensor containing FP4 codes
     scales: same shape as q (or broadcastable)
     """
-    return (q.to(out_dtype) * scales.to(out_dtype))
+    return q.to(out_dtype) * scales.to(out_dtype)
 
 
 def fp8_tensor_quant(
@@ -176,7 +178,9 @@ class FPScaledTensor(torch.Tensor):
     logical_dtype: Optional[torch.dtype] = None
 
     @staticmethod
-    def _from_base(base: torch.Tensor, *, logical_dtype: Optional[torch.dtype]) -> "FPScaledTensor":
+    def _from_base(
+        base: torch.Tensor, *, logical_dtype: Optional[torch.dtype]
+    ) -> "FPScaledTensor":
         out = torch.Tensor._make_subclass(
             FPScaledTensor, base, require_grad=base.requires_grad
         )
@@ -207,7 +211,7 @@ class FPScaledTensor(torch.Tensor):
         in ``compute_dtype`` while they are actually stored as FP8.
         """
         return self.logical_dtype or super().dtype
-    
+
     def to(self, *args, **kwargs):
         base = super().to(*args, **kwargs)
         return self._wrap_like(base)
@@ -268,7 +272,7 @@ class FPScaledParameter(nn.Parameter):
     def clone(self, *args, **kwargs):
         base = super().clone(*args, **kwargs)
         return self._wrap_like(base)
-    
+
     def dequant(self, *, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
         """
         Return a dequantized / compute-dtype view of this parameter for arithmetic.
@@ -310,8 +314,6 @@ class FPScaledParameter(nn.Parameter):
 
     def __rmatmul__(self, other):  # type: ignore[override]
         return other @ self.dequant(dtype=other.dtype)
-    
-    
 
 
 def restore_fpscaled_parameters(
@@ -347,9 +349,15 @@ def restore_fpscaled_parameters(
             module.weight = _wrap_fpscaled_weight_parameter(
                 weight, logical_dtype=logical_dtype
             )
-    
+
     for name, param in model.named_parameters():
-        if param.dtype in [torch.float8_e4m3fn, torch.float8_e5m2, torch.float4_e2m1fn_x2] and ".weight" not in name and ".bias" not in name and ".scale_weight" not in name:
+        if (
+            param.dtype
+            in [torch.float8_e4m3fn, torch.float8_e5m2, torch.float4_e2m1fn_x2]
+            and ".weight" not in name
+            and ".bias" not in name
+            and ".scale_weight" not in name
+        ):
             wrapped_param = FPScaledParameter._from_base(
                 param, logical_dtype=param.dtype, requires_grad=param.requires_grad
             )
@@ -359,8 +367,7 @@ def restore_fpscaled_parameters(
             for part in parts[:-1]:
                 module = getattr(module, part)
             setattr(module, parts[-1], wrapped_param)
-    
-    
+
 
 def _wrap_fpscaled_weight_parameter(
     param: nn.Parameter,
@@ -461,7 +468,11 @@ class FPScaledLayer(nn.Module):
             # other behaviour to the default Module implementation.
             if isinstance(param, torch.nn.Parameter):
                 try:
-                    if tensor.numel() == 1 and param.numel() == 1 and tensor.shape != param.shape:
+                    if (
+                        tensor.numel() == 1
+                        and param.numel() == 1
+                        and tensor.shape != param.shape
+                    ):
                         # View the incoming checkpoint tensor as the current
                         # parameter shape (e.g. [] <-> [1]).
                         state_dict[key] = tensor.view_as(param)
@@ -469,7 +480,7 @@ class FPScaledLayer(nn.Module):
                     # If anything goes wrong, fall back to default behaviour
                     # and let the underlying implementation surface an error.
                     pass
-                
+
         key = prefix + "weight"
 
         super()._load_from_state_dict(
@@ -481,7 +492,6 @@ class FPScaledLayer(nn.Module):
             unexpected_keys,
             error_msgs,
         )
-
 
     def _scale_and_cast_weight(
         self,
@@ -541,6 +551,7 @@ class FPScaledLayer(nn.Module):
 
         return w
 
+
 class FPScaledLinear(FPScaledLayer, nn.Linear):
     """
     Linear layer with FP weights and `scale_weight` support.
@@ -573,14 +584,13 @@ class FPScaledLinear(FPScaledLayer, nn.Linear):
         # dtype (logical) via ``weight.dtype``, while we still retain the true
         # FP storage dtype for dequantization via ``weight.physical_dtype``.
         logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
-        self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+        self.weight = _wrap_fpscaled_weight_parameter(
+            self.weight, logical_dtype=logical_dtype
+        )
 
         self.scale_weight = nn.Parameter(
             torch.ones(1, dtype=torch.float32), requires_grad=False
         )
-        
-        
-        
 
     @property
     def effective_dtype(self):
@@ -741,6 +751,7 @@ class FPScaledConv1d(FPScaledLayer, nn.Conv1d):
         # Always return in compute dtype (float16/bfloat16/float32), not FP8.
         return out
 
+
 class FPScaledEmbedding(FPScaledLayer, nn.Embedding):
     def __init__(
         self,
@@ -818,7 +829,9 @@ class FPScaledLayerNorm(FPScaledLayer, nn.LayerNorm):
         )
         if elementwise_affine:
             logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
-            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+            self.weight = _wrap_fpscaled_weight_parameter(
+                self.weight, logical_dtype=logical_dtype
+            )
             self.scale_weight = nn.Parameter(
                 torch.ones(1, dtype=torch.float32), requires_grad=False
             )
@@ -826,7 +839,7 @@ class FPScaledLayerNorm(FPScaledLayer, nn.LayerNorm):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         compute_dtype = self._effective_compute_dtype(x)
         x_c = x.to(compute_dtype)
-        
+
         if self.elementwise_affine:
             w = self._scale_and_cast_weight(
                 self.weight,
@@ -868,7 +881,9 @@ class FPScaledGroupNorm(FPScaledLayer, nn.GroupNorm):
         )
         if affine:
             logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
-            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+            self.weight = _wrap_fpscaled_weight_parameter(
+                self.weight, logical_dtype=logical_dtype
+            )
             self.scale_weight = nn.Parameter(
                 torch.ones(1, dtype=torch.float32), requires_grad=False
             )
@@ -876,7 +891,7 @@ class FPScaledGroupNorm(FPScaledLayer, nn.GroupNorm):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         compute_dtype = self._effective_compute_dtype(x)
         x_c = x.to(compute_dtype)
-        
+
         if self.affine:
             w = self._scale_and_cast_weight(
                 self.weight,
@@ -920,7 +935,9 @@ class FPScaledBatchNorm2d(FPScaledLayer, nn.BatchNorm2d):
         )
         if affine:
             logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
-            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+            self.weight = _wrap_fpscaled_weight_parameter(
+                self.weight, logical_dtype=logical_dtype
+            )
             self.scale_weight = nn.Parameter(
                 torch.ones(1, dtype=torch.float32), requires_grad=False
             )
@@ -928,7 +945,7 @@ class FPScaledBatchNorm2d(FPScaledLayer, nn.BatchNorm2d):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         compute_dtype = self._effective_compute_dtype(x)
         x_c = x.to(compute_dtype)
-        
+
         if self.affine:
             w = self._scale_and_cast_weight(
                 self.weight,
@@ -981,7 +998,9 @@ class FPScaledBatchNorm3d(FPScaledLayer, nn.BatchNorm3d):
         )
         if affine:
             logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
-            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+            self.weight = _wrap_fpscaled_weight_parameter(
+                self.weight, logical_dtype=logical_dtype
+            )
             self.scale_weight = nn.Parameter(
                 torch.ones(1, dtype=torch.float32), requires_grad=False
             )
@@ -989,7 +1008,7 @@ class FPScaledBatchNorm3d(FPScaledLayer, nn.BatchNorm3d):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         compute_dtype = self._effective_compute_dtype(x)
         x_c = x.to(compute_dtype)
-        
+
         if self.affine:
             w = self._scale_and_cast_weight(
                 self.weight,
@@ -1014,7 +1033,6 @@ class FPScaledBatchNorm3d(FPScaledLayer, nn.BatchNorm3d):
             self.momentum,
             self.eps,
         )
-
 
 
 class FPScaledRMSNorm(FPScaledLayer, nn.RMSNorm):
@@ -1048,8 +1066,12 @@ class FPScaledRMSNorm(FPScaledLayer, nn.RMSNorm):
 
         if self.elementwise_affine and self.weight is not None:
             logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
-            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
-            self.scale_weight = nn.Parameter(torch.ones(1, dtype=torch.float32), requires_grad=False)
+            self.weight = _wrap_fpscaled_weight_parameter(
+                self.weight, logical_dtype=logical_dtype
+            )
+            self.scale_weight = nn.Parameter(
+                torch.ones(1, dtype=torch.float32), requires_grad=False
+            )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         compute_dtype = self._effective_compute_dtype(hidden_states)
@@ -1091,6 +1113,7 @@ _TYPE_MAP = {
     nn.BatchNorm3d: FPScaledBatchNorm3d,
     nn.RMSNorm: FPScaledRMSNorm,
 }
+
 
 def patch_fpscaled_model(
     model: nn.Module,
@@ -1194,7 +1217,9 @@ def patch_fpscaled_model(
                         elementwise_affine=child.elementwise_affine,
                         bias=child.bias is not None,
                         compute_dtype=default_compute_dtype,
-                        device=child.weight.device if child.elementwise_affine else None,
+                        device=(
+                            child.weight.device if child.elementwise_affine else None
+                        ),
                         dtype=child.weight.dtype if child.elementwise_affine else None,
                     )
                     with torch.no_grad():
@@ -1264,8 +1289,16 @@ def patch_fpscaled_model(
                         eps=child.eps,
                         elementwise_affine=child.elementwise_affine,
                         compute_dtype=default_compute_dtype,
-                        device=child.weight.device if child.elementwise_affine and child.weight is not None else None,
-                        dtype=child.weight.dtype if child.elementwise_affine and child.weight is not None else None,
+                        device=(
+                            child.weight.device
+                            if child.elementwise_affine and child.weight is not None
+                            else None
+                        ),
+                        dtype=(
+                            child.weight.dtype
+                            if child.elementwise_affine and child.weight is not None
+                            else None
+                        ),
                     )
                     with torch.no_grad():
                         if child.elementwise_affine and child.weight is not None:
@@ -1278,6 +1311,7 @@ def patch_fpscaled_model(
 
             if child is not None and len(child._modules) > 0:
                 stack.append((qname + ".", child))
+
 
 def _infer_fpscaled_module_names_from_state_dict(state_dict: dict) -> set[str]:
     """

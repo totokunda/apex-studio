@@ -158,7 +158,6 @@ class HunyuanImageT2IEngine(BaseEngine):
         if offload:
             del self.text_encoder
 
-
         if prompt_embeds_2 is None:
             prompt_embeds_2_list = []
             prompt_embeds_mask_2_list = []
@@ -194,7 +193,6 @@ class HunyuanImageT2IEngine(BaseEngine):
 
             if offload and hasattr(self, "text_encoder_2"):
                 del self.text_encoder_2
-
 
             prompt_embeds_2 = torch.cat(prompt_embeds_2_list, dim=0)
             prompt_embeds_mask_2 = torch.cat(prompt_embeds_mask_2_list, dim=0)

@@ -20,7 +20,7 @@ import traceback
 router = APIRouter(prefix="/manifest", tags=["manifest"])
 
 # Base path to manifest directory
-MANIFEST_BASE_PATH = Path(__file__).parent.parent.parent / "manifest" / "verified"
+MANIFEST_BASE_PATH = Path(__file__).parent.parent.parent / "manifest"
 
 # Cache the system's compute capability (it doesn't change during runtime)
 _SYSTEM_COMPUTE_CAPABILITY: Optional[ComputeCapability] = None
@@ -718,10 +718,14 @@ def _list_manifests_by_model_sync(model: str, include_incompatible: bool = False
 @router.get("/list/model/{model}")
 async def list_manifests_by_model(model: str, include_incompatible: bool = False):
     """List all manifest names for a specific model (async)."""
-    return await _run_blocking(_list_manifests_by_model_sync, model, include_incompatible)
+    return await _run_blocking(
+        _list_manifests_by_model_sync, model, include_incompatible
+    )
 
 
-def _list_manifests_by_model_type_sync(model_type: str, include_incompatible: bool = False):
+def _list_manifests_by_model_type_sync(
+    model_type: str, include_incompatible: bool = False
+):
     if include_incompatible:
         manifests = _list_all_manifests_sync(include_incompatible=True)
     else:
@@ -743,7 +747,9 @@ def _list_manifests_by_model_type_sync(model_type: str, include_incompatible: bo
 
 
 @router.get("/list/type/{model_type}")
-async def list_manifests_by_model_type(model_type: str, include_incompatible: bool = False):
+async def list_manifests_by_model_type(
+    model_type: str, include_incompatible: bool = False
+):
     """List all manifest names for a specific model type (async)."""
     return await _run_blocking(
         _list_manifests_by_model_type_sync, model_type, include_incompatible

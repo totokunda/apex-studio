@@ -25,7 +25,7 @@ from ..modulation import ada_layer_type
 from ..normalization import norm_layer_type
 from ..mm import MMArg, MMModule
 from ..mlp import get_mlp
-    
+
 
 class NaMMSRTransformerBlock(nn.Module):
     def __init__(
@@ -51,7 +51,13 @@ class NaMMSRTransformerBlock(nn.Module):
     ):
         super().__init__()
         dim = MMArg(vid_dim, txt_dim)
-        self.attn_norm = MMModule(norm, dim=dim, eps=norm_eps, elementwise_affine=False, shared_weights=shared_weights,)
+        self.attn_norm = MMModule(
+            norm,
+            dim=dim,
+            eps=norm_eps,
+            elementwise_affine=False,
+            shared_weights=shared_weights,
+        )
 
         self.attn = NaSwinAttention(
             vid_dim=vid_dim,
@@ -68,15 +74,29 @@ class NaMMSRTransformerBlock(nn.Module):
             window_method=kwargs.pop("window_method", None),
         )
 
-        self.mlp_norm = MMModule(norm, dim=dim, eps=norm_eps, elementwise_affine=False, shared_weights=shared_weights, vid_only=is_last_layer)
+        self.mlp_norm = MMModule(
+            norm,
+            dim=dim,
+            eps=norm_eps,
+            elementwise_affine=False,
+            shared_weights=shared_weights,
+            vid_only=is_last_layer,
+        )
         self.mlp = MMModule(
             get_mlp(mlp_type),
             dim=dim,
             expand_ratio=expand_ratio,
             shared_weights=shared_weights,
-            vid_only=is_last_layer
+            vid_only=is_last_layer,
         )
-        self.ada = MMModule(ada, dim=dim, emb_dim=emb_dim, layers=["attn", "mlp"], shared_weights=shared_weights, vid_only=is_last_layer)
+        self.ada = MMModule(
+            ada,
+            dim=dim,
+            emb_dim=emb_dim,
+            layers=["attn", "mlp"],
+            shared_weights=shared_weights,
+            vid_only=is_last_layer,
+        )
         self.is_last_layer = is_last_layer
 
     def forward(
@@ -105,15 +125,23 @@ class NaMMSRTransformerBlock(nn.Module):
         }
 
         vid_attn, txt_attn = self.attn_norm(vid, txt)
-        vid_attn, txt_attn = self.ada(vid_attn, txt_attn, layer="attn", mode="in", **ada_kwargs)
+        vid_attn, txt_attn = self.ada(
+            vid_attn, txt_attn, layer="attn", mode="in", **ada_kwargs
+        )
         vid_attn, txt_attn = self.attn(vid_attn, txt_attn, vid_shape, txt_shape, cache)
-        vid_attn, txt_attn = self.ada(vid_attn, txt_attn, layer="attn", mode="out", **ada_kwargs)
+        vid_attn, txt_attn = self.ada(
+            vid_attn, txt_attn, layer="attn", mode="out", **ada_kwargs
+        )
         vid_attn, txt_attn = (vid_attn + vid), (txt_attn + txt)
 
         vid_mlp, txt_mlp = self.mlp_norm(vid_attn, txt_attn)
-        vid_mlp, txt_mlp = self.ada(vid_mlp, txt_mlp, layer="mlp", mode="in", **ada_kwargs)
+        vid_mlp, txt_mlp = self.ada(
+            vid_mlp, txt_mlp, layer="mlp", mode="in", **ada_kwargs
+        )
         vid_mlp, txt_mlp = self.mlp(vid_mlp, txt_mlp)
-        vid_mlp, txt_mlp = self.ada(vid_mlp, txt_mlp, layer="mlp", mode="out", **ada_kwargs)
+        vid_mlp, txt_mlp = self.ada(
+            vid_mlp, txt_mlp, layer="mlp", mode="out", **ada_kwargs
+        )
         vid_mlp, txt_mlp = (vid_mlp + vid_attn), (txt_mlp + txt_attn)
 
         return vid_mlp, txt_mlp, vid_shape, txt_shape

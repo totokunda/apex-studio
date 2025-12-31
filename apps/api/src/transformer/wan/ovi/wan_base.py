@@ -12,6 +12,7 @@ from .attention import flash_attention
 from .easy_cache import easycache_forward
 import types
 
+
 def gradient_checkpointing(module: nn.Module, *args, enabled: bool, **kwargs):
     if enabled:
         return checkpoint(module, *args, use_reentrant=False, **kwargs)
@@ -461,7 +462,7 @@ class WanAttentionBlock(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
-        
+
         assert (
             len(e.shape) == 4 and e.size(2) == 6 and e.shape[1] == x.shape[1]
         ), f"{e.shape}, {x.shape}"
@@ -721,10 +722,15 @@ class WanModel(ModelMixin, ConfigMixin):
         self.init_weights()
 
         self.gradient_checkpointing = False
-        
-    
-    def enable_easy_cache(self, num_steps: int, thresh: float, ret_steps: int = 10, cutoff_steps: int | None = None):
-        
+
+    def enable_easy_cache(
+        self,
+        num_steps: int,
+        thresh: float,
+        ret_steps: int = 10,
+        cutoff_steps: int | None = None,
+    ):
+
         self.forward = types.MethodType(easycache_forward, self)
         self.cnt = 0
         self.skip_cond_step = []
@@ -744,8 +750,9 @@ class WanModel(ModelMixin, ConfigMixin):
 
         self.cost_time = 0
         self.ret_steps = ret_steps * 2
-        self.cutoff_steps = cutoff_steps if cutoff_steps is not None else num_steps * 2 - 2
-        
+        self.cutoff_steps = (
+            cutoff_steps if cutoff_steps is not None else num_steps * 2 - 2
+        )
 
     def set_rope_params(self):
         # buffers (don't use register_buffer otherwise dtype will be changed in to())

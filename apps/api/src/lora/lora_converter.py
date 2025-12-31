@@ -55,7 +55,9 @@ def _restore_kohya_flattened_prefix(prefix: str) -> str:
             prefix = prefix.replace(token, token.replace("_", placeholder))
 
     # Protect common "word_digit" tokens like `linear_1` / `conv_2` / `norm_3`.
-    prefix = re.sub(r"linear_(\d+)", lambda m: f"linear{placeholder}{m.group(1)}", prefix)
+    prefix = re.sub(
+        r"linear_(\d+)", lambda m: f"linear{placeholder}{m.group(1)}", prefix
+    )
     prefix = re.sub(r"conv_(\d+)", lambda m: f"conv{placeholder}{m.group(1)}", prefix)
     prefix = re.sub(r"norm_(\d+)", lambda m: f"norm{placeholder}{m.group(1)}", prefix)
 
@@ -65,12 +67,14 @@ def _restore_kohya_flattened_prefix(prefix: str) -> str:
     # Restore protected underscores.
     return prefix.replace(placeholder, "_")
 
+
 class StateDictType(Enum):
     DIFFUSERS = "diffusers"
     DIFFUSERS_OLD = "diffusers_old"
     KOHYA_SS = "kohya_ss"
     PEFT = "peft"
     BASE = "base"
+
 
 class LoraConverter(BaseConverter):
     """
@@ -80,60 +84,70 @@ class LoraConverter(BaseConverter):
     performs the conversion *in-place* on the provided state dict, avoiding the
     creation of a full secondary state dict of the same size.
     """
+
     def __init__(self):
-        
+
         super().__init__()
         self.special_keys_map = {
             ".diff_b": self.remove_keys_inplace,
             ".diff": self.remove_keys_inplace,
             "scaled_fp8": self.remove_keys_inplace,
         }
-        
-    def _get_state_dict_type(self, state_dict:Dict[str, Any]) -> StateDictType:
+
+    def _get_state_dict_type(self, state_dict: Dict[str, Any]) -> StateDictType:
         """
         Detect the state dict type by checking if any keys match patterns
         characteristic of each format.
         """
         keys = list(state_dict.keys())
-        
+
         # Check for KOHYA_SS patterns (most distinctive)
         kohya_patterns = ["lora_te1.", "lora_te2.", "lora_unet", "dora_scale"]
         if any(any(pattern in key for pattern in kohya_patterns) for key in keys):
             return StateDictType.KOHYA_SS
-        
+
         base_patterns = ["lora_down", "lora_up"]
         if any(any(pattern in key for pattern in base_patterns) for key in keys):
             return StateDictType.BASE
-        
+
         # Check for DIFFUSERS_OLD patterns
-        diffusers_old_patterns = [".to_q_lora", ".to_k_lora", ".to_v_lora", ".to_out_lora"]
-        if any(any(pattern in key for pattern in diffusers_old_patterns) for key in keys):
+        diffusers_old_patterns = [
+            ".to_q_lora",
+            ".to_k_lora",
+            ".to_v_lora",
+            ".to_out_lora",
+        ]
+        if any(
+            any(pattern in key for pattern in diffusers_old_patterns) for key in keys
+        ):
             return StateDictType.DIFFUSERS_OLD
-        
+
         # Check for DIFFUSERS patterns
         diffusers_patterns = [".lora_linear_layer.up", ".lora_linear_layer.down"]
         if any(any(pattern in key for pattern in diffusers_patterns) for key in keys):
             return StateDictType.DIFFUSERS
-        
+
         # Check for PEFT patterns (default fallback)
         peft_patterns = [".lora_A", ".lora_B"]
         if any(any(pattern in key for pattern in peft_patterns) for key in keys):
             return StateDictType.PEFT
-        
+
         # Default to PEFT if no patterns match
         return StateDictType.PEFT
-    
+
     def get_alpha_scales(self, down_weight, alpha):
         rank = down_weight.shape[0]
-        
-        scale = alpha / rank  # LoRA is scaled by 'alpha / rank' in forward pass, so we need to scale it back here
+
+        scale = (
+            alpha / rank
+        )  # LoRA is scaled by 'alpha / rank' in forward pass, so we need to scale it back here
         scale_down = scale
         scale_up = 1.0
         while scale_down * 2 < scale_up:
             scale_down *= 2
             scale_up /= 2
         return scale_down, scale_up
-    
+
     def scale_alpha(self, state_dict: Dict[str, Any]):
         for key, value in state_dict.items():
             if ".alpha" in key:
@@ -147,8 +161,7 @@ class LoraConverter(BaseConverter):
                     state_dict[down_key] = down_weight * scale_down
                     state_dict[up_key] = up_weight * scale_up
         return state_dict
-    
-    
+
     def convert(self, state_dict: Dict[str, Any]):
         state_dict_type = self._get_state_dict_type(state_dict)
         if state_dict_type == StateDictType.KOHYA_SS:
@@ -235,11 +248,7 @@ def convert_kohya_to_peft_state_dict(
         if adapter_name and (k.endswith(".weight") or k.endswith(".bias")):
             base, suffix = k.rsplit(".", 1)
             k = f"{base}.{adapter_name}.{suffix}"
-            
-        kohya_state_dict[k] = value
-        
 
+        kohya_state_dict[k] = value
 
     return kohya_state_dict
-
-

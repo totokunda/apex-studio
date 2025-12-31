@@ -47,5 +47,9 @@ def __getattr__(name: str):
     if name in {"TextEncoderQuantizer", "TransformerQuantizer"}:
         from .quantize import TextEncoderQuantizer, TransformerQuantizer
 
-        return TextEncoderQuantizer if name == "TextEncoderQuantizer" else TransformerQuantizer
+        return (
+            TextEncoderQuantizer
+            if name == "TextEncoderQuantizer"
+            else TransformerQuantizer
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

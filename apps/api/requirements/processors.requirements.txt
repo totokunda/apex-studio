@@ -1,19 +1,41 @@
-raft
+#
+# "Processors" / optional heavy deps (often include compiled extensions).
+# These are intentionally separated from `requirements/requirements.txt` so we can
+# layer machine-specific accelerators cleanly.
+#
+# If you need per-machine entrypoints (CPU / MPS / CUDA Ampere/Hopper/Blackwell),
+# use `requirements/machines/*.txt`.
+#
+
+# Vision / segmentation / detection
+facexlib==0.3.0
 insightface==0.7.3
+mediapipe==0.10.31
+mmengine==0.10.7
+# NOTE: `opendr` builds native OpenGL bindings; it currently fails to build on
+# some modern macOS/arm64 toolchains. Keep it out of the default darwin bundle.
+opendr==0.78; sys_platform != "darwin"
+open3d==0.19.0
+ptlflow
+raft
+# NOTE: RetinaFace is optional.
+# The Cosmos guardrail face-blur filter will gracefully disable itself if RetinaFace
+# is not installed (to avoid hard dependency conflicts in the default bundle).
+
+# Build helpers
+Cython>=0.29.36
+rtree
+
+# Models / external repos
 git+https://github.com/xinyu1205/recognize-anything.git
+git+https://github.com/facebookresearch/sam2.git
 fairscale
 pycocotools
-retinaface-py==0.0.2
-git+https://github.com/facebookresearch/sam2.git
-facexlib
-trimesh
-mediapipe
-numpy==1.26.4
-Cython>=0.29.36
-opendr
-rtree
-mmengine
-ptlflow
+
+# Background removal (extras are selected in machine-specific requirements)
 rembg
+
+# Video decode (platform-specific)
 decord; sys_platform == "linux" or sys_platform == "win32"
-eva-decord; sys_platform == "darwin"
+# NOTE: `eva-decord` does not publish macOS arm64 wheels for some recent macOS
+# platform tags. Keep it out of the default darwin bundle to avoid solver failure.
