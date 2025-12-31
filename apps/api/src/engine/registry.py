@@ -138,7 +138,7 @@ class EngineRegistry:
             data = load_yaml(resolved)
             spec = data.get("spec", {})
             engine_type = engine_type or spec.get("engine")
-            model_type = model_type or spec.get("model_type") 
+            model_type = model_type or spec.get("model_type")
             engine_kwargs = spec.get("engine_kwargs", {})
             if engine_type is None or model_type is None:
                 raise ValueError(
@@ -195,7 +195,7 @@ class UniversalEngine:
         default_kwargs = self.engine._get_default_kwargs("run")
         merged_kwargs = {**default_kwargs, **kwargs}
         return self.engine.run(*args, **merged_kwargs)
-    
+
     def offload_engine(self):
         self.engine.offload_engine()
 

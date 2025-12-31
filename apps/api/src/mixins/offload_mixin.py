@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from engine.base_engine import BaseEngine
+
     base_object = BaseEngine
 else:
     base_object = object
-    
-    
-    
+
+
 def live_cuda_tensors():
     out = []
     for obj in gc.get_objects():
@@ -23,7 +23,9 @@ def live_cuda_tensors():
             if torch.is_tensor(obj) and obj.is_cuda:
                 out.append(obj)
             # also catch Parameters
-            elif hasattr(obj, "data") and torch.is_tensor(obj.data) and obj.data.is_cuda:
+            elif (
+                hasattr(obj, "data") and torch.is_tensor(obj.data) and obj.data.is_cuda
+            ):
                 out.append(obj.data)
         except Exception:
             pass
@@ -62,7 +64,9 @@ def _attrnames_in_obj(obj: object, target: object, limit: int = 8) -> list[str]:
     return names
 
 
-def _frame_locals_holding(frame: types.FrameType, target: object, limit: int = 8) -> list[str]:
+def _frame_locals_holding(
+    frame: types.FrameType, target: object, limit: int = 8
+) -> list[str]:
     names: list[str] = []
     try:
         for k, v in frame.f_locals.items():
@@ -88,7 +92,14 @@ def _indices_in_seq(seq: object, target: object, limit: int = 8) -> list[int]:
     return idxs
 
 
-def _find_paths(root: object, target: object, *, prefix: str, max_depth: int = 4, max_paths: int = 10) -> list[str]:
+def _find_paths(
+    root: object,
+    target: object,
+    *,
+    prefix: str,
+    max_depth: int = 4,
+    max_paths: int = 10,
+) -> list[str]:
     """
     Best-effort path finder: returns strings like `self.foo['bar'][0]` if `target`
     is reachable from `root` via common Python containers and object attributes.
@@ -180,7 +191,9 @@ def _find_paths(root: object, target: object, *, prefix: str, max_depth: int = 4
     return paths
 
 
-def holders_for_tensor(t: torch.Tensor, *, self_obj=None, max_referrers: int = 30) -> list[str]:
+def holders_for_tensor(
+    t: torch.Tensor, *, self_obj=None, max_referrers: int = 30
+) -> list[str]:
     """
     Best-effort "who is holding this tensor alive" by inspecting Python referrers.
     Note: this won't explain CUDA caching allocator 'reserved' memory.
@@ -206,7 +219,9 @@ def holders_for_tensor(t: torch.Tensor, *, self_obj=None, max_referrers: int = 3
         if isinstance(r, types.FrameType):
             info = inspect.getframeinfo(r)
             locs = _frame_locals_holding(r, t)
-            refs.append(f"frame {info.filename}:{info.lineno} in {info.function} locals={locs}")
+            refs.append(
+                f"frame {info.filename}:{info.lineno} in {info.function} locals={locs}"
+            )
             continue
 
         if isinstance(r, dict):
@@ -269,7 +284,9 @@ def _container_context(container: object, *, self_obj=None) -> list[str]:
 
     if self_obj is not None:
         try:
-            paths = _find_paths(self_obj, container, prefix="self", max_depth=4, max_paths=6)
+            paths = _find_paths(
+                self_obj, container, prefix="self", max_depth=4, max_paths=6
+            )
             for p in paths[:6]:
                 ctx.append(f"via {p}")
         except Exception:
@@ -323,6 +340,7 @@ def _container_context(container: object, *, self_obj=None) -> list[str]:
 
     return ctx
 
+
 class OffloadMixin(base_object):
     """
     Add to any class that owns a torch.nn.Module (e.g. your Trainer or Model
@@ -342,10 +360,10 @@ class OffloadMixin(base_object):
 
     @torch.no_grad()
     def _offload(
-        self:"BaseEngine",
+        self: "BaseEngine",
         module: torch.nn.Module | str | None,
         *,
-        offload_type: Literal["cpu", "discard"] = "discard"
+        offload_type: Literal["cpu", "discard"] = "discard",
     ) -> None:
         """
         Move every weight/buffer to CPU **and** clear CUDA/MPS/CPU caches.
@@ -382,13 +400,13 @@ class OffloadMixin(base_object):
                 component = self.get_component_by_name(module)
                 if component:
                     module_type_obj = getattr(self, component.get("type"), None)
-                    
+
                     if module_type_obj is module_obj:
                         self.logger.info(f"Setting {component.get('type')} to None")
                         setattr(self, component.get("type"), None)
                 else:
                     component = self.get_component_by_type(module)
-                # check if type is helper 
+                # check if type is helper
                 if component:
                     if component.get("type") == "helper":
                         try:
@@ -402,7 +420,7 @@ class OffloadMixin(base_object):
                 module.to("cpu")
             elif offload_type == "discard":
                 raise ValueError(f"Invalid offload type: {offload_type} for module.")
-        
+
         gc.collect()
         # 4)  Reclaim CUDA VRAM
         if torch.cuda.is_available():
@@ -418,9 +436,8 @@ class OffloadMixin(base_object):
             and torch.backends.mps.is_available()
         ):
             torch.mps.empty_cache()
-        
+
         try:
             mx.clear_cache()
         except Exception:
             pass
-        

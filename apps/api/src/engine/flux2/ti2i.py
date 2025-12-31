@@ -112,7 +112,9 @@ class Flux2T2IEngine(Flux2Shared):
             for img in image:
                 self.image_processor.check_image_input(img)
 
-            safe_emit_progress(progress_callback, 0.30, "Resizing and preprocessing images")
+            safe_emit_progress(
+                progress_callback, 0.30, "Resizing and preprocessing images"
+            )
             condition_images = []
             for img in image:
                 image_width, image_height = img.size
@@ -131,7 +133,9 @@ class Flux2T2IEngine(Flux2Shared):
                 width = width or image_width
             safe_emit_progress(progress_callback, 0.33, "Prepared condition images")
         else:
-            safe_emit_progress(progress_callback, 0.33, "No input image provided; running pure t2i")
+            safe_emit_progress(
+                progress_callback, 0.33, "No input image provided; running pure t2i"
+            )
 
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
@@ -274,7 +278,6 @@ class Flux2T2IEngine(Flux2Shared):
                         # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
                         latents = latents.to(latents_dtype)
 
-               
                 if i == len(timesteps) - 1 or (
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
                 ):
@@ -298,12 +301,15 @@ class Flux2T2IEngine(Flux2Shared):
                         and render_on_step_callback
                         and total_steps > 0
                         and (
-                            (i + 1) % max(int(render_on_step_interval), 1) == 0 or i == 0
+                            (i + 1) % max(int(render_on_step_interval), 1) == 0
+                            or i == 0
                         )
                         and i != len(timesteps) - 1
                     ):
                         safe_emit_progress(
-                            denoise_progress_callback, step_progress, "Rendering preview"
+                            denoise_progress_callback,
+                            step_progress,
+                            "Rendering preview",
                         )
                         self._render_step(latents, render_on_step_callback)
 

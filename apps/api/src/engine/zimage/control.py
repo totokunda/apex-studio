@@ -6,8 +6,10 @@ from PIL import Image
 import numpy as np
 from torch.nn import functional as F
 
+
 class ZImageControlEngine(ZImageShared):
     """ZImage Control Engine Implementation"""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.control_in_dim = 33
@@ -69,12 +71,14 @@ class ZImageControlEngine(ZImageShared):
         ref_image = ref_image.unsqueeze(0).permute([3, 0, 1, 2]).unsqueeze(0) / 255
 
         return ref_image
-    
+
     def get_image_latent(self, ref_image=None, sample_size=None, padding=False):
         if ref_image is not None:
             ref_image = self._load_image(ref_image)
             if padding:
-                ref_image = self.padding_image(ref_image, sample_size[1], sample_size[0])
+                ref_image = self.padding_image(
+                    ref_image, sample_size[1], sample_size[0]
+                )
             ref_image = ref_image.resize((sample_size[1], sample_size[0]))
             ref_image = torch.from_numpy(np.array(ref_image))
             ref_image = ref_image.unsqueeze(0).permute([3, 0, 1, 2]).unsqueeze(0) / 255
@@ -123,20 +127,26 @@ class ZImageControlEngine(ZImageShared):
             height = height - (height % vae_scale)
         if width % vae_scale != 0:
             width = width - (width % vae_scale)
-        
+
         sample_size = [height, width]
         if inpaint_image is not None:
-            image = self.get_image_latent(inpaint_image, sample_size=sample_size)[:, :, 0]
+            image = self.get_image_latent(inpaint_image, sample_size=sample_size)[
+                :, :, 0
+            ]
         else:
             image = torch.zeros([1, 3, sample_size[0], sample_size[1]])
 
         if mask_image is not None:
-            mask_image = self.get_image_latent(mask_image, sample_size=sample_size)[:, :1, 0]
+            mask_image = self.get_image_latent(mask_image, sample_size=sample_size)[
+                :, :1, 0
+            ]
         else:
             mask_image = torch.ones([1, 1, sample_size[0], sample_size[1]]) * 255
 
         if control_image is not None:
-            control_image = self.get_image_latent(control_image, sample_size=sample_size)[:, :, 0]
+            control_image = self.get_image_latent(
+                control_image, sample_size=sample_size
+            )[:, :, 0]
 
         self._guidance_scale = guidance_scale
         self._joint_attention_kwargs = joint_attention_kwargs
@@ -158,18 +168,35 @@ class ZImageControlEngine(ZImageShared):
         # Prepare mask latent variables
         if num_channels_latents != self.control_in_dim:
             if mask_image is not None:
-                mask_condition = self.mask_processor.preprocess(mask_image, height=height, width=width) 
-                mask_condition = torch.tile(mask_condition, [1, 3, 1, 1]).to(dtype=weight_dtype, device=device)
-            
+                mask_condition = self.mask_processor.preprocess(
+                    mask_image, height=height, width=width
+                )
+                mask_condition = torch.tile(mask_condition, [1, 3, 1, 1]).to(
+                    dtype=weight_dtype, device=device
+                )
+
             if image is not None:
-                init_image = self.image_processor.preprocess(image, height=height, width=width)
-                init_image = init_image.to(dtype=weight_dtype, device=device) * (mask_condition < 0.5)
+                init_image = self.image_processor.preprocess(
+                    image, height=height, width=width
+                )
+                init_image = init_image.to(dtype=weight_dtype, device=device) * (
+                    mask_condition < 0.5
+                )
                 inpaint_latent = self.vae_encode(init_image)
             else:
-                inpaint_latent = torch.zeros((batch_size, num_channels_latents, 2 * (int(height) // (self.vae_scale_factor * 2)), 2 * (int(width) // (self.vae_scale_factor * 2)))).to(device, weight_dtype)
+                inpaint_latent = torch.zeros(
+                    (
+                        batch_size,
+                        num_channels_latents,
+                        2 * (int(height) // (self.vae_scale_factor * 2)),
+                        2 * (int(width) // (self.vae_scale_factor * 2)),
+                    )
+                ).to(device, weight_dtype)
 
         if control_image is not None:
-            control_image = self.image_processor.preprocess(control_image, height=height, width=width) 
+            control_image = self.image_processor.preprocess(
+                control_image, height=height, width=width
+            )
             control_image = control_image.to(dtype=weight_dtype, device=device)
             control_latents = self.vae_encode(control_image)
         else:
@@ -178,17 +205,23 @@ class ZImageControlEngine(ZImageShared):
         # Unsqueeze
         if num_channels_latents != self.control_in_dim:
             inpaint_latent = inpaint_latent.unsqueeze(2)
-            mask_condition = F.interpolate(1 - mask_condition[:, :1], size=inpaint_latent.size()[-2:], mode='nearest').to(device, weight_dtype)
+            mask_condition = F.interpolate(
+                1 - mask_condition[:, :1],
+                size=inpaint_latent.size()[-2:],
+                mode="nearest",
+            ).to(device, weight_dtype)
             mask_condition = mask_condition.unsqueeze(2)
 
         control_latents = control_latents.unsqueeze(2)
 
         # Concat
         if num_channels_latents != self.control_in_dim:
-            control_context = torch.concat([control_latents, mask_condition, inpaint_latent], dim=1)
+            control_context = torch.concat(
+                [control_latents, mask_condition, inpaint_latent], dim=1
+            )
         else:
             control_context = control_latents
-        
+
         # If prompt_embeds is provided and prompt is None, skip encoding
         if prompt_embeds is not None and prompt is None:
             if self.do_classifier_free_guidance and negative_prompt_embeds is None:
@@ -197,7 +230,9 @@ class ZImageControlEngine(ZImageShared):
                     "`negative_prompt_embeds` must also be provided for classifier-free guidance."
                 )
         else:
-            encode_progress_callback = make_mapped_progress(progress_callback, 0.02, 0.18)
+            encode_progress_callback = make_mapped_progress(
+                progress_callback, 0.02, 0.18
+            )
             (
                 prompt_embeds,
                 negative_prompt_embeds,
@@ -227,13 +262,19 @@ class ZImageControlEngine(ZImageShared):
 
         # Repeat prompt_embeds for num_images_per_prompt
         if num_images_per_prompt > 1:
-            prompt_embeds = [pe for pe in prompt_embeds for _ in range(num_images_per_prompt)]
+            prompt_embeds = [
+                pe for pe in prompt_embeds for _ in range(num_images_per_prompt)
+            ]
             if self.do_classifier_free_guidance and negative_prompt_embeds:
-                negative_prompt_embeds = [npe for npe in negative_prompt_embeds for _ in range(num_images_per_prompt)]
+                negative_prompt_embeds = [
+                    npe
+                    for npe in negative_prompt_embeds
+                    for _ in range(num_images_per_prompt)
+                ]
 
         actual_batch_size = batch_size * num_images_per_prompt
         image_seq_len = (latents.shape[2] // 2) * (latents.shape[3] // 2)
-        
+
         if not self.scheduler:
             safe_emit_progress(progress_callback, 0.19, "Loading scheduler")
             self.load_component_by_type("scheduler")
@@ -258,10 +299,11 @@ class ZImageControlEngine(ZImageShared):
             sigmas=sigmas,
             **scheduler_kwargs,
         )
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+        num_warmup_steps = max(
+            len(timesteps) - num_inference_steps * self.scheduler.order, 0
+        )
         self._num_timesteps = len(timesteps)
-        
-        
+
         if not self.transformer:
             safe_emit_progress(progress_callback, 0.23, "Loading transformer")
             self.load_component_by_type("transformer")
@@ -269,8 +311,7 @@ class ZImageControlEngine(ZImageShared):
             safe_emit_progress(progress_callback, 0.25, "Moving transformer to device")
             self.to_device(self.transformer)
             safe_emit_progress(progress_callback, 0.26, "Transformer on device")
-            
- 
+
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.40, 0.92)
         # 6. Denoising loop
         with self._progress_bar(total=num_inference_steps) as progress_bar:
@@ -295,7 +336,9 @@ class ZImageControlEngine(ZImageShared):
                         current_guidance_scale = 0.0
 
                 # Run CFG only if configured AND scale is non-zero
-                apply_cfg = self.do_classifier_free_guidance and current_guidance_scale > 0
+                apply_cfg = (
+                    self.do_classifier_free_guidance and current_guidance_scale > 0
+                )
 
                 if apply_cfg:
                     latents_typed = latents.to(self.transformer.dtype)
@@ -331,7 +374,10 @@ class ZImageControlEngine(ZImageShared):
                         pred = pos + current_guidance_scale * (pos - neg)
 
                         # Renormalization
-                        if self._cfg_normalization and float(self._cfg_normalization) > 0.0:
+                        if (
+                            self._cfg_normalization
+                            and float(self._cfg_normalization) > 0.0
+                        ):
                             ori_pos_norm = torch.linalg.vector_norm(pos)
                             new_pos_norm = torch.linalg.vector_norm(pred)
                             max_new_norm = ori_pos_norm * float(self._cfg_normalization)
@@ -348,30 +394,39 @@ class ZImageControlEngine(ZImageShared):
                 noise_pred = -noise_pred
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred.to(torch.float32), t, latents, return_dict=False)[0]
+                latents = self.scheduler.step(
+                    noise_pred.to(torch.float32), t, latents, return_dict=False
+                )[0]
                 assert latents.dtype == torch.float32
 
                 # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                if i == len(timesteps) - 1 or (
+                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+                ):
                     progress_bar.update()
-                    
+
                 if denoise_progress_callback is not None and len(timesteps) > 0:
                     try:
-                        denoise_progress_callback(min((i + 1) / len(timesteps), 1.0), f"Denoising step {i + 1}/{len(timesteps)}")
+                        denoise_progress_callback(
+                            min((i + 1) / len(timesteps), 1.0),
+                            f"Denoising step {i + 1}/{len(timesteps)}",
+                        )
                     except Exception:
                         pass
-        
+
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")
-        
+
         if offload:
             self._offload("transformer")
             safe_emit_progress(progress_callback, 0.94, "Transformer offloaded")
-        
+
         if return_latents:
             safe_emit_progress(progress_callback, 1.0, "Returning latents")
             return latents
         else:
             image = self.vae_decode(latents, offload=offload)
             image = self._tensor_to_frame(image)
-            safe_emit_progress(progress_callback, 1.0, "Completed text-to-image pipeline")
+            safe_emit_progress(
+                progress_callback, 1.0, "Completed text-to-image pipeline"
+            )
             return image

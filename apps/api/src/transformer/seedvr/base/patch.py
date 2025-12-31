@@ -21,6 +21,7 @@ from torch.nn.modules.utils import _triple
 from src.transformer.seedvr.base_v2.cache import Cache
 import src.transformer.seedvr.base.na as na
 
+
 class PatchIn(nn.Module):
     def __init__(
         self,
@@ -38,7 +39,9 @@ class PatchIn(nn.Module):
         vid: torch.Tensor,
     ) -> torch.Tensor:
         t, h, w = self.patch_size
-        vid = rearrange(vid, "b c (T t) (H h) (W w) -> b T H W (t h w c)", t=t, h=h, w=w)
+        vid = rearrange(
+            vid, "b c (T t) (H h) (W w) -> b T H W (t h w c)", t=t, h=h, w=w
+        )
         vid = self.proj(vid)
         return vid
 
@@ -61,7 +64,9 @@ class PatchOut(nn.Module):
     ) -> torch.Tensor:
         t, h, w = self.patch_size
         vid = self.proj(vid)
-        vid = rearrange(vid, "b T H W (t h w c) -> b c (T t) (H h) (W w)", t=t, h=h, w=w)
+        vid = rearrange(
+            vid, "b T H W (t h w c) -> b c (T t) (H h) (W w)", t=t, h=h, w=w
+        )
         return vid
 
 

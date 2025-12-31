@@ -155,7 +155,10 @@ class MotionConv2d(nn.Module):
                 self.in_channels, 1, -1, -1
             )
             x = F.conv2d(
-                x, expanded_kernel.to(x.dtype), padding=self.blur_padding, groups=self.in_channels
+                x,
+                expanded_kernel.to(x.dtype),
+                padding=self.blur_padding,
+                groups=self.in_channels,
             )
 
         # Main Conv2D with scaling
@@ -1182,7 +1185,7 @@ class WanAnimateTransformer3DModel(
         motion_encode_batch_size = (
             motion_encode_batch_size or self.config.motion_encoder_batch_size
         )
-        
+
         face_batches = torch.split(face_pixel_values, motion_encode_batch_size)
         motion_vec_batches = []
         for face_batch in face_batches:

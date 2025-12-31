@@ -16,6 +16,7 @@ from math import ceil
 from typing import Tuple
 import math
 
+
 def get_window_op(name: str):
     if name == "720pwin_by_size_bysize":
         return make_720Pwindows_bysize
@@ -25,10 +26,12 @@ def get_window_op(name: str):
 
 
 # -------------------------------- Windowing -------------------------------- #
-def make_720Pwindows_bysize(size: Tuple[int, int, int], num_windows: Tuple[int, int, int]):
+def make_720Pwindows_bysize(
+    size: Tuple[int, int, int], num_windows: Tuple[int, int, int]
+):
     t, h, w = size
     resized_nt, resized_nh, resized_nw = num_windows
-    #cal windows under 720p
+    # cal windows under 720p
     scale = math.sqrt((45 * 80) / (h * w))
     resized_h, resized_w = round(h * scale), round(w * scale)
     wh, ww = ceil(resized_h / resized_nh), ceil(resized_w / resized_nw)  # window size.
@@ -48,21 +51,28 @@ def make_720Pwindows_bysize(size: Tuple[int, int, int], num_windows: Tuple[int, 
         if min((it + 1) * wt, t) > it * wt
     ]
 
-def make_shifted_720Pwindows_bysize(size: Tuple[int, int, int], num_windows: Tuple[int, int, int]):
+
+def make_shifted_720Pwindows_bysize(
+    size: Tuple[int, int, int], num_windows: Tuple[int, int, int]
+):
     t, h, w = size
     resized_nt, resized_nh, resized_nw = num_windows
-    #cal windows under 720p
+    # cal windows under 720p
     scale = math.sqrt((45 * 80) / (h * w))
     resized_h, resized_w = round(h * scale), round(w * scale)
     wh, ww = ceil(resized_h / resized_nh), ceil(resized_w / resized_nw)  # window size.
     wt = ceil(min(t, 30) / resized_nt)  # window size.
-    
+
     st, sh, sw = (  # shift size.
         0.5 if wt < t else 0,
         0.5 if wh < h else 0,
         0.5 if ww < w else 0,
     )
-    nt, nh, nw = ceil((t - st) / wt), ceil((h - sh) / wh), ceil((w - sw) / ww)  # window size.
+    nt, nh, nw = (
+        ceil((t - st) / wt),
+        ceil((h - sh) / wh),
+        ceil((w - sw) / ww),
+    )  # window size.
     nt, nh, nw = (  # number of window.
         nt + 1 if st > 0 else 1,
         nh + 1 if sh > 0 else 1,

@@ -200,7 +200,9 @@ class HuMoEngine(WanShared):
         if not cfg_guidance:
             neg = pos_t
         else:
-            neg, _ = self.parse_output(self.transformer(latents, t=timestep, **arg_null))
+            neg, _ = self.parse_output(
+                self.transformer(latents, t=timestep, **arg_null)
+            )
             torch.cuda.empty_cache()
 
         noise_pred = scale_a * (pos_ta - pos_t) + scale_t * (pos_t - neg) + neg
@@ -378,11 +380,8 @@ class HuMoEngine(WanShared):
         **kwargs,
     ):
 
-        use_cfg_guidance = (
-            guidance_scale_t > 1.0
-            and negative_prompt is not None
-        )
-        
+        use_cfg_guidance = guidance_scale_t > 1.0 and negative_prompt is not None
+
         safe_emit_progress(progress_callback, 0.0, "Starting HuMo pipeline")
 
         safe_emit_progress(
@@ -402,7 +401,9 @@ class HuMoEngine(WanShared):
                     self.device, dtype=transformer_dtype
                 )
             ]
-            height, width = self.get_height_width(height, width, resolution, aspect_ratio)
+            height, width = self.get_height_width(
+                height, width, resolution, aspect_ratio
+            )
 
         latents_ref_neg = [torch.zeros_like(latent_ref) for latent_ref in latents_ref]
         latents_ref = [latent_ref for latent_ref in latents_ref]
@@ -419,7 +420,9 @@ class HuMoEngine(WanShared):
             safe_emit_progress(progress_callback, 0.04, f"Seeded generator ({seed})")
 
         frame_num = self._parse_num_frames(duration, fps)
-        safe_emit_progress(progress_callback, 0.05, f"Resolved frames: {frame_num} @ {fps}fps")
+        safe_emit_progress(
+            progress_callback, 0.05, f"Resolved frames: {frame_num} @ {fps}fps"
+        )
 
         if audio is not None:
             audio_processor = self.helpers["wan.humo_audio_processor"]
@@ -433,7 +436,9 @@ class HuMoEngine(WanShared):
         else:
             audio_emb = torch.zeros(frame_num, 5, 1280).to(self.device)
             audio_length = frame_num
-            safe_emit_progress(progress_callback, 0.10, "No audio provided; using zeros")
+            safe_emit_progress(
+                progress_callback, 0.10, "No audio provided; using zeros"
+            )
 
         if offload and audio_processor is not None:
             self._offload("audio_processor")
@@ -444,7 +449,9 @@ class HuMoEngine(WanShared):
         else:
             frame_num = frame_num if frame_num != -1 else audio_length
         frame_num = 4 * ((frame_num - 1) // 4) + 1
-        safe_emit_progress(progress_callback, 0.12, f"Clamped/rounded frame_num -> {frame_num}")
+        safe_emit_progress(
+            progress_callback, 0.12, f"Clamped/rounded frame_num -> {frame_num}"
+        )
         audio_emb, _ = self.get_audio_emb_window(audio_emb, frame_num, frame0_idx=0)
         zero_audio_pad = torch.zeros(latents_ref[0].shape[1], *audio_emb.shape[1:]).to(
             audio_emb.device
@@ -469,7 +476,9 @@ class HuMoEngine(WanShared):
         zero_video_tensor = torch.zeros(
             1, 3, frame_num, noise.shape[3] * 8, noise.shape[4] * 8
         ).to(self.device)
-        safe_emit_progress(progress_callback, 0.17, "Encoding zero VAE latent (reference)")
+        safe_emit_progress(
+            progress_callback, 0.17, "Encoding zero VAE latent (reference)"
+        )
         zero_vae = self.vae_encode(
             zero_video_tensor, offload=offload, sample_mode="mode"
         )[0].squeeze(0)
@@ -489,7 +498,7 @@ class HuMoEngine(WanShared):
             0.19,
             f"Encoding prompts (CFG: {'on' if use_cfg_guidance else 'off'})",
         )
-        
+
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,
             negative_prompt=negative_prompt,

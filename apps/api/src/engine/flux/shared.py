@@ -9,6 +9,7 @@ from src.utils.progress import safe_emit_progress
 from loguru import logger
 import os
 
+
 class FluxShared(TextualInversionLoaderMixin, BaseEngine):
     """Shared functionality for Flux engine implementations"""
 
@@ -160,7 +161,7 @@ class FluxShared(TextualInversionLoaderMixin, BaseEngine):
         # latent height and width to be divisible by 2.
         height = 2 * (int(height) // (self.vae_scale_factor * 2))
         width = 2 * (int(width) // (self.vae_scale_factor * 2))
-        
+
         shape = (batch_size, num_channels_latents, height, width)
 
         if latents is not None:
@@ -271,11 +272,10 @@ class FluxShared(TextualInversionLoaderMixin, BaseEngine):
             )
         else:
             negative_pooled_prompt_embeds = None
-        
+
         if offload:
             safe_emit_progress(progress_callback, 0.72, "Offloading text encoder")
             del self.text_encoder
-
 
         if not hasattr(self, "text_encoder_2") or not self.text_encoder_2:
             safe_emit_progress(progress_callback, 0.75, "Loading text encoder 2")
@@ -317,7 +317,9 @@ class FluxShared(TextualInversionLoaderMixin, BaseEngine):
         )
 
         if negative_prompt_2 is not None and use_cfg_guidance:
-            safe_emit_progress(progress_callback, 0.96, "Encoding negative prompt embeddings")
+            safe_emit_progress(
+                progress_callback, 0.96, "Encoding negative prompt embeddings"
+            )
             negative_prompt_embeds = self.text_encoder_2.encode(
                 negative_prompt_2,
                 device=self.device,
@@ -325,7 +327,9 @@ class FluxShared(TextualInversionLoaderMixin, BaseEngine):
                 output_type="hidden_states",
                 **text_encoder_2_kwargs,
             )
-            safe_emit_progress(progress_callback, 0.99, "Negative prompt embeddings ready")
+            safe_emit_progress(
+                progress_callback, 0.99, "Negative prompt embeddings ready"
+            )
             negative_text_ids = torch.zeros(negative_prompt_embeds.shape[1], 3).to(
                 device=self.device, dtype=negative_prompt_embeds.dtype
             )
@@ -578,8 +582,6 @@ class FluxShared(TextualInversionLoaderMixin, BaseEngine):
                     noise_pred = neg_noise_pred + true_cfg_scale * (
                         noise_pred - neg_noise_pred
                     )
-                
-                
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
@@ -605,7 +607,7 @@ class FluxShared(TextualInversionLoaderMixin, BaseEngine):
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
                 ):
                     progress_bar.update()
-                
+
                 # external progress callback
                 safe_emit_progress(
                     denoise_progress_callback,

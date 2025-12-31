@@ -83,7 +83,7 @@ class FluxFillEngine(FluxShared):
             text_encoder_2_kwargs,
             progress_callback=make_mapped_progress(progress_callback, 0.02, 0.20),
         )
-        
+
         safe_emit_progress(progress_callback, 0.20, "Encoded prompts")
 
         if offload:
@@ -233,8 +233,8 @@ class FluxFillEngine(FluxShared):
             denoise_progress_callback=denoise_progress_callback,
             render_on_step_interval=render_on_step_interval,
         )
-        
-        latents:torch.Tensor = latents
+
+        latents: torch.Tensor = latents
 
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")
 

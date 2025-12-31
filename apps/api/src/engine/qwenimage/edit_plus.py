@@ -5,13 +5,14 @@ import numpy as np
 from src.utils.progress import safe_emit_progress, make_mapped_progress
 from src.types.media import InputImage
 import math
+
 CONDITION_IMAGE_SIZE = 384 * 384
 VAE_IMAGE_SIZE = 1024 * 1024
 
 
 class QwenImageEditPlusEngine(QwenImageShared):
     """QwenImage Edit Plus Engine Implementation"""
-    
+
     @staticmethod
     def calculate_dimensions(target_area, ratio):
         width = math.sqrt(target_area * ratio)
@@ -21,7 +22,7 @@ class QwenImageEditPlusEngine(QwenImageShared):
         height = round(height / 32) * 32
 
         return width, height
-    
+
     def _prepare_image_latents(
         self,
         images,
@@ -55,7 +56,10 @@ class QwenImageEditPlusEngine(QwenImageShared):
                 image = image.to(device=device, dtype=dtype)
                 if image.shape[1] != self.num_channels_latents:
                     image_latents = self.vae_encode(
-                        image, sample_mode="mode", offload=offload, offload_type="cpu" if idx != len(images) - 1 else "discard"
+                        image,
+                        sample_mode="mode",
+                        offload=offload,
+                        offload_type="cpu" if idx != len(images) - 1 else "discard",
                     )
                 else:
                     image_latents = image
@@ -104,7 +108,6 @@ class QwenImageEditPlusEngine(QwenImageShared):
             latents = latents.to(device=device, dtype=dtype)
 
         return latents, image_latents
-
 
     def run(
         self,
@@ -172,11 +175,17 @@ class QwenImageEditPlusEngine(QwenImageShared):
             condition_width, condition_height = self.calculate_dimensions(
                 CONDITION_IMAGE_SIZE, image_width / image_height
             )
-            vae_width, vae_height = self.calculate_dimensions(VAE_IMAGE_SIZE, image_width / image_height)
+            vae_width, vae_height = self.calculate_dimensions(
+                VAE_IMAGE_SIZE, image_width / image_height
+            )
             condition_image_sizes.append((condition_width, condition_height))
             vae_image_sizes.append((vae_width, vae_height))
-            condition_images.append(self.image_processor.resize(img, condition_height, condition_width))
-            vae_images.append(self.image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
+            condition_images.append(
+                self.image_processor.resize(img, condition_height, condition_width)
+            )
+            vae_images.append(
+                self.image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2)
+            )
 
         safe_emit_progress(progress_callback, 0.10, "Images loaded and resized")
 
@@ -234,7 +243,9 @@ class QwenImageEditPlusEngine(QwenImageShared):
         prompt_embeds_mask = prompt_embeds_mask.to(self.device)
 
         if negative_prompt_embeds is not None:
-            safe_emit_progress(progress_callback, 0.27, "Preparing negative embeddings for transformer")
+            safe_emit_progress(
+                progress_callback, 0.27, "Preparing negative embeddings for transformer"
+            )
             negative_prompt_embeds = negative_prompt_embeds.to(
                 self.device, dtype=transformer_dtype
             )
@@ -244,7 +255,9 @@ class QwenImageEditPlusEngine(QwenImageShared):
         transformer_config = self.load_config_by_type("transformer")
 
         num_channels_latents = transformer_config.in_channels // 4
-        safe_emit_progress(progress_callback, 0.28, "Preparing latent noise and image latents")
+        safe_emit_progress(
+            progress_callback, 0.28, "Preparing latent noise and image latents"
+        )
         latents, image_latents = self._prepare_image_latents(
             vae_images,
             batch_size * num_images,
@@ -328,7 +341,9 @@ class QwenImageEditPlusEngine(QwenImageShared):
 
         # handle guidance
         if self.transformer.config.guidance_embeds and guidance_scale is not None:
-            safe_emit_progress(progress_callback, 0.475, "Preparing guidance embeddings")
+            safe_emit_progress(
+                progress_callback, 0.475, "Preparing guidance embeddings"
+            )
             guidance = torch.full(
                 [1], guidance_scale, device=self.device, dtype=torch.float32
             )
@@ -368,7 +383,6 @@ class QwenImageEditPlusEngine(QwenImageShared):
             0.50,
             f"Starting denoising (CFG: {'on' if (negative_prompt is not None and use_cfg_guidance) else 'off'})",
         )
-        
 
         latents = self.denoise(
             latents=latents,
@@ -397,7 +411,7 @@ class QwenImageEditPlusEngine(QwenImageShared):
         if offload:
             safe_emit_progress(progress_callback, 0.93, "Offloading transformer")
             self._offload("transformer")
-            
+
         safe_emit_progress(progress_callback, 0.94, "Transformer offloaded")
 
         if return_latents:
@@ -410,5 +424,3 @@ class QwenImageEditPlusEngine(QwenImageShared):
         image = self._tensor_to_frame(tensor_image)
         safe_emit_progress(progress_callback, 1.0, "Completed edit pipeline")
         return image
-
-    

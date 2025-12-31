@@ -198,7 +198,7 @@ class HidreamShared(BaseEngine):
 
         if offload:
             del self.text_encoder_3
-            
+
         pooled_prompt_embeds = torch.cat(
             [pooled_prompt_embeds_1, pooled_prompt_embeds_2], dim=-1
         ).view(num_images, -1)

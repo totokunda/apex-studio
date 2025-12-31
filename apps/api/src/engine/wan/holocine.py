@@ -534,8 +534,7 @@ class WanHoloCineEngine(WanShared):
             negative_text_cut_positions = None
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
-            
-        
+
         if offload:
             self._offload("text_encoder")
 
@@ -588,25 +587,37 @@ class WanHoloCineEngine(WanShared):
                     "prompt": prompt,
                 }
 
-                negative_input_kwargs = dict({
-                    "latents": latent_model_input,
-                    "timestep": timestep,
-                    "context": negative_context.to(transformer_dtype),
-                    "text_cut_positions": negative_text_cut_positions,
-                    "prompt": negative_prompt,
-                }) if negative_context is not None else None
+                negative_input_kwargs = (
+                    dict(
+                        {
+                            "latents": latent_model_input,
+                            "timestep": timestep,
+                            "context": negative_context.to(transformer_dtype),
+                            "text_cut_positions": negative_text_cut_positions,
+                            "prompt": negative_prompt,
+                        }
+                    )
+                    if negative_context is not None
+                    else None
+                )
 
                 if boundary_timestep is not None and timestep >= boundary_timestep:
 
-                    if hasattr(self, "low_noise_transformer") and self.low_noise_transformer:
+                    if (
+                        hasattr(self, "low_noise_transformer")
+                        and self.low_noise_transformer
+                    ):
                         safe_emit_progress(
-                            denoise_progress_callback,  
+                            denoise_progress_callback,
                             float(i) / float(total_steps) if total_steps else 0.0,
                             "Offloading previous transformer",
                         )
                         self._offload("low_noise_transformer")
 
-                    if not hasattr(self, "high_noise_transformer") or not self.high_noise_transformer:
+                    if (
+                        not hasattr(self, "high_noise_transformer")
+                        or not self.high_noise_transformer
+                    ):
                         safe_emit_progress(
                             denoise_progress_callback,
                             float(i) / float(total_steps) if total_steps else 0.0,
@@ -615,7 +626,9 @@ class WanHoloCineEngine(WanShared):
 
                         self.load_component_by_name("high_noise_transformer")
                         self.to_device(self.high_noise_transformer)
-                        comp = self.get_component_by_name("high_noise_transformer") or {}
+                        comp = (
+                            self.get_component_by_name("high_noise_transformer") or {}
+                        )
                         self.check_sparse_self_attn("high_noise_transformer")
                         safe_emit_progress(
                             denoise_progress_callback,
@@ -628,7 +641,10 @@ class WanHoloCineEngine(WanShared):
                     if isinstance(guidance_scale, list):
                         guidance_scale = guidance_scale[0]
                 else:
-                    if hasattr(self, "high_noise_transformer") and self.high_noise_transformer:
+                    if (
+                        hasattr(self, "high_noise_transformer")
+                        and self.high_noise_transformer
+                    ):
                         safe_emit_progress(
                             denoise_progress_callback,
                             float(i) / float(total_steps) if total_steps else 0.0,
@@ -636,7 +652,10 @@ class WanHoloCineEngine(WanShared):
                         )
                         self._offload("high_noise_transformer")
 
-                    if not hasattr(self, "low_noise_transformer") or not self.low_noise_transformer:
+                    if (
+                        not hasattr(self, "low_noise_transformer")
+                        or not self.low_noise_transformer
+                    ):
                         safe_emit_progress(
                             denoise_progress_callback,
                             float(i) / float(total_steps) if total_steps else 0.0,

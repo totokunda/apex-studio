@@ -2,14 +2,27 @@ from src.engine import UniversalEngine
 from diffusers.utils import export_to_video
 import os
 
-variants = ["GGUF_Q2_K", "GGUF_Q3_K_S", "GGUF_Q3_K_M", "GGUF_Q4_K_S", "GGUF_Q4_K_M", "GGUF_Q5_K_S", "GGUF_Q5_K_M", "GGUF_Q6_K", "GGUF_Q8_0", "FP8"]
+variants = [
+    "GGUF_Q2_K",
+    "GGUF_Q3_K_S",
+    "GGUF_Q3_K_M",
+    "GGUF_Q4_K_S",
+    "GGUF_Q4_K_M",
+    "GGUF_Q5_K_S",
+    "GGUF_Q5_K_M",
+    "GGUF_Q6_K",
+    "GGUF_Q8_0",
+    "FP8",
+]
 variants.reverse()
 yaml_path = "/home/tosin_coverquick_co/apex/manifest/verified/video/wan2.2-a14b-first-frame-last-frame-1.0.0.v1.yml"
 
 dir_path = "test_fflf_wan_22_a14b"
 os.makedirs(dir_path, exist_ok=True)
 
-prompt= "In a cozy recording studio, a man and a woman are singing together with passion and emotion. The man, with short brown hair, wears a light gray button-up shirt, his expression filled with concentration and warmth. The woman, with long wavy brown hair, dons a sleeveless dress adorned with small polka dots, her eyes closed as she belts out a heartfelt melody. The studio is equipped with professional microphones, and the background features soundproofing panels, creating an intimate and focused atmosphere. A close-up shot captures their expressions and the intensity of their performance.",
+prompt = (
+    "In a cozy recording studio, a man and a woman are singing together with passion and emotion. The man, with short brown hair, wears a light gray button-up shirt, his expression filled with concentration and warmth. The woman, with long wavy brown hair, dons a sleeveless dress adorned with small polka dots, her eyes closed as she belts out a heartfelt melody. The studio is equipped with professional microphones, and the background features soundproofing panels, creating an intimate and focused atmosphere. A close-up shot captures their expressions and the intensity of their performance.",
+)
 first_frame = "/home/tosin_coverquick_co/apex/images/dragon_first_frame.png"
 last_frame = "/home/tosin_coverquick_co/apex/images/dragon_last_frame.png"
 

@@ -3,7 +3,17 @@ from src.engine import UniversalEngine
 from diffusers.utils import export_to_video
 import os
 
-variants = ["GGUF_Q2_K", "GGUF_Q3_K_S", "GGUF_Q3_K_M", "GGUF_Q4_K_S", "GGUF_Q4_K_M", "GGUF_Q5_K_S", "GGUF_Q5_K_M", "GGUF_Q6_K", "GGUF_Q8_0"]
+variants = [
+    "GGUF_Q2_K",
+    "GGUF_Q3_K_S",
+    "GGUF_Q3_K_M",
+    "GGUF_Q4_K_S",
+    "GGUF_Q4_K_M",
+    "GGUF_Q5_K_S",
+    "GGUF_Q5_K_M",
+    "GGUF_Q6_K",
+    "GGUF_Q8_0",
+]
 variants.reverse()
 
 dir_path = "test_ti2v_wan_22_5b"
@@ -15,21 +25,17 @@ negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕�
 
 for variant in variants:
     print(f"[wan2.2 t2i2v] Running variant={variant}")
-    
+
     engine = UniversalEngine(
         yaml_path="/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.2-5b-text-to-image-to-video-turbo-1.0.0.v1.yml",
         selected_components={
-            "transformer": {
-                "variant": variant
-            },
-            "text_encoder": {
-                "variant": "FP8"
-            },
+            "transformer": {"variant": variant},
+            "text_encoder": {"variant": "FP8"},
         },
         attention_type="sage",
-        model_type="i2v"
+        model_type="i2v",
     )
-    
+
     video = engine.run(
         image=image,
         prompt=prompt,
@@ -43,9 +49,7 @@ for variant in variants:
 
     export_to_video(
         video[0],
-        os.path.join(
-            dir_path, f"test_wan_22_ti2v_5b_{variant.lower()}.mp4"
-        ),
+        os.path.join(dir_path, f"test_wan_22_ti2v_5b_{variant.lower()}.mp4"),
         fps=24,
         quality=8,
     )

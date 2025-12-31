@@ -31,6 +31,7 @@ from src.utils.defaults import get_components_path, get_cache_path
 from src.mixins.cache_mixin import CacheMixin
 from typing import Dict, Any
 
+
 def use_default(value, default):
     """Utility: return value if not None, else default."""
     return value if value is not None else default
@@ -97,8 +98,6 @@ PRECISION_TO_TYPE = {
 }
 
 
-
-
 def load_tokenizer(
     tokenizer_type, tokenizer_path=None, padding_side="right", logger=None
 ):
@@ -145,9 +144,9 @@ class TextEncoder(BaseHelper, CacheMixin):
         max_length: int = 1000,
         text_encoder_precision: Optional[str] = "fp16",
         model_path: Optional[str] = None,
-        config:Dict[str, Any] = None,
-        config_path:str = None,
-        extra_kwargs:Dict[str, Any] = None,
+        config: Dict[str, Any] = None,
+        config_path: str = None,
+        extra_kwargs: Dict[str, Any] = None,
         tokenizer_type: Optional[str] = None,
         tokenizer_path: Optional[str] = None,
         output_key: Optional[str] = None,
@@ -242,34 +241,35 @@ class TextEncoder(BaseHelper, CacheMixin):
             self.text2tokens("a photo of a cat", data_type="image")
         if self.use_video_template and self.prompt_template_video is not None:
             self.text2tokens("a photo of a cat", data_type="video")
-            
 
     def load_text_encoder(
         self,
-        text_encoder_type, 
+        text_encoder_type,
         text_encoder_precision=None,
         text_encoder_path=None,
         logger=None,
         device=None,
-        base:str = "Qwen2_5_VLForConditionalGeneration",
-        config:Dict[str, Any] = None,
-        config_path:str = None,
-        extra_kwargs:Dict[str, Any] = None,
+        base: str = "Qwen2_5_VLForConditionalGeneration",
+        config: Dict[str, Any] = None,
+        config_path: str = None,
+        extra_kwargs: Dict[str, Any] = None,
     ):
         if text_encoder_path is None:
             if text_encoder_type not in TEXT_ENCODER_PATH:
                 raise ValueError(f"Unsupported text encoder type: {text_encoder_type}")
             text_encoder_path = TEXT_ENCODER_PATH[text_encoder_type]
-        
 
-        text_encoder = self._load_model({
-            "type": "text_encoder",
-            "model_path": text_encoder_path,
-            "base": base,
-            "config": config,
-            "config_path": config_path,
-            "extra_kwargs": extra_kwargs,
-        }, load_dtype=PRECISION_TO_TYPE[text_encoder_precision])
+        text_encoder = self._load_model(
+            {
+                "type": "text_encoder",
+                "model_path": text_encoder_path,
+                "base": base,
+                "config": config,
+                "config_path": config_path,
+                "extra_kwargs": extra_kwargs,
+            },
+            load_dtype=PRECISION_TO_TYPE[text_encoder_precision],
+        )
 
         if hasattr(text_encoder, "language_model"):
             text_encoder = text_encoder.language_model
@@ -277,7 +277,9 @@ class TextEncoder(BaseHelper, CacheMixin):
 
         # from_pretrained will ensure that the model is in eval mode.
         if text_encoder_precision is not None:
-            text_encoder = text_encoder.to(dtype=PRECISION_TO_TYPE[text_encoder_precision])
+            text_encoder = text_encoder.to(
+                dtype=PRECISION_TO_TYPE[text_encoder_precision]
+            )
 
         text_encoder.requires_grad_(False)
 

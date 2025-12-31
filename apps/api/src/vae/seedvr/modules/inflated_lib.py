@@ -22,6 +22,7 @@ from torch import Tensor, nn
 
 from loguru import logger
 
+
 class MemoryState(Enum):
     """
     State[Disabled]:        No memory bank will be enabled.
@@ -84,10 +85,14 @@ def extend_head(
     else:
         tile_repeat = np.ones(tensor.ndim).astype(int)
         tile_repeat[2] = times
-        return torch.cat(tensors=(torch.tile(tensor[:, :, :1], list(tile_repeat)), tensor), dim=2)
+        return torch.cat(
+            tensors=(torch.tile(tensor[:, :, :1], list(tile_repeat)), tensor), dim=2
+        )
 
 
-def inflate_weight(weight_2d: torch.Tensor, weight_3d: torch.Tensor, inflation_mode: str):
+def inflate_weight(
+    weight_2d: torch.Tensor, weight_3d: torch.Tensor, inflation_mode: str
+):
     """
     Inflate a 2D convolution weight matrix to a 3D one.
     Parameters:

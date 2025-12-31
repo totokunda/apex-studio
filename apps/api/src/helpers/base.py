@@ -14,6 +14,7 @@ import numpy as np
 import json
 from loguru import logger
 
+
 class BaseOutput(OrderedDict):
     """
     Lightweight output container that supports both attribute and dict-style access.
