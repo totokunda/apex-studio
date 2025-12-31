@@ -410,6 +410,8 @@ function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
   const frameTime = frame.timestamp / 1e6;
 
   
+
+  
   // 1. Cache
   cacheFrame(state, frame);
 
@@ -484,8 +486,7 @@ async function cacheKeyPackets(state: AssetState) {
 // Handler factory – binds an assetId so multiple assets can run concurrently.
 const createFrameHandler = (assetId: string) => (frame: VideoFrame) => {
 
-  console.log("createFrameHandler", assetId, frame.timestamp);
-  
+
   const state = assetStates.get(assetId);
   if (!state) {
     frame.close();
@@ -797,7 +798,7 @@ async function handleSeek(
 
   // 1. Cache Hit
   const cached = findCachedFrame(state, timestamp);
-  console.log("handleSeek cached", id, timestamp, cached);
+
   if (cached) {
     postFrame(id, cached, requestId);
     // @ts-ignore
@@ -862,6 +863,7 @@ async function handleSeek(
     const chunk = currentPacket.toEncodedVideoChunk();
     state.decoder.decode(chunk);
   } catch (e: any) {
+    
     if (isKeyframeRequiredError(e)) {
       try {
         // Re-verify from the demuxer and retry once.
@@ -900,11 +902,17 @@ async function handleSeek(
   }
 
   
-
   const packets = state.sink.packets(currentPacket);
   for await (const packet of packets) {
     if ((state.decoder.state as string) === "closed") break;
     const colorChunk = packet.toEncodedVideoChunk();
+    try {
+      state.decoder.decode(colorChunk);
+    } catch (e: any) {
+      console.log("decode error", e.name, e.message);
+      if (e?.name === "DataError" && /key\s*frame/i.test(e.message || "")) break;
+      
+    }
     state.decoder.decode(colorChunk);
     if (packet.sideData?.alpha) {
       ensureAlphaDecoder(state, id);

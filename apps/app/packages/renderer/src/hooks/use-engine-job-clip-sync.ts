@@ -228,16 +228,18 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
           resolvedAssetId = asset?.id;
           if (resolvedAssetId) {
             patch.assetId = resolvedAssetId;
-            patch.trimEnd = 0;
-            patch.trimStart = 0;
+            // Preserve any existing trims; attaching a result asset should not
+            // implicitly "untrim" the user's clip.
           }
           const mediaInfo = asset?.path ? getMediaInfoCached(asset.path) : undefined;
           if (mediaInfo) {
             const duration = mediaInfo.duration;
+            
             if (typeof duration === "number" && duration > 0) {
               const newEndFrame = clip.startFrame + duration * fps;
               if (clip.endFrame !== newEndFrame) {
-                patch.endFrame = Math.floor(newEndFrame);
+                patch.endFrame = Math.round(newEndFrame);
+                needsUpdate = true;
               }
             }
           }

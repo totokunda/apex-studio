@@ -276,7 +276,7 @@ spec:
       scale_by: resolution
     - id: prompt
       label: Prompt
-      description: Describe the image you want to generate.
+      description: Describe the video you want to generate.
       placeholder: A beautiful landscape at golden hour.
       type: text
       panel: prompting
@@ -301,8 +301,6 @@ spec:
       type: select
       default: 720
       options:
-      - name: Ultra HD
-        value: 1024
       - name: HD
         value: 720
       - name: SD
@@ -350,20 +348,20 @@ spec:
       type: number
       value_type: integer
       panel: size
-      default: 1024
+      default: 480
       min: 256
       max: 8192
-      step: 64
+      step: 16
     - id: width
       label: Width
       description: Explicit width override
       type: number
       value_type: integer
       panel: size
-      default: 1024
+      default: 832
       min: 256
       max: 8192
-      step: 64
+      step: 16
     - id: seed
       label: Seed
       description: Random seed for reproducibility

@@ -37,9 +37,11 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
   rectHeight,
   applicators,
 }) => {
-  const shapeRef = useRef<Konva.Shape>(null);
-  const transformerRef = useRef<Konva.Transformer>(null);
-  const groupRef = useRef<Konva.Group>(null);
+  // This ref is attached to multiple concrete Konva node types depending on `shapeType`
+  // (Rect/Ellipse/Line/Star/RegularPolygon). Use a permissive type to satisfy react-konva.
+  const shapeRef = useRef<any>(null);
+  const transformerRef = useRef<any>(null);
+  const groupRef = useRef<any>(null);
   const suppressUntilRef = useRef<number>(0);
 
   const tool = useViewportStore((s) => s.tool);
@@ -48,6 +50,17 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
   const setClipTransform = useClipStore((s) => s.setClipTransform);
   const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
   const clip = useClipStore((s) => s.getClipById(clipId));
+  const focusFrame = useControlsStore((s) => s.focusFrame);
+
+  const isInFrame = useMemo(() => {
+    const f = Number(focusFrame);
+    if (!Number.isFinite(f)) return true;
+    const start = Number((clip as any)?.startFrame ?? 0);
+    const endRaw = (clip as any)?.endFrame;
+    const end =
+      typeof endRaw === "number" && Number.isFinite(endRaw) ? endRaw : Infinity;
+    return f >= start && f <= end;
+  }, [focusFrame, (clip as any)?.startFrame, (clip as any)?.endFrame]);
 
   const isSelected = useControlsStore((s) =>
     s.selectedClipIds.includes(clipId),
@@ -340,6 +353,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
   );
 
   useEffect(() => {
+    if (!isInFrame) return;
     if (!isSelected) return;
     const tr = transformerRef.current;
     const shape = shapeRef.current;
@@ -358,6 +372,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
   // This allows Konva to reuse a bitmap for static frames and only recache
   // when something actually changes (e.g., style, geometry, filters).
   useEffect(() => {
+    if (!isInFrame) return;
     const node = shapeRef.current;
     if (!node) return;
     if (isInteracting) return;
@@ -379,6 +394,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
     width,
     height,
     applicatorClipsSignature,
+    isInFrame,
   ]);
 
   const handleClick = useCallback(() => {
@@ -604,6 +620,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
   ]);
 
   useEffect(() => {
+    if (!isInFrame) return;
     const handleWindowClick = (e: MouseEvent) => {
       if (!isSelected) return;
       const now =
@@ -637,7 +654,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
     return () => {
       window.removeEventListener("click", handleWindowClick);
     };
-  }, [clipId, isSelected, removeClipSelection]);
+  }, [clipId, isSelected, removeClipSelection, isInFrame]);
 
   const hexToRgba = (hex: string, opacity: number) => {
     const r = parseInt(hex.slice(1, 3), 16);
@@ -774,6 +791,10 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
         );
     }
   };
+
+  if (!isInFrame) {
+    return null;
+  }
 
   return (
     <React.Fragment>

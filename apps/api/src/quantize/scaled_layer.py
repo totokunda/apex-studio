@@ -268,6 +268,50 @@ class FPScaledParameter(nn.Parameter):
     def clone(self, *args, **kwargs):
         base = super().clone(*args, **kwargs)
         return self._wrap_like(base)
+    
+    def dequant(self, *, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
+        """
+        Return a dequantized / compute-dtype view of this parameter for arithmetic.
+
+        For FP8/FP4 physical storage this returns a regular (base) Tensor cast to a
+        higher-precision dtype suitable for compute (typically the logical dtype).
+
+        Note:
+        - This does *not* apply any external scaling (e.g. `scale_weight` on
+          FPScaledLayer weights). It only casts from the physical storage dtype.
+        """
+        base = self.as_subclass(torch.Tensor)
+        target_dtype = dtype or getattr(self, "logical_dtype", None) or base.dtype
+        return base.to(target_dtype)
+
+    # Make common arithmetic ops "safe" by dequantizing to the logical dtype.
+    # This is important for parameters like `scale_shift_table` that participate
+    # in addition/subtraction/multiplication with FP32 tensors.
+    def __add__(self, other):  # type: ignore[override]
+        return self.dequant(dtype=other.dtype) + other
+
+    def __radd__(self, other):  # type: ignore[override]
+        return other + self.dequant(dtype=other.dtype)
+
+    def __sub__(self, other):  # type: ignore[override]
+        return self.dequant(dtype=other.dtype) - other
+
+    def __rsub__(self, other):  # type: ignore[override]
+        return other - self.dequant(dtype=other.dtype)
+
+    def __mul__(self, other):  # type: ignore[override]
+        return self.dequant(dtype=other.dtype) * other
+
+    def __rmul__(self, other):  # type: ignore[override]
+        return other * self.dequant(dtype=other.dtype)
+
+    def __matmul__(self, other):  # type: ignore[override]
+        return self.dequant(dtype=other.dtype) @ other
+
+    def __rmatmul__(self, other):  # type: ignore[override]
+        return other @ self.dequant(dtype=other.dtype)
+    
+    
 
 
 def restore_fpscaled_parameters(
@@ -283,7 +327,7 @@ def restore_fpscaled_parameters(
     all FPScaled* layers, preserving logical vs. physical dtype semantics.
     """
 
-    for module in model.modules():
+    for name, module in model.named_modules():
         if isinstance(module, FPScaledLayer):
             weight = getattr(module, "weight", None)
             # Skip if there's no weight or it's already an FPScaledParameter
@@ -303,7 +347,20 @@ def restore_fpscaled_parameters(
             module.weight = _wrap_fpscaled_weight_parameter(
                 weight, logical_dtype=logical_dtype
             )
-
+    
+    for name, param in model.named_parameters():
+        if param.dtype in [torch.float8_e4m3fn, torch.float8_e5m2, torch.float4_e2m1fn_x2] and ".weight" not in name and ".bias" not in name and ".scale_weight" not in name:
+            wrapped_param = FPScaledParameter._from_base(
+                param, logical_dtype=param.dtype, requires_grad=param.requires_grad
+            )
+            # Navigate to the module and set the parameter
+            parts = name.split(".")
+            module = model
+            for part in parts[:-1]:
+                module = getattr(module, part)
+            setattr(module, parts[-1], wrapped_param)
+    
+    
 
 def _wrap_fpscaled_weight_parameter(
     param: nn.Parameter,
@@ -737,13 +794,303 @@ class FPScaledEmbedding(FPScaledLayer, nn.Embedding):
         )
 
 
+class FPScaledLayerNorm(FPScaledLayer, nn.LayerNorm):
+    def __init__(
+        self,
+        normalized_shape,
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+        bias: bool = True,
+        *,
+        compute_dtype: Optional[torch.dtype] = None,
+        device=None,
+        dtype=None,
+    ) -> None:
+        FPScaledLayer.__init__(self, compute_dtype=compute_dtype)
+        nn.LayerNorm.__init__(
+            self,
+            normalized_shape=normalized_shape,
+            eps=eps,
+            elementwise_affine=elementwise_affine,
+            bias=bias,
+            device=device,
+            dtype=dtype,
+        )
+        if elementwise_affine:
+            logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
+            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+            self.scale_weight = nn.Parameter(
+                torch.ones(1, dtype=torch.float32), requires_grad=False
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        compute_dtype = self._effective_compute_dtype(x)
+        x_c = x.to(compute_dtype)
+        
+        if self.elementwise_affine:
+            w = self._scale_and_cast_weight(
+                self.weight,
+                getattr(self, "scale_weight", None),
+                target_dtype=compute_dtype,
+                per_out_feature_dim=-1,
+            )
+            b = self.bias
+            if b is not None and b.dtype != compute_dtype:
+                b = b.to(compute_dtype)
+        else:
+            w = None
+            b = None
+
+        return F.layer_norm(x_c, self.normalized_shape, w, b, self.eps)
+
+
+class FPScaledGroupNorm(FPScaledLayer, nn.GroupNorm):
+    def __init__(
+        self,
+        num_groups: int,
+        num_channels: int,
+        eps: float = 1e-5,
+        affine: bool = True,
+        *,
+        compute_dtype: Optional[torch.dtype] = None,
+        device=None,
+        dtype=None,
+    ) -> None:
+        FPScaledLayer.__init__(self, compute_dtype=compute_dtype)
+        nn.GroupNorm.__init__(
+            self,
+            num_groups=num_groups,
+            num_channels=num_channels,
+            eps=eps,
+            affine=affine,
+            device=device,
+            dtype=dtype,
+        )
+        if affine:
+            logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
+            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+            self.scale_weight = nn.Parameter(
+                torch.ones(1, dtype=torch.float32), requires_grad=False
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        compute_dtype = self._effective_compute_dtype(x)
+        x_c = x.to(compute_dtype)
+        
+        if self.affine:
+            w = self._scale_and_cast_weight(
+                self.weight,
+                getattr(self, "scale_weight", None),
+                target_dtype=compute_dtype,
+                per_out_feature_dim=0,
+            )
+            b = self.bias
+            if b is not None and b.dtype != compute_dtype:
+                b = b.to(compute_dtype)
+        else:
+            w = None
+            b = None
+
+        return F.group_norm(x_c, self.num_groups, w, b, self.eps)
+
+
+class FPScaledBatchNorm2d(FPScaledLayer, nn.BatchNorm2d):
+    def __init__(
+        self,
+        num_features: int,
+        eps: float = 1e-5,
+        momentum: float = 0.1,
+        affine: bool = True,
+        track_running_stats: bool = True,
+        *,
+        compute_dtype: Optional[torch.dtype] = None,
+        device=None,
+        dtype=None,
+    ) -> None:
+        FPScaledLayer.__init__(self, compute_dtype=compute_dtype)
+        nn.BatchNorm2d.__init__(
+            self,
+            num_features=num_features,
+            eps=eps,
+            momentum=momentum,
+            affine=affine,
+            track_running_stats=track_running_stats,
+            device=device,
+            dtype=dtype,
+        )
+        if affine:
+            logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
+            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+            self.scale_weight = nn.Parameter(
+                torch.ones(1, dtype=torch.float32), requires_grad=False
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        compute_dtype = self._effective_compute_dtype(x)
+        x_c = x.to(compute_dtype)
+        
+        if self.affine:
+            w = self._scale_and_cast_weight(
+                self.weight,
+                getattr(self, "scale_weight", None),
+                target_dtype=compute_dtype,
+                per_out_feature_dim=0,
+            )
+            b = self.bias
+            if b is not None and b.dtype != compute_dtype:
+                b = b.to(compute_dtype)
+        else:
+            w = None
+            b = None
+
+        return F.batch_norm(
+            x_c,
+            self.running_mean,
+            self.running_var,
+            w,
+            b,
+            self.training or not self.track_running_stats,
+            self.momentum,
+            self.eps,
+        )
+
+
+class FPScaledBatchNorm3d(FPScaledLayer, nn.BatchNorm3d):
+    def __init__(
+        self,
+        num_features: int,
+        eps: float = 1e-5,
+        momentum: float = 0.1,
+        affine: bool = True,
+        track_running_stats: bool = True,
+        *,
+        compute_dtype: Optional[torch.dtype] = None,
+        device=None,
+        dtype=None,
+    ) -> None:
+        FPScaledLayer.__init__(self, compute_dtype=compute_dtype)
+        nn.BatchNorm3d.__init__(
+            self,
+            num_features=num_features,
+            eps=eps,
+            momentum=momentum,
+            affine=affine,
+            track_running_stats=track_running_stats,
+            device=device,
+            dtype=dtype,
+        )
+        if affine:
+            logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
+            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+            self.scale_weight = nn.Parameter(
+                torch.ones(1, dtype=torch.float32), requires_grad=False
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        compute_dtype = self._effective_compute_dtype(x)
+        x_c = x.to(compute_dtype)
+        
+        if self.affine:
+            w = self._scale_and_cast_weight(
+                self.weight,
+                getattr(self, "scale_weight", None),
+                target_dtype=compute_dtype,
+                per_out_feature_dim=0,
+            )
+            b = self.bias
+            if b is not None and b.dtype != compute_dtype:
+                b = b.to(compute_dtype)
+        else:
+            w = None
+            b = None
+
+        return F.batch_norm(
+            x_c,
+            self.running_mean,
+            self.running_var,
+            w,
+            b,
+            self.training or not self.track_running_stats,
+            self.momentum,
+            self.eps,
+        )
+
+
+
+class FPScaledRMSNorm(FPScaledLayer, nn.RMSNorm):
+    """
+    FPScaled wrapper for torch.nn.RMSNorm.
+
+    Important: this uses *multiple inheritance* (like FPScaledLinear/Conv/Embedding)
+    rather than containing an inner submodule, so the state_dict keys remain
+    compatible (`weight`, `eps`, etc.) with the original `nn.RMSNorm`.
+    """
+
+    def __init__(
+        self,
+        normalized_shape,
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+        *,
+        compute_dtype: Optional[torch.dtype] = None,
+        device=None,
+        dtype=None,
+    ) -> None:
+        FPScaledLayer.__init__(self, compute_dtype=compute_dtype)
+        nn.RMSNorm.__init__(
+            self,
+            normalized_shape=normalized_shape,
+            eps=eps,
+            elementwise_affine=elementwise_affine,
+            device=device,
+            dtype=dtype,
+        )
+
+        if self.elementwise_affine and self.weight is not None:
+            logical_dtype = getattr(self, "compute_dtype", None) or self.weight.dtype
+            self.weight = _wrap_fpscaled_weight_parameter(self.weight, logical_dtype=logical_dtype)
+            self.scale_weight = nn.Parameter(torch.ones(1, dtype=torch.float32), requires_grad=False)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        compute_dtype = self._effective_compute_dtype(hidden_states)
+        x = hidden_states.to(compute_dtype)
+
+        # Manual RMSNorm (so we can apply scaled weight cleanly)
+        nd = len(self.normalized_shape)
+        dims = tuple(range(-nd, 0)) if nd > 0 else (-1,)
+        variance = x.to(torch.float32).pow(2).mean(dims, keepdim=True)
+        x = x * torch.rsqrt(variance + self.eps)
+
+        if self.elementwise_affine and self.weight is not None:
+            # Apply optional scale_weight and broadcast safely across normalized dims.
+            w = self.weight.to(compute_dtype)
+            s = getattr(self, "scale_weight", None)
+            if s is not None:
+                s = s.to(compute_dtype)
+                if s.numel() == 1:
+                    w = w * s
+                elif s.shape == w.shape:
+                    w = w * s
+                elif s.numel() == w.shape[-1] and w.dim() == 1:
+                    w = w * s
+                else:
+                    w = w * s.view_as(w) if s.numel() == w.numel() else (w * s)
+            x = x * w
+
+        return x
+
+
 _TYPE_MAP = {
     nn.Linear: FPScaledLinear,
     nn.Conv2d: FPScaledConv2d,
     nn.Conv1d: FPScaledConv1d,
     nn.Embedding: FPScaledEmbedding,
+    nn.LayerNorm: FPScaledLayerNorm,
+    nn.GroupNorm: FPScaledGroupNorm,
+    nn.BatchNorm2d: FPScaledBatchNorm2d,
+    nn.BatchNorm3d: FPScaledBatchNorm3d,
+    nn.RMSNorm: FPScaledRMSNorm,
 }
-
 
 def patch_fpscaled_model(
     model: nn.Module,
@@ -840,6 +1187,89 @@ def patch_fpscaled_model(
                     )
                     with torch.no_grad():
                         new_mod.weight.copy_(child.weight)
+                elif isinstance(child, nn.LayerNorm):
+                    new_mod = cls(  # type: ignore[call-arg]
+                        child.normalized_shape,
+                        eps=child.eps,
+                        elementwise_affine=child.elementwise_affine,
+                        bias=child.bias is not None,
+                        compute_dtype=default_compute_dtype,
+                        device=child.weight.device if child.elementwise_affine else None,
+                        dtype=child.weight.dtype if child.elementwise_affine else None,
+                    )
+                    with torch.no_grad():
+                        if child.elementwise_affine:
+                            new_mod.weight.copy_(child.weight)
+                            if child.bias is not None:
+                                new_mod.bias.copy_(child.bias)
+                elif isinstance(child, nn.GroupNorm):
+                    new_mod = cls(  # type: ignore[call-arg]
+                        child.num_groups,
+                        child.num_channels,
+                        eps=child.eps,
+                        affine=child.affine,
+                        compute_dtype=default_compute_dtype,
+                        device=child.weight.device if child.affine else None,
+                        dtype=child.weight.dtype if child.affine else None,
+                    )
+                    with torch.no_grad():
+                        if child.affine:
+                            new_mod.weight.copy_(child.weight)
+                            if child.bias is not None:
+                                new_mod.bias.copy_(child.bias)
+                elif isinstance(child, nn.BatchNorm2d):
+                    new_mod = cls(  # type: ignore[call-arg]
+                        child.num_features,
+                        eps=child.eps,
+                        momentum=child.momentum,
+                        affine=child.affine,
+                        track_running_stats=child.track_running_stats,
+                        compute_dtype=default_compute_dtype,
+                        device=child.weight.device if child.affine else None,
+                        dtype=child.weight.dtype if child.affine else None,
+                    )
+                    with torch.no_grad():
+                        if child.affine:
+                            new_mod.weight.copy_(child.weight)
+                            if child.bias is not None:
+                                new_mod.bias.copy_(child.bias)
+                        if child.track_running_stats:
+                            new_mod.running_mean.copy_(child.running_mean)
+                            new_mod.running_var.copy_(child.running_var)
+                            new_mod.num_batches_tracked.copy_(child.num_batches_tracked)
+                elif isinstance(child, nn.BatchNorm3d):
+                    new_mod = cls(  # type: ignore[call-arg]
+                        child.num_features,
+                        eps=child.eps,
+                        momentum=child.momentum,
+                        affine=child.affine,
+                        track_running_stats=child.track_running_stats,
+                        compute_dtype=default_compute_dtype,
+                        device=child.weight.device if child.affine else None,
+                        dtype=child.weight.dtype if child.affine else None,
+                    )
+                    with torch.no_grad():
+                        if child.affine:
+                            new_mod.weight.copy_(child.weight)
+                            if child.bias is not None:
+                                new_mod.bias.copy_(child.bias)
+                        if child.track_running_stats:
+                            new_mod.running_mean.copy_(child.running_mean)
+                            new_mod.running_var.copy_(child.running_var)
+                            new_mod.num_batches_tracked.copy_(child.num_batches_tracked)
+                elif isinstance(child, nn.RMSNorm):
+                    # torch.nn.RMSNorm uses `normalized_shape` (tuple-like), not `.dim`
+                    new_mod = cls(  # type: ignore[call-arg]
+                        child.normalized_shape,
+                        eps=child.eps,
+                        elementwise_affine=child.elementwise_affine,
+                        compute_dtype=default_compute_dtype,
+                        device=child.weight.device if child.elementwise_affine and child.weight is not None else None,
+                        dtype=child.weight.dtype if child.elementwise_affine and child.weight is not None else None,
+                    )
+                    with torch.no_grad():
+                        if child.elementwise_affine and child.weight is not None:
+                            new_mod.weight.copy_(child.weight)
                 else:  # pragma: no cover - defensive
                     continue
 
@@ -848,7 +1278,6 @@ def patch_fpscaled_model(
 
             if child is not None and len(child._modules) > 0:
                 stack.append((qname + ".", child))
-
 
 def _infer_fpscaled_module_names_from_state_dict(state_dict: dict) -> set[str]:
     """

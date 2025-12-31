@@ -638,6 +638,7 @@ def sage_attention(
     dropout_p: float = 0.0,
     is_causal: bool = False,
     softmax_scale=None,
+    default_dtype=torch.bfloat16,
     **kwargs,
 ):
     """
@@ -671,6 +672,16 @@ def sage_attention(
     # Match PyTorch SDPA's default scaling when none is provided
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(q.shape[-1])
+        
+    
+    # ensure q, k, v are on the same device and are of either bfloat16 or float16 dont raise error, just fix it
+    if q.device != k.device or q.device != v.device:
+        q = q.to(k.device)
+        v = v.to(k.device)
+    if q.dtype not in [torch.bfloat16, torch.float16] or k.dtype not in [torch.bfloat16, torch.float16] or v.dtype not in [torch.bfloat16, torch.float16]:
+        q = q.to(default_dtype)
+        k = k.to(default_dtype)
+        v = v.to(default_dtype)
 
     attn_output = sageattn(
         q,

@@ -244,6 +244,7 @@ spec:
         - - guidance_scale
         - - audio_guidance_scale
         - - seed
+        - - num_frames
     inputs:
     - id: video
       label: Video Input
@@ -381,3 +382,13 @@ spec:
       min: 1.0
       max: 15.0
       step: 0.5
+    - id: num_frames
+      label: Number of Frames per Segment
+      description: Number of frames to generate per segment
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 81
+      min: 1
+      max: 200
+      step: 1

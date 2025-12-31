@@ -9,7 +9,6 @@ import urllib3
 from diffusers.models.modeling_utils import ModelMixin
 from contextlib import contextmanager
 from tqdm import tqdm
-import shutil
 import accelerate
 import psutil
 import json
@@ -20,7 +19,6 @@ from src.utils.defaults import (
     get_offload_path,
 )
 from src.utils.module import find_class_recursive
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from src.transformer.base import TRANSFORMERS_REGISTRY as TRANSFORMERS_REGISTRY_TORCH
 from src.mlx.transformer.base import TRANSFORMERS_REGISTRY as TRANSFORMERS_REGISTRY_MLX
