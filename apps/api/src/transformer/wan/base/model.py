@@ -42,8 +42,295 @@ from diffusers.models.normalization import FP32LayerNorm
 from .attention import WanAttnProcessor2_0
 
 from src.transformer.base import TRANSFORMERS_REGISTRY
+import types
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
+# Global variables for EasyCache
+WANTF_GLOBAL_CNT = 0
+WANTF_GLOBAL_NUM_STEPS = 100
+WANTF_GLOBAL_THRESH = 0.1
+WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN = 0
+WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR = True
+WANTF_GLOBAL_K = None
+WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN = None
+WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN = None
+WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_ODD = None
+WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN = None
+WANTF_GLOBAL_CACHE_EVEN = None
+WANTF_GLOBAL_CACHE_ODD = None
+WANTF_GLOBAL_RET_STEPS = 20
+
+
+def reset_wantf_global_cache():
+    """Reset all global cache variables."""
+    global WANTF_GLOBAL_CNT, WANTF_GLOBAL_NUM_STEPS, WANTF_GLOBAL_THRESH
+    global WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN, WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR
+    global WANTF_GLOBAL_K, WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN
+    global WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN, WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_ODD
+    global WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN, WANTF_GLOBAL_CACHE_EVEN
+    global WANTF_GLOBAL_CACHE_ODD, WANTF_GLOBAL_RET_STEPS
+
+    WANTF_GLOBAL_CNT = 0
+    WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN = 0
+    WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR = True
+    WANTF_GLOBAL_K = None
+    WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN = None
+    WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN = None
+    WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_ODD = None
+    WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN = None
+    WANTF_GLOBAL_CACHE_EVEN = None
+    WANTF_GLOBAL_CACHE_ODD = None
+
+
+def easycache_forward_(
+    self,
+    hidden_states: torch.Tensor,
+    timestep: torch.LongTensor,
+    encoder_hidden_states: torch.Tensor,
+    encoder_hidden_states_image: Optional[torch.Tensor] = None,
+    ip_image_hidden_states: Optional[torch.Tensor] = None,
+    return_dict: bool = True,
+    attention_kwargs: Optional[Dict[str, Any]] = None,
+    enhance_kwargs: Optional[Dict[str, Any]] = None,
+) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+    """
+    EasyCache-enabled forward pass for WanTransformer3DModel.
+    Uses global variables to maintain caching state across calls.
+
+    Args:
+        hidden_states (Tensor): Input video tensor with shape [B, C, F, H, W]
+        timestep (Tensor): Diffusion timesteps tensor of shape [B]
+        encoder_hidden_states (Tensor): Text embeddings with shape [B, L, C]
+        encoder_hidden_states_image (Tensor, optional): Image embeddings for I2V
+        ip_image_hidden_states (Tensor, optional): IP image features
+        return_dict (bool): Whether to return dict or tuple
+        attention_kwargs (dict, optional): Additional attention arguments
+        enhance_kwargs (dict, optional): Enhancement arguments
+
+    Returns:
+        Transformer2DModelOutput or tuple with denoised video tensor
+    """
+    global WANTF_GLOBAL_CNT, WANTF_GLOBAL_NUM_STEPS, WANTF_GLOBAL_THRESH
+    global WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN, WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR
+    global WANTF_GLOBAL_K, WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN
+    global WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN, WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_ODD
+    global WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN, WANTF_GLOBAL_CACHE_EVEN
+    global WANTF_GLOBAL_CACHE_ODD, WANTF_GLOBAL_RET_STEPS
+
+    # Get the number of latent channels (without condition channels)
+    out_channels = self.config.out_channels
+
+    # Store original raw input for end-to-end caching (only latent part, not condition)
+    # hidden_states may be [B, C_latent + C_condition, F, H, W] when concatenated with latent_condition
+    raw_input = hidden_states[:, :out_channels].clone()
+
+    # Track which type of step (even=condition, odd=uncondition)
+    is_even = (WANTF_GLOBAL_CNT % 2 == 0)
+
+    # Only make decision on even (condition) steps
+    if is_even:
+        # Always compute first ret_steps and last steps
+        if WANTF_GLOBAL_CNT < WANTF_GLOBAL_RET_STEPS or WANTF_GLOBAL_CNT >= (WANTF_GLOBAL_NUM_STEPS - 2):
+            WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR = True
+            WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN = 0
+        else:
+            if WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN is not None and WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None:
+                raw_input_change = (raw_input - WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN).flatten().abs().mean()
+                if WANTF_GLOBAL_K is not None:
+                    output_norm = WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN.flatten().abs().mean()
+                    pred_change = WANTF_GLOBAL_K * (raw_input_change / output_norm)
+                    combined_pred_change = pred_change
+                    WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN += combined_pred_change
+                    if WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN < WANTF_GLOBAL_THRESH:
+                        WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR = False
+                    else:
+                        WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR = True
+                        WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN = 0
+                else:
+                    WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR = True
+            else:
+                WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR = True
+        WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN = raw_input.clone()
+
+    # Check if we can use cached output and return early
+    if is_even and not WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR and WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None:
+        WANTF_GLOBAL_CNT += 1
+        output = (raw_input + WANTF_GLOBAL_CACHE_EVEN).float()
+        if not return_dict:
+            return (output,)
+        return Transformer2DModelOutput(sample=output)
+    elif not is_even and not WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR and WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_ODD is not None:
+        WANTF_GLOBAL_CNT += 1
+        output = (raw_input + WANTF_GLOBAL_CACHE_ODD).float()
+        if not return_dict:
+            return (output,)
+        return Transformer2DModelOutput(sample=output)
+
+    # Continue with normal processing since we need to calculate
+    if attention_kwargs is not None:
+        attention_kwargs = attention_kwargs.copy()
+        lora_scale = attention_kwargs.pop("scale", 1.0)
+    else:
+        lora_scale = 1.0
+
+    if enhance_kwargs is not None:
+        enhance_weight = enhance_kwargs.get("enhance_weight", None)
+        num_frames = enhance_kwargs.get("num_frames", None)
+        if enhance_weight is not None and num_frames is not None:
+            self.set_enhance(enhance_weight, num_frames)
+
+    if USE_PEFT_BACKEND:
+        scale_lora_layers(self, lora_scale)
+    else:
+        if attention_kwargs is not None and attention_kwargs.get("scale", None) is not None:
+            logger.warning(
+                "Passing `scale` via `attention_kwargs` when not using the PEFT backend is ineffective."
+            )
+
+    batch_size, num_channels, num_frames, height, width = hidden_states.shape
+    p_t, p_h, p_w = self.config.patch_size
+    post_patch_num_frames = num_frames // p_t
+    post_patch_height = height // p_h
+    post_patch_width = width // p_w
+
+    rotary_emb = self.rope(hidden_states)
+    ip_hidden_states_len = 0
+    if ip_image_hidden_states is not None:
+        hidden_states_ip = self.patch_embedding(ip_image_hidden_states)
+        hidden_states_ip = hidden_states_ip.flatten(2).transpose(1, 2)
+        ip_hidden_states_len = hidden_states_ip.shape[1]
+        rotary_emb_ip = self.rope(hidden_states, ip_image_hidden_states, time_index=0)
+        rotary_emb = torch.concat([rotary_emb, rotary_emb_ip], dim=2)
+    else:
+        hidden_states_ip = None
+
+    hidden_states = self.patch_embedding(hidden_states)
+    hidden_states = hidden_states.flatten(2).transpose(1, 2)
+
+    if timestep.ndim == 2:
+        ts_seq_len = timestep.shape[1]
+        timestep = timestep.flatten()
+    else:
+        ts_seq_len = None
+
+    (
+        temb,
+        timestep_proj,
+        encoder_hidden_states,
+        encoder_hidden_states_image,
+        timestep_proj_ip,
+    ) = self.condition_embedder(
+        timestep,
+        encoder_hidden_states,
+        encoder_hidden_states_image,
+        ip_image_hidden_states,
+        timestep_seq_len=ts_seq_len,
+    )
+
+    if ts_seq_len is not None:
+        timestep_proj = timestep_proj.unflatten(2, (6, -1))
+    else:
+        timestep_proj = timestep_proj.unflatten(1, (6, -1))
+
+    if timestep_proj_ip is not None:
+        timestep_proj_ip = timestep_proj_ip.unflatten(1, (6, -1))
+
+    if encoder_hidden_states_image is not None:
+        encoder_hidden_states = torch.concat(
+            [encoder_hidden_states_image, encoder_hidden_states], dim=1
+        )
+
+    # Transformer blocks
+    if torch.is_grad_enabled() and self.gradient_checkpointing:
+        for block in self.blocks:
+            hidden_states = self._gradient_checkpointing_func(
+                block,
+                hidden_states,
+                encoder_hidden_states,
+                timestep_proj,
+                rotary_emb,
+                hidden_states_ip,
+                timestep_proj_ip,
+            )
+            if hidden_states_ip is not None:
+                hidden_states, hidden_states_ip = (
+                    hidden_states[:, :-ip_hidden_states_len],
+                    hidden_states[:, -ip_hidden_states_len:],
+                )
+    else:
+        for block in self.blocks:
+            hidden_states = block(
+                hidden_states,
+                encoder_hidden_states,
+                timestep_proj,
+                rotary_emb,
+                hidden_states_ip,
+                timestep_proj_ip,
+                rotary_emb_chunk_size=attention_kwargs.get("rotary_emb_chunk_size", None) if attention_kwargs is not None else None
+            )
+            if hidden_states_ip is not None:
+                hidden_states, hidden_states_ip = (
+                    hidden_states[:, :-ip_hidden_states_len],
+                    hidden_states[:, -ip_hidden_states_len:],
+                )
+
+    if temb.ndim == 3:
+        shift, scale = (
+            self.scale_shift_table.unsqueeze(0) + temb.unsqueeze(2)
+        ).chunk(2, dim=2)
+        shift = shift.squeeze(2)
+        scale = scale.squeeze(2)
+    else:
+        shift, scale = (self.scale_shift_table + temb.unsqueeze(1)).chunk(2, dim=1)
+
+    shift = shift.to(hidden_states.device)
+    scale = scale.to(hidden_states.device)
+
+    hidden_states = (
+        self.norm_out(hidden_states.float()) * (1 + scale) + shift
+    ).type_as(hidden_states)
+    hidden_states = self.proj_out(hidden_states)
+
+    hidden_states = hidden_states.reshape(
+        batch_size,
+        post_patch_num_frames,
+        post_patch_height,
+        post_patch_width,
+        p_t,
+        p_h,
+        p_w,
+        -1,
+    )
+
+    hidden_states = hidden_states.permute(0, 7, 1, 4, 2, 5, 3, 6)
+    output = hidden_states.flatten(6, 7).flatten(4, 5).flatten(2, 3)
+
+    if USE_PEFT_BACKEND:
+        unscale_lora_layers(self, lora_scale)
+
+    # Update cache and calculate change rates if needed
+    if is_even:  # Condition path
+        if WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None:
+            output_change = (output - WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN).flatten().abs().mean()
+            if WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN is not None:
+                input_change = (
+                    WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN - WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN
+                ).flatten().abs().mean()
+                WANTF_GLOBAL_K = output_change / input_change
+        WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN = WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN
+        WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN = output.clone()
+        WANTF_GLOBAL_CACHE_EVEN = output - raw_input
+    else:  # Uncondition path
+        WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_ODD = output.clone()
+        WANTF_GLOBAL_CACHE_ODD = output - raw_input
+
+    WANTF_GLOBAL_CNT += 1
+
+    if not return_dict:
+        return (output.float(),)
+
+    return Transformer2DModelOutput(sample=output.float())
 
 
 class LoRALinearLayerIP(nn.Module):
@@ -325,20 +612,21 @@ class WanTimeTextImageEmbedding(nn.Module):
             timestep.dtype != time_embedder_dtype
             and time_embedder_dtype != torch.int8
             and time_embedder_dtype != torch.uint8
+            and time_embedder_dtype in [torch.float16, torch.float32, torch.float64, torch.bfloat16]
         ):
             timestep = timestep.to(time_embedder_dtype)
 
+ 
         temb = self.time_embedder(timestep).type_as(encoder_hidden_states)
 
         timestep_proj = self.time_proj(self.act_fn(temb))
-
         encoder_hidden_states = self.text_embedder(encoder_hidden_states)
 
         if encoder_hidden_states_image is not None:
             encoder_hidden_states_image = self.image_embedder(
                 encoder_hidden_states_image
             )
-
+        
         return (
             temb,
             timestep_proj,
@@ -604,11 +892,10 @@ class WanTransformerBlock(nn.Module):
             c_scale_msa = c_scale_msa.squeeze(2)
             c_gate_msa = c_gate_msa.squeeze(2)
         else:
-            # temb: batch_size, 6, inner_dim (wan2.1/wan2.2 14B)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
                 self.scale_shift_table + temb.float()
             ).chunk(6, dim=1)
-
+            
         # 1. Self-attention
         norm_hidden_states = (
             self.norm1(hidden_states.float()) * (1 + scale_msa) + shift_msa
@@ -826,6 +1113,45 @@ class WanTransformer3DModel(
         for block in self.blocks:
             block.attn1.processor.set_enhance_weight(enhance_weight)
             block.attn1.processor.set_num_frames(num_frames)
+
+    def enable_easy_cache(
+        self,
+        num_steps: int,
+        thresh: float,
+        ret_steps: int = 10,
+        should_reset_global_cache: bool = True,
+    ):
+        """
+        Enable EasyCache for accelerated inference using global state.
+
+        Args:
+            num_steps: Total number of diffusion steps (will be multiplied by 2 for cond/uncond pairs)
+            thresh: Threshold for determining when to skip computation
+            ret_steps: Number of initial steps to always compute (will be multiplied by 2)
+        """
+        global WANTF_GLOBAL_NUM_STEPS, WANTF_GLOBAL_THRESH, WANTF_GLOBAL_RET_STEPS
+
+        # Reset global cache state
+        if should_reset_global_cache:
+            reset_wantf_global_cache()
+
+        # Set global parameters
+        WANTF_GLOBAL_NUM_STEPS = num_steps * 2  # Account for cond/uncond pairs
+        WANTF_GLOBAL_THRESH = thresh
+        WANTF_GLOBAL_RET_STEPS = ret_steps * 2  # Account for cond/uncond pairs
+
+        # Replace forward method with cached version
+        self.forward = types.MethodType(easycache_forward_, self)
+
+    def disable_easy_cache(self):
+        """
+        Disable EasyCache and restore original forward method.
+        """
+        # Reset global cache state
+        reset_wantf_global_cache()
+
+        # Restore original forward method by rebinding the class method
+        del self.forward  # Remove instance-level override, fall back to class method
 
     def forward(
         self,

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Basic app operation -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    
+    <!-- Allow JIT compilation for PyTorch, NumPy, and other ML libraries -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    
+    <!-- Allow unsigned executable memory for native extensions -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    
+    <!-- Allow loading of third-party dylibs -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    
+    <!-- Allow debugging -->
+    <key>com.apple.security.cs.debugger</key>
+    <true/>
+    
+    <!-- Network access for API server and model downloads -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    
+    <!-- File access for models, cache, and user data -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+    
+    <!-- Allow hardened runtime exceptions for Python -->
+    <key>com.apple.security.cs.disable-executable-page-protection</key>
+    <true/>
+    
+    <!-- Metal GPU access for MPS (Apple Silicon) -->
+    <key>com.apple.security.device.metal</key>
+    <true/>
+</dict>
+</plist>
+

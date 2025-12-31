@@ -83,6 +83,5 @@ def load_safetensors(
                         tensor = tensor.astype(dtype)
 
             result[k] = tensor
-
     return result
 

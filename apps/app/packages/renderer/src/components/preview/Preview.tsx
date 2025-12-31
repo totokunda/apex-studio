@@ -230,6 +230,7 @@ const Preview: React.FC<PreviewProps> = () => {
   // Note: we use imperative store access in the recenter effect to avoid rerender loops
   const focusFrame = useControlsStore((s) => s.focusFrame);
   const totalTimelineFrames = useControlsStore((s) => s.totalTimelineFrames);
+  const isPlaying = useControlsStore((s) => s.isPlaying);
   // Shape creation state
   const [isDrawingShape, setIsDrawingShape] = useState(false);
   const [isDrawingText, setIsDrawingText] = useState(false);
@@ -2751,7 +2752,6 @@ const Preview: React.FC<PreviewProps> = () => {
     layer.on("draw", handler);
     return () => layer.off("draw", handler);
   }, []);
-
   
   return (
     <>
@@ -2846,32 +2846,18 @@ const Preview: React.FC<PreviewProps> = () => {
                     recenterAllClips(committedRectWidth, committedRectHeight);
                   }}
                 />
+                
                 {sortClips(filterClips(clips)).map((clip: AnyClipProps) => {
-                  const startFrame = clip.startFrame || 0;
-                  const hasOverlap =
-                    (clip.type === "video" || clip.type === "image") &&
-                    startFrame > 0
-                      ? true
-                      : false;
 
-                  const clipAtFrame = clipWithinFrame(
-                    clip,
-                    focusFrame,
-                    hasOverlap,
-                    1,
-                  );
                   const clipAtFrameNoOverlap = clipWithinFrame(
                     clip,
                     focusFrame,
                   );
-                  if (!clipAtFrame) return null;
 
                   // Get applicators for clips that support effects (video, image, etc.)
-
                   const applicators = getClipApplicators(clip.clipId);
-          
-                  if (clipAtFrame) {
-                    switch (clip.type) {
+
+                  switch (clip.type) {
                       case "video":
                         return (
                           <VideoPreview
@@ -2881,6 +2867,7 @@ const Preview: React.FC<PreviewProps> = () => {
                             rectHeight={rectHeight}
                             applicators={applicators}
                             overlap={clipAtFrameNoOverlap}
+                            hidden={!clipAtFrameNoOverlap}
                           />
                         );
                       case "image":
@@ -2943,9 +2930,6 @@ const Preview: React.FC<PreviewProps> = () => {
                       default:
                         return null;
                     }
-                  } else {
-                    return null;
-                  }
                 })}
                 {renderDrawingShape()}
                 {renderDrawingText()}
@@ -3088,20 +3072,22 @@ const Preview: React.FC<PreviewProps> = () => {
       {
         <>
           {sortClips(filterClips(clips, true)).map((clip: AnyClipProps) => {
-            const hasOverlap =
-              (clip.type === "video" || clip.type === "model" && clip.assetId) && (clip.startFrame || 0) > 0
-                ? true
-                : false;
-            const clipAtFrame = clipWithinFrame(
-              clip,
-              focusFrame,
-              hasOverlap,
-              1,
-            );
-            if (!clipAtFrame) return null;
-            if (clip.type === "audio" || clip.type === "video" || (clip.type === "model" && clip.assetId)) {
+
+            const isActive = clipWithinFrame(clip, focusFrame, false, 0);
+
+            if (
+              clip.type === "audio" ||
+              clip.type === "video" ||
+              (clip.type === "model" && (clip as any).assetId)
+            ) {
               return (
-                <AudioPreview key={`audio-${clip.clipId}`} {...(clip as any)} />
+                <AudioPreview
+                  key={`audio-${clip.clipId}`}
+                  {...(clip as any)}
+                  // When playing, allow prebuffer during overlap, but mute until active
+                  disabled={!isPlaying}
+                  muted={isPlaying ? !isActive : false}
+                />
               );
             }
             return null;

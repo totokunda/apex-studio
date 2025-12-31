@@ -4,19 +4,17 @@ from PIL import Image
 import numpy as np
 from .shared import WanShared
 from src.utils.progress import safe_emit_progress, make_mapped_progress
-
+from src.types import InputImage
 
 class WanI2VEngine(WanShared):
     """WAN Image-to-Video Engine Implementation"""
 
     def run(
         self,
-        image: Union[
-            Image.Image, List[Image.Image], List[str], str, np.ndarray, torch.Tensor
-        ],
+        image: InputImage,
         prompt: List[str] | str,
         negative_prompt: List[str] | str = None,
-        duration: int | str = 16,
+        duration: int | str = 81,
         height: int = 480,
         width: int = 832,
         num_inference_steps: int = 30,

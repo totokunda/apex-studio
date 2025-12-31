@@ -20,23 +20,38 @@ const AudioPreview: React.FC<
     inputMode?: boolean;
     inputId?: string;
     disabled?: boolean;
+    /**
+     * If true, the clip is allowed to prebuffer/schedule audio but should be silent.
+     * Used with playback overlap to avoid boundary gaps without double-audio.
+     */
+    muted?: boolean;
   }
 > = (props) => {
 
   const {
     assetId,
     startFrame = 0,
+    endFrame,
     trimStart,
     volume = 0,
     fadeIn = 0,
     fadeOut = 0,
     speed: _speed,
-  } = props as AudioClipProps;
+    framesToPrefetch = 5,
+  } = props;
+
   const {
     inputMode = false,
     inputId,
     disabled = false,
-  } = props as { inputMode?: boolean; inputId?: string; disabled?: boolean };
+    muted = false,
+  } = props as {
+    inputMode?: boolean;
+    inputId?: string;
+    disabled?: boolean;
+    muted?: boolean;
+  };
+
   const mediaInfoRef = useRef<MediaInfo | null>(
     getMediaInfoCached(assetId) || null,
   );
@@ -48,15 +63,44 @@ const AudioPreview: React.FC<
   const focusFrameByInputId = useInputControlsStore(
     (s) => s.focusFrameByInputId,
   );
+
   const focusFrameFromInputs = focusFrameByInputId[inputId || ""] ?? 0;
   const focusFrame = inputMode ? focusFrameFromInputs : focusFrameFromControls;
   const getAssetById = useClipStore((s) => s.getAssetById);
+
+  // In input mode, the AudioPreview expects a clip-local focusFrame (0..span), so we normalize
+  // absolute start/end into a 0-based window when needed.
+  const startFrameUsed = useMemo(() => (inputMode ? 0 : startFrame), [inputMode, startFrame]);
+  const endFrameUsed = useMemo(() => {
+    if (!inputMode) return typeof endFrame === "number" ? endFrame : undefined;
+    if (typeof endFrame === "number" && typeof startFrame === "number") {
+      return Math.max(0, endFrame - startFrame);
+    }
+    return typeof endFrame === "number" ? endFrame : undefined;
+  }, [endFrame, inputMode, startFrame]);
+
+  const isInFrame = useMemo(() => {
+    const f = Number(focusFrame);
+    if (!Number.isFinite(f)) return true;
+    const s = Number(startFrameUsed ?? 0);
+    if (!Number.isFinite(s)) return true;
+    const e =
+      typeof endFrameUsed === "number" && Number.isFinite(endFrameUsed)
+        ? endFrameUsed
+        : Infinity;
+    return f >= Number(s) - framesToPrefetch && f <= e;
+  }, [focusFrame, startFrameUsed, endFrameUsed, framesToPrefetch]);
+
   // In input mode, focusFrame is clip-local and the input timeline is [0, span],
-  // so we must not subtract the absolute clip start. Use local focus + trimStart.
+  // so we must not subtract the absolute clip start.
+  //
+  // NOTE: We always apply trimStart, even when the playhead is slightly before
+  // the clip start (overlap prebuffer). This ensures split segments (where the
+  // right-hand clip has a non-zero trimStart) decode/schedule from the correct
+  // offset instead of restarting from the beginning.
   const currentFrame = useMemo(() => {
-    const effectiveStart = inputMode ? 0 : startFrame;
-    return focusFrame - effectiveStart + (trimStart || 0);
-  }, [focusFrame, startFrame, trimStart, inputMode]);
+    return focusFrame - startFrameUsed + (trimStart || 0);
+  }, [focusFrame, startFrameUsed, trimStart]);
   const isPlayingFromControls = useControlsStore((s) => s.isPlaying);
   const isPlayingByInputId = useInputControlsStore((s) => s.isPlayingByInputId);
   const isPlayingFromInputs = !!isPlayingByInputId[inputId || ""];
@@ -70,7 +114,6 @@ const AudioPreview: React.FC<
   const playbackTimeAtStartRef = useRef<number>(0);
   const audioQueueRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const lastResyncTimeRef = useRef<number>(0);
-  const hasValidCurrentFrame = useMemo(() => currentFrame >= 0, [currentFrame]);
   const soundtouchNodeRef = useRef<AudioWorkletNode | null>(null);
   const soundtouchInitPromiseRef = useRef<Promise<boolean> | null>(null);
   const soundtouchUnavailableRef = useRef<boolean>(false);
@@ -79,7 +122,7 @@ const AudioPreview: React.FC<
   const asset = useMemo(() => getAssetById(assetId), [assetId]);
   useEffect(() => {
     const wasPlaying = prevIsPlayingRef.current;
-    if (!wasPlaying && isPlaying) {
+    if (!wasPlaying && isPlaying && isInFrame) {
       try {
         const detail = {
           assetId,
@@ -94,7 +137,7 @@ const AudioPreview: React.FC<
         );
       } catch {}
     }
-    if (wasPlaying && !isPlaying) {
+    if (wasPlaying && !isPlaying && isInFrame) {
       try {
         const detail = {
           assetId,
@@ -110,7 +153,7 @@ const AudioPreview: React.FC<
       } catch {}
     }
     prevIsPlayingRef.current = isPlaying;
-  }, [isPlaying, assetId, currentFrame, fps, inputMode, inputId]);
+  }, [isPlaying, assetId, currentFrame, fps, inputMode, inputId, isInFrame]);
 
   const { ctx, gainNode } = useMemo<{
     ctx: AudioContext;
@@ -123,6 +166,19 @@ const AudioPreview: React.FC<
     gainNode.connect(ctx.destination);
     return { ctx, gainNode };
   }, []);
+
+  // Mute/unmute at the output gain so we can prebuffer without audible playback.
+  useEffect(() => {
+    if (!ctx || !gainNode) return;
+    try {
+      const now = ctx.currentTime;
+      const target = muted ? 0 : 1;
+      // tiny ramp to avoid clicks
+      gainNode.gain.cancelScheduledValues(now);
+      gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+      gainNode.gain.linearRampToValueAtTime(target, now + 0.01);
+    } catch {}
+  }, [muted, ctx, gainNode]);
 
   // Prepare analyser node and expose it for visualizers when in input mode
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -421,12 +477,13 @@ const AudioPreview: React.FC<
   const startRendering = useCallback(async () => {
     // Only play audio when clip is actually active (not during prebuffer period)
     if (
+      !isInFrame ||
       !isPlaying ||
       !ctx ||
       !mediaInfoRef.current ||
       !mediaInfoRef.current.audio ||
       !fps ||
-      !hasValidCurrentFrame
+      !Number.isFinite(currentFrame)
     ) {
       return;
     }
@@ -449,12 +506,17 @@ const AudioPreview: React.FC<
     lastResyncTimeRef.current = Date.now();
 
     // Sample from the correct media frame based on speed
+    const speedFactor = Math.max(0.1, speed);
+    const mediaStartOffset = mediaInfoRef.current?.startFrame || 0;
     const mediaFrameIndex =
-      Math.max(
-        0,
-        Math.floor(currentStartFrameRef.current * Math.max(0.1, speed)),
-      ) + (mediaInfoRef.current?.startFrame || 0);
-    const mediaTimeAtStart = mediaFrameIndex / fps;
+      Math.max(0, Math.floor(currentStartFrameRef.current * speedFactor)) +
+      mediaStartOffset;
+    // IMPORTANT: mediaTimeAtStart uses the *signed* currentStartFrameRef to support
+    // overlap prebuffering. When currentFrame is negative (playhead before clip start),
+    // this pushes scheduled buffers into the future so audio starts exactly at the
+    // clip boundary (no gap), without playing early.
+    const mediaTimeAtStart =
+      (currentStartFrameRef.current * speedFactor + mediaStartOffset) / fps;
     // Extend audio beyond clip boundary for seamless transitions with adjacent clips
     const endIndex = mediaInfoRef.current?.endFrame
       ? mediaInfoRef.current.endFrame
@@ -486,9 +548,39 @@ const AudioPreview: React.FC<
 
       // Map media timestamp to wall clock according to speed.
       // Timeline seconds advance 1:1 with wall clock; media advances at `speed`.
+      const speedVal = Math.max(0.1, speed);
       let startTimestamp =
-        startTimeRef.current +
-        (timestamp - mediaTimeAtStart) / Math.max(0.1, speed);
+        startTimeRef.current + (timestamp - mediaTimeAtStart) / speedVal;
+
+      let bufferDurationToPlay = duration;
+
+      // Clamp duration to clip boundary to prevent overlap/phasing with next clip
+      if (
+        typeof endFrameUsed === "number" &&
+        Number.isFinite(endFrameUsed) &&
+        fps
+      ) {
+        const wallSecondsRemaining =
+          (endFrameUsed -
+            startFrameUsed -
+            (currentStartFrameRef.current - (trimStart || 0))) /
+          fps;
+        const absoluteEndTime = startTimeRef.current + wallSecondsRemaining;
+
+        const wallDuration = duration / speedVal;
+
+        if (startTimestamp >= absoluteEndTime) {
+          continue;
+        }
+
+        if (startTimestamp + wallDuration > absoluteEndTime) {
+          const allowedWallDuration = Math.max(
+            0,
+            absoluteEndTime - startTimestamp,
+          );
+          bufferDurationToPlay = allowedWallDuration * speedVal;
+        }
+      }
 
       // Ensure no gap at clip boundaries - if this buffer should start very soon, start it immediately
       const timeUntilStart = startTimestamp - ctx.currentTime;
@@ -498,7 +590,7 @@ const AudioPreview: React.FC<
 
       const node = ctx.createBufferSource();
       node.buffer = buffer;
-      const playbackRate = Math.max(0.1, speed);
+      const playbackRate = speedVal;
       node.playbackRate.setValueAtTime(playbackRate, ctx.currentTime);
       if (!soundtouchNode) {
         try {
@@ -610,9 +702,19 @@ const AudioPreview: React.FC<
       }
 
       if (startTimestamp >= ctx.currentTime) {
-        node.start(startTimestamp);
+        node.start(startTimestamp, 0, bufferDurationToPlay);
       } else {
-        node.start(ctx.currentTime, ctx.currentTime - startTimestamp);
+        const wallOffset = ctx.currentTime - startTimestamp;
+        const bufferOffset = wallOffset * speedVal;
+        if (bufferDurationToPlay > bufferOffset) {
+          node.start(
+            ctx.currentTime,
+            bufferOffset,
+            bufferDurationToPlay - bufferOffset,
+          );
+        } else {
+          continue;
+        }
       }
 
       audioQueueRef.current.add(node);
@@ -645,6 +747,7 @@ const AudioPreview: React.FC<
       }
     }
   }, [
+    isInFrame,
     isPlaying,
     ctx,
     mediaInfoRef.current,
@@ -655,14 +758,13 @@ const AudioPreview: React.FC<
     fadeIn,
     fadeOut,
     speed,
-    hasValidCurrentFrame,
     ensureSoundtouchNode,
     configureSoundtouchForSpeed,
   ]);
 
   // Start or restart rendering when playback starts or media becomes ready
   useEffect(() => {
-    if (!isPlaying || disabled) return;
+    if (!isPlaying || disabled || !isInFrame) return;
     void startRendering();
   }, [
     isPlaying,
@@ -675,7 +777,23 @@ const AudioPreview: React.FC<
     fadeIn,
     fadeOut,
     disabled,
+    isInFrame,
   ]);
+
+  // If the playhead leaves this clip while playing, stop scheduling and stop any queued nodes.
+  // This keeps audio accurate during scrubbing / jumping frames.
+  useEffect(() => {
+    if (isInFrame) return;
+    // @ts-ignore
+    iteratorRef.current?.return?.();
+    iteratorRef.current = null;
+    for (const node of audioQueueRef.current) {
+      try {
+        node.stop();
+      } catch {}
+    }
+    audioQueueRef.current.clear();
+  }, [isInFrame]);
 
   // Cleanup on unmount: let scheduled audio complete for smooth transitions
   useEffect(() => {

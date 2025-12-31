@@ -51,7 +51,7 @@ const AttentionPanel: React.FC<AttentionPanelProps> = ({ clipId }) => {
     if (!curr || !names.includes(String(curr))) {
       const first = options[0];
       const next = { name: first?.name };
-      console.log("next", next);
+
       const nextSelected = {
         ...(clip.selectedComponents || {}),
         attention: next,

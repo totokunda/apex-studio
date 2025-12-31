@@ -1,0 +1,274 @@
+name: Build and Release Apex Studio
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create draft release'
+        required: false
+        default: 'true'
+        type: boolean
+      skip_python:
+        description: 'Skip Python bundling (use cached)'
+        required: false
+        default: 'false'
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '23'
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  build-python:
+    name: Build Python API (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+          - os: macos-13
+            platform: darwin
+            arch: x64
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - os: windows-2022
+            platform: win32
+            arch: x64
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          cd apps/api
+          pip install --upgrade pip setuptools wheel
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build Python bundle
+        if: ${{ !inputs.skip_python }}
+        run: |
+          cd apps/api
+          python scripts/bundle_python.py \
+            --platform ${{ matrix.platform }} \
+            --output ../app/python-api-bundle-${{ matrix.platform }}-${{ matrix.arch }} \
+            --cuda cpu
+        env:
+          # Sign on macOS
+          APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+
+      - name: Upload Python bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-api-${{ matrix.platform }}-${{ matrix.arch }}
+          path: apps/app/python-api-bundle-${{ matrix.platform }}-${{ matrix.arch }}
+          retention-days: 7
+
+  build-electron:
+    name: Build Electron App (${{ matrix.os }})
+    needs: build-python
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+          - os: macos-13
+            platform: darwin
+            arch: x64
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - os: windows-2022
+            platform: win32
+            arch: x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: apps/app/package-lock.json
+
+      - name: Download Python bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: python-api-${{ matrix.platform }}-${{ matrix.arch }}
+          path: apps/app/python-api-bundle
+
+      - name: Install dependencies
+        run: |
+          cd apps/app
+          npm ci
+
+      - name: Build Electron packages
+        run: |
+          cd apps/app
+          npm run build
+
+      - name: Build macOS (arm64)
+        if: matrix.platform == 'darwin' && matrix.arch == 'arm64'
+        run: |
+          cd apps/app
+          npx electron-builder build --config electron-builder.mjs --mac --arm64
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build macOS (x64)
+        if: matrix.platform == 'darwin' && matrix.arch == 'x64'
+        run: |
+          cd apps/app
+          npx electron-builder build --config electron-builder.mjs --mac --x64
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Windows
+        if: matrix.platform == 'win32'
+        run: |
+          cd apps/app
+          npx electron-builder build --config electron-builder.mjs --win
+        env:
+          WINDOWS_CERT_FILE: ${{ secrets.WINDOWS_CERT_FILE }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Linux
+        if: matrix.platform == 'linux'
+        run: |
+          cd apps/app
+          npx electron-builder build --config electron-builder.mjs --linux
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/app/dist/*.dmg
+            apps/app/dist/*.zip
+            apps/app/dist/*.exe
+            apps/app/dist/*.deb
+            apps/app/dist/*.AppImage
+            apps/app/dist/*.tar.gz
+            apps/app/dist/latest*.yml
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: build-electron
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: ${{ inputs.draft || false }}
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+          generate_release_notes: true
+          files: |
+            artifacts/*.dmg
+            artifacts/*.zip
+            artifacts/*.exe
+            artifacts/*.deb
+            artifacts/*.AppImage
+            artifacts/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Optional: Build with CUDA for high-performance machines
+  build-cuda:
+    name: Build Python API (CUDA)
+    runs-on: ubuntu-22.04
+    if: ${{ !inputs.skip_python }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install CUDA
+        uses: Jimver/cuda-toolkit@v0.2.11
+        with:
+          cuda: '12.1.0'
+          method: 'network'
+          sub-packages: '["nvcc", "runtime", "cudart"]'
+
+      - name: Install Python dependencies
+        run: |
+          cd apps/api
+          pip install --upgrade pip setuptools wheel
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build Python bundle (CUDA)
+        run: |
+          cd apps/api
+          python scripts/bundle_python.py \
+            --platform linux \
+            --output ../app/python-api-bundle-cuda \
+            --cuda cuda121
+
+      - name: Upload CUDA bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-api-linux-cuda
+          path: apps/app/python-api-bundle-cuda
+          retention-days: 30
+
