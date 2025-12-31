@@ -79,12 +79,10 @@ class FluxT2IEngine(FluxShared):
 
         safe_emit_progress(progress_callback, 0.20, "Encoded prompts")
 
-
         if offload:
             safe_emit_progress(progress_callback, 0.21, "Offloading text encoder 2")
             del self.text_encoder_2
             safe_emit_progress(progress_callback, 0.22, "Text encoder 2 offloaded")
-
 
         transformer_dtype = self.component_dtypes.get("transformer", None)
         batch_size = prompt_embeds.shape[0]
@@ -180,7 +178,9 @@ class FluxT2IEngine(FluxShared):
         image_embeds = None
         negative_image_embeds = None
         if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-            safe_emit_progress(progress_callback, 0.498, "Preparing IP adapter embeddings")
+            safe_emit_progress(
+                progress_callback, 0.498, "Preparing IP adapter embeddings"
+            )
             image_embeds = self.prepare_ip_adapter_image_embeds(
                 ip_adapter_image,
                 ip_adapter_image_embeds,

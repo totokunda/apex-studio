@@ -4,6 +4,7 @@ from loguru import logger
 import numpy as np
 import PIL.Image
 import torch
+import importlib.util
 from huggingface_hub import snapshot_download
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import SiglipModel, SiglipProcessor
@@ -13,10 +14,6 @@ from src.postprocess.base import (
     PostprocessorCategory,
     postprocessor_registry,
 )
-
-from retinaface.data import cfg_re50
-from retinaface.layers.functions.prior_box import PriorBox
-from retinaface.models.retinaface import RetinaFace
 import pathlib
 import os
 import json
@@ -24,8 +21,6 @@ from typing import Iterable, Union
 from dataclasses import dataclass
 import re
 from src.utils.defaults import DEFAULT_POSTPROCESSOR_SAVE_PATH
-
-from retinaface.utils.nms.py_cpu_nms import py_cpu_nms
 
 
 def read_keyword_list_from_dir(folder_path: str) -> list[str]:
@@ -89,6 +84,9 @@ def filter_detected_boxes(
 
     # Run non-maximum-suppression (NMS) to remove overlapping boxes
     dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=False)
+    # Lazy import: RetinaFace is optional in the default bundle.
+    from retinaface.utils.nms.py_cpu_nms import py_cpu_nms  # type: ignore
+
     keep = py_cpu_nms(dets, nms_threshold)
     dets = dets[keep, :]
     dets = dets[:keep_top_k, :]
@@ -596,6 +594,15 @@ class VideoContentSafetyFilter(torch.nn.Module, ContentSafetyGuardrail):
 
 
 class RetinaFaceFilter(torch.nn.Module, PostprocessingGuardrail):
+    @staticmethod
+    def is_available() -> bool:
+        """
+        RetinaFace is an optional dependency. We keep it out of the default bundle
+        because some published distributions pin older OpenCV versions that conflict
+        with other core deps (e.g. albumentations).
+        """
+        return importlib.util.find_spec("retinaface") is not None
+
     def __init__(
         self,
         checkpoint_id: str = COSMOS_GUARDRAIL_CHECKPOINT,
@@ -604,6 +611,15 @@ class RetinaFaceFilter(torch.nn.Module, PostprocessingGuardrail):
         confidence_threshold: float = 0.7,
     ) -> None:
         super().__init__()
+        if not self.is_available():
+            raise RuntimeError(
+                "RetinaFace is not installed. Install an appropriate RetinaFace package "
+                "to enable face-blur, or run without it."
+            )
+
+        # Lazy imports so importing this module doesn't hard-require RetinaFace.
+        from retinaface.data import cfg_re50  # type: ignore
+        from retinaface.models.retinaface import RetinaFace  # type: ignore
 
         checkpoint_dir = snapshot_download(checkpoint_id, local_dir=save_path)
         checkpoint = (
@@ -734,6 +750,10 @@ class RetinaFaceFilter(torch.nn.Module, PostprocessingGuardrail):
             with torch.no_grad():
                 # Generate priors for the video
                 if prior_data is None:
+                    from retinaface.layers.functions.prior_box import (  # type: ignore
+                        PriorBox,
+                    )
+
                     priorbox = PriorBox(self.cfg, image_size=(h, w))
                     priors = priorbox.forward()
                     priors = priors.to(device, dtype=dtype)
@@ -771,9 +791,16 @@ class CosmosGuardrailPostprocessor(BasePostprocessor):
         super().__init__(engine, PostprocessorCategory.SAFETY_CHECKER, **kwargs)
         self.model_path = model_path
         self.save_path = save_path
+        postprocessors = []
+        if RetinaFaceFilter.is_available():
+            postprocessors.append(RetinaFaceFilter(save_path=save_path))
+        else:
+            logger.warning(
+                "RetinaFace is not installed; Cosmos guardrail will run without face-blur."
+            )
         self.runner = GuardrailRunner(
             safety_models=[VideoContentSafetyFilter(save_path=save_path)],
-            postprocessors=[RetinaFaceFilter(save_path=save_path)],
+            postprocessors=postprocessors,
         )
 
     def __call__(self, video: list[PIL.Image.Image]) -> np.ndarray:

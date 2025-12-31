@@ -28,16 +28,22 @@ from diffusers.models.cache_utils import CacheMixin
 from diffusers.models.modeling_utils import ModelMixin
 from src.transformer.seedvr.base_v2.cache import Cache
 
+
 # Fake func, no checkpointing is required for inference
-def gradient_checkpointing(module: Union[Callable, nn.Module], *args, enabled: bool, **kwargs):
+def gradient_checkpointing(
+    module: Union[Callable, nn.Module], *args, enabled: bool, **kwargs
+):
     return module(*args, **kwargs)
+
 
 @dataclass
 class NaDiTOutput:
     vid_sample: torch.Tensor
 
 
-class SeedVR2Transformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin):
+class SeedVR2Transformer3DModel(
+    ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin
+):
     """
     Native Resolution Diffusion Transformer (NaDiT)
     """
@@ -79,11 +85,13 @@ class SeedVR2Transformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromO
         **kwargs,
     ):
         if block_type is None:
-            block_type = ['mmdit_sr'] * num_layers
+            block_type = ["mmdit_sr"] * num_layers
         if window is None:
-            window = [(4,3,3)] * num_layers
+            window = [(4, 3, 3)] * num_layers
         if window_method is None:
-            window_method = ['720pwin_by_size_bysize','720pswin_by_size_bysize'] * (num_layers // 2)
+            window_method = ["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * (
+                num_layers // 2
+            )
         ada = get_ada_layer(ada)
         norm = get_norm_layer(norm)
         qk_norm = get_norm_layer(qk_norm)
@@ -107,7 +115,9 @@ class SeedVR2Transformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromO
                     txt_proj_layer = nn.Linear(in_dim, txt_dim)
                 else:
                     txt_proj_layer = nn.Sequential(
-                        nn.Linear(in_dim, in_dim), nn.GELU("tanh"), nn.Linear(in_dim, txt_dim)
+                        nn.Linear(in_dim, in_dim),
+                        nn.GELU("tanh"),
+                        nn.Linear(in_dim, txt_dim),
                     )
                 torch.nn.init.constant_(txt_norm_layer.weight, txt_in_norm_scale_factor)
                 self.txt_in.append(

@@ -225,13 +225,19 @@ class BaseConverter:
                 # If rename application fails (e.g. invalid regex in a subclass), don't
                 # let prefix stripping be the thing that breaks conversion.
                 pass
-            if self.pre_special_keys_map and any(p in k for p in self.pre_special_keys_map.keys()):
+            if self.pre_special_keys_map and any(
+                p in k for p in self.pre_special_keys_map.keys()
+            ):
                 score += 1
-            if self.special_keys_map and any(p in k for p in self.special_keys_map.keys()):
+            if self.special_keys_map and any(
+                p in k for p in self.special_keys_map.keys()
+            ):
                 score += 1
         return score
 
-    def _strip_prefix_inplace_if_better(self, state_dict: Dict[str, Any], prefix: str) -> bool:
+    def _strip_prefix_inplace_if_better(
+        self, state_dict: Dict[str, Any], prefix: str
+    ) -> bool:
         """
         If *all* keys start with `prefix`, and stripping it increases this converter's
         applicability (match score), then strip it in-place and return True.
@@ -249,7 +255,7 @@ class BaseConverter:
             return False
         if len(set(stripped)) != len(stripped):
             return False
-    
+
         for old_key, new_key in zip(keys, stripped):
             update_state_dict_(state_dict, old_key, new_key)
         return True

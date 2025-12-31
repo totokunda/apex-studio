@@ -52,7 +52,9 @@ def _parse_include_exclude(include_regex: Optional[str], exclude_regex: Optional
     return include_re, exclude_re
 
 
-def _extract_lora_modules(lora_sd: Dict[str, torch.Tensor]) -> Dict[str, Dict[str, torch.Tensor]]:
+def _extract_lora_modules(
+    lora_sd: Dict[str, torch.Tensor],
+) -> Dict[str, Dict[str, torch.Tensor]]:
     """
     Return {module_prefix: {"A": tensor, "B": tensor, "alpha": optional tensor}}.
     module_prefix is the part before ".lora_A.weight" / ".lora_B.weight".
@@ -98,7 +100,9 @@ def _maybe_remap_lora_to_distilled_layout(
     if not (has_fused_img_qkv and base_has_split_img_q):
         return lora_sd
 
-    logger.info("Detected fused qkv/proj LoRA keys; remapping to distilled split-projection layout.")
+    logger.info(
+        "Detected fused qkv/proj LoRA keys; remapping to distilled split-projection layout."
+    )
 
     def rename_simple(old_sub: str, new_sub: str) -> None:
         keys = list(lora_sd.keys())
@@ -218,17 +222,56 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Evaluate how well a LoRA reconstructs a tuned checkpoint when applied to a base checkpoint."
     )
-    parser.add_argument("--base", required=True, help="Base weights path (file or dir of shards).")
-    parser.add_argument("--tuned", required=True, help="Tuned weights path (file or dir of shards).")
-    parser.add_argument("--lora", required=True, help="LoRA weights path (.safetensors).")
-    parser.add_argument("--base_subfolder", default="transformer", help="Optional subfolder to use under --base if it exists.")
-    parser.add_argument("--tuned_subfolder", default=None, help="Optional subfolder to use under --tuned if it exists.")
-    parser.add_argument("--scale", type=float, default=1.0, help="Global LoRA scale multiplier (like adapter weight).")
-    parser.add_argument("--device", default="cpu", help="Computation device for applying LoRA (cpu or cuda).")
-    parser.add_argument("--include_regex", default=None, help="Only evaluate weight keys matching this regex.")
-    parser.add_argument("--exclude_regex", default=None, help="Skip weight keys matching this regex.")
-    parser.add_argument("--topk", type=int, default=30, help="Show the worst top-K layers by relative delta error.")
-    parser.add_argument("--max_layers", type=int, default=None, help="Optional cap on number of layers evaluated.")
+    parser.add_argument(
+        "--base", required=True, help="Base weights path (file or dir of shards)."
+    )
+    parser.add_argument(
+        "--tuned", required=True, help="Tuned weights path (file or dir of shards)."
+    )
+    parser.add_argument(
+        "--lora", required=True, help="LoRA weights path (.safetensors)."
+    )
+    parser.add_argument(
+        "--base_subfolder",
+        default="transformer",
+        help="Optional subfolder to use under --base if it exists.",
+    )
+    parser.add_argument(
+        "--tuned_subfolder",
+        default=None,
+        help="Optional subfolder to use under --tuned if it exists.",
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help="Global LoRA scale multiplier (like adapter weight).",
+    )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Computation device for applying LoRA (cpu or cuda).",
+    )
+    parser.add_argument(
+        "--include_regex",
+        default=None,
+        help="Only evaluate weight keys matching this regex.",
+    )
+    parser.add_argument(
+        "--exclude_regex", default=None, help="Skip weight keys matching this regex."
+    )
+    parser.add_argument(
+        "--topk",
+        type=int,
+        default=30,
+        help="Show the worst top-K layers by relative delta error.",
+    )
+    parser.add_argument(
+        "--max_layers",
+        type=int,
+        default=None,
+        help="Optional cap on number of layers evaluated.",
+    )
     args = parser.parse_args()
 
     from src.converters.convert import load_state_dict, strip_common_prefix
@@ -263,12 +306,16 @@ def main() -> None:
     lora_modules = _extract_lora_modules(lora_sd)
     logger.info(f"LoRA contains {len(lora_modules)} module entries with A/B weights.")
 
-    include_re, exclude_re = _parse_include_exclude(args.include_regex, args.exclude_regex)
+    include_re, exclude_re = _parse_include_exclude(
+        args.include_regex, args.exclude_regex
+    )
     device = torch.device(args.device)
 
     # Evaluate
     eps = 1e-12
-    rows: List[Tuple[float, float, float, str]] = []  # (rel_delta_err, rel_weight_err, delta_norm, key)
+    rows: List[Tuple[float, float, float, str]] = (
+        []
+    )  # (rel_delta_err, rel_weight_err, delta_norm, key)
     missing_in_tuned = 0
     missing_in_base = 0
     evaluated = 0
@@ -298,10 +345,15 @@ def main() -> None:
         with torch.no_grad():
             w_recon = _apply_lora_delta(w_base, A, B, alpha, scale=float(args.scale))
             # Errors
-            delta_true = (w_tuned.to(torch.float32) - w_base.to(torch.float32))
-            delta_recon = (w_recon.to(torch.float32) - w_base.to(torch.float32))
-            rel_delta_err = float((delta_recon - delta_true).norm() / (delta_true.norm() + eps))
-            rel_weight_err = float((w_recon - w_tuned.to(torch.float32)).norm() / (w_tuned.to(torch.float32).norm() + eps))
+            delta_true = w_tuned.to(torch.float32) - w_base.to(torch.float32)
+            delta_recon = w_recon.to(torch.float32) - w_base.to(torch.float32)
+            rel_delta_err = float(
+                (delta_recon - delta_true).norm() / (delta_true.norm() + eps)
+            )
+            rel_weight_err = float(
+                (w_recon - w_tuned.to(torch.float32)).norm()
+                / (w_tuned.to(torch.float32).norm() + eps)
+            )
             delta_norm = float(delta_true.norm())
             rows.append((rel_delta_err, rel_weight_err, delta_norm, w_key))
 
@@ -310,33 +362,43 @@ def main() -> None:
             break
 
     if evaluated == 0:
-        raise RuntimeError("No layers evaluated. Check regex filters and whether LoRA keys match base/tuned keys.")
+        raise RuntimeError(
+            "No layers evaluated. Check regex filters and whether LoRA keys match base/tuned keys."
+        )
 
     # Aggregate metrics
     rel_delta_errs = torch.tensor([r[0] for r in rows], dtype=torch.float64)
     rel_weight_errs = torch.tensor([r[1] for r in rows], dtype=torch.float64)
     delta_norms = torch.tensor([max(r[2], eps) for r in rows], dtype=torch.float64)
 
-    weighted_mean_delta_err = float((rel_delta_errs * delta_norms).sum() / delta_norms.sum())
-    weighted_mean_weight_err = float((rel_weight_errs * delta_norms).sum() / delta_norms.sum())
+    weighted_mean_delta_err = float(
+        (rel_delta_errs * delta_norms).sum() / delta_norms.sum()
+    )
+    weighted_mean_weight_err = float(
+        (rel_weight_errs * delta_norms).sum() / delta_norms.sum()
+    )
 
     logger.info("=== Summary ===")
     logger.info(f"Evaluated layers: {evaluated}")
     logger.info(f"LoRA modules missing in base: {missing_in_base}")
     logger.info(f"LoRA modules missing in tuned: {missing_in_tuned}")
     logger.info(f"Scale used: {args.scale}")
-    logger.info(f"Rel delta error: mean={float(rel_delta_errs.mean()):.6f} weighted_mean={weighted_mean_delta_err:.6f} max={float(rel_delta_errs.max()):.6f}")
-    logger.info(f"Rel weight error: mean={float(rel_weight_errs.mean()):.6f} weighted_mean={weighted_mean_weight_err:.6f} max={float(rel_weight_errs.max()):.6f}")
+    logger.info(
+        f"Rel delta error: mean={float(rel_delta_errs.mean()):.6f} weighted_mean={weighted_mean_delta_err:.6f} max={float(rel_delta_errs.max()):.6f}"
+    )
+    logger.info(
+        f"Rel weight error: mean={float(rel_weight_errs.mean()):.6f} weighted_mean={weighted_mean_weight_err:.6f} max={float(rel_weight_errs.max()):.6f}"
+    )
 
     # Show worst layers
     rows_sorted = sorted(rows, key=lambda x: x[0], reverse=True)
     topk = int(args.topk)
     logger.info(f"=== Worst {topk} layers by relative delta error ===")
     for rel_d, rel_w, dnorm, k in rows_sorted[:topk]:
-        logger.info(f"{k} | rel_delta_err={rel_d:.6f} rel_weight_err={rel_w:.6f} delta_norm={dnorm:.4g}")
+        logger.info(
+            f"{k} | rel_delta_err={rel_d:.6f} rel_weight_err={rel_w:.6f} delta_norm={dnorm:.4g}"
+        )
 
 
 if __name__ == "__main__":
     main()
-
-

@@ -69,10 +69,14 @@ if isinstance(_persisted, dict):
     # (stored as env-var-compatible "true"/"false" strings).
     _enable_image_render_step = _persisted.get("ENABLE_IMAGE_RENDER_STEP")
     if isinstance(_enable_image_render_step, str) and _enable_image_render_step.strip():
-        os.environ["ENABLE_IMAGE_RENDER_STEP"] = _enable_image_render_step.strip().lower()
+        os.environ["ENABLE_IMAGE_RENDER_STEP"] = (
+            _enable_image_render_step.strip().lower()
+        )
     _enable_video_render_step = _persisted.get("ENABLE_VIDEO_RENDER_STEP")
     if isinstance(_enable_video_render_step, str) and _enable_video_render_step.strip():
-        os.environ["ENABLE_VIDEO_RENDER_STEP"] = _enable_video_render_step.strip().lower()
+        os.environ["ENABLE_VIDEO_RENDER_STEP"] = (
+            _enable_video_render_step.strip().lower()
+        )
     # HF token persistence for backend process
     _hf_token = _persisted.get("hf_token")
     if isinstance(_hf_token, str) and _hf_token.strip():
@@ -135,7 +139,7 @@ def set_torch_device(device: torch.device | str | None = None) -> None:
 
 
 def get_torch_device() -> torch.device:
-    # check if cuda or mps from default device is available otherwise return cpu 
+    # check if cuda or mps from default device is available otherwise return cpu
     if DEFAULT_DEVICE.type == "cuda" and torch.cuda.is_available():
         return DEFAULT_DEVICE
     elif DEFAULT_DEVICE.type == "mps" and torch.backends.mps.is_available():

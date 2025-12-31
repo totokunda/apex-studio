@@ -7,27 +7,59 @@ from src.utils.progress import safe_emit_progress, make_mapped_progress
 from src.types import InputImage
 from tqdm import tqdm
 
+
 class WanSVIEngine(WanShared):
     """WAN Image-to-Video Engine Implementation"""
-    
-    def _prepare_image_latents_pro(self, is_first_clip: bool, input_image: InputImage | List[InputImage], anchor: InputImage, width: int, height: int, num_frames: int, offload: bool = True, prev_last_latent: torch.Tensor = None, end_image: InputImage = None, num_motion_latent: int = 1, end_frame_fill=0.5, end_frame_max_strength=1.0):
-        input_image = [input_image] if not isinstance(input_image, list) else input_image
+
+    def _prepare_image_latents_pro(
+        self,
+        is_first_clip: bool,
+        input_image: InputImage | List[InputImage],
+        anchor: InputImage,
+        width: int,
+        height: int,
+        num_frames: int,
+        offload: bool = True,
+        prev_last_latent: torch.Tensor = None,
+        end_image: InputImage = None,
+        num_motion_latent: int = 1,
+        end_frame_fill=0.5,
+        end_frame_max_strength=1.0,
+    ):
+        input_image = (
+            [input_image] if not isinstance(input_image, list) else input_image
+        )
         input_image = [self._load_image(img) for img in input_image]
-        
-        if is_first_clip: # Use first frame as anchor
+
+        if is_first_clip:  # Use first frame as anchor
             anchor = input_image[0]
         if end_image is not None:
             end_image = self._load_image(end_image)
-            end_image = self.video_processor.preprocess(end_image, height=height, width=width).to(self.device, dtype=torch.float32)
-            
-        input_image = [self.video_processor.preprocess(img, height=height, width=width).to(self.device, dtype=torch.float32) for img in input_image]
-        
+            end_image = self.video_processor.preprocess(
+                end_image, height=height, width=width
+            ).to(self.device, dtype=torch.float32)
+
+        input_image = [
+            self.video_processor.preprocess(img, height=height, width=width).to(
+                self.device, dtype=torch.float32
+            )
+            for img in input_image
+        ]
+
         # Preprocess anchor
-        anchor = self.video_processor.preprocess(anchor, height=height, width=width).to(self.device, dtype=torch.float32).unsqueeze(2)
+        anchor = (
+            self.video_processor.preprocess(anchor, height=height, width=width)
+            .to(self.device, dtype=torch.float32)
+            .unsqueeze(2)
+        )
         input_image = torch.cat(input_image, dim=1)  # Shape: [3, num_frames, H, W]
-        
+
         if end_image is not None:
-            end_image = self.video_processor.preprocess(end_image, height=height, width=width).to(self.device, dtype=torch.float32).unsqueeze(2)
+            end_image = (
+                self.video_processor.preprocess(end_image, height=height, width=width)
+                .to(self.device, dtype=torch.float32)
+                .unsqueeze(2)
+            )
             end_image_latent = self.vae_encode(
                 end_image,
                 offload=offload,
@@ -45,7 +77,7 @@ class WanSVIEngine(WanShared):
             normalize_latents_dtype=torch.float32,
         )[0]
         total_latents = (num_frames - 1) // 4 + 1
-        
+
         if end_image_latent is not None:
             end_latent = end_image_latent.clone()
             end_frames = end_latent.shape[2]
@@ -61,25 +93,36 @@ class WanSVIEngine(WanShared):
                     # Blend factor increases from 0 to 1 as we go through end frames
                     blend_factor = (frame_idx + 1) / end_frames
                     anchor_latent[:, :, anchor_frame_idx] = (
-                        (1 - blend_factor) * anchor_latent[:, :, anchor_frame_idx] +
-                        blend_factor * end_latent[:, :, frame_idx]
-                    )
-        
+                        1 - blend_factor
+                    ) * anchor_latent[
+                        :, :, anchor_frame_idx
+                    ] + blend_factor * end_latent[
+                        :, :, frame_idx
+                    ]
+
         if is_first_clip:
             # First clip: only anchor + padding
             padding_size = total_latents - anchor_latent.shape[1]
             image_cond_latent = anchor_latent
         else:
             # Subsequent clips: anchor + motion + padding
-            motion_latent = prev_last_latent.to(device=self.device)[:, -num_motion_latent:]
-            padding_size = total_latents - anchor_latent.shape[1] - motion_latent.shape[1]
-            image_cond_latent = torch.concat([anchor_latent, motion_latent], dim=1)
-            
-        padding = torch.zeros(
-                anchor_latent.shape[0], padding_size, anchor_latent.shape[2], anchor_latent.shape[3],
-                dtype=torch.float32, device=self.device
+            motion_latent = prev_last_latent.to(device=self.device)[
+                :, -num_motion_latent:
+            ]
+            padding_size = (
+                total_latents - anchor_latent.shape[1] - motion_latent.shape[1]
             )
-        
+            image_cond_latent = torch.concat([anchor_latent, motion_latent], dim=1)
+
+        padding = torch.zeros(
+            anchor_latent.shape[0],
+            padding_size,
+            anchor_latent.shape[2],
+            anchor_latent.shape[3],
+            dtype=torch.float32,
+            device=self.device,
+        )
+
         if end_image_latent is not None and padding_size > 0:
             end_latent = end_image_latent.clone()
             end_frames = end_latent.shape[2]
@@ -93,45 +136,77 @@ class WanSVIEngine(WanShared):
                 padding_frame_idx = padding_blend_start + frame_idx
                 # Blend factor increases from 0 to strength across the blended padding frames
                 blend_factor = ((frame_idx + 1) / blend_frames) * end_frame_max_strength
-                padding[:, padding_frame_idx] = (
-                    (1 - blend_factor) * padding[:, :, padding_frame_idx] +
-                    blend_factor * end_latent[:, :, frame_idx]
-                )
+                padding[:, padding_frame_idx] = (1 - blend_factor) * padding[
+                    :, :, padding_frame_idx
+                ] + blend_factor * end_latent[:, :, frame_idx]
 
         # Create frame mask (1 for first frame, 0 for rest)
-        msk = torch.ones(1, num_frames, height//8, width//8, device=self.device)
-        msk[:, anchor_latent.shape[1]:] = 0
-        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
-        msk = msk.view(1, msk.shape[1] // 4, 4, height//8, width//8)
+        msk = torch.ones(1, num_frames, height // 8, width // 8, device=self.device)
+        msk[:, anchor_latent.shape[1] :] = 0
+        msk = torch.concat(
+            [torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1
+        )
+        msk = msk.view(1, msk.shape[1] // 4, 4, height // 8, width // 8)
         msk = msk.transpose(1, 2)[0]
         y = torch.concat([image_cond_latent, padding], dim=1)
 
-        y = torch.concat([msk, y]).unsqueeze(0).to(dtype=torch.float32, device=self.device)
+        y = (
+            torch.concat([msk, y])
+            .unsqueeze(0)
+            .to(dtype=torch.float32, device=self.device)
+        )
         return y
 
-    def _prepare_image_latents(self, input_image: InputImage, width: int, height: int, num_frames: int, offload: bool = True, end_image: InputImage = None, anchor: InputImage = None,  num_motion_latent: int = 1):
-        
+    def _prepare_image_latents(
+        self,
+        input_image: InputImage,
+        width: int,
+        height: int,
+        num_frames: int,
+        offload: bool = True,
+        end_image: InputImage = None,
+        anchor: InputImage = None,
+        num_motion_latent: int = 1,
+    ):
+
         input_image = self._load_image(input_image)
-        msk = torch.ones(1, num_frames, height//8, width//8, device=self.device)
+        msk = torch.ones(1, num_frames, height // 8, width // 8, device=self.device)
         msk[:, 1:] = 0
-        
+
         if anchor:
-            anchor = self.video_processor.preprocess(anchor, height=height, width=width).to(self.device, dtype=torch.float32)
-            
-        image = self.video_processor.preprocess(input_image, height=height, width=width).to(self.device, dtype=torch.float32)
+            anchor = self.video_processor.preprocess(
+                anchor, height=height, width=width
+            ).to(self.device, dtype=torch.float32)
+
+        image = self.video_processor.preprocess(
+            input_image, height=height, width=width
+        ).to(self.device, dtype=torch.float32)
         if end_image is not None:
-            end_image = self.video_processor.preprocess(end_image, height=height, width=width).to(self.device, dtype=torch.float32)
-            vae_input = torch.concat([image.transpose(0,1), torch.zeros(3, num_frames-2, height, width).to(image.device), end_image.transpose(0,1)],dim=1)
+            end_image = self.video_processor.preprocess(
+                end_image, height=height, width=width
+            ).to(self.device, dtype=torch.float32)
+            vae_input = torch.concat(
+                [
+                    image.transpose(0, 1),
+                    torch.zeros(3, num_frames - 2, height, width).to(image.device),
+                    end_image.transpose(0, 1),
+                ],
+                dim=1,
+            )
             msk[:, -1:] = 1
         else:
             if anchor is not None:
-                input_pad = anchor.transpose(0, 1).repeat(1, num_frames-1, 1, 1)  
+                input_pad = anchor.transpose(0, 1).repeat(1, num_frames - 1, 1, 1)
             else:
-                input_pad = torch.zeros(3, num_frames-1, height, width, device=self.device)          
+                input_pad = torch.zeros(
+                    3, num_frames - 1, height, width, device=self.device
+                )
             vae_input = torch.concat([image.transpose(0, 1), input_pad], dim=1)
         # Preprocess anchor
-        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
-        msk = msk.view(1, msk.shape[1] // 4, 4, height//8, width//8)
+        msk = torch.concat(
+            [torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1
+        )
+        msk = msk.view(1, msk.shape[1] // 4, 4, height // 8, width // 8)
         msk = msk.transpose(1, 2)[0]
         y = self.vae_encode(vae_input.unsqueeze(0))[0]
         y = torch.concat([msk, y])
@@ -191,9 +266,13 @@ class WanSVIEngine(WanShared):
             and low_noise_guidance_scale is not None
         ):
             guidance_scale = [high_noise_guidance_scale, low_noise_guidance_scale]
-            safe_emit_progress(progress_callback, 0.01, "Using high/low-noise guidance scales")
+            safe_emit_progress(
+                progress_callback, 0.01, "Using high/low-noise guidance scales"
+            )
 
-        safe_emit_progress(progress_callback, 0.0, "Starting stable infinite video pipeline (SVI)")
+        safe_emit_progress(
+            progress_callback, 0.0, "Starting stable infinite video pipeline (SVI)"
+        )
         if guidance_scale is not None and isinstance(guidance_scale, list):
             use_cfg_guidance = (
                 negative_prompt is not None
@@ -234,11 +313,13 @@ class WanSVIEngine(WanShared):
         safe_emit_progress(progress_callback, 0.10, "All prompts encoded")
 
         batch_size = 1
-        
+
         if num_seconds_per_segment is not None:
             if not isinstance(num_seconds_per_segment, str):
                 num_seconds_per_segment = str(num_seconds_per_segment) + "s"
-            num_frames_per_segment = self._parse_num_frames(num_seconds_per_segment, fps)
+            num_frames_per_segment = self._parse_num_frames(
+                num_seconds_per_segment, fps
+            )
 
         if negative_prompt is not None and use_cfg_guidance:
             negative_prompt_embeds = self.text_encoder.encode(
@@ -266,15 +347,23 @@ class WanSVIEngine(WanShared):
         safe_emit_progress(progress_callback, 0.15, "Text encoder offloaded")
         all_video_frames = []
         all_latents = []
-        safe_emit_progress(progress_callback, 0.16, "Loading and resizing input image(s)")
+        safe_emit_progress(
+            progress_callback, 0.16, "Loading and resizing input image(s)"
+        )
         image = self._load_image(image)
         if end_image is not None:
             end_image = self._load_image(end_image)
-            end_image, _, _ = self._aspect_ratio_resize(end_image, max_area=height * width, mod_value=16)
-        image, height, width = self._aspect_ratio_resize(image, max_area=height * width, mod_value=16)
+            end_image, _, _ = self._aspect_ratio_resize(
+                end_image, max_area=height * width, mod_value=16
+            )
+        image, height, width = self._aspect_ratio_resize(
+            image, max_area=height * width, mod_value=16
+        )
         current_input_image = image
         total_num_frames = self._parse_num_frames(duration, fps)
-        num_clips = max(total_num_frames // num_frames_per_segment, len(prompt_embeds_list))
+        num_clips = max(
+            total_num_frames // num_frames_per_segment, len(prompt_embeds_list)
+        )
         safe_emit_progress(
             progress_callback,
             0.18,
@@ -328,14 +417,14 @@ class WanSVIEngine(WanShared):
                 timesteps_as_indices=timesteps_as_indices,
                 num_inference_steps=num_inference_steps,
             )
-            
+
             safe_emit_progress(
                 clip_progress_callback,
                 0.10,
                 f"Clip {clip_idx_1}/{num_clips}: scheduler ready "
                 f"(num_inference_steps={num_inference_steps}, timesteps={len(timesteps)})",
             )
-            
+
             vae_config = self.load_config_by_type("vae")
             vae_scale_factor_spatial = getattr(
                 vae_config, "scale_factor_spatial", self.vae_scale_factor_spatial
@@ -344,12 +433,14 @@ class WanSVIEngine(WanShared):
             vae_scale_factor_temporal = getattr(
                 vae_config, "scale_factor_temporal", self.vae_scale_factor_temporal
             )
-            
+
             if seed is None:
                 # generate a random seed
                 generator = torch.Generator(device=self.device)
             else:
-                generator = torch.Generator(device=self.device).manual_seed(seed * (idx + 1))
+                generator = torch.Generator(device=self.device).manual_seed(
+                    seed * (idx + 1)
+                )
 
             noise = self._get_latents(
                 height,
@@ -391,7 +482,7 @@ class WanSVIEngine(WanShared):
                     width=width,
                     height=height,
                     num_frames=num_frames_per_segment,
-                    offload=offload
+                    offload=offload,
                 )
             safe_emit_progress(
                 clip_progress_callback,
@@ -451,7 +542,7 @@ class WanSVIEngine(WanShared):
                 easy_cache_ret_steps=easy_cache_ret_steps,
                 easy_cache_cutoff_steps=easy_cache_cutoff_steps,
             )
-            
+
             safe_emit_progress(
                 clip_progress_callback,
                 0.86,
@@ -481,9 +572,11 @@ class WanSVIEngine(WanShared):
                 if idx == 0:
                     all_video_frames.extend(postprocessed_video)
                 else:
-                    all_video_frames = all_video_frames 
+                    all_video_frames = all_video_frames
                     if num_motion_latent > 0:
-                        all_video_frames.extend(postprocessed_video[num_overlap_frames:])
+                        all_video_frames.extend(
+                            postprocessed_video[num_overlap_frames:]
+                        )
                     else:
                         all_video_frames.extend(postprocessed_video[1:])
                 if render_on_step_callback is not None:
@@ -509,9 +602,15 @@ class WanSVIEngine(WanShared):
         safe_emit_progress(progress_callback, 0.95, "All clips complete")
 
         if return_latents:
-            safe_emit_progress(progress_callback, 0.98, "Concatenating and returning latents")
+            safe_emit_progress(
+                progress_callback, 0.98, "Concatenating and returning latents"
+            )
             return torch.cat(all_latents, dim=2)
         else:
-            safe_emit_progress(progress_callback, 0.98, "Completed stable infinite video pipeline (SVI)")
+            safe_emit_progress(
+                progress_callback,
+                0.98,
+                "Completed stable infinite video pipeline (SVI)",
+            )
             safe_emit_progress(progress_callback, 1.0, "Returning frames")
             return [all_video_frames]

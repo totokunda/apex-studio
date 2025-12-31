@@ -28,7 +28,7 @@ class ZImageT2IEngine(ZImageShared):
     @property
     def interrupt(self):
         return self._interrupt
-    
+
     @property
     def progress_callback(self):
         return self._progress_callback
@@ -62,7 +62,7 @@ class ZImageT2IEngine(ZImageShared):
         progress_callback: Callable = None,
         **kwargs,
     ):
-    
+
         safe_emit_progress(progress_callback, 0.0, "Starting text-to-image pipeline")
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
@@ -100,7 +100,9 @@ class ZImageT2IEngine(ZImageShared):
                     "`negative_prompt_embeds` must also be provided for classifier-free guidance."
                 )
         else:
-            encode_progress_callback = make_mapped_progress(progress_callback, 0.02, 0.18)
+            encode_progress_callback = make_mapped_progress(
+                progress_callback, 0.02, 0.18
+            )
             (
                 prompt_embeds,
                 negative_prompt_embeds,
@@ -115,12 +117,11 @@ class ZImageT2IEngine(ZImageShared):
                 progress_callback=encode_progress_callback,
             )
             safe_emit_progress(progress_callback, 0.18, "Prompts ready")
-              
+
         if offload:
             self._offload("text_encoder")
             safe_emit_progress(progress_callback, 0.20, "Text encoder offloaded")
-            
-        
+
         if not self.transformer:
             safe_emit_progress(progress_callback, 0.21, "Loading transformer")
             self.load_component_by_type("transformer")
@@ -128,7 +129,7 @@ class ZImageT2IEngine(ZImageShared):
             safe_emit_progress(progress_callback, 0.24, "Moving transformer to device")
             self.to_device(self.transformer)
             safe_emit_progress(progress_callback, 0.25, "Transformer on device")
-        
+
         safe_emit_progress(progress_callback, 0.25, "Transformer ready")
 
         # 4. Prepare latent variables
@@ -164,7 +165,7 @@ class ZImageT2IEngine(ZImageShared):
         if not self.scheduler:
             self.load_component_by_type("scheduler")
             self.to_device(self.scheduler)
-        
+
         safe_emit_progress(progress_callback, 0.36, "Scheduler ready")
 
         # 5. Prepare timesteps
@@ -188,13 +189,17 @@ class ZImageT2IEngine(ZImageShared):
         num_warmup_steps = max(
             len(timesteps) - num_inference_steps * self.scheduler.order, 0
         )
-        safe_emit_progress(progress_callback, 0.40, "Timesteps computed; starting denoise")
-        
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+        safe_emit_progress(
+            progress_callback, 0.40, "Timesteps computed; starting denoise"
+        )
+
+        num_warmup_steps = max(
+            len(timesteps) - num_inference_steps * self.scheduler.order, 0
+        )
         self._num_timesteps = len(timesteps)
-        
+
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.40, 0.92)
-        
+
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
@@ -284,15 +289,18 @@ class ZImageT2IEngine(ZImageShared):
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
                 ):
                     progress_bar.update()
-                
+
                 if denoise_progress_callback is not None and len(timesteps) > 0:
                     try:
-                        denoise_progress_callback(min((i + 1) / len(timesteps), 1.0), f"Denoising step {i + 1}/{len(timesteps)}")
+                        denoise_progress_callback(
+                            min((i + 1) / len(timesteps), 1.0),
+                            f"Denoising step {i + 1}/{len(timesteps)}",
+                        )
                     except Exception:
                         pass
-        
+
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")
-        
+
         if offload:
             self._offload("transformer")
             safe_emit_progress(progress_callback, 0.94, "Transformer offloaded")
@@ -303,5 +311,7 @@ class ZImageT2IEngine(ZImageShared):
         else:
             image = self.vae_decode(latents, offload=offload)
             image = self._tensor_to_frame(image)
-            safe_emit_progress(progress_callback, 1.0, "Completed text-to-image pipeline")
+            safe_emit_progress(
+                progress_callback, 1.0, "Completed text-to-image pipeline"
+            )
             return image

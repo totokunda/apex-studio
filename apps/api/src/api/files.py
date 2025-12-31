@@ -143,7 +143,9 @@ def match_file(scope: str, path: str, sha256: str, size: Optional[int] = None):
     """
     sha256_norm = (sha256 or "").strip().lower()
     if not _is_valid_sha256_hex(sha256_norm):
-        raise HTTPException(status_code=400, detail="Invalid sha256; expected 64 hex chars")
+        raise HTTPException(
+            status_code=400, detail="Invalid sha256; expected 64 hex chars"
+        )
 
     base = _base_for_scope(scope)
     target = _safe_join(base, path)

@@ -75,6 +75,7 @@ def transfer(model, model_weights):
         ]
     return transfered_model_weights
 
+
 def draw_bodypose_with_feet(canvas, candidate, subset):
     H, W, C = canvas.shape
     candidate = np.array(candidate)
@@ -138,8 +139,12 @@ def draw_bodypose_with_feet(canvas, candidate, subset):
     ]
 
     colors_feet = [
-        [100, 0, 215], [80, 0, 235], [60, 0, 255],
-        [0, 235, 150], [0, 215, 170], [0, 195, 190],
+        [100, 0, 215],
+        [80, 0, 235],
+        [60, 0, 255],
+        [0, 235, 150],
+        [0, 215, 170],
+        [0, 195, 190],
     ]
 
     colors = colors + colors_feet
@@ -159,7 +164,7 @@ def draw_bodypose_with_feet(canvas, candidate, subset):
                 (int(mY), int(mX)), (int(length / 2), stickwidth), int(angle), 0, 360, 1
             )
             cv2.fillConvexPoly(canvas, polygon, colors[i])
-    
+
     for i in range(6):
         for n in range(len(subset)):
             index = subset[n][np.array(foot_limbSeq[i]) - 1]
@@ -175,7 +180,6 @@ def draw_bodypose_with_feet(canvas, candidate, subset):
                 (int(mY), int(mX)), (int(length / 2), stickwidth), int(angle), 0, 360, 1
             )
             cv2.fillConvexPoly(canvas, polygon, colors_feet[i])
-            
 
     canvas = (canvas * 0.6).astype(np.uint8)
 
@@ -192,7 +196,9 @@ def draw_bodypose_with_feet(canvas, candidate, subset):
     return canvas
 
 
-def draw_bodypose_augmentation(canvas, candidate, subset, drop_aug=True, shift_aug=False, all_cheek_aug=False):
+def draw_bodypose_augmentation(
+    canvas, candidate, subset, drop_aug=True, shift_aug=False, all_cheek_aug=False
+):
     H, W, C = canvas.shape
     candidate = np.array(candidate)
     subset = np.array(subset)
@@ -207,16 +213,16 @@ def draw_bodypose_augmentation(canvas, candidate, subset, drop_aug=True, shift_a
         [6, 7],  # 5->6 右臂 4
         [7, 8],  # 6->7 右肘 5
         [2, 9],  # 6
-        [9, 10], # 7
-        [10, 11], # 8
+        [9, 10],  # 7
+        [10, 11],  # 8
         [2, 12],  # 9
-        [12, 13], # 10
-        [13, 14], # 11
-        [2, 1],   # 12 
+        [12, 13],  # 10
+        [13, 14],  # 11
+        [2, 1],  # 12
         [1, 15],  # 13 cheek
-        [15, 17], # 14 cheek
+        [15, 17],  # 14 cheek
         [1, 16],  # 15 cheek
-        [16, 18], # 16 cheek
+        [16, 18],  # 16 cheek
         [3, 17],
         [6, 18],
     ]
@@ -244,7 +250,7 @@ def draw_bodypose_augmentation(canvas, candidate, subset, drop_aug=True, shift_a
 
     # 随机选0-2根骨骼进行丢弃
     if drop_aug:
-        arr_drop = list(range(17))  
+        arr_drop = list(range(17))
         k_drop = random.choices([0, 1, 2], weights=[0.5, 0.3, 0.2])[0]
         drop_indices = random.sample(arr_drop, k_drop)
     else:
@@ -254,7 +260,7 @@ def draw_bodypose_augmentation(canvas, candidate, subset, drop_aug=True, shift_a
     else:
         shift_indices = []
     if all_cheek_aug:
-        drop_indices = list(range(13)) # 0-12对应的骨骼都扔掉
+        drop_indices = list(range(13))  # 0-12对应的骨骼都扔掉
 
     for i in range(17):
         for n in range(len(subset)):
@@ -267,12 +273,12 @@ def draw_bodypose_augmentation(canvas, candidate, subset, drop_aug=True, shift_a
             if i in drop_indices:
                 continue
 
-            mX = np.mean(X)   # 计算两个关节点之间的中点
+            mX = np.mean(X)  # 计算两个关节点之间的中点
             mY = np.mean(Y)
             length = ((X[0] - X[1]) ** 2 + (Y[0] - Y[1]) ** 2) ** 0.5
             if i in shift_indices:
-                mX = mX + random.uniform(-length/4, length/4)
-                mY = mY + random.uniform(-length/4, length/4)
+                mX = mX + random.uniform(-length / 4, length / 4)
+                mY = mY + random.uniform(-length / 4, length / 4)
             angle = math.degrees(math.atan2(X[0] - X[1], Y[0] - Y[1]))
             polygon = cv2.ellipse2Poly(
                 (int(mY), int(mX)), (int(length / 2), stickwidth), int(angle), 0, 360, 1
@@ -295,6 +301,7 @@ def draw_bodypose_augmentation(canvas, candidate, subset, drop_aug=True, shift_a
             cv2.circle(canvas, (int(x), int(y)), 4, colors[i], thickness=-1)
 
     return canvas
+
 
 def draw_bodypose(canvas, candidate, subset):
     H, W, C = canvas.shape
@@ -376,16 +383,32 @@ def draw_bodypose(canvas, candidate, subset):
 
     return canvas
 
+
 def draw_handpose_lr(canvas, all_hand_peaks):
     H, W, C = canvas.shape
 
     # 连接顺序：21个关键点的骨架连线
     edges = [
-        [0, 1], [1, 2], [2, 3], [3, 4],
-        [0, 5], [5, 6], [6, 7], [7, 8],
-        [0, 9], [9, 10], [10, 11], [11, 12],
-        [0, 13], [13, 14], [14, 15], [15, 16],
-        [0, 17], [17, 18], [18, 19], [19, 20],
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [3, 4],
+        [0, 5],
+        [5, 6],
+        [6, 7],
+        [7, 8],
+        [0, 9],
+        [9, 10],
+        [10, 11],
+        [11, 12],
+        [0, 13],
+        [13, 14],
+        [14, 15],
+        [15, 16],
+        [0, 17],
+        [17, 18],
+        [18, 19],
+        [19, 20],
     ]
 
     all_num_hands = len(all_hand_peaks)
@@ -403,9 +426,9 @@ def draw_handpose_lr(canvas, all_hand_peaks):
             y2 = int(y2 * H)
             if x1 > eps and y1 > eps and x2 > eps and y2 > eps:
                 if left_or_right == 0:
-                    hsv_color = [ (base_hue + ie / float(len(edges)) * 0.8), 0.9, 0.9 ]
+                    hsv_color = [(base_hue + ie / float(len(edges)) * 0.8), 0.9, 0.9]
                 else:
-                    hsv_color = [ (base_hue + ie / float(len(edges)) * 0.8), 0.8, 1 ]
+                    hsv_color = [(base_hue + ie / float(len(edges)) * 0.8), 0.8, 1]
                 rgb_color = matplotlib.colors.hsv_to_rgb(hsv_color) * 255
                 cv2.line(
                     canvas,
@@ -425,6 +448,7 @@ def draw_handpose_lr(canvas, all_hand_peaks):
                 cv2.circle(canvas, (x, y), 4, point_color, thickness=-1)
 
     return canvas
+
 
 def draw_handpose(canvas, all_hand_peaks):
     H, W, C = canvas.shape
@@ -496,13 +520,18 @@ def draw_facepose(canvas, all_lmks, optimized_face=True):
             if x > eps and y > eps:
                 if optimized_face:
                     if lmk_idx in list(range(17, 27)) + list(range(36, 70)):
-                        cv2.circle(canvas, (x, y), stickwidth_thin, (255, 255, 255), thickness=-1)
+                        cv2.circle(
+                            canvas,
+                            (x, y),
+                            stickwidth_thin,
+                            (255, 255, 255),
+                            thickness=-1,
+                        )
                 else:
-                    cv2.circle(canvas, (x, y), stickwidth, (255, 255, 255), thickness=-1)
+                    cv2.circle(
+                        canvas, (x, y), stickwidth, (255, 255, 255), thickness=-1
+                    )
     return canvas
-
-
-
 
 
 # detect hand according to body pose keypoints

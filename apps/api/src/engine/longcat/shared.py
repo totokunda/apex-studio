@@ -225,17 +225,13 @@ class LongCatShared(BaseEngine):
         cfg_step_lora = self.preloaded_loras.get("cfg_step_lora", None)
         self.logger.info(f"Applying cfg_step_lora: {cfg_step_lora}")
         if cfg_step_lora:
-            self.apply_loras(
-                [cfg_step_lora], adapter_names=["cfg_step_lora"]
-            )
+            self.apply_loras([cfg_step_lora], adapter_names=["cfg_step_lora"])
 
     def apply_refinement_lora(self):
         refinement_lora = self.preloaded_loras.get("refinement_lora", None)
         self.logger.info(f"Applying refinement lora: {refinement_lora}")
         if refinement_lora:
-            self.apply_loras(
-                [refinement_lora], adapter_names=["refinement_lora"]
-            )
+            self.apply_loras([refinement_lora], adapter_names=["refinement_lora"])
 
     def _get_t5_prompt_embeds(
         self,

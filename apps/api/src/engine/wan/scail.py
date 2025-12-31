@@ -7,6 +7,7 @@ from src.utils.progress import safe_emit_progress, make_mapped_progress
 from src.types import InputVideo, InputImage
 import torch.nn.functional as F
 
+
 class WanSCAILEngine(WanShared):
     """WAN SCAIL Engine Implementation"""
 
@@ -92,7 +93,9 @@ class WanSCAILEngine(WanShared):
             self._offload("text_encoder")
         safe_emit_progress(progress_callback, 0.16, "Text encoder offloaded")
 
-        safe_emit_progress(progress_callback, 0.17, "Loading inputs (image + pose video)")
+        safe_emit_progress(
+            progress_callback, 0.17, "Loading inputs (image + pose video)"
+        )
         loaded_image = self._load_image(image)
         pose_video = self._load_video(
             pose_video,
@@ -104,33 +107,38 @@ class WanSCAILEngine(WanShared):
         original_height, original_width = height, width
         safe_emit_progress(progress_callback, 0.18, "Preprocessing pose video")
         for idx, frame in enumerate(pose_video):
-            frame, height, width = self._aspect_ratio_resize(frame, max_area=original_height * original_width, mod_value=32)
+            frame, height, width = self._aspect_ratio_resize(
+                frame, max_area=original_height * original_width, mod_value=32
+            )
             frame, height, width = self._center_crop_resize(frame, height, width)
-        pose_video = self.video_processor.preprocess_video(pose_video, height=height, width=width).to(self.device, dtype=torch.float32)
-        pose_video = F.interpolate(pose_video.squeeze(0), scale_factor=0.5, mode='bilinear', align_corners=False).unsqueeze(0)
+        pose_video = self.video_processor.preprocess_video(
+            pose_video, height=height, width=width
+        ).to(self.device, dtype=torch.float32)
+        pose_video = F.interpolate(
+            pose_video.squeeze(0),
+            scale_factor=0.5,
+            mode="bilinear",
+            align_corners=False,
+        ).unsqueeze(0)
 
         safe_emit_progress(progress_callback, 0.19, "Preprocessing reference image")
         loaded_image, _, _ = self._aspect_ratio_resize(
-            loaded_image,
-            max_area=original_height * original_width,
-            mod_value=32
+            loaded_image, max_area=original_height * original_width, mod_value=32
         )
 
         preprocessed_image = self.video_processor.preprocess(
             loaded_image, height=height, width=width
         ).to(self.device, dtype=torch.float32)
 
-        
         transformer_dtype = self.component_dtypes["transformer"]
 
         safe_emit_progress(progress_callback, 0.20, "Moving transformer to device")
         self.to_device(self.transformer)
         safe_emit_progress(progress_callback, 0.21, "Encoding image with CLIP")
-        image_embeds = self.helpers["clip"](
-                loaded_image, hidden_states_layer=-2
-        ).to(self.device, dtype=transformer_dtype)
-        
-       
+        image_embeds = self.helpers["clip"](loaded_image, hidden_states_layer=-2).to(
+            self.device, dtype=transformer_dtype
+        )
+
         safe_emit_progress(progress_callback, 0.22, "Moving embeddings to device")
         prompt_embeds = prompt_embeds.to(self.device, dtype=transformer_dtype)
         if negative_prompt_embeds is not None:
@@ -163,11 +171,8 @@ class WanSCAILEngine(WanShared):
             num_inference_steps=num_inference_steps,
         )
 
-        safe_emit_progress(
-            progress_callback, 0.30, "Scheduler and timesteps prepared"
-        )
+        safe_emit_progress(progress_callback, 0.30, "Scheduler and timesteps prepared")
 
-       
         vae_config = self.load_config_by_type("vae")
         vae_scale_factor_spatial = getattr(
             vae_config, "scale_factor_spatial", self.vae_scale_factor_spatial
@@ -175,9 +180,6 @@ class WanSCAILEngine(WanShared):
         vae_scale_factor_temporal = getattr(
             vae_config, "scale_factor_temporal", self.vae_scale_factor_temporal
         )
-        
-        
-        
 
         safe_emit_progress(progress_callback, 0.32, "Initializing latent noise")
         latents = self._get_latents(
@@ -207,7 +209,7 @@ class WanSCAILEngine(WanShared):
             normalize_latents_dtype=latents.dtype,
             offload_type="cpu",
         )
-        
+
         safe_emit_progress(progress_callback, 0.42, "Encoding pose video (VAE)")
         pose_latents = self.vae_encode(
             pose_video,
@@ -216,7 +218,6 @@ class WanSCAILEngine(WanShared):
             normalize_latents_dtype=latents.dtype,
             offload_type="discard",
         )
-        
 
         batch_size, _, num_latent_frames, latent_height, latent_width = latents.shape
 
@@ -228,9 +229,16 @@ class WanSCAILEngine(WanShared):
             f"Starting denoising (CFG: {'on' if use_cfg_guidance else 'off'})",
         )
         transformer_config = self.load_config_by_type("transformer")
-        max_seq_len = num_latent_frames * latent_height * latent_width // (
-            transformer_config.get("patch_size", (1, 2, 2))[1] * transformer_config.get("patch_size", (1, 2, 2))[2])
-    
+        max_seq_len = (
+            num_latent_frames
+            * latent_height
+            * latent_width
+            // (
+                transformer_config.get("patch_size", (1, 2, 2))[1]
+                * transformer_config.get("patch_size", (1, 2, 2))[2]
+            )
+        )
+
         with torch.autocast(device_type=self.device.type, dtype=transformer_dtype):
             latents = self.denoise(
                 timesteps=timesteps,

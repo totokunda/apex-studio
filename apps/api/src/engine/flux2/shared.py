@@ -75,7 +75,11 @@ class Flux2Shared(BaseEngine):
         return prompt_embeds, text_ids
 
     def _encode_vae_image(
-        self, image: torch.Tensor, generator: torch.Generator, offload: bool = True, offload_type: Literal["cpu", "discard"] = "discard"
+        self,
+        image: torch.Tensor,
+        generator: torch.Generator,
+        offload: bool = True,
+        offload_type: Literal["cpu", "discard"] = "discard",
     ):
         if image.ndim != 4:
             raise ValueError(f"Expected image dims 4, got {image.ndim}.")
@@ -232,7 +236,7 @@ class Flux2Shared(BaseEngine):
         # Move to device
         input_ids = inputs["input_ids"].to(device)
         attention_mask = inputs["attention_mask"].to(device)
-        
+
         self.text_encoder.model.language_model.embed_tokens.to(device)
         # Forward pass through the model
         output = self.text_encoder.model(
@@ -441,7 +445,10 @@ class Flux2Shared(BaseEngine):
         for idx, image in enumerate(images):
             image = image.to(device=device, dtype=dtype)
             imagge_latent = self._encode_vae_image(
-                image=image, generator=generator, offload=offload, offload_type="cpu" if idx != len(images) - 1 else "discard"
+                image=image,
+                generator=generator,
+                offload=offload,
+                offload_type="cpu" if idx != len(images) - 1 else "discard",
             )
             image_latents.append(imagge_latent)  # (1, 128, 32, 32)
 

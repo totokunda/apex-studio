@@ -130,6 +130,7 @@ def _get_env_bool(name: str, default: bool) -> bool:
         return default
     return str(val).strip().lower() == "true"
 
+
 def _refresh_hf_token_runtime(token: Optional[str]) -> None:
     """
     Ensure Hugging Face token updates take effect immediately in a long-running process.
@@ -153,7 +154,9 @@ def _refresh_hf_token_runtime(token: Optional[str]) -> None:
         try:
             from huggingface_hub.utils import _auth as hf_auth
 
-            if hasattr(hf_auth, "get_token") and hasattr(hf_auth.get_token, "cache_clear"):
+            if hasattr(hf_auth, "get_token") and hasattr(
+                hf_auth.get_token, "cache_clear"
+            ):
                 hf_auth.get_token.cache_clear()
         except Exception:
             pass
@@ -373,6 +376,7 @@ def get_enable_image_render_steps():
         enabled=_get_env_bool("ENABLE_IMAGE_RENDER_STEP", default=True)
     )
 
+
 @router.post("/enable-image-render-steps", response_model=RenderStepEnabledResponse)
 def set_enable_image_render_steps(request: RenderStepEnabledRequest):
     """Enable/disable per-step image rendering during inference."""
@@ -394,6 +398,7 @@ def get_enable_video_render_steps():
     return RenderStepEnabledResponse(
         enabled=_get_env_bool("ENABLE_VIDEO_RENDER_STEP", default=True)
     )
+
 
 @router.post("/enable-video-render-steps", response_model=RenderStepEnabledResponse)
 def set_enable_video_render_steps(request: RenderStepEnabledRequest):
@@ -499,8 +504,6 @@ def set_mask_model(request: MaskModelRequest):
         )
 
 
-    
-
 def _update_persisted_config(**updates: str) -> None:
     """
     Persist config-related values (paths, hf_token, etc.) so they survive backend restarts.
@@ -541,14 +544,19 @@ def get_hostname():
 
 class UseFastDownloadRequest(BaseModel):
     enabled: bool
-    
+
+
 class UseFastDownloadResponse(BaseModel):
     enabled: bool
+
 
 @router.get("/enable-fast-download", response_model=UseFastDownloadResponse)
 def get_use_fast_download():
     """Get whether fast download is enabled"""
-    return UseFastDownloadResponse(enabled=_get_env_bool("APEX_USE_FAST_DOWNLOAD", default=True))
+    return UseFastDownloadResponse(
+        enabled=_get_env_bool("APEX_USE_FAST_DOWNLOAD", default=True)
+    )
+
 
 @router.post("/enable-fast-download", response_model=UseFastDownloadResponse)
 def set_use_fast_download(request: UseFastDownloadRequest):
