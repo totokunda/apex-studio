@@ -2,7 +2,7 @@ api_version: apex/v1
 kind: Model
 metadata:
   id: seedvr2-3b
-  model: seedvr2
+  model: seedvr2 
   name: SeedVR2 3B
   version: 1.0.0
   description: SeedVR2 3B is an upscaler model for video and image upscaling that uses a 3B VAE.
@@ -371,8 +371,10 @@ spec:
       required: false
       default: "same"
       options:
-        - "same"
-        - "cpu"
+        - name: "Same"
+          value: "same"
+        - name: "CPU"
+          value: "cpu"
     - id: use_chunking
       label: Use Chunking
       description: Use chunking for the upscaling 

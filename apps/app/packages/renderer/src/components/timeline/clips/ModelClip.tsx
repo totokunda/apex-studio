@@ -94,33 +94,6 @@ const ModelClip: React.FC<Props> = ({
   const finalSrcSetRef = useRef(false);
   const [, setForceRerenderCounter] = useState(0);
 
-  useEffect(() => {
-    const clip = getClipById(clipId) as ModelClipProps | undefined;
-    if (!clip) return;
-    const start = clip.startFrame ?? 0;
-    const end = clip.endFrame ?? start + 1;
-    if (clip.modelStatus === "running" || clip.modelStatus === "pending") {
-      if (targetFramesRef.current == null) {
-        targetFramesRef.current = Math.max(1, end - start);
-        initialStartRef.current = start;
-      }
-      const target = targetFramesRef.current || Math.max(1, end - start);
-      const pct = Math.max(0, Math.min(100, Math.floor(progress || 0)));
-      const grown = Math.max(1, Math.round((target * pct) / 100));
-      const desiredEnd = (initialStartRef.current ?? start) + grown;
-      if (desiredEnd > (clip.endFrame ?? 0)) {
-        updateClip(clipId, { endFrame: desiredEnd });
-      }
-    } else if (clip.modelStatus === "complete") {
-      if (targetFramesRef.current != null && initialStartRef.current != null) {
-        const desiredEnd = initialStartRef.current + targetFramesRef.current;
-        updateClip(clipId, { endFrame: desiredEnd });
-      }
-      targetFramesRef.current = null;
-      initialStartRef.current = null;
-    }
-  }, [progress, clipId, getClipById, updateClip]);
-
   // Allow re-runs: when a new run starts, clear final-result guard and transient state
   useEffect(() => {
     const status = currentClip?.modelStatus;
