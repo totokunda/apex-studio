@@ -312,7 +312,6 @@ class LoaderMixin(DownloadMixin):
                 state_dict = new_state_dict
             
             converter.convert(state_dict)
-            
             if load_dtype and not is_safetensors:
                 for k, v in state_dict.items():
                     state_dict[k] = v.to(load_dtype)

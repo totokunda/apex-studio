@@ -1431,6 +1431,61 @@ def run_engine_from_manifest(
                 return value, None
             return None, None
 
+        def _looks_like_video_file(path_str: str) -> bool:
+            lower = (path_str or "").lower()
+            return any(
+                lower.endswith(ext) for ext in (".mp4", ".mov", ".mkv", ".avi", ".webm")
+            )
+
+        def _extract_input_video_path_for_audio_mux(
+            raw_inputs: Dict[str, Any],
+        ) -> Optional[str]:
+            """
+            Best-effort: find the main input video path so we can carry its audio
+            into the final output for upscalers.
+            """
+            try:
+                # Prefer the canonical id used by upscaler manifests.
+                val = (raw_inputs or {}).get("video")
+                p, _ = _coerce_media_input(val)
+                if isinstance(p, str) and _looks_like_video_file(p) and os.path.isfile(p):
+                    return p
+
+                # Fallback: scan other inputs for a plausible video path.
+                for _, v in (raw_inputs or {}).items():
+                    p2, _ = _coerce_media_input(v)
+                    if (
+                        isinstance(p2, str)
+                        and _looks_like_video_file(p2)
+                        and os.path.isfile(p2)
+                    ):
+                        return p2
+            except Exception:
+                return None
+            return None
+
+        # Detect our upscale engines (SeedVR / FlashVSR) so we can preserve input audio.
+        spec_engine = None
+        try:
+            spec_engine = (
+                (spec_block.get("engine") if isinstance(spec_block, dict) else None)
+                or engine_type
+            )
+        except Exception:
+            spec_engine = engine_type
+        engine_name_lc = (
+            str(spec_engine).strip().lower() if spec_engine is not None else ""
+        )
+        model_type_lc = str(model_type).strip().lower() if model_type is not None else ""
+        is_upscaler_engine = (
+            engine_name_lc in {"seedvr", "flashvsr"} or model_type_lc == "upscale"
+        )
+        input_video_for_audio_mux = (
+            _extract_input_video_path_for_audio_mux(inputs or {})
+            if is_upscaler_engine
+            else None
+        )
+
         prepared_inputs: Dict[str, Any] = {}
         preprocessor_jobs: List[Dict[str, Any]] = []
         for input_key, raw_value in inputs.items():
@@ -1545,6 +1600,66 @@ def run_engine_from_manifest(
                 logger.warning(f"Failed to mux audio into video: {e}")
                 return None
 
+        def _mux_audio_from_source_video(
+            video_path: str, source_video_path: str
+        ) -> Optional[str]:
+            """
+            Best-effort helper to mux the first audio track from `source_video_path`
+            into `video_path` using ffmpeg.
+            """
+            import subprocess
+            import os
+
+            try:
+                if not (
+                    isinstance(video_path, str)
+                    and isinstance(source_video_path, str)
+                    and os.path.isfile(video_path)
+                    and os.path.isfile(source_video_path)
+                ):
+                    return None
+
+                base = Path(video_path)
+                # Mux into a temporary file, then overwrite the original.
+                temp_out_path = base.with_name(f"{base.stem}_with_audio{base.suffix}")
+
+                # Video from generated output (0), audio from source input (1).
+                # Encode audio to AAC for MP4 compatibility; copy video stream.
+                cmd: List[str] = [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    video_path,
+                    "-i",
+                    source_video_path,
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0?",
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "aac",
+                    "-shortest",
+                    "-movflags",
+                    "+faststart",
+                    str(temp_out_path),
+                ]
+                proc = subprocess.run(cmd, capture_output=True)
+                if proc.returncode != 0 or not temp_out_path.is_file():
+                    return None
+                try:
+                    temp_out_path.replace(base)
+                except Exception as move_err:
+                    logger.warning(
+                        f"ffmpeg audio mux succeeded but failed to move into place: {move_err}"
+                    )
+                    return None
+                return str(base)
+            except Exception as e:
+                logger.warning(f"Failed to mux audio from source video: {e}")
+                return None
+
         def save_output(
             output_obj,
             filename_prefix: str = "result",
@@ -1586,6 +1701,26 @@ def run_engine_from_manifest(
                         except Exception as mux_err:
                             logger.warning(
                                 "Audio muxing failed; returning video-only output. "
+                                f"Error: {mux_err}"
+                            )
+
+                    # Upscalers (SeedVR/FlashVSR): preserve input video audio if present.
+                    if (
+                        final
+                        and media_type == "video"
+                        and result_path
+                        and is_upscaler_engine
+                        and input_video_for_audio_mux
+                    ):
+                        try:
+                            muxed = _mux_audio_from_source_video(
+                                result_path, input_video_for_audio_mux
+                            )
+                            if muxed:
+                                result_path = muxed
+                        except Exception as mux_err:
+                            logger.warning(
+                                "Upscaler input audio muxing failed; returning video-only output. "
                                 f"Error: {mux_err}"
                             )
                 else:
@@ -1872,7 +2007,7 @@ def run_engine_from_manifest(
         output = engine.run(
             **(prepared_inputs or {}),
             progress_callback=progress_callback,
-            
+            render_on_step=render_on_step,
             render_on_step_callback=render_func,
         )
         # Avoid logging giant tensors/lists (can be very large and can amplify RSS).

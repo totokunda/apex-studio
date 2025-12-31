@@ -26,7 +26,7 @@ class WanMultitalkEngine(WanShared):
         negative_prompt: List[str] | str = None,
         height: int = 480,
         width: int = 832,
-        duration: int | str = 81,
+        num_frames: int = 81,
         max_num_frames: int = 1000,
         num_inference_steps: int = 40,
         num_videos: int = 1,
@@ -76,7 +76,6 @@ class WanMultitalkEngine(WanShared):
         """
 
         safe_emit_progress(progress_callback, 0.0, "Starting multitalk pipeline")
-        num_frames = self._parse_num_frames(duration, fps)
         use_cfg_guidance = guidance_scale > 1.0 and negative_prompt is not None
 
         assert (

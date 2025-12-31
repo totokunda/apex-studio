@@ -482,6 +482,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     return false;
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, preprocessor]);
 
+
   const getValidTab = (currentTab: string) => {
     // Check if current tab is valid for this clip type
 

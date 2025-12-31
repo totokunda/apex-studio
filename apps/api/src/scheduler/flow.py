@@ -74,8 +74,6 @@ class FlowMatchScheduler(SchedulerInterface):
                 self.linear_timesteps_weights = self.linear_timesteps_weights.to(device)
 
     def step(self, model_output, timestep, sample, to_final=False, **kwargs):
-        from loguru import logger
-        logger.info(f"model_output: {model_output.shape}, timestep: {timestep.shape}, sample: {sample.shape}")
         if timestep.ndim == 2:
             timestep = timestep.flatten(0, 1)
         elif timestep.ndim == 0:
