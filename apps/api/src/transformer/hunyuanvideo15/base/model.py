@@ -434,7 +434,9 @@ class MMSingleStreamBlock(nn.Module):
         return x + apply_gate(output, gate=mod_gate)
 
 
-class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapterMixin):
+class HunyuanVideo_1_5_DiffusionTransformer(
+    ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapterMixin
+):
     """
     HunyuanVideo Transformer backbone.
 

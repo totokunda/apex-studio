@@ -26,8 +26,7 @@ def create_procfile(procfile: Path, mode="dev"):
         host = os.getenv("APEX_HOST", "0.0.0.0")
         port = os.getenv("APEX_PORT", "8765")
         start = (
-            "api: uvicorn src.api.main:app "
-            f"--host {host} --port {port} --reload\n"
+            "api: uvicorn src.api.main:app " f"--host {host} --port {port} --reload\n"
         )
     elif mode == "prod":
         start = "api: gunicorn src.api.main:app --config gunicorn.conf.py\n"
@@ -45,6 +44,7 @@ def create_envfile(envfile: Path, mode="dev"):
 
 
 app = typer.Typer(help="Apex command line")
+
 
 def _honcho_available() -> bool:
     return importlib.util.find_spec("honcho") is not None
@@ -166,9 +166,7 @@ def start(
     cmd = _proc_cmd_from_procfile(procfile_path, name="api")
     if daemon and log_path is not None:
         with open(log_path, "a", buffering=1) as f:
-            f.write(
-                "Honcho not available; running Procfile 'api' command directly.\n"
-            )
+            f.write("Honcho not available; running Procfile 'api' command directly.\n")
     _run(cmd, cwd=cwd, daemon=daemon, log_path=log_path)
 
 

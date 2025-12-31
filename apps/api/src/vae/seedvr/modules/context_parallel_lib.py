@@ -23,7 +23,6 @@ from src.vae.seedvr.modules.utils import safe_pad_operation
 from src.vae.seedvr.modules.types import MemoryState
 
 
-
 def causal_conv_slice_inputs(x, split_size, memory_state):
     sp_size = 1
     sp_group = None
@@ -45,7 +44,8 @@ def causal_conv_slice_inputs(x, split_size, memory_state):
     split_sizes = torch.tensor(split_sizes)
     slices_per_rank = len(split_sizes) // sp_size
     split_sizes = split_sizes.split(
-        [slices_per_rank] * (sp_size - 1) + [len(split_sizes) - slices_per_rank * (sp_size - 1)]
+        [slices_per_rank] * (sp_size - 1)
+        + [len(split_sizes) - slices_per_rank * (sp_size - 1)]
     )
     split_sizes = list(map(lambda s: s.sum().item(), split_sizes))
 
@@ -61,7 +61,9 @@ def causal_conv_gather_outputs(x):
     # Communicate shapes.
     unpad_lens = torch.empty((sp_size,), device=x.device, dtype=torch.long)
     local_unpad_len = torch.tensor([x.size(2)], device=x.device, dtype=torch.long)
-    torch.distributed.all_gather_into_tensor(unpad_lens, local_unpad_len, group=sp_group)
+    torch.distributed.all_gather_into_tensor(
+        unpad_lens, local_unpad_len, group=sp_group
+    )
 
     # Padding to max_len for gather.
     max_len = unpad_lens.max()
@@ -76,16 +78,26 @@ def causal_conv_gather_outputs(x):
 
 
 def get_output_len(conv_module, input_len, pad_len, dim=0):
-    dilated_kernerl_size = conv_module.dilation[dim] * (conv_module.kernel_size[dim] - 1) + 1
-    output_len = (input_len + pad_len - dilated_kernerl_size) // conv_module.stride[dim] + 1
+    dilated_kernerl_size = (
+        conv_module.dilation[dim] * (conv_module.kernel_size[dim] - 1) + 1
+    )
+    output_len = (input_len + pad_len - dilated_kernerl_size) // conv_module.stride[
+        dim
+    ] + 1
     return output_len
 
 
 def get_cache_size(conv_module, input_len, pad_len, dim=0):
-    dilated_kernerl_size = conv_module.dilation[dim] * (conv_module.kernel_size[dim] - 1) + 1
-    output_len = (input_len + pad_len - dilated_kernerl_size) // conv_module.stride[dim] + 1
+    dilated_kernerl_size = (
+        conv_module.dilation[dim] * (conv_module.kernel_size[dim] - 1) + 1
+    )
+    output_len = (input_len + pad_len - dilated_kernerl_size) // conv_module.stride[
+        dim
+    ] + 1
     remain_len = (
-        input_len + pad_len - ((output_len - 1) * conv_module.stride[dim] + dilated_kernerl_size)
+        input_len
+        + pad_len
+        - ((output_len - 1) * conv_module.stride[dim] + dilated_kernerl_size)
     )
     overlap_len = dilated_kernerl_size - conv_module.stride[dim]
     cache_len = overlap_len + remain_len  # >= 0
@@ -129,10 +141,11 @@ def cache_send_recv(tensor: List[Tensor], cache_size, times, memory=None):
                 2
             ), f"Not enough value to cache, got {tensor[-1].size()}, cache_size={cache_size}"
             dist.isend(
-                tensor[-1][:, :, -cache_size:].detach().contiguous(), send_dst, group=sp_group
+                tensor[-1][:, :, -cache_size:].detach().contiguous(),
+                send_dst,
+                group=sp_group,
             )
         if recv_req is not None:
             recv_req.wait()
-
 
     return recv_buffer

@@ -38,9 +38,6 @@ class LoraItem:
     scale: float = 1.0
     name: Optional[str] = None
     component: Optional[str] = None
-    
-
-
 
 
 class LoraManager(DownloadMixin):
@@ -52,7 +49,6 @@ class LoraManager(DownloadMixin):
 
     def _hash(self, text: str) -> str:
         return hashlib.sha256(text.encode()).hexdigest()[:16]
-
 
     def resolve(
         self,
@@ -188,12 +184,10 @@ class LoraManager(DownloadMixin):
         if "." in name or "/" in name:
             name = name.replace(".", "_").replace("/", "_")
         return name
-    
-    def _get_prefix_key(self, keys:List[str]):
+
+    def _get_prefix_key(self, keys: List[str]):
         prefix = None
-        if keys[0].startswith("transformer.") and keys[-1].startswith(
-            "transformer."
-        ):
+        if keys[0].startswith("transformer.") and keys[-1].startswith("transformer."):
             prefix = "transformer"
         elif keys[0].startswith("diffusion_model.") and keys[-1].startswith(
             "diffusion_model."
@@ -204,10 +198,10 @@ class LoraManager(DownloadMixin):
         elif keys[0].startswith("unet.") and keys[-1].startswith("unet."):
             prefix = "unet"
         return prefix
-        
+
     @staticmethod
     def _build_lora_config_metadata_from_state_dict(
-        state_dict: Dict[str, torch.Tensor]
+        state_dict: Dict[str, torch.Tensor],
     ) -> Optional[Dict[str, Any]]:
         """
         Diffusers' PEFT loader infers LoRA rank from keys containing "lora_B".
@@ -244,9 +238,13 @@ class LoraManager(DownloadMixin):
         r = collections.Counter(per_module_rank.values()).most_common(1)[0][0]
         rank_pattern = {m: rr for m, rr in per_module_rank.items() if rr != r}
 
-        target_modules = sorted({name.split(".lora")[0] for name in state_dict.keys() if ".lora" in name})
+        target_modules = sorted(
+            {name.split(".lora")[0] for name in state_dict.keys() if ".lora" in name}
+        )
         use_dora = any("lora_magnitude_vector" in k for k in state_dict.keys())
-        lora_bias = any(("lora_B" in k and k.endswith(".bias")) for k in state_dict.keys())
+        lora_bias = any(
+            ("lora_B" in k and k.endswith(".bias")) for k in state_dict.keys()
+        )
 
         return {
             "r": int(r),
@@ -257,7 +255,6 @@ class LoraManager(DownloadMixin):
             "use_dora": use_dora,
             "lora_bias": lora_bias,
         }
-
 
     def load_into(
         self,
@@ -310,7 +307,7 @@ class LoraManager(DownloadMixin):
                     composed_lora.append((local_path, item.scale))
             composed_lora = compose_lora(composed_lora)
             model.update_lora_params(composed_lora)
-        
+
         else:
             for i, item in enumerate(resolved):
                 adapter_name = (
@@ -331,7 +328,6 @@ class LoraManager(DownloadMixin):
                     local_path_state_dict = strip_common_prefix(
                         local_path_state_dict, model.state_dict()
                     )
-                    
 
                     # Normalize keys that include an embedded adapter name, e.g.:
                     # "vace_blocks.0.attn2.to_k.lora_B.default.weight"
@@ -352,12 +348,14 @@ class LoraManager(DownloadMixin):
                     adapter_name = self._clean_adapter_name(adapter_name)
                     # convert to dtype of the model
                     model_dtype = next(model.parameters()).dtype
-    
-                    metadata = self._build_lora_config_metadata_from_state_dict(local_path_state_dict)
+
+                    metadata = self._build_lora_config_metadata_from_state_dict(
+                        local_path_state_dict
+                    )
                     if metadata is not None and prefix is not None:
                         # diffusers filters metadata keys by prefix and strips it, so prefix these keys to keep them.
                         metadata = {f"{prefix}.{k}": v for k, v in metadata.items()}
-                    
+
                     model.load_lora_adapter(
                         local_path_state_dict,
                         adapter_name=adapter_name,
@@ -373,13 +371,15 @@ class LoraManager(DownloadMixin):
             except Exception as e:
                 # print the full stack trace
                 import traceback
+
                 traceback.print_exc()
                 logger.warning(
                     f"Failed to activate adapters {final_names} with scales {final_scales}: {e}"
                 )
                 import traceback
+
                 traceback.print_exc()
-        
+
         return loaded_resolved
 
     def maybe_convert_state_dict(self, local_path: str, model_name: str):
@@ -387,7 +387,7 @@ class LoraManager(DownloadMixin):
         converter = get_transformer_converter_by_model_name(model_name)
         lora_converter = LoraConverter()
         lora_converter.convert(state_dict)
-        
+
         if converter is not None:
             converter.convert(state_dict)
         return state_dict
@@ -511,6 +511,3 @@ class LoraManager(DownloadMixin):
 
         del state_dict
         return new_state
-    
-    
-

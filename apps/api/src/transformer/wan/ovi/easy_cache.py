@@ -15,15 +15,16 @@ def sinusoidal_embedding_1d(dim, position):
     x = torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1)
     return x
 
+
 def easycache_forward(
-        self,
-        x,
-        t,
-        context,
-        seq_len,
-        clip_fea=None,
-        y=None,
-        first_frame_is_clean=False,
+    self,
+    x,
+    t,
+    context,
+    seq_len,
+    clip_fea=None,
+    y=None,
+    first_frame_is_clean=False,
 ):
     """
     Args:
@@ -36,7 +37,7 @@ def easycache_forward(
     Returns:
         List[Tensor]: List of denoised video tensors with original input shapes
     """
-    if self.model_type == 'i2v':
+    if self.model_type == "i2v":
         assert y is not None
 
     # Store original raw input for end-to-end caching
@@ -52,39 +53,62 @@ def easycache_forward(
         x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
 
     # Track which type of step (even=condition, odd=uncondition)
-    self.is_even = (self.cnt % 2 == 0)
-    
+    self.is_even = self.cnt % 2 == 0
+
     # Only make decision on even (condition) steps
     if self.is_even:
         # Always compute first ret_steps and last steps
         if self.cnt < self.ret_steps or self.cnt >= (
-                ((getattr(self, "low_start_step", None) is not None and getattr(self, "is_high_noise", False)) and (
-                        self.low_start_step - 1) * 2 - 2) or
-                ((getattr(self, "low_start_step", None) is not None and not getattr(self, "is_high_noise", False)) and (
-                        self.num_steps - self.low_start_step) * 2 - 2) or
-                (self.num_steps * 2 - 2)
+            (
+                (
+                    getattr(self, "low_start_step", None) is not None
+                    and getattr(self, "is_high_noise", False)
+                )
+                and (self.low_start_step - 1) * 2 - 2
+            )
+            or (
+                (
+                    getattr(self, "low_start_step", None) is not None
+                    and not getattr(self, "is_high_noise", False)
+                )
+                and (self.num_steps - self.low_start_step) * 2 - 2
+            )
+            or (self.num_steps * 2 - 2)
         ):
             self.should_calc_current_pair = True
             self.accumulated_error_even = 0
         else:
             # Check if we have previous step data for comparison
-            if hasattr(self, 'previous_raw_input_even') and hasattr(self, 'previous_raw_output_even') and \
-                    self.previous_raw_input_even is not None and self.previous_raw_output_even is not None:
+            if (
+                hasattr(self, "previous_raw_input_even")
+                and hasattr(self, "previous_raw_output_even")
+                and self.previous_raw_input_even is not None
+                and self.previous_raw_output_even is not None
+            ):
                 # Calculate input changes
-                raw_input_change = torch.cat([
-                    (u - v).flatten() for u, v in zip(raw_input, self.previous_raw_input_even)
-                ]).abs().mean()
+                raw_input_change = (
+                    torch.cat(
+                        [
+                            (u - v).flatten()
+                            for u, v in zip(raw_input, self.previous_raw_input_even)
+                        ]
+                    )
+                    .abs()
+                    .mean()
+                )
 
                 # Compute predicted change if we have k factors
-                if hasattr(self, 'k') and self.k is not None:
+                if hasattr(self, "k") and self.k is not None:
                     # Calculate output norm for relative comparison
-                    output_norm = torch.cat([
-                        u.flatten() for u in self.previous_raw_output_even
-                    ]).abs().mean()
+                    output_norm = (
+                        torch.cat([u.flatten() for u in self.previous_raw_output_even])
+                        .abs()
+                        .mean()
+                    )
                     pred_change = self.k * (raw_input_change / output_norm)
                     combined_pred_change = pred_change
                     # Accumulate predicted error
-                    if not hasattr(self, 'accumulated_error_even'):
+                    if not hasattr(self, "accumulated_error_even"):
                         self.accumulated_error_even = 0
                     self.accumulated_error_even += combined_pred_change
                     # Decide if we need full calculation
@@ -102,17 +126,24 @@ def easycache_forward(
 
         # Store current input state
         self.previous_raw_input_even = [u.clone() for u in raw_input]
-    
 
     # Check if we can use cached output and return early
-    if self.is_even and not self.should_calc_current_pair and \
-            hasattr(self, 'previous_raw_output_even') and self.previous_raw_output_even is not None:
+    if (
+        self.is_even
+        and not self.should_calc_current_pair
+        and hasattr(self, "previous_raw_output_even")
+        and self.previous_raw_output_even is not None
+    ):
         # Use cached output directly
         self.cnt += 1
         return [(u + v).float() for u, v in zip(raw_input, self.cache_even)]
 
-    elif not self.is_even and not self.should_calc_current_pair and \
-            hasattr(self, 'previous_raw_output_odd') and self.previous_raw_output_odd is not None:
+    elif (
+        not self.is_even
+        and not self.should_calc_current_pair
+        and hasattr(self, "previous_raw_output_odd")
+        and self.previous_raw_output_odd is not None
+    ):
         # Use cached output directly
         self.cnt += 1
         # return [u.float() for u in self.previous_raw_output_odd]
@@ -120,7 +151,6 @@ def easycache_forward(
 
     # Continue with normal processing since we need to calculate
     # embeddings
-    
 
     x = [
         self.patch_embedding(u.unsqueeze(0)) for u in x
@@ -206,25 +236,46 @@ def easycache_forward(
     # Update cache and calculate change rates if needed
     if self.is_even:  # Condition path
         # If we have previous output, calculate k factors for future predictions
-        if hasattr(self, 'previous_raw_output_even') and self.previous_raw_output_even is not None:
+        if (
+            hasattr(self, "previous_raw_output_even")
+            and self.previous_raw_output_even is not None
+        ):
             # Calculate output change at the raw level
-            output_change = torch.cat([
-                (u - v).flatten() for u, v in zip(output, self.previous_raw_output_even)
-            ]).abs().mean()
+            output_change = (
+                torch.cat(
+                    [
+                        (u - v).flatten()
+                        for u, v in zip(output, self.previous_raw_output_even)
+                    ]
+                )
+                .abs()
+                .mean()
+            )
 
             # Check if we have previous input state for comparison
-            if hasattr(self, 'prev_prev_raw_input_even') and self.prev_prev_raw_input_even is not None:
+            if (
+                hasattr(self, "prev_prev_raw_input_even")
+                and self.prev_prev_raw_input_even is not None
+            ):
                 # Calculate input change
-                input_change = torch.cat([
-                    (u - v).flatten() for u, v in zip(
-                        self.previous_raw_input_even, self.prev_prev_raw_input_even
+                input_change = (
+                    torch.cat(
+                        [
+                            (u - v).flatten()
+                            for u, v in zip(
+                                self.previous_raw_input_even,
+                                self.prev_prev_raw_input_even,
+                            )
+                        ]
                     )
-                ]).abs().mean()
+                    .abs()
+                    .mean()
+                )
 
                 self.k = output_change / input_change
 
                 # Update history
-        self.prev_prev_raw_input_even = getattr(self, 'previous_raw_input_even', None)
+        self.prev_prev_raw_input_even = getattr(self, "previous_raw_input_even", None)
         self.previous_raw_output_even = [u.clone() for u in output]
         self.cache_even = [u - v for u, v in zip(output, raw_input)]
 
@@ -236,8 +287,6 @@ def easycache_forward(
     # Update counter
     self.cnt += 1
     return [u.float() for u in output]
-
-
 
 
 GLOBAL_CNT = 0
@@ -254,14 +303,15 @@ GLOBAL_CACHE_EVEN = None
 GLOBAL_CACHE_ODD = None
 GLOBAL_RET_STEPS = 20
 
+
 def easycache_forward_(
-        self,
-        x,
-        t,
-        context,
-        seq_len,
-        clip_fea=None,
-        y=None,
+    self,
+    x,
+    t,
+    context,
+    seq_len,
+    clip_fea=None,
+    y=None,
 ):
     """
     Args:
@@ -274,7 +324,7 @@ def easycache_forward_(
     Returns:
         List[Tensor]: List of denoised video tensors with original input shapes
     """
-    if self.model_type == 'i2v':
+    if self.model_type == "i2v":
         assert y is not None
 
     # Store original raw input for end-to-end caching
@@ -295,7 +345,7 @@ def easycache_forward_(
     global GLOBAL_RET_STEPS
 
     # Track which type of step (even=condition, odd=uncondition)
-    is_even = (GLOBAL_CNT % 2 == 0)
+    is_even = GLOBAL_CNT % 2 == 0
 
     # Only make decision on even (condition) steps
     if is_even:
@@ -304,14 +354,28 @@ def easycache_forward_(
             GLOBAL_SHOULD_CALC_CURRENT_PAIR = True
             GLOBAL_ACCUMULATED_ERROR_EVEN = 0
         else:
-            if GLOBAL_PREVIOUS_RAW_INPUT_EVEN is not None and GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None:
-                raw_input_change = torch.cat([
-                    (u - v).flatten() for u, v in zip(raw_input, GLOBAL_PREVIOUS_RAW_INPUT_EVEN)
-                ]).abs().mean()
+            if (
+                GLOBAL_PREVIOUS_RAW_INPUT_EVEN is not None
+                and GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None
+            ):
+                raw_input_change = (
+                    torch.cat(
+                        [
+                            (u - v).flatten()
+                            for u, v in zip(raw_input, GLOBAL_PREVIOUS_RAW_INPUT_EVEN)
+                        ]
+                    )
+                    .abs()
+                    .mean()
+                )
                 if GLOBAL_K is not None:
-                    output_norm = torch.cat([
-                        u.flatten() for u in GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN
-                    ]).abs().mean()
+                    output_norm = (
+                        torch.cat(
+                            [u.flatten() for u in GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN]
+                        )
+                        .abs()
+                        .mean()
+                    )
                     pred_change = GLOBAL_K * (raw_input_change / output_norm)
                     combined_pred_change = pred_change
                     GLOBAL_ACCUMULATED_ERROR_EVEN += combined_pred_change
@@ -327,46 +391,59 @@ def easycache_forward_(
         GLOBAL_PREVIOUS_RAW_INPUT_EVEN = [u.clone() for u in raw_input]
 
     # Check if we can use cached output and return early
-    if is_even and not GLOBAL_SHOULD_CALC_CURRENT_PAIR and GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None:
+    if (
+        is_even
+        and not GLOBAL_SHOULD_CALC_CURRENT_PAIR
+        and GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None
+    ):
         GLOBAL_CNT += 1
         return [(u + v).float() for u, v in zip(raw_input, GLOBAL_CACHE_EVEN)]
-    elif not is_even and not GLOBAL_SHOULD_CALC_CURRENT_PAIR and GLOBAL_PREVIOUS_RAW_OUTPUT_ODD is not None:
+    elif (
+        not is_even
+        and not GLOBAL_SHOULD_CALC_CURRENT_PAIR
+        and GLOBAL_PREVIOUS_RAW_OUTPUT_ODD is not None
+    ):
         GLOBAL_CNT += 1
         return [(u + v).float() for u, v in zip(raw_input, GLOBAL_CACHE_ODD)]
 
     # Continue with normal processing since we need to calculate
     # embeddings
     x = [self.patch_embedding(u.unsqueeze(0)) for u in x]
-    grid_sizes = torch.stack(
-        [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
+    grid_sizes = torch.stack([torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
     x = [u.flatten(2).transpose(1, 2) for u in x]
     seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
     assert seq_lens.max() <= seq_len
-    x = torch.cat([
-        torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
-                  dim=1) for u in x
-    ])
+    x = torch.cat(
+        [
+            torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))], dim=1)
+            for u in x
+        ]
+    )
 
     # time embeddings
     if t.dim() == 1:
         t = t.expand(t.size(0), seq_len)
-    with torch.amp.autocast('cuda', dtype=torch.float32):
+    with torch.amp.autocast("cuda", dtype=torch.float32):
         bt = t.size(0)
         t = t.flatten()
         e = self.time_embedding(
-            sinusoidal_embedding_1d(self.freq_dim,
-                                    t).unflatten(0, (bt, seq_len)).float())
+            sinusoidal_embedding_1d(self.freq_dim, t)
+            .unflatten(0, (bt, seq_len))
+            .float()
+        )
         e0 = self.time_projection(e).unflatten(2, (6, self.dim))
         assert e.dtype == torch.float32 and e0.dtype == torch.float32
 
     # context
     context_lens = None
     context = self.text_embedding(
-        torch.stack([
-            torch.cat(
-                [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
-            for u in context
-        ]))
+        torch.stack(
+            [
+                torch.cat([u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
+                for u in context
+            ]
+        )
+    )
 
     if clip_fea is not None:
         context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
@@ -379,7 +456,8 @@ def easycache_forward_(
         grid_sizes=grid_sizes,
         freqs=self.freqs,
         context=context,
-        context_lens=context_lens)
+        context_lens=context_lens,
+    )
 
     # Apply transformer blocks
     for block in self.blocks:
@@ -394,15 +472,30 @@ def easycache_forward_(
     # Update cache and calculate change rates if needed
     if is_even:  # Condition path
         if GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None:
-            output_change = torch.cat([
-                (u - v).flatten() for u, v in zip(output, GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN)
-            ]).abs().mean()
+            output_change = (
+                torch.cat(
+                    [
+                        (u - v).flatten()
+                        for u, v in zip(output, GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN)
+                    ]
+                )
+                .abs()
+                .mean()
+            )
             if GLOBAL_PREV_PREV_RAW_INPUT_EVEN is not None:
-                input_change = torch.cat([
-                    (u - v).flatten() for u, v in zip(
-                        GLOBAL_PREVIOUS_RAW_INPUT_EVEN, GLOBAL_PREV_PREV_RAW_INPUT_EVEN
+                input_change = (
+                    torch.cat(
+                        [
+                            (u - v).flatten()
+                            for u, v in zip(
+                                GLOBAL_PREVIOUS_RAW_INPUT_EVEN,
+                                GLOBAL_PREV_PREV_RAW_INPUT_EVEN,
+                            )
+                        ]
                     )
-                ]).abs().mean()
+                    .abs()
+                    .mean()
+                )
                 GLOBAL_K = output_change / input_change
         GLOBAL_PREV_PREV_RAW_INPUT_EVEN = GLOBAL_PREVIOUS_RAW_INPUT_EVEN
         GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN = [u.clone() for u in output]

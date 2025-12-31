@@ -68,5 +68,3 @@ def _maybe_fake_ram() -> None:
 
 
 _maybe_fake_ram()
-
-

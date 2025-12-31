@@ -134,7 +134,6 @@ class WanFFLFEngine(WanShared):
             loaded_last_frame, height=height, width=width
         ).to(self.device, dtype=torch.float32)
 
-    
         transformer_dtype = self.component_dtypes["transformer"]
 
         if boundary_ratio is None:
@@ -156,7 +155,7 @@ class WanFFLFEngine(WanShared):
         if offload and boundary_ratio is None:
             safe_emit_progress(progress_callback, 0.21, "Offloading CLIP")
             self._offload("clip")
-            
+
         safe_emit_progress(progress_callback, 0.22, "Moving transformer to device")
         self.to_device(self.transformer)
 

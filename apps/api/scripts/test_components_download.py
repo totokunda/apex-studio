@@ -27,15 +27,23 @@ import requests
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Test components download with progress")
-    parser.add_argument("--url", default="http://127.0.0.1:8765", help="Backend base URL")
+    parser = argparse.ArgumentParser(
+        description="Test components download with progress"
+    )
+    parser.add_argument(
+        "--url", default="http://127.0.0.1:8765", help="Backend base URL"
+    )
     parser.add_argument(
         "--paths",
         default="https://huggingface.co/deepseek-ai/DeepSeek-OCR/resolve/main/model-00001-of-000001.safetensors",
         help="Comma-separated list of paths to download",
     )
-    parser.add_argument("--save-path", default=None, help="Optional save path on server")
-    parser.add_argument("--no-ws", action="store_true", help="Disable websocket; poll status only")
+    parser.add_argument(
+        "--save-path", default=None, help="Optional save path on server"
+    )
+    parser.add_argument(
+        "--no-ws", action="store_true", help="Disable websocket; poll status only"
+    )
     return parser.parse_args()
 
 
@@ -48,7 +56,9 @@ def as_ws_url(http_url: str) -> str:
     return "ws://" + http_url
 
 
-def start_download(base_url: str, paths: List[str], save_path: Optional[str] = None) -> str:
+def start_download(
+    base_url: str, paths: List[str], save_path: Optional[str] = None
+) -> str:
     payload = {"paths": paths}
     if save_path:
         payload["save_path"] = save_path
@@ -61,7 +71,9 @@ def start_download(base_url: str, paths: List[str], save_path: Optional[str] = N
     return job_id
 
 
-def poll_status_until_done(base_url: str, job_id: str, stop_event: threading.Event) -> str:
+def poll_status_until_done(
+    base_url: str, job_id: str, stop_event: threading.Event
+) -> str:
     status = "unknown"
     while not stop_event.is_set():
         try:
@@ -81,14 +93,20 @@ def run_ws_loop(ws_url: str, job_id: str, stop_event: threading.Event) -> None:
     try:
         from websocket import WebSocketApp  # type: ignore
     except Exception:
-        print("websocket-client not installed; skipping WS (pip install websocket-client)")
+        print(
+            "websocket-client not installed; skipping WS (pip install websocket-client)"
+        )
         return
 
     def on_message(_ws, message: str):
         try:
             msg = json.loads(message)
             progress = msg.get("progress")
-            pct = f"{progress * 100:.1f}%" if isinstance(progress, (int, float)) else "n/a"
+            pct = (
+                f"{progress * 100:.1f}%"
+                if isinstance(progress, (int, float))
+                else "n/a"
+            )
             label = msg.get("metadata", {}).get("label")
             status = msg.get("status", "processing")
             line = f"progress={pct} status={status}"
@@ -107,7 +125,12 @@ def run_ws_loop(ws_url: str, job_id: str, stop_event: threading.Event) -> None:
         # Allow main thread to finish
         pass
 
-    app = WebSocketApp(f"{ws_url}/ws/job/{job_id}", on_message=on_message, on_error=on_error, on_close=on_close)
+    app = WebSocketApp(
+        f"{ws_url}/ws/job/{job_id}",
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+    )
 
     def _run():
         try:
@@ -130,7 +153,7 @@ def run_ws_loop(ws_url: str, job_id: str, stop_event: threading.Event) -> None:
 def main() -> int:
     args = parse_args()
     base_url = args.url.rstrip("/")
-    paths = ['deepseek-ai/DeepSeek-OCR/model-00001-of-000001.safetensors']
+    paths = ["deepseek-ai/DeepSeek-OCR/model-00001-of-000001.safetensors"]
     if not paths:
         print("No paths provided")
         return 2
@@ -152,7 +175,9 @@ def main() -> int:
 
     if not args.no_ws:
         ws_url = as_ws_url(base_url)
-        run_thread = threading.Thread(target=run_ws_loop, args=(ws_url, job_id, stop_event), daemon=True)
+        run_thread = threading.Thread(
+            target=run_ws_loop, args=(ws_url, job_id, stop_event), daemon=True
+        )
         run_thread.start()
 
     final = poll_status_until_done(base_url, job_id, stop_event)
@@ -163,5 +188,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

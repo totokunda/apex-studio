@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 from tqdm import tqdm
+
 # Allow running this script directly without requiring manual PYTHONPATH setup.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
@@ -26,6 +27,7 @@ _local_setup_logging()
 logger = logging.getLogger(__name__)
 
 MIN_SV = 1e-6
+
 
 def _strip_checkpoint_prefixes(sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     out: Dict[str, torch.Tensor] = {}
@@ -162,7 +164,13 @@ def _determine_rank(
     else:
         rank = int(max_rank_limit)
 
-    rank = min(int(rank), int(max_rank_limit), int(module_eff_in_dim), int(module_eff_out_dim), int(len(S_values)))
+    rank = min(
+        int(rank),
+        int(max_rank_limit),
+        int(module_eff_in_dim),
+        int(module_eff_out_dim),
+        int(len(S_values)),
+    )
     rank = max(1, int(rank))
     return rank
 
@@ -279,7 +287,9 @@ def _construct_lora_factors_from_svd_comfy(
         q = min(max(q, 0.0), 1.0)
         dist = torch.cat([B.flatten(), A.flatten()])
         if dist.numel() > int(clamp_sample_size):
-            idx = torch.randperm(dist.numel(), device=dist.device)[: int(clamp_sample_size)]
+            idx = torch.randperm(dist.numel(), device=dist.device)[
+                : int(clamp_sample_size)
+            ]
             dist_sample = dist[idx]
             hi_val = torch.quantile(dist_sample, q)
         else:
@@ -502,18 +512,30 @@ def main() -> None:
 
     methods_requiring_param = {"sv_ratio", "sv_fro", "sv_cumulative", "sv_rel_decrease"}
     if args.dynamic_method in methods_requiring_param and args.dynamic_param is None:
-        parser.error(f"Dynamic method '{args.dynamic_method}' requires --dynamic_param to be set.")
+        parser.error(
+            f"Dynamic method '{args.dynamic_method}' requires --dynamic_param to be set."
+        )
 
     if not args.dynamic_method and args.rank <= 0:
         parser.error(f"--rank must be > 0. Got {args.rank}")
-    if args.include_conv2d and (args.conv_rank is None or int(args.conv_rank) <= 0) and not args.dynamic_method:
-        parser.error(f"--conv_rank must be > 0 when --include_conv2d is set. Got {args.conv_rank}")
+    if (
+        args.include_conv2d
+        and (args.conv_rank is None or int(args.conv_rank) <= 0)
+        and not args.dynamic_method
+    ):
+        parser.error(
+            f"--conv_rank must be > 0 when --include_conv2d is set. Got {args.conv_rank}"
+        )
 
     svd_dtype = torch.float64 if args.svd_dtype == "float64" else torch.float32
     svd_device = args.svd_device or ("cuda" if torch.cuda.is_available() else "cpu")
     svd_device_t = torch.device(svd_device)
     logger.info(f"Using SVD device: {svd_device_t}")
-    if str(args.svd_method).lower() == "exact" and svd_dtype == torch.float32 and str(svd_device_t).startswith("cuda"):
+    if (
+        str(args.svd_method).lower() == "exact"
+        and svd_dtype == torch.float32
+        and str(svd_device_t).startswith("cuda")
+    ):
         logger.warning(
             "You are running exact SVD in float32 on CUDA. This can be numerically inaccurate even at full rank. "
             "For near-zero full-rank reconstruction error, use --svd_dtype float64 (ideally with --svd_device cpu)."
@@ -594,21 +616,31 @@ def main() -> None:
     probe_ranks: Optional[list[int]] = None
     if args.probe_ranks:
         try:
-            probe_ranks = [int(x.strip()) for x in str(args.probe_ranks).split(",") if x.strip()]
+            probe_ranks = [
+                int(x.strip()) for x in str(args.probe_ranks).split(",") if x.strip()
+            ]
             if not probe_ranks:
                 raise ValueError("empty")
         except Exception:
-            raise ValueError(f"Invalid --probe_ranks {args.probe_ranks!r}. Expected comma-separated ints like '2048,1024,512'.")
+            raise ValueError(
+                f"Invalid --probe_ranks {args.probe_ranks!r}. Expected comma-separated ints like '2048,1024,512'."
+            )
         if args.dynamic_method:
             logger.warning(
                 f"--probe_ranks is set; ignoring --dynamic_method={args.dynamic_method!r} (probe uses explicit ranks)."
             )
         if clamp_q is not None:
-            logger.info(f"--probe_ranks will use clamping at quantile={clamp_q}. For exact full-rank reconstruction, use --clamp_quantile 1.0.")
+            logger.info(
+                f"--probe_ranks will use clamping at quantile={clamp_q}. For exact full-rank reconstruction, use --clamp_quantile 1.0."
+            )
         else:
-            logger.info("--probe_ranks will run with clamping disabled (--clamp_quantile >= 1.0).")
+            logger.info(
+                "--probe_ranks will run with clamping disabled (--clamp_quantile >= 1.0)."
+            )
 
-    weight_keys_iter = _iter_lora_candidate_weight_keys(base_sd, include_conv2d=bool(args.include_conv2d))
+    weight_keys_iter = _iter_lora_candidate_weight_keys(
+        base_sd, include_conv2d=bool(args.include_conv2d)
+    )
     for w_key in tqdm(weight_keys_iter):
         if include_re and not include_re.search(w_key):
             continue
@@ -652,9 +684,13 @@ def main() -> None:
         if is_conv2d:
             out_ch, in_ch, kh, kw = map(int, delta.shape)
             is_3x3 = (kh, kw) != (1, 1)
-            mat_for_svd = delta.flatten(start_dim=1) if is_3x3 else delta.reshape(out_ch, in_ch)
+            mat_for_svd = (
+                delta.flatten(start_dim=1) if is_3x3 else delta.reshape(out_ch, in_ch)
+            )
             max_rank_limit = int(args.conv_rank) if is_3x3 else int(args.rank)
-            eff_out_dim, eff_in_dim = int(mat_for_svd.shape[0]), int(mat_for_svd.shape[1])
+            eff_out_dim, eff_in_dim = int(mat_for_svd.shape[0]), int(
+                mat_for_svd.shape[1]
+            )
         else:
             out_dim, in_dim = map(int, delta.shape)
             mat_for_svd = delta
@@ -673,7 +709,9 @@ def main() -> None:
                 svd_dtype=svd_dtype,
             )
         except Exception as e:
-            logger.warning(f"SVD failed for {w_key} with shape {tuple(mat_for_svd.shape)}: {type(e).__name__}: {e}")
+            logger.warning(
+                f"SVD failed for {w_key} with shape {tuple(mat_for_svd.shape)}: {type(e).__name__}: {e}"
+            )
             skipped_shape += 1
             continue
 
@@ -694,7 +732,9 @@ def main() -> None:
                 S_k = S_full[:r_eff]
                 Vh_k = Vh_full[:r_eff, :]
                 approx_svd = (U_k * S_k.unsqueeze(0)) @ Vh_k
-                rel_err_svd = (approx_svd - mat_for_svd).norm() / (mat_for_svd.norm() + 1e-12)
+                rel_err_svd = (approx_svd - mat_for_svd).norm() / (
+                    mat_for_svd.norm() + 1e-12
+                )
 
                 if args.factorization == "comfy":
                     A_2d, B_2d = _construct_lora_factors_from_svd_comfy(
@@ -714,12 +754,22 @@ def main() -> None:
                     out_ch, in_ch, kh, kw = map(int, delta.shape)
                     is_3x3 = (kh, kw) != (1, 1)
                     Bm = B_2d.reshape(out_ch, r_eff)
-                    Am = A_2d.reshape(r_eff, in_ch * kh * kw) if is_3x3 else A_2d.reshape(r_eff, in_ch)
+                    Am = (
+                        A_2d.reshape(r_eff, in_ch * kh * kw)
+                        if is_3x3
+                        else A_2d.reshape(r_eff, in_ch)
+                    )
                     approx_m = scale * (Bm @ Am)
-                    approx = approx_m.reshape(out_ch, in_ch, kh, kw) if is_3x3 else approx_m.reshape(out_ch, in_ch, 1, 1)
+                    approx = (
+                        approx_m.reshape(out_ch, in_ch, kh, kw)
+                        if is_3x3
+                        else approx_m.reshape(out_ch, in_ch, 1, 1)
+                    )
                 else:
                     approx = scale * (B_2d @ A_2d)
-                rel_err_probe = (approx - delta.to(approx.device)).norm() / (delta.norm() + 1e-12)
+                rel_err_probe = (approx - delta.to(approx.device)).norm() / (
+                    delta.norm() + 1e-12
+                )
                 logger.info(
                     f"[probe] {w_key} shape={tuple(delta.shape)} rank={r_eff}/{full_rank} "
                     f"rel_err_svd={float(rel_err_svd):.6g} rel_err_lora_fp32={float(rel_err_probe):.6g}"
@@ -727,7 +777,9 @@ def main() -> None:
 
             processed += 1
             if processed >= int(args.probe_max_layers):
-                logger.info(f"[probe] Reached --probe_max_layers={args.probe_max_layers}, stopping.")
+                logger.info(
+                    f"[probe] Reached --probe_max_layers={args.probe_max_layers}, stopping."
+                )
                 break
             continue
 
@@ -743,7 +795,9 @@ def main() -> None:
                 min_sv_threshold=MIN_SV,
             )
         else:
-            rank_used = int(min(max_rank_limit, eff_in_dim, eff_out_dim, int(S_full.numel())))
+            rank_used = int(
+                min(max_rank_limit, eff_in_dim, eff_out_dim, int(S_full.numel()))
+            )
             rank_used = max(1, rank_used)
 
         # The loader applies: w = w_base + (alpha/rank) * (B @ A)
@@ -772,11 +826,23 @@ def main() -> None:
         if is_conv2d:
             out_ch, in_ch, kh, kw = map(int, delta.shape)
             is_3x3 = (kh, kw) != (1, 1)
-            B = B_2d.reshape(out_ch, rank_used, 1, 1).to(device="cpu", dtype=torch.float32).contiguous()
+            B = (
+                B_2d.reshape(out_ch, rank_used, 1, 1)
+                .to(device="cpu", dtype=torch.float32)
+                .contiguous()
+            )
             if is_3x3:
-                A = A_2d.reshape(rank_used, in_ch, kh, kw).to(device="cpu", dtype=torch.float32).contiguous()
+                A = (
+                    A_2d.reshape(rank_used, in_ch, kh, kw)
+                    .to(device="cpu", dtype=torch.float32)
+                    .contiguous()
+                )
             else:
-                A = A_2d.reshape(rank_used, in_ch, 1, 1).to(device="cpu", dtype=torch.float32).contiguous()
+                A = (
+                    A_2d.reshape(rank_used, in_ch, 1, 1)
+                    .to(device="cpu", dtype=torch.float32)
+                    .contiguous()
+                )
         else:
             A = A_2d.to(device="cpu", dtype=torch.float32).contiguous()
             B = B_2d.to(device="cpu", dtype=torch.float32).contiguous()
@@ -799,9 +865,17 @@ def main() -> None:
             out_ch, in_ch, kh, kw = map(int, delta.shape)
             is_3x3 = (kh, kw) != (1, 1)
             Bm = B.reshape(out_ch, rank_used)
-            Am = A.reshape(rank_used, in_ch * kh * kw) if is_3x3 else A.reshape(rank_used, in_ch)
+            Am = (
+                A.reshape(rank_used, in_ch * kh * kw)
+                if is_3x3
+                else A.reshape(rank_used, in_ch)
+            )
             approx_m = scale * (Bm @ Am)
-            approx = approx_m.reshape(out_ch, in_ch, kh, kw) if is_3x3 else approx_m.reshape(out_ch, in_ch, 1, 1)
+            approx = (
+                approx_m.reshape(out_ch, in_ch, kh, kw)
+                if is_3x3
+                else approx_m.reshape(out_ch, in_ch, 1, 1)
+            )
         else:
             approx = scale * (B @ A)
         rel_err = (approx - delta.to(approx.device)).norm() / (delta.norm() + 1e-12)
@@ -819,7 +893,13 @@ def main() -> None:
         if not args.no_metadata:
             # Minimal Kohya-ish metadata to help tooling; safe for consumers to ignore.
             network_dim_meta = "Dynamic" if args.dynamic_method else str(int(args.rank))
-            network_alpha_meta = "Dynamic" if args.dynamic_method else str(float(args.alpha) if args.alpha is not None else float(args.rank))
+            network_alpha_meta = (
+                "Dynamic"
+                if args.dynamic_method
+                else str(
+                    float(args.alpha) if args.alpha is not None else float(args.rank)
+                )
+            )
             metadata = {
                 "ss_network_module": "networks.lora",
                 "ss_network_dim": network_dim_meta,

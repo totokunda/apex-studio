@@ -17,6 +17,7 @@ def is_safetensors_file(file_path: str, framework: str = "pt"):
 def is_floating_point_tensor(tensor: torch.Tensor) -> bool:
     return tensor.dtype in [torch.float16, torch.float32, torch.float64, torch.bfloat16]
 
+
 def load_safetensors(
     filename: Union[str, os.PathLike],
     device: Union[str, int] = "cpu",
@@ -84,4 +85,3 @@ def load_safetensors(
 
             result[k] = tensor
     return result
-

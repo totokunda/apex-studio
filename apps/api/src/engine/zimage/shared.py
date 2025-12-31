@@ -20,10 +20,15 @@ class ZImageShared(BaseEngine):
             vae_scale_factor=self.vae_scale_factor * 2
         )
         self.mask_processor = VaeImageProcessor(
-            vae_scale_factor=self.vae_scale_factor, do_normalize=False, do_binarize=True, do_convert_grayscale=True
+            vae_scale_factor=self.vae_scale_factor,
+            do_normalize=False,
+            do_binarize=True,
+            do_convert_grayscale=True,
         )
-        
-        self.num_channels_latents = self.transformer.in_channels if self.transformer is not None else 16
+
+        self.num_channels_latents = (
+            self.transformer.in_channels if self.transformer is not None else 16
+        )
 
     def encode_prompt(
         self,
@@ -57,7 +62,9 @@ class ZImageShared(BaseEngine):
                     else negative_prompt
                 )
             assert len(prompt) == len(negative_prompt)
-            safe_emit_progress(progress_callback, 0.75, "Preparing negative prompt encoding")
+            safe_emit_progress(
+                progress_callback, 0.75, "Preparing negative prompt encoding"
+            )
             negative_prompt_embeds = self._encode_prompt(
                 prompt=negative_prompt,
                 device=device,
@@ -90,7 +97,9 @@ class ZImageShared(BaseEngine):
             safe_emit_progress(progress_callback, 0.30, "Text encoder on device")
 
         if prompt_embeds is not None:
-            safe_emit_progress(progress_callback, 0.35, "Using provided prompt embeddings")
+            safe_emit_progress(
+                progress_callback, 0.35, "Using provided prompt embeddings"
+            )
             return prompt_embeds
 
         if isinstance(prompt, str):

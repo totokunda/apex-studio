@@ -40,11 +40,16 @@ class WanT2VEngine(WanShared):
         enhance_kwargs: Dict[str, Any] = {},
         **kwargs,
     ):
-        
-        if (high_noise_guidance_scale is not None and low_noise_guidance_scale is not None):
+
+        if (
+            high_noise_guidance_scale is not None
+            and low_noise_guidance_scale is not None
+        ):
             guidance_scale = [high_noise_guidance_scale, low_noise_guidance_scale]
-            safe_emit_progress(progress_callback, 0.01, "Using high/low-noise guidance scales")
-            
+            safe_emit_progress(
+                progress_callback, 0.01, "Using high/low-noise guidance scales"
+            )
+
         safe_emit_progress(progress_callback, 0.0, "Starting text-to-video pipeline")
         if guidance_scale is not None and isinstance(guidance_scale, list):
             use_cfg_guidance = (
@@ -54,8 +59,7 @@ class WanT2VEngine(WanShared):
             )
         else:
             use_cfg_guidance = negative_prompt is not None and guidance_scale > 1.0
-            
-        
+
         if num_inference_steps <= 8:
             render_on_step = False
 
@@ -74,7 +78,7 @@ class WanT2VEngine(WanShared):
             num_videos_per_prompt=num_videos,
             **text_encoder_kwargs,
         )
-        
+
         safe_emit_progress(progress_callback, 0.10, "Encoded prompt")
 
         batch_size = prompt_embeds.shape[0]
@@ -135,21 +139,19 @@ class WanT2VEngine(WanShared):
             num_inference_steps=num_inference_steps,
         )
 
-        safe_emit_progress(
-            progress_callback, 0.20, "Scheduler and timesteps prepared"
-        )
+        safe_emit_progress(progress_callback, 0.20, "Scheduler and timesteps prepared")
 
         vae_config = self.load_config_by_type("vae")
         vae_scale_factor_spatial = getattr(
             vae_config, "scale_factor_spatial", self.vae_scale_factor_spatial
         )
-        
+
         vae_scale_factor_temporal = getattr(
             vae_config, "scale_factor_temporal", self.vae_scale_factor_temporal
         )
 
         safe_emit_progress(progress_callback, 0.26, "Initializing latent noise")
-        
+
         latents = self._get_latents(
             height,
             width,
@@ -173,7 +175,7 @@ class WanT2VEngine(WanShared):
             )
         else:
             boundary_timestep = None
-            
+
         # Set preview context for per-step rendering on the main engine when available
         self._preview_height = height
         self._preview_width = width
@@ -187,7 +189,7 @@ class WanT2VEngine(WanShared):
             f"Starting denoise (CFG: {'on' if use_cfg_guidance else 'off'})",
         )
         mask = torch.ones(latents.shape, dtype=torch.float32, device=self.device)
-        
+
         latents = self.denoise(
             expand_timesteps=expand_timesteps,
             boundary_timestep=boundary_timestep,

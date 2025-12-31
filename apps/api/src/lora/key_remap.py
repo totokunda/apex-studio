@@ -62,11 +62,16 @@ def remap_embedding_lora_keys(
     out: Dict[str, torch.Tensor] = {}
     for key, value in state_dict.items():
         parts = key.split(".")
-        if len(parts) >= 3 and parts[-1] == "weight" and parts[-2] in (
-            "lora_A",
-            "lora_B",
-            "lora_down",
-            "lora_up",
+        if (
+            len(parts) >= 3
+            and parts[-1] == "weight"
+            and parts[-2]
+            in (
+                "lora_A",
+                "lora_B",
+                "lora_down",
+                "lora_up",
+            )
         ):
             lora_tag = parts[-2]
             module_path = ".".join(parts[:-2])
@@ -83,5 +88,3 @@ def remap_embedding_lora_keys(
                 continue
         out[key] = value
     return out
-
-

@@ -19,9 +19,12 @@ from flash_attn import flash_attn_varlen_func
 
 from torch import nn
 
+
 class TorchAttention(nn.Module):
     def tflops(self, args, kwargs, output) -> float:
-        assert len(args) == 0 or len(args) > 2, "query, key should both provided by args / kwargs"
+        assert (
+            len(args) == 0 or len(args) > 2
+        ), "query, key should both provided by args / kwargs"
         q = kwargs.get("query") or args[0]
         k = kwargs.get("key") or args[1]
         b, h, sq, d = q.shape

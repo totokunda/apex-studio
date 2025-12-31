@@ -28,24 +28,26 @@ from ...window import get_window_op
 from itertools import chain
 from src.attention import attention_register
 
-def safe_pad_operation(x, padding, mode='constant', value=0.0):
+
+def safe_pad_operation(x, padding, mode="constant", value=0.0):
     """Safe padding operation that handles Half precision only for problematic modes"""
     # Modes qui nécessitent le fix Half precision
-    problematic_modes = ['replicate', 'reflect', 'circular']
-    
+    problematic_modes = ["replicate", "reflect", "circular"]
+
     if mode in problematic_modes:
         try:
             return F.pad(x, padding, mode=mode, value=value)
         except RuntimeError as e:
             if "not implemented for 'Half'" in str(e):
                 original_dtype = x.dtype
-                return F.pad(x.float(), padding, mode=mode, value=value).to(original_dtype)
+                return F.pad(x.float(), padding, mode=mode, value=value).to(
+                    original_dtype
+                )
             else:
                 raise e
     else:
         # Pour 'constant' et autres modes compatibles, pas de fix nécessaire
         return F.pad(x, padding, mode=mode, value=value)
-
 
 
 class NaMMAttention(nn.Module):
@@ -71,7 +73,9 @@ class NaMMAttention(nn.Module):
         self.proj_qkv = MMModule(
             nn.Linear, dim, qkv_dim, bias=qk_bias, shared_weights=shared_weights
         )
-        self.proj_out = MMModule(nn.Linear, inner_dim, dim, shared_weights=shared_weights)
+        self.proj_out = MMModule(
+            nn.Linear, inner_dim, dim, shared_weights=shared_weights
+        )
         self.norm_q = MMModule(
             qk_norm,
             dim=head_dim,
@@ -88,7 +92,6 @@ class NaMMAttention(nn.Module):
         )
 
         self.rope = get_na_rope(rope_type=rope_type, dim=rope_dim)
-
 
     def forward(
         self,
@@ -130,11 +133,21 @@ class NaMMAttention(nn.Module):
             q=concat(vid_q, txt_q).bfloat16(),
             k=concat(vid_k, txt_k).bfloat16(),
             v=concat(vid_v, txt_v).bfloat16(),
-            cu_seqlens_q=cache("mm_seqlens", lambda: safe_pad_operation(all_len.cumsum(0), (1, 0)).int()),
-            cu_seqlens_k=cache("mm_seqlens", lambda: safe_pad_operation(all_len.cumsum(0), (1, 0)).int()),
+            cu_seqlens_q=cache(
+                "mm_seqlens",
+                lambda: safe_pad_operation(all_len.cumsum(0), (1, 0)).int(),
+            ),
+            cu_seqlens_k=cache(
+                "mm_seqlens",
+                lambda: safe_pad_operation(all_len.cumsum(0), (1, 0)).int(),
+            ),
             max_seqlen_q=cache("mm_maxlen", lambda: all_len.max().item()),
             max_seqlen_k=cache("mm_maxlen", lambda: all_len.max().item()),
-            key="flash_varlen" if attention_register.is_available("flash_varlen") else "sdpa_varlen",
+            key=(
+                "flash_varlen"
+                if attention_register.is_available("flash_varlen")
+                else "sdpa_varlen"
+            ),
         ).type_as(vid_q)
 
         attn = rearrange(attn, "l h d -> l (h d)")
@@ -186,7 +199,9 @@ class NaSwinAttention(NaMMAttention):
         )
         vid_qkv_win = window_partition(vid_qkv)
 
-        vid_qkv_win = rearrange(vid_qkv_win, "l (o h d) -> l o h d", o=3, d=self.head_dim)
+        vid_qkv_win = rearrange(
+            vid_qkv_win, "l (o h d) -> l o h d", o=3, d=self.head_dim
+        )
         txt_qkv = rearrange(txt_qkv, "l (o h d) -> l o h d", o=3, d=self.head_dim)
 
         vid_q, vid_k, vid_v = vid_qkv_win.unbind(1)
@@ -198,7 +213,9 @@ class NaSwinAttention(NaMMAttention):
         txt_len = cache("txt_len", lambda: txt_shape.prod(-1))
 
         vid_len_win = cache_win("vid_len", lambda: window_shape.prod(-1))
-        txt_len_win = cache_win("txt_len", lambda: txt_len.repeat_interleave(window_count))
+        txt_len_win = cache_win(
+            "txt_len", lambda: txt_len.repeat_interleave(window_count)
+        )
         all_len_win = cache_win("all_len", lambda: vid_len_win + txt_len_win)
         concat_win, unconcat_win = cache_win(
             "mm_pnp", lambda: na.repeat_concat_idx(vid_len_win, txt_len, window_count)
@@ -224,24 +241,40 @@ class NaSwinAttention(NaMMAttention):
                 txt_k_repeat = rearrange(txt_k_repeat, "l (h d) -> l h d", h=num_h)
 
                 vid_q, vid_k, txt_q, txt_k = self.rope(
-                    vid_q, vid_k, window_shape, txt_q_repeat, txt_k_repeat, txt_shape_repeat, cache_win
+                    vid_q,
+                    vid_k,
+                    window_shape,
+                    txt_q_repeat,
+                    txt_k_repeat,
+                    txt_shape_repeat,
+                    cache_win,
                 )
             else:
                 vid_q, vid_k = self.rope(vid_q, vid_k, window_shape, cache_win)
-            
+
         out = attention_register.call(
             q=concat_win(vid_q, txt_q).bfloat16(),
             k=concat_win(vid_k, txt_k).bfloat16(),
             v=concat_win(vid_v, txt_v).bfloat16(),
             cu_seqlens_q=cache_win(
-                "vid_seqlens_q", lambda: safe_pad_operation(all_len_win.cumsum(0), (1, 0)).int()
+                "vid_seqlens_q",
+                lambda: safe_pad_operation(all_len_win.cumsum(0), (1, 0)).int(),
             ),
             cu_seqlens_k=cache_win(
-                "vid_seqlens_k", lambda: safe_pad_operation(all_len_win.cumsum(0), (1, 0)).int()
+                "vid_seqlens_k",
+                lambda: safe_pad_operation(all_len_win.cumsum(0), (1, 0)).int(),
             ),
-            max_seqlen_q=cache_win("vid_max_seqlen_q", lambda: all_len_win.max().item()),
-            max_seqlen_k=cache_win("vid_max_seqlen_k", lambda: all_len_win.max().item()),
-            key="flash_varlen" if attention_register.is_available("flash_varlen") else "sdpa_varlen",
+            max_seqlen_q=cache_win(
+                "vid_max_seqlen_q", lambda: all_len_win.max().item()
+            ),
+            max_seqlen_k=cache_win(
+                "vid_max_seqlen_k", lambda: all_len_win.max().item()
+            ),
+            key=(
+                "flash_varlen"
+                if attention_register.is_available("flash_varlen")
+                else "sdpa_varlen"
+            ),
         ).type_as(vid_q)
 
         # text pooling

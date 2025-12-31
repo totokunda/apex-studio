@@ -476,15 +476,12 @@ class WanIPAttnProcessor(nn.Module):
         return hidden_states
 
 
-
-
-
 class WanIPAttnProcessorLight(torch.nn.Module):
     def __init__(
-        self, 
-        hidden_size, 
-        cross_attention_dim=None, 
-        scale=1.0, 
+        self,
+        hidden_size,
+        cross_attention_dim=None,
+        scale=1.0,
         bias=False,
     ):
         super().__init__()
@@ -493,8 +490,12 @@ class WanIPAttnProcessorLight(torch.nn.Module):
         self.cross_attention_dim = cross_attention_dim
         self.scale = scale
 
-        self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=bias)
-        self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=bias)
+        self.to_k_ip = nn.Linear(
+            cross_attention_dim or hidden_size, hidden_size, bias=bias
+        )
+        self.to_v_ip = nn.Linear(
+            cross_attention_dim or hidden_size, hidden_size, bias=bias
+        )
 
         torch.nn.init.zeros_(self.to_k_ip.weight)
         torch.nn.init.zeros_(self.to_v_ip.weight)
@@ -503,7 +504,6 @@ class WanIPAttnProcessorLight(torch.nn.Module):
             torch.nn.init.zeros_(self.to_v_ip.bias)
 
         self.norm_rms_k = RMSNorm(hidden_size, eps=1e-5, elementwise_affine=False)
-
 
     def __call__(
         self,
@@ -530,7 +530,7 @@ class WanIPAttnProcessorLight(torch.nn.Module):
         batch_size = image_embed.size(0)
 
         ip_hidden_states = image_embed
-        ip_query = query # attn.to_q(hidden_states.clone())
+        ip_query = query  # attn.to_q(hidden_states.clone())
         ip_key = self.to_k_ip(ip_hidden_states)
         ip_value = self.to_v_ip(ip_hidden_states)
 
@@ -541,15 +541,26 @@ class WanIPAttnProcessorLight(torch.nn.Module):
         ip_inner_dim = ip_key.shape[-1]
         ip_head_dim = ip_inner_dim // attn.heads
 
-        ip_query = ip_query.view(batch_size, -1, attn.heads, ip_head_dim).transpose(1, 2)
+        ip_query = ip_query.view(batch_size, -1, attn.heads, ip_head_dim).transpose(
+            1, 2
+        )
         ip_key = ip_key.view(batch_size, -1, attn.heads, ip_head_dim).transpose(1, 2)
-        ip_value = ip_value.view(batch_size, -1, attn.heads, ip_head_dim).transpose(1, 2)
-
-        ip_hidden_states = attention_register.call(
-            ip_query, ip_key, ip_value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+        ip_value = ip_value.view(batch_size, -1, attn.heads, ip_head_dim).transpose(
+            1, 2
         )
 
-        ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * ip_head_dim)
+        ip_hidden_states = attention_register.call(
+            ip_query,
+            ip_key,
+            ip_value,
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            is_causal=False,
+        )
+
+        ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(
+            batch_size, -1, attn.heads * ip_head_dim
+        )
         ip_hidden_states = ip_hidden_states.to(ip_query.dtype)
         # ===========================================================================
 
@@ -564,8 +575,12 @@ class WanIPAttnProcessorLight(torch.nn.Module):
 
         if rotary_emb is not None:
 
-            def apply_rotary_emb_inner(hidden_states: torch.Tensor, freqs: torch.Tensor):
-                x_rotated = torch.view_as_complex(hidden_states.to(torch.float64).unflatten(3, (-1, 2)))
+            def apply_rotary_emb_inner(
+                hidden_states: torch.Tensor, freqs: torch.Tensor
+            ):
+                x_rotated = torch.view_as_complex(
+                    hidden_states.to(torch.float64).unflatten(3, (-1, 2))
+                )
                 x_out = torch.view_as_real(x_rotated * freqs).flatten(3, 4)
                 return x_out.type_as(hidden_states)
 
@@ -583,7 +598,12 @@ class WanIPAttnProcessorLight(torch.nn.Module):
             value_img = value_img.unflatten(2, (attn.heads, -1)).transpose(1, 2)
 
             hidden_states_img = attention_register.call(
-                query, key_img, value_img, attn_mask=None, dropout_p=0.0, is_causal=False
+                query,
+                key_img,
+                value_img,
+                attn_mask=None,
+                dropout_p=0.0,
+                is_causal=False,
             )
             hidden_states_img = hidden_states_img.transpose(1, 2).flatten(2, 3)
             hidden_states_img = hidden_states_img.type_as(query)
@@ -604,6 +624,7 @@ class WanIPAttnProcessorLight(torch.nn.Module):
         hidden_states = attn.to_out[1](hidden_states)
 
         return hidden_states
+
 
 class WanRefAttnProcessor(nn.Module):
     def __init__(self, dim: int, bias: bool):
@@ -770,7 +791,7 @@ def register_ip_adapter_light(
 
     if layers is None:
         layers = list(range(0, len(model.blocks)))
-    elif isinstance(layers, int): # Only interval provided
+    elif isinstance(layers, int):  # Only interval provided
         layers = list(range(0, len(model.blocks), layers))
 
     for i, block in enumerate(model.blocks):
@@ -779,8 +800,7 @@ def register_ip_adapter_light(
 
         name = f"blocks.{i}.attn2.processor"
         attn_procs[name] = WanIPAttnProcessorLight(
-            hidden_size=hidden_size,
-            cross_attention_dim=cross_attention_dim
+            hidden_size=hidden_size, cross_attention_dim=cross_attention_dim
         )
 
         if init_method == "zero":
@@ -802,6 +822,7 @@ def register_ip_adapter_light(
     ip_layers.to(model.device, dtype=dtype)
 
     return model, ip_layers
+
 
 def register_ref_adapter(model, init_method="zero", dtype=torch.float32):
     attn_procs = {}
@@ -913,7 +934,7 @@ class WanLynxHelper(BaseHelper):
                 raise FileNotFoundError(
                     f"Missing resampler weights at {resampler_path}"
                 )
-                
+
             state_dicts = load_file(resampler_path, device="cpu")
             out_dim = state_dicts["norm_out.weight"].shape[0]
             with init_empty_weights():
@@ -926,8 +947,8 @@ class WanLynxHelper(BaseHelper):
                     heads=20,
                     num_queries=16,
                     output_dim=out_dim,
-            )
-            
+                )
+
             resampler.load_state_dict(state_dicts, assign=True)
             resampler.to(device=device, dtype=dtype)
             resampler.eval()
@@ -941,7 +962,11 @@ class WanLynxHelper(BaseHelper):
                 n_registers = (
                     ip_sd["0.registers"].shape[1] if "0.registers" in ip_sd else 0
                 )
-                register_fn = register_ip_adapter_full if cross_attention_dim == 5120 else register_ip_adapter_light
+                register_fn = (
+                    register_ip_adapter_full
+                    if cross_attention_dim == 5120
+                    else register_ip_adapter_light
+                )
                 transformer, ip_layers = register_fn(
                     transformer,
                     cross_attention_dim=cross_attention_dim,
@@ -1038,8 +1063,10 @@ class WanLynxHelper(BaseHelper):
         return align_face(
             face_image, face_landmarks, extend_face_crop=True, face_size=face_size
         )
-    
-    def encode_face_embedding(self, face_embeds, do_classifier_free_guidance, device, dtype):
+
+    def encode_face_embedding(
+        self, face_embeds, do_classifier_free_guidance, device, dtype
+    ):
         num_images_per_prompt = 1
 
         if isinstance(face_embeds, torch.Tensor):
@@ -1047,7 +1074,6 @@ class WanLynxHelper(BaseHelper):
         else:
             face_embeds = torch.from_numpy(face_embeds)
 
-   
         face_embeds = face_embeds.reshape([1, -1, 512])
 
         if do_classifier_free_guidance:
@@ -1063,4 +1089,3 @@ class WanLynxHelper(BaseHelper):
         face_embeds = face_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
 
         return face_embeds.to(device=device, dtype=dtype)
-    

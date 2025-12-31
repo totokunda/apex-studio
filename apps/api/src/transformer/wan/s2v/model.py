@@ -505,7 +505,7 @@ class WanTimeTextAudioPoseEmbedding(nn.Module):
         )
 
         self.pose_embedder = None
-        
+
         if pose_embed_dim is not None:
             self.pose_embedder = nn.Conv3d(
                 pose_embed_dim, dim, kernel_size=patch_size, stride=patch_size
@@ -532,7 +532,7 @@ class WanTimeTextAudioPoseEmbedding(nn.Module):
         encoder_hidden_states = self.text_embedder(encoder_hidden_states)
 
         audio_hidden_states = self.causal_audio_encoder(audio_hidden_states)
-        
+
         if self.pose_embedder is not None:
             pose_hidden_states = self.pose_embedder(pose_hidden_states)
 
@@ -923,7 +923,7 @@ class WanS2VTransformer3DModel(
         self.rope = WanS2VRotaryPosEmbed(
             attention_head_dim, patch_size, rope_max_seq_len, num_attention_heads
         )
-        
+
         self.patch_embedding = nn.Conv3d(
             in_channels, inner_dim, kernel_size=patch_size, stride=patch_size
         )
@@ -971,7 +971,7 @@ class WanS2VTransformer3DModel(
         all_modules, all_modules_names = torch_dfs(
             self.blocks, parent_name="root.transformer_blocks"
         )
-        
+
         self.audio_injector = AudioInjector(
             all_modules,
             all_modules_names,
@@ -1211,7 +1211,6 @@ class WanS2VTransformer3DModel(
         ) = self.condition_embedder(
             timestep, encoder_hidden_states, audio_embeds, pose_latents
         )
-        
 
         timestep_proj = timestep_proj.unflatten(1, (6, -1))
 

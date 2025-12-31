@@ -54,7 +54,9 @@ class FlowMatchScheduler(SchedulerInterface):
         if shift is not None:
             self.sigmas = shift * self.sigmas / (1 + (shift - 1) * self.sigmas)
         else:
-            self.sigmas = self.shift * self.sigmas / (1 + (self.shift - 1) * self.sigmas)
+            self.sigmas = (
+                self.shift * self.sigmas / (1 + (self.shift - 1) * self.sigmas)
+            )
         if self.reverse_sigmas:
             self.sigmas = 1 - self.sigmas
         self.timesteps = self.sigmas * self.num_train_timesteps

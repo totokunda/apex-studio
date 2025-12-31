@@ -54,12 +54,16 @@ class AdaSingle(nn.Module):
         self.layers = layers
         for l in layers:
             if "in" in modes:
-                self.register_parameter(f"{l}_shift", nn.Parameter(torch.randn(dim) / dim**0.5))
+                self.register_parameter(
+                    f"{l}_shift", nn.Parameter(torch.randn(dim) / dim**0.5)
+                )
                 self.register_parameter(
                     f"{l}_scale", nn.Parameter(torch.randn(dim) / dim**0.5 + 1)
                 )
             if "out" in modes:
-                self.register_parameter(f"{l}_gate", nn.Parameter(torch.randn(dim) / dim**0.5))
+                self.register_parameter(
+                    f"{l}_gate", nn.Parameter(torch.randn(dim) / dim**0.5)
+                )
 
     def forward(
         self,
@@ -72,13 +76,17 @@ class AdaSingle(nn.Module):
         hid_len: Optional[torch.LongTensor] = None,  # b
     ) -> torch.FloatTensor:
         idx = self.layers.index(layer)
-        emb = rearrange(emb, "b (d l g) -> b d l g", l=len(self.layers), g=3)[..., idx, :]
+        emb = rearrange(emb, "b (d l g) -> b d l g", l=len(self.layers), g=3)[
+            ..., idx, :
+        ]
         emb = expand_dims(emb, 1, hid.ndim + 1)
 
         if hid_len is not None:
             emb = cache(
                 f"emb_repeat_{idx}_{branch_tag}",
-                lambda: torch.cat([e.repeat(l, *([1] * e.ndim)) for e, l in zip(emb, hid_len)]),
+                lambda: torch.cat(
+                    [e.repeat(l, *([1] * e.ndim)) for e, l in zip(emb, hid_len)]
+                ),
             )
 
         shiftA, scaleA, gateA = emb.unbind(-1)
