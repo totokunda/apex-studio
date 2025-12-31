@@ -1,6 +1,6 @@
 from src.converters.utils import update_state_dict_
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Iterable
 
 
 class BaseConverter:
@@ -209,8 +209,82 @@ class BaseConverter:
 
         self.rename_dict = dict(priority_items + other_items)
 
+    def _conversion_match_score(self, keys: Iterable[str]) -> int:
+        """
+        Roughly estimate how "applicable" this converter is to a given set of keys.
+
+        We use this to decide whether stripping a common wrapper prefix (e.g. "model.")
+        would *help* conversion (i.e. reveal patterns that start matching).
+        """
+        score = 0
+        for k in keys:
+            try:
+                if self._apply_rename_dict(k) != k:
+                    score += 1
+            except Exception:
+                # If rename application fails (e.g. invalid regex in a subclass), don't
+                # let prefix stripping be the thing that breaks conversion.
+                pass
+            if self.pre_special_keys_map and any(p in k for p in self.pre_special_keys_map.keys()):
+                score += 1
+            if self.special_keys_map and any(p in k for p in self.special_keys_map.keys()):
+                score += 1
+        return score
+
+    def _strip_prefix_inplace_if_better(self, state_dict: Dict[str, Any], prefix: str) -> bool:
+        """
+        If *all* keys start with `prefix`, and stripping it increases this converter's
+        applicability (match score), then strip it in-place and return True.
+        """
+        if not state_dict or not prefix:
+            return False
+
+        keys = list(state_dict.keys())
+        if not keys or not all(k.startswith(prefix) for k in keys):
+            return False
+
+        stripped = [k[len(prefix) :] for k in keys]
+        # Guard against pathological prefixes and key collisions.
+        if any(not k for k in stripped):
+            return False
+        if len(set(stripped)) != len(stripped):
+            return False
+    
+        for old_key, new_key in zip(keys, stripped):
+            update_state_dict_(state_dict, old_key, new_key)
+        return True
+
+    def _strip_known_prefixes_inplace(self, state_dict: Dict[str, Any]) -> None:
+        """
+        Strip common wrapper prefixes (only when unanimous and helpful).
+
+        This is intentionally conservative: we only strip when it increases the
+        likelihood that this converter's rename/special rules will match.
+        """
+        # Prefer longer compound prefixes first, then single-token wrappers.
+        candidate_prefixes = (
+            "model.diffusion_model.",
+            "diffusion_model.model.",
+            "model.",
+            "diffusion_model.",
+            "module.",
+            "unet.",
+        )
+
+        changed = True
+        while changed:
+            changed = False
+            for p in candidate_prefixes:
+                if self._strip_prefix_inplace_if_better(state_dict, p):
+                    changed = True
+                    break
+
     def convert(self, state_dict: Dict[str, Any]):
         self._sort_rename_dict()
+        # Some checkpoints are stored under a wrapper prefix (e.g. "model." or
+        # "diffusion_model."). If *every* key has the prefix and stripping it makes
+        # our conversion rules match better, strip it before any conversion passes.
+        self._strip_known_prefixes_inplace(state_dict)
         # If this looks like a checkpoint that already matches the target key layout,
         # exit early to keep conversion idempotent.
 

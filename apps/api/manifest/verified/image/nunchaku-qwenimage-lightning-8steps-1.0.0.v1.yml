@@ -235,7 +235,7 @@ spec:
       default: 1024
       min: 256
       max: 8192
-      step: 64
+      step: 16
     - id: width
       label: Width
       description: Explicit width override
@@ -245,7 +245,7 @@ spec:
       default: 1024
       min: 256
       max: 8192
-      step: 64
+      step: 16
     - id: seed
       label: Seed
       description: Random seed for reproducibility

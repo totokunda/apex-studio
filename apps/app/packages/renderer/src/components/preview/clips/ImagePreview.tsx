@@ -119,6 +119,56 @@ const ImagePreview: React.FC<
   ) as ImageClipProps;
   const clip = (overrideClip as ImageClipProps) || clipFromStore;
 
+  // Determine whether our `focusFrame` is expressed in global timeline frames or in input-local
+  // frames. In input mode we sometimes synthesize a global focus frame via
+  // `currentLocalFrameOverride`, so we must keep the in-frame check in the same space.
+  const isGlobalFocusFrame =
+    !inputMode ||
+    typeof focusFrameOverride === "number" ||
+    typeof syntheticGlobalFromLocal === "number";
+
+  // Mirror VideoPreview's input-mode semantics: grouped clips render in a 0-based group-local
+  // frame space; non-grouped input previews render in a 0-based local window.
+  const startFrameUsed = useMemo(() => {
+    const rawStart = (clip as any)?.startFrame ?? 0;
+    if (isGlobalFocusFrame) return rawStart;
+    const hasGroup = Boolean(clipInfo.groupId);
+    if (hasGroup) {
+      return Math.max(0, rawStart - (groupStartForClip || 0));
+    }
+    return 0;
+  }, [clip, clipInfo.groupId, groupStartForClip, isGlobalFocusFrame]);
+
+  const endFrameUsed = useMemo(() => {
+    const rawEnd = (clip as any)?.endFrame as number | undefined;
+    const rawStart = (clip as any)?.startFrame as number | undefined;
+    if (isGlobalFocusFrame) return typeof rawEnd === "number" ? rawEnd : undefined;
+
+    const hasGroup = Boolean(clipInfo.groupId);
+    if (hasGroup && typeof rawEnd === "number") {
+      return Math.max(0, rawEnd - (groupStartForClip || 0));
+    }
+
+    // For non-grouped input previews, normalize absolute [start..end] to a 0-based window.
+    if (typeof rawEnd === "number" && typeof rawStart === "number") {
+      return Math.max(0, rawEnd - rawStart);
+    }
+
+    return typeof rawEnd === "number" ? rawEnd : undefined;
+  }, [clip, clipInfo.groupId, groupStartForClip, isGlobalFocusFrame]);
+
+  const isInFrame = useMemo(() => {
+    const f = Number(focusFrame);
+    if (!Number.isFinite(f)) return true;
+    const s = Number(startFrameUsed ?? 0);
+    if (!Number.isFinite(s)) return true;
+    const e =
+      typeof endFrameUsed === "number" && Number.isFinite(endFrameUsed)
+        ? endFrameUsed
+        : Infinity;
+    return f >= s && f <= e;
+  }, [focusFrame, startFrameUsed, endFrameUsed]);
+
   // Stable signature for masks so we don't retrigger effects on array identity changes
   const masksSignature = useMemo(() => {
     const masks = clip?.masks;
@@ -570,6 +620,7 @@ const ImagePreview: React.FC<
   }, [applyMask]);
 
   const draw = useCallback(async () => {
+    if (!isInFrame) return;
     if (!canvasRef.current) return;
     if (!mediaInfoRef.current) return;
     if (!displayWidth || !displayHeight) return;
@@ -703,6 +754,7 @@ const ImagePreview: React.FC<
     applicatorsActiveStore,
     applyFilters,
     tool,
+    isInFrame,
   ]);
 
   useEffect(() => {
@@ -916,6 +968,11 @@ const ImagePreview: React.FC<
       height: c.height * displayHeight,
     };
   }, [clipTransform?.crop, displayWidth, displayHeight]);
+
+  // Only mount Konva nodes when the clip is active for the current focus frame.
+  if (!isInFrame) {
+    return null;
+  }
 
   return (
     <React.Fragment>

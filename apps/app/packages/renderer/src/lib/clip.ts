@@ -5,7 +5,6 @@ import {
   ClipTransform,
   TimelineType,
   VideoClipProps,
-  AudioClipProps,
   PreprocessorClipProps,
   ImageClipProps,
   PreprocessorClipType,
@@ -2214,174 +2213,131 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
       // create new clip ids
       const newClipId1 = uuidv4();
       const newClipId2 = uuidv4();
-      const infinitytrimEnd = !isFinite(clip.trimEnd || 0);
-      const infinitytrimStart = !isFinite(clip.trimStart || 0);
-      const fps = useControlsStore.getState().fps;
+      // IMPORTANT:
+      // Splitting must not change the displayed frames at any given timeline focusFrame.
+      // We achieve this by preserving the original clip's media mapping and only
+      // adjusting trims for the new boundaries.
+      //
+      // - `trimStart` is the source-frame offset at the clip's start (in project frames).
+      // - `trimEnd` is a <= 0 "give" value used by resize logic (negative when trimmed in).
+      // - The right clip must advance `trimStart` by the cut offset so it starts on the
+      //   same source frame the original clip had at `cutFrame`.
+      const oldStart = Math.max(0, Number(clip.startFrame ?? 0));
+      const oldEnd = Math.max(oldStart + 1, Number(clip.endFrame ?? oldStart + 1));
+      const safeOldTrimStart = isFinite(clip.trimStart ?? 0)
+        ? Number(clip.trimStart ?? 0)
+        : 0;
+      const safeOldTrimEnd = isFinite(clip.trimEnd ?? 0)
+        ? Number(clip.trimEnd ?? 0)
+        : 0;
+      const cutRel = Math.max(0, Math.min(oldEnd - oldStart, cutFrame - oldStart));
 
-      const getDurationFromURL = (url:URL) => {
-        const currentStartFrame = url.searchParams.get("startFrame")
-          ? Number(url.searchParams.get("startFrame"))
-          : 0;
-        const currentEndFrame = url.searchParams.get("endFrame")
-          ? Number(url.searchParams.get("endFrame"))
-          : undefined;
-          if (isNaN(currentStartFrame) || isNaN(currentEndFrame ?? 0)) return undefined;
-        return ((currentEndFrame ?? 0) - (currentStartFrame ?? 0)) / fps;
-      }
-
-      // First clip: from original start to cut frame
-      // Keeps original trimStart, but can't extend past cut
+      // Left clip: same start/trimStart; end at cut; adjust trimEnd exactly like a right-edge resize.
       const newClip1: AnyClipProps = {
         ...clip,
-        endFrame: cutFrame,
         clipId: newClipId1,
-        trimStart: infinitytrimStart ? Infinity : 0,
-        trimEnd: infinitytrimEnd ? -Infinity : 0,
+        endFrame: cutFrame,
+        trimStart: safeOldTrimStart,
+        trimEnd: safeOldTrimEnd + (cutFrame - oldEnd),
       };
 
-      // Second clip: from cut frame to original end
-      // Maintains proper media offset, but can't extend before cut
+      // Right clip: start at cut; advance trimStart so it begins at the cut point in the source.
       const newClip2: AnyClipProps = {
         ...clip,
-        startFrame: cutFrame,
         clipId: newClipId2,
-        trimStart: infinitytrimStart ? Infinity : 0,
-        trimEnd: infinitytrimEnd ? -Infinity : 0,
+        startFrame: cutFrame,
+        trimStart: safeOldTrimStart + cutRel,
+        trimEnd: safeOldTrimEnd,
       };
 
+      // Split/rebase preprocessors (stored in clip-local frames: 0 = clip start).
       if (clip.type === "image" || clip.type === "video") {
-        if (clip.preprocessors && clip.preprocessors.length > 0) {
+        const origPre = (clip as VideoClipProps | ImageClipProps).preprocessors;
+        if (Array.isArray(origPre) && origPre.length > 0) {
           const clip1Preprocessors: PreprocessorClipProps[] = [];
           const clip2Preprocessors: PreprocessorClipProps[] = [];
-          clip.preprocessors.forEach((preprocessor) => {
-            // check if preprocessor is within the new clip
-            if (
-              preprocessor.startFrame !== undefined &&
-              preprocessor.endFrame !== undefined
-            ) {
-              // Case 1: Preprocessor is entirely before the cut frame
-              if (preprocessor.endFrame <= cutFrame) {
-                clip1Preprocessors.push(preprocessor);
-              }
-              // Case 2: Preprocessor is entirely after the cut frame
-              else if (preprocessor.startFrame > cutFrame) {
-                clip2Preprocessors.push({
-                  ...preprocessor,
-                  startFrame: preprocessor.startFrame - cutFrame,
-                  endFrame: preprocessor.endFrame - cutFrame,
-                });
-              }
-              // Case 3: Preprocessor spans across the cut frame
-              else if (
-                preprocessor.startFrame < cutFrame &&
-                preprocessor.endFrame > cutFrame
-              ) {
-                // Calculate how much of the preprocessor media is used before/after cut
-                const preprocessorMediaDurationBeforeCut =
-                  cutFrame - preprocessor.startFrame;
-                const preprocessorMediaDurationAfterCut =
-                  preprocessor.endFrame - cutFrame;
+          for (const p of origPre) {
+            const ps = Number(p.startFrame ?? 0);
+            const pe = Number(p.endFrame ?? 0);
+            if (!Number.isFinite(ps) || !Number.isFinite(pe) || pe <= ps) continue;
 
-                const preprocessor1 = {
-                  ...preprocessor,
-                  endFrame: cutFrame,
-                };
-
-                const preprocessor2 = {
-                  ...preprocessor,
-                  id: uuidv4(),
-                  startFrame: 0,
-                  endFrame: preprocessorMediaDurationAfterCut,
-                };
-
-                // Update src URLs to reflect the split in preprocessor media
-                if (preprocessor.assetId) {
-                  const asset = get().getAssetById(preprocessor.assetId);
-                  if (!asset) return;
-                   const url1 = new URL(asset.path);
-                  const url2 = new URL(asset.path);
-                 
-                  const currentStartFrame = url1.searchParams.get("startFrame")
-                    ? Number(url1.searchParams.get("startFrame"))
-                    : 0;
-                  const currentEndFrame = url1.searchParams.get("endFrame")
-                    ? Number(url1.searchParams.get("endFrame"))
-                    : undefined;
-
-                  // First preprocessor: from start to cutFrame in preprocessor media
-                  url1.searchParams.set(
-                    "startFrame",
-                    String(currentStartFrame),
-                  );
-                  url1.searchParams.set(
-                    "endFrame",
-                    String(
-                      currentStartFrame + preprocessorMediaDurationBeforeCut,
-                    ),
-                  );
-
-                  // Second preprocessor: from cutFrame to end in preprocessor media
-                  url2.searchParams.set(
-                    "startFrame",
-                    String(
-                      currentStartFrame + preprocessorMediaDurationBeforeCut,
-                    ),
-                  );
-
-                  if (currentEndFrame !== undefined) {
-                    url2.searchParams.set("endFrame", String(currentEndFrame));
-                  } else {
-                    url2.searchParams.set(
-                      "endFrame",
-                      String(
-                        currentStartFrame +
-                          preprocessorMediaDurationBeforeCut +
-                          preprocessorMediaDurationAfterCut,
-                      ),
-                    );
-                  }
-
-                  // create new assets
-                  // get duration for both 
-                  const duration1 = getDurationFromURL(url1);
-                  const duration2 = getDurationFromURL(url2);
-                  const asset1 = get().addAsset({ ...asset, path: url1.toString(), duration: duration1 });
-                  const asset2 = get().addAsset({ ...asset, path: url2.toString(), duration: duration2 });
-
-                  preprocessor1.assetId = asset1.id;
-                  preprocessor2.assetId = asset2.id;
-
-                  void getMediaInfo(asset1.path);
-                  void getMediaInfo(asset2.path);
-                }
-
-                clip1Preprocessors.push(preprocessor1);
-                clip2Preprocessors.push(preprocessor2);
-              }
+            // Entirely before cut (left)
+            if (pe <= cutRel) {
+              clip1Preprocessors.push({ ...p });
+              continue;
             }
-          });
+            // Entirely after cut (right) - rebase to new clip start
+            if (ps >= cutRel) {
+              clip2Preprocessors.push({
+                ...p,
+                startFrame: ps - cutRel,
+                endFrame: pe - cutRel,
+              });
+              continue;
+            }
+            // Spans cut: split into two preprocessors
+            const left: PreprocessorClipProps = {
+              ...p,
+              endFrame: cutRel,
+            };
+            const right: PreprocessorClipProps = {
+              ...p,
+              id: uuidv4(),
+              startFrame: 0,
+              endFrame: pe - cutRel,
+            };
 
+            // If this preprocessor has a completed in-place output asset, slice the
+            // underlying asset for the right side so its frame 0 corresponds to `cutRel`.
+            // This preserves preview frame correctness when the cut happens mid-preprocessor.
+            try {
+              if (p.assetId) {
+                const srcAsset = get().getAssetById(p.assetId);
+                if (srcAsset?.path) {
+                  const url = new URL(srcAsset.path);
+                  const baseStart = url.searchParams.get("startFrame")
+                    ? Number(url.searchParams.get("startFrame"))
+                    : 0;
+                  const skipFrames = Math.max(0, Math.round(cutRel - ps));
+                  const remaining = Math.max(1, Math.round(pe - cutRel));
+                  const newStart = Math.max(0, Math.round(baseStart + skipFrames));
+                  const newEnd = Math.max(newStart + 1, newStart + remaining);
+                  url.searchParams.set("startFrame", String(newStart));
+                  url.searchParams.set("endFrame", String(newEnd));
+
+                  const sliced = get().addAsset({
+                    path: url.toString(),
+                    type: srcAsset.type,
+                    width: srcAsset.width,
+                    height: srcAsset.height,
+                  });
+                  right.assetId = sliced.id;
+                  // Best-effort warm media info for quick preview
+                  void getMediaInfo(sliced.path);
+                }
+              }
+            } catch {}
+            clip1Preprocessors.push(left);
+            clip2Preprocessors.push(right);
+          }
           (newClip1 as VideoClipProps | ImageClipProps).preprocessors =
             clip1Preprocessors;
           (newClip2 as VideoClipProps | ImageClipProps).preprocessors =
             clip2Preprocessors;
         }
-        // Split masks and rebase keyframes for each new clip
-        if (
-          (clip as VideoClipProps | ImageClipProps).masks &&
-          (clip as VideoClipProps | ImageClipProps).masks.length > 0
-        ) {
-          const originalMasks = (clip as VideoClipProps | ImageClipProps).masks;
+
+        // Split masks by local frame index (mask frames use the same local frame space
+        // as preview: focusFrame - startFrame + trimStart).
+        const originalMasks = (clip as VideoClipProps | ImageClipProps).masks;
+        if (Array.isArray(originalMasks) && originalMasks.length > 0) {
           const masksForClip1: MaskClipProps[] = [];
           const masksForClip2: MaskClipProps[] = [];
 
-          // Compute local cut position relative to original clip start
-          const startFrame = clip.startFrame ?? 0;
+          const startFrame = Number(clip.startFrame ?? 0);
           const trimStart = isFinite(clip.trimStart ?? 0)
-            ? (clip.trimStart ?? 0)
+            ? Number(clip.trimStart ?? 0)
             : 0;
-          const realStartFrame = startFrame + trimStart;
-          const cutLocal = Math.max(0, cutFrame - realStartFrame);
+          const cutLocal = Math.max(0, cutFrame - startFrame + trimStart);
 
           const makeEmptyKeyframesLike = (
             kf: Map<number, MaskData> | Record<number, MaskData>,
@@ -2395,11 +2351,8 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
             frame: number,
             data: MaskData,
           ) => {
-            if (target instanceof Map) {
-              target.set(frame, data);
-            } else {
-              (target as Record<number, MaskData>)[frame] = data;
-            }
+            if (target instanceof Map) target.set(frame, data);
+            else (target as Record<number, MaskData>)[frame] = data;
           };
 
           const getKeyframe = (
@@ -2422,15 +2375,15 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
           for (const mask of originalMasks) {
             const keyframes = mask.keyframes;
             const frames = getSortedFrames(keyframes);
+            const now = Date.now();
 
-            // Image clips only use frame 0; copy that to both sides
+            // Image clips only use frame 0; copy that to both
             if (clip.type === "image") {
               const dataAt0 =
                 getKeyframe(keyframes, 0) ??
                 (frames.length > 0
                   ? getKeyframe(keyframes, frames[0])
                   : undefined);
-              const now = Date.now();
               if (dataAt0) {
                 const kf1 = makeEmptyKeyframesLike(keyframes);
                 const kf2 = makeEmptyKeyframesLike(keyframes);
@@ -2452,22 +2405,15 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
               continue;
             }
 
-            // Video clips: split around cutLocal; left keeps < cutLocal, right keeps >= cutLocal rebased to start at 0
             const kfLeft = makeEmptyKeyframesLike(keyframes);
             const kfRight = makeEmptyKeyframesLike(keyframes);
-
             for (const f of frames) {
               const data = getKeyframe(keyframes, f);
               if (!data) continue;
-              if (f < cutLocal) {
-                setKeyframe(kfLeft, f, { ...data });
-              } else {
-                const rebased = Math.max(0, f - cutLocal);
-                setKeyframe(kfRight, rebased, { ...data });
-              }
+              if (f < cutLocal) setKeyframe(kfLeft, f, { ...data });
+              else setKeyframe(kfRight, f, { ...data });
             }
 
-            const now = Date.now();
             masksForClip1.push({
               ...mask,
               keyframes: kfLeft,
@@ -2485,55 +2431,6 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
           (newClip1 as VideoClipProps | ImageClipProps).masks = masksForClip1;
           (newClip2 as VideoClipProps | ImageClipProps).masks = masksForClip2;
         }
-      }
-
-      const clipAsset = get().getAssetById((clip as VideoClipProps | ImageClipProps | AudioClipProps).assetId);
-
-      if (
-        clipAsset &&
-        (AUDIO_EXTS.includes(getLowercaseExtension(clipAsset.path)) ||
-          VIDEO_EXTS.includes(getLowercaseExtension(clipAsset.path)))
-      ) {
-        // one of audio or video
-        let speed = 1;
-        if (Object.prototype.hasOwnProperty.call(clip, "speed")) {
-          speed = (clip as AudioClipProps).speed || 1;
-        }
-        const frameShift = (clip.startFrame || 0) - (clip.trimStart || 0);
-        const url1 = new URL(clipAsset.path);
-        const url2 = new URL(clipAsset.path);
-        const startFrame1 = (clip.startFrame || 0) - frameShift;
-        const endFrame1 = cutFrame * speed - frameShift;
-        const startFrame2 = cutFrame * speed - frameShift;
-        const endFrame2 = (clip.endFrame || 0) * speed - frameShift;
-        const currentStartFrame = url1.searchParams.get("startFrame")
-          ? Number(url1.searchParams.get("startFrame"))
-          : 0;
-        url1.searchParams.set(
-          "startFrame",
-          String(startFrame1 + currentStartFrame),
-        );
-        url1.searchParams.set(
-          "endFrame",
-          String(endFrame1 + currentStartFrame),
-        );
-        url2.searchParams.set(
-          "startFrame",
-          String(startFrame2 + currentStartFrame),
-        );
-        url2.searchParams.set(
-          "endFrame",
-          String(endFrame2 + currentStartFrame),
-        );
-
-        const duration1 = getDurationFromURL(url1);
-        const duration2 = getDurationFromURL(url2);   
-        const asset1 = get().addAsset({ ...clipAsset, path: url1.toString(), duration: duration1 });
-        const asset2 = get().addAsset({ ...clipAsset, path: url2.toString(), duration: duration2 });
-        (newClip1 as VideoClipProps | ImageClipProps | AudioClipProps).assetId = asset1.id;
-        (newClip2 as VideoClipProps | ImageClipProps | AudioClipProps).assetId = asset2.id;
-        void getMediaInfo(asset1.path);
-        void getMediaInfo(asset2.path);
       }
 
       const newClips = [...filteredClips, newClip1, newClip2];
@@ -2734,10 +2631,10 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     if (overlap) {
       return (
         frame >= (clip.startFrame || 0) - (overlapAmount || 0) &&
-        frame <= (clip.endFrame || 0)
+        frame < (clip.endFrame || 0)
       );
     }
-    return frame >= (clip.startFrame || 0) && frame <= (clip.endFrame || 0);
+    return frame >= (clip.startFrame || 0) && frame < (clip.endFrame || 0);
   },
   getTimelinePosition: (timelineId: string, scrollY?: number) => {
     const timeline = get().timelines.find((t) => t.timelineId === timelineId);

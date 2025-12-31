@@ -29,6 +29,17 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
   const { updateClip } = useClipStore();
   const removeClip = useClipStore((s) => s.removeClip);
   const tool = useViewportStore((s) => s.tool);
+  const focusFrame = useControlsStore((s) => s.focusFrame);
+  const clipFromStore = useClipStore((s) => s.getClipById(clipId)) as any;
+  const isInFrame = React.useMemo(() => {
+    const f = Number(focusFrame);
+    if (!Number.isFinite(f)) return true;
+    const start = Number(clipFromStore?.startFrame ?? 0);
+    const endRaw = clipFromStore?.endFrame;
+    const end =
+      typeof endRaw === "number" && Number.isFinite(endRaw) ? endRaw : Infinity;
+    return f >= start && f <= end;
+  }, [focusFrame, clipFromStore?.startFrame, clipFromStore?.endFrame]);
   const isSelected = useControlsStore((s) =>
     s.selectedClipIds.includes(clipId),
   );
@@ -159,6 +170,7 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
 
   // Deselect line when clicking outside the drawing clip
   React.useEffect(() => {
+    if (!isInFrame) return;
     const handleWindowClick = (e: MouseEvent) => {
       if (!selectedLineId) return;
       // Only this clip (that owns the selected line) should handle deselection
@@ -197,7 +209,7 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
     return () => {
       window.removeEventListener("click", handleWindowClick);
     };
-  }, [selectedLineId, setSelectedLineId, lines]);
+  }, [selectedLineId, setSelectedLineId, lines, isInFrame]);
 
   // Auto-delete empty drawing clips
   React.useEffect(() => {
@@ -209,6 +221,10 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
   }, [lines, clipId, removeClip, removeClipSelection, setSelectedLineId]);
 
   const renderLines = tempLinesOverride ?? lines;
+
+  if (!isInFrame) {
+    return null;
+  }
 
   return (
     <Group

@@ -208,3 +208,5 @@ packages/renderer/public/filters
 /.idea/csv-plugin.xml
 
 .env
+
+.github/workflows/*

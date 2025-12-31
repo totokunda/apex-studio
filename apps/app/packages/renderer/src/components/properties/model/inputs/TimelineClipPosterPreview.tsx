@@ -58,30 +58,15 @@ const PosterClipItem = React.memo(({
   getClipById: (id: string) => AnyClipProps | undefined;
   isDialogOpen?: boolean;
 }) => {
-  const startFrame = clip.startFrame || 0;
+
   const groupStart = clip.groupId
     ? getClipById(clip.groupId)?.startFrame || 0
     : 0;
-  const relativeStart = startFrame - groupStart;
-  const hasOverlap =
-    (clip.type === "video" || clip.type === "image" || clip.type === "model") &&
-    (clip.groupId ? relativeStart : startFrame) > 0
-      ? true
-      : false;
-  
+
   const effectiveGlobalFrame = clip.groupId
     ? focusFrame + groupStart
     : focusFrame;
     
-  const clipAtFrame = clipWithinFrame(
-    clip,
-    effectiveGlobalFrame,
-    hasOverlap,
-    0,
-  );
-  
-  if (!clipAtFrame && clip.groupId) return null;
-
   const applicators = getApplicators(
     clip.clipId,
     effectiveGlobalFrame,
@@ -175,13 +160,14 @@ const PosterClipItem = React.memo(({
     }
     return override;
   }, [clip, rectWidth, rectHeight, isDialogOpen]);
+  
 
   switch (clip.type) {
     case "video":
       return (
         <VideoPreview
           key={`${clip.clipId}-${isDialogOpen}`}
-          {...(clip as any)}
+          {...{...(clip as any), hidden: false}}
           overrideClip={overrideToUse}
           rectWidth={rectWidth}
           rectHeight={rectHeight}
@@ -197,7 +183,7 @@ const PosterClipItem = React.memo(({
       return (
         <ImagePreview
           key={clip.clipId}
-          {...(clip as any)}
+          {...{...(clip as any), hidden: false}}
           overrideClip={overrideToUse}
           rectWidth={rectWidth}
           rectHeight={rectHeight}
@@ -212,7 +198,7 @@ const PosterClipItem = React.memo(({
       return (
         <ShapePreview
           key={clip.clipId}
-          {...(clip as any)}
+          {...{...(clip as any), hidden: false}}
           rectWidth={rectWidth}
           rectHeight={rectHeight}
           applicators={applicators}
@@ -234,7 +220,7 @@ const PosterClipItem = React.memo(({
       return (
         <DrawingPreview
           key={clip.clipId}
-          {...(clip as any)}
+          {...{...(clip as any), hidden: false}}
           rectWidth={rectWidth}
           rectHeight={rectHeight}
           assetMode={true}
@@ -505,6 +491,7 @@ const TimelineClipPosterPreview: React.FC<{
     ? { width: audioOnly ? 1 : width, height: audioOnly ? 1 : height }
     : {};
 
+
   return (
     <div className="w-full h-auto flex flex-col items-center justify-start bg-black">
       <StageComponent
@@ -529,8 +516,6 @@ const TimelineClipPosterPreview: React.FC<{
             {audioOnly
               ? null
               : toRender.map((clip) => {
-                  if (clip.type === "group") return null;
-                  
                   // 3. USE THE NEW MEMOIZED ITEM COMPONENT HERE
                   return (
                     <PosterClipItem
@@ -556,21 +541,13 @@ const TimelineClipPosterPreview: React.FC<{
               const relativeStart = startFrame - groupStart;
               const hasOverlap =
                 (clip.groupId ? relativeStart : startFrame) > 0 ? true : false;
-              const effectiveGlobalFrame = clip.groupId
-                ? focusFrame + groupStart
-                : focusFrame;
-              const clipAtFrame = clipWithinFrame(
-                clip,
-                effectiveGlobalFrame,
-                hasOverlap,
-                0,
-              );
-              if (!clipAtFrame && clip.groupId) return null;
+
+         
               const overrideToUse = clipOverride ? clip : undefined;
               return (
                 <AudioPreview
                   key={clip.clipId}
-                  {...(clip as any)}
+                  {...{...(clip as any), hidden: false}}
                   overrideClip={overrideToUse}
                   overlap={hasOverlap}
                   rectWidth={rectWidth}

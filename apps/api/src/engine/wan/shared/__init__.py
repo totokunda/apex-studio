@@ -16,6 +16,11 @@ from torch import Tensor
 import os
 import gc
 
+try:
+    import psutil
+except Exception:  # pragma: no cover
+    psutil = None
+
 class WanShared(BaseEngine, WanMLXDenoise):
     """Base class for WAN engine implementations containing common functionality"""
 
@@ -233,6 +238,97 @@ class WanShared(BaseEngine, WanMLXDenoise):
         encoded_image = self.vae_encode(ip_image, sample_mode="mode", dtype=dtype)
         return encoded_image
 
+    def _estimate_loaded_module_tensor_bytes(
+        self, module: Any, *, include_buffers: bool = True
+    ) -> int:
+        """Best-effort estimate of a loaded torch module's tensor footprint in bytes."""
+        try:
+            if module is None or not isinstance(module, torch.nn.Module):
+                return 0
+        except Exception:
+            return 0
+
+        total = 0
+        try:
+            for p in module.parameters(recurse=True):
+                try:
+                    total += int(p.numel()) * int(p.element_size())
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        if include_buffers:
+            try:
+                for b in module.buffers(recurse=True):
+                    try:
+                        total += int(b.numel()) * int(b.element_size())
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        return int(total)
+
+    def _estimate_component_bytes_by_name(self, component_name: str) -> int:
+        """Estimate component weight size from config/weight files (works even if not loaded)."""
+        try:
+            comp_cfg = self.get_component_by_name(component_name)
+            if not comp_cfg:
+                return 0
+            return int(self._estimate_component_model_size_bytes(comp_cfg) or 0)
+        except Exception:
+            return 0
+
+    def _should_keep_moe_transformers_on_cpu(self) -> bool:
+        """Return True if we can keep *both* MOE transformers resident on CPU when offloading."""
+        if psutil is None:
+            return False
+
+        try:
+            vm = psutil.virtual_memory()
+            cpu_available_bytes = int(getattr(vm, "available", 0) or 0)
+        except Exception:
+            return False
+
+        if cpu_available_bytes <= 0:
+            return False
+
+        low_obj = getattr(self, "low_noise_transformer", None)
+        high_obj = getattr(self, "high_noise_transformer", None)
+
+        low_bytes = self._estimate_loaded_module_tensor_bytes(low_obj)
+        if low_bytes <= 0:
+            low_bytes = self._estimate_component_bytes_by_name("low_noise_transformer")
+
+        high_bytes = self._estimate_loaded_module_tensor_bytes(high_obj)
+        if high_bytes <= 0:
+            high_bytes = self._estimate_component_bytes_by_name("high_noise_transformer")
+
+        # If we can't estimate both sizes at all, be conservative.
+        if low_bytes <= 0 or high_bytes <= 0:
+            return False
+
+        try:
+            headroom_gb = float(os.environ.get("WAN_MOE_CPU_KEEP_HEADROOM_GB", "4.0"))
+        except Exception:
+            headroom_gb = 4.0
+
+        try:
+            safety_mult = float(os.environ.get("WAN_MOE_CPU_KEEP_SAFETY_MULT", "1.15"))
+        except Exception:
+            safety_mult = 1.15
+
+        try:
+            max_frac = float(
+                os.environ.get("WAN_MOE_CPU_KEEP_MAX_AVAILABLE_FRAC", "0.80")
+            )
+        except Exception:
+            max_frac = 0.80
+
+        needed_bytes = int((low_bytes + high_bytes) * safety_mult + headroom_gb * 1e9)
+        return needed_bytes <= int(cpu_available_bytes * max_frac)
+
   
 
     
@@ -260,11 +356,20 @@ class WanShared(BaseEngine, WanMLXDenoise):
         render_on_step_interval = kwargs.get("render_on_step_interval", 3)
         offload = kwargs.get("offload", True)
         extra_step_kwargs = kwargs.get("extra_step_kwargs", {})
+        easy_cache_thresh = kwargs.get("easy_cache_thresh", 0.00)
+        easy_cache_ret_steps = kwargs.get("easy_cache_ret_steps", 10)
+        easy_cache_cutoff_steps = kwargs.get("easy_cache_cutoff_steps", None)
         total_steps = len(timesteps) if timesteps is not None else 0
         safe_emit_progress(denoise_progress_callback, 0.0, "Starting denoise")
+        keep_moe_transformers_on_cpu = self._should_keep_moe_transformers_on_cpu()
         
         if total_steps <= 8:
             render_on_step = False
+        
+        has_offloaded_low_noise_transformer = False
+        has_loaded_low_noise_transformer = False
+        has_offloaded_high_noise_transformer = False
+        has_loaded_high_noise_transformer = False
 
         with self._progress_bar(len(timesteps), desc=f"Sampling MOE") as pbar:
             total_steps = len(timesteps)
@@ -279,8 +384,8 @@ class WanShared(BaseEngine, WanMLXDenoise):
 
                 timestep = t.expand(latents.shape[0])
                 
- 
-                if boundary_timestep is not None and t >= boundary_timestep:
+
+                if boundary_timestep is not None and t >= boundary_timestep and not has_offloaded_low_noise_transformer:
                     if getattr(self, "low_noise_transformer", None): 
                         self.logger.info("Offloading low noise transformer")
                         safe_emit_progress(
@@ -289,7 +394,13 @@ class WanShared(BaseEngine, WanMLXDenoise):
                             "Offloading previous transformer",
                         )
                         # IMPORTANT: group-offloading hooks can keep CPU tensors alive.
-                        self._offload("low_noise_transformer")
+                        self._offload(
+                            "low_noise_transformer",
+                            offload_type="cpu"
+                            if keep_moe_transformers_on_cpu
+                            else "discard",
+                        )
+                        has_offloaded_low_noise_transformer = True
 
                     if not getattr(self, "high_noise_transformer", None):
                         safe_emit_progress(
@@ -303,26 +414,42 @@ class WanShared(BaseEngine, WanMLXDenoise):
                         self.to_device(self.high_noise_transformer)
                         self.high_noise_transformer.current_steps = i
                         self.high_noise_transformer.num_inference_steps = total_steps
+                        if easy_cache_thresh > 0.0:
+                            self.high_noise_transformer.enable_easy_cache(total_steps, easy_cache_thresh, easy_cache_ret_steps, should_reset_global_cache=True)
+                            self.logger.info(f"Enabled easy cache for high noise transformer with threshold {easy_cache_thresh}, ret steps {easy_cache_ret_steps}, cutoff steps {easy_cache_cutoff_steps}")
 
                         safe_emit_progress(
                             denoise_progress_callback,
                             float(i) / float(total_steps) if total_steps else 0.0,
                             "New transformer ready",
                         )
+                        
+                        has_loaded_high_noise_transformer = True
+                        
+                    if not has_loaded_high_noise_transformer:
+                        self.to_device(self.high_noise_transformer)
+                        has_loaded_high_noise_transformer = True
 
                     transformer = self.high_noise_transformer
+                    
 
                     if isinstance(guidance_scale, list):
                         guidance_scale = guidance_scale[0]
                 else:
-                    if getattr(self, "high_noise_transformer", None):
+                    if getattr(self, "high_noise_transformer", None) and not has_offloaded_high_noise_transformer:
                         self.logger.info("Offloading high noise transformer")
                         safe_emit_progress(
                             denoise_progress_callback,
                             float(i) / float(total_steps) if total_steps else 0.0,
                             "Offloading previous transformer",
                         )
-                        self._offload("high_noise_transformer")
+                        self._offload(
+                            "high_noise_transformer",
+                            offload_type="cpu"
+                            if keep_moe_transformers_on_cpu
+                            else "discard",
+                        )
+                        has_offloaded_high_noise_transformer = True
                         
                     if not getattr(self, "low_noise_transformer", None):
                         safe_emit_progress(
@@ -332,11 +459,19 @@ class WanShared(BaseEngine, WanMLXDenoise):
                         )
                         self.load_component_by_name("low_noise_transformer")
                         self.to_device(self.low_noise_transformer)
+                        if easy_cache_thresh > 0.0:
+                            self.low_noise_transformer.enable_easy_cache(total_steps, easy_cache_thresh, easy_cache_ret_steps, should_reset_global_cache=False)
                         safe_emit_progress(
                             denoise_progress_callback,
                             float(i) / float(total_steps) if total_steps else 0.0,
                             "Alternate transformer ready",
                         )
+                        has_loaded_low_noise_transformer = True
+                        
+                    if not has_loaded_low_noise_transformer:
+                        self.to_device(self.low_noise_transformer)
+                        has_loaded_low_noise_transformer = True
+                        
                     transformer = self.low_noise_transformer
                     if isinstance(guidance_scale, list):
                         guidance_scale = guidance_scale[1]
@@ -393,9 +528,15 @@ class WanShared(BaseEngine, WanMLXDenoise):
             
         if offload:
             if getattr(self, "low_noise_transformer", None):
-                self._offload("low_noise_transformer")
+                self._offload(
+                    "low_noise_transformer",
+                    offload_type="cpu" if keep_moe_transformers_on_cpu else "discard",
+                )
             if getattr(self, "high_noise_transformer", None):
-                self._offload("high_noise_transformer")
+                self._offload(
+                    "high_noise_transformer",
+                    offload_type="cpu" if keep_moe_transformers_on_cpu else "discard",
+                )
 
         return latents
 

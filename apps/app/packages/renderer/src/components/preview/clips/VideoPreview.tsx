@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Image, Transformer, Group, Line } from "react-konva";
+import { Image, Transformer, Group, Line} from "react-konva";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import { useControlsStore } from "@/lib/control";
 import Konva from "konva";
@@ -101,6 +101,12 @@ const VideoPreview: React.FC<
     currentLocalFrameOverride?: number;
     offscreenFast?: boolean;
     /**
+     * If true, keep decoders warm and update the backing canvas, but do not
+     * render/interact in Konva. This is used to prewarm the next clip segment
+     * (e.g. after a split) to avoid a visible flicker on boundary transitions.
+     */
+    hidden?: boolean;
+    /**
      * Optional logical key to scope decoder state so multiple previews of the same
      * asset/clip (e.g. media dialog vs. timeline poster) don't override each other.
      */
@@ -124,6 +130,7 @@ const VideoPreview: React.FC<
   currentLocalFrameOverride,
   offscreenFast = false,
   decoderKey,
+  hidden = false,
 }) => {
 
   const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(assetId) || null);
@@ -141,10 +148,11 @@ const VideoPreview: React.FC<
     s.getFocusFrame(inputId ?? ""),
   );
   const getActiveProject = useProjectsStore((s) => s.getActiveProject);
+  const useInputScopedControls = inputMode && !!inputId;
   const focusFrame =
     typeof focusFrameOverride === "number"
       ? focusFrameOverride
-      : inputMode
+      : useInputScopedControls
         ? focusFrameFromInputs
         : focusFrameFromControls;
   
@@ -192,6 +200,44 @@ const VideoPreview: React.FC<
     }
     return 0;
   }, [inputMode, startFrame, clip, groupStartForClip]);
+
+  // Mirror `startFrameUsed` semantics for end-frame checks (important in input mode where we
+  // normalize non-grouped clips to a 0-based local window).
+  const endFrameUsed = useMemo(() => {
+    const rawEnd = (clip as any)?.endFrame as number | undefined;
+    if (!inputMode) return typeof rawEnd === "number" ? rawEnd : undefined;
+
+    const rawStart = (clip as any)?.startFrame as number | undefined;
+    const hasGroup = Boolean((clip as any)?.groupId);
+
+    if (hasGroup && typeof rawEnd === "number") {
+      const rel = rawEnd - (groupStartForClip || 0);
+      return Math.max(0, rel);
+    }
+
+    // Non-grouped input previews use `startFrameUsed = 0`. If the clip provides absolute
+    // start/end frames, convert that into a duration window [0..(end-start)].
+    if (typeof rawEnd === "number" && typeof rawStart === "number") {
+      return Math.max(0, rawEnd - rawStart);
+    }
+
+    return typeof rawEnd === "number" ? rawEnd : undefined;
+  }, [clip, groupStartForClip, inputMode]);
+
+  // Gate Konva node rendering: keep decode/effects hooks running, but do not mount Konva
+  // nodes unless the clip is actually in frame for the current focus frame.
+  const isInFrame = useMemo(() => {
+    const f = Number(focusFrame);
+    if (!Number.isFinite(f)) return true;
+    const s = Number(startFrameUsed ?? 0);
+    if (!Number.isFinite(s)) return true;
+    const e =
+      typeof endFrameUsed === "number" && Number.isFinite(endFrameUsed)
+        ? endFrameUsed
+        : Infinity;
+    
+    return f >= s && f <= e;
+  }, [focusFrame, startFrameUsed, endFrameUsed]);
   const currentFrame = useMemo(
     () => focusFrame - startFrameUsed + (trimStart || 0),
     [focusFrame, startFrameUsed, trimStart],
@@ -322,7 +368,7 @@ const VideoPreview: React.FC<
     return { selectedAssetId: assetId, frameOffset: 0 };
   }, [clip?.preprocessors, assetId, currentFrame, trimStart]);
 
-
+  // (seekInProgressRef removed; was unused and could cause confusion)
 
   // Use refs to store current filter values to avoid callback recreation
   const filterParamsRef = useRef({
@@ -416,22 +462,29 @@ const VideoPreview: React.FC<
   const isPlayingFromInputs = useInputControlsStore((s) =>
     s.getIsPlaying(inputId ?? ""),
   );
-  const isPlayingRef = useRef(
-    inputMode ? isPlayingFromInputs : isPlayingFromControls,
-  );
-  useEffect(() => {
-    isPlayingRef.current = inputMode
+  // IMPORTANT:
+  // - `isPlaying` must be reactive (derived from store selectors), otherwise playback
+  //   can get stuck in "paused" mode and force per-frame seeks.
+  // - We still use refs (e.g. focusFrameRef) for fast access inside decoder callbacks.
+  const isPlaying = offscreenFast
+    ? true
+    : useInputScopedControls
       ? isPlayingFromInputs
       : isPlayingFromControls;
-  }, [isPlayingFromInputs, isPlayingFromControls, inputMode]);
-  const isPlaying = offscreenFast ? true : isPlayingRef.current;
   const focusFrameRef = useRef(focusFrame);
   useEffect(() => {
     focusFrameRef.current = focusFrame;
   }, [focusFrame]);
+  // When input playback reaches the end, the store can "rewind" focusFrame back to the
+  // range start and immediately resume playing. If `startRendering()` kicked off using
+  // the old end-frame before that rewind propagated, the iterator will be out of sync
+  // and can appear frozen until the user scrubs (seek).
+  //
+  // Detect backwards jumps while playing and restart the iterator from the new position.
+  const prevFocusFrameWhilePlayingRef = useRef<number | null>(null);
   const fpsFromControls = useControlsStore((s) => s.fps);
   const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId ?? ""));
-  const fps = inputMode ? fpsFromInputs : fpsFromControls;
+  const fps = useInputScopedControls ? fpsFromInputs : fpsFromControls;
   const currentStartFrameRef = useRef<number>(0);
   const lastRenderedFrameRef = useRef<number>(-1);
 
@@ -943,16 +996,17 @@ const VideoPreview: React.FC<
     speed,
   ]);
 
-  const seekToCurrentFrame = useCallback(async (isAccurateSeekNeededInput: boolean = false) => {
-    // Check store state directly to ensure we don't block seeking due to stale ref
-    const currentlyPlaying = inputMode
-      ? useInputControlsStore.getState().getIsPlaying(inputId ?? "")
-      : useControlsStore.getState().isPlaying;
+  const seekToCurrentFrame = useCallback(
+    async (isAccurateSeekNeededInput: boolean = false) => {
+      
 
-    // If playback has started, do not run paused seek rendering to avoid cancelling live decode
-    if (currentlyPlaying) return;
+      // NOTE: Do NOT use `useInputControlsStore.getState()` here:
+      // it reads the global fallback store (wrong clip scope) and will return false
+      // during input playback, causing us to seek every frame.
+      if (isPlaying) return;
     
     const info = getTargetFrameInfo();
+
 
     if (!info) return;
 
@@ -982,7 +1036,18 @@ const VideoPreview: React.FC<
     } catch (e) {
       console.warn("[video] seek failed", e);
     }
-  }, [decoderManager, getTargetFrameInfo, inputMode, maskFrameForCurrentFocus, isAccurateSeekNeeded, selectedAssetId, makeDecoderId, focusFrameOverride]);
+    },
+    [
+      decoderManager,
+      getTargetFrameInfo,
+      isPlaying,
+      maskFrameForCurrentFocus,
+      isAccurateSeekNeeded,
+      selectedAssetId,
+      makeDecoderId,
+    ],
+  );
+  
 
 
 
@@ -994,7 +1059,6 @@ const VideoPreview: React.FC<
       clip?.preprocessors?.forEach((p) => {
         if (p.assetId) ids.add(p.assetId);
       });
-
     
       for (const id of ids) {
         try {
@@ -1026,7 +1090,6 @@ const VideoPreview: React.FC<
             timestamp: number;
             duration: number;
           }) => {
-            console.log("onFrame", id, data);
             drawWrappedCanvas(data, decoderMaskFrameRef.current);
           };
 
@@ -1077,7 +1140,7 @@ const VideoPreview: React.FC<
 
   useEffect(() => {
     void seekToCurrentFrame();
-  }, [seekToCurrentFrame, mediaInfoVersion]);
+  }, [seekToCurrentFrame]);
 
   const startRendering = useCallback(async () => {
     if (!canvasRef.current) return;
@@ -1121,6 +1184,15 @@ const VideoPreview: React.FC<
     };
 
     try {
+      // Ensure the decoder is positioned at our intended start time before iterating.
+      // This is particularly important when replaying after hitting end-of-stream, where
+      // the underlying decoder/worker may not automatically rewind for a backwards range.
+      if (!checkCancel()) return;
+      try {
+        await decoderManager.seek(logicalId, startTime, true);
+      } catch {}
+      if (!checkCancel()) return;
+
       await decoderManager.iterate(
         logicalId,
         startTime,
@@ -1254,6 +1326,22 @@ const VideoPreview: React.FC<
     inputId,
     inputMode,
   ]);
+
+  // Restart iteration if focusFrame jumps backwards during playback (e.g. replay from end).
+  useEffect(() => {
+    if (!isPlaying) {
+      prevFocusFrameWhilePlayingRef.current = focusFrame;
+      return;
+    }
+    const prev = prevFocusFrameWhilePlayingRef.current;
+    prevFocusFrameWhilePlayingRef.current = focusFrame;
+    if (typeof prev === "number" && Number.isFinite(prev)) {
+      // Any backwards jump indicates a discontinuity (scrub or replay). Restart decode.
+      if (focusFrame < prev) {
+        void startRendering();
+      }
+    }
+  }, [focusFrame, isPlaying, startRendering]);
 
   // If video is paused, reapply filters and applicators when they change
   useEffect(() => {
@@ -1463,9 +1551,19 @@ const VideoPreview: React.FC<
 
   const handleClick = useCallback(() => {
     if (isFullscreen) return;
+    if (hidden) return;
     clearSelection();
     addClipSelection(clipId);
-  }, [addClipSelection, clipId, isFullscreen]);
+  }, [addClipSelection, clipId, isFullscreen, hidden]);
+
+  // If we become visible after being hidden (prewarmed), force a redraw so the
+  // already-decoded backing canvas is displayed immediately.
+  useEffect(() => {
+    if (hidden) return;
+    try {
+      imageRef.current?.getLayer()?.batchDraw?.();
+    } catch {}
+  }, [hidden]);
 
   useEffect(() => {
     const transformer = transformerRef.current;
@@ -1613,6 +1711,12 @@ const VideoPreview: React.FC<
     };
   }, [clipTransform?.crop, displayWidth, displayHeight]);
 
+  
+
+  // Only render Konva nodes when the clip is active in the current frame and not explicitly hidden.
+  if (hidden || !isInFrame) {
+    return null;
+  }
 
 
 
@@ -1625,8 +1729,12 @@ const VideoPreview: React.FC<
         clipWidth={rectWidth}
         clipHeight={rectHeight}
       >
+        
         <Image
-          draggable={tool === "pointer" && !isTransforming && !inputMode}
+          
+          visible={!hidden}
+          listening={!hidden}
+          draggable={tool === "pointer" && !isTransforming && !inputMode && !hidden}
           ref={imageRef}
           image={imageSource || undefined}
           x={clipTransform?.x ?? offsetX}
@@ -1758,12 +1866,14 @@ const VideoPreview: React.FC<
         anchorStrokeWidth={1}
         borderStrokeWidth={2}
         visible={
+          !hidden &&
           tool === "pointer" &&
           isSelected &&
           !isFullscreen &&
           overlap &&
           !inputMode
         }
+        listening={!hidden}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
         boundBoxFunc={transformerBoundBoxFunc as any}
         ref={(node) => {

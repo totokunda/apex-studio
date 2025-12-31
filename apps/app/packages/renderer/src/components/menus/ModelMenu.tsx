@@ -587,7 +587,7 @@ const ModelMenu: React.FC = () => {
       }
       return response.data ?? [];
     },
-    placeholderData: [],
+    placeholderData: (prev) => prev ?? [],
     retry: false,
     refetchOnWindowFocus: false,
   });

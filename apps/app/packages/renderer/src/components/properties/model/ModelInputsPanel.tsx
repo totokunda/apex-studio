@@ -17,6 +17,7 @@ import AudioInput from "./inputs/AudioInput";
 import SchedulerPanel from "./SchedulerPanel";
 import AttentionPanel from "./AttentionPanel";
 import ImageInputList from "./inputs/ImageInputList";
+import TextInputList from "./inputs/TextInputList";
 import { useControlsStore } from "@/lib/control";
 import { useResolutionAspectSync } from "./useResolutionAspectSync";
 import type { ManifestComponent } from "@/lib/manifest/api";
@@ -320,6 +321,62 @@ export const ModelInputsPanel: React.FC<{
                           placeholder={input?.placeholder}
                         />
                       );
+                    case "text_list": {
+                      const parseTextListValue = (v: any) => {
+                        if (!v) return [] as string[];
+                        if (Array.isArray(v)) {
+                          return v.map((x) => (x == null ? "" : String(x)));
+                        }
+                        if (typeof v === "string") {
+                          try {
+                            const parsed = JSON.parse(v);
+                            if (Array.isArray(parsed)) {
+                              return parsed.map((x) =>
+                                x == null ? "" : String(x),
+                              );
+                            }
+                          } catch {
+                            // ignore
+                          }
+                          // fallback: treat as newline-separated
+                          return v
+                            .split("\n")
+                            .map((s) => s.trim())
+                            .filter((s) => s.length > 0);
+                        }
+                        return [String(v)];
+                      };
+
+                      const currentVal: string[] = parseTextListValue(
+                        (input as any)?.value ?? (input as any)?.default,
+                      );
+                      const maxItems =
+                        (input as any)?.max_items ?? (input as any)?.maxItems;
+
+                      return (
+                        <TextInputList
+                          key={inputId}
+                          label={input?.label}
+                          description={input?.description}
+                          value={currentVal}
+                          defaultValue={
+                            Array.isArray((input as any)?.default)
+                              ? ((input as any).default as string[])
+                              : undefined
+                          }
+                          maxItems={
+                            typeof maxItems === "number" ? maxItems : undefined
+                          }
+                          placeholder={input?.placeholder}
+                          onChange={(vals) =>
+                            updateModelInput(clipId, inputId, {
+                              value:
+                                vals && vals.length ? JSON.stringify(vals) : "",
+                            })
+                          }
+                        />
+                      );
+                    }
                     case "image+mask": {
                       const parseImageValue = (v: any) => {
                         if (!v) return null;

@@ -368,8 +368,10 @@ spec:
       required: false
       default: "same"
       options:
-        - "same"
-        - "cpu"
+        - name: "Same"
+          value: "same"
+        - name: "CPU"
+          value: "cpu"
     - id: use_chunking
       label: Use Chunking
       description: Use chunking for the upscaling 

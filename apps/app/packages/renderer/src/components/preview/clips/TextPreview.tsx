@@ -57,6 +57,16 @@ const TextPreview: React.FC<
   const setClipTransform = useClipStore((s) => s.setClipTransform);
   const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
   const clip = useClipStore((s) => s.getClipById(clipId)) as TextClipProps;
+  const focusFrame = useControlsStore((s) => s.focusFrame);
+  const isInFrame = useMemo(() => {
+    const f = Number(focusFrame);
+    if (!Number.isFinite(f)) return true;
+    const start = Number((clip as any)?.startFrame ?? 0);
+    const endRaw = (clip as any)?.endFrame;
+    const end =
+      typeof endRaw === "number" && Number.isFinite(endRaw) ? endRaw : Infinity;
+    return f >= start && f <= end;
+  }, [focusFrame, (clip as any)?.startFrame, (clip as any)?.endFrame]);
   const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
   const addClipSelection = useControlsStore((s) => s.addClipSelection);
   const clearSelection = useControlsStore((s) => s.clearSelection);
@@ -139,6 +149,15 @@ const TextPreview: React.FC<
   if (!clip) {
     return null;
   }
+
+  // If the playhead leaves this clip, exit editing mode to avoid stray keyboard/mouse handlers.
+  useEffect(() => {
+    if (!isInFrame && isEditing) {
+      setIsEditing(false);
+      setSelectionStart(null);
+      setSelectionEnd(null);
+    }
+  }, [isInFrame, isEditing]);
 
   const updateGuidesAndMaybeSnap = useCallback(
     (opts: { snap: boolean }) => {
@@ -457,6 +476,7 @@ const TextPreview: React.FC<
 
   // Build a map of all character bounding boxes for debugging and interaction
   const characterBoundingBoxes = useMemo(() => {
+    if (!isInFrame) return [];
     const node = textRef.current;
     if (!node) return [];
 
@@ -538,6 +558,7 @@ const TextPreview: React.FC<
     defaultWidth,
     defaultHeight,
     getDisplayedChars,
+    isInFrame,
   ]);
 
   // Handle keyboard input
@@ -1679,6 +1700,7 @@ const TextPreview: React.FC<
   ]);
 
   useEffect(() => {
+    if (!isInFrame) return;
     const handleWindowClick = (e: MouseEvent) => {
       if (!isSelected) return;
 
@@ -1717,9 +1739,10 @@ const TextPreview: React.FC<
     return () => {
       window.removeEventListener("click", handleWindowClick);
     };
-  }, [clipId, isSelected, removeClipSelection, isEditing]);
+  }, [clipId, isSelected, removeClipSelection, isEditing, isInFrame]);
 
   useEffect(() => {
+    if (!isInFrame) return;
     if (!isEditing) {
       // Clean up zero-width spaces when exiting edit mode
       const ZERO_WIDTH_SPACE = "\u200B";
@@ -1743,7 +1766,7 @@ const TextPreview: React.FC<
         inputRef.current?.focus();
       }, 0);
     }
-  }, [isEditing, clip?.text, temporaryText, clipId]);
+  }, [isEditing, clip?.text, temporaryText, clipId, isInFrame]);
 
   // Exit editing mode if node is deselected
   useEffect(() => {
@@ -1800,6 +1823,7 @@ const TextPreview: React.FC<
 
   // Listen for global mouse up to end dragging
   useEffect(() => {
+    if (!isInFrame) return;
     const handleGlobalMouseUp = () => {
       if (isDragging) {
         // Create a fake Konva event for the handler
@@ -1817,10 +1841,11 @@ const TextPreview: React.FC<
     return () => {
       window.removeEventListener("mouseup", handleGlobalMouseUp);
     };
-  }, [isDragging, handleMouseUp]);
+  }, [isDragging, handleMouseUp, isInFrame]);
 
   // Blinking caret animation
   useEffect(() => {
+    if (!isInFrame) return;
     if (!isEditing) {
       setCaretVisible(true);
       return;
@@ -1834,7 +1859,7 @@ const TextPreview: React.FC<
     }, 530);
 
     return () => clearInterval(interval);
-  }, [isEditing, caretPosition]);
+  }, [isEditing, caretPosition, isInFrame]);
 
   // Calculate merged selection rectangles (one per line to eliminate gaps)
   const selectedCharacterBoxes = useMemo(() => {
@@ -2037,6 +2062,10 @@ const TextPreview: React.FC<
     if (!textRef.current) return;
     textRef.current.getStage()!.container().style.cursor = "default";
   }, []);
+
+  if (!isInFrame) {
+    return null;
+  }
 
   return (
     <React.Fragment>

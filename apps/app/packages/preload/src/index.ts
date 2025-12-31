@@ -78,3 +78,6 @@ export * from "./settings.ts";
 
 // Export result caching (persistent, electron-store)
 export * from "./exportCache.ts";
+
+// Python process management (bundled API control)
+export * from "./python.ts";
