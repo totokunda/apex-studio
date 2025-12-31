@@ -56,7 +56,9 @@ class WanT2IEngine(WanShared):
             and low_noise_guidance_scale is not None
         ):
             guidance_scale = [high_noise_guidance_scale, low_noise_guidance_scale]
-            safe_emit_progress(progress_callback, 0.01, "Using high/low-noise guidance scales")
+            safe_emit_progress(
+                progress_callback, 0.01, "Using high/low-noise guidance scales"
+            )
 
         if not self.text_encoder:
             safe_emit_progress(progress_callback, 0.02, "Loading text encoder")

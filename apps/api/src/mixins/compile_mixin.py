@@ -34,7 +34,9 @@ class CompileMixin:
 
         compile_type = cfg.get("type", "torch.compile")
         # For now we only support torch.compile based flows.
-        return isinstance(compile_type, str) and compile_type.startswith("torch.compile")
+        return isinstance(compile_type, str) and compile_type.startswith(
+            "torch.compile"
+        )
 
     def _compile_from_config(self, module: Any, component: Dict[str, Any]):
         """
@@ -53,7 +55,9 @@ class CompileMixin:
             return module
 
         if not hasattr(torch, "compile"):
-            log.warning("torch.compile is not available on this PyTorch install; skipping compilation.")
+            log.warning(
+                "torch.compile is not available on this PyTorch install; skipping compilation."
+            )
             return module
 
         if module is None or not isinstance(module, torch.nn.Module):
@@ -85,7 +89,9 @@ class CompileMixin:
         name = component.get("name") or component.get("type") or type(module).__name__
 
         try:
-            log.info(f"Compiling component '{name}' with torch.compile (kwargs={compile_kwargs})")
+            log.info(
+                f"Compiling component '{name}' with torch.compile (kwargs={compile_kwargs})"
+            )
             compiled = torch.compile(module, **compile_kwargs)
             return compiled
         except Exception as e:
@@ -105,5 +111,3 @@ class CompileMixin:
         except Exception:
             # Very defensive: never let compilation break model loading.
             return module
-
-

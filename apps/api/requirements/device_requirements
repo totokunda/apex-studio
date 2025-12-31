@@ -1,0 +1,37 @@
+#
+# Device / accelerator dependencies
+#
+# NOTE:
+# - This file is kept for backwards compatibility.
+# - For "it just works" installs per machine type (CPU/MPS/ROCm + CUDA Ampere/Hopper/Blackwell),
+#   prefer `requirements/machines/*.txt`.
+#
+
+# -------------------------
+# CUDA (generic, non-arch-specific)
+# -------------------------
+# GPU-enabled rembg (pulls CUDA-enabled backends where available)
+rembg[gpu]; sys_platform == "linux" or sys_platform == "win32"
+
+# Common CUDA performance libs (Linux-only)
+# - These frequently require a matching CUDA toolkit + compiler toolchain.
+# - If builds fail, use `apps/api/scripts/install.sh` (it handles source builds + fallbacks).
+xformers==0.0.33.post2; sys_platform == "linux"
+transformer_engine==2.10.0; sys_platform == "linux"
+apex==0.9.10dev; sys_platform == "linux"
+
+# -------------------------
+# ROCm (Linux)
+# -------------------------
+rembg[rocm]; sys_platform == "linux"
+
+# -------------------------
+# CPU (all platforms)
+# -------------------------
+rembg[cpu]
+
+# -------------------------
+# MLX (Apple Silicon / Metal)
+# -------------------------
+mlx; sys_platform == "darwin"
+mlx[cpu]; sys_platform != "darwin"

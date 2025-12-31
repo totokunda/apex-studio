@@ -6,6 +6,7 @@ from diffusers.image_processor import VaeImageProcessor
 from loguru import logger
 from src.utils.progress import safe_emit_progress
 
+
 class QwenImageShared(BaseEngine):
     """Base class for QwenImage engine implementations containing common functionality"""
 
@@ -142,17 +143,17 @@ class QwenImageShared(BaseEngine):
 
         txt = [template.format(base_img_prompt + e) for e in prompt]
 
-        
-
-        prompt_hash = self.text_encoder.hash({
-            "prompt": prompt,
-            "image": image,
-            "device": device,
-            "dtype": dtype,
-            "max_sequence_length": max_sequence_length,
-            "num_images_per_prompt": num_images_per_prompt,
-            "text_encoder_kwargs": text_encoder_kwargs,
-        })
+        prompt_hash = self.text_encoder.hash(
+            {
+                "prompt": prompt,
+                "image": image,
+                "device": device,
+                "dtype": dtype,
+                "max_sequence_length": max_sequence_length,
+                "num_images_per_prompt": num_images_per_prompt,
+                "text_encoder_kwargs": text_encoder_kwargs,
+            }
+        )
 
         cached = None
         if self.text_encoder.enable_cache:
@@ -160,7 +161,9 @@ class QwenImageShared(BaseEngine):
             cached = self.text_encoder.load_cached(prompt_hash)
 
         if cached is not None:
-            safe_emit_progress(progress_callback, 0.10, "Loaded cached prompt embeddings")
+            safe_emit_progress(
+                progress_callback, 0.10, "Loaded cached prompt embeddings"
+            )
             prompt_embeds, prompt_embeds_mask = cached
         else:
             safe_emit_progress(progress_callback, 0.12, "Encoding prompt embeddings")
@@ -177,7 +180,9 @@ class QwenImageShared(BaseEngine):
                     **text_encoder_kwargs,
                 }
             else:
-                safe_emit_progress(progress_callback, 0.14, "Preparing vision-language inputs")
+                safe_emit_progress(
+                    progress_callback, 0.14, "Preparing vision-language inputs"
+                )
                 processor = self.helpers["image.processor"]
                 model_inputs = processor(
                     text=txt,
@@ -200,12 +205,18 @@ class QwenImageShared(BaseEngine):
                 )
             else:
                 if not self.text_encoder.model_loaded:
-                    safe_emit_progress(progress_callback, 0.18, "Loading text encoder model")
-                    self.text_encoder.model = self.text_encoder.load_model(no_weights=False)
+                    safe_emit_progress(
+                        progress_callback, 0.18, "Loading text encoder model"
+                    )
+                    self.text_encoder.model = self.text_encoder.load_model(
+                        no_weights=False
+                    )
                     self.text_encoder.model = self.text_encoder.model.to(dtype)
                     self.text_encoder.model_loaded = True
 
-                safe_emit_progress(progress_callback, 0.22, "Running text+vision encoder")
+                safe_emit_progress(
+                    progress_callback, 0.22, "Running text+vision encoder"
+                )
 
                 encoder_outputs = self.text_encoder.model(**input_kwargs)
                 attention_mask = model_inputs.attention_mask
@@ -363,12 +374,11 @@ class QwenImageShared(BaseEngine):
                 denoise_progress_callback(0.0, "Starting denoise")
             except Exception:
                 pass
-        
+
         try:
             self.scheduler.set_begin_index(0)
         except Exception:
             pass
-        
 
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):

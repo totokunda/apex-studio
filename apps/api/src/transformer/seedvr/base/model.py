@@ -17,7 +17,7 @@ from typing import Optional, Tuple, Union, Callable
 import torch
 from torch import nn
 
-from src.transformer.seedvr.base_v2.cache import Cache  
+from src.transformer.seedvr.base_v2.cache import Cache
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
 from diffusers.models.cache_utils import CacheMixin
@@ -29,23 +29,28 @@ from src.transformer.seedvr.base.nablocks import get_nablock
 from src.transformer.seedvr.base.normalization import get_norm_layer
 from src.transformer.seedvr.base.patch import NaPatchIn, NaPatchOut
 
+
 # Fake func, no checkpointing is required for inference
-def gradient_checkpointing(module: Union[Callable, nn.Module], *args, enabled: bool, **kwargs):
+def gradient_checkpointing(
+    module: Union[Callable, nn.Module], *args, enabled: bool, **kwargs
+):
     return module(*args, **kwargs)
+
 
 @dataclass
 class NaDiTOutput:
     vid_sample: torch.Tensor
 
 
-class SeedVR2Transformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin):
+class SeedVR2Transformer3DModel(
+    ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin
+):
     """
     SeedVR2 Transformer 3D Model
     """
 
     gradient_checkpointing = False
 
-    
     def __init__(
         self,
         vid_in_channels: int,
@@ -76,11 +81,13 @@ class SeedVR2Transformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromO
         **kwargs,
     ):
         if block_type is None:
-            block_type = ['mmdit_sr'] * num_layers
+            block_type = ["mmdit_sr"] * num_layers
         if window is None:
-            window = [(4,3,3)] * num_layers
+            window = [(4, 3, 3)] * num_layers
         if window_method is None:
-            window_method = ['720pwin_by_size_bysize','720pswin_by_size_bysize'] * (num_layers // 2)
+            window_method = ["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * (
+                num_layers // 2
+            )
         ada = get_ada_layer(ada)
         norm = get_norm_layer(norm)
         qk_norm = get_norm_layer(qk_norm)
@@ -167,7 +174,9 @@ class SeedVR2Transformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromO
     ):
         # Text input.
         if txt_shape.size(-1) == 1 and self.need_txt_repeat:
-            txt, txt_shape = na.repeat(txt, txt_shape, "l c -> t l c", t=vid_shape[:, 0])
+            txt, txt_shape = na.repeat(
+                txt, txt_shape, "l c -> t l c", t=vid_shape[:, 0]
+            )
         # slice vid after patching in when using sequence parallelism
         txt = self.txt_in(txt)
 
@@ -233,11 +242,13 @@ class SeedVR2Transformer3DModelUpscaler(nn.Module):
         **kwargs,
     ):
         if block_type is None:
-            block_type = ['mmdit_sr'] * num_layers
+            block_type = ["mmdit_sr"] * num_layers
         if window is None:
-            window = [(4,3,3)] * num_layers
+            window = [(4, 3, 3)] * num_layers
         if window_method is None:
-            window_method = ['720pwin_by_size_bysize','720pswin_by_size_bysize'] * (num_layers // 2)
+            window_method = ["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * (
+                num_layers // 2
+            )
         ada = get_ada_layer(ada)
         norm = get_norm_layer(norm)
         qk_norm = get_norm_layer(qk_norm)
@@ -332,7 +343,9 @@ class SeedVR2Transformer3DModelUpscaler(nn.Module):
 
         # Text input.
         if txt_shape.size(-1) == 1 and self.need_txt_repeat:
-            txt, txt_shape = na.repeat(txt, txt_shape, "l c -> t l c", t=vid_shape[:, 0])
+            txt, txt_shape = na.repeat(
+                txt, txt_shape, "l c -> t l c", t=vid_shape[:, 0]
+            )
         # slice vid after patching in when using sequence parallelism
         txt = self.txt_in(txt)
 

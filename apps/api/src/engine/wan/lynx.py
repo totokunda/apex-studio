@@ -37,8 +37,6 @@ class LynxEngine(WanShared):
             or cfg.get("adapter_dir")
             or override
         )
-        
-    
 
     # ------------------------------- Main entry ------------------------------- #
     def run(
@@ -110,8 +108,6 @@ class LynxEngine(WanShared):
             offload=False,
         )
         safe_emit_progress(progress_callback, 0.18, "Prompts ready")
-        
-        
 
         batch_size = prompt_embeds.shape[0]
 
@@ -144,7 +140,9 @@ class LynxEngine(WanShared):
         safe_emit_progress(progress_callback, 0.26, "Scheduler prepared")
 
         transformer_dtype = self.component_dtypes["transformer"]
-        safe_emit_progress(progress_callback, 0.28, "Moving prompt embeddings to device")
+        safe_emit_progress(
+            progress_callback, 0.28, "Moving prompt embeddings to device"
+        )
         prompt_embeds = prompt_embeds.to(self.device, dtype=transformer_dtype)
         if negative_prompt_embeds is not None:
             negative_prompt_embeds = negative_prompt_embeds.to(
@@ -179,7 +177,9 @@ class LynxEngine(WanShared):
         self.to_device(self.transformer)
         safe_emit_progress(progress_callback, 0.38, "Transformer on device")
         # Preserve any deferred group offloading config across adapter wrapping.
-        pending_offload = getattr(self.transformer, "_apex_pending_group_offloading", None)
+        pending_offload = getattr(
+            self.transformer, "_apex_pending_group_offloading", None
+        )
         safe_emit_progress(progress_callback, 0.39, "Loading Lynx adapters")
         self.transformer = helper.load_adapters(
             self.transformer, adapter_root, device=self.device, dtype=transformer_dtype
@@ -187,7 +187,8 @@ class LynxEngine(WanShared):
         safe_emit_progress(progress_callback, 0.40, "Lynx adapters loaded")
         if (
             pending_offload is not None
-            and getattr(self.transformer, "_apex_pending_group_offloading", None) is None
+            and getattr(self.transformer, "_apex_pending_group_offloading", None)
+            is None
         ):
             setattr(self.transformer, "_apex_pending_group_offloading", pending_offload)
 
@@ -195,7 +196,9 @@ class LynxEngine(WanShared):
             self.preloaded_loras.keys()
         )
         if lora_items:
-            safe_emit_progress(progress_callback, 0.41, f"Applying {len(lora_items)} LoRAs")
+            safe_emit_progress(
+                progress_callback, 0.41, f"Applying {len(lora_items)} LoRAs"
+            )
             self.logger.info(f"Applying {len(lora_items)} loras to Lynx transformer")
             preloaded_loras = [
                 (lora.source, lora.scale, lora.name)
@@ -208,10 +211,10 @@ class LynxEngine(WanShared):
                 model=self.transformer,
             )
             # Group offloading for transformers must be enabled after LoRA/adapters.
-            
+
             self._apply_pending_group_offloading(self.transformer)
             safe_emit_progress(progress_callback, 0.42, "LoRAs applied")
-            
+
         safe_emit_progress(progress_callback, 0.43, "Building IP states")
         ip_states, ip_states_uncond = helper.build_ip_states(
             embeds, device=self.device, dtype=transformer_dtype
@@ -223,7 +226,9 @@ class LynxEngine(WanShared):
             safe_emit_progress(progress_callback, 0.45, "Preparing reference buffer")
 
             aligned_face = helper.align_face(face_image, face_landmarks, face_size=256)
-            safe_emit_progress(progress_callback, 0.48, "Encoding reference buffer (cond/uncond)")
+            safe_emit_progress(
+                progress_callback, 0.48, "Encoding reference buffer (cond/uncond)"
+            )
             ref_gen = (
                 torch.Generator(device=self.device).manual_seed(seed + 1)
                 if seed is not None
@@ -268,7 +273,7 @@ class LynxEngine(WanShared):
             merged_attention_kwargs_uncond.update(
                 {"ref_buffer": ref_buffer_uncond, "ref_scale": ref_scale}
             )
-            
+
         if face_token_embeds is None:
             transformer_dtype = self.component_dtypes["transformer"]
             # 3.1 Encoder input face embedding
@@ -278,13 +283,17 @@ class LynxEngine(WanShared):
             )
             safe_emit_progress(progress_callback, 0.50, "Face embedding ready")
         else:
-            face_token_embeds = torch.cat([torch.zeros_like(face_token_embeds), face_token_embeds], dim=0)
+            face_token_embeds = torch.cat(
+                [torch.zeros_like(face_token_embeds), face_token_embeds], dim=0
+            )
 
-        face_token_embeds = face_token_embeds.to(device=self.device, dtype=transformer_dtype)
-        
+        face_token_embeds = face_token_embeds.to(
+            device=self.device, dtype=transformer_dtype
+        )
+
         merged_attention_kwargs.update({"image_embed": face_token_embeds})
         merged_attention_kwargs_uncond.update({"image_embed": face_token_embeds})
-        
+
         if offload:
             safe_emit_progress(progress_callback, 0.50, "Offloading Lynx helper")
             self._offload("helper")

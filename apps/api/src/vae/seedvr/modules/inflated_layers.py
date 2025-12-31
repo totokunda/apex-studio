@@ -28,6 +28,7 @@ from src.vae.seedvr.modules.inflated_lib import (
 _inflation_mode_t = Literal["none", "tail", "replicate"]
 _memory_device_t = Optional[Literal["cpu", "same"]]
 
+
 class InflatedCausalConv3d(Conv3d):
     def __init__(
         self,
@@ -46,7 +47,9 @@ class InflatedCausalConv3d(Conv3d):
     def set_memory_device(self, memory_device: _memory_device_t):
         self.memory_device = memory_device
 
-    def forward(self, input: Tensor, memory_state: MemoryState = MemoryState.DISABLED) -> Tensor:
+    def forward(
+        self, input: Tensor, memory_state: MemoryState = MemoryState.DISABLED
+    ) -> Tensor:
         mem_size = self.stride[0] - self.kernel_size[0]
         if (self.memory is not None) and (memory_state == MemoryState.ACTIVE):
             input = extend_head(input, memory=self.memory)
@@ -68,7 +71,14 @@ class InflatedCausalConv3d(Conv3d):
         return super().forward(input)
 
     def _load_from_state_dict(
-        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
     ):
         if self.inflation_mode != "none":
             state_dict = modify_state_dict(

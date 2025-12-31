@@ -34,6 +34,7 @@ NEG_EMB_PATH = os.path.join(ASSETS_PATH, "neg_emb.pt")
 @dataclass
 class SamplerModelArgs:
     """Arguments passed to the model function during sampling."""
+
     x_t: Tensor
     t: Tensor
     i: int
@@ -194,15 +195,15 @@ class SeedVRUpscaleEngine(BaseEngine):
         processed_frames = []
         for frame in frames:
             # Resize using area interpolation (like NaResize)
-            frame = self._aspect_ratio_resize(frame, max_area=target_height * target_width, mod_value=16)[0]
+            frame = self._aspect_ratio_resize(
+                frame, max_area=target_height * target_width, mod_value=16
+            )[0]
             processed_frames.append(frame)
 
         # Convert to tensor [T, C, H, W] normalized to [-1, 1]
         frame_tensors = []
         for frame in tqdm(processed_frames, desc="Converting frames to tensors"):
-            tensor = torch.from_numpy(
-                __import__("numpy").array(frame)
-            ).float() / 255.0
+            tensor = torch.from_numpy(__import__("numpy").array(frame)).float() / 255.0
             tensor = tensor.permute(2, 0, 1)  # HWC -> CHW
             tensor = (tensor - 0.5) / 0.5  # Normalize to [-1, 1]
             frame_tensors.append(tensor)
@@ -288,26 +289,26 @@ class SeedVRUpscaleEngine(BaseEngine):
             Tuple of (list of chunk tensors, list of (start, end) indices)
         """
         c, t, h, w = video.shape
-        
+
         if t <= chunk_frames:
             # No chunking needed
             return [video], [(0, t)]
-        
+
         chunks = []
         indices = []
         stride = chunk_frames - overlap_frames
-        
+
         start = 0
         while start < t:
             end = min(start + chunk_frames, t)
             chunk = video[:, start:end]
             chunks.append(chunk)
             indices.append((start, end))
-            
+
             if end >= t:
                 break
             start += stride
-        
+
         return chunks, indices
 
     def _blend_chunks(
@@ -333,45 +334,49 @@ class SeedVRUpscaleEngine(BaseEngine):
         """
         if len(chunks) == 1:
             return chunks[0]
-        
+
         # Get dimensions from first chunk
         _, c, h, w = chunks[0].shape
         device = chunks[0].device
         dtype = chunks[0].dtype
-        
+
         # Initialize output tensor and weight accumulator
         output = torch.zeros(total_frames, c, h, w, device=device, dtype=dtype)
         weights = torch.zeros(total_frames, 1, 1, 1, device=device, dtype=dtype)
-        
+
         for chunk, (start, end) in zip(chunks, indices):
             chunk_len = end - start
-            
+
             # Create blending weights for this chunk
             chunk_weights = torch.ones(chunk_len, 1, 1, 1, device=device, dtype=dtype)
-            
+
             # Apply fade-in at the start (except for first chunk)
             if start > 0:
                 fade_len = min(overlap_frames, chunk_len)
                 # Cosine fade-in: 0 -> 1
-                t = torch.linspace(0, torch.pi / 2, fade_len, device=device, dtype=dtype)
+                t = torch.linspace(
+                    0, torch.pi / 2, fade_len, device=device, dtype=dtype
+                )
                 fade_in = torch.sin(t).view(-1, 1, 1, 1)
                 chunk_weights[:fade_len] = fade_in
-            
+
             # Apply fade-out at the end (except for last chunk)
             if end < total_frames:
                 fade_len = min(overlap_frames, chunk_len)
                 # Cosine fade-out: 1 -> 0
-                t = torch.linspace(0, torch.pi / 2, fade_len, device=device, dtype=dtype)
+                t = torch.linspace(
+                    0, torch.pi / 2, fade_len, device=device, dtype=dtype
+                )
                 fade_out = torch.cos(t).view(-1, 1, 1, 1)
                 chunk_weights[-fade_len:] = chunk_weights[-fade_len:] * fade_out
-            
+
             # Accumulate weighted chunk
             output[start:end] += chunk[:chunk_len] * chunk_weights
             weights[start:end] += chunk_weights
-        
+
         # Normalize by accumulated weights
         output = output / weights.clamp(min=1e-8)
-        
+
         return output
 
     # -------------------------------------------------------------------------
@@ -401,9 +406,13 @@ class SeedVRUpscaleEngine(BaseEngine):
             self.load_component_by_type("vae")
         self.to_device(self.vae)
         if hasattr(self.vae, "set_memory_limit"):
-            self.vae.set_memory_limit(conv_max_mem=conv_max_mem, norm_max_mem=norm_max_mem)
+            self.vae.set_memory_limit(
+                conv_max_mem=conv_max_mem, norm_max_mem=norm_max_mem
+            )
         if hasattr(self.vae, "set_causal_slicing"):
-            self.vae.set_causal_slicing(split_size=split_size, memory_device=memory_device)
+            self.vae.set_causal_slicing(
+                split_size=split_size, memory_device=memory_device
+            )
 
         latents = []
         dtype = self._vae_dtype
@@ -430,7 +439,7 @@ class SeedVRUpscaleEngine(BaseEngine):
 
         if offload:
             self._offload("vae")
-        
+
         # Synchronize before clearing cache for consistent memory behavior
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -461,9 +470,13 @@ class SeedVRUpscaleEngine(BaseEngine):
             self.load_component_by_type("vae")
         self.to_device(self.vae)
         if hasattr(self.vae, "set_memory_limit"):
-            self.vae.set_memory_limit(conv_max_mem=conv_max_mem, norm_max_mem=norm_max_mem)
+            self.vae.set_memory_limit(
+                conv_max_mem=conv_max_mem, norm_max_mem=norm_max_mem
+            )
         if hasattr(self.vae, "set_causal_slicing"):
-            self.vae.set_causal_slicing(split_size=split_size, memory_device=memory_device)
+            self.vae.set_causal_slicing(
+                split_size=split_size, memory_device=memory_device
+            )
         samples = []
         dtype = self._vae_dtype
         scale = self._vae_scaling_factor
@@ -488,7 +501,7 @@ class SeedVRUpscaleEngine(BaseEngine):
 
         if offload:
             self._offload("vae")
-        
+
         # Synchronize before clearing cache for consistent memory behavior
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -511,9 +524,7 @@ class SeedVRUpscaleEngine(BaseEngine):
         timesteps = torch.linspace(T, 0, num_steps + 1, device=device)
         return timesteps
 
-    def _timestep_transform(
-        self, timesteps: Tensor, latent_shape: Tensor
-    ) -> Tensor:
+    def _timestep_transform(self, timesteps: Tensor, latent_shape: Tensor) -> Tensor:
         """
         Apply timestep shifting based on resolution (as in SeedVR).
 
@@ -569,9 +580,7 @@ class SeedVRUpscaleEngine(BaseEngine):
             Condition tensor [T, H, W, C+1]
         """
         t, h, w, c = noise.shape
-        cond = torch.zeros(
-            [t, h, w, c + 1], device=noise.device, dtype=noise.dtype
-        )
+        cond = torch.zeros([t, h, w, c + 1], device=noise.device, dtype=noise.dtype)
 
         # SR task: use blurred latent as condition with mask=1
         cond[..., :-1] = latent_blur
@@ -662,9 +671,7 @@ class SeedVRUpscaleEngine(BaseEngine):
     # Main Inference
     # -------------------------------------------------------------------------
 
-    def _flatten_latents(
-        self, latents: List[Tensor]
-    ) -> Tuple[Tensor, Tensor]:
+    def _flatten_latents(self, latents: List[Tensor]) -> Tuple[Tensor, Tensor]:
         """Flatten list of latents for batched processing."""
         shapes = torch.stack(
             [torch.tensor(x.shape[:-1], device=latents[0].device) for x in latents]
@@ -672,9 +679,7 @@ class SeedVRUpscaleEngine(BaseEngine):
         flat = torch.cat([x.flatten(0, -2) for x in latents])
         return flat, shapes
 
-    def _unflatten_latents(
-        self, flat: Tensor, shapes: Tensor
-    ) -> List[Tensor]:
+    def _unflatten_latents(self, flat: Tensor, shapes: Tensor) -> List[Tensor]:
         """Unflatten batched latents back to list."""
         lengths = shapes.prod(-1)
         splits = flat.split(lengths.tolist())
@@ -767,7 +772,9 @@ class SeedVRUpscaleEngine(BaseEngine):
                 # From original: scale = cfg_scale if (i+1)/len(timesteps) <= partial else 1.0
                 # diffusion.cfg.partial defaults to 1.0 (always apply full CFG)
                 progress_ratio = (i + 1) / num_steps
-                effective_cfg_scale = cfg_scale if progress_ratio <= self._cfg_partial else 1.0
+                effective_cfg_scale = (
+                    cfg_scale if progress_ratio <= self._cfg_partial else 1.0
+                )
 
                 pred = self._classifier_free_guidance(
                     pos_pred, neg_pred, effective_cfg_scale, cfg_rescale
@@ -796,7 +803,7 @@ class SeedVRUpscaleEngine(BaseEngine):
             empty_cache()
             safe_emit_progress(progress_callback, 1.0, "SeedVR sampling complete")
             return latents
-        
+
         # Synchronize and clear cache before VAE decode
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -806,13 +813,13 @@ class SeedVRUpscaleEngine(BaseEngine):
         # VAE decode
         self.to_device(self.vae)
         samples = self._seedvr_vae_decode(latents, offload=dit_offload)
-        
+
         # Free latents after decoding
         del latents
 
         if dit_offload:
             self._offload("vae")
-        
+
         # Final synchronization and cache clear
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -920,7 +927,7 @@ class SeedVRUpscaleEngine(BaseEngine):
         video_tensor = self._divisible_crop(video_tensor, (16, 16))
 
         total_frames = video_tensor.shape[1]
-        
+
         # Store original video for color fix (before any padding)
         input_video_for_colorfix = video_tensor.clone()
 
@@ -929,22 +936,29 @@ class SeedVRUpscaleEngine(BaseEngine):
         text_pos_embeds, text_neg_embeds = self._load_prompt_embeddings(self.device)
 
         # Determine if chunking is needed
-        use_chunking = chunk_frames is not None and total_frames > chunk_frames and not is_image_input and use_chunking
-        
+        use_chunking = (
+            chunk_frames is not None
+            and total_frames > chunk_frames
+            and not is_image_input
+            and use_chunking
+        )
+
         if use_chunking:
-            self.logger.info(f"Chunking enabled: {total_frames} frames -> chunks of {chunk_frames} with {chunk_overlap} overlap")
+            self.logger.info(
+                f"Chunking enabled: {total_frames} frames -> chunks of {chunk_frames} with {chunk_overlap} overlap"
+            )
             safe_emit_progress(progress_callback, 0.12, "Splitting video into chunks")
-            
+
             # Split video into chunks - extract chunk data as CPU tensors to avoid holding GPU memory
             chunks_cpu, chunk_indices = self._split_video_into_chunks(
                 video_tensor, chunk_frames, chunk_overlap
             )
             # Move chunks to CPU immediately to free GPU memory
             chunks_cpu = [c.cpu() for c in chunks_cpu]
-            
+
             # Move input video to CPU - we only need it for color fix at the end
             input_video_for_colorfix = input_video_for_colorfix.cpu()
-            
+
             # Free the original GPU video tensor
             del video_tensor
             if torch.cuda.is_available():
@@ -961,7 +975,9 @@ class SeedVRUpscaleEngine(BaseEngine):
             padded_chunks_cpu: List[Tensor] = []
             chunk_original_lens: List[int] = []
             for chunk in chunks_cpu:
-                chunk_padded, chunk_original_len = self._pad_video_frames(chunk, sp_size)
+                chunk_padded, chunk_original_len = self._pad_video_frames(
+                    chunk, sp_size
+                )
                 padded_chunks_cpu.append(chunk_padded)
                 chunk_original_lens.append(chunk_original_len)
 
@@ -996,15 +1012,19 @@ class SeedVRUpscaleEngine(BaseEngine):
             chunks_overall_end = 0.80
 
             for chunk_idx, (start, end) in enumerate(chunk_indices):
-                self.logger.info(f"Sampling chunk {chunk_idx + 1}/{num_chunks} (frames {start}-{end})")
+                self.logger.info(
+                    f"Sampling chunk {chunk_idx + 1}/{num_chunks} (frames {start}-{end})"
+                )
 
-                chunk_start_p = chunks_overall_start + (chunk_idx / max(1, num_chunks)) * (
-                    chunks_overall_end - chunks_overall_start
+                chunk_start_p = chunks_overall_start + (
+                    chunk_idx / max(1, num_chunks)
+                ) * (chunks_overall_end - chunks_overall_start)
+                chunk_end_p = chunks_overall_start + (
+                    (chunk_idx + 1) / max(1, num_chunks)
+                ) * (chunks_overall_end - chunks_overall_start)
+                chunk_progress = make_mapped_progress(
+                    progress_callback, chunk_start_p, chunk_end_p
                 )
-                chunk_end_p = chunks_overall_start + ((chunk_idx + 1) / max(1, num_chunks)) * (
-                    chunks_overall_end - chunks_overall_start
-                )
-                chunk_progress = make_mapped_progress(progress_callback, chunk_start_p, chunk_end_p)
                 chunk_progress(0.0, f"Chunk {chunk_idx + 1}/{num_chunks}: preparing")
 
                 # Move this chunk's condition latent to GPU only when needed
@@ -1017,7 +1037,9 @@ class SeedVRUpscaleEngine(BaseEngine):
                     if torch.cuda.is_available():
                         torch.cuda.manual_seed_all(chunk_seed)
 
-                chunk_progress(0.12, f"Chunk {chunk_idx + 1}/{num_chunks}: initializing noise")
+                chunk_progress(
+                    0.12, f"Chunk {chunk_idx + 1}/{num_chunks}: initializing noise"
+                )
                 noises = [torch.randn_like(cond_latent)]
                 aug_noises = [torch.randn_like(cond_latent)]
 
@@ -1037,7 +1059,9 @@ class SeedVRUpscaleEngine(BaseEngine):
                 empty_cache()
 
                 # Reserve a sub-span inside the chunk for sampling
-                chunk_sampling_progress = make_mapped_progress(chunk_progress, 0.18, 0.98)
+                chunk_sampling_progress = make_mapped_progress(
+                    chunk_progress, 0.18, 0.98
+                )
 
                 # Run inference for this chunk (latents only; decode later)
                 out_latents = self._inference(
@@ -1098,16 +1122,18 @@ class SeedVRUpscaleEngine(BaseEngine):
 
             del decoded_chunks, chunk_original_lens
             gc.collect()
-            
+
             # Blend chunks together (all on CPU now)
             self.logger.info("Blending chunks...")
             safe_emit_progress(progress_callback, 0.90, "Blending chunks")
-            blended_sample = self._blend_chunks(processed_chunks, chunk_indices, total_frames, chunk_overlap)
-            
+            blended_sample = self._blend_chunks(
+                processed_chunks, chunk_indices, total_frames, chunk_overlap
+            )
+
             # Free processed chunks after blending
             del processed_chunks
             gc.collect()
-            
+
             # Apply color fix if requested (both tensors already on CPU)
             if color_fix:
                 safe_emit_progress(progress_callback, 0.92, "Applying color correction")
@@ -1115,39 +1141,46 @@ class SeedVRUpscaleEngine(BaseEngine):
                     blended_sample,
                     input_video_for_colorfix.permute(1, 0, 2, 3),
                 )
-            
+
             # Free input video after color fix
             del input_video_for_colorfix
             gc.collect()
-            
+
             # Convert to output format
             safe_emit_progress(progress_callback, 0.95, "Converting output frames")
             blended_sample = rearrange(blended_sample, "t c h w -> t h w c")
-            blended_sample = blended_sample.clamp(-1, 1).mul(0.5).add(0.5).mul(255).round()
+            blended_sample = (
+                blended_sample.clamp(-1, 1).mul(0.5).add(0.5).mul(255).round()
+            )
             blended_sample = blended_sample.to(torch.uint8).cpu().numpy()
-            
+
             if offload:
                 self._offload("transformer")
-            
+
             # Convert to PIL images
             output_frames = []
             for frame in blended_sample:
                 output_frames.append(Image.fromarray(frame))
-        
+
         else:
             # Original non-chunked processing
             # Pad frames if needed
             safe_emit_progress(progress_callback, 0.12, "Padding frames (if needed)")
-            video_tensor, original_length = self._pad_video_frames(video_tensor, sp_size)
+            video_tensor, original_length = self._pad_video_frames(
+                video_tensor, sp_size
+            )
 
             # VAE encode the conditioned latents
             self.logger.info(f"Encoding video: {video_tensor.shape}")
             safe_emit_progress(progress_callback, 0.18, "Encoding latents")
 
             cond_latents = self._seedvr_vae_encode(
-                [video_tensor], offload=True,
-                conv_max_mem=vae_conv_max_mem, norm_max_mem=vae_norm_max_mem,
-                split_size=vae_split_size, memory_device=vae_memory_device
+                [video_tensor],
+                offload=True,
+                conv_max_mem=vae_conv_max_mem,
+                norm_max_mem=vae_norm_max_mem,
+                split_size=vae_split_size,
+                memory_device=vae_memory_device,
             )
 
             # Generate noise and augmentation noise
@@ -1197,10 +1230,14 @@ class SeedVRUpscaleEngine(BaseEngine):
 
                 # Apply color fix if requested
                 if color_fix:
-                    safe_emit_progress(progress_callback, 0.90, "Applying color correction")
+                    safe_emit_progress(
+                        progress_callback, 0.90, "Applying color correction"
+                    )
                     sample = wavelet_reconstruction(
                         sample.cpu(),
-                        input_video_for_colorfix[:, :original_length].cpu().permute(1, 0, 2, 3),
+                        input_video_for_colorfix[:, :original_length]
+                        .cpu()
+                        .permute(1, 0, 2, 3),
                     )
 
                 # Convert to output format

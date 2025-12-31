@@ -74,7 +74,10 @@ class WanMLXDenoise(BaseClass):
             # - Otherwise:
             #     use the alternate transformer_2 and guidance_scale[1]
             if boundary_timestep is not None and t >= boundary_timestep:
-                if hasattr(self, "high_noise_transformer") and self.high_noise_transformer:
+                if (
+                    hasattr(self, "high_noise_transformer")
+                    and self.high_noise_transformer
+                ):
                     self._offload("high_noise_transformer")
                     setattr(self, "high_noise_transformer", None)
                 if not self.high_noise_transformer:
@@ -86,7 +89,10 @@ class WanMLXDenoise(BaseClass):
                 if self.low_noise_transformer:
                     self._offload("low_noise_transformer")
                     setattr(self, "low_noise_transformer", None)
-                if not hasattr(self, "low_noise_transformer") or not self.low_noise_transformer:
+                if (
+                    not hasattr(self, "low_noise_transformer")
+                    or not self.low_noise_transformer
+                ):
                     self.load_component_by_name("low_noise_transformer")
                 transformer = self.low_noise_transformer
                 if isinstance(guidance_scale, list):

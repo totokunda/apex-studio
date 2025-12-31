@@ -21,6 +21,7 @@ import { useWebGLMask } from "../mask/useWebGLMask";
 import { useInputControlsStore } from "@/lib/inputControl";
 import { useVideoDecoderManager } from "@/lib/media/VideoDecoderManagerContext";
 import { useProjectsStore } from "@/lib/projects";
+import { generatePosterCanvas } from "@/lib/media/timeline";
 // (prefetch helper removed by request; timeline-driven rendering only)
 
 const calculateIterateRange = (
@@ -172,6 +173,8 @@ const VideoPreview: React.FC<
   const imageRef = useRef<Konva.Image>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const drawTokenRef = useRef(0);
+  const posterRequestRef = useRef(0);
+  const lastPosterKeyRef = useRef<string | null>(null);
   const suppressUntilRef = useRef<number>(0);
   const { applyFilters } = useWebGLFilters();
   // Resolve clip early so timing math can reference grouping info
@@ -305,7 +308,7 @@ const VideoPreview: React.FC<
 
     // Cache miss - recalculate
     if (
-      !Object.prototype.hasOwnProperty.call(clip, "preprocessors") ||
+      !_.has(clip, "preprocessors") ||
       !clip.preprocessors ||
       clip.preprocessors.length === 0
     ) {
@@ -367,6 +370,19 @@ const VideoPreview: React.FC<
     addedTimestampRef.current = 0;
     return { selectedAssetId: assetId, frameOffset: 0 };
   }, [clip?.preprocessors, assetId, currentFrame, trimStart]);
+
+  const posterPreprocessors = useMemo(() => {
+    const preprocessors = clip?.preprocessors ?? [];
+    return preprocessors.filter(
+      (p) =>
+        p?.assetId &&
+        p.createNewClip === false &&
+        p.status === "complete" &&
+        (typeof p.startFrame === "number" || typeof p.endFrame === "number"),
+    );
+  }, [clip?.preprocessors]);
+
+  const posterMasks = useMemo(() => clip?.masks ?? [], [clip?.masks]);
 
   // (seekInProgressRef removed; was unused and could cause confusion)
 
@@ -719,6 +735,7 @@ const VideoPreview: React.FC<
     lastSelectedAssetIdRef.current = selectedAssetId;
     // Force redraw on source switch: reset last rendered frame and clear cached original frame
     lastRenderedFrameRef.current = -1;
+    lastPosterKeyRef.current = null;
     originalFrameRef.current = null;
     processingCanvasRef.current = null;
     // @ts-ignore
@@ -996,6 +1013,97 @@ const VideoPreview: React.FC<
     speed,
   ]);
 
+  const renderPosterFallback = useCallback(
+    async (opts?: { force?: boolean }) => {
+      if (!opts?.force && isPlaying) return;
+      if (hidden || !isInFrame) return;
+      if (!canvasRef.current) return;
+      if (!selectedAssetId) return;
+      if (originalFrameRef.current) return;
+
+      const info = mediaInfo.current;
+      if (!info) return;
+
+      let { displayWidth: targetW, displayHeight: targetH } =
+        displaySizeRef.current;
+      if (!targetW || !targetH) {
+        const fallback = getAspectFitSize(info, rectWidth, rectHeight);
+        displaySizeRef.current = fallback;
+        targetW = fallback.displayWidth;
+        targetH = fallback.displayHeight;
+      }
+
+      const width = Math.max(1, Math.floor(targetW || 0));
+      const height = Math.max(1, Math.floor(targetH || 0));
+      if (!width || !height) return;
+
+      const targetInfo = getTargetFrameInfo();
+      const frameIndex = Math.max(
+        0,
+        Math.floor(targetInfo?.targetFrame ?? 0),
+      );
+      const posterKey = `${selectedAssetId}|${frameIndex}|${width}x${height}`;
+      if (lastPosterKeyRef.current === posterKey) return;
+
+      const asset = getAssetById(selectedAssetId);
+      if (!asset?.path) return;
+
+      const token = ++posterRequestRef.current;
+      lastPosterKeyRef.current = posterKey;
+
+      const poster = await generatePosterCanvas(asset.path, width, height, {
+        mediaInfo: info,
+        frameIndex,
+        masks: posterMasks.length ? posterMasks : undefined,
+        preprocessors: posterPreprocessors.length
+          ? posterPreprocessors
+          : undefined,
+      });
+
+      if (posterRequestRef.current !== token) return;
+      if (!poster) return;
+      if (originalFrameRef.current || lastRenderedFrameRef.current >= 0) {
+        return;
+      }
+
+      const fallbackCanvas = document.createElement("canvas");
+      fallbackCanvas.width = width;
+      fallbackCanvas.height = height;
+      const ctx = fallbackCanvas.getContext("2d");
+      if (!ctx) return;
+      try {
+        ctx.drawImage(poster, 0, 0, width, height);
+      } catch {
+        return;
+      }
+
+      const maskFrame = maskFrameForCurrentFocus;
+      decoderMaskFrameRef.current = maskFrame;
+      drawWrappedCanvas(
+        {
+          canvas: fallbackCanvas,
+          timestamp: targetInfo?.timestamp ?? 0,
+          duration: 0,
+        },
+        maskFrame,
+      );
+    },
+    [
+      isPlaying,
+      hidden,
+      isInFrame,
+      selectedAssetId,
+      rectWidth,
+      rectHeight,
+      getAssetById,
+      getTargetFrameInfo,
+      drawWrappedCanvas,
+      posterMasks,
+      posterPreprocessors,
+      maskFrameForCurrentFocus,
+    ],
+  );
+
   const seekToCurrentFrame = useCallback(
     async (isAccurateSeekNeededInput: boolean = false) => {
       
@@ -1008,7 +1116,10 @@ const VideoPreview: React.FC<
     const info = getTargetFrameInfo();
 
 
-    if (!info) return;
+    if (!info) {
+      void renderPosterFallback();
+      return;
+    }
 
     const { timestamp, targetFrame } = info;
 
@@ -1035,12 +1146,14 @@ const VideoPreview: React.FC<
       }
     } catch (e) {
       console.warn("[video] seek failed", e);
+      void renderPosterFallback({ force: true });
     }
     },
     [
       decoderManager,
       getTargetFrameInfo,
       isPlaying,
+      renderPosterFallback,
       maskFrameForCurrentFocus,
       isAccurateSeekNeeded,
       selectedAssetId,
@@ -1141,6 +1254,17 @@ const VideoPreview: React.FC<
   useEffect(() => {
     void seekToCurrentFrame();
   }, [seekToCurrentFrame]);
+
+  useEffect(() => {
+    void renderPosterFallback();
+  }, [
+    renderPosterFallback,
+    isPlaying,
+    hidden,
+    isInFrame,
+    mediaInfoVersion,
+    selectedAssetId,
+  ]);
 
   const startRendering = useCallback(async () => {
     if (!canvasRef.current) return;
@@ -1282,6 +1406,7 @@ const VideoPreview: React.FC<
       );
     } catch (e: any) {
       console.log("startRendering error", e);
+      void renderPosterFallback({ force: true });
     }
   }, [
     mediaInfo,
@@ -1300,6 +1425,7 @@ const VideoPreview: React.FC<
     isPlaying,
     inputMode,
     makeDecoderId,
+    renderPosterFallback,
   ]);
 
   useEffect(() => {
@@ -1488,6 +1614,7 @@ const VideoPreview: React.FC<
     // reset caches to guarantee re-render of first frame for new selection
     lastSelectedAssetIdRef.current = null;
     lastRenderedFrameRef.current = -1;
+    lastPosterKeyRef.current = null;
     originalFrameRef.current = null;
     // @ts-ignore
     iteratorRef.current?.return?.();

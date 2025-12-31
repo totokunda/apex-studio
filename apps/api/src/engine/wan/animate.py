@@ -399,7 +399,7 @@ class WanAnimateEngine(WanShared):
         face_video: Optional[InputVideo] = None,
         background_video: Optional[InputVideo] = None,
         mask_video: Optional[InputVideo] = None,
-        prompt: Union[str, List[str]] = '视频中的人在做动作',
+        prompt: Union[str, List[str]] = "视频中的人在做动作",
         negative_prompt: Union[str, List[str]] = None,
         height: int = 720,
         width: int = 1280,
@@ -537,19 +537,30 @@ class WanAnimateEngine(WanShared):
 
         face_video_width, face_video_height = face_video[0].size
         expected_face_size = self.transformer.motion_encoder_size
-        # check if face_video is square 
+        # check if face_video is square
         if face_video_width != face_video_height:
             self.logger.warning(
                 f"Reshaping face video from ({face_video_width}, {face_video_height}) to ({face_video_height},"
                 f" {face_video_height})"
             )
-            face_video = [frame.resize((face_video_height, face_video_height)) for frame in face_video]
-        
-        if face_video_width != expected_face_size or face_video_height != expected_face_size:
+            face_video = [
+                frame.resize((face_video_height, face_video_height))
+                for frame in face_video
+            ]
+
+        if (
+            face_video_width != expected_face_size
+            or face_video_height != expected_face_size
+        ):
             # we will resize the face video to the expected face size
-            self.logger.info(f"Reshaping face video from ({face_video_width}, {face_video_height}) to ({expected_face_size}, {expected_face_size})")
-            face_video = [frame.resize((expected_face_size, expected_face_size)) for frame in face_video]
-        
+            self.logger.info(
+                f"Reshaping face video from ({face_video_width}, {face_video_height}) to ({expected_face_size}, {expected_face_size})"
+            )
+            face_video = [
+                frame.resize((expected_face_size, expected_face_size))
+                for frame in face_video
+            ]
+
         face_video = self.video_processor.preprocess_video(
             face_video, height=expected_face_size, width=expected_face_size
         ).to(device, dtype=torch.float32)
@@ -722,11 +733,10 @@ class WanAnimateEngine(WanShared):
                 render_on_step=render_on_step,
             )
 
-            
-
             out_frames = self.vae_decode(latents[:, :, 1:], offload=offload)
             video = self._tensor_to_frames(out_frames)
             from diffusers.utils import export_to_video
+
             export_to_video(video[0], "output_animate_segment.mp4", fps=16, quality=8.0)
             if start > 0:
                 out_frames = out_frames[:, :, prev_segment_conditioning_frames:]

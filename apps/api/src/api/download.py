@@ -61,6 +61,7 @@ def _request_key(
     }
     return json.dumps(canonical, sort_keys=True, separators=(",", ":"))
 
+
 def _new_unique_job_id(preferred: Optional[str] = None) -> str:
     """
     Return a fresh job_id that is not already present in the job store or websocket cache.
@@ -230,6 +231,7 @@ def start_unified_download(request: UnifiedDownloadRequest):
         # Clear any cached/stale websocket state for this job_id to avoid replaying stale state.
         try:
             from .ws_manager import websocket_manager
+
             websocket_manager.clear_latest(job_id)
         except Exception:
             pass
@@ -239,13 +241,12 @@ def start_unified_download(request: UnifiedDownloadRequest):
             ray.get(bridge.clear_updates.remote(job_id))
         except Exception:
             pass
-        
-        
-        
-        
+
         if request.item_type == "lora":
             device_index, device_type = get_best_gpu()
-            resources = get_ray_resources(device_index, device_type, load_profile="light")
+            resources = get_ray_resources(
+                device_index, device_type, load_profile="light"
+            )
         else:
             resources = {}
 
@@ -280,6 +281,7 @@ def start_unified_download(request: UnifiedDownloadRequest):
         logger.error(f"Failed to start unified download: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/resolve", response_model=ResolveResponse)
 def resolve_job_id(request: ResolveRequest):

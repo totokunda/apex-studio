@@ -147,7 +147,7 @@ class ToMixin:
             # Non-floating parameters (e.g. int8) imply quantization/scaling.
             if not param.is_floating_point():
                 return True
-            
+
             if hasattr(param, "logical_dtype") and param.logical_dtype is not None:
                 return True
             # Floating dtypes outside the standard trio (fp16/bf16/fp32) are treated

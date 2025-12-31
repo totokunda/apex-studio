@@ -10,8 +10,10 @@ from typing import Dict, Any
 import tempfile
 import traceback
 from typing import Tuple
+
 ProgressCb = Callable[[int, Optional[int], Optional[str]], None]
 from tqdm import tqdm
+
 
 def _progress_tqdm(desc: str) -> Tuple[tqdm, ProgressCb]:
     """
@@ -43,9 +45,9 @@ def _progress_tqdm(desc: str) -> Tuple[tqdm, ProgressCb]:
 
     return bar, cb
 
+
 class DownloadMixin:
     logger: Logger = logger
-    
 
     @staticmethod
     def _stable_url_key(url: str) -> str:
@@ -204,7 +206,10 @@ class DownloadMixin:
                                 part_path = os.path.join(root, name)
                                 full_path = part_path[: -len(".part")]
                                 try:
-                                    if os.path.isfile(full_path) and os.path.getsize(full_path) > 0:
+                                    if (
+                                        os.path.isfile(full_path)
+                                        and os.path.getsize(full_path) > 0
+                                    ):
                                         try:
                                             if os.path.isfile(part_path):
                                                 os.remove(part_path)
@@ -1293,7 +1298,9 @@ class DownloadMixin:
                 if progress_callback is None:
                     bar, cb = _progress_tqdm(label)
 
-                    def _cb(n: int, _total: Optional[int], _label: Optional[str] = None):
+                    def _cb(
+                        n: int, _total: Optional[int], _label: Optional[str] = None
+                    ):
                         # Drive tqdm and let it infer/receive totals when available
                         cb(int(n), _total if _total is not None else size_hint, _label)
 
@@ -1317,6 +1324,7 @@ class DownloadMixin:
                 stage_dir = os.path.join(tmp_root, os.path.basename(dest_path))
                 os.makedirs(stage_dir, exist_ok=True)
                 futures = []
+
                 # Control HF parallelism via env vars.
                 # - When Rust downloader is enabled, default HF concurrency to 1 to reduce rate limiting.
                 # - When not using Rust, keep the existing parallel default (8) but make it configurable.
@@ -1490,7 +1498,9 @@ class DownloadMixin:
                         for src_f in files_to_move:
                             rel = os.path.relpath(src_f, stage_dir)
                             dst_f = os.path.join(dest_path, rel)
-                            if os.path.exists(dst_f) and _hf_local_file_is_complete(dst_f):
+                            if os.path.exists(dst_f) and _hf_local_file_is_complete(
+                                dst_f
+                            ):
                                 continue
                             os.makedirs(os.path.dirname(dst_f), exist_ok=True)
                             try:
@@ -1798,7 +1808,9 @@ class DownloadMixin:
             except Exception:
                 return None
 
-        def _parse_ratelimit_headers(headers: Mapping[str, str]) -> Optional[_RateLimitInfo]:
+        def _parse_ratelimit_headers(
+            headers: Mapping[str, str],
+        ) -> Optional[_RateLimitInfo]:
             """
             Follows IETF draft (subset): https://www.ietf.org/archive/id/draft-ietf-httpapi-ratelimit-headers-09.html
             Example:
@@ -1829,7 +1841,9 @@ class DownloadMixin:
                     remaining=int(remaining),
                     reset_in_seconds=int(reset_in_seconds),
                     limit=None if limit is None else int(limit),
-                    window_seconds=None if window_seconds is None else int(window_seconds),
+                    window_seconds=(
+                        None if window_seconds is None else int(window_seconds)
+                    ),
                 )
             except Exception:
                 return None
@@ -1877,14 +1891,17 @@ class DownloadMixin:
                 callback_min_bytes = int(
                     os.environ.get("APEX_DOWNLOAD_PROGRESS_MIN_BYTES", str(1024 * 1024))
                 )
-                
-                
+
                 # If caller didn't supply a progress callback, default to a tqdm-based callback
                 # (can be disabled via APEX_RUST_TQDM=0).
                 rust_bar = None
                 effective_progress_callback = progress_callback
-                if effective_progress_callback is None and _bool_env("APEX_RUST_TQDM", True):
-                    rust_bar, effective_progress_callback = _progress_tqdm(os.path.basename(file_path))
+                if effective_progress_callback is None and _bool_env(
+                    "APEX_RUST_TQDM", True
+                ):
+                    rust_bar, effective_progress_callback = _progress_tqdm(
+                        os.path.basename(file_path)
+                    )
 
                 try:
                     _rs_download_from_url(
@@ -1955,7 +1972,10 @@ class DownloadMixin:
                         allow_redirects=True,
                     )
                     if head_resp.status_code == 429:
-                        if ratelimit_max_retries == 0 or rl_attempts >= ratelimit_max_retries:
+                        if (
+                            ratelimit_max_retries == 0
+                            or rl_attempts >= ratelimit_max_retries
+                        ):
                             self.logger.warning(
                                 f"Rate limited (429) too many times while probing; retries={ratelimit_max_retries}"
                             )
@@ -2033,7 +2053,10 @@ class DownloadMixin:
                     allow_redirects=True,
                 )
                 if response.status_code == 429:
-                    if ratelimit_max_retries == 0 or rl_attempts >= ratelimit_max_retries:
+                    if (
+                        ratelimit_max_retries == 0
+                        or rl_attempts >= ratelimit_max_retries
+                    ):
                         try:
                             response.close()
                         except Exception:

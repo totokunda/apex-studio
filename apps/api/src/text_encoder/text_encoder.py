@@ -13,10 +13,12 @@ from src.utils.module import find_class_recursive
 import transformers
 import inspect
 
+
 def nan_hook(module, inputs, outputs):
     if isinstance(outputs, torch.Tensor):
         if not torch.isfinite(outputs).all():
             raise RuntimeError(f"NaN/Inf in {module}")
+
 
 class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
     def __init__(
@@ -75,7 +77,10 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         self.model_loaded = False
 
     def load_model(
-        self, no_weights: bool = False, override_kwargs: Dict[str, Any] = None, to_device: bool = True
+        self,
+        no_weights: bool = False,
+        override_kwargs: Dict[str, Any] = None,
+        to_device: bool = True,
     ):
         input_kwargs = dict(
             component={
@@ -251,7 +256,6 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         if not self.model_loaded:
             self.model = self.load_model(no_weights=False)
             self.model_loaded = True
-        
 
         dict_kwargs = dict(
             padding="max_length" if pad_to_max_length else "longest",
@@ -259,9 +263,9 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             truncation=True,
             add_special_tokens=add_special_tokens,
             return_tensors="pt",
-            return_attention_mask=True
+            return_attention_mask=True,
         )
-        
+
         if add_special_tokens is None:
             dict_kwargs.pop("add_special_tokens")
 
@@ -299,9 +303,9 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             )
             mask = (mask_indices <= seq_lengths.unsqueeze(1)).long()
             inputs["attention_mask"] = mask.to(device=self.model.device)
-            
+
         self.model.apply(lambda m: m.register_forward_hook(nan_hook))
-      
+
         result = self.model(
             **inputs,
             output_hidden_states=(
@@ -310,7 +314,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
                 or output_type == "hidden_states_all"
             ),
         )
-        
+
         if output_type == "hidden_states_all" and hasattr(result, "hidden_states"):
             prompt_embeds = result.hidden_states
             prompt_embeds = torch.stack(prompt_embeds, dim=0)

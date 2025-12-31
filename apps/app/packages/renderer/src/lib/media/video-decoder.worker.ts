@@ -173,6 +173,11 @@ const assetStates = new Map<string, AssetState>();
 // Shared tuning constants
 const MAX_CACHE_SIZE = 240; // Keep ~2 seconds of frames (at 30fps)
 const MAX_ITERATION_IN_FLIGHT = 4;
+const MAX_DECODE_QUEUE_SIZE = 8;
+const MAX_DECODE_QUEUE_WAIT_MS = 500;
+const MAX_RESYNC_ATTEMPTS = 4;
+const DECODE_QUEUE_SLEEP_MS = 5;
+const KEYFRAME_REQUIRED_RE = /key\s*frame/i;
 
 // Emit a one-time debug message as soon as the worker script is evaluated so
 // we can confirm that this exact file is being loaded by the main thread.
@@ -356,22 +361,35 @@ function ensureAlphaDecoder(state: AssetState, assetId: string) {
     return;
   }
 
-  state.alphaDecoder = new VideoDecoder({
+  const alphaDecoder = new VideoDecoder({
     output: createAlphaFrameHandler(assetId),
     error: (e) => {
       console.error("Alpha VideoDecoder error", e);
-      try {
-        // @ts-ignore
-        postMessage({
-          type: "error",
-          error: e.message ?? "Alpha VideoDecoder error",
-          assetId,
-        });
-      } catch {
-        // ignore
+      if (state.alphaDecoder === alphaDecoder) {
+        try {
+          alphaDecoder.close();
+        } catch {
+          // ignore
+        }
+        state.alphaDecoder = null;
+      }
+      const suppressError =
+        state.seekTargetTimestamp !== null || state.customOutputHandler !== null;
+      if (!suppressError) {
+        try {
+          // @ts-ignore
+          postMessage({
+            type: "error",
+            error: e.message ?? "Alpha VideoDecoder error",
+            assetId,
+          });
+        } catch {
+          // ignore
+        }
       }
     },
   });
+  state.alphaDecoder = alphaDecoder;
 
   // Alpha side data is encoded with the same codec, but is not "embedded alpha"
   // in the bitstream. Some platforms reject `alpha: "keep"` for such streams,
@@ -534,6 +552,51 @@ const createFrameHandler = (assetId: string) => (frame: VideoFrame) => {
   dispatchDecodedFrame(assetId, frame);
 };
 
+function createVideoDecoder(state: AssetState, assetId: string) {
+  const decoder = new VideoDecoder({
+    output: createFrameHandler(assetId),
+    error: (e) => {
+      console.error("VideoDecoder error", e);
+      if (state.decoder === decoder) {
+        try {
+          decoder.close();
+        } catch {
+          // ignore
+        }
+        state.decoder = null;
+      }
+      const suppressError =
+        state.seekTargetTimestamp !== null || state.customOutputHandler !== null;
+      if (!suppressError) {
+        try {
+          // @ts-ignore
+          postMessage({
+            type: "error",
+            error: e.message,
+            assetId,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    },
+  });
+  state.decoder = decoder;
+}
+
+function ensureDecoderInstance(state: AssetState, assetId: string): VideoDecoder | null {
+  if (state.decoder && (state.decoder.state as string) !== "closed") {
+    return state.decoder;
+  }
+  try {
+    state.decoder?.close();
+  } catch {
+    // ignore
+  }
+  createVideoDecoder(state, assetId);
+  return state.decoder;
+}
+
 function postFrame(assetId: string, frame: VideoFrame, reqId: number) {
   const clone = frame.clone();
   const msg: WorkerResponse = {
@@ -546,6 +609,162 @@ function postFrame(assetId: string, frame: VideoFrame, reqId: number) {
   };
   // @ts-ignore
   postMessage(msg, [clone]);
+}
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function isKeyframeRequiredError(err: any): boolean {
+  const msg = (err?.message ?? "").toString();
+  return err?.name === "DataError" && KEYFRAME_REQUIRED_RE.test(msg);
+}
+
+function isQuotaExceededError(err: any): boolean {
+  return err?.name === "QuotaExceededError";
+}
+
+function isInvalidStateError(err: any): boolean {
+  const msg = (err?.message ?? "").toString();
+  return err?.name === "InvalidStateError" || /closed/i.test(msg);
+}
+
+async function waitForDecodeQueue(
+  decoder: VideoDecoder,
+  maxSize: number = MAX_DECODE_QUEUE_SIZE,
+) {
+  let waited = 0;
+  while (
+    decoder.decodeQueueSize > maxSize &&
+    waited < MAX_DECODE_QUEUE_WAIT_MS
+  ) {
+    await sleep(DECODE_QUEUE_SLEEP_MS);
+    waited += DECODE_QUEUE_SLEEP_MS;
+  }
+}
+
+async function getVerifiedKeyPacket(
+  state: AssetState,
+  timestamp: number,
+): Promise<EncodedPacket | null> {
+  if (!state.sink) return null;
+
+  try {
+    const keyPacket = await state.sink.getKeyPacket(timestamp, {
+      verifyKeyPackets: true,
+    });
+    if (keyPacket) return keyPacket;
+
+    const nearby = await state.sink.getPacket(timestamp);
+    if (nearby) {
+      const nextKey = await state.sink.getNextKeyPacket(nearby, {
+        verifyKeyPackets: true,
+      });
+      if (nextKey) return nextKey;
+    }
+
+    return await state.sink.getFirstPacket({ verifyKeyPackets: true });
+  } catch {
+    return null;
+  }
+}
+
+async function getNextKeyPacketSafe(
+  state: AssetState,
+  packet: EncodedPacket,
+): Promise<EncodedPacket | null> {
+  if (!state.sink) return null;
+  try {
+    return await state.sink.getNextKeyPacket(packet, {
+      verifyKeyPackets: true,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function resetAndConfigureDecoders(state: AssetState, assetId: string): boolean {
+  if (!state.config) return false;
+  const decoder = ensureDecoderInstance(state, assetId);
+  if (!decoder) return false;
+
+  try {
+    decoder.reset();
+  } catch {
+    // ignore
+  }
+
+  try {
+    decoder.configure(state.config as VideoDecoderConfig);
+  } catch (e) {
+    try {
+      const fallbackConfig: any = { ...(state.config as any) };
+      delete fallbackConfig.alpha;
+      state.config = fallbackConfig;
+      decoder.configure(fallbackConfig as VideoDecoderConfig);
+    } catch {
+      return false;
+    }
+  }
+
+  if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+    try {
+      state.alphaDecoder.reset();
+      const cfgAny: any = { ...(state.config as any) };
+      delete cfgAny.alpha;
+      state.alphaDecoder.configure(cfgAny as VideoDecoderConfig);
+    } catch {
+      // ignore
+    }
+  }
+
+  return true;
+}
+
+async function decodePacketSafe(
+  state: AssetState,
+  assetId: string,
+  packet: EncodedPacket,
+  requestId: number,
+): Promise<boolean> {
+  if (!state.decoder || (state.decoder.state as string) === "closed") {
+    return false;
+  }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (state.currentRequestId !== requestId) return false;
+    await waitForDecodeQueue(state.decoder, MAX_DECODE_QUEUE_SIZE);
+    if (!state.decoder || (state.decoder.state as string) === "closed") {
+      return false;
+    }
+
+    try {
+      state.decoder.decode(packet.toEncodedVideoChunk());
+      break;
+    } catch (e: any) {
+      if (isQuotaExceededError(e)) {
+        await waitForDecodeQueue(state.decoder, 2);
+        continue;
+      }
+      if (isKeyframeRequiredError(e) || isInvalidStateError(e)) {
+        return false;
+      }
+      return false;
+    }
+  }
+
+  if (packet.sideData?.alpha) {
+    ensureAlphaDecoder(state, assetId);
+    if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+      await waitForDecodeQueue(state.alphaDecoder, MAX_DECODE_QUEUE_SIZE);
+      try {
+        state.alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
+      } catch {
+        // ignore alpha decode errors; color still decodes
+      }
+    }
+  }
+
+  return true;
 }
 
 
@@ -716,21 +935,10 @@ async function handleConfigure(
   }
   state.config = configAny as VideoDecoderConfig;
  
-  state.decoder = new VideoDecoder({
-    output: createFrameHandler(id),
-    error: (e) => {
-      console.error("VideoDecoder error", e);
-      // @ts-ignore
-      postMessage({
-        type: "error",
-        error: e.message,
-        assetId: id,
-      });
-    },
-  });
+  createVideoDecoder(state, id);
 
   try {
-    state.decoder.configure(state.config as VideoDecoderConfig);
+    state?.decoder?.configure(state.config as VideoDecoderConfig);
   } catch (e) {
     // Fallback: if the platform/codec rejects alpha preservation, retry without it.
     // This keeps broad compatibility while enabling transparency where supported.
@@ -738,7 +946,7 @@ async function handleConfigure(
       const fallbackConfig: any = { ...(state.config as any) };
       delete fallbackConfig.alpha;
       state.config = fallbackConfig;
-      state.decoder.configure(fallbackConfig as VideoDecoderConfig);
+      state?.decoder?.configure(fallbackConfig as VideoDecoderConfig);
     } catch (e2) {
       console.error("VideoDecoder configure failed", e, e2);
       // @ts-ignore
@@ -769,7 +977,9 @@ async function handleSeek(
  
   if (!id) return;
   const state = assetStates.get(id);
-  if (!state || !state.decoder || !state.sink) return;
+  if (!state || !state.sink || !state.config) return;
+  ensureDecoderInstance(state, id);
+  if (!state.decoder) return;
 
   // Cancel any active iteration handler to prevent hijacking seek output
   state.customOutputHandler = null;
@@ -821,118 +1031,93 @@ async function handleSeek(
   // packet (especially during rapid scrubbing), which triggers:
   //   DataError: A key frame is required after configure() or flush().
   // So we always verify key packets for seeks.
-  const currentPacket = await state.sink.getKeyPacket(timestamp, {
-    verifyKeyPackets: true,
-  });
-
-
-  if (!currentPacket) return;
-
-  if (!state.keyPacketCache.has(currentPacket.timestamp)) {
-    state.keyPacketCache.set(currentPacket.timestamp, currentPacket);
+  const initialPacket = await getVerifiedKeyPacket(state, timestamp);
+  if (!initialPacket) {
+    // @ts-ignore
+    postMessage({
+      type: "seekDone",
+      requestId,
+      assetId: id,
+    });
+    return;
   }
 
+  if (!state.keyPacketCache.has(initialPacket.timestamp)) {
+    state.keyPacketCache.set(initialPacket.timestamp, initialPacket);
+  }
 
   if (state.currentRequestId !== requestId) return;
 
+  let currentPacket: EncodedPacket | null = initialPacket;
+  let resyncAttempts = 0;
+  let previewArmed = isFastScrubbing;
 
-  if ((state.decoder.state as string) === "closed") return;
+  while (
+    currentPacket &&
+    state.currentRequestId === requestId &&
+    resyncAttempts <= MAX_RESYNC_ATTEMPTS
+  ) {
+    if (!resetAndConfigureDecoders(state, id)) break;
 
-  if (state.config) state.decoder.configure(state.config);
-  if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+    const decodedKey = await decodePacketSafe(
+      state,
+      id,
+      currentPacket,
+      requestId,
+    );
+    if (!decodedKey) {
+      currentPacket = await getNextKeyPacketSafe(state, currentPacket);
+      resyncAttempts++;
+      continue;
+    }
+
+    if (previewArmed) {
+      state.showingPreview = true;
+      await sleep(80);
+      state.showingPreview = false;
+      previewArmed = false;
+    }
+
+    let resyncPacket: EncodedPacket | null = null;
     try {
-      state.alphaDecoder.reset();
-      // Configure alpha decoder without the alpha hint when possible.
-      const cfgAny: any = { ...(state.config as any) };
-      delete cfgAny.alpha;
-      state.alphaDecoder.configure(cfgAny as VideoDecoderConfig);
-    } catch {
-      // ignore; we'll recreate lazily if needed
-    }
-  }
-
-  const isKeyframeRequiredError = (e: any): boolean => {
-    const msg = (e?.message ?? "").toString();
-    return e?.name === "DataError" && /key\s*frame/i.test(msg);
-  };
-
-  // Decode the verified key packet first. If the runtime still complains (some
-  // platforms are extra strict about "key" typing), retry by re-fetching a
-  // verified key packet at the same timestamp and decoding that.
-  try {
-    const chunk = currentPacket.toEncodedVideoChunk();
-    state.decoder.decode(chunk);
-  } catch (e: any) {
-    
-    if (isKeyframeRequiredError(e)) {
-      try {
-        // Re-verify from the demuxer and retry once.
-        const retryKey = await state.sink.getKeyPacket(timestamp, {
-          verifyKeyPackets: true,
-        });
-        if (retryKey && (state.decoder.state as string) !== "closed") {
-          state.decoder.reset();
-          if (state.config) state.decoder.configure(state.config);
-          state.decoder.decode(retryKey.toEncodedVideoChunk());
+      const packets = state.sink.packets(currentPacket);
+      await packets.next(); // skip start packet (already decoded)
+      for await (const packet of packets) {
+        if (state.currentRequestId !== requestId) break;
+        if (!state.decoder || (state.decoder.state as string) === "closed") {
+          resyncPacket = await getNextKeyPacketSafe(state, packet);
+          break;
         }
-      } catch {
-        // fall through to the outer error handler
-      }
-    }
-    throw e;
-  }
+        if (packet.timestamp > timestamp + 0.1) break;
 
-
-  if (currentPacket.sideData?.alpha) {
-    ensureAlphaDecoder(state, id);
-    if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
-      try {
-        state.alphaDecoder.decode(currentPacket.alphaToEncodedVideoChunk());
-      } catch {
-        // ignore alpha decode errors; color still decodes
-      }
-    }
-  }
-
-  if (isFastScrubbing) {
-    state.showingPreview = true;
-    await new Promise((r) => setTimeout(r, 80));
-    //if (state.currentRequestId !== requestId) return;
-    state.showingPreview = false;
-  }
-
-  
-  const packets = state.sink.packets(currentPacket);
-  for await (const packet of packets) {
-    if ((state.decoder.state as string) === "closed") break;
-    const colorChunk = packet.toEncodedVideoChunk();
-    try {
-      state.decoder.decode(colorChunk);
-    } catch (e: any) {
-      console.log("decode error", e.name, e.message);
-      if (e?.name === "DataError" && /key\s*frame/i.test(e.message || "")) break;
-      
-    }
-    state.decoder.decode(colorChunk);
-    if (packet.sideData?.alpha) {
-      ensureAlphaDecoder(state, id);
-      if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
-        try {
-          state.alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
-        } catch (e) {
-          console.log(state.alphaDecoder, "alpha decode error", e);
-          // ignore
+        const decoded = await decodePacketSafe(state, id, packet, requestId);
+        if (!decoded) {
+          resyncPacket = await getNextKeyPacketSafe(state, packet);
+          break;
         }
-      }
-    }
-    if (state.seekDone) break;
-    if (state.currentRequestId !== requestId) break;
-    if (packet.timestamp > timestamp + 0.1) break;
-  }
 
+        if (state.seekDone) break;
+      }
+    } catch (e) {
+      console.warn("Seek packet iteration failed", e);
+    }
+
+    if (!resyncPacket || state.seekDone || state.currentRequestId !== requestId) {
+      break;
+    }
+
+    currentPacket = resyncPacket;
+    resyncAttempts++;
+  }
 
   if (forceAccurate) {
-    await state.decoder.flush();
+    if (state.decoder && (state.decoder.state as string) !== "closed") {
+      try {
+        await state.decoder.flush();
+      } catch {
+        // ignore
+      }
+    }
     if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
       try {
         await state.alphaDecoder.flush();
@@ -971,7 +1156,9 @@ async function handleIterate(
     const id = assetId;
     if (!id) return;
     const state = assetStates.get(id);
-    if (!state || !state.decoder || !state.sink || !state.config) return;
+    if (!state || !state.sink || !state.config) return;
+    ensureDecoderInstance(state, id);
+    if (!state.decoder) return;
 
     state.currentRequestId = requestId;
     resetAlphaMergeQueues(state);
@@ -979,10 +1166,8 @@ async function handleIterate(
     // Same keyframe requirement as seek: after reset/configure, the first decode
     // must be a key frame. Verify key packets to avoid intermittent DataError
     // during iteration starts.
-    const keyPacket = await state.sink.getKeyPacket(startTime, {
-      verifyKeyPackets: true,
-    });
-    if (!keyPacket) {
+    const initialPacket = await getVerifiedKeyPacket(state, startTime);
+    if (!initialPacket) {
         // @ts-ignore
         postMessage({
           type: "iterateDone",
@@ -990,20 +1175,6 @@ async function handleIterate(
           assetId: id,
         });
         return;
-    }
-
-    if ((state.decoder.state as string) === "closed") return;
-    state.decoder.reset();
-    state.decoder.configure(state.config);
-    if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
-      try {
-        state.alphaDecoder.reset();
-        const cfgAny: any = { ...(state.config as any) };
-        delete cfgAny.alpha;
-        state.alphaDecoder.configure(cfgAny as VideoDecoderConfig);
-      } catch {
-        // ignore
-      }
     }
 
     // Override handler temporarily for iteration
@@ -1044,63 +1215,72 @@ async function handleIterate(
 
 
     try {
-        if ((state.decoder.state as string) === "closed") {
-             // @ts-ignore
-             postMessage({
-               type: "error",
-               error: "Decoder closed",
-               requestId,
-               assetId: id,
-             });
-             return;
-        }
-        
-        // Always decode color into the main decoder, and alpha (when present)
-        // into the alphaDecoder for later merge.
-        state.decoder.decode(keyPacket.toEncodedVideoChunk());
-        if (keyPacket.sideData?.alpha) {
-          ensureAlphaDecoder(state, id);
-          if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
-            try {
-              state.alphaDecoder.decode(keyPacket.alphaToEncodedVideoChunk());
-            } catch {
-              // ignore
-            }
-          }
-        }
-        const packets = state.sink.packets(keyPacket);
-        
-        for await (const packet of packets) {
-            if (state.currentRequestId !== requestId) break;
-            if (packet.timestamp > endTime + 0.1) break;
-            
-            if ((state.decoder.state as string) === "closed") break;
-            
-            // Flow control: Wait if too many frames are pending
-            while (state.iterationInFlight >= MAX_ITERATION_IN_FLIGHT) {
-                 if (state.currentRequestId !== requestId) break;
-                 await new Promise<void>(r => state.iterationResume = r);
-            }
+        let currentPacket: EncodedPacket | null = initialPacket;
+        let resyncAttempts = 0;
 
-            state.decoder.decode(packet.toEncodedVideoChunk());
-            if (packet.sideData?.alpha) {
-              ensureAlphaDecoder(state, id);
-              if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
-                try {
-                  state.alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
-                } catch {
-                  // ignore
-                }
+        while (
+          currentPacket &&
+          state.currentRequestId === requestId &&
+          resyncAttempts <= MAX_RESYNC_ATTEMPTS
+        ) {
+          if (!resetAndConfigureDecoders(state, id)) break;
+
+          const decodedKey = await decodePacketSafe(
+            state,
+            id,
+            currentPacket,
+            requestId,
+          );
+          if (!decodedKey) {
+            currentPacket = await getNextKeyPacketSafe(state, currentPacket);
+            resyncAttempts++;
+            continue;
+          }
+
+          let resyncPacket: EncodedPacket | null = null;
+          try {
+            const packets = state.sink.packets(currentPacket);
+            await packets.next(); // skip start packet (already decoded)
+
+            for await (const packet of packets) {
+              if (state.currentRequestId !== requestId) break;
+              if (packet.timestamp > endTime + 0.1) break;
+
+              if (!state.decoder || (state.decoder.state as string) === "closed") {
+                resyncPacket = await getNextKeyPacketSafe(state, packet);
+                break;
+              }
+
+              // Flow control: Wait if too many frames are pending
+              while (state.iterationInFlight >= MAX_ITERATION_IN_FLIGHT) {
+                if (state.currentRequestId !== requestId) break;
+                await new Promise<void>((r) => (state.iterationResume = r));
+              }
+
+              const decoded = await decodePacketSafe(state, id, packet, requestId);
+              if (!decoded) {
+                resyncPacket = await getNextKeyPacketSafe(state, packet);
+                break;
               }
             }
-            
-            while (state.decoder.decodeQueueSize > 6) {
-                 await new Promise(r => setTimeout(r, 5));
-            }
+          } catch (e) {
+            console.warn("Iteration packet loop failed", e);
+          }
+
+          if (!resyncPacket || state.currentRequestId !== requestId) {
+            break;
+          }
+
+          currentPacket = resyncPacket;
+          resyncAttempts++;
         }
-        
-        if ((state.decoder.state as string) !== "closed") {
+
+        if (state.decoder && (state.decoder.state as string) !== "closed") {
+          try {
             await state.decoder.flush();
+          } catch {
+            // ignore
+          }
         }
         if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
           try {

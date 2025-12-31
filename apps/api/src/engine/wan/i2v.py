@@ -6,6 +6,7 @@ from .shared import WanShared
 from src.utils.progress import safe_emit_progress, make_mapped_progress
 from src.types import InputImage
 
+
 class WanI2VEngine(WanShared):
     """WAN Image-to-Video Engine Implementation"""
 
@@ -45,7 +46,9 @@ class WanI2VEngine(WanShared):
             and low_noise_guidance_scale is not None
         ):
             guidance_scale = [high_noise_guidance_scale, low_noise_guidance_scale]
-            safe_emit_progress(progress_callback, 0.01, "Using high/low-noise guidance scales")
+            safe_emit_progress(
+                progress_callback, 0.01, "Using high/low-noise guidance scales"
+            )
 
         safe_emit_progress(progress_callback, 0.0, "Starting image-to-video pipeline")
         if guidance_scale is not None and isinstance(guidance_scale, list):

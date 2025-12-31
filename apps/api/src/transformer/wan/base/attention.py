@@ -33,6 +33,7 @@ def enhance_score(query_image, key_image, head_dim, num_frames, enhance_weight):
     enhance_scores = enhance_scores.clamp(min=1)
     return enhance_scores
 
+
 def apply_rotary_emb(
     hidden_states: torch.Tensor,
     freqs: torch.Tensor,
@@ -82,9 +83,7 @@ def apply_rotary_emb(
     # [B, H, T, D/2] as complex
     if chunk_size is None:
         # Fast, fully vectorized path (default).
-        x_rotated = torch.view_as_complex(
-            hidden_states.to(dtype).unflatten(3, (-1, 2))
-        )
+        x_rotated = torch.view_as_complex(hidden_states.to(dtype).unflatten(3, (-1, 2)))
         x_out = torch.view_as_real(x_rotated * freqs_complex).flatten(3, 4)
         return x_out.type_as(hidden_states)
 
@@ -98,9 +97,7 @@ def apply_rotary_emb(
 
         # [B, H, t_chunk, D]
         hs_chunk = hidden_states[:, :, start:end]
-        x_rotated = torch.view_as_complex(
-            hs_chunk.to(dtype).unflatten(3, (-1, 2))
-        )
+        x_rotated = torch.view_as_complex(hs_chunk.to(dtype).unflatten(3, (-1, 2)))
 
         # [1, 1, t_chunk, D/2] → broadcast to [B, H, t_chunk, D/2]
         freqs_chunk = freqs_complex[:, :, start:end]
@@ -303,7 +300,6 @@ class WanAttnProcessor2_0:
 
             return hidden_states
 
-
     def __call__(
         self,
         attn: Attention,
@@ -356,7 +352,9 @@ class WanAttnProcessor2_0:
         value = value.unflatten(2, (attn.heads, -1)).transpose(1, 2)
 
         if rotary_emb is not None:
-            query = apply_rotary_emb(query, rotary_emb, chunk_size=rotary_emb_chunk_size)
+            query = apply_rotary_emb(
+                query, rotary_emb, chunk_size=rotary_emb_chunk_size
+            )
             key = apply_rotary_emb(key, rotary_emb, chunk_size=rotary_emb_chunk_size)
 
         if self.use_enhance:

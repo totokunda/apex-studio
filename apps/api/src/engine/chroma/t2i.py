@@ -241,7 +241,9 @@ class ChromaT2IEngine(BaseEngine):
         )
 
         if negative_prompt is not None and use_cfg_guidance:
-            safe_emit_progress(progress_callback, 0.70, "Encoding negative prompt embeddings")
+            safe_emit_progress(
+                progress_callback, 0.70, "Encoding negative prompt embeddings"
+            )
             negative_prompt_embeds, negative_prompt_embeds_mask = (
                 self.text_encoder.encode(
                     negative_prompt,
@@ -252,7 +254,9 @@ class ChromaT2IEngine(BaseEngine):
                     **text_encoder_kwargs,
                 )
             )
-            safe_emit_progress(progress_callback, 0.85, "Negative prompt embeddings ready")
+            safe_emit_progress(
+                progress_callback, 0.85, "Negative prompt embeddings ready"
+            )
 
             negative_text_ids = torch.zeros(negative_prompt_embeds.shape[1], 3).to(
                 device=self.device, dtype=negative_prompt_embeds.dtype
@@ -266,10 +270,16 @@ class ChromaT2IEngine(BaseEngine):
             safe_emit_progress(progress_callback, 0.95, "Offloading text encoder")
             del self.text_encoder
         safe_emit_progress(progress_callback, 1.0, "Prompt encoding complete")
-            
-        return prompt_embeds, prompt_embeds_mask, negative_prompt_embeds, negative_prompt_embeds_mask, text_ids, negative_text_ids
-    
-    
+
+        return (
+            prompt_embeds,
+            prompt_embeds_mask,
+            negative_prompt_embeds,
+            negative_prompt_embeds_mask,
+            text_ids,
+            negative_text_ids,
+        )
+
     def _render_step(self, latents: torch.Tensor, render_on_step_callback: Callable):
         """Override: unpack latents for image decoding and render a preview frame.
 
@@ -473,7 +483,9 @@ class ChromaT2IEngine(BaseEngine):
         image_embeds = None
         negative_image_embeds = None
         if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-            safe_emit_progress(progress_callback, 0.495, "Preparing IP adapter embeddings")
+            safe_emit_progress(
+                progress_callback, 0.495, "Preparing IP adapter embeddings"
+            )
             image_embeds = self.prepare_ip_adapter_image_embeds(
                 ip_adapter_image,
                 ip_adapter_image_embeds,
@@ -484,7 +496,9 @@ class ChromaT2IEngine(BaseEngine):
             negative_ip_adapter_image is not None
             or negative_ip_adapter_image_embeds is not None
         ):
-            safe_emit_progress(progress_callback, 0.498, "Preparing negative IP adapter embeddings")
+            safe_emit_progress(
+                progress_callback, 0.498, "Preparing negative IP adapter embeddings"
+            )
             negative_image_embeds = self.prepare_ip_adapter_image_embeds(
                 negative_ip_adapter_image,
                 negative_ip_adapter_image_embeds,

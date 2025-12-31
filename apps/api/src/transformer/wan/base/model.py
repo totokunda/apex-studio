@@ -126,19 +126,31 @@ def easycache_forward_(
     raw_input = hidden_states[:, :out_channels].clone()
 
     # Track which type of step (even=condition, odd=uncondition)
-    is_even = (WANTF_GLOBAL_CNT % 2 == 0)
+    is_even = WANTF_GLOBAL_CNT % 2 == 0
 
     # Only make decision on even (condition) steps
     if is_even:
         # Always compute first ret_steps and last steps
-        if WANTF_GLOBAL_CNT < WANTF_GLOBAL_RET_STEPS or WANTF_GLOBAL_CNT >= (WANTF_GLOBAL_NUM_STEPS - 2):
+        if WANTF_GLOBAL_CNT < WANTF_GLOBAL_RET_STEPS or WANTF_GLOBAL_CNT >= (
+            WANTF_GLOBAL_NUM_STEPS - 2
+        ):
             WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR = True
             WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN = 0
         else:
-            if WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN is not None and WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None:
-                raw_input_change = (raw_input - WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN).flatten().abs().mean()
+            if (
+                WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN is not None
+                and WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None
+            ):
+                raw_input_change = (
+                    (raw_input - WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN)
+                    .flatten()
+                    .abs()
+                    .mean()
+                )
                 if WANTF_GLOBAL_K is not None:
-                    output_norm = WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN.flatten().abs().mean()
+                    output_norm = (
+                        WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN.flatten().abs().mean()
+                    )
                     pred_change = WANTF_GLOBAL_K * (raw_input_change / output_norm)
                     combined_pred_change = pred_change
                     WANTF_GLOBAL_ACCUMULATED_ERROR_EVEN += combined_pred_change
@@ -154,13 +166,21 @@ def easycache_forward_(
         WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN = raw_input.clone()
 
     # Check if we can use cached output and return early
-    if is_even and not WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR and WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None:
+    if (
+        is_even
+        and not WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR
+        and WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None
+    ):
         WANTF_GLOBAL_CNT += 1
         output = (raw_input + WANTF_GLOBAL_CACHE_EVEN).float()
         if not return_dict:
             return (output,)
         return Transformer2DModelOutput(sample=output)
-    elif not is_even and not WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR and WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_ODD is not None:
+    elif (
+        not is_even
+        and not WANTF_GLOBAL_SHOULD_CALC_CURRENT_PAIR
+        and WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_ODD is not None
+    ):
         WANTF_GLOBAL_CNT += 1
         output = (raw_input + WANTF_GLOBAL_CACHE_ODD).float()
         if not return_dict:
@@ -183,7 +203,10 @@ def easycache_forward_(
     if USE_PEFT_BACKEND:
         scale_lora_layers(self, lora_scale)
     else:
-        if attention_kwargs is not None and attention_kwargs.get("scale", None) is not None:
+        if (
+            attention_kwargs is not None
+            and attention_kwargs.get("scale", None) is not None
+        ):
             logger.warning(
                 "Passing `scale` via `attention_kwargs` when not using the PEFT backend is ineffective."
             )
@@ -267,7 +290,11 @@ def easycache_forward_(
                 rotary_emb,
                 hidden_states_ip,
                 timestep_proj_ip,
-                rotary_emb_chunk_size=attention_kwargs.get("rotary_emb_chunk_size", None) if attention_kwargs is not None else None
+                rotary_emb_chunk_size=(
+                    attention_kwargs.get("rotary_emb_chunk_size", None)
+                    if attention_kwargs is not None
+                    else None
+                ),
             )
             if hidden_states_ip is not None:
                 hidden_states, hidden_states_ip = (
@@ -276,9 +303,9 @@ def easycache_forward_(
                 )
 
     if temb.ndim == 3:
-        shift, scale = (
-            self.scale_shift_table.unsqueeze(0) + temb.unsqueeze(2)
-        ).chunk(2, dim=2)
+        shift, scale = (self.scale_shift_table.unsqueeze(0) + temb.unsqueeze(2)).chunk(
+            2, dim=2
+        )
         shift = shift.squeeze(2)
         scale = scale.squeeze(2)
     else:
@@ -312,11 +339,19 @@ def easycache_forward_(
     # Update cache and calculate change rates if needed
     if is_even:  # Condition path
         if WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN is not None:
-            output_change = (output - WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN).flatten().abs().mean()
+            output_change = (
+                (output - WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN).flatten().abs().mean()
+            )
             if WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN is not None:
                 input_change = (
-                    WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN - WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN
-                ).flatten().abs().mean()
+                    (
+                        WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN
+                        - WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN
+                    )
+                    .flatten()
+                    .abs()
+                    .mean()
+                )
                 WANTF_GLOBAL_K = output_change / input_change
         WANTF_GLOBAL_PREV_PREV_RAW_INPUT_EVEN = WANTF_GLOBAL_PREVIOUS_RAW_INPUT_EVEN
         WANTF_GLOBAL_PREVIOUS_RAW_OUTPUT_EVEN = output.clone()
@@ -612,11 +647,11 @@ class WanTimeTextImageEmbedding(nn.Module):
             timestep.dtype != time_embedder_dtype
             and time_embedder_dtype != torch.int8
             and time_embedder_dtype != torch.uint8
-            and time_embedder_dtype in [torch.float16, torch.float32, torch.float64, torch.bfloat16]
+            and time_embedder_dtype
+            in [torch.float16, torch.float32, torch.float64, torch.bfloat16]
         ):
             timestep = timestep.to(time_embedder_dtype)
 
- 
         temb = self.time_embedder(timestep).type_as(encoder_hidden_states)
 
         timestep_proj = self.time_proj(self.act_fn(temb))
@@ -626,7 +661,7 @@ class WanTimeTextImageEmbedding(nn.Module):
             encoder_hidden_states_image = self.image_embedder(
                 encoder_hidden_states_image
             )
-        
+
         return (
             temb,
             timestep_proj,
@@ -895,7 +930,7 @@ class WanTransformerBlock(nn.Module):
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
                 self.scale_shift_table + temb.float()
             ).chunk(6, dim=1)
-            
+
         # 1. Self-attention
         norm_hidden_states = (
             self.norm1(hidden_states.float()) * (1 + scale_msa) + shift_msa
@@ -923,7 +958,9 @@ class WanTransformerBlock(nn.Module):
             self.attn1.kv_cache = None
 
         attn_output = self.attn1(
-            hidden_states=norm_hidden_states, rotary_emb=rotary_emb, rotary_emb_chunk_size=rotary_emb_chunk_size
+            hidden_states=norm_hidden_states,
+            rotary_emb=rotary_emb,
+            rotary_emb_chunk_size=rotary_emb_chunk_size,
         )
 
         if hidden_states_ip is not None:
@@ -1271,7 +1308,11 @@ class WanTransformer3DModel(
                     rotary_emb,
                     hidden_states_ip,
                     timestep_proj_ip,
-                    rotary_emb_chunk_size=attention_kwargs.get("rotary_emb_chunk_size", None) if attention_kwargs is not None else None
+                    rotary_emb_chunk_size=(
+                        attention_kwargs.get("rotary_emb_chunk_size", None)
+                        if attention_kwargs is not None
+                        else None
+                    ),
                 )
                 if hidden_states_ip is not None:
                     hidden_states, hidden_states_ip = (

@@ -234,7 +234,6 @@ class WanS2VEngine(WanShared):
 
         scale = video_rate / fps
 
-
         num_repeat = int(audio_frame_num / (num_frames * scale)) + 1
 
         bucket_num = num_repeat * num_frames
@@ -332,7 +331,7 @@ class WanS2VEngine(WanShared):
         **kwargs,
     ):
         safe_emit_progress(progress_callback, 0.0, "Starting s2v pipeline")
-        
+
         use_cfg_guidance = negative_prompt is not None and guidance_scale > 1.0
 
         if return_latents:
@@ -369,7 +368,9 @@ class WanS2VEngine(WanShared):
 
         if negative_prompt_embeds is None:
             use_cfg_guidance = False
-            safe_emit_progress(progress_callback, 0.105, "CFG disabled (no negative prompt)")
+            safe_emit_progress(
+                progress_callback, 0.105, "CFG disabled (no negative prompt)"
+            )
 
         batch_size = prompt_embeds.shape[0]
         transformer_dtype = self.component_dtypes["transformer"]
@@ -383,7 +384,6 @@ class WanS2VEngine(WanShared):
         )
         if num_chunks is None or num_chunks > num_chunks_audio:
             num_chunks = num_chunks_audio
-        
 
         safe_emit_progress(
             progress_callback, 0.20, f"Audio encoded (chunks={num_chunks_audio})"
@@ -394,7 +394,9 @@ class WanS2VEngine(WanShared):
             self.motion_frames + 3
         ) // self.vae_scale_factor_temporal
 
-        safe_emit_progress(progress_callback, 0.21, "Loading and preprocessing input image")
+        safe_emit_progress(
+            progress_callback, 0.21, "Loading and preprocessing input image"
+        )
         image = self._load_image(image)
         image, height, width = self._aspect_ratio_resize(image, max_area=height * width)
 
@@ -406,7 +408,9 @@ class WanS2VEngine(WanShared):
         )
 
         if pose_video is not None:
-            safe_emit_progress(progress_callback, 0.25, "Loading and preprocessing pose video")
+            safe_emit_progress(
+                progress_callback, 0.25, "Loading and preprocessing pose video"
+            )
             num_frames = num_frames_per_chunk * num_chunks
             pose_video = self._load_video(
                 pose_video, num_frames=num_frames, reverse=True, fps=fps
@@ -608,7 +612,9 @@ class WanS2VEngine(WanShared):
                                 f"Denoising step {i + 1}/{total_steps}",
                             )
 
-            safe_emit_progress(chunk_progress, 0.82, "Denoising complete; decoding chunk")
+            safe_emit_progress(
+                chunk_progress, 0.82, "Denoising complete; decoding chunk"
+            )
             if not (self.drop_first_motion and r == 0):
                 decode_latents = torch.cat([motion_latents, latents], dim=2)
             else:
@@ -638,13 +644,17 @@ class WanS2VEngine(WanShared):
             video_chunks.append(video)
             self._preview_video_chunks.append(video)
 
-            safe_emit_progress(chunk_progress, 1.0, f"Chunk {r + 1}/{num_chunks} complete")
+            safe_emit_progress(
+                chunk_progress, 1.0, f"Chunk {r + 1}/{num_chunks} complete"
+            )
 
         if offload:
             safe_emit_progress(progress_callback, 0.96, "Offloading transformer")
             self._offload("transformer")
 
-        safe_emit_progress(progress_callback, 0.98, "Concatenating and postprocessing video")
+        safe_emit_progress(
+            progress_callback, 0.98, "Concatenating and postprocessing video"
+        )
         video_chunks = torch.cat(video_chunks, dim=2)
         safe_emit_progress(progress_callback, 1.0, "Completed s2v pipeline")
         return self._tensor_to_frames(video_chunks)
