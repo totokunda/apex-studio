@@ -232,7 +232,11 @@ def main() -> None:
     ap.add_argument("--url", required=True)
     ap.add_argument("--out-dir", default="/tmp/apex_download_bench")
     ap.add_argument("--python-chunk-bytes", type=int, default=1024 * 1024)
-    ap.add_argument("--rust", action="store_true", help="Run Rust benchmark (requires apex_download_rs)")
+    ap.add_argument(
+        "--rust",
+        action="store_true",
+        help="Run Rust benchmark (requires apex_download_rs)",
+    )
     ap.add_argument("--python", action="store_true", help="Run Python benchmark")
     args = ap.parse_args()
 
@@ -300,5 +304,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

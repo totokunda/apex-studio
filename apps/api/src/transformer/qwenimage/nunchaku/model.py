@@ -8,7 +8,6 @@ from warnings import warn
 from src.transformer import TRANSFORMERS_REGISTRY
 
 
-
 @TRANSFORMERS_REGISTRY("qwenimage.nunchaku")
 class QwenImageTransformer2DModel(NunchakuQwenImageTransformer2DModel):
     """

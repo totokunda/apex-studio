@@ -369,9 +369,6 @@ class FluxTransformer2DModel(
     CacheMixin,
     AttentionMixin,
 ):
-
-
-
     """
     The Transformer model introduced in Flux.
 
@@ -408,7 +405,6 @@ class FluxTransformer2DModel(
     _skip_layerwise_casting_patterns = ["pos_embed", "norm"]
     _repeated_blocks = ["FluxTransformerBlock", "FluxSingleTransformerBlock"]
 
-
     @register_to_config
     def __init__(
         self,
@@ -425,7 +421,6 @@ class FluxTransformer2DModel(
         axes_dims_rope: Tuple[int, int, int] = (16, 56, 56),
     ):
 
-        
         super().__init__()
         self.out_channels = out_channels or in_channels
         self.inner_dim = num_attention_heads * attention_head_dim

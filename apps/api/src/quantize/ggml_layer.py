@@ -7,6 +7,7 @@ from src.quantize.dequant import is_quantized, dequantize_tensor
 from src.quantize.ggml_tensor import GGMLTensor
 from typing import Callable
 
+
 def cast_to(
     t: Optional[torch.Tensor],
     dtype: Optional[torch.dtype],
@@ -79,9 +80,9 @@ class GGMLLayer(nn.Module):
             out = t.to(dtype=target_dtype, device=device)
         else:
             # Quantized → dequantize first
-           
+
             dq_dtype = self._effective_dequant_dtype(target_dtype, t)
-            
+
             # dequantize_tensor interfaces differ across repos; prefer (tensor, out_dtype),
             # and fall back to (tensor, out_dtype, dq_dtype_hint) if available.
             try:
@@ -107,7 +108,6 @@ class GGMLLayer(nn.Module):
             device = input.device if device is None else device
             if dtype is None:
                 dtype = input.dtype
-        
 
         # Weight
         weight = self._materialize_weight(
@@ -120,7 +120,6 @@ class GGMLLayer(nn.Module):
             bias = self._materialize_weight(
                 self.bias, target_dtype=dtype, device=device
             )
-        
 
         return weight, bias
 
@@ -130,7 +129,6 @@ class GGMLLayer(nn.Module):
         # if any GGML quant present or this is Linear/large Embedding, route to custom loader
         weight = state_dict.get(f"{prefix}weight", None)
         bias = state_dict.get(f"{prefix}bias", None)
-        
 
         should_route = self.is_ggml_quantized(weight=weight, bias=bias)
         if (
@@ -193,7 +191,9 @@ class GGMLLayer(nn.Module):
         if not got_weight and isinstance(self, nn.Linear):
             if strict:
                 # Correct ordering: (out_features, in_features)
-                w = torch.zeros(self.out_features, self.in_features, dtype=torch.float32)
+                w = torch.zeros(
+                    self.out_features, self.in_features, dtype=torch.float32
+                )
                 self.weight = nn.Parameter(w, requires_grad=False)
                 missing_keys.append(prefix + "weight")
             else:
@@ -216,15 +216,18 @@ class GGMLLayer(nn.Module):
 
 # -------------------- Patched layers --------------------
 
+
 class GGMLLinear(GGMLLayer, nn.Linear):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        w, b = self.cast_bias_weight(x) 
+        w, b = self.cast_bias_weight(x)
         return F.linear(x, w, b)
+
 
 class GGMLConv3d(GGMLLayer, nn.Conv3d):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         w, b = self.cast_bias_weight(x)
         return F.conv3d(x, w, b, self.stride, self.padding, self.dilation, self.groups)
+
 
 class GGMLConv2d(GGMLLayer, nn.Conv2d):
     def forward(self, x: torch.Tensor) -> torch.Tensor:

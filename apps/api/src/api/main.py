@@ -72,6 +72,7 @@ async def lifespan(app: FastAPI):
         pass
     shutdown_ray()
 
+
 app = FastAPI(name="Apex Engine", lifespan=lifespan)
 app.include_router(ws_router)
 app.include_router(manifest_router)

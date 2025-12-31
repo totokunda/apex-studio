@@ -6,7 +6,15 @@ import psutil
 
 print(f"Total RAM: {psutil.virtual_memory().total / (1024 ** 3):.2f} GB")
 
-variants = ["GGUF_Q4_K_S", "GGUF_Q4_K_M", "GGUF_Q5_K_S", "GGUF_Q5_K_M", "GGUF_Q6_K", "GGUF_Q8_0", "FP8"]
+variants = [
+    "GGUF_Q4_K_S",
+    "GGUF_Q4_K_M",
+    "GGUF_Q5_K_S",
+    "GGUF_Q5_K_M",
+    "GGUF_Q6_K",
+    "GGUF_Q8_0",
+    "FP8",
+]
 variants.reverse()
 dir_path = "test_lynx_wan_21_14b"
 os.makedirs(dir_path, exist_ok=True)
@@ -22,20 +30,16 @@ negative_prompt = "lowres, text, error, cropped, worst quality, low quality, jpe
 
 for variant in variants:
     print(f"[wan2.2 t2i2v] Running variant={variant}")
-    
+
     engine = UniversalEngine(
         yaml_path="/home/tosin_coverquick_co/apex/manifest/verified/video/wan-lynx-14b-1.0.0.v1.yml",
         selected_components={
-            "transformer": {
-                "variant": variant
-            },
-            "text_encoder": {
-                "variant": "FP8"
-            }
+            "transformer": {"variant": variant},
+            "text_encoder": {"variant": "FP8"},
         },
-        attention_type="sage"
+        attention_type="sage",
     )
-    
+
     video = engine.run(
         prompt=prompt,
         negative_prompt=negative_prompt,

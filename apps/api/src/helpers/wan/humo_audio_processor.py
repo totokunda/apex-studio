@@ -84,11 +84,14 @@ class HuMoAudioProcessor(BaseHelper):
         model_path = self._download(model_path, get_components_path())
         # check if is file or directory
         if os.path.isfile(model_path) and config_path is not None:
-            self.whisper = self._load_model({
-                "base": "WhisperModel",
-                "model_path": model_path,
-                "config_path": config_path,
-            }, module_name="transformers")
+            self.whisper = self._load_model(
+                {
+                    "base": "WhisperModel",
+                    "model_path": model_path,
+                    "config_path": config_path,
+                },
+                module_name="transformers",
+            )
         else:
             self.whisper = WhisperModel.from_pretrained(model_path).eval()
         self.to_device(self.whisper)

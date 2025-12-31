@@ -1,0 +1,22 @@
+# CUDA 
+rembg[gpu]
+triton==2.3.0
+flash_attn==2.8.3
+mlx[cuda12]
+sageattention==1.0.6
+transformer_engine==2.10.0
+xformers==0.0.33.post2
+decord
+apex==0.9.10dev
+
+# ROCM
+rembg[rocm]
+mlx[cpu]
+
+# CPU
+rembg[cpu]
+mlx[cpu]
+
+# MPS
+mlx
+eva-decord

@@ -29,7 +29,9 @@ def get_args(key: str, args: List[Any]) -> List[Any]:
 
 
 def get_kwargs(key: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: getattr(v, key) if isinstance(v, MMArg) else v for k, v in kwargs.items()}
+    return {
+        k: getattr(v, key) if isinstance(v, MMArg) else v for k, v in kwargs.items()
+    }
 
 
 class MMModule(nn.Module):

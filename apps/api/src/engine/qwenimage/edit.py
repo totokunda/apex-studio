@@ -139,7 +139,9 @@ class QwenImageEditEngine(QwenImageShared):
         safe_emit_progress(progress_callback, 0.32, "Transformer ready")
 
         if negative_prompt_embeds is not None:
-            safe_emit_progress(progress_callback, 0.33, "Preparing negative embeddings for transformer")
+            safe_emit_progress(
+                progress_callback, 0.33, "Preparing negative embeddings for transformer"
+            )
             negative_prompt_embeds = negative_prompt_embeds.to(
                 self.device, dtype=transformer_dtype
             )
@@ -216,7 +218,9 @@ class QwenImageEditEngine(QwenImageShared):
 
         # handle guidance
         if self.transformer.config.guidance_embeds and guidance_scale is not None:
-            safe_emit_progress(progress_callback, 0.485, "Preparing guidance embeddings")
+            safe_emit_progress(
+                progress_callback, 0.485, "Preparing guidance embeddings"
+            )
             guidance = torch.full(
                 [1], guidance_scale, device=self.device, dtype=torch.float32
             )

@@ -19,6 +19,7 @@ from src.utils.defaults import (
     get_offload_path,
 )
 from src.utils.module import find_class_recursive
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from src.transformer.base import TRANSFORMERS_REGISTRY as TRANSFORMERS_REGISTRY_TORCH
 from src.mlx.transformer.base import TRANSFORMERS_REGISTRY as TRANSFORMERS_REGISTRY_MLX
@@ -61,6 +62,7 @@ import inspect
 from src.lora import LoraManager, LoraItem
 from src.helpers.helpers import helpers
 from src.utils.torch_patches import patch_torch_linalg_solve_for_cusolver
+
 try:
     torch.backends.cuda.preferred_linalg_library()
 except Exception as e:
@@ -292,7 +294,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         # Normalize optional memory management mapping.
         # If no explicit mapping is provided, we will try to infer sensible
         # defaults based on the size of the models that will be loaded.
-        
+
         self.auto_apply_loras = kwargs.get("auto_apply_loras", True)
         self._init_lora_manager(kwargs.get("lora_save_path", DEFAULT_LORA_SAVE_PATH))
         loaded_loras, loaded_loras_names = self._load_loras()
@@ -309,7 +311,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
 
         self.attention_type = kwargs.get("attention_type", "sdpa")
         attention_register.set_default(self.attention_type)
-        
 
     def post_init(self):
         """
@@ -330,8 +331,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         logger.info(f"Selected components: {selected}")
         if isinstance(selected, dict):
             for key, value in selected.items():
-                if isinstance(value, dict) and self._has_memory_management_parameters(value):
-                    cfg = {k: value.get(k) for k in self._MEMORY_CONFIG_KEYS if k in value}
+                if isinstance(value, dict) and self._has_memory_management_parameters(
+                    value
+                ):
+                    cfg = {
+                        k: value.get(k) for k in self._MEMORY_CONFIG_KEYS if k in value
+                    }
                     if cfg:
                         explicit_from_selected[str(key)] = cfg
 
@@ -633,7 +638,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             component_module = text_encoder
         elif component_type == "transformer":
             logger.info(f"Loading transformer component: {component}")
-            transformer = self.load_transformer(component, load_dtype, no_weights, device)
+            transformer = self.load_transformer(
+                component, load_dtype, no_weights, device
+            )
             component_module = transformer
         elif component_type == "helper":
             helper = self.load_helper(component, device)
@@ -657,10 +664,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             helper_class = find_class_recursive(importlib.import_module(module), base)
         if helper_class is None:
             raise ValueError(f"Helper class {base} not found")
-        
+
         # create an instance of the helper class
         if hasattr(helper_class, "from_pretrained") and "model_path" in config:
-            helper = helper_class.from_pretrained(config["model_path"], device_map=device)
+            helper = helper_class.from_pretrained(
+                config["model_path"], device_map=device
+            )
         else:
             # check for config_path
             if "config_path" in config and config.get("module", None) is not None:
@@ -671,7 +680,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 except Exception:
                     pass
                 config = self._load_config_file(config_path)
-                
+
             helper = helper_class(**config)
 
         # Store helper with multiple keys for easier access
@@ -924,7 +933,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             else:
                 raise ValueError(f"Component name {component_name} not found")
 
-    def load_text_encoder(self, component: Dict[str, Any], no_weights: bool = False, device: str = "cpu"):
+    def load_text_encoder(
+        self, component: Dict[str, Any], no_weights: bool = False, device: str = "cpu"
+    ):
         component["load_dtype"] = self.component_load_dtypes.get("text_encoder", None)
         component["dtype"] = self.component_dtypes.get("text_encoder", None)
         text_encoder = TextEncoder(component, no_weights, device=device)
@@ -934,10 +945,15 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         if mm_config is not None:
             original_load_model = text_encoder.load_model
             import types
-            text_encoder._resolve_memory_config_for_component = types.MethodType(lambda self, x: mm_config, text_encoder)
+
+            text_encoder._resolve_memory_config_for_component = types.MethodType(
+                lambda self, x: mm_config, text_encoder
+            )
 
             def _patched_load_model(no_weights: bool = False, *args, **kwargs):
-                model = original_load_model(no_weights=no_weights, to_device=False, *args, **kwargs)
+                model = original_load_model(
+                    no_weights=no_weights, to_device=False, *args, **kwargs
+                )
                 text_encoder.model = model
 
                 if no_weights:
@@ -946,11 +962,13 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 already_enabled = getattr(
                     text_encoder, "_group_offloading_enabled", False
                 )
-                
+
                 if not already_enabled:
                     offloading_module = component.get("offloading_module", None)
                     if offloading_module:
-                        model_to_offload = text_encoder.model.get_submodule(offloading_module)
+                        model_to_offload = text_encoder.model.get_submodule(
+                            offloading_module
+                        )
                     else:
                         model_to_offload = text_encoder.model
                     self._apply_group_offloading(
@@ -959,7 +977,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                         module_label=component.get("name") or "text_encoder",
                     )
                     setattr(text_encoder, "_group_offloading_enabled", True)
-                    
+
                 self._maybe_compile_module(text_encoder.model, component)
                 self.to_device(text_encoder)
                 return text_encoder.model
@@ -1025,7 +1043,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 adapter_names=[lora[2] for lora in preloaded_loras],
                 model=transformer,
             )
-        
+
         # Apply transformer group offloading *after* any post-load mutations
         # (e.g. auto-apply LoRAs above). We intentionally skip enabling group
         # offloading inside LoaderMixin for transformers, because it caches CPU
@@ -1058,7 +1076,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                         if offloading_module
                         else transformer
                     )
-                    print(f"\n\nTransformer group offloading model to offload resolved\n\n")
+                    print(
+                        f"\n\nTransformer group offloading model to offload resolved\n\n"
+                    )
                     self._apply_group_offloading(
                         model_to_offload, mm_config, module_label=label
                     )
@@ -1317,10 +1337,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                             # If a target dtype is configured, estimate the effective in-memory
                             # size after casting floating-point tensors (except float8).
                             effective_es = stored_es
-                            if (
-                                target_fp_es is not None
-                                and dtype_str in {"F64", "F32", "BF16", "F16"}
-                            ):
+                            if target_fp_es is not None and dtype_str in {
+                                "F64",
+                                "F32",
+                                "BF16",
+                                "F16",
+                            }:
                                 effective_es = target_fp_es
 
                             total += int(numel) * int(effective_es)
@@ -1594,15 +1616,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
 
         # Estimate total model size
         total_size_bytes = self._estimate_component_model_size_bytes(component)
-        
-        
+
         if total_size_bytes <= 0:
             return None
 
         total_size_gb = float(total_size_bytes) / 1e9
-        
 
-        
         # No GPU or model doesn't fit? Need offloading
         needs_offload = False
         if gpu_total_gb is None or gpu_total_gb == 0:
@@ -1612,14 +1631,18 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         # Heuristic headroom for activations, KV cache, temporary buffers, etc.
         # This replaces the older percent-of-VRAM rule which was too coarse.
         if component.get("type") == "text_encoder":
-            activation_overhead_gb = os.environ.get("TEXT_ENCODER_ACTIVATION_OVERHEAD_GB", 4.0)
+            activation_overhead_gb = os.environ.get(
+                "TEXT_ENCODER_ACTIVATION_OVERHEAD_GB", 4.0
+            )
         elif component.get("type") == "transformer":
-            activation_overhead_gb = os.environ.get("TRANSFORMER_ACTIVATION_OVERHEAD_GB", 8.0)
+            activation_overhead_gb = os.environ.get(
+                "TRANSFORMER_ACTIVATION_OVERHEAD_GB", 8.0
+            )
         elif component.get("type") == "vae":
             activation_overhead_gb = os.environ.get("VAE_ACTIVATION_OVERHEAD_GB", 6.0)
         else:
             activation_overhead_gb = os.environ.get("ACTIVATION_OVERHEAD_GB", 8.0)
-            
+
         required_gpu_gb = total_size_gb + activation_overhead_gb
 
         if gpu_available_gb is not None:
@@ -1639,11 +1662,16 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
 
         # Decide on offloading strategy
         config = MemoryConfig.for_block_level()
-        
-        if (component.get("type") == "transformer" and self.config.get("metadata", {}).get("id") == "zimage-turbo-control"):
+
+        if (
+            component.get("type") == "transformer"
+            and self.config.get("metadata", {}).get("id") == "zimage-turbo-control"
+        ):
             config.group_offload_record_stream = False
             config.group_offload_use_stream = False
-            self.logger.info(f"Component {component.get('name') or ctype}: using no stream offload")
+            self.logger.info(
+                f"Component {component.get('name') or ctype}: using no stream offload"
+            )
 
         # Determine if we need disk offload
         # Calculate how many blocks will be in CPU memory at once (rough estimate: 2-3 blocks)
@@ -1686,14 +1714,14 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             return None
 
         auto_map: Dict[str, MemoryConfig] = {}
-        
+
         for comp in components:
             ctype = comp.get("type")
             if ctype not in {"transformer", "vae", "text_encoder"}:
                 continue
-            
+
             strategy = self._determine_memory_strategy(comp)
-            
+
             if strategy is not None:
                 key = comp.get("name") or ctype
                 auto_map[key] = strategy
@@ -1722,7 +1750,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             )
         else:
             denormalized_latents = latents
-            
+
         self.enable_vae_tiling(component_name=component_name)
 
         video = getattr(self, component_name).decode(
@@ -1810,10 +1838,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         # if a dict has any of the keys: group_offload_type, group_offload_num_blocks_per_group, group_offload_use_stream, group_offload_record_stream, group_offload_non_blocking, group_offload_low_cpu_mem_usage, group_offload_offload_device, group_offload_disk_path
         if not isinstance(value, dict):
             return False
-        return any(
-            key in value
-            for key in self._MEMORY_CONFIG_KEYS
-        )
+        return any(key in value for key in self._MEMORY_CONFIG_KEYS)
 
     def _normalize_memory_management(
         self,
@@ -1823,7 +1848,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
     ) -> Optional[Dict[str, MemoryConfig]]:
         # Start with any explicit mapping provided by the caller.
         normalized: Dict[str, MemoryConfig] = {}
-        
 
         if spec:
 
@@ -1861,7 +1885,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 for key, cfg in auto_map.items():
                     if key not in normalized:
                         normalized[key] = cfg
-            
 
         return normalized if normalized else None
 
@@ -1924,8 +1947,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             else:
 
                 from diffusers.hooks import apply_group_offloading
-                
-                
+
                 apply_group_offloading(module, **kwargs)
 
         except Exception as exc:
@@ -1982,7 +2004,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 ignore_load_dtype = component.get("extra_kwargs", {}).get(
                     "ignore_load_dtype", False
                 )
-                
+
                 component_module = self.load_component(
                     component,
                     (
@@ -1994,7 +2016,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 setattr(self, component.get("name"), component_module)
                 loaded_component = True
                 return component_module
-    
+
         if not loaded_component and component_type:
             return self.load_component_by_type(component_type)
 
@@ -2049,12 +2071,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             raise RuntimeError("LoraManager is not available")
 
         resolved = self.lora_manager.load_into(
-            model,
-            loras,
-            adapter_names=adapter_names,
-            scales=scales
+            model, loras, adapter_names=adapter_names, scales=scales
         )
-
 
         # Track by adapter name
         for i, item in enumerate(resolved):
@@ -2064,7 +2082,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 else item.name or f"lora_{i}"
             )
             self.loaded_loras[name] = item
-        
 
     def _load_loras(self):
         """If the YAML config includes a top-level `loras` list, apply them on init.
@@ -2167,7 +2184,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 if selected_label:
                     selected_item = self.selected_components.get(selected_label)
                 if not isinstance(selected_item, dict):
-                    selected_item = raw_model_paths[0] if isinstance(raw_model_paths[0], dict) else None
+                    selected_item = (
+                        raw_model_paths[0]
+                        if isinstance(raw_model_paths[0], dict)
+                        else None
+                    )
 
                 if isinstance(selected_item, dict):
                     desired_variant = selected_item.get("variant")
@@ -2175,8 +2196,13 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                     for item in raw_model_paths:
                         if not isinstance(item, dict):
                             continue
-                        if desired_variant is None or item.get("variant") == desired_variant:
-                            selected_source = selected_item.get("path", item.get("path"))
+                        if (
+                            desired_variant is None
+                            or item.get("variant") == desired_variant
+                        ):
+                            selected_source = selected_item.get(
+                                "path", item.get("path")
+                            )
                             break
                     if selected_source is None:
                         for item in raw_model_paths:
@@ -2273,12 +2299,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 selected_scheduler_option = self.selected_components.get(
                     component_name, self.selected_components.get(component_type, None)
                 )
-                
+
                 if not selected_scheduler_option:
                     # take the first scheduler option
                     selected_scheduler_option = scheduler_options[0]
-                    
-                
+
                 match_found = False
                 for scheduler_option in scheduler_options:
                     if selected_scheduler_option["name"] == scheduler_option["name"]:
@@ -2298,7 +2323,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                     selected_scheduler_option.update(scheduler_options[0])
                     component = selected_scheduler_option
                     match_found = True
-                        
+
                 if component_name:
                     component["name"] = component_name
 
@@ -2374,7 +2399,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                         ] = downloaded_extra_model_path
 
             new_components_cfg.append(component)
-    
+
         self.config["components"] = new_components_cfg
 
     def _get_latents(
@@ -2464,7 +2489,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         else:
             return noise
 
-    def get_height_width(self, height, width, resolution, aspect_ratio, mod_value: int = 16):
+    def get_height_width(
+        self, height, width, resolution, aspect_ratio, mod_value: int = 16
+    ):
         height = (height // mod_value) * mod_value
         width = (width // mod_value) * mod_value
         return height, width
@@ -2536,7 +2563,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 timestep_ids = torch.tensor(
                     timesteps, dtype=torch.long, device=self.device
                 )
-                
+
                 num_train_timesteps = getattr(
                     self.scheduler, "num_train_timesteps", 1000
                 )
@@ -2585,7 +2612,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
 
         return timesteps, num_inference_steps
 
-    
     def denoise(self, *args, **kwargs):
         """
         Dispatch denoising to a type-specific implementation.
@@ -2755,12 +2781,13 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             del transformer
             empty_cache()
 
+    def save_and_upload_component(self, component_name_or_type: str, repo_id: str):
 
-    def save_and_upload_component(self, component_name_or_type:str, repo_id:str):
-        
-        from huggingface_hub import  upload_folder
+        from huggingface_hub import upload_folder
 
-        component = self.get_component_by_name(component_name_or_type) or self.get_component_by_type(component_name_or_type)
+        component = self.get_component_by_name(
+            component_name_or_type
+        ) or self.get_component_by_type(component_name_or_type)
         if component.get("type") == "scheduler":
             scheduler = self.load_scheduler(component)
             # `upload_folder()` expects a directory path, not a single file path.
@@ -2778,7 +2805,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                         raise RuntimeError(
                             "Scheduler did not create scheduler_config.json and did not return a config dict."
                         )
-                        
+
                 upload_folder(
                     folder_path=tmp_dir,
                     repo_id=repo_id,
@@ -2789,5 +2816,3 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             return True
         else:
             raise ValueError(f"Unsupported component type: {component.get('type')}")
-
-    

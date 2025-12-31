@@ -56,7 +56,6 @@ def load_state_dict(module, state_dict, strict=False, logger=None):
             message. If not specified, print function will be used.
     """
 
-
     unexpected_keys = []
     all_missing_keys = []
     err_msg = []

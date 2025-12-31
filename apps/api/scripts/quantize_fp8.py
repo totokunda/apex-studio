@@ -8,6 +8,7 @@ from src.quantize.scaled_layer import get_fp_maxval, fp8_tensor_quant
 from src.engine import UniversalEngine
 import safetensors.torch
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -103,7 +104,6 @@ def _mantissa_bits_for_dtype(dtype: torch.dtype) -> int:
     if dtype is torch.float8_e5m2:
         return 2
     raise ValueError(f"Unsupported FP8 dtype for mantissa mapping: {dtype!r}")
-
 
 
 def quantize_large_linear_layers_to_fp8(
@@ -242,5 +242,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

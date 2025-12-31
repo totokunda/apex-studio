@@ -27,11 +27,14 @@ import cv2
 import tempfile
 from glob import glob
 from transformers.modeling_utils import PreTrainedModel
-from src.quantize.ggml_layer import patch_model_from_state_dict as patch_model_ggml_from_state_dict
+from src.quantize.ggml_layer import (
+    patch_model_from_state_dict as patch_model_ggml_from_state_dict,
+)
 from src.quantize.load import load_gguf
 from src.mixins.download_mixin import DownloadMixin
 from contextlib import nullcontext
 from tqdm import tqdm
+
 # Import pretrained config from transformers
 from transformers.configuration_utils import PretrainedConfig
 from src.utils.safetensors import is_safetensors_file, load_safetensors
@@ -42,6 +45,7 @@ from src.types import InputImage, InputVideo, InputAudio
 import librosa
 import gguf
 import pydash
+
 ACCEPTABLE_DTYPES = [torch.float16, torch.float32, torch.bfloat16]
 IMAGE_EXTS = [
     "jpg",
@@ -69,7 +73,7 @@ VIDEO_EXTS = [
 
 class LoaderMixin(DownloadMixin):
     logger: Logger = logger
-    
+
     def fetch_config(
         self,
         config_path: str,
@@ -93,10 +97,10 @@ class LoaderMixin(DownloadMixin):
         key_map: Dict[str, str] | None = None,
         extra_kwargs: Dict[str, Any] | None = None,
     ) -> ModelMixin:
-        
+
         if not self.logger:
             self.logger = logger
-    
+
         if extra_kwargs is None:
             extra_kwargs = {}
 
@@ -116,15 +120,14 @@ class LoaderMixin(DownloadMixin):
 
         model_base = component.get("base")
         model_path = component.get("model_path")
-        
+
         if mm_config is not None:
             # Should be cpu often times since the model is loaded on the cpu
             load_device = "cpu"
-        
+
         if no_weights:
             load_device = "cpu"
-            
-    
+
         if getter_fn:
             model_class = getter_fn(model_base)
         else:
@@ -135,17 +138,15 @@ class LoaderMixin(DownloadMixin):
             raise ValueError(f"Model class for base '{model_base}' not found")
         config_path = component.get("config_path")
         config = {}
-        
+
         if "nunchaku" in model_base:
             return model_class.from_pretrained(model_path, torch_dtype=load_dtype)
-            
 
         if config_path:
             pydash.merge(config, self.fetch_config(config_path))
 
         if component.get("config"):
             pydash.merge(config, component.get("config"))
-            
 
         # Lazy import here as well to avoid circular imports.
         from src.converters.convert import (
@@ -164,7 +165,6 @@ class LoaderMixin(DownloadMixin):
             converter = get_text_encoder_converter(model_base)
         else:
             converter = NoOpConverter()
-            
 
         if os.path.isdir(model_path):
             # look for a config.json file
@@ -212,7 +212,7 @@ class LoaderMixin(DownloadMixin):
 
         if no_weights:
             return model
-        
+
         files_to_load = []
         if os.path.isdir(model_path):
             extensions = component.get(
@@ -235,16 +235,18 @@ class LoaderMixin(DownloadMixin):
             if any(model_path.endswith(ext) for ext in extensions):
                 files_to_load = [model_path]
         extra_model_paths = component.get("extra_model_paths", [])
-        
+
         if isinstance(extra_model_paths, str):
             extra_model_paths = [extra_model_paths]
         if extra_kwargs.get("load_extra_model_paths", True):
             files_to_load.extend(extra_model_paths)
         # Track whether we've already patched this model for FP-scaled weights
- 
+
         patched_for_fpscaled = False
         gguf_kwargs = component.get("gguf_kwargs", {})
-        for file_path in tqdm(files_to_load, desc="Loading weights", total=len(files_to_load)):
+        for file_path in tqdm(
+            files_to_load, desc="Loading weights", total=len(files_to_load)
+        ):
             if str(file_path).endswith(".gguf"):
                 # GGUF follows the same "files_to_load" pathway as other weight files.
                 if hasattr(self, "engine_type") and self.engine_type == "mlx":
@@ -269,8 +271,7 @@ class LoaderMixin(DownloadMixin):
                     state_dict,
                     default_dequant_dtype=load_dtype,
                 )
-                
-                
+
                 for key, value in state_dict.items():
                     if load_dtype:
                         if getattr(value, "tensor_type", None) in {
@@ -290,8 +291,7 @@ class LoaderMixin(DownloadMixin):
                     dtype=load_dtype,
                     framework=(
                         "np"
-                        if hasattr(self, "engine_type")
-                        and self.engine_type == "mlx"
+                        if hasattr(self, "engine_type") and self.engine_type == "mlx"
                         else "pt"
                     ),
                 )
@@ -299,7 +299,7 @@ class LoaderMixin(DownloadMixin):
                 state_dict = torch.load(
                     file_path, map_location=load_device, weights_only=True, mmap=True
                 )
-            
+
             # remap keys if key_map is provided replace part of existing key with new key
             if key_map:
                 new_state_dict = {}
@@ -310,7 +310,7 @@ class LoaderMixin(DownloadMixin):
                         else:
                             new_state_dict[k2] = v2
                 state_dict = new_state_dict
-            
+
             converter.convert(state_dict)
             if load_dtype and not is_safetensors:
                 for k, v in state_dict.items():
@@ -327,10 +327,7 @@ class LoaderMixin(DownloadMixin):
                 and (
                     any(k.endswith("scale_weight") for k in state_dict.keys())
                     or any(
-                        (
-                            v.dtype == torch.float8_e4m3fn
-                            or v.dtype == torch.float8_e5m2
-                        )
+                        (v.dtype == torch.float8_e4m3fn or v.dtype == torch.float8_e5m2)
                         for v in state_dict.values()
                     )
                 )
@@ -338,6 +335,7 @@ class LoaderMixin(DownloadMixin):
                 from src.quantize.scaled_layer import (
                     patch_fpscaled_model_from_state_dict,
                 )
+
                 # Prefer the explicit load_dtype (if it's a torch dtype)
                 # as the compute dtype for FP dequantization; otherwise
                 # let the scaled layers infer it from their inputs.
@@ -374,7 +372,7 @@ class LoaderMixin(DownloadMixin):
                 raise ValueError(
                     f"Model {model} does not have a load_state_dict or load_weights method"
                 )
-                    
+
         if getattr(self, "engine_type", "torch") == "torch":
             has_meta_params = False
             patched_for_fpscaled = getattr(model, "_patched_for_fpscaled", False)
@@ -454,10 +452,14 @@ class LoaderMixin(DownloadMixin):
                             import torch.nn as nn
 
                             init_range = getattr(
-                                getattr(model, "config", None), "initializer_range", 0.02
+                                getattr(model, "config", None),
+                                "initializer_range",
+                                0.02,
                             )
                             param_dtype = (
-                                load_dtype if isinstance(load_dtype, torch.dtype) else torch.float32
+                                load_dtype
+                                if isinstance(load_dtype, torch.dtype)
+                                else torch.float32
                             )
                             w = torch.empty(
                                 tuple(out_emb.weight.shape),
@@ -471,7 +473,10 @@ class LoaderMixin(DownloadMixin):
                             # Bias is uncommon for lm_head, but handle it if present.
                             if hasattr(out_emb, "bias") and out_emb.bias is not None:
                                 b = out_emb.bias
-                                if getattr(b, "device", None) is not None and b.device.type == "meta":
+                                if (
+                                    getattr(b, "device", None) is not None
+                                    and b.device.type == "meta"
+                                ):
                                     out_emb.bias = nn.Parameter(
                                         torch.zeros(
                                             tuple(b.shape),
@@ -618,7 +623,12 @@ class LoaderMixin(DownloadMixin):
                     "Model has parameters on meta device, this is not supported"
                 )
 
-        if mm_config is not None and not no_weights and component.get("type") != "transformer" and component.get("type") != "text_encoder": 
+        if (
+            mm_config is not None
+            and not no_weights
+            and component.get("type") != "transformer"
+            and component.get("type") != "text_encoder"
+        ):
             apply_group_offloading = getattr(self, "_apply_group_offloading", None)
             if callable(apply_group_offloading):
                 label = (
@@ -642,12 +652,15 @@ class LoaderMixin(DownloadMixin):
                         )
 
         # Optionally compile the fully initialized module according to config.
-        if not no_weights and component.get("type") != "transformer" and component.get("type") != "text_encoder":
+        if (
+            not no_weights
+            and component.get("type") != "transformer"
+            and component.get("type") != "text_encoder"
+        ):
             maybe_compile = getattr(self, "_maybe_compile_module", None)
             if callable(maybe_compile):
                 model = maybe_compile(model, component)
-                
-        
+
         return model
 
     def _load_config_file(self, file_path: str | Path):
@@ -734,7 +747,6 @@ class LoaderMixin(DownloadMixin):
             raise ValueError(
                 f"Could not find scheduler class '{class_name}' in module '{module_name}' or its submodules."
             )
-            
 
         config_path = component.get("config_path")
         config = component.get("config")
@@ -745,7 +757,6 @@ class LoaderMixin(DownloadMixin):
             config = self.fetch_config(config_path)
         else:
             config = component.get("config", {})
-            
 
         # Determine which config entries can be passed to the component constructor
         try:
@@ -772,8 +783,6 @@ class LoaderMixin(DownloadMixin):
             config_to_register = {
                 k: v for k, v in (config or {}).items() if k not in init_param_names
             }
-            
-        
 
         component = component_class(**init_kwargs)
 
@@ -1005,7 +1014,9 @@ class LoaderMixin(DownloadMixin):
                             next_sample_t += target_dt
 
                         frame_count += 1
-                return _finalize_frames(frames, requested_fps if requested_fps is not None else original_fps)
+                return _finalize_frames(
+                    frames, requested_fps if requested_fps is not None else original_fps
+                )
             finally:
                 if "cap" in locals() and cap.isOpened():
                     cap.release()

@@ -22,6 +22,7 @@ _memory_device_t = Optional[Literal["cpu", "same"]]
 _gradient_checkpointing_t = Optional[Literal["half", "full"]]
 _selective_checkpointing_t = Optional[Literal["coarse", "fine"]]
 
+
 class DiagonalGaussianDistribution:
     def __init__(self, mean: torch.Tensor, logvar: torch.Tensor):
         self.mean = mean
@@ -40,6 +41,7 @@ class DiagonalGaussianDistribution:
             self.mean**2 + self.var - 1.0 - self.logvar,
             dim=list(range(1, self.mean.ndim)),
         )
+
 
 class MemoryState(Enum):
     """

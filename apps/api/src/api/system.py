@@ -17,6 +17,7 @@ import re
 
 router = APIRouter(prefix="/system", tags=["system"])
 
+
 async def _run_blocking(func, *args, **kwargs):
     """Run blocking (sync) work in a worker thread so we don't block the event loop."""
     return await anyio.to_thread.run_sync(partial(func, *args, **kwargs))

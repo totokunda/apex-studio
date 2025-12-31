@@ -130,9 +130,7 @@ class WanVaceEngine(WanShared):
             num_inference_steps=num_inference_steps,
         )
 
-        safe_emit_progress(
-            progress_callback, 0.24, "Scheduler and timesteps prepared"
-        )
+        safe_emit_progress(progress_callback, 0.24, "Scheduler and timesteps prepared")
 
         if mask:
             safe_emit_progress(progress_callback, 0.25, "Loading mask")
@@ -267,7 +265,9 @@ class WanVaceEngine(WanShared):
         inactive = preprocessed_video * (1 - mask)
         reactive = preprocessed_video * mask
 
-        safe_emit_progress(progress_callback, 0.36, "Encoding inactive/reactive regions (VAE)")
+        safe_emit_progress(
+            progress_callback, 0.36, "Encoding inactive/reactive regions (VAE)"
+        )
         inactive = self.vae_encode(
             inactive,
             offload=offload,
@@ -340,7 +340,9 @@ class WanVaceEngine(WanShared):
                 mask_ = torch.cat([mask_padding, mask_], dim=1)
             mask_list.append(mask_)
 
-        safe_emit_progress(progress_callback, 0.42, "Preparing conditioning latents/masks")
+        safe_emit_progress(
+            progress_callback, 0.42, "Preparing conditioning latents/masks"
+        )
         conditioning_latents = torch.stack(latent_list, dim=0).to(self.device)
         conditioning_masks = torch.stack(mask_list, dim=0).to(self.device)
 

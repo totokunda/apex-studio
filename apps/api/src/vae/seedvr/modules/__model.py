@@ -42,18 +42,20 @@ from src.vae.seedvr.modules.types import (
 )
 
 
-def safe_pad_operation(x, padding, mode='constant', value=0.0):
+def safe_pad_operation(x, padding, mode="constant", value=0.0):
     """Safe padding operation that handles Half precision only for problematic modes"""
     # Modes qui nécessitent le fix Half precision
-    problematic_modes = ['replicate', 'reflect', 'circular']
-    
+    problematic_modes = ["replicate", "reflect", "circular"]
+
     if mode in problematic_modes:
         try:
             return F.pad(x, padding, mode=mode, value=value)
         except RuntimeError as e:
             if "not implemented for 'Half'" in str(e):
                 original_dtype = x.dtype
-                return F.pad(x.float(), padding, mode=mode, value=value).to(original_dtype)
+                return F.pad(x.float(), padding, mode=mode, value=value).to(
+                    original_dtype
+                )
             else:
                 raise e
     else:
@@ -62,8 +64,11 @@ def safe_pad_operation(x, padding, mode='constant', value=0.0):
 
 
 # Fake func, no checkpointing is required for inference
-def gradient_checkpointing(module: Union[Callable, nn.Module], *args, enabled: bool, **kwargs):
+def gradient_checkpointing(
+    module: Union[Callable, nn.Module], *args, enabled: bool, **kwargs
+):
     return module(*args, **kwargs)
+
 
 class ResnetBlock2D(nn.Module):
     r"""
@@ -78,7 +83,11 @@ class ResnetBlock2D(nn.Module):
     """
 
     def __init__(
-        self, *, in_channels: int, out_channels: Optional[int] = None, dropout: float = 0.0
+        self,
+        *,
+        in_channels: int,
+        out_channels: Optional[int] = None,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -91,14 +100,18 @@ class ResnetBlock2D(nn.Module):
             num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
         )
 
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(
+            in_channels, out_channels, kernel_size=3, stride=1, padding=1
+        )
 
         self.norm2 = torch.nn.GroupNorm(
             num_groups=32, num_channels=out_channels, eps=1e-6, affine=True
         )
 
         self.dropout = torch.nn.Dropout(dropout)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(
+            out_channels, out_channels, kernel_size=3, stride=1, padding=1
+        )
 
         self.use_in_shortcut = self.in_channels != out_channels
 
@@ -127,6 +140,7 @@ class ResnetBlock2D(nn.Module):
 
         return output_tensor
 
+
 class Upsample3D(nn.Module):
     """A 3D upsampling layer."""
 
@@ -141,7 +155,11 @@ class Upsample3D(nn.Module):
         super().__init__()
         self.channels = channels
         self.conv = init_causal_conv3d(
-            self.channels, self.channels, kernel_size=3, padding=1, inflation_mode=inflation_mode
+            self.channels,
+            self.channels,
+            kernel_size=3,
+            padding=1,
+            inflation_mode=inflation_mode,
         )
 
         self.temporal_up = temporal_up
@@ -155,7 +173,9 @@ class Upsample3D(nn.Module):
             self.channels, self.channels * upscale_ratio, kernel_size=1, padding=0
         )
         identity = (
-            torch.eye(self.channels).repeat(upscale_ratio, 1).reshape_as(self.upscale_conv.weight)
+            torch.eye(self.channels)
+            .repeat(upscale_ratio, 1)
+            .reshape_as(self.upscale_conv.weight)
         )
 
         self.upscale_conv.weight.data.copy_(identity)
@@ -184,7 +204,9 @@ class Upsample3D(nn.Module):
         if self.slicing:
             split_size = hidden_states.size(2) // 2
             hidden_states = list(
-                hidden_states.split([split_size, hidden_states.size(2) - split_size], dim=2)
+                hidden_states.split(
+                    [split_size, hidden_states.size(2) - split_size], dim=2
+                )
             )
         else:
             hidden_states = [hidden_states]
@@ -234,7 +256,11 @@ class Downsample3D(nn.Module):
         self.conv = init_causal_conv3d(
             self.channels,
             self.channels,
-            kernel_size=(self.temporal_kernel, self.spatial_kernel, self.spatial_kernel),
+            kernel_size=(
+                self.temporal_kernel,
+                self.spatial_kernel,
+                self.spatial_kernel,
+            ),
             stride=(self.temporal_ratio, self.spatial_ratio, self.spatial_ratio),
             padding=((1 if self.temporal_down else 0), 0, 0),
             inflation_mode=inflation_mode,
@@ -262,7 +288,9 @@ class Downsample3D(nn.Module):
         assert hidden_states.shape[1] == self.channels
 
         if self.spatial_down:
-            hidden_states = safe_pad_operation(hidden_states, (0, 1, 0, 1), mode="constant", value=0)
+            hidden_states = safe_pad_operation(
+                hidden_states, (0, 1, 0, 1), mode="constant", value=0
+            )
 
         hidden_states = self.conv(hidden_states, memory_state=memory_state)
         return hidden_states
@@ -307,7 +335,9 @@ class ResnetBlock3D(ResnetBlock2D):
             )
         self.gradient_checkpointing = False
 
-    def forward(self, input_tensor: torch.Tensor, memory_state: MemoryState = MemoryState.UNSET):
+    def forward(
+        self, input_tensor: torch.Tensor, memory_state: MemoryState = MemoryState.UNSET
+    ):
         return gradient_checkpointing(
             self.custom_forward,
             input_tensor,
@@ -529,7 +559,9 @@ class Encoder3D(nn.Module):
             input_channel = output_channel
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
-            is_temporal_down_block = i >= len(block_out_channels) - self.temporal_down_num - 1
+            is_temporal_down_block = (
+                i >= len(block_out_channels) - self.temporal_down_num - 1
+            )
             # Note: take the last one
 
             down_block = DownEncoderBlock3D(
@@ -559,7 +591,11 @@ class Encoder3D(nn.Module):
 
         conv_out_channels = 2 * out_channels if double_z else out_channels
         self.conv_out = init_causal_conv3d(
-            block_out_channels[-1], conv_out_channels, 3, padding=1, inflation_mode=inflation_mode
+            block_out_channels[-1],
+            conv_out_channels,
+            3,
+            padding=1,
+            inflation_mode=inflation_mode,
         )
 
         assert len(selective_checkpointing) == len(self.down_blocks)
@@ -581,7 +617,9 @@ class Encoder3D(nn.Module):
         self.gradient_checkpointing = gradient_checkpointing
         logger.info(f"[Encoder3D] gradient_checkpointing: {checkpointing_types}")
 
-    def forward(self, sample: torch.FloatTensor, memory_state: MemoryState) -> torch.FloatTensor:
+    def forward(
+        self, sample: torch.FloatTensor, memory_state: MemoryState
+    ) -> torch.FloatTensor:
         r"""The forward method of the `Encoder` class."""
         sample = self.conv_in(sample, memory_state=memory_state)
         # down
@@ -674,7 +712,11 @@ class Decoder3D(nn.Module):
         )
         self.conv_act = nn.SiLU()
         self.conv_out = init_causal_conv3d(
-            block_out_channels[0], out_channels, 3, padding=1, inflation_mode=inflation_mode
+            block_out_channels[0],
+            out_channels,
+            3,
+            padding=1,
+            inflation_mode=inflation_mode,
         )
 
         assert len(selective_checkpointing) == len(self.up_blocks)
@@ -696,7 +738,9 @@ class Decoder3D(nn.Module):
         self.gradient_checkpointing = gradient_checkpointing
         logger.info(f"[Decoder3D] gradient_checkpointing: {checkpointing_types}")
 
-    def forward(self, sample: torch.FloatTensor, memory_state: MemoryState) -> torch.FloatTensor:
+    def forward(
+        self, sample: torch.FloatTensor, memory_state: MemoryState
+    ) -> torch.FloatTensor:
         r"""The forward method of the `Decoder` class."""
 
         sample = self.conv_in(sample, memory_state=memory_state)
@@ -750,8 +794,10 @@ class SeedVR2AutoencoderKL(nn.Module):
         if slicing_sample_min_size is None:
             slicing_sample_min_size = temporal_downsample_factor
         self.slicing_sample_min_size = slicing_sample_min_size
-        self.slicing_latent_min_size = slicing_sample_min_size // (2**temporal_scale_num)
-        
+        self.slicing_latent_min_size = slicing_sample_min_size // (
+            2**temporal_scale_num
+        )
+
         # pass init params to Encoder
         self.encoder = Encoder3D(
             in_channels=in_channels,
@@ -824,7 +870,11 @@ class SeedVR2AutoencoderKL(nn.Module):
 
     def _encode(self, x: torch.Tensor, memory_state: MemoryState) -> torch.Tensor:
         h = self.encoder(x, memory_state=memory_state)
-        h = self.quant_conv(h, memory_state=memory_state) if self.quant_conv is not None else h
+        h = (
+            self.quant_conv(h, memory_state=memory_state)
+            if self.quant_conv is not None
+            else h
+        )
         return h
 
     def _decode(self, z: torch.Tensor, memory_state: MemoryState) -> torch.Tensor:
@@ -838,8 +888,13 @@ class SeedVR2AutoencoderKL(nn.Module):
 
     def slicing_encode(self, x: torch.Tensor) -> torch.Tensor:
         sp_size = 1
-        if self.use_slicing and (x.shape[2] - 1) > self.slicing_sample_min_size * sp_size:
-            x_slices = x[:, :, 1:].split(split_size=self.slicing_sample_min_size * sp_size, dim=2)
+        if (
+            self.use_slicing
+            and (x.shape[2] - 1) > self.slicing_sample_min_size * sp_size
+        ):
+            x_slices = x[:, :, 1:].split(
+                split_size=self.slicing_sample_min_size * sp_size, dim=2
+            )
             encoded_slices = [
                 self._encode(
                     torch.cat((x[:, :, :1], x_slices[0]), dim=2),
@@ -856,8 +911,13 @@ class SeedVR2AutoencoderKL(nn.Module):
 
     def slicing_decode(self, z: torch.Tensor) -> torch.Tensor:
         sp_size = 1
-        if self.use_slicing and (z.shape[2] - 1) > self.slicing_latent_min_size * sp_size:
-            z_slices = z[:, :, 1:].split(split_size=self.slicing_latent_min_size * sp_size, dim=2)
+        if (
+            self.use_slicing
+            and (z.shape[2] - 1) > self.slicing_latent_min_size * sp_size
+        ):
+            z_slices = z[:, :, 1:].split(
+                split_size=self.slicing_latent_min_size * sp_size, dim=2
+            )
             decoded_slices = [
                 self._decode(
                     torch.cat((z[:, :, :1], z_slices[0]), dim=2),
@@ -906,16 +966,26 @@ class SeedVR2AutoencoderKL(nn.Module):
             if isinstance(module, InflatedCausalConv3d):
                 module.set_memory_device(memory_device)
 
-    def set_memory_limit(self, conv_max_mem: Optional[float], norm_max_mem: Optional[float]):
+    def set_memory_limit(
+        self, conv_max_mem: Optional[float], norm_max_mem: Optional[float]
+    ):
         set_norm_limit(norm_max_mem)
         for m in self.modules():
             if isinstance(m, InflatedCausalConv3d):
-                m.set_memory_limit(conv_max_mem if conv_max_mem is not None else float("inf"))
+                m.set_memory_limit(
+                    conv_max_mem if conv_max_mem is not None else float("inf")
+                )
 
 
-class SeedVR2AutoencoderKLWrapper(SeedVR2AutoencoderKL, ModelMixin, ConfigMixin, FromOriginalModelMixin):
+class SeedVR2AutoencoderKLWrapper(
+    SeedVR2AutoencoderKL, ModelMixin, ConfigMixin, FromOriginalModelMixin
+):
     def __init__(
-        self, *args, spatial_downsample_factor: int, temporal_downsample_factor: int, **kwargs
+        self,
+        *args,
+        spatial_downsample_factor: int,
+        temporal_downsample_factor: int,
+        **kwargs,
     ):
         self.spatial_downsample_factor = spatial_downsample_factor
         self.temporal_downsample_factor = temporal_downsample_factor
@@ -947,7 +1017,7 @@ class SeedVR2AutoencoderKLWrapper(SeedVR2AutoencoderKL, ModelMixin, ConfigMixin,
     def postprocess(self, x):
         # x should in [B, C, T, H, W], [B, C, H, W]
         return x
-    
+
     def enable_tiling(self):
         self.use_tiling = True
 

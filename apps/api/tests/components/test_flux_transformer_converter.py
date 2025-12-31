@@ -63,5 +63,3 @@ def test_flux_converter_splits_double_block_qkv_lora_keys():
     assert "transformer_blocks.0.attn.to_v.lora_up.weight" in sd
 
     assert not any("double_blocks.0.img_attn.qkv.lora_" in k for k in sd.keys())
-
-

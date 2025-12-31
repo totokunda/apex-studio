@@ -32,6 +32,7 @@ import ctypes
 import ctypes.util
 import time
 
+
 def _persist_run_config(
     manifest_path: str,
     engine_kwargs: Dict[str, Any],
@@ -104,8 +105,6 @@ def _persist_run_config(
 
         from random import randint
 
-
-
         for key, value in inputs.items():
             media_path, field_key = _extract_media_candidate(value)
             new_value = value
@@ -115,16 +114,14 @@ def _persist_run_config(
                     src_path = Path(media_path)
                     if src_path.is_file():
                         if src_path.name == "result.mp4":
-                            dest_path = assets_dir / f"_{randint(1, 100000000)}_{src_path.name}"
+                            dest_path = (
+                                assets_dir / f"_{randint(1, 100000000)}_{src_path.name}"
+                            )
                         else:
                             dest_path = assets_dir / src_path.name
                         if src_path.resolve() != dest_path.resolve():
                             shutil.copy2(src_path, dest_path)
-                        rel_path = f"assets/{dest_path.name}" 
-
-
-
-
+                        rel_path = f"assets/{dest_path.name}"
 
                         if isinstance(value, dict) and field_key:
                             updated = dict(value)
@@ -156,6 +153,7 @@ def _persist_run_config(
     except Exception as e:
         logger.warning(f"Failed to persist run configuration: {e}")
         return None
+
 
 def _derive_lora_name_from_source(source: str) -> str:
     """
@@ -394,7 +392,8 @@ def _ensure_lora_registered_in_manifests(
         already_present = False
         for entry in loras:
             if isinstance(entry, dict) and (
-                entry.get("source") == source or entry.get("remote_source") == source
+                entry.get("source") == source
+                or entry.get("remote_source") == source
                 or entry.get("name") == lora_name
             ):
                 already_present = True
@@ -534,12 +533,16 @@ def _mark_lora_verified_in_manifests(
         loras = spec.get("loras") or []
         if not isinstance(loras, list):
             return None
-        
+
         if lora_name:
             for entry in loras:
-                if isinstance(entry, dict) and entry.get("name") == lora_name and entry.get("verified"):
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("name") == lora_name
+                    and entry.get("verified")
+                ):
                     return True
-        
+
         # Only attempt verification if the manifest's transformer is present locally
         transformer_component = _is_transformer_downloaded_for_manifest(doc)
         logger.info(
@@ -891,7 +894,9 @@ def download_unified(
                 except Exception:
                     pass
 
-                verified = _mark_lora_verified_in_manifests(source, manifest_id, lora_name)
+                verified = _mark_lora_verified_in_manifests(
+                    source, manifest_id, lora_name
+                )
 
                 # If verification explicitly failed, surface an error and remove the LoRA
                 if verified is False:
@@ -1448,7 +1453,11 @@ def run_engine_from_manifest(
                 # Prefer the canonical id used by upscaler manifests.
                 val = (raw_inputs or {}).get("video")
                 p, _ = _coerce_media_input(val)
-                if isinstance(p, str) and _looks_like_video_file(p) and os.path.isfile(p):
+                if (
+                    isinstance(p, str)
+                    and _looks_like_video_file(p)
+                    and os.path.isfile(p)
+                ):
                     return p
 
                 # Fallback: scan other inputs for a plausible video path.
@@ -1468,15 +1477,16 @@ def run_engine_from_manifest(
         spec_engine = None
         try:
             spec_engine = (
-                (spec_block.get("engine") if isinstance(spec_block, dict) else None)
-                or engine_type
-            )
+                spec_block.get("engine") if isinstance(spec_block, dict) else None
+            ) or engine_type
         except Exception:
             spec_engine = engine_type
         engine_name_lc = (
             str(spec_engine).strip().lower() if spec_engine is not None else ""
         )
-        model_type_lc = str(model_type).strip().lower() if model_type is not None else ""
+        model_type_lc = (
+            str(model_type).strip().lower() if model_type is not None else ""
+        )
         is_upscaler_engine = (
             engine_name_lc in {"seedvr", "flashvsr"} or model_type_lc == "upscale"
         )
@@ -1871,7 +1881,7 @@ def run_engine_from_manifest(
                     result.get("error")
                     or f"Preprocessor {job['preprocessor_name']} failed"
                 )
-            
+
             prepared_inputs[job["input_id"]] = result.get("result_path")
 
         # Resolve concrete file paths for any audio inputs that should be saved with the final video
@@ -1997,13 +2007,17 @@ def run_engine_from_manifest(
             else render_on_step_callback_ovi
         )
         _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
-        
+
         # get if the model is video or image
         if has_fps:
-            render_on_step = os.environ.get("ENABLE_VIDEO_RENDER_STEP", "true") == "true"
+            render_on_step = (
+                os.environ.get("ENABLE_VIDEO_RENDER_STEP", "true") == "true"
+            )
         else:
-            render_on_step = os.environ.get("ENABLE_IMAGE_RENDER_STEP", "true") == "true"
-        
+            render_on_step = (
+                os.environ.get("ENABLE_IMAGE_RENDER_STEP", "true") == "true"
+            )
+
         output = engine.run(
             **(prepared_inputs or {}),
             progress_callback=progress_callback,

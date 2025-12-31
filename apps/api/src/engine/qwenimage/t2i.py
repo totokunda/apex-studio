@@ -135,7 +135,7 @@ class QwenImageT2IEngine(QwenImageShared):
         if not self.scheduler:
             safe_emit_progress(progress_callback, 0.33, "Loading scheduler")
             self.load_component_by_type("scheduler")
-        
+
         safe_emit_progress(progress_callback, 0.34, "Scheduler loaded")
         safe_emit_progress(progress_callback, 0.35, "Moving scheduler to device")
         self.to_device(self.scheduler)
@@ -196,7 +196,7 @@ class QwenImageT2IEngine(QwenImageShared):
         self._preview_height = height
         self._preview_width = width
         self._preview_offload = offload
-        
+
         latents = self.denoise(
             latents=latents,
             timesteps=timesteps,

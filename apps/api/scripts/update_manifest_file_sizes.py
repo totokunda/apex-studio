@@ -60,12 +60,16 @@ def sizeof_url(url: str, timeout: float = 15.0) -> int:
     try:
         # Try HEAD first; allow redirects to get Content-Length
         resp = requests.head(url, allow_redirects=True, timeout=timeout)
-        length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
+        length = resp.headers.get("Content-Length") or resp.headers.get(
+            "content-length"
+        )
         if length is not None:
             return int(length)
         # Some endpoints don't give length on HEAD; try GET with stream=False but no download
         resp = requests.get(url, stream=True, timeout=timeout)
-        length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
+        length = resp.headers.get("Content-Length") or resp.headers.get(
+            "content-length"
+        )
         if length is not None:
             return int(length)
     except Exception:
@@ -139,7 +143,7 @@ def sizeof_hf(path: str) -> int:
         return int(total)
     except Exception as e:
         print(f"Error computing size for {path}: {e}")
-        
+
         return 0
 
 
@@ -148,7 +152,7 @@ def compute_size_for_model_path(path_value: str, file_root: Path) -> int:
     if is_url(path_value):
         return sizeof_url(path_value)
     # 2) HF repo reference
-    
+
     if is_hf_repo_path(path_value):
         size = sizeof_hf(path_value)
         if size:
@@ -233,8 +237,15 @@ def update_manifest_file(path: Path) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Populate file_size for model_path items in manifests.")
-    parser.add_argument("--root", type=str, default=str(MANIFEST_ROOT), help="Root directory containing manifests")
+    parser = argparse.ArgumentParser(
+        description="Populate file_size for model_path items in manifests."
+    )
+    parser.add_argument(
+        "--root",
+        type=str,
+        default=str(MANIFEST_ROOT),
+        help="Root directory containing manifests",
+    )
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
@@ -257,5 +268,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

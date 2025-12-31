@@ -42,5 +42,3 @@ def patch_torch_linalg_solve_for_cusolver() -> None:
 
     _safe_solve._apex_cusolver_safe_patch = True  # type: ignore[attr-defined]
     torch.linalg.solve = _safe_solve  # type: ignore[assignment]
-
-

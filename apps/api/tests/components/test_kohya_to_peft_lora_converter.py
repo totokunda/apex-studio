@@ -14,8 +14,12 @@ def test_convert_kohya_to_peft_preserves_double_blocks_and_single_blocks_tokens(
     sd = {
         # Prefix is Kohya-flattened: dots become underscores except for the last two dots
         # before `.lora_down.weight` / `.lora_up.weight`.
-        "lora_unet_diffusion_model_double_blocks_0_img_attn_qkv.lora_down.weight": torch.zeros(1),
-        "lora_unet_diffusion_model_single_blocks_0_img_attn_qkv.lora_up.weight": torch.zeros(1),
+        "lora_unet_diffusion_model_double_blocks_0_img_attn_qkv.lora_down.weight": torch.zeros(
+            1
+        ),
+        "lora_unet_diffusion_model_single_blocks_0_img_attn_qkv.lora_up.weight": torch.zeros(
+            1
+        ),
         # Kohya `.alpha` tensors should be dropped.
         "lora_unet_diffusion_model_double_blocks_0_img_attn_qkv.alpha": torch.zeros(1),
     }
@@ -28,5 +32,3 @@ def test_convert_kohya_to_peft_preserves_double_blocks_and_single_blocks_tokens(
     assert not any(k.endswith(".alpha") for k in sd.keys())
     assert not any("double.blocks" in k for k in sd.keys())
     assert not any("single.blocks" in k for k in sd.keys())
-
-

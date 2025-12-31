@@ -4,6 +4,7 @@ import ray
 from .settings import settings
 from loguru import logger
 
+
 def _init_ray() -> None:
     """
     Initialize Ray (once) with sane defaults for this service.

@@ -2,7 +2,15 @@ from src.engine import UniversalEngine
 from diffusers.utils import export_to_video
 import os
 
-variants = ["GGUF_Q2_K", "GGUF_Q3_K_S", "GGUF_Q3_K_M", "GGUF_Q4_K_S", "GGUF_Q4_K_M", "GGUF_Q5_K_S", "GGUF_Q5_K_M"]
+variants = [
+    "GGUF_Q2_K",
+    "GGUF_Q3_K_S",
+    "GGUF_Q3_K_M",
+    "GGUF_Q4_K_S",
+    "GGUF_Q4_K_M",
+    "GGUF_Q5_K_S",
+    "GGUF_Q5_K_M",
+]
 variants.reverse()
 yaml_path = "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.2-14b-animate-1.0.0.v1.yml"
 
@@ -15,7 +23,8 @@ face_video = "/home/tosin_coverquick_co/apex/Wan2.2/examples/wan_animate/animate
 
 for variant in variants:
     out_path = os.path.join(
-        dir_path, f"test_wan_22_animate_a14b_{variant.lower()}_sdpa_default_text_encoder_4_steps.mp4"
+        dir_path,
+        f"test_wan_22_animate_a14b_{variant.lower()}_sdpa_default_text_encoder_4_steps.mp4",
     )
     print(f"[wan2.2 animate] Running variant={variant} -> {out_path}")
     try:

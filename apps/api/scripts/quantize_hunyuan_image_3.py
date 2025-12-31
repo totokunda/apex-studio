@@ -16,11 +16,5 @@ quantizer = TransformerQuantizer(
 )
 
 quantizer.quantize(
-    keys_to_exclude=[
-        "vae.",
-        "vision_model.",
-        "vision_aligner.",
-        "lm_head.",
-        "ln_f."
-    ]
-)    
+    keys_to_exclude=["vae.", "vision_model.", "vision_aligner.", "lm_head.", "ln_f."]
+)

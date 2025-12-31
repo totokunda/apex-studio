@@ -49,9 +49,15 @@ if os.getenv("ENVIRONMENT") == "development":
     workers = 1
     loglevel = "debug"
 elif os.getenv("ENVIRONMENT") == "staging":
-    workers = int(os.getenv("APEX_GUNICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or str(multiprocessing.cpu_count()))
+    workers = int(
+        os.getenv("APEX_GUNICORN_WORKERS")
+        or os.getenv("WEB_CONCURRENCY")
+        or str(multiprocessing.cpu_count())
+    )
     loglevel = "warning"
 elif os.getenv("ENVIRONMENT") == "production":
-    workers = int(os.getenv("APEX_GUNICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1")
+    workers = int(
+        os.getenv("APEX_GUNICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1"
+    )
     loglevel = "error"
     preload_app = False
