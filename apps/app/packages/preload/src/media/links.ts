@@ -1,6 +1,6 @@
 import { promises as fsp } from "node:fs";
 import fs from "node:fs";
-import { join, dirname, extname, basename } from "node:path";
+import { join } from "node:path";
 
 export type LinksIndex = {
   originalToConverted: Record<string, string>;

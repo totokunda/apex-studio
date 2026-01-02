@@ -53,7 +53,7 @@ export const usePostprocessorJobStore = create<PostprocessorJobStore>()(
       }));
 
       // Wire websocket listeners
-      const unsubUpdate = subscribeToJobUpdates(jobId, (data) => {
+      subscribeToJobUpdates(jobId, (data) => {
         const existing = get().jobs[jobId];
         const now = Date.now();
         get().updateJobProgress(jobId, {
@@ -71,14 +71,14 @@ export const usePostprocessorJobStore = create<PostprocessorJobStore>()(
         });
       });
 
-      const unsubStatus = subscribeToJobStatus(jobId, (data) => {
+      subscribeToJobStatus(jobId, (data) => {
         get().updateJobProgress(jobId, {
           status: (data?.status as any) || "running",
           lastUpdate: Date.now(),
         });
       });
 
-      const unsubError = subscribeToJobErrors(jobId, (data) => {
+      subscribeToJobErrors(jobId, (data) => {
         get().updateJobProgress(jobId, {
           status: "failed",
           error: data?.error || data?.message || "Unknown error",

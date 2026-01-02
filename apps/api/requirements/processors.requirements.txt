@@ -15,7 +15,6 @@ mmengine==0.10.7
 # NOTE: `opendr` builds native OpenGL bindings; it currently fails to build on
 # some modern macOS/arm64 toolchains. Keep it out of the default darwin bundle.
 opendr==0.78; sys_platform != "darwin"
-open3d==0.19.0
 ptlflow
 raft
 # NOTE: RetinaFace is optional.

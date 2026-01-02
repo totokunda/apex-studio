@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import { join, basename, extname, relative } from "node:path";
-import { dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join, basename, extname, relative, dirname } from "node:path";
+import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 // id should be the basename of the file
 
 interface Filter {
@@ -13,6 +13,8 @@ interface Filter {
   examplePath: string;
   exampleAssetUrl: string;
 }
+
+const require = createRequire(import.meta.url);
 
 // Convert snake_case to Title Case
 const snakeCaseToTitleCase = (str: string): string => {
@@ -45,21 +47,20 @@ const findPngFiles = async (
 
 export const fetchFilters = async () => {
   const filters: Filter[] = [];
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const publicPath = join(
-    __dirname,
-    "..",
-    "..",
-    "..",
-    "packages",
-    "renderer",
-    "public",
-    "filters",
-  );
-  const smallBasePath = join(publicPath, "small");
-  const fullBasePath = join(publicPath, "full");
-  const exampleBasePath = join(publicPath, "examples");
-  const exampleFiles = await findPngFiles(exampleBasePath, exampleBasePath);
+  // In packaged builds, the renderer assets live under @app/renderer/dist.
+  // Resolve from the installed package so this works in both dev and packaged modes.
+  const rendererIndex = require.resolve("@app/renderer/dist/index.html");
+  const rendererDistRoot = dirname(rendererIndex);
+  const filtersRoot = join(rendererDistRoot, "filters");
+
+  const smallBasePath = join(filtersRoot, "small");
+  const fullBasePath = join(filtersRoot, "full");
+  const exampleBasePath = join(filtersRoot, "examples");
+
+  // If full/examples are excluded from packaging for size, fall back to small.
+  const hasFull = fs.existsSync(fullBasePath);
+  const hasExamples = fs.existsSync(exampleBasePath);
+
   // Find all PNG files in the small directory
   const smallFiles = await findPngFiles(smallBasePath, smallBasePath);
 
@@ -68,11 +69,23 @@ export const fetchFilters = async () => {
     const id = fileName;
     const name = snakeCaseToTitleCase(fileName);
     const smallPath = join(smallBasePath, relPath);
-    const fullPath = join(fullBasePath, relPath);
-    let examplePath = join(exampleBasePath, relPath);
-    // remove everything before public/
-    const exampleAssetUrl = pathToFileURL(examplePath).href;
-    examplePath = examplePath.replace(publicPath, "filters");
+    const fullPathCandidate = join(fullBasePath, relPath);
+    const fullPath = hasFull && fs.existsSync(fullPathCandidate) ? fullPathCandidate : smallPath;
+
+    const exampleFsPathCandidate = join(exampleBasePath, relPath);
+    const exampleFsPath =
+      hasExamples && fs.existsSync(exampleFsPathCandidate) ? exampleFsPathCandidate : smallPath;
+
+    // Renderer-facing URL-ish path (used in <img src="...">).
+    // Always use forward slashes.
+    const examplePath = (
+      hasExamples && fs.existsSync(exampleFsPathCandidate)
+        ? `filters/examples/${relPath}`
+        : `filters/small/${relPath}`
+    ).replace(/\\/g, "/");
+
+    const exampleAssetUrl = pathToFileURL(exampleFsPath).href;
+
     // Extract category from the immediate parent directory
     const dirPath = dirname(relPath);
     const categoryDir = basename(dirPath);

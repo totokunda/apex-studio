@@ -1,12 +1,15 @@
 import type { AppModule } from "../AppModule.js";
 import { ModuleContext } from "../ModuleContext.js";
-import { BrowserWindow } from "electron";
+import { BrowserWindow, ipcMain } from "electron";
 import type { AppInitConfig } from "../AppInitConfig.js";
 
 class WindowManager implements AppModule {
   readonly #preload: { path: string };
   readonly #renderer: { path: string } | URL;
   readonly #openDevTools;
+  #launcherWindow: BrowserWindow | null = null;
+  #mainWindow: BrowserWindow | null = null;
+  #isQuitting = false;
 
   constructor({
     initConfig,
@@ -23,18 +26,69 @@ class WindowManager implements AppModule {
   async enable({ app }: ModuleContext): Promise<void> {
     await app.whenReady();
     try {
-      await this.restoreOrCreateWindow(true);
+      app.on("before-quit", () => {
+        this.#isQuitting = true;
+      });
+      this.#registerLauncherIpc();
+      await this.restoreOrCreateLauncherWindow(true);
     } catch (error) {
       console.error("[WindowManager] Failed to create/show window:", error);
     }
-    app.on("second-instance", () => this.restoreOrCreateWindow(true));
-    app.on("activate", () => this.restoreOrCreateWindow(true));
+    app.on("second-instance", () => this.focusBestWindow());
+    app.on("activate", () => this.focusBestWindow());
   }
 
-  async createWindow(): Promise<BrowserWindow> {
+  #registerLauncherIpc() {
+    // idempotent-ish registration: ignore if already registered
+    if (ipcMain.listenerCount("launcher:launch") > 0) return;
+    ipcMain.handle("launcher:launch", async () => {
+      await this.restoreOrCreateMainWindow(true);
+      // Keep launcher alive (hidden) so that closing the main window returns to the launcher.
+      try {
+        this.#launcherWindow?.hide();
+      } catch {
+        // ignore
+      }
+      return { ok: true };
+    });
+  }
+
+  #wireReadyToShow(browserWindow: BrowserWindow) {
+    browserWindow.once("ready-to-show", () => {
+      if (browserWindow.isDestroyed()) return;
+      browserWindow.show();
+      if (this.#openDevTools) {
+        browserWindow.webContents.openDevTools();
+      }
+      browserWindow.focus();
+    });
+  }
+
+  async #loadRenderer(browserWindow: BrowserWindow, mode: "launcher" | "main") {
+    try {
+      if (this.#renderer instanceof URL) {
+        const u = new URL(this.#renderer.href);
+        u.hash = mode === "launcher" ? "launcher" : "";
+        await browserWindow.loadURL(u.href);
+      } else {
+        await browserWindow.loadFile(
+          this.#renderer.path,
+          mode === "launcher" ? { hash: "launcher" } : undefined,
+        );
+      }
+    } catch (error) {
+      console.error("[WindowManager] Failed to load renderer:", error);
+    }
+  }
+
+  async createLauncherWindow(): Promise<BrowserWindow> {
     const browserWindow = new BrowserWindow({
       show: false, // Use the 'ready-to-show' event to show the instantiated BrowserWindow.
-      fullscreen: true,
+      width: 980,
+      height: 640,
+      minWidth: 720,
+      minHeight: 520,
+      backgroundColor: "#000000",
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -43,25 +97,51 @@ class WindowManager implements AppModule {
         preload: this.#preload.path,
       },
     });
+    this.#wireReadyToShow(browserWindow);
+    await this.#loadRenderer(browserWindow, "launcher");
 
-    try {
-      if (this.#renderer instanceof URL) {
-        await browserWindow.loadURL(this.#renderer.href);
-      } else {
-        await browserWindow.loadFile(this.#renderer.path);
+    browserWindow.on("closed", () => {
+      if (this.#launcherWindow === browserWindow) {
+        this.#launcherWindow = null;
       }
-    } catch (error) {
-      console.error("[WindowManager] Failed to load renderer:", error);
-    }
+    });
 
     return browserWindow;
   }
 
-  async restoreOrCreateWindow(show = false) {
-    let window = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+  async createMainWindow(): Promise<BrowserWindow> {
+    const browserWindow = new BrowserWindow({
+      show: false,
+      fullscreen: true,
+      backgroundColor: "#000000",
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: false,
+        webviewTag: false,
+        preload: this.#preload.path,
+      },
+    });
+    this.#wireReadyToShow(browserWindow);
+    await this.#loadRenderer(browserWindow, "main");
 
-    if (window === undefined) {
-      window = await this.createWindow();
+    // When the main window closes (user clicks X), return to the launcher.
+    browserWindow.on("closed", () => {
+      if (this.#mainWindow === browserWindow) {
+        this.#mainWindow = null;
+      }
+      if (this.#isQuitting) return;
+      void this.restoreOrCreateLauncherWindow(true);
+    });
+
+    return browserWindow;
+  }
+
+  async restoreOrCreateLauncherWindow(show = false) {
+    let window = this.#launcherWindow;
+    if (!window || window.isDestroyed()) {
+      window = await this.createLauncherWindow();
+      this.#launcherWindow = window;
     }
 
     if (!show) {
@@ -81,6 +161,38 @@ class WindowManager implements AppModule {
     window.focus();
 
     return window;
+  }
+
+  async restoreOrCreateMainWindow(show = false) {
+    let window = this.#mainWindow;
+    if (!window || window.isDestroyed()) {
+      window = await this.createMainWindow();
+      this.#mainWindow = window;
+    }
+
+    if (!show) {
+      return window;
+    }
+
+    if (window.isMinimized()) {
+      window.restore();
+    }
+
+    window?.show();
+    if (this.#openDevTools) {
+      window?.webContents.openDevTools();
+    }
+    window.focus();
+    return window;
+  }
+
+  focusBestWindow() {
+    const main = this.#mainWindow;
+    if (main && !main.isDestroyed()) {
+      void this.restoreOrCreateMainWindow(true);
+      return;
+    }
+    void this.restoreOrCreateLauncherWindow(true);
   }
 }
 

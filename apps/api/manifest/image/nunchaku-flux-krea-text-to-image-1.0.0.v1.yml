@@ -31,11 +31,11 @@ spec:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
     - cuda
-    - cpu
     excluded_cuda_architectures:
     - sm_90
   attention_types:
   - sdpa
+  - efficient_dot_product_attention
   components:
   - type: scheduler
     label: Scheduler

@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { useDraggable } from "@dnd-kit/core";
 
 type GenericData = any;

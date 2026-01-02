@@ -19,8 +19,15 @@ spec:
   model_type: t2i
   engine_type: torch
   denoise_type: base
+  compute_requirements:
+    min_cuda_compute_capability: 7.0
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
   attention_types:
   - sdpa
+  - efficient_dot_product_attention
   components:
   - type: scheduler
     label: Scheduler

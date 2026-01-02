@@ -53,6 +53,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   private config: PythonProcessConfig;
   private logPath: string = "";
   private bundledPythonPath: string = "";
+  private bundledBundleRoot: string = "";
   private isShuttingDown: boolean = false;
 
   constructor(config: PythonProcessConfig = {}) {
@@ -81,6 +82,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
     // Determine the bundled Python path
     this.bundledPythonPath = this.getBundledPythonPath();
+    this.bundledBundleRoot = this.getBundledBundleRoot();
 
     // Register IPC handlers
     this.registerHandlers();
@@ -115,14 +117,33 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       const resourcesPath = process.resourcesPath!;
       
       if (platform === "darwin") {
-        // macOS: Check for .app bundle or standalone
-        const appBundle = path.join(resourcesPath, "python-api", "apex-engine.app", "Contents", "MacOS", "apex-engine");
-        const standalone = path.join(resourcesPath, "python-api", "apex-engine", "apex-engine");
-        return fs.existsSync(appBundle) ? appBundle : standalone;
+        // macOS: venv-based bundle
+        return path.join(
+          resourcesPath,
+          "python-api",
+          "apex-engine",
+          "apex-studio",
+          "bin",
+          "python"
+        );
       } else if (platform === "win32") {
-        return path.join(resourcesPath, "python-api", "apex-engine", "apex-engine.exe");
+        return path.join(
+          resourcesPath,
+          "python-api",
+          "apex-engine",
+          "apex-studio",
+          "Scripts",
+          "python.exe"
+        );
       } else {
-        return path.join(resourcesPath, "python-api", "apex-engine", "apex-engine");
+        return path.join(
+          resourcesPath,
+          "python-api",
+          "apex-engine",
+          "apex-studio",
+          "bin",
+          "python"
+        );
       }
     } else {
       // Development: use system Python or virtual environment
@@ -144,6 +165,13 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       // Fallback to system Python
       return platform === "win32" ? "python" : "python3";
     }
+  }
+
+  private getBundledBundleRoot(): string {
+    const isPackaged = this.app?.isPackaged ?? false;
+    if (!isPackaged) return "";
+    const resourcesPath = process.resourcesPath!;
+    return path.join(resourcesPath, "python-api", "apex-engine");
   }
 
   #resolveDevApiPath(): string {
@@ -331,9 +359,18 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     let args: string[];
 
     if (isPackaged) {
-      // Production: run bundled executable
+      // Production: run bundled venv python and execute the CLI module
       cmd = this.bundledPythonPath;
-      args = ["start", "--daemon", "--port", String(this.config.port)];
+      args = [
+        "-m",
+        "src",
+        "start",
+        "--cwd",
+        this.bundledBundleRoot,
+        "--daemon",
+        "--port",
+        String(this.config.port),
+      ];
     } else {
       // Development: run via Python module
       const apiPath = path.resolve(__dirname, "../../../../..", "api");
@@ -345,7 +382,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
     this.process = spawn(cmd, args, {
       env,
-      cwd: isPackaged ? path.dirname(this.bundledPythonPath) : undefined,
+      cwd: isPackaged ? this.bundledBundleRoot : undefined,
       stdio: ["ignore", "pipe", "pipe"],
       detached: false,
     });
@@ -398,15 +435,16 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     
     // Set Python paths for bundled deployment
     if (this.app?.isPackaged) {
-      const bundleDir = path.dirname(this.bundledPythonPath);
-      env.PYTHONPATH = bundleDir;
-      env.PYTHONHOME = bundleDir;
+      // The bundle root contains `src/`, `assets/`, etc.
+      const bundleRoot = this.bundledBundleRoot;
+      env.PYTHONPATH = bundleRoot;
       
       // Platform-specific library paths
       if (process.platform === "darwin") {
-        env.DYLD_LIBRARY_PATH = path.join(bundleDir, "lib");
+        // Don't set PYTHONHOME for venv Python; it can break venv isolation.
+        // Leave DYLD_LIBRARY_PATH untouched unless you have a specific need.
       } else if (process.platform === "linux") {
-        env.LD_LIBRARY_PATH = path.join(bundleDir, "lib");
+        // Leave LD_LIBRARY_PATH untouched unless you have a specific need.
       }
     }
 

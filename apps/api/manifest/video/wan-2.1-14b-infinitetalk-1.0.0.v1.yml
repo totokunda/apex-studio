@@ -33,11 +33,13 @@ spec:
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   attention_types:
   - sdpa
   - flash
   - flash3
   - sage
+  - efficient_dot_product_attention
   loras:
   - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors
     scale: 1.0

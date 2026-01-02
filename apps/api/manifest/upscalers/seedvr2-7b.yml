@@ -27,6 +27,7 @@ spec:
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   attention_types:
   - flash_varlen
   - sdpa_varlen

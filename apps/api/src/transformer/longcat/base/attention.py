@@ -5,7 +5,10 @@ from einops import rearrange
 from .rope_3d import RotaryPositionalEmbedding
 from .blocks import RMSNorm_FP32
 from src.attention import attention_register
-from .bsa_interface import flash_attn_bsa_3d
+try:
+    from .bsa_interface import flash_attn_bsa_3d
+except ImportError:
+    flash_attn_bsa_3d = None
 
 
 class Attention(nn.Module):

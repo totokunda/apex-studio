@@ -15,7 +15,6 @@ from src.preprocess.dwpose_nlf.render_helpers import (
     render_whole,
     get_single_pose_cylinder_specs,
 )
-import taichi as ti
 from src.preprocess.util import (
     HWC3,
     resize_image_with_pad,
@@ -120,9 +119,50 @@ class DwposeNlfDetector(DwposeDetector):
             self.device = get_torch_device()
         else:
             self.device = device
-        ti.init(arch=ti.gpu if self.device.type == "cuda" else ti.cpu)
 
-        self.nlf_model.to(self.device).eval()
+        # MPS (Apple Silicon) can fail on some ops inside the NLF TorchScript model
+        # (notably adaptive_avg_pool2d via interpolate(mode="area")) for non-divisible sizes.
+        # Default to running NLF on CPU when main device is MPS; allow override if desired.
+        allow_mps = os.getenv("DWPOSE_NLF_ALLOW_MPS", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        self.nlf_device = self.device
+        if self.device.type == "mps" and not allow_mps:
+            self.nlf_device = torch.device("cpu")
+
+        self.nlf_model.to(self.nlf_device).eval()
+
+    def _detect_smpl_batched(self, frame_batch: torch.Tensor):
+        """
+        Run NLF TorchScript inference with an MPS-safe fallback.
+
+        On Apple MPS, some downsampling paths can throw:
+          "Adaptive pool MPS: input sizes must be divisible by output sizes"
+        In that case, retry on CPU.
+        """
+        try:
+            return self.nlf_model.detect_smpl_batched(frame_batch.to(self.nlf_device))
+        except RuntimeError as e:
+            msg = str(e)
+            if (
+                self.nlf_device.type == "mps"
+                and (
+                    "Adaptive pool MPS" in msg
+                    or "adaptive_avg_pool2d" in msg
+                    or "Non-divisible input sizes" in msg
+                )
+            ):
+                # Fallback: run on CPU (slower, but reliable).
+                self.nlf_device = torch.device("cpu")
+                try:
+                    self.nlf_model.to(self.nlf_device).eval()
+                except Exception:
+                    # If for some reason the scripted module can't be moved, still try CPU inputs.
+                    pass
+                return self.nlf_model.detect_smpl_batched(frame_batch.cpu())
+            raise
 
     @staticmethod
     def download_nlf_model(url, nlf_model_filename):
@@ -196,7 +236,16 @@ class DwposeNlfDetector(DwposeDetector):
             global_cached_dwpose = t
 
         # load nlf model with torch.jit
-        nlf_model = torch.jit.load(nlf_model_path, map_location=get_torch_device().type)
+        # Prefer loading NLF TorchScript model on CPU when default device is MPS to avoid
+        # MPS adaptive_avg_pool2d limitations (can be overridden via DWPOSE_NLF_ALLOW_MPS=1).
+        dev = get_torch_device()
+        allow_mps = os.getenv("DWPOSE_NLF_ALLOW_MPS", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        map_location = "cpu" if (dev.type == "mps" and not allow_mps) else dev.type
+        nlf_model = torch.jit.load(nlf_model_path, map_location=map_location)
         return cls(global_cached_dwpose, nlf_model)
 
     def render_nlf_as_images(
@@ -617,7 +666,7 @@ class DwposeNlfDetector(DwposeDetector):
             if buffer_count <= 0:
                 return
             frame_batch = buffer[:buffer_count].permute(0, 3, 1, 2)
-            pred = self.nlf_model.detect_smpl_batched(frame_batch)
+            pred = self._detect_smpl_batched(frame_batch)
             if isinstance(pred, dict) and "joints3d_nonparam" in pred:
                 out_list = pred["joints3d_nonparam"]
             else:
@@ -699,18 +748,20 @@ class DwposeNlfDetector(DwposeDetector):
                         detected_map, frame_records[fidx]["target_size"]
                     )
 
-                if progress_callback is not None:
-                    # Progress by yielded frames (matches the generator contract)
-                    progress_callback(
-                        next_frame_to_yield + 1,
-                        total_frames if total_frames else next_frame_to_yield + 1,
-                    )
                 yield detected_map
                 next_frame_to_yield += 1
 
         frame_idx = 0
         with torch.inference_mode():
             for frame in tqdm(frames, desc="Processing frames", total=total_frames):
+                # Keep progress behavior consistent with BasePreprocessor.process_video():
+                # update progress once per input frame, even if we haven't yielded yet
+                # (render batching can otherwise delay progress updates).
+                if progress_callback is not None:
+                    progress_callback(
+                        frame_idx + 1, total_frames if total_frames else frame_idx + 1
+                    )
+
                 target_size = (
                     frame.size
                     if isinstance(frame, Image.Image)
@@ -794,7 +845,8 @@ class DwposeNlfDetector(DwposeDetector):
             yield from _flush_render_queue(force=True)
 
         if progress_callback is not None:
-            progress_callback(next_frame_to_yield, next_frame_to_yield)
+            # Final completion signal (mirrors BasePreprocessor.process_video()).
+            progress_callback(frame_idx, total_frames if total_frames else frame_idx)
 
     @torch.inference_mode()
     def process_dwpose(
@@ -854,7 +906,7 @@ class DwposeNlfDetector(DwposeDetector):
             buffer_count += 1
             if buffer_count == batch_size:
                 frame_batch = buffer.permute(0, 3, 1, 2)
-                pred = self.nlf_model.detect_smpl_batched(frame_batch)
+                pred = self._detect_smpl_batched(frame_batch)
                 if "joints3d_nonparam" in pred:
                     result_list.extend(pred["joints3d_nonparam"])
                 else:
@@ -864,7 +916,7 @@ class DwposeNlfDetector(DwposeDetector):
 
         if buffer_count > 0:
             frame_batch = buffer[:buffer_count].permute(0, 3, 1, 2)
-            pred = self.nlf_model.detect_smpl_batched(frame_batch)
+            pred = self._detect_smpl_batched(frame_batch)
             if "joints3d_nonparam" in pred:
                 result_list.extend(pred["joints3d_nonparam"])
             else:

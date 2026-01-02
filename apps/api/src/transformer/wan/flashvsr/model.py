@@ -16,10 +16,15 @@ try:
     from block_sparse_attn import block_sparse_attn_func
 
     USE_BLOCK_SPARSE_ATTN = True
+    SUPPORTS_SPARSE_ATTN = True
 except ImportError:
     block_sparse_attn_func = None
-    from .sparse_sage import sparse_sageattn
-
+    try:
+        from .sparse_sage import sparse_sageattn
+        SUPPORTS_SPARSE_ATTN = True
+    except ImportError:
+        sparse_sageattn = None
+        SUPPORTS_SPARSE_ATTN = False
     USE_BLOCK_SPARSE_ATTN = False
 
 from PIL import Image
@@ -268,6 +273,7 @@ def flash_attention(
     if (
         attention_mask is not None
         and attention_register.get_default() == "block_sparse"
+        and SUPPORTS_SPARSE_ATTN
     ):
         seqlen = q.shape[1]
         seqlen_kv = k.shape[1]

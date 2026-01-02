@@ -28,7 +28,6 @@ spec:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
     - cuda
-    - cpu
   attention_types:
   - block-sparse-attn
   fps: 24

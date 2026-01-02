@@ -2,7 +2,32 @@ import numpy as np
 import cv2
 import src.preprocess.dwpose_nlf.draw_util as util
 import torch
-import taichi as ti
+
+
+def _project_points_pinhole_xyz_to_uv(
+    xyz: np.ndarray, fx: float, fy: float, cx: float, cy: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Args:
+        xyz: (N, 3) float array in camera coordinates (X, Y, Z).
+    Returns:
+        uv: (N, 2) float array in pixel coords (u, v)
+        z:  (N,) float array depth Z
+    """
+    xyz = np.asarray(xyz)
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError(f"Expected xyz shape (N,3), got {xyz.shape}")
+    z = xyz[:, 2].astype(np.float32, copy=False)
+    eps = 1e-6
+    valid = z > eps
+    uv = np.full((xyz.shape[0], 2), np.nan, dtype=np.float32)
+    if np.any(valid):
+        x = xyz[valid, 0].astype(np.float32, copy=False)
+        y = xyz[valid, 1].astype(np.float32, copy=False)
+        zv = z[valid]
+        uv[valid, 0] = fx * (x / zv) + cx
+        uv[valid, 1] = fy * (y / zv) + cy
+    return uv, z
 
 
 def process_data_to_COCO_format(joints):
@@ -236,168 +261,141 @@ def flatten_specs(specs_list):
 
 
 def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radius=21.5):
-    img = ti.Vector.field(4, dtype=ti.f32, shape=(H, W))
-    starts, ends, colors, frame_offset, frame_count = flatten_specs(specs_list)
-    total_cyl = len(starts)
+    """
+    Fast Taichi-free renderer.
+
+    Instead of ray-marching SDF cylinders per pixel, we:
+    - project each 3D limb segment into 2D with the provided intrinsics
+    - draw thick anti-aliased lines (OpenCV C++ fast path)
+    - alpha composite in depth order (far -> near) for a decent occlusion approximation
+
+    This is typically *much* faster on CPU than pure-Python rasterization and avoids any
+    extra external dependency beyond the already-imported `cv2`.
+    """
     n_frames = len(specs_list)
     # Handle empty specs (e.g., no detected people in the whole batch)
-    if total_cyl == 0:
+    if n_frames == 0:
+        return []
+
+    # Find global depth range across the whole batch (to mimic the original depth fade).
+    z_values = []
+    for specs in specs_list:
+        for s, e, _c in specs:
+            s = np.asarray(s)
+            e = np.asarray(e)
+            if s.shape[0] >= 3:
+                z_values.append(float(s[2]))
+            if e.shape[0] >= 3:
+                z_values.append(float(e[2]))
+    if len(z_values) == 0:
         return [np.zeros((H, W, 4), dtype=np.uint8) for _ in range(n_frames)]
-    z_min = min(starts[:, 2].min(), ends[:, 2].min())
-    z_max = max(starts[:, 2].max(), ends[:, 2].max())
 
-    # ========= 相机内参 =========
+    z_min = float(np.min(z_values))
+    z_max = float(np.max(z_values))
     znear = 0.1
-    zfar = max(min(z_max, 25000), 10000)
-    C = ti.Vector([0.0, 0.0, 0.0])  # 相机中心
-    light_dir = ti.Vector([0.0, 0.0, 1.0])
+    depth_near = max(z_min, znear)
+    depth_far = min(z_max + 6000.0, 20000.0)
+    if depth_far <= depth_near + 1e-6:
+        depth_far = depth_near + 1.0
 
-    c_start = ti.Vector.field(3, dtype=ti.f32, shape=total_cyl)
-    c_end = ti.Vector.field(3, dtype=ti.f32, shape=total_cyl)
-    c_rgba = ti.Vector.field(4, dtype=ti.f32, shape=total_cyl)
-    n_cyl = ti.field(dtype=ti.i32, shape=())  # 实际数量
-    f_offset = ti.field(dtype=ti.i32, shape=n_frames)
-    f_count = ti.field(dtype=ti.i32, shape=n_frames)
-    frame_id = ti.field(dtype=ti.i32, shape=())  # 当前帧号
-    z_min_field = ti.field(dtype=ti.f32, shape=())
-    z_max_field = ti.field(dtype=ti.f32, shape=())
+    max_thickness = max(2, int(round(0.06 * max(H, W))))
 
-    z_min_field[None] = z_min
-    z_max_field[None] = z_max
+    frames_np_rgba: list[np.ndarray] = []
 
-    # # ====== 拷贝数据一次 ======
-    c_start.from_numpy(starts)
-    c_end.from_numpy(ends)
-    c_rgba.from_numpy(colors)
-    f_offset.from_numpy(frame_offset)
-    f_count.from_numpy(frame_count)
+    # Reusable mask to avoid allocations in the inner loop.
+    mask = np.zeros((H, W), dtype=np.uint8)
 
-    @ti.func
-    def sd_cylinder(p, a, b, r):
-        pa = p - a
-        ba = b - a
-        h = ba.norm()
-        eps = 1e-8
-        res = 0.0
-        if h < eps:
-            res = pa.norm() - r
-        else:
-            ba_n = ba / h
-            proj = pa.dot(ba_n)
-            proj_clamped = min(max(proj, 0.0), h)
-            res = (pa - proj_clamped * ba_n).norm() - r
-        return res
+    for specs in specs_list:
+        out_rgb = np.zeros((H, W, 3), dtype=np.float32)  # 0..1
+        out_a = np.zeros((H, W), dtype=np.float32)  # 0..1
 
-    @ti.func
-    def scene_sdf(p):
-        best_d = 1e6
-        best_col = ti.Vector([0.0, 0.0, 0.0, 0.0])
-        fid = frame_id[None]  # 从 field 里读出来，变成一个普通 int
-        off = f_offset[fid]
-        cnt = f_count[fid]
-        for i in range(cnt):  # 只遍历实际数量
-            a = c_start[off + i]
-            b = c_end[off + i]
-            r = radius
-            col = c_rgba[off + i]
-            d = sd_cylinder(p, a, b, r)
-            if d < best_d:
-                best_d = d
-                best_col = col
-        return best_d, best_col
+        if len(specs) == 0:
+            frames_np_rgba.append(np.zeros((H, W, 4), dtype=np.uint8))
+            continue
 
-    @ti.func
-    def get_normal(p):
-        e = 1e-3
-        dx = (
-            scene_sdf(p + ti.Vector([e, 0.0, 0.0]))[0]
-            - scene_sdf(p - ti.Vector([e, 0.0, 0.0]))[0]
-        )
-        dy = (
-            scene_sdf(p + ti.Vector([0.0, e, 0.0]))[0]
-            - scene_sdf(p - ti.Vector([0.0, e, 0.0]))[0]
-        )
-        dz = (
-            scene_sdf(p + ti.Vector([0.0, 0.0, e]))[0]
-            - scene_sdf(p - ti.Vector([0.0, 0.0, e]))[0]
-        )
-        n = ti.Vector([dx, dy, dz])
-        return n.normalized()
+        # Vectorize projection + sort by depth (far -> near).
+        starts = np.asarray([s for (s, _e, _c) in specs], dtype=np.float32)
+        ends = np.asarray([e for (_s, e, _c) in specs], dtype=np.float32)
+        cols = np.asarray([c for (_s, _e, c) in specs], dtype=np.float32)
+        if cols.ndim == 1:
+            cols = cols[None, :]
+        if cols.shape[1] == 3:
+            alpha_col = np.ones((cols.shape[0], 1), dtype=np.float32)
+            cols = np.concatenate([cols, alpha_col], axis=1)
+        elif cols.shape[1] < 4:
+            # Pad up to RGBA
+            pad = np.zeros((cols.shape[0], 4 - cols.shape[1]), dtype=np.float32)
+            cols = np.concatenate([cols, pad], axis=1)
 
-    @ti.func
-    def pixel_to_ray(xi, yi):
-        u = (xi - cx) / fx
-        v = (yi - cy) / fy
-        dir_cam = ti.Vector([u, v, 1.0]).normalized()
-        Rcw = ti.Matrix.identity(ti.f32, 3)
-        rd_world = Rcw @ dir_cam
-        ro_world = C
-        return ro_world, rd_world
+        uv0, z0 = _project_points_pinhole_xyz_to_uv(starts, fx, fy, cx, cy)
+        uv1, z1 = _project_points_pinhole_xyz_to_uv(ends, fx, fy, cx, cy)
 
-    @ti.kernel
-    def render():
-        depth_near, depth_far = ti.max(z_min_field[None], 0.1), ti.min(
-            z_max_field[None] + 6000, 20000
-        )  # 能渲染出来的点，最大12000
-        for y, x in img:
-            ro, rd = pixel_to_ray(x, y)
-            t = znear
-            col_out = ti.Vector([0.0, 0.0, 0.0, 0.0])
-            for _ in range(300):
-                p = ro + rd * t
-                d, col = scene_sdf(p)
-                if d < 1e-3:
-                    #     n = get_normal(p)
-                    #     diff = max(n.dot(-light_dir), 0.0)
-                    #     lit = 0.3 + 0.7 * diff
-                    #     col_out = ti.Vector([col.x * lit, col.y * lit, col.z * lit, col.w])
-                    #     break
+        z_mean = 0.5 * (z0 + z1)
+        # Skip segments behind the camera / too close (matches the original znear behavior).
+        valid = (z0 > znear) & (z1 > znear) & np.isfinite(uv0).all(axis=1) & np.isfinite(
+            uv1
+        ).all(axis=1)
+        if not np.any(valid):
+            frames_np_rgba.append(np.zeros((H, W, 4), dtype=np.uint8))
+            continue
 
-                    n = get_normal(p)
-                    diff = max(n.dot(-light_dir), 0.0)
+        order = np.argsort(z_mean[valid])[::-1]  # far -> near
+        valid_idx = np.nonzero(valid)[0][order]
 
-                    # === Blinn-Phong 镜面反射 ===
-                    view_dir = -rd.normalized()
-                    half_dir = (view_dir + -light_dir).normalized()
-                    spec = (
-                        max(n.dot(half_dir), 0.0) ** 32
-                    )  # shininess=32，越小越散，越大越锐
+        for i in valid_idx:
+            u0, v0 = float(uv0[i, 0]), float(uv0[i, 1])
+            u1, v1 = float(uv1[i, 0]), float(uv1[i, 1])
+            zm = float(z_mean[i])
+            if zm <= znear:
+                continue
 
-                    depth_factor = 1.0 - (p.z - depth_near) / (depth_far - znear)
-                    depth_factor = ti.max(0.0, ti.min(1.0, depth_factor))
+            # Thickness (world-space radius -> pixels). Clamp to avoid extreme sizes.
+            r_px = int(round(radius * (0.5 * (fx + fy)) / max(zm, znear)))
+            thickness = int(np.clip(r_px, 1, max_thickness))
 
-                    # 原来的 diffuse/ambient 光照
-                    diffuse_term = 0.3 + 0.7 * diff
-                    base = col.xyz * diffuse_term * depth_factor
+            # Depth fade similar to the Taichi version
+            depth_factor = 1.0 - (zm - depth_near) / (depth_far - znear)
+            depth_factor = float(np.clip(depth_factor, 0.0, 1.0))
 
-                    # 镜面高光（叠加到原有结果上）
-                    highlight = ti.Vector([1.0, 1.0, 1.0]) * (0.5 * spec) * depth_factor
+            rgb = cols[i, :3].astype(np.float32, copy=False)
+            a_src = float(np.clip(cols[i, 3], 0.0, 1.0))
+            rgb = np.clip(rgb * depth_factor, 0.0, 1.0)
 
-                    col_out = ti.Vector(
-                        [
-                            base.x + highlight.x,
-                            base.y + highlight.y,
-                            base.z + highlight.z,
-                            col.w,
-                        ]
-                    )
-                    break
+            # Draw mask for this segment
+            mask[:] = 0
+            cv2.line(
+                mask,
+                (int(round(u0)), int(round(v0))),
+                (int(round(u1)), int(round(v1))),
+                color=255,
+                thickness=thickness,
+                lineType=cv2.LINE_AA,
+            )
 
-                if t > zfar:
-                    break
-                t += max(d, 1e-4)
-            img[y, x] = col_out
+            ys, xs = np.nonzero(mask)
+            if ys.size == 0:
+                continue
 
-    frames_np_rgba = []
-    for f in range(len(specs_list)):
-        # start_time = time.time()
-        frame_id[None] = f
-        render()
-        arr = np.clip(img.to_numpy(), 0, 1)
-        # end_time = time.time()
-        # print(f"Frame {f} time: {end_time - start_time} seconds")
-        arr8 = (arr * 255).astype(np.uint8)
-        frames_np_rgba.append(arr8)
+            y0b, y1b = int(ys.min()), int(ys.max()) + 1
+            x0b, x1b = int(xs.min()), int(xs.max()) + 1
+
+            m = (mask[y0b:y1b, x0b:x1b].astype(np.float32) / 255.0)[..., None]  # (h,w,1)
+            a = (a_src * m).astype(np.float32)  # (h,w,1)
+
+            # "over" compositing on the ROI
+            roi_rgb = out_rgb[y0b:y1b, x0b:x1b, :]
+            roi_a = out_a[y0b:y1b, x0b:x1b][..., None]
+
+            roi_rgb[:] = roi_rgb * (1.0 - a) + rgb[None, None, :] * a
+            roi_a[:] = roi_a * (1.0 - a) + a
+
+            out_rgb[y0b:y1b, x0b:x1b, :] = roi_rgb
+            out_a[y0b:y1b, x0b:x1b] = roi_a[..., 0]
+
+        rgba = np.zeros((H, W, 4), dtype=np.uint8)
+        rgba[:, :, :3] = (np.clip(out_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
+        rgba[:, :, 3] = (np.clip(out_a, 0.0, 1.0) * 255.0).astype(np.uint8)
+        frames_np_rgba.append(rgba)
 
     return frames_np_rgba
 

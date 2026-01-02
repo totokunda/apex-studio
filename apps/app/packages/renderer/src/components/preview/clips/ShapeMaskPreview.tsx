@@ -39,8 +39,6 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
   height,
   rotation,
   animationOffset,
-  rectWidth,
-  rectHeight,
   shapeType,
 }) => {
   const tool = useViewportStore((s) => s.tool);
@@ -51,7 +49,6 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
 
   const selectedClipIds = useControlsStore((s) => s.selectedClipIds);
   const setSelectedClipIds = useControlsStore((s) => s.setSelectedClipIds);
-  const getClipTransform = useClipStore((s) => s.getClipTransform);
 
   const shapeWhiteRef = useRef<any>(null);
   const shapeBlackRef = useRef<any>(null);

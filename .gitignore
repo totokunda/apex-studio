@@ -210,3 +210,4 @@ packages/renderer/public/filters
 .env
 
 .github/workflows/*
+python-api-bundle/**

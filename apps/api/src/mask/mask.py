@@ -15,7 +15,8 @@ import gc
 import time
 
 # get the default device
-from src.utils.defaults import get_torch_device, DEFAULT_PREPROCESSOR_SAVE_PATH
+from src.utils.defaults import DEFAULT_PREPROCESSOR_SAVE_PATH
+from src.utils.mask_device import resolve_mask_device
 
 # create an enum for the model types
 from enum import Enum
@@ -1149,7 +1150,14 @@ class UnifiedSAM2Predictor:
         self.use_tf32 = use_tf32
 
         # Get device inside actor
-        self.device = get_torch_device()
+        self.device = resolve_mask_device(model_family="sam2")
+        if self.device.type == "cpu" and torch.backends.mps.is_available():
+            # High-signal log on Apple Silicon, where users often expect MPS by default.
+            self.logger.warning(
+                "SAM2 on Apple MPS is unstable on some macOS/PyTorch builds (can SIGABRT inside MPSGraph). "
+                "Falling back to CPU for mask to keep the API stable. "
+                "Override with MASK_DEVICE=mps or set MASK_ALLOW_MPS=1 to try MPS anyway."
+            )
 
         # Single video predictor for everything
         self._predictor = None
@@ -1224,7 +1232,14 @@ class UnifiedSAM2Predictor:
         return self._predictor
 
     def _warmup_model(self):
-        """Pre-warm the model to compile CUDA kernels."""
+        """Pre-warm the model to compile CUDA kernels.
+
+        Important: do NOT warm up on MPS because certain ops (e.g. SDPA) can hard-crash
+        the process (SIGABRT) inside MPSGraph and cannot be caught by Python.
+        """
+        if self.device.type != "cuda":
+            self.logger.info(f"Skipping warmup on device={self.device} (warmup is CUDA-only).")
+            return
         try:
             self.logger.info("Warming up model...")
             dummy_img = torch.rand(1, 3, 1024, 1024, device=self.device)

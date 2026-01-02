@@ -29,11 +29,13 @@ spec:
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   attention_types:
   - sdpa
   - flash
   - flash3
   - sage
+  - efficient_dot_product_attention
   loras:
   - source: lightx2v/Wan2.2-Lightning/Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors
     scale: 0.0

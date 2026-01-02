@@ -178,7 +178,7 @@ const SelectInput: React.FC<SelectInputProps> = ({
           )}
         </div>
         <div className="flex flex-row w-full  rounded-[6px] overflow-hidden border border-brand-light/5 divide-x divide-brand-light/5">
-          {normalizedOptions.map((option, index) => (
+          {normalizedOptions.map((option) => (
             <button
               key={option.value}
               onClick={() => onChange(String(option.value))}
@@ -211,7 +211,7 @@ const SelectInput: React.FC<SelectInputProps> = ({
         {label}
       </label>
       <div className="flex flex-row flex-1  rounded-[6px] overflow-hidden ">
-        {normalizedOptions.map((option, index) => (
+        {normalizedOptions.map((option) => (
           <button
             key={option.value}
             onClick={() => onChange(String(option.value))}
@@ -220,7 +220,6 @@ const SelectInput: React.FC<SelectInputProps> = ({
               String(selectedOption?.value) === String(option.value)
                 ? "bg-brand-light/10 text-brand-lighter"
                 : "bg-brand text-brand-light/60 hover:bg-brand-light/5",
-              index !== 0 && "",
             )}
           >
             {option.name}

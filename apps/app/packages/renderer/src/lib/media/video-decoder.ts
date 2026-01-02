@@ -406,9 +406,11 @@ export class VideoDecoderManager {
     }
 
     constructor() {
-        let workerUrl = new URL("./video-decoder.worker.ts", import.meta.url);
-
-        this.worker = new Worker(workerUrl, {
+        // IMPORTANT: keep this in the inline `new Worker(new URL(...))` form.
+        // Vite's worker transform relies on recognizing this pattern; if we assign the URL
+        // to a variable first, Vite may treat the `.worker.ts` file as a static asset and
+        // ship it with a `.ts` extension (which then gets `video/mp2t` MIME via our protocol).
+        this.worker = new Worker(new URL("./video-decoder.worker.ts", import.meta.url), {
             type: "module",
         });
 

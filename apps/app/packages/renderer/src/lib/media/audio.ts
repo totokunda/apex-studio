@@ -1,6 +1,6 @@
 import { MediaInfo } from "../types";
 import { AudioDecoderContext, AudioDecoderKey } from "./types";
-import { AudioBufferSink, WrappedAudioBuffer, WrappedCanvas } from "mediabunny";
+import { AudioBufferSink, WrappedAudioBuffer } from "mediabunny";
 import { nowMs, audioDecoders, pruneStaleDecoders } from "./utils";
 import { MediaCache } from "./cache";
 
