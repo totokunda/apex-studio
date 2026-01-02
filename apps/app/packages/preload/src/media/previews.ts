@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ipcRenderer } from "electron";
 import { getMediaRootAbsolute } from "./root.js";
+import { resolveFfmpegCommand } from "./ffmpegBin.js";
 
 // Local helper mirror of ensurePreviewDir from the previous monolith.
 async function ensurePreviewDir(): Promise<{
@@ -234,7 +235,7 @@ async function exportAudioMp3FromWav(
       "192k",
       outAbs,
     ];
-    const ff = spawn("ffmpeg", args);
+    const ff = spawn(resolveFfmpegCommand("ffmpeg"), args);
     let stderr = "";
     ff.stderr.setEncoding("utf8");
     ff.stderr.on("data", (d) => {
@@ -293,7 +294,7 @@ function buildAtempoChain(rate: number): string[] {
 async function hasAudioStream(path: string): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     try {
-      const ff = spawn("ffprobe", [
+      const ff = spawn(resolveFfmpegCommand("ffprobe"), [
         "-v",
         "error",
         "-select_streams",
@@ -512,7 +513,7 @@ async function renderAudioMixWithFfmpeg(
   args.push(outAbs);
 
   await new Promise<void>((resolve, reject) => {
-    const ff = spawn("ffmpeg", args);
+    const ff = spawn(resolveFfmpegCommand("ffmpeg"), args);
     let stderr = "";
     ff.stderr.setEncoding("utf8");
     ff.stderr.on("data", (d) => {
@@ -778,7 +779,7 @@ async function exportVideoOpen(
 
   args.push(outAbs);
 
-  const proc = spawn("ffmpeg", args);
+  const proc = spawn(resolveFfmpegCommand("ffmpeg"), args);
   const sessionId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session: AdvancedEncodeSession = {
     id: sessionId,
@@ -1024,7 +1025,7 @@ async function savePreviewVideoFromFrames(
   ];
 
   await new Promise<void>((resolve, reject) => {
-    const ff = spawn("ffmpeg", args);
+    const ff = spawn(resolveFfmpegCommand("ffmpeg"), args);
     let stderr = "";
     ff.stderr.setEncoding("utf8");
     ff.stderr.on("data", (d) => {

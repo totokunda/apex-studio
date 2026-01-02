@@ -16,7 +16,6 @@ import type {
   ShapeClipProps,
   ClipTransform,
   ImageClipProps,
-  MaskClipProps,
   VideoClipProps,
 } from "./blit";
 import type { WrappedCanvas } from "mediabunny";
@@ -460,7 +459,6 @@ export class KonvaExportRenderer {
     // @ts-ignore
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, 0, 0, texWidth, texHeight);
-    const data = ctx.getImageData(0, 0, texWidth, texHeight);
 
     // 4. Apply Masks
     if (Array.isArray(clip.masks) && clip.masks.length > 0) {

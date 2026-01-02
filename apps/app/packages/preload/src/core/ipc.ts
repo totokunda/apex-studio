@@ -1,7 +1,7 @@
 import { ipcRenderer, webUtils } from "electron";
 import { promises as fsp } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import fs from "node:fs";
 
@@ -41,7 +41,6 @@ async function deleteFile(pathOrUrl: string): Promise<void> {
 
 // Generic binary file helpers used by the renderer (supports app://, http(s) and file://)
 const readFileBuffer = async (path: string) => {
-  const original = path;
   // Handle app:// scheme directly (served by main via AppDirProtocol)
   if (typeof path === "string" && path.startsWith("app://")) {
     const res = await fetch(path);
@@ -75,7 +74,7 @@ const readFileBuffer = async (path: string) => {
     const buffer = await fsp.readFile(path);
     return buffer;
   } catch (err) {
-    // If local read failed, attempt to fetch via app://apex-cache assuming 'original' may be a remote absolute path
+    // If local read failed, attempt to fetch via app://apex-cache assuming the input may be a remote absolute path
     try {
       const encodedPath = (() => {
         const p = path.startsWith("/") ? path : `/${path}`;

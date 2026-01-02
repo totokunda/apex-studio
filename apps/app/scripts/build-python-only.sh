@@ -6,7 +6,7 @@
 # Useful for development and testing the Python bundling separately.
 #
 # Usage:
-#   ./scripts/build-python-only.sh [cuda|cpu|mps]
+#   ./scripts/build-python-only.sh [auto|cuda*|cpu|mps|rocm] [--skip-rust] [--require-python312]
 #
 
 set -e
@@ -30,6 +30,15 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Parse arguments
 GPU_MODE="${1:-auto}"
+SKIP_RUST=false
+REQUIRE_PY312=false
+
+for arg in "${@:2}"; do
+    case "$arg" in
+        --skip-rust) SKIP_RUST=true ;;
+        --require-python312) REQUIRE_PY312=true ;;
+    esac
+done
 
 # Detect platform
 case "$(uname -s)" in
@@ -45,13 +54,28 @@ log_info "GPU Mode: $GPU_MODE"
 log_info "Output: $OUTPUT_DIR"
 
 # Check Python
-if ! command -v python3 &> /dev/null; then
-    log_error "Python 3 is required but not installed"
+PYTHON_BIN="${APEX_PYTHON:-}"
+if [ -z "$PYTHON_BIN" ]; then
+    if command -v python3.12 &> /dev/null; then
+        PYTHON_BIN="python3.12"
+    else
+        PYTHON_BIN="python3"
+    fi
+fi
+
+if ! command -v "$PYTHON_BIN" &> /dev/null; then
+    log_error "Python is required but not installed ($PYTHON_BIN)"
     exit 1
 fi
 
-PYTHON_VERSION=$(python3 --version)
+PYTHON_VERSION=$("$PYTHON_BIN" --version)
 log_info "Using $PYTHON_VERSION"
+if [ "$REQUIRE_PY312" = true ]; then
+    if ! "$PYTHON_BIN" -c "import sys; raise SystemExit(0 if (sys.version_info.major==3 and sys.version_info.minor==12) else 1)"; then
+        log_error "Python 3.12 is required (--require-python312). Set APEX_PYTHON to a Python 3.12 interpreter."
+        exit 1
+    fi
+fi
 
 # Check if we're in a conda environment
 if [ -n "$CONDA_PREFIX" ]; then
@@ -76,10 +100,19 @@ BUNDLER_ARGS=(
     "scripts/bundle_python.py"
     "--platform" "$PLATFORM"
     "--output" "$APP_DIR/temp-python-build"
+    "--python" "$PYTHON_BIN"
 )
 
 if [ "$GPU_MODE" != "auto" ]; then
     BUNDLER_ARGS+=("--cuda" "$GPU_MODE")
+fi
+
+if [ "$SKIP_RUST" = true ]; then
+    BUNDLER_ARGS+=("--skip-rust")
+fi
+
+if [ "$REQUIRE_PY312" = true ]; then
+    BUNDLER_ARGS+=("--require-python312")
 fi
 
 # Check for signing on macOS
@@ -88,11 +121,17 @@ if [ "$PLATFORM" = "darwin" ] && [ -n "$APPLE_IDENTITY" ]; then
     BUNDLER_ARGS+=("--sign")
 fi
 
-python3 "${BUNDLER_ARGS[@]}"
+"$PYTHON_BIN" "${BUNDLER_ARGS[@]}"
 
-# Move bundle to final location
+# Move bundle to final location.
+# We copy the *apex-engine folder itself* so the final layout matches production:
+#   python-api-bundle/
+#     apex-engine/
+#       apex-engine (launcher)
+#       apex-studio/ (venv)
+#       src/ ...
 if [ -d "$APP_DIR/temp-python-build/python-api/apex-engine" ]; then
-    cp -r "$APP_DIR/temp-python-build/python-api/apex-engine/." "$OUTPUT_DIR/"
+    cp -r "$APP_DIR/temp-python-build/python-api/apex-engine" "$OUTPUT_DIR/"
     rm -rf "$APP_DIR/temp-python-build"
     log_success "Python bundle created at: $OUTPUT_DIR"
 else
@@ -104,9 +143,9 @@ fi
 log_info "Testing bundle..."
 
 if [ "$PLATFORM" = "win32" ]; then
-    APEX_BIN="$OUTPUT_DIR/apex-engine.exe"
+    APEX_BIN="$OUTPUT_DIR/apex-engine/apex-engine.bat"
 else
-    APEX_BIN="$OUTPUT_DIR/apex-engine"
+    APEX_BIN="$OUTPUT_DIR/apex-engine/apex-engine"
 fi
 
 if [ -f "$APEX_BIN" ]; then
@@ -130,7 +169,7 @@ echo ""
 log_success "Python API bundle complete!"
 echo ""
 echo "To test the bundle:"
-echo "  cd $OUTPUT_DIR"
+echo "  cd $OUTPUT_DIR/apex-engine"
 echo "  ./apex-engine start --port 8765"
 echo ""
 echo "To build the full Electron app with this bundle:"

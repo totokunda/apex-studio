@@ -21,8 +21,15 @@ spec:
   model_type: t2i
   engine_type: torch
   denoise_type: moe
+  compute_requirements:
+    min_cuda_compute_capability: 7.0
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
   attention_types:
   - sdpa
+  - efficient_dot_product_attention
   loras:
   - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors
     scale: 1.0

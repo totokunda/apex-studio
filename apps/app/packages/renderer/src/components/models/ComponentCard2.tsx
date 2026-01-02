@@ -706,7 +706,7 @@ const DownloadProgressSection: React.FC<{
   width: number;
 }> = ({ jobUpdates, onCancel, width }) => {
   if (!jobUpdates.length) return null;
-  const [isCancelling, setIsCancelling] = useState(false);
+  const [isCancelling] = useState(false);
 
   const files = useMemo(
     () => unifiedDownloadWsUpdatesToFiles(jobUpdates),

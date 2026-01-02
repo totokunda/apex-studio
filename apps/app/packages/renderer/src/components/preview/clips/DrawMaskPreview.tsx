@@ -1,5 +1,5 @@
 import React from "react";
-import { Group, Line as KonvaLine, Rect } from "react-konva";
+import { Group } from "react-konva";
 import { MaskClipProps } from "@/lib/types";
 
 interface DrawMaskPreviewProps {
@@ -11,9 +11,6 @@ interface DrawMaskPreviewProps {
 }
 
 const DrawMaskPreview: React.FC<DrawMaskPreviewProps> = ({
-  mask,
-  drawStrokes,
-  animationOffset,
   rectWidth,
   rectHeight,
 }) => {

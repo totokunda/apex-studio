@@ -2,7 +2,9 @@ import multiprocessing
 import os
 
 # Server socket
-bind = "0.0.0.0:8765"
+_host = os.getenv("APEX_HOST", "0.0.0.0")
+_port = os.getenv("APEX_PORT", "8765")
+bind = f"{_host}:{_port}"
 backlog = 2048
 
 # Worker processes

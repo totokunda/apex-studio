@@ -27,6 +27,7 @@ spec:
   - flash
   - flash3
   - sage
+  - efficient_dot_product_attention
   model_type:
   - t2v
   - i2v
@@ -38,6 +39,7 @@ spec:
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   components:
   - type: scheduler
     label: Wan 2.2 5B Turbo Scheduler

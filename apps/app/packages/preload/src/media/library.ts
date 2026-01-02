@@ -5,6 +5,7 @@ import { basename, extname, join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ipcRenderer } from "electron";
 import { spawn } from "node:child_process";
+import { resolveFfmpegCommand } from "./ffmpegBin.js";
 import { getMediaRootAbsolute } from "./root.js";
 import { symlinksDir, proxyDir } from "./paths.js";
 import {
@@ -15,7 +16,7 @@ import {
 } from "./fileExts.js";
 import { ensureUniqueNameSync } from "./links.js";
 import type { ClipType } from "../../../renderer/src/lib/types.js";
-import { getCachePath, getUserDataPath } from "../config.js";
+import { getUserDataPath } from "../config.js";
 import {
   renameMediaPairInRoot,
   deleteMediaPairInRoot,
@@ -732,7 +733,7 @@ async function createProxy(
       proxyPath,
     ];
 
-    const ffmpeg = spawn("ffmpeg", args);
+    const ffmpeg = spawn(resolveFfmpegCommand("ffmpeg"), args);
 
     let stderr = "";
     ffmpeg.stderr.on("data", (data) => {

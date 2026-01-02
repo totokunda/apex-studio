@@ -1,5 +1,4 @@
 import React, {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -574,6 +573,7 @@ const ModelMenu: React.FC = () => {
     placeholderData: (prev) => prev ?? [],
     retry: false,
     refetchOnWindowFocus: false,
+    staleTime: 30000,
   });
   
   const modelTypesQuery = useQuery<ModelTypeInfo[]>({
@@ -590,6 +590,7 @@ const ModelMenu: React.FC = () => {
     placeholderData: (prev) => prev ?? [],
     retry: false,
     refetchOnWindowFocus: false,
+    staleTime: 30000,
   });
 
   const manifestsData = manifestsQuery.data;

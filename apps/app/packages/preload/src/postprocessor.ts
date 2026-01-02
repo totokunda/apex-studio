@@ -73,7 +73,6 @@ function onPostprocessorWebSocketError(
 }
 
 export {
-  RunPostprocessorRequest,
   runPostprocessor,
   getPostprocessorStatus,
   cancelPostprocessor,
@@ -83,5 +82,7 @@ export {
   onPostprocessorWebSocketStatus,
   onPostprocessorWebSocketError,
 };
+
+export type { RunPostprocessorRequest };
 
 

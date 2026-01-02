@@ -29,11 +29,13 @@ spec:
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   attention_types:
   - sdpa
   - flash
   - flash3
   - sage
+  - efficient_dot_product_attention
   loras:
   - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors
     scale: 0.0

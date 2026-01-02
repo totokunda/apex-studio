@@ -58,6 +58,16 @@ npm run bundle
 
 ## Build Commands
 
+## ffmpeg / ffprobe
+
+Apex Studio uses native `ffmpeg` / `ffprobe` for previews, proxies, and export.
+
+- **Packaged builds**: `electron-builder` bundles `ffmpeg` and `ffprobe` into the app at `resources/ffmpeg/`, so end users do **not** need them installed.
+- **Dev**: if `ffmpeg` / `ffprobe` are not on your PATH, install dependencies normally (`npm install`) and the app will fall back to `ffmpeg-static` / `ffprobe-static`.
+
+Overrides (useful for debugging):
+- `APEX_FFMPEG_PATH` / `APEX_FFPROBE_PATH` (absolute paths)
+
 ### Full Application Bundle
 
 These commands build both the Python API and Electron app:
@@ -101,6 +111,13 @@ npm run compile         # Current platform
 npm run compile:mac     # macOS
 npm run compile:win     # Windows
 npm run compile:linux   # Linux
+```
+
+Note: `npm run compile*` now builds a **lean Electron-only** app by default (does not bundle Python).
+To explicitly include the Python bundle (very large), set:
+
+```bash
+export APEX_INCLUDE_PYTHON_BUNDLE=1
 ```
 
 ## Code Signing
@@ -265,7 +282,7 @@ The full Python bundle with ML libraries can be 3-5GB. To reduce size:
 
 ### Build Fails with "Out of Memory"
 
-Building PyInstaller bundles is memory-intensive. Try:
+Building the Python venv bundle (ML deps) is memory-intensive. Try:
 
 1. Close other applications
 2. Increase swap space
@@ -289,7 +306,7 @@ Apex Studio
     ├── FastAPI Server
     ├── Ray Distributed Processing
     ├── ML Models & Preprocessors
-    └── Bundled with PyInstaller
+    └── Bundled as a self-contained venv + source/assets (no PyInstaller)
 ```
 
 ## CI/CD Integration
