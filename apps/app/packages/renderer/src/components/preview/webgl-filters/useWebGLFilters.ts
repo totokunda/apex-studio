@@ -47,7 +47,6 @@ export function useWebGLFilters() {
       if (!ctx) return sourceCanvas;
 
       let currentCanvas: HTMLCanvasElement = sourceCanvas;
-      let needsRedraw = false;
 
       // Apply brightness
       if (params.brightness && params.brightness !== 0) {
@@ -67,7 +66,6 @@ export function useWebGLFilters() {
         ctx.drawImage(result, 0, -sourceCanvas.height);
         ctx.restore();
         currentCanvas = sourceCanvas;
-        needsRedraw = true;
       }
 
       // Apply contrast
@@ -87,7 +85,6 @@ export function useWebGLFilters() {
         ctx.drawImage(result, 0, -sourceCanvas.height);
         ctx.restore();
         currentCanvas = sourceCanvas;
-        needsRedraw = true;
       }
 
       // Apply hue and saturation
@@ -111,7 +108,6 @@ export function useWebGLFilters() {
         ctx.drawImage(result, 0, -sourceCanvas.height);
         ctx.restore();
         currentCanvas = sourceCanvas;
-        needsRedraw = true;
       }
 
       // Apply blur
@@ -129,7 +125,6 @@ export function useWebGLFilters() {
         ctx.drawImage(result, 0, -sourceCanvas.height);
         ctx.restore();
         currentCanvas = sourceCanvas;
-        needsRedraw = true;
       }
 
       // Apply sharpness
@@ -149,7 +144,6 @@ export function useWebGLFilters() {
         ctx.drawImage(result, 0, -sourceCanvas.height);
         ctx.restore();
         currentCanvas = sourceCanvas;
-        needsRedraw = true;
       }
 
       // Apply noise
@@ -166,7 +160,6 @@ export function useWebGLFilters() {
         ctx.drawImage(result, 0, -sourceCanvas.height);
         ctx.restore();
         currentCanvas = sourceCanvas;
-        needsRedraw = true;
       }
 
       // Apply vignette
@@ -185,7 +178,6 @@ export function useWebGLFilters() {
         ctx.scale(1, -1);
         ctx.drawImage(result, 0, -sourceCanvas.height);
         ctx.restore();
-        needsRedraw = true;
       }
 
       return sourceCanvas;

@@ -44,7 +44,6 @@ const PosterClipItem = React.memo(({
   focusFrame,
   inputId,
   getApplicators,
-  clipWithinFrame,
   getClipById,
   isDialogOpen,
 }: {
@@ -54,7 +53,6 @@ const PosterClipItem = React.memo(({
   focusFrame: number;
   inputId?: string;
   getApplicators: (id: string, frame: number) => BaseClipApplicator[];
-  clipWithinFrame: (clip: AnyClipProps, frame: number, overlap: boolean, padding: number) => boolean;
   getClipById: (id: string) => AnyClipProps | undefined;
   isDialogOpen?: boolean;
 }) => {
@@ -267,7 +265,6 @@ const TimelineClipPosterPreview: React.FC<{
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const getClipById = useClipStore((s) => s.getClipById);
   const clips = useClipStore((s) => s.clips);
-  const clipWithinFrame = useClipStore((s) => s.clipWithinFrame);
   const haldClutInstance = useWebGLHaldClut();
   const focusFrame = useInputControlsStore(
     (s) => s.getFocusFrame(inputId ?? "") ?? 0,
@@ -526,7 +523,6 @@ const TimelineClipPosterPreview: React.FC<{
                         focusFrame={focusFrame}
                         inputId={inputId}
                         getApplicators={getApplicators}
-                        clipWithinFrame={clipWithinFrame}
                         getClipById={getClipById}
                         isDialogOpen={isDialogOpen}
                     />

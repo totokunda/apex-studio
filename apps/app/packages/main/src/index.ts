@@ -14,10 +14,16 @@ import { settingsModule } from "./modules/SettingsModule.js";
 import { jsonPersistenceModule } from "./modules/JSONPersistenceModule.js";
 import { appDirProtocol } from "./modules/AppDirProtocol.js";
 import { pythonProcess } from "./modules/PythonProcess.js";
+import { uvTool } from "./modules/UvTool.js";
 
 export async function initApp(initConfig: AppInitConfig) {
-  // Check if we're in development mode (renderer is a URL, not a file)
-  const isDev = initConfig.renderer instanceof URL;
+  // Consider "dev mode" only when the renderer is served from an http(s) dev server.
+  // In production we now load the renderer via `app://renderer/index.html`, which is also a URL,
+  // so `instanceof URL` alone is not sufficient.
+  const isDev =
+    initConfig.renderer instanceof URL &&
+    (initConfig.renderer.protocol === "http:" ||
+      initConfig.renderer.protocol === "https:");
 
   let moduleRunner = createModuleRunner()
     // Ensure single instance lock before any window creation
@@ -26,6 +32,8 @@ export async function initApp(initConfig: AppInitConfig) {
     .init(appDirProtocol())
     // Python process management - starts bundled API in production
     .init(pythonProcess({ devMode: isDev, autoStart: !isDev }))
+    // uv tool (bundled in production) for environment installation/bootstrapping
+    .init(uvTool())
     // Core backend IPC and persistence should be ready before any renderer windows load
     .init(apexApi())
     .init(jsonPersistenceModule())
@@ -34,8 +42,9 @@ export async function initApp(initConfig: AppInitConfig) {
       createWindowManagerModule({
         initConfig,
         // main/preload are built even in dev-mode, so import.meta.env.DEV isn't reliable here.
-        // If the renderer is a dev-server URL, open devtools to surface HMR/runtime errors.
-        openDevTools: initConfig.renderer instanceof URL,
+        // Auto-open devtools only for dev-server renderer URLs.
+        // You can still force it for debugging by setting APEX_OPEN_DEVTOOLS=1.
+        openDevTools: isDev || process.env.APEX_OPEN_DEVTOOLS === "1",
       }),
     )
     .init(terminateAppOnLastWindowClose())

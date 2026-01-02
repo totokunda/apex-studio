@@ -5,6 +5,10 @@ Python API Bundler for Apex Studio
 This script handles bundling the Python API for distribution with the Electron app.
 It supports multiple platforms and handles PyTorch/CUDA dependencies intelligently.
 
+NOTE: We intentionally do NOT use PyInstaller. Instead, we create a self-contained
+virtual environment (venv) and ship it alongside the API source/assets. The app
+is started by invoking the venv's Python interpreter and running `-m src ...`.
+
 Usage:
     python scripts/bundle_python.py --platform [darwin|linux|win32] --output ./dist
 """
@@ -13,16 +17,18 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
-from typing import Optional, Set, List
+from typing import Optional, Set, List, Tuple
 
 
 class PythonBundler:
-    """Bundles Python API for distribution"""
+    """Bundles Python API for distribution (venv-based, no PyInstaller)."""
 
     SUPPORTED_PLATFORMS = ["darwin", "linux", "win32"]
 
@@ -32,7 +38,6 @@ class PythonBundler:
         "cuda124": "https://download.pytorch.org/whl/cu124",
         "cuda121": "https://download.pytorch.org/whl/cu121",
         "cuda118": "https://download.pytorch.org/whl/cu118",
-        # Newer stacks (used by some Windows wheels / newer GPUs)
         "cuda128": "https://download.pytorch.org/whl/cu128",
         "cpu": "https://download.pytorch.org/whl/cpu",
         "rocm": "https://download.pytorch.org/whl/rocm6.4",
@@ -43,22 +48,34 @@ class PythonBundler:
         platform_name: str,
         output_dir: Path,
         cuda_version: Optional[str] = None,
-        use_pyinstaller: bool = True,
         sign: bool = False,
         python_executable: Optional[str] = None,
         prefer_python_312: bool = True,
     ):
         self.platform_name = platform_name
-        self.output_dir = Path(output_dir)
+        # Resolve to an absolute path so later subprocess calls that change cwd (e.g. Rust builds)
+        # still can find the venv interpreter and other bundle files reliably.
+        self.output_dir = Path(output_dir).resolve()
         self.cuda_version = cuda_version
-        self.use_pyinstaller = use_pyinstaller
         self.sign = sign
         self.python_executable = python_executable or sys.executable
         self.prefer_python_312 = prefer_python_312
 
-        self.project_root = Path(__file__).parent.parent
+        self.project_root = Path(__file__).resolve().parent.parent
         self.src_dir = self.project_root / "src"
         self.dist_dir = self.output_dir / "python-api"
+
+        # Name of the venv directory we create & ship.
+        # Users can activate it directly: `source apex-studio/bin/activate`
+        self.venv_name = "apex-studio"
+
+        # Populated after bundling
+        self.last_gpu_type: Optional[str] = None
+        self.last_manifest: Optional[dict] = None
+
+        # Whether to keep the *intermediate* build venv at `<output>/<venv_name>/`.
+        # The shipped bundle contains its own copy at `<output>/python-api/apex-engine/<venv_name>/`.
+        self.keep_build_venv: bool = False
 
     def _run(self, cmd: List[str], timeout: int = 5) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -67,6 +84,101 @@ class PythonBundler:
             text=True,
             timeout=timeout,
         )
+
+    def _ensure_uv_available(self) -> str:
+        """
+        Ensure the `uv` CLI is available.
+
+        We prefer using a system-installed `uv`. If not available, we install it into the
+        bundler's selected interpreter environment (the host interpreter running this script).
+        """
+        try:
+            subprocess.run(["uv", "--version"], check=True, capture_output=True, text=True)
+            return "uv"
+        except Exception:
+            # Bootstrap uv using the selected interpreter (network access is already assumed for dependency installs).
+            subprocess.run(
+                [self.python_executable, "-m", "pip", "install", "--upgrade", "uv"],
+                check=True,
+            )
+            return "uv"
+
+    def _ensure_macos_libpython_present(self, venv_dir: Path) -> None:
+        """
+        macOS: ensure the venv is relocatable enough for our bundle.
+
+        Some Python distributions (notably conda/anaconda) build the `python` executable
+        to load `libpythonX.Y.dylib` from a path relative to the executable:
+          @executable_path/../lib/libpythonX.Y.dylib
+
+        When we ship/copy the venv, that dylib may not be present under `<venv>/lib/`,
+        causing dyld aborts after install/move. We copy the base interpreter's libpython
+        dylib into the venv `lib/` directory as a pragmatic fix.
+        """
+        if self.platform_name != "darwin":
+            return
+
+        if self.platform_name == "win32":
+            py_path = venv_dir / "Scripts" / "python.exe"
+        else:
+            py_path = venv_dir / "bin" / "python"
+
+        # If the dylib is already present, nothing to do.
+        lib_dir = venv_dir / "lib"
+        # Common names we might need.
+        existing = list(lib_dir.glob("libpython*.dylib")) if lib_dir.exists() else []
+        if existing:
+            return
+
+        # Ask the *base* interpreter where its libpython lives.
+        try:
+            probe = subprocess.run(
+                [
+                    str(self.python_executable),
+                    "-c",
+                    "import sys, sysconfig, pathlib; "
+                    "base = getattr(sys, 'base_prefix', sys.prefix); "
+                    "libdir = sysconfig.get_config_var('LIBDIR') or ''; "
+                    "ldlib = sysconfig.get_config_var('LDLIBRARY') or ''; "
+                    "p = pathlib.Path(libdir) / ldlib if (libdir and ldlib) else pathlib.Path(''); "
+                    "print(str(base)); "
+                    "print(f'{sys.version_info.major}.{sys.version_info.minor}'); "
+                    "print(str(p) if str(p) else '')",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            lines = [ln.strip() for ln in probe.stdout.splitlines()]
+            base_prefix = lines[0] if len(lines) > 0 else ""
+            py_mm = lines[1] if len(lines) > 1 else ""
+            reported = lines[2] if len(lines) > 2 else ""
+        except Exception:
+            base_prefix = ""
+            py_mm = ""
+            reported = ""
+
+        candidates: list[Path] = []
+        if reported:
+            candidates.append(Path(reported))
+        if base_prefix and py_mm:
+            # Conda often reports LDLIBRARY as a static archive (.a). We want the dylib.
+            candidates.append(Path(base_prefix) / "lib" / f"libpython{py_mm}.dylib")
+            candidates.extend(sorted((Path(base_prefix) / "lib").glob(f"libpython{py_mm}*.dylib")))
+        if base_prefix:
+            candidates.extend(sorted((Path(base_prefix) / "lib").glob("libpython*.dylib")))
+
+        src = next((p for p in candidates if p.exists() and p.suffix == ".dylib"), None)
+        if src is None:
+            return
+
+        lib_dir.mkdir(parents=True, exist_ok=True)
+        dst = lib_dir / src.name
+        try:
+            shutil.copy2(src, dst)
+        except Exception:
+            # Best-effort: bundling should not fail solely due to this hygiene step.
+            return
 
     def detect_gpu_support(self) -> str:
         """Detect available GPU support"""
@@ -258,9 +370,6 @@ class PythonBundler:
                 continue
             requirements.append(line)
 
-        # Add PyInstaller
-        requirements.append("pyinstaller>=6.0.0")
-
         # Write requirements file
         with open(req_file, "w") as f:
             f.write("\n".join(requirements))
@@ -269,38 +378,52 @@ class PythonBundler:
         return req_file
 
     def create_venv(self, requirements_file: Path) -> Path:
-        """Create a virtual environment with all dependencies"""
-        venv_dir = self.output_dir / "venv"
+        """
+        Create a virtual environment with all dependencies.
+
+        The venv directory is named `apex-studio` to make manual usage predictable:
+          source apex-studio/bin/activate
+          python -m src start ...
+        """
+        venv_dir = self.output_dir / self.venv_name
 
         if venv_dir.exists():
             print(f"Removing existing venv: {venv_dir}")
             shutil.rmtree(venv_dir)
 
         print(f"Creating virtual environment: {venv_dir}")
-        subprocess.run([self.python_executable, "-m", "venv", str(venv_dir)], check=True)
-
-        # Get pip path
-        if self.platform_name == "win32":
-            pip_path = venv_dir / "Scripts" / "pip.exe"
-            py_path = venv_dir / "Scripts" / "python.exe"
-        else:
-            pip_path = venv_dir / "bin" / "pip"
-            py_path = venv_dir / "bin" / "python"
-
-        # Upgrade pip
+        uv = self._ensure_uv_available()
+        # Use uv to create the venv (faster + consistent across platforms).
         subprocess.run(
-            [str(pip_path), "install", "--upgrade", "pip", "setuptools", "wheel"],
+            [uv, "venv", str(venv_dir), "--python", str(self.python_executable)],
             check=True,
         )
-
-        # install uv
-        subprocess.run([str(pip_path), "install", "uv"], check=True)
-
-        # install with uv
+        
+        # Get python path within the venv
         if self.platform_name == "win32":
-            uv_path = venv_dir / "Scripts" / "uv.exe"
+            py_path = venv_dir / "Scripts" / "python.exe"
         else:
-            uv_path = venv_dir / "bin" / "uv"
+            py_path = venv_dir / "bin" / "python"
+
+        # Install with uv into the venv we just created.
+        uv_path = uv
+
+        # Ensure standard build tooling exists inside the venv.
+        # Some sdists / VCS installs (e.g. diffusers from git) can assume setuptools is present.
+        subprocess.run(
+            [
+                str(uv_path),
+                "pip",
+                "install",
+                "--python",
+                str(py_path),
+                "--upgrade",
+                "pip",
+                "setuptools",
+                "wheel",
+            ],
+            check=True,
+        )
 
         # Pre-install build helpers that some legacy sdists forget to declare.
         # (Example: opendr/opendr-toolkit needs Cython/numpy at build time but doesn't specify them.)
@@ -316,7 +439,7 @@ class PythonBundler:
             ],
             check=True,
         )
-
+        
         # Build & install Rust wheels (apex_download_rs) into the venv so they are
         # included in the final bundle.
         if not getattr(self, "skip_rust", False):
@@ -338,13 +461,331 @@ class PythonBundler:
             check=True,
         )
 
-        # Install the project itself
+        # Optional: install Nunchaku wheels if the current (platform, python, torch) matches
+        # an available prebuilt wheel on GitHub releases.
+        self._maybe_install_nunchaku(uv_path=Path(str(uv_path)), py_path=py_path)
+
+        # Install the project itself (so the venv has the `apex-engine` console script),
+        # but we still ship `src/` alongside the venv and run `python -m src ...` in production.
         subprocess.run(
-            [str(uv_path), "pip", "install", "--python", str(py_path), "-e", str(self.project_root)],
+            [str(uv_path), "pip", "install", "--python", str(py_path), str(self.project_root)],
             check=True,
         )
 
+        # PyInstaller hard-fails if the obsolete PyPI backport package `typing` is installed.
+        # Some environments/dependency stacks can accidentally pull it in.
+        # Remove it proactively (no-op if not installed).
+        self._remove_obsolete_typing_backport(py_path=py_path)
+
+        # macOS/conda: ensure libpython is present so the venv can run after being moved/installed.
+        self._ensure_macos_libpython_present(venv_dir)
+
         return venv_dir
+
+    def _maybe_install_nunchaku(self, uv_path: Path, py_path: Path) -> None:
+        """
+        Best-effort install for Nunchaku wheels.
+
+        We *do not* include Nunchaku in the base requirements files because its wheels are
+        built against specific PyTorch major/minor versions (e.g. +torch2.9). Installing
+        the wrong wheel can hard-fail the whole bundle. Instead, we detect the *installed*
+        torch version in the venv and install the matching wheel if one exists.
+
+        Release: https://github.com/nunchaku-tech/nunchaku/releases/tag/v1.1.0
+        """
+
+        # Only CUDA-capable platforms; skip macOS/ROCm/CPU bundles.
+        if self.platform_name not in ("linux", "win32"):
+            return
+
+        # Determine python tag (cp310/cp311/cp312/cp313) and torch major/minor.
+        try:
+            probe = subprocess.run(
+                [
+                    str(py_path),
+                    "-c",
+                    "import sys; "
+                    "import torch; "
+                    "v = (torch.__version__ or '').split('+')[0].strip(); "
+                    "mm = '.'.join(v.split('.')[:2]) if v else ''; "
+                    "print(f'cp{sys.version_info.major}{sys.version_info.minor}'); "
+                    "print(mm)",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return
+
+        lines = [ln.strip() for ln in probe.stdout.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            return
+        py_tag = lines[0]  # e.g. cp312
+        torch_mm = lines[1]  # e.g. 2.9
+
+        # Supported wheel builds in v1.1.0
+        supported_linux = {"2.7", "2.8", "2.9", "2.11"}
+        supported_win = {"2.9", "2.11"}
+
+        if self.platform_name == "linux":
+            if torch_mm not in supported_linux:
+                print(f"Skipping Nunchaku wheel: no v1.1.0 linux wheel for torch {torch_mm} ({py_tag})")
+                return
+            plat_suffix = "linux_x86_64"
+        else:
+            if torch_mm not in supported_win:
+                print(f"Skipping Nunchaku wheel: no v1.1.0 windows wheel for torch {torch_mm} ({py_tag})")
+                return
+            plat_suffix = "win_amd64"
+
+        # Build the exact filename/URL for the matching wheel.
+        # Example asset:
+        #   nunchaku-1.1.0+torch2.9-cp312-cp312-win_amd64.whl
+        # Note: the '+' is URL-encoded as %2B in the GitHub release URLs.
+        filename = f"nunchaku-1.1.0+torch{torch_mm}-{py_tag}-{py_tag}-{plat_suffix}.whl"
+        url = f"https://github.com/nunchaku-tech/nunchaku/releases/download/v1.1.0/{filename.replace('+', '%2B')}"
+
+        print(f"Attempting Nunchaku install: {filename}")
+        try:
+            subprocess.run(
+                [str(uv_path), "pip", "install", "--python", str(py_path), url],
+                check=False,
+            )
+        except Exception:
+            # Best-effort: bundling should not fail because Nunchaku couldn't be installed.
+            return
+
+    def _remove_obsolete_typing_backport(self, py_path: Path) -> None:
+        """
+        PyInstaller error:
+          "The 'typing' package is an obsolete backport of a standard library package and is incompatible with PyInstaller."
+
+        This refers to the *PyPI distribution named `typing`*, not the stdlib module.
+        """
+        try:
+            # `pip uninstall` returns non-zero when the package isn't installed; that's fine.
+            subprocess.run(
+                [str(py_path), "-m", "pip", "uninstall", "-y", "typing"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            # Bundling should not fail because we couldn't perform this hygiene step.
+            pass
+
+    def _patch_diffusers_set_adapter_scale(self, venv_dir: Path) -> None:
+        """
+        Patch diffusers in the bundled venv.
+
+        We intentionally remove the try/except KeyError fallback around:
+          scale_expansion_fn = _SET_ADAPTER_SCALE_FN_MAPPING[self.__class__.__name__]
+
+        This ensures our shipped bundle matches the expected upstream behavior.
+        """
+        # Allow disabling in emergencies (e.g. while bisecting build issues).
+        if os.environ.get("APEX_BUNDLE_PATCH_DIFFUSERS_PEFT", "1") == "0":
+            print("Skipping diffusers peft.py patch (APEX_BUNDLE_PATCH_DIFFUSERS_PEFT=0)")
+            return
+
+        if self.platform_name == "win32":
+            py_path = venv_dir / "Scripts" / "python.exe"
+        else:
+            py_path = venv_dir / "bin" / "python"
+
+        # Resolve the installed diffusers path inside the venv.
+        probe = subprocess.run(
+            [
+                str(py_path),
+                "-c",
+                "import diffusers; from pathlib import Path; "
+                "base = Path(diffusers.__file__).resolve().parent; "
+                "print(str(base / 'loaders' / 'peft.py'))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        peft_path = Path(probe.stdout.strip())
+        if not peft_path.exists():
+            raise RuntimeError(f"diffusers peft.py not found at expected path: {peft_path}")
+
+        src = peft_path.read_text(encoding="utf-8")
+
+        # Match the try/except block exactly (indentation-aware).
+        pattern = re.compile(
+            r"(?m)^(?P<indent>[ \t]*)try:\n"
+            r"(?P=indent)[ \t]*scale_expansion_fn = _SET_ADAPTER_SCALE_FN_MAPPING\[self\.__class__\.__name__\]\n"
+            r"(?P=indent)[ \t]*except KeyError:\n"
+            r"(?P=indent)[ \t]*scale_expansion_fn = lambda model, weights: weights[ \t]*$"
+        )
+
+        def _repl(m: re.Match) -> str:
+            indent = m.group("indent")
+            return f"{indent}scale_expansion_fn = _SET_ADAPTER_SCALE_FN_MAPPING[self.__class__.__name__]"
+
+        patched, n = pattern.subn(_repl, src, count=1)
+        if n != 1:
+            # If the file already has the desired one-liner, treat as success/idempotent.
+            if "_SET_ADAPTER_SCALE_FN_MAPPING[self.__class__.__name__]" in src and "except KeyError" not in src:
+                print(f"diffusers peft.py already patched: {peft_path}")
+                return
+            raise RuntimeError(
+                "Failed to apply diffusers peft.py patch (pattern not found). "
+                f"File: {peft_path}"
+            )
+
+        peft_path.write_text(patched, encoding="utf-8")
+        print(f"Patched diffusers peft.py: {peft_path}")
+
+    def _patch_sam2_transformer_rope_dtype_device(self, venv_dir: Path) -> None:
+        """
+        Patch sam2 inside the bundled venv.
+
+        Patch file:
+          patches/fix-sam2-transformer-rope-dtype-device.patch
+
+        We apply this as an in-place edit (rather than invoking external patch tooling)
+        to keep bundling deterministic and cross-platform.
+        """
+        # Allow disabling in emergencies (e.g. while bisecting build issues).
+        if os.environ.get("APEX_BUNDLE_PATCH_SAM2_TRANSFORMER", "1") == "0":
+            print("Skipping sam2 transformer.py patch (APEX_BUNDLE_PATCH_SAM2_TRANSFORMER=0)")
+            return
+
+        if self.platform_name == "win32":
+            py_path = venv_dir / "Scripts" / "python.exe"
+        else:
+            py_path = venv_dir / "bin" / "python"
+
+        # Resolve the installed sam2 path inside the venv.
+        probe = subprocess.run(
+            [
+                str(py_path),
+                "-c",
+                "import sam2; from pathlib import Path; "
+                "base = Path(sam2.__file__).resolve().parent; "
+                "print(str(base))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        sam2_dir = Path(probe.stdout.strip())
+        transformer_path = sam2_dir / "modeling" / "sam" / "transformer.py"
+        if not transformer_path.exists():
+            raise RuntimeError(
+                f"sam2 transformer.py not found at expected path: {transformer_path}"
+            )
+
+        src = transformer_path.read_text(encoding="utf-8")
+
+        # Idempotency: if already contains the expected device-aware conversions, do nothing.
+        already_patched = (
+            "device=self.q_proj.weight.device" in src
+            and "q.device != k.device" in src
+            and "q.device != v.device" in src
+        )
+        if already_patched:
+            print(f"sam2 transformer.py already patched: {transformer_path}")
+            return
+
+        patched = src
+
+        # Patch input projection casts to include device (dtype + device).
+        # Prefer simple exact replacements, then fall back to regex-based edits.
+        replacements = [
+            (
+                "q = self.q_proj(q.to(self.q_proj.weight.dtype))",
+                "q = self.q_proj(\n"
+                "            q.to(dtype=self.q_proj.weight.dtype, device=self.q_proj.weight.device)\n"
+                "        )",
+            ),
+            (
+                "k = self.k_proj(k.to(self.k_proj.weight.dtype))",
+                "k = self.k_proj(\n"
+                "            k.to(dtype=self.k_proj.weight.dtype, device=self.k_proj.weight.device)\n"
+                "        )",
+            ),
+            (
+                "v = self.v_proj(v.to(self.v_proj.weight.dtype))",
+                "v = self.v_proj(\n"
+                "            v.to(dtype=self.v_proj.weight.dtype, device=self.v_proj.weight.device)\n"
+                "        )",
+            ),
+        ]
+        for old, new in replacements:
+            if old in patched:
+                patched = patched.replace(old, new, 1)
+
+        # Regex fallbacks in case upstream spacing differs slightly.
+        proj_patterns = [
+            (
+                re.compile(
+                    r"(?m)^(?P<indent>[ \t]*)q = self\.q_proj\(q\.to\(self\.q_proj\.weight\.dtype\)\)\s*$"
+                ),
+                "q",
+            ),
+            (
+                re.compile(
+                    r"(?m)^(?P<indent>[ \t]*)k = self\.k_proj\(k\.to\(self\.k_proj\.weight\.dtype\)\)\s*$"
+                ),
+                "k",
+            ),
+            (
+                re.compile(
+                    r"(?m)^(?P<indent>[ \t]*)v = self\.v_proj\(v\.to\(self\.v_proj\.weight\.dtype\)\)\s*$"
+                ),
+                "v",
+            ),
+        ]
+        for pattern, var in proj_patterns:
+            if f"{var} = self.{var}_proj(" in patched and f"device=self.{var}_proj.weight.device" in patched:
+                continue
+            m = pattern.search(patched)
+            if not m:
+                continue
+            indent = m.group("indent")
+            repl = (
+                f"{indent}{var} = self.{var}_proj(\n"
+                f"{indent}    {var}.to(dtype=self.{var}_proj.weight.dtype, device=self.{var}_proj.weight.device)\n"
+                f"{indent})"
+            )
+            patched = pattern.sub(repl, patched, count=1)
+
+        # Patch attention dtype/device harmonization.
+        attn_pattern = re.compile(
+            r"(?m)^(?P<indent>[ \t]*)if q\.dtype != k\.dtype:\n"
+            r"(?P=indent)[ \t]*k = k\.to\(dtype=q\.dtype\)\n"
+            r"(?P=indent)if q\.dtype != v\.dtype:\n"
+            r"(?P=indent)[ \t]*v = v\.to\(dtype=q\.dtype\)\s*$"
+        )
+        m2 = attn_pattern.search(patched)
+        if m2:
+            indent = m2.group("indent")
+            repl2 = (
+                f"{indent}if q.dtype != k.dtype or q.device != k.device:\n"
+                f"{indent}    k = k.to(dtype=q.dtype, device=q.device)\n"
+                f"{indent}if q.dtype != v.dtype or q.device != v.device:\n"
+                f"{indent}    v = v.to(dtype=q.dtype, device=q.device)"
+            )
+            patched = attn_pattern.sub(repl2, patched, count=1)
+
+        # Validate patch applied.
+        if (
+            "device=self.q_proj.weight.device" not in patched
+            or "q.device != k.device" not in patched
+            or "q.device != v.device" not in patched
+        ):
+            raise RuntimeError(
+                "Failed to apply sam2 transformer dtype/device patch. "
+                "Upstream sam2 may have changed; update the patcher accordingly. "
+                f"File: {transformer_path}"
+            )
+
+        transformer_path.write_text(patched, encoding="utf-8")
+        print(f"Patched sam2 transformer.py: {transformer_path}")
 
     def _build_and_install_rust_wheels(self, uv_path: Path, py_path: Path) -> None:
         rust_project = self.project_root / "rust" / "apex_download_rs"
@@ -402,65 +843,56 @@ class PythonBundler:
             check=True,
         )
 
-    def build_with_pyinstaller(self, venv_dir: Path) -> Path:
-        """Build the bundle using PyInstaller"""
+    def _create_apex_engine_entrypoint(self, bundle_dir: Path) -> None:
+        """
+        Ensure the bundle has a stable `apex-engine` entrypoint at the bundle root.
+
+        We intentionally do NOT rely on venv console-script shebangs (they embed absolute
+        paths from build time). Instead, we run the venv Python interpreter explicitly.
+        """
         if self.platform_name == "win32":
-            pyinstaller_path = venv_dir / "Scripts" / "pyinstaller.exe"
-        else:
-            pyinstaller_path = venv_dir / "bin" / "pyinstaller"
+            # Best-effort: provide a batch wrapper for manual testing.
+            # (Electron will invoke the venv python directly; this is mainly for terminal usage.)
+            launcher = bundle_dir / "apex-engine.bat"
+            content = r"""@echo off
+setlocal
+set SCRIPT_DIR=%~dp0
+set PYTHONPATH=%SCRIPT_DIR%
+"%SCRIPT_DIR%\apex-studio\Scripts\python.exe" -m src %*
+"""
+            launcher.write_text(content, encoding="utf-8")
+            return
 
-        spec_file = self.project_root / "apex_engine.spec"
+        launcher = bundle_dir / "apex-engine"
+        content = """#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$SCRIPT_DIR"
+exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
+"""
+        launcher.write_text(content, encoding="utf-8")
+        os.chmod(launcher, 0o755)
 
-        print(f"Building with PyInstaller: {spec_file}")
+    def create_venv_bundle(self, venv_dir: Path) -> Path:
+        """
+        Create a self-contained bundle built around a venv (no PyInstaller).
 
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(self.project_root)
-
-        # Add code signing identity if available
-        if self.sign and self.platform_name == "darwin":
-            identity = os.environ.get("APPLE_IDENTITY")
-            if identity:
-                env["APPLE_IDENTITY"] = identity
-
-        subprocess.run(
-            [
-                str(pyinstaller_path),
-                str(spec_file),
-                "--distpath",
-                str(self.dist_dir),
-                "--workpath",
-                str(self.output_dir / "build"),
-                "--clean",
-            ],
-            cwd=str(self.project_root),
-            env=env,
-            check=True,
-        )
-
-        return self.dist_dir / "apex-engine"
-
-    def create_standalone_bundle(self, venv_dir: Path) -> Path:
-        """Create a standalone bundle without PyInstaller (portable Python)"""
+        Layout (bundle_dir):
+          - apex-studio/        # venv (shipped)
+          - src/               # API code
+          - assets/, manifest/, transformer_configs/, vae_configs/
+          - gunicorn.conf.py
+          - apex-engine        # launcher that runs venv python -m src ...
+        """
         bundle_dir = self.dist_dir / "apex-engine"
         # Make this operation idempotent (re-running bundler should not fail).
         if bundle_dir.exists():
             shutil.rmtree(bundle_dir)
         bundle_dir.mkdir(parents=True, exist_ok=True)
 
-        # Copy Python installation
-        if self.platform_name == "win32":
-            python_dir = venv_dir / "Scripts"
-            lib_dir = venv_dir / "Lib" / "site-packages"
-        else:
-            python_dir = venv_dir / "bin"
-            # Find site-packages
-            for sp in (venv_dir / "lib").glob("python*/site-packages"):
-                lib_dir = sp
-                break
-
-        # Copy essential Python files
-        dest_python = bundle_dir / "python"
-        shutil.copytree(venv_dir, dest_python, symlinks=True)
+        # Copy venv (avoid symlinks for portability: we want a self-contained bundle).
+        dest_venv = bundle_dir / self.venv_name
+        shutil.copytree(venv_dir, dest_venv, symlinks=False)
 
         # Copy source code
         dest_src = bundle_dir / "src"
@@ -475,8 +907,10 @@ class PythonBundler:
         # Copy gunicorn config
         shutil.copy(self.project_root / "gunicorn.conf.py", bundle_dir)
 
-        # Create launcher script
+        # Create launcher scripts (for manual start-api testing)
         self._create_launcher(bundle_dir)
+        # Create apex-engine entrypoint at bundle root (matches Electron/runtime expectations)
+        self._create_apex_engine_entrypoint(bundle_dir)
 
         return bundle_dir
 
@@ -488,16 +922,16 @@ class PythonBundler:
 setlocal
 set SCRIPT_DIR=%~dp0
 set PYTHONPATH=%SCRIPT_DIR%
-set PATH=%SCRIPT_DIR%\\python\\Scripts;%PATH%
-"%SCRIPT_DIR%\\python\\Scripts\\python.exe" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
+set PATH=%SCRIPT_DIR%\\apex-studio\\Scripts;%PATH%
+"%SCRIPT_DIR%\\apex-studio\\Scripts\\python.exe" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
 """
         else:
             launcher = bundle_dir / "start-api.sh"
             content = """#!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR"
-export PATH="$SCRIPT_DIR/python/bin:$PATH"
-exec "$SCRIPT_DIR/python/bin/python" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
+export PATH="$SCRIPT_DIR/apex-studio/bin:$PATH"
+exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
 """
 
         with open(launcher, "w") as f:
@@ -567,13 +1001,19 @@ exec "$SCRIPT_DIR/python/bin/python" -m uvicorn src.api.main:app --host 127.0.0.
                     check=True,
                 )
 
-    def create_manifest(self, bundle_dir: Path):
+    def create_manifest(self, bundle_dir: Path, gpu_type: str) -> dict:
         """Create a manifest file with bundle information"""
+        py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
         manifest = {
             "version": "0.1.0",
             "platform": self.platform_name,
-            "gpu_support": self.cuda_version or "auto",
+            "arch": platform.machine(),
+            "gpu_support": gpu_type,
+            "python_tag": py_tag,
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "bundle_type": "venv",
+            "venv_dirname": self.venv_name,
+            "rust_wheels": not getattr(self, "skip_rust", False),
             "created_at": __import__("datetime").datetime.utcnow().isoformat(),
             "signed": self.sign,
         }
@@ -583,6 +1023,220 @@ exec "$SCRIPT_DIR/python/bin/python" -m uvicorn src.api.main:app --host 127.0.0.
             json.dump(manifest, f, indent=2)
 
         print(f"Created manifest: {manifest_file}")
+        self.last_manifest = manifest
+        return manifest
+
+    def _safe_filename_component(self, value: str) -> str:
+        """
+        Convert arbitrary strings into something safe for filenames.
+        Keeps: alnum, '.', '-', '_'
+        """
+        s = (value or "").strip()
+        if not s:
+            return "unknown"
+        out = []
+        for ch in s:
+            if ch.isalnum() or ch in "._-":
+                out.append(ch)
+            elif ch.isspace():
+                out.append("-")
+            else:
+                out.append("-")
+        collapsed = re.sub(r"-{2,}", "-", "".join(out)).strip("-")
+        return collapsed or "unknown"
+
+    def default_zip_name(self, zip_scope: str) -> str:
+        """
+        Compute a descriptive default zip name based on the *actual* bundled config.
+        """
+        m = self.last_manifest or {}
+        prefix = "python-api" if zip_scope == "python-api" else "apex-engine"
+        version = self._safe_filename_component(str(m.get("version", "0.0.0")))
+        plat = self._safe_filename_component(str(m.get("platform", self.platform_name)))
+        arch = self._safe_filename_component(str(m.get("arch", platform.machine())))
+        gpu = self._safe_filename_component(str(m.get("gpu_support", self.last_gpu_type or "unknown")))
+        py_tag = self._safe_filename_component(
+            str(m.get("python_tag", f"cp{sys.version_info.major}{sys.version_info.minor}"))
+        )
+
+        extras: List[str] = []
+        if m.get("signed"):
+            extras.append("signed")
+        if not m.get("rust_wheels", True):
+            extras.append("norust")
+
+        extra = ("-" + "-".join(extras)) if extras else ""
+        return f"{prefix}-{version}-{plat}-{arch}-{gpu}-{py_tag}{extra}.zip"
+
+    def _should_exclude_from_zip(self, rel_path: Path) -> bool:
+        """
+        Exclude files that don't belong in release zips (noise / cache artifacts).
+
+        Keep this conservative: the unzipped bundle should still be runnable.
+        """
+        parts = set(rel_path.parts)
+        if "__pycache__" in parts:
+            return True
+        name = rel_path.name
+        if name.endswith(".pyc") or name.endswith(".pyo"):
+            return True
+        if name == ".DS_Store":
+            return True
+        return False
+
+    def _zip_dir(
+        self,
+        src_dir: Path,
+        zip_path: Path,
+        *,
+        include_root_dir: bool = True,
+    ) -> Path:
+        """
+        Create a zip of src_dir.
+
+        - include_root_dir=True makes the zip contain a single top-level folder named like src_dir.name
+          (recommended for release artifacts to avoid scattering files on unzip).
+        - Best-effort preserve Unix permission bits for executables (important for `apex-engine`).
+        """
+        src_dir = src_dir.resolve()
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+        if zip_path.exists():
+            zip_path.unlink()
+
+        arc_prefix = src_dir.name if include_root_dir else ""
+
+        files: List[Tuple[Path, Path]] = []
+        for p in src_dir.rglob("*"):
+            if p.is_dir():
+                continue
+            rel = p.relative_to(src_dir)
+            if self._should_exclude_from_zip(rel):
+                continue
+            files.append((p, rel))
+
+        files.sort(key=lambda t: str(t[1]).replace("\\", "/"))
+
+        with zipfile.ZipFile(
+            zip_path,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as zf:
+            for abs_path, rel in files:
+                arcname = str(Path(arc_prefix) / rel) if arc_prefix else str(rel)
+                arcname = arcname.replace("\\", "/")
+
+                zi = zipfile.ZipInfo.from_file(abs_path, arcname=arcname)
+                try:
+                    st_mode = abs_path.stat().st_mode
+                    # Preserve permission bits (e.g. executable flags) for Unix unzip tools.
+                    zi.external_attr = (st_mode & 0xFFFF) << 16
+                except Exception:
+                    pass
+
+                with open(abs_path, "rb") as f:
+                    zf.writestr(zi, f.read())
+
+        print(f"Created zip: {zip_path} (from {src_dir})")
+        return zip_path
+
+    def _tar_zst_dir(
+        self,
+        src_dir: Path,
+        out_path: Path,
+        *,
+        include_root_dir: bool = True,
+        level: int = 19,
+    ) -> Path:
+        """
+        Create a .tar.zst of src_dir using system `tar` + `zstd`.
+
+        Notes:
+        - This avoids a huge intermediate `.tar` file by streaming tar -> zstd.
+        - Requires `zstd` to be installed and available on PATH.
+        """
+        tar_bin = shutil.which("tar")
+        zstd_bin = shutil.which("zstd")
+        if not tar_bin:
+            raise RuntimeError("Cannot create .tar.zst: `tar` not found on PATH.")
+        if not zstd_bin:
+            raise RuntimeError(
+                "Cannot create .tar.zst: `zstd` not found on PATH. "
+                "Install it (macOS: `brew install zstd`)."
+            )
+
+        src_dir = src_dir.resolve()
+        out_path = out_path.resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if out_path.exists():
+            out_path.unlink()
+
+        # We keep the same exclude semantics as zip to avoid cache noise.
+        excludes = [
+            "--exclude=__pycache__",
+            "--exclude=*.pyc",
+            "--exclude=*.pyo",
+            "--exclude=.DS_Store",
+        ]
+
+        if include_root_dir:
+            tar_cmd = [
+                tar_bin,
+                *excludes,
+                "-C",
+                str(src_dir.parent),
+                "-cf",
+                "-",
+                str(src_dir.name),
+            ]
+        else:
+            tar_cmd = [tar_bin, *excludes, "-C", str(src_dir), "-cf", "-", "."]
+
+        # zstd reads from stdin and writes to file.
+        # -T0 uses all cores.
+        zstd_cmd = [
+            zstd_bin,
+            "-T0",
+            f"-{int(level)}",
+            "-o",
+            str(out_path),
+        ]
+
+        print(f"Creating tar.zst: {out_path.name} (from {src_dir})")
+        p1 = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            p2 = subprocess.run(
+                zstd_cmd,
+                stdin=p1.stdout,
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            # Ensure tar's stdout pipe is closed so tar can receive SIGPIPE if zstd exits early.
+            try:
+                if p1.stdout:
+                    p1.stdout.close()
+            except Exception:
+                pass
+
+        tar_stderr = ""
+        try:
+            _, tar_stderr = p1.communicate(timeout=120)
+            tar_stderr = (tar_stderr or b"").decode("utf-8", errors="replace") if isinstance(tar_stderr, (bytes, bytearray)) else (tar_stderr or "")
+        except Exception:
+            # If tar hangs for any reason, terminate best-effort.
+            try:
+                p1.kill()
+            except Exception:
+                pass
+
+        if p1.returncode not in (0, None):
+            raise RuntimeError(f"`tar` failed (exit {p1.returncode}). stderr:\n{tar_stderr}")
+        if p2.returncode != 0:
+            raise RuntimeError(f"`zstd` failed (exit {p2.returncode}). stderr:\n{p2.stderr}")
+
+        print(f"Created tar.zst: {out_path}")
+        return out_path
 
     def bundle(self) -> Path:
         """Run the full bundling process"""
@@ -593,6 +1247,7 @@ exec "$SCRIPT_DIR/python/bin/python" -m uvicorn src.api.main:app --host 127.0.0.
 
         # Detect GPU support
         gpu_type = self.cuda_version or self.detect_gpu_support()
+        self.last_gpu_type = gpu_type
         print(f"GPU support: {gpu_type}")
 
         # Create requirements
@@ -601,17 +1256,29 @@ exec "$SCRIPT_DIR/python/bin/python" -m uvicorn src.api.main:app --host 127.0.0.
         # Create virtual environment
         venv_dir = self.create_venv(req_file)
 
-        # Build bundle
-        if self.use_pyinstaller:
-            bundle_dir = self.build_with_pyinstaller(venv_dir)
-        else:
-            bundle_dir = self.create_standalone_bundle(venv_dir)
+        # Patch third-party deps inside the venv before we copy it into the shipped bundle.
+        self._patch_diffusers_set_adapter_scale(venv_dir)
+        self._patch_sam2_transformer_rope_dtype_device(venv_dir)
+
+        # Build venv-based bundle (no PyInstaller)
+        bundle_dir = self.create_venv_bundle(venv_dir)
+
+        # IMPORTANT: avoid doubling output size.
+        # We build the venv under `<output>/<venv_name>/` and then copy it into the shipped bundle.
+        # If we keep both, release zips (or any packaging of the whole output dir) will include Python twice.
+        if not getattr(self, "keep_build_venv", False):
+            try:
+                if venv_dir.exists():
+                    shutil.rmtree(venv_dir)
+            except Exception:
+                # Best-effort: don't fail bundling just because cleanup didn't work.
+                pass
 
         # Sign the bundle
         self.sign_bundle(bundle_dir)
 
         # Create manifest
-        self.create_manifest(bundle_dir)
+        self.create_manifest(bundle_dir, gpu_type=gpu_type)
 
         print(f"Bundle created: {bundle_dir}")
         return bundle_dir
@@ -649,17 +1316,67 @@ def main():
         help="Fail fast if the selected interpreter is not Python 3.12.x",
     )
     parser.add_argument(
-        "--no-pyinstaller",
-        action="store_true",
-        help="Create a portable bundle instead of using PyInstaller",
-    )
-    parser.add_argument(
         "--sign", action="store_true", help="Sign the bundle for distribution"
     )
     parser.add_argument(
         "--skip-rust",
         action="store_true",
         help="Skip building/installing Rust wheels (apex_download_rs).",
+    )
+    parser.add_argument(
+        "--keep-build-venv",
+        action="store_true",
+        help="Keep the intermediate build venv at <output>/apex-studio (default: delete it to avoid doubling bundle size).",
+    )
+    parser.add_argument(
+        "--zip",
+        action="store_true",
+        help="Create a release zip artifact after bundling (zip is written under --output unless --zip-output is provided).",
+    )
+    parser.add_argument(
+        "--zip-scope",
+        choices=["bundle", "python-api"],
+        default="python-api",
+        help="What to zip: 'bundle' zips the apex-engine folder; 'python-api' zips the python-api folder containing apex-engine.",
+    )
+    parser.add_argument(
+        "--zip-output",
+        type=Path,
+        default=None,
+        help="Path to write the zip artifact (default: <output>/<zip-name>).",
+    )
+    parser.add_argument(
+        "--zip-name",
+        default=None,
+        help="Zip filename to use when --zip-output is not provided (default: python-api-<platform>.zip or apex-engine-<platform>.zip).",
+    )
+    parser.add_argument(
+        "--tar-zst",
+        action="store_true",
+        help="Create a release .tar.zst artifact after bundling (requires `zstd` on PATH).",
+    )
+    parser.add_argument(
+        "--tar-zst-scope",
+        choices=["bundle", "python-api"],
+        default="python-api",
+        help="What to tar.zst: 'bundle' tars the apex-engine folder; 'python-api' tars the python-api folder containing apex-engine.",
+    )
+    parser.add_argument(
+        "--tar-zst-output",
+        type=Path,
+        default=None,
+        help="Path to write the .tar.zst artifact (default: <output>/<tar-zst-name>).",
+    )
+    parser.add_argument(
+        "--tar-zst-name",
+        default=None,
+        help="Filename for the .tar.zst when --tar-zst-output is not provided (default: same as zip naming but with .tar.zst).",
+    )
+    parser.add_argument(
+        "--tar-zst-level",
+        type=int,
+        default=19,
+        help="Zstd compression level (default: 19).",
     )
 
     args = parser.parse_args()
@@ -692,15 +1409,40 @@ def main():
         platform_name=platform_name,
         output_dir=args.output,
         cuda_version=cuda_version,
-        use_pyinstaller=not args.no_pyinstaller,
         sign=args.sign,
         python_executable=py_exe,
     )
     bundler.skip_rust = args.skip_rust
+    bundler.keep_build_venv = args.keep_build_venv
 
     bundle_dir = bundler.bundle()
+
+    if args.zip:
+        if args.zip_scope == "bundle":
+            zip_src = bundle_dir
+        else:
+            zip_src = bundler.dist_dir
+
+        zip_name = args.zip_name or bundler.default_zip_name(args.zip_scope)
+        zip_path = args.zip_output or (bundler.output_dir / zip_name)
+        bundler._zip_dir(zip_src, zip_path, include_root_dir=True)
+
+    if args.tar_zst:
+        if args.tar_zst_scope == "bundle":
+            tar_src = bundle_dir
+        else:
+            tar_src = bundler.dist_dir
+
+        default_name = bundler.default_zip_name(args.tar_zst_scope).replace(".zip", ".tar.zst")
+        tar_name = args.tar_zst_name or default_name
+        tar_path = args.tar_zst_output or (bundler.output_dir / tar_name)
+        bundler._tar_zst_dir(tar_src, tar_path, include_root_dir=True, level=args.tar_zst_level)
+
     print(f"\nBundle complete: {bundle_dir}")
-    print(f"To test: cd {bundle_dir} && ./apex-engine start --daemon")
+    if platform_name == "win32":
+        print(f"To test: cd {bundle_dir} && apex-engine.bat start --daemon --port 8765")
+    else:
+        print(f"To test: cd {bundle_dir} && ./apex-engine start --daemon --port 8765")
 
 
 if __name__ == "__main__":

@@ -19,9 +19,6 @@ const transformsEqual = (a?: ClipTransform, b?: ClipTransform): boolean => {
   );
 };
 
-const getSafeNumber = (value: number | undefined, fallback: number): number =>
-  isFiniteNumber(value) ? value! : fallback;
-
 export const sanitizeScale = (value: number | undefined): number => {
   if (!isFiniteNumber(value)) return 1;
   const v = value as number;
@@ -29,31 +26,6 @@ export const sanitizeScale = (value: number | undefined): number => {
     return v < 0 ? -1e-6 : 1e-6;
   }
   return v;
-};
-
-const getScale = (
-  transform: ClipTransform,
-): { scaleX: number; scaleY: number } => ({
-  scaleX: sanitizeScale(transform.scaleX),
-  scaleY: sanitizeScale(transform.scaleY),
-});
-
-const getBaseSize = (
-  transform: ClipTransform,
-): { width: number; height: number } => ({
-  width: getSafeNumber(transform.width, 0),
-  height: getSafeNumber(transform.height, 0),
-});
-
-const getActualSize = (
-  transform: ClipTransform,
-): { width: number; height: number } => {
-  const base = getBaseSize(transform);
-  const scale = getScale(transform);
-  return {
-    width: base.width * scale.scaleX,
-    height: base.height * scale.scaleY,
-  };
 };
 
 const rotate = (x: number, y: number, angleDeg: number) => {

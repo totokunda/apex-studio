@@ -77,8 +77,6 @@ const ModelClip: React.FC<Props> = ({
     clip?.activeJobId ?? null,
     isRunState,
   );
-  const targetFramesRef = useRef<number | null>(null);
-  const initialStartRef = useRef<number | null>(null);
   const imageCanvas = useRef<HTMLCanvasElement>(
     document.createElement("canvas"),
   );

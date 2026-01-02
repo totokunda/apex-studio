@@ -1,5 +1,7 @@
 import { initApp } from "@app/main";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 // In CI and automated tests, fail fast on unhandled errors.
 if (
@@ -25,7 +27,7 @@ if (
 
 // noinspection JSIgnoredPromiseFromCall
 /**
- * We resolve '@app/renderer' and '@app/preload'
+ * We resolve the built artifacts for '@app/renderer' and '@app/preload'
  * here and not in '@app/main'
  * to observe good practices of modular design.
  * This allows fewer dependencies and better separation of concerns in '@app/main'.
@@ -39,16 +41,28 @@ initApp({
       process.env.MODE === "development" && !!process.env.VITE_DEV_SERVER_URL;
     const renderer = useDevServer
       ? new URL(process.env.VITE_DEV_SERVER_URL)
-      : { path: fileURLToPath(import.meta.resolve("@app/renderer")) };
+      : {
+          // In packaged builds, load renderer via `app://renderer/...` so Electron can
+          // serve JS with correct Content-Type (critical for module workers).
+          // The `app://` handler maps `renderer` host to @app/renderer/dist.
+          //
+          // NOTE: This must be a URL (not loadFile) so the origin isn't `file://`.
+          // `WindowManager` will call `loadURL(...)` for URL renderers.
+          //
+          // Keep the old path resolution in place as a fallback for logs/debugging.
+          path: require.resolve("@app/renderer/dist/index.html"),
+        };
+    const resolved =
+      renderer instanceof URL ? renderer : new URL("app://renderer/index.html");
     console.log(
       `[entry-point] renderer: ${
-        renderer instanceof URL ? renderer.href : renderer.path
+        resolved instanceof URL ? resolved.href : resolved.path
       }`,
     );
-    return renderer;
+    return resolved;
   })(),
 
   preload: {
-    path: fileURLToPath(import.meta.resolve("@app/preload/exposed.mjs")),
+    path: require.resolve("@app/preload/exposed.mjs"),
   },
 });

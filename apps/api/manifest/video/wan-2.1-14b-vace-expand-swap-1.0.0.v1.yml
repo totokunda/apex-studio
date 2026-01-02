@@ -6,7 +6,7 @@ metadata:
   name: Wan 2.1 14B VACE Expand & Swap
   version: 1.0.0
   description: Wan 2.1 14B VACE Expand & Swap is a 14B parameter model for video expand
-    & swap that supports expanding a clip and swapping a clip with a new content.
+    and swap that supports expanding a clip and swapping a clip with a new content.
   tags:
   - wan
   - vace
@@ -33,12 +33,13 @@ spec:
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   attention_types:
   - sdpa
   - flash
   - flash3
   - sage
-  fps: 16
+  - efficient_dot_product_attention
   loras:
   - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors
     scale: 0.0

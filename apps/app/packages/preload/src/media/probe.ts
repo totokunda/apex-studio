@@ -1,11 +1,16 @@
 import { spawn } from "node:child_process";
+import { resolveFfmpegCommand } from "./ffmpegBin.js";
 
 function run(
   cmd: string,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
-    const ps = spawn(cmd, args);
+    const resolved =
+      cmd === "ffmpeg" || cmd === "ffprobe"
+        ? resolveFfmpegCommand(cmd)
+        : cmd;
+    const ps = spawn(resolved, args);
     let out = "";
     let err = "";
     ps.stdout.setEncoding("utf8");

@@ -103,7 +103,7 @@ const RewindForward = () => {
 const PauseButton = () => {
   return (
     <div
-      onClick={(e) => {}}
+      onClick={() => {}}
       className="flex items-center cursor-pointer  justify-center opacity-60 hover:opacity-100 transition-opacity duration-300"
     >
       <FaCirclePause className="text-brand-light/70 h-7 w-7" />
@@ -223,7 +223,7 @@ const ReduceTimelineButton: React.FC<{ numSeconds?: number }> = ({
 
 const SplitButton = () => {
   const { splitClip, clipWithinFrame, getClipById } = useClipStore();
-  const { focusFrame, setFocusFrame } = useControlsStore();
+  const { focusFrame } = useControlsStore();
   const { clips, clipDuration } = useClipStore();
   const hasClips = clips.length > 0;
 
@@ -272,7 +272,7 @@ const SplitButton = () => {
         splitClip(focusFrame, clipId);
       }
     });
-  }, [disabled, splitClip, focusFrame, selectedClipIds]);
+  }, [disabled, splitClip, focusFrame, selectedClipIds, getClipById]);
   return (
     <div
       className={cn(

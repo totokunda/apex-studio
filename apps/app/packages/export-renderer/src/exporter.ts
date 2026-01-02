@@ -570,7 +570,7 @@ export async function exportSequence(
         );
       } else if (clip.type === "video") {
         const c = clip as ExportVideoClip;
-        const { selectedSrc, frameOffset } = resolveVideoSourceForFrame(
+        const { selectedSrc } = resolveVideoSourceForFrame(
           c,
           frame,
         );
@@ -1180,7 +1180,7 @@ export async function exportClip(
         frame,
       );
     } else if (workingClip.type === "video") {
-      const { selectedSrc, frameOffset } = resolveVideoSourceForFrame(
+      const { selectedSrc } = resolveVideoSourceForFrame(
         workingClip as ExportVideoClip,
         frame,
       );
@@ -1436,35 +1436,6 @@ export async function exportClip(
     // Optional: include audio when exporting a single video clip if an audio source is attached
     if (includeAudio && workingClip.type === "video") {
       checkCancelled();
-      const spec = [
-        {
-          src: String((workingClip as any).audioSrc),
-          startFrame: Number(workingClip.startFrame) || 0,
-          endFrame:
-            typeof workingClip.endFrame === "number"
-              ? Number(workingClip.endFrame)
-              : endFrame,
-          trimStart: (() => {
-            const { srcStartFrame } = getSrcFrameWindow(
-              String((workingClip as any).src),
-            );
-            const baseTrimStart = Math.max(
-              0,
-              Number((workingClip as any)?.trimStart) || 0,
-            );
-            return baseTrimStart + srcStartFrame;
-          })(),
-          volumeDb: 0,
-          fadeInSec: 0,
-          fadeOutSec: 0,
-          speed: (() => {
-            const s = Number((workingClip as any)?.speed ?? 1);
-            return Number.isFinite(s) && s > 0
-              ? Math.min(5, Math.max(0.1, s))
-              : 1;
-          })(),
-        },
-      ];
       try {
         const out = await renderAudioMixToFile(workingClip as unknown as ExportAudioClip, startFrame, endFrame, fps, audioOptions?.format ?? "mp3", filename ?? "output.mp3", filename);
         if (out) audioPath = String(out);

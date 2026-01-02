@@ -322,6 +322,11 @@ export type PreprocessorClipProps = {
   status?: "running" | "complete" | "failed";
   activeJobId?: string;
   jobIds?: string[];
+  /**
+   * Ephemeral progress percent (0..100) for the active run.
+   * Not persisted; used only for UI rendering.
+   */
+  progress?: number;
 };
 
 export type GroupClipProps = ClipProps & {

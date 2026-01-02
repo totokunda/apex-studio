@@ -50,6 +50,11 @@ def _honcho_available() -> bool:
     return importlib.util.find_spec("honcho") is not None
 
 
+def _is_frozen() -> bool:
+    # PyInstaller sets sys.frozen = True in the bundled executable.
+    return bool(getattr(sys, "frozen", False))
+
+
 def _load_envfile_if_present(envfile: Path | None) -> None:
     if envfile is None:
         return
@@ -79,8 +84,18 @@ def _proc_cmd_from_procfile(procfile_path: Path, name: str = "api") -> list[str]
             raise ValueError(f"Empty command for process '{name}' in {procfile_path}")
         parts = shlex.split(cmd)
         # Prefer running via the active interpreter to avoid PATH/env mismatch.
+        #
+        # IMPORTANT: In a PyInstaller frozen build, sys.executable is the *apex-engine binary*,
+        # not a Python interpreter. So `sys.executable -m uvicorn ...` would become:
+        #   apex-engine -m uvicorn ...
+        # which Typer then treats as CLI flags and errors ("No such option: -m").
         if parts and parts[0] in {"uvicorn", "gunicorn"}:
-            parts = [sys.executable, "-m", parts[0], *parts[1:]]
+            if _is_frozen():
+                # We only need to support the API server start; use our internal serve command.
+                # We ignore most Procfile flags and rely on APEX_HOST/APEX_PORT.
+                parts = [sys.executable, "serve"]
+            else:
+                parts = [sys.executable, "-m", parts[0], *parts[1:]]
         return parts
 
     raise ValueError(f"Process '{name}' not found in {procfile_path}")
@@ -133,6 +148,16 @@ def start(
     cwd: Path = typer.Option(
         Path("."), "--cwd", help="Working directory where processes run"
     ),
+    host: str | None = typer.Option(
+        None,
+        "--host",
+        help="Host to bind the API to (sets APEX_HOST).",
+    ),
+    port: int | None = typer.Option(
+        None,
+        "--port",
+        help="Port to bind the API to (sets APEX_PORT).",
+    ),
     daemon: bool = typer.Option(
         False, "--daemon", "-d", help="Run as daemon in background"
     ),
@@ -142,6 +167,13 @@ def start(
     Equivalent to: honcho start -f Procfile [-e .env]
     """
     cwd = cwd.resolve()
+
+    # Allow callers (Electron bundle / CLI users) to override host/port without needing to
+    # manage environment variables themselves.
+    if host is not None:
+        os.environ["APEX_HOST"] = str(host)
+    if port is not None:
+        os.environ["APEX_PORT"] = str(port)
 
     # Resolve procfile/envfile relative to cwd (matches how honcho interprets -f/-e)
     procfile_path = procfile if procfile.is_absolute() else (cwd / procfile)
@@ -154,6 +186,12 @@ def start(
 
     log_path = (cwd / "apex-engine-start.log") if daemon else None
     _load_envfile_if_present(envfile_path)
+
+    # In frozen builds we cannot use `sys.executable -m honcho ...` because sys.executable
+    # points to this binary. Use our internal server runner instead.
+    if _is_frozen():
+        _run([sys.executable, "serve"], cwd=cwd, daemon=daemon, log_path=log_path)
+        return
 
     if _honcho_available():
         args = [sys.executable, "-m", "honcho", "start", "-f", str(procfile_path)]
@@ -168,6 +206,22 @@ def start(
         with open(log_path, "a", buffering=1) as f:
             f.write("Honcho not available; running Procfile 'api' command directly.\n")
     _run(cmd, cwd=cwd, daemon=daemon, log_path=log_path)
+
+
+@app.command(name="serve", hidden=True)
+def internal_serve():
+    """
+    Internal command used by frozen (PyInstaller) builds to start the API without relying on
+    `python -m ...` module execution.
+    """
+    # Resolve from environment (start() sets these when flags are passed).
+    host = os.getenv("APEX_HOST", "127.0.0.1")
+    port = int(os.getenv("APEX_PORT", "8765"))
+
+    import uvicorn
+
+    # Run the API server. In production we do not use --reload.
+    uvicorn.run("src.api.main:app", host=host, port=port, log_level="info")
 
 
 def _find_apex_processes():

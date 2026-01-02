@@ -81,3 +81,9 @@ export * from "./exportCache.ts";
 
 // Python process management (bundled API control)
 export * from "./python.ts";
+
+// uv tool (bundled) for environment installation/bootstrapping
+export * from "./uv.ts";
+
+// Launcher helpers (gate the main UI behind a setup/launcher screen)
+export * from "./launcher.ts";

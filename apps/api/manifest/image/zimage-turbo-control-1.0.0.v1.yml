@@ -26,8 +26,10 @@ spec:
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   attention_types:
   - sdpa
+  - efficient_dot_product_attention
   components:
   - type: scheduler
     label: Scheduler
