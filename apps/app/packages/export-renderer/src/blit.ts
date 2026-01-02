@@ -107,7 +107,6 @@ export interface TextClipProps extends BaseClipProps {
 type MaskTransform = ClipTransform;
 
 type MaskTool = "lasso" | "shape" | "draw" | "touch";
-type MaskShapeTool = "rectangle" | "ellipse" | "polygon" | "star";
 type MaskTrackingDirection = "forward" | "backward" | "both";
 
 export type MaskClipProps = {
@@ -164,35 +163,6 @@ export interface DrawingClipProps extends BaseClipProps {
 }
 
 type Canvas = HTMLCanvasElement;
-
-function computeSizeRatios(
-  original?: ClipTransform,
-  resolved?: { width: number; height: number },
-): { ratioX: number; ratioY: number } {
-  if (!original || !resolved) return { ratioX: 1, ratioY: 1 };
-  const ow = Number(original.width) || 0;
-  const oh = Number(original.height) || 0;
-  if (ow <= 0 || oh <= 0) return { ratioX: 1, ratioY: 1 };
-  const rx = resolved.width / ow;
-  const ry = resolved.height / oh;
-  return {
-    ratioX: Number.isFinite(rx) && rx > 0 ? rx : 1,
-    ratioY: Number.isFinite(ry) && ry > 0 ? ry : 1,
-  };
-}
-
-function scaleTransformSize(
-  transform: ClipTransform | undefined,
-  ratioX: number,
-  ratioY: number,
-): ClipTransform | undefined {
-  if (!transform || (ratioX === 1 && ratioY === 1)) return transform;
-  return {
-    ...transform,
-    width: transform.width * ratioX,
-    height: transform.height * ratioY,
-  };
-}
 
 function ensureTransform(
   transform?: ClipTransform,

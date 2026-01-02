@@ -6,6 +6,7 @@ import path from "node:path";
 import mime from "mime";
 import os from "node:os";
 import { Readable } from "node:stream";
+import { createRequire } from "node:module";
 
 // Register 'app://' as a privileged scheme as early as possible (before 'ready')
 protocol.registerSchemesAsPrivileged([
@@ -71,6 +72,7 @@ class AppDirProtocol implements AppModule {
   private inflightDownloads: Map<string, Promise<boolean>> = new Map();
   private inflightRemoteReprobe: Promise<boolean> | null = null;
   private lastRemoteReprobeAtMs: number = 0;
+  private rendererDistPath: string | null = null;
 
   private backendUrlIsLoopbackHost(): boolean {
     try {
@@ -192,6 +194,69 @@ class AppDirProtocol implements AppModule {
     await app.whenReady();
 
     this.electronApp = app;
+    // Resolve renderer dist path once so we can serve it via `app://renderer/...`
+    // with proper Content-Type headers (important for module scripts/workers).
+    this.rendererDistPath = null;
+    const rendererCandidates: string[] = [];
+    try {
+      // Best-case: node resolution works (dev + some packaged layouts).
+      const require = createRequire(import.meta.url);
+      const indexHtml = require.resolve("@app/renderer/dist/index.html");
+      rendererCandidates.push(path.dirname(indexHtml));
+    } catch {
+      // ignore
+    }
+    try {
+      // Packaged app layouts:
+      // - process.resourcesPath usually ".../Contents/Resources" (macOS)
+      // - app.getAppPath() usually ".../Resources/app.asar" (asar enabled)
+      const appPath = app.getAppPath();
+      rendererCandidates.push(
+        path.join(appPath, "node_modules", "@app", "renderer", "dist"),
+      );
+      // When asar is enabled, some artifacts can be unpacked:
+      rendererCandidates.push(
+        path.join(
+          process.resourcesPath,
+          "app.asar.unpacked",
+          "node_modules",
+          "@app",
+          "renderer",
+          "dist",
+        ),
+      );
+      // Non-asar packaging (or dev-ish layouts):
+      rendererCandidates.push(
+        path.join(process.resourcesPath, "app", "node_modules", "@app", "renderer", "dist"),
+      );
+      rendererCandidates.push(
+        path.join(process.resourcesPath, "node_modules", "@app", "renderer", "dist"),
+      );
+    } catch {
+      // ignore
+    }
+    // Pick first candidate that actually contains index.html
+    for (const cand of rendererCandidates) {
+      try {
+        const idx = path.join(cand, "index.html");
+        if (fs.existsSync(idx)) {
+          this.rendererDistPath = cand;
+          break;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (!this.rendererDistPath) {
+      console.warn(
+        "[AppDirProtocol] Could not resolve renderer dist path; app://renderer/* will 404. Candidates:",
+        rendererCandidates,
+      );
+    } else {
+      console.log(
+        `[AppDirProtocol] rendererDistPath: ${this.rendererDistPath}`,
+      );
+    }
 
     ipcMain.handle(
       "appdir:resolve-path",
@@ -204,6 +269,9 @@ class AppDirProtocol implements AppModule {
         }
       },
     );
+    ipcMain.handle("appdir:renderer-dist-path", async (): Promise<string | null> => {
+      return this.rendererDistPath;
+    });
 
     // Kick off non-blocking initialization (backend locality, remote cache path, etc.)
     // Do NOT block app startup on backend/network availability.
@@ -239,10 +307,24 @@ class AppDirProtocol implements AppModule {
 
       const filePath = await this.resolveAppUrlToFilePathWithRemoteFallback(u);
       if (!filePath) {
+        if (u.hostname === "renderer") {
+          console.warn(
+            `[AppDirProtocol] 404 for ${request.url} (rendererDistPath=${this.rendererDistPath ?? "null"})`,
+          );
+        }
         return new Response(null, { status: 404, headers: baseCors });
       }
 
-      const stat = fs.statSync(filePath);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(filePath);
+      } catch (e) {
+        console.warn(
+          `[AppDirProtocol] stat failed for ${request.url} -> ${filePath}`,
+          e,
+        );
+        return new Response(null, { status: 404, headers: baseCors });
+      }
       const fileSize = stat.size;
       const contentType = mime.getType(filePath) || "application/octet-stream";
 
@@ -327,6 +409,8 @@ class AppDirProtocol implements AppModule {
       basePath = app ? app.getPath("userData") : null;
     } else if (u.hostname === "apex-cache") {
       basePath = this.cachePath;
+    } else if (u.hostname === "renderer") {
+      basePath = this.rendererDistPath;
     }
 
 
@@ -426,22 +510,32 @@ class AppDirProtocol implements AppModule {
       const candidateAbs = path.isAbsolute(decodedPathname)
         ? path.normalize(decodedPathname)
         : null;
+
+      // If the renderer passed an absolute filesystem path, accept it only if it falls under our allowed roots.
+      // Otherwise, treat it as a normal URL path relative to basePath (e.g. "/index.html" -> "index.html").
+      //
+      // This is important because URL pathnames always start with "/" (e.g. "/index.html"), which is NOT
+      // necessarily an absolute *filesystem* path.
       if (candidateAbs) {
-        // If the renderer passed an absolute path, accept it only if it falls under our allowed roots.
-        // Crucially: never "re-base" an absolute path under basePath (that causes double-concat bugs).
         const allowedBases: string[] = [];
+        // Always allow the protocol host's basePath (e.g. rendererDistPath) as a valid root.
+        allowedBases.push(basePath);
         if (u.hostname === "apex-cache" && this.cachePath) {
           allowedBases.push(this.cachePath);
         }
         if (app) {
           allowedBases.push(...this.localUserDataBaseCandidates(app));
+        }
+
+        if (this.isUnderAnyBase(candidateAbs, allowedBases)) {
+          // Crucially: never "re-base" an absolute path under basePath (that causes double-concat bugs).
+          filePath = candidateAbs;
         } else {
-          allowedBases.push(basePath);
+          const rel = this.stripLeadingSlashes(decodedPathname);
+          const resolved = this.resolveUnderBase(basePath, rel);
+          if (!resolved) return null;
+          filePath = resolved;
         }
-        if (!this.isUnderAnyBase(candidateAbs, allowedBases)) {
-          return null;
-        }
-        filePath = candidateAbs;
       } else {
         const rel = this.stripLeadingSlashes(decodedPathname);
         const resolved = this.resolveUnderBase(basePath, rel);

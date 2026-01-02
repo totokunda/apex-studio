@@ -13,7 +13,10 @@
  * Options:
  *   --platform [darwin|linux|win32|all]  Target platform (default: current)
  *   --arch [x64|arm64|universal]         Target architecture (default: current)
- *   --cuda [auto|cuda126|cpu|mps]        GPU support (default: auto)
+ *   --cuda [auto|cpu|mps|rocm|cuda118|cuda121|cuda124|cuda126|cuda128]  GPU support (default: auto)
+ *   --python <python3.12>               Python executable to run bundler + create venv (default: auto-detect)
+ *   --require-python312                 Fail if bundler isn't running under Python 3.12.x
+ *   --skip-rust                          Skip building/installing Rust wheels during bundling
  *   --skip-python                        Skip Python bundling (use existing)
  *   --skip-sign                          Skip code signing
  *   --publish                            Publish release after build
@@ -21,15 +24,15 @@
  */
 
 import { spawn, execSync } from "node:child_process";
-import { existsSync, mkdirSync, cpSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, statSync, chmodSync, createWriteStream } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import https from "node:https";
+import { pipeline } from "node:stream/promises";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const APP_ROOT = resolve(__dirname, "..");
-const API_ROOT = resolve(APP_ROOT, "..", "api");
-const PYTHON_BUNDLE_DIR = join(APP_ROOT, "python-api-bundle");
 
 // Parse command line arguments
 function parseArgs() {
@@ -38,8 +41,9 @@ function parseArgs() {
     platform: process.platform,
     arch: process.arch,
     cuda: "auto",
-    skipPython: false,
     skipSign: false,
+    uvVersion: null, // null => use GitHub releases "latest"
+    skipUv: false,
     publish: false,
     draft: false,
   };
@@ -53,14 +57,14 @@ function parseArgs() {
       case "--arch":
         config.arch = args[++i];
         break;
-      case "--cuda":
-        config.cuda = args[++i];
-        break;
-      case "--skip-python":
-        config.skipPython = true;
-        break;
       case "--skip-sign":
         config.skipSign = true;
+        break;
+      case "--uv-version":
+        config.uvVersion = args[++i];
+        break;
+      case "--skip-uv":
+        config.skipUv = true;
         break;
       case "--publish":
         config.publish = true;
@@ -88,8 +92,8 @@ Usage:
 Options:
   --platform [darwin|linux|win32|all]  Target platform (default: current)
   --arch [x64|arm64|universal]         Target architecture (default: current)
-  --cuda [auto|cuda126|cpu|mps]        GPU support for Python (default: auto)
-  --skip-python                        Skip Python bundling (use existing)
+  --uv-version <tag>                   Pin uv GitHub release tag (default: latest)
+  --skip-uv                            Skip bundling uv binaries
   --skip-sign                          Skip code signing
   --publish                            Publish release after build
   --draft                              Create draft release
@@ -154,66 +158,189 @@ function runCommand(command, args, options = {}) {
   });
 }
 
-// Step 1: Build Python API bundle
-async function buildPythonBundle(config) {
-  if (config.skipPython) {
-    if (existsSync(PYTHON_BUNDLE_DIR)) {
-      log("Skipping Python bundle (--skip-python), using existing bundle", "warning");
-      return true;
-    } else {
-      log("No existing Python bundle found, building...", "warning");
+function getUvAssetName({ platform, arch }) {
+  const a = arch === "arm64" ? "aarch64" : "x86_64";
+  if (platform === "darwin") return `uv-${a}-apple-darwin.tar.gz`;
+  if (platform === "linux") return `uv-${a}-unknown-linux-gnu.tar.gz`;
+  if (platform === "win32") return `uv-${a}-pc-windows-msvc.zip`;
+  throw new Error(`Unsupported platform for uv: ${platform}`);
+}
+
+function uvDownloadUrl({ versionTag, assetName }) {
+  // Use GitHub's "latest" redirect by default to avoid hard pinning.
+  if (!versionTag) {
+    return `https://github.com/astral-sh/uv/releases/latest/download/${assetName}`;
+  }
+  return `https://github.com/astral-sh/uv/releases/download/${versionTag}/${assetName}`;
+}
+
+async function downloadFile(url, destPath) {
+  await new Promise((resolve, reject) => {
+    const fetch = (u, redirectsLeft = 5) => {
+      https
+        .get(
+          u,
+          {
+            headers: {
+              "User-Agent": "apex-studio-build-script",
+              Accept: "*/*",
+            },
+          },
+          (res) => {
+            const status = res.statusCode ?? 0;
+            const loc = res.headers.location;
+            if ([301, 302, 303, 307, 308].includes(status) && loc && redirectsLeft > 0) {
+              res.resume();
+              const next = loc.startsWith("http") ? loc : new URL(loc, u).toString();
+              return fetch(next, redirectsLeft - 1);
+            }
+            if (status < 200 || status >= 300) {
+              res.resume();
+              return reject(new Error(`Download failed (${status}) for ${u}`));
+            }
+            const out = createWriteStream(destPath);
+            pipeline(res, out).then(resolve, reject);
+          },
+        )
+        .on("error", reject);
+    };
+    fetch(url);
+  });
+}
+
+function findFileRecursive(rootDir, predicate) {
+  const stack = [rootDir];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      const full = join(dir, ent.name);
+      if (ent.isDirectory()) stack.push(full);
+      else if (ent.isFile() && predicate(ent.name, full)) return full;
+    }
+  }
+  return null;
+}
+
+async function extractArchive(archivePath, outDir) {
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true });
+
+  if (archivePath.endsWith(".tar.gz")) {
+    await runCommand("tar", ["-xzf", archivePath, "-C", outDir]);
+    return;
+  }
+
+  if (archivePath.endsWith(".zip")) {
+    // Prefer `unzip` when available (mac/linux build hosts); fall back to PowerShell on Windows.
+    try {
+      await runCommand("unzip", ["-o", archivePath, "-d", outDir]);
+      return;
+    } catch (e) {
+      if (process.platform !== "win32") throw e;
+      // Windows: Expand-Archive
+      await runCommand("powershell", [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `Expand-Archive -Force -Path "${archivePath}" -DestinationPath "${outDir}"`,
+      ]);
+      return;
     }
   }
 
-  log("Building Python API bundle...", "step");
+  throw new Error(`Unsupported archive format: ${archivePath}`);
+}
 
-  // Clean previous bundle
-  if (existsSync(PYTHON_BUNDLE_DIR)) {
-    log("Removing previous Python bundle...", "info");
-    rmSync(PYTHON_BUNDLE_DIR, { recursive: true, force: true });
+async function ensureUvBinaries(config) {
+  if (config.skipUv) {
+    log("Skipping uv bundling (--skip-uv)", "warning");
+    return;
   }
 
-  // Build Python bundle using the bundler script
-  const pythonCmd = process.platform === "win32" ? "python" : "python3";
-  const bundlerScript = join(API_ROOT, "scripts", "bundle_python.py");
+  log("Ensuring uv binaries are bundled (mac/linux/windows)...", "step");
 
-  const args = [
-    bundlerScript,
-    "--platform", config.platform,
-    "--output", join(APP_ROOT, "temp-python-build"),
-  ];
+  const uvRoot = join(APP_ROOT, "buildResources", "uv");
+  const tmpRoot = join(APP_ROOT, ".tmp", "uv");
+  mkdirSync(uvRoot, { recursive: true });
+  mkdirSync(tmpRoot, { recursive: true });
 
-  if (config.cuda !== "auto") {
-    args.push("--cuda", config.cuda);
-  }
+  const platforms =
+    config.platform === "all" ? ["darwin", "linux", "win32"] : [config.platform];
 
-  if (!config.skipSign) {
-    args.push("--sign");
-  }
-
-  try {
-    await runCommand(pythonCmd, args, { cwd: API_ROOT });
-    
-    // Copy bundle to expected location
-    const builtBundle = join(APP_ROOT, "temp-python-build", "python-api", "apex-engine");
-    if (existsSync(builtBundle)) {
-      mkdirSync(PYTHON_BUNDLE_DIR, { recursive: true });
-      cpSync(builtBundle, PYTHON_BUNDLE_DIR, { recursive: true });
-      log("Python bundle created successfully", "success");
+  /** @type {{platform:string, arch:string}[]} */
+  const targets = [];
+  for (const p of platforms) {
+    if (p === "darwin") {
+      if (config.arch === "universal") {
+        targets.push({ platform: "darwin", arch: "x64" }, { platform: "darwin", arch: "arm64" });
+      } else if (config.arch === "x64" || config.arch === "arm64") {
+        targets.push({ platform: "darwin", arch: config.arch });
+      } else {
+        targets.push({ platform: "darwin", arch: process.arch === "arm64" ? "arm64" : "x64" });
+      }
+    } else if (p === "win32") {
+      targets.push({ platform: "win32", arch: config.arch === "arm64" ? "arm64" : "x64" });
+    } else if (p === "linux") {
+      targets.push({ platform: "linux", arch: config.arch === "arm64" ? "arm64" : "x64" });
     } else {
-      throw new Error("Python bundle was not created");
+      throw new Error(`Unsupported target platform: ${p}`);
+    }
+  }
+
+  for (const t of targets) {
+    const destDir = join(uvRoot, t.platform, t.arch);
+    mkdirSync(destDir, { recursive: true });
+
+    const exeSuffix = t.platform === "win32" ? ".exe" : "";
+    const destUv = join(destDir, `uv${exeSuffix}`);
+    const destUvx = join(destDir, `uvx${exeSuffix}`);
+
+    // Skip download if already present (makes rebuilds fast)
+    if (existsSync(destUv) && (t.platform === "win32" ? true : true)) {
+      log(`uv already present for ${t.platform}/${t.arch}`, "info");
+      continue;
     }
 
-    // Clean up temp directory
-    rmSync(join(APP_ROOT, "temp-python-build"), { recursive: true, force: true });
-    
-    return true;
-  } catch (error) {
-    log(`Failed to build Python bundle: ${error.message}`, "error");
-    log("Continuing without bundled Python (dev mode)...", "warning");
-    return false;
+    const assetName = getUvAssetName(t);
+    const url = uvDownloadUrl({ versionTag: config.uvVersion, assetName });
+    const archivePath = join(tmpRoot, assetName);
+    const extractDir = join(tmpRoot, `${t.platform}-${t.arch}`);
+
+    log(`Downloading uv (${t.platform}/${t.arch}) from ${url}`, "info");
+    await downloadFile(url, archivePath);
+    await extractArchive(archivePath, extractDir);
+
+    const uvName = `uv${exeSuffix}`;
+    const uvxName = `uvx${exeSuffix}`;
+
+    const uvFound = findFileRecursive(extractDir, (name) => name === uvName);
+    const uvxFound = findFileRecursive(extractDir, (name) => name === uvxName);
+    if (!uvFound) throw new Error(`Failed to locate ${uvName} after extracting ${assetName}`);
+
+    cpSync(uvFound, destUv);
+    if (uvxFound) cpSync(uvxFound, destUvx);
+
+    if (t.platform !== "win32") {
+      try {
+        chmodSync(destUv, 0o755);
+      } catch {}
+      try {
+        if (existsSync(destUvx)) chmodSync(destUvx, 0o755);
+      } catch {}
+    }
+
+    log(`Bundled uv for ${t.platform}/${t.arch} -> ${destDir}`, "success");
   }
 }
+
+
 
 // Step 2: Build Electron app packages
 async function buildElectronPackages() {
@@ -233,7 +360,7 @@ async function buildElectronPackages() {
 async function packageApp(config) {
   log("Packaging application with electron-builder...", "step");
 
-  const args = ["electron-builder", "build", "--config", "electron-builder.mjs"];
+  const args = ["electron-builder", "build", "--config", "electron-builder.cjs"];
 
   // Platform
   if (config.platform !== process.platform || config.platform === "all") {
@@ -268,7 +395,12 @@ async function packageApp(config) {
   }
 
   try {
-    await runCommand("npx", args, { cwd: APP_ROOT });
+    // Only include the Python bundle in packaged builds when we've actually built it.
+    // This keeps the default `electron-builder` output (e.g. DMG) much smaller.
+    const env = {
+      ...process.env
+    };
+    await runCommand("npx", args, { cwd: APP_ROOT, env });
     log("Application packaged successfully", "success");
     return true;
   } catch (error) {
@@ -287,7 +419,7 @@ async function main() {
 ║                    Apex Studio Build                           ║
 ╠════════════════════════════════════════════════════════════════╣
 ║  Platform: ${config.platform.padEnd(12)} Architecture: ${config.arch.padEnd(12)}  ║
-║  CUDA: ${config.cuda.padEnd(16)} Sign: ${(!config.skipSign).toString().padEnd(16)}  ║
+║  Sign: ${(!config.skipSign).toString().padEnd(16)}  ║
 ╚════════════════════════════════════════════════════════════════╝
 `);
 
@@ -311,11 +443,8 @@ async function main() {
 
     log("Prerequisites check passed", "success");
 
-    // Build Python bundle
-    const hasPythonBundle = await buildPythonBundle(config);
-    if (!hasPythonBundle) {
-      log("Building without bundled Python - app will require external API", "warning");
-    }
+    // Bundle uv binaries (used for environment installation/bootstrapping)
+    await ensureUvBinaries(config);
 
     // Build Electron packages
     await buildElectronPackages();

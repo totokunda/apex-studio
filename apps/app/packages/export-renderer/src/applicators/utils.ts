@@ -1,41 +1,16 @@
 import type { WebGLHaldClut } from "../../../renderer/src/components/preview/webgl-filters/hald-clut";
 import type { BaseClipApplicator } from "../../../renderer/src/components/preview/clips/apply/base";
 import { FilterPreview } from "../../../renderer/src/components/preview/clips/apply/filter";
-
-export type ClipType =
-  | "video"
-  | "image"
-  | "audio"
-  | "model"
-  | "text"
-  | "lora"
-  | "shape"
-  | "draw"
-  | "filter"
-  | "group";
-
-export interface AnyClipProps {
-  type: ClipType;
-  clipId: string;
-  groupId?: string;
-  timelineId?: string;
-  startFrame?: number;
-  endFrame?: number;
-  children?: string[][]; // for group
-}
+import type {
+  AnyClipProps,
+  ClipType,
+  FilterClipProps,
+} from "../../../renderer/src/lib/types";
 
 export interface TimelineLike {
   timelineId: string;
   timelineY: number;
   hidden?: boolean;
-}
-
-export interface FilterClipProps extends AnyClipProps {
-  type: "filter";
-  smallPath?: string;
-  fullPath?: string;
-  category?: string;
-  intensity?: number;
 }
 
 export interface ApplicatorFactoryConfig {
@@ -194,3 +169,6 @@ export function getApplicatorsForClipExport(
     .filter((a): a is BaseClipApplicator => a !== null);
   return applicators;
 }
+
+// Re-export renderer clip types so export-renderer consumers can use a stable surface.
+export type { AnyClipProps, ClipType, FilterClipProps } from "../../../renderer/src/lib/types";

@@ -16,6 +16,7 @@ import {
 import { useControlsStore } from "@/lib/control";
 import { useEngineJobClipSync } from "@/hooks/use-engine-job-clip-sync";
 import { useDownloadJobClipSync } from "@/hooks/use-download-job-clip-sync";
+import { usePreprocessorJobClipSync } from "@/hooks/use-preprocessor-job-clip-sync";
 
 const POLL_MS = 2000;
 const RAY_JOBS_QUERY_KEY = ["rayJobs"] as const;
@@ -41,7 +42,7 @@ const JobsMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [jobsById, setJobsById] = useState<Record<string, TrackedJob>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
-  const { updateClip, addAssetAsync } = useClipStore();
+  const { updateClip, addAssetAsync, updatePreprocessor } = useClipStore();
   const { fps } = useControlsStore();
   // Poll aggregated Ray jobs
   const { data: polledJobs = [] } = useQuery<RayJobStatus[]>({
@@ -118,6 +119,12 @@ const JobsMenu: React.FC = () => {
       ...j,
       updatedAt: Date.now(),
     })),
+  });
+
+  usePreprocessorJobClipSync({
+    jobsById,
+    setJobsById,
+    addAssetAsync,
   });
 
   // When a component card cancels a download, it dispatches a `jobs-menu-reload`
@@ -222,13 +229,42 @@ const JobsMenu: React.FC = () => {
 
   const activeCount = activeJobs.length;
 
-  const handleCancel = async (jobId: string) => {
+  const handleCancel = async (job: TrackedJob) => {
+    const jobId = job.job_id;
     if (!jobId) return;
     setBusyIds((prev) => new Set(prev).add(jobId));
     try {
       await cancelRayJob(jobId);
-      
-      window.dispatchEvent(new CustomEvent("clear-job-id", { detail: { jobId: jobId } }));
+
+      // Reset clip state immediately for cancelled jobs.
+      // - engine: clear active job id on model clips (existing behavior)
+      // - processor: reset preprocessor back to its prior state so it can run again
+      try {
+        const cat = String(job.category || "").toLowerCase();
+        if (cat === "engine") {
+          window.dispatchEvent(
+            new CustomEvent("clear-job-id", { detail: { jobId } }),
+          );
+        } else if (cat === "processor") {
+          const state = useClipStore.getState();
+          const clips = state.clips || [];
+          for (const c of clips) {
+            if (!c || (c.type !== "video" && c.type !== "image")) continue;
+            const pres = (c as any).preprocessors || [];
+            for (const p of pres) {
+              if (!p || p.activeJobId !== jobId) continue;
+              // If there was an existing result asset, return to "complete" so the
+              // previous output remains visible; otherwise return to idle.
+              updatePreprocessor(c.clipId, p.id, {
+                status: p.assetId ? "complete" : undefined,
+                activeJobId: undefined,
+                progress: 0,
+              } as any);
+            }
+          }
+        }
+      } catch {}
+
       setJobsById((prev) => {
         const existing = prev[jobId];
         if (!existing) return prev;
@@ -276,7 +312,7 @@ const JobsMenu: React.FC = () => {
         className="h-4.5 w-4.5 items-center justify-center rounded-[4px] inline-flex hover:text-red-500 text-brand-light/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         onClick={(e) => {
           e.stopPropagation();
-          handleCancel(job.job_id);
+          handleCancel(job);
         }} 
         disabled={isCancelling}
         aria-label="Cancel job"

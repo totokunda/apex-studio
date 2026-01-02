@@ -94,6 +94,16 @@ const TextPreview: React.FC<
     clip?.text ?? null,
   );
 
+  // Editing model refs (avoid stale React state during rapid key repeats / fast typing)
+  const editingTextRef = useRef<string>(clip?.text ?? "");
+  const caretPositionRef = useRef<number>(0);
+  const selectionStartRef = useRef<number | null>(null);
+  const selectionEndRef = useRef<number | null>(null);
+
+  // Batch clip-store writes to once per animation frame (keeps typing responsive)
+  const pendingClipTextRef = useRef<string | null>(null);
+  const clipTextFlushRafRef = useRef<number | null>(null);
+
   const groupRef = useRef<Konva.Group>(null);
   const SNAP_THRESHOLD_PX = 4;
   const [guides, setGuides] = useState({
@@ -561,21 +571,98 @@ const TextPreview: React.FC<
     isInFrame,
   ]);
 
-  // Handle keyboard input
+  // Keep refs in sync when React state changes (also covers enter/exit edit mode)
+  useEffect(() => {
+    if (!isInFrame) return;
+    if (!isEditing) return;
+    editingTextRef.current = temporaryText ?? clip?.text ?? "";
+    caretPositionRef.current = caretPosition;
+    selectionStartRef.current = selectionStart;
+    selectionEndRef.current = selectionEnd;
+  }, [
+    isInFrame,
+    isEditing,
+    temporaryText,
+    clip?.text,
+    caretPosition,
+    selectionStart,
+    selectionEnd,
+  ]);
+
+  const flushClipTextToStore = useCallback(
+    (textToPersist?: string) => {
+      const next = typeof textToPersist === "string"
+        ? textToPersist
+        : pendingClipTextRef.current;
+      if (typeof next !== "string") return;
+      pendingClipTextRef.current = null;
+      const updateClipStore = useClipStore.getState().updateClip;
+      updateClipStore(clipId, { text: next });
+    },
+    [clipId],
+  );
+
+  const scheduleClipTextToStore = useCallback(
+    (next: string) => {
+      pendingClipTextRef.current = next;
+      if (clipTextFlushRafRef.current != null) return;
+      clipTextFlushRafRef.current = requestAnimationFrame(() => {
+        clipTextFlushRafRef.current = null;
+        flushClipTextToStore();
+      });
+    },
+    [flushClipTextToStore],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (clipTextFlushRafRef.current != null) {
+        cancelAnimationFrame(clipTextFlushRafRef.current);
+        clipTextFlushRafRef.current = null;
+      }
+      // Best-effort final flush on unmount
+      flushClipTextToStore();
+    };
+  }, [flushClipTextToStore]);
+
+  // Handle keyboard input (ref-driven to ensure keystrokes apply in order)
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      const currentText = temporaryText ?? text ?? "";
-      const hasSelection =
-        selectionStart !== null &&
-        selectionEnd !== null &&
-        selectionStart !== selectionEnd;
+      const getCurrent = () => {
+        const currentText = editingTextRef.current ?? "";
+        const caret = caretPositionRef.current ?? 0;
+        const selStart = selectionStartRef.current;
+        const selEnd = selectionEndRef.current;
+        const hasSelection =
+          selStart !== null && selEnd !== null && selStart !== selEnd;
+        return { currentText, caret, selStart, selEnd, hasSelection };
+      };
+
+      const setSelection = (start: number | null, end: number | null) => {
+        selectionStartRef.current = start;
+        selectionEndRef.current = end;
+        setSelectionStart(start);
+        setSelectionEnd(end);
+      };
+
+      const setCaret = (pos: number) => {
+        caretPositionRef.current = pos;
+        setCaretPosition(pos);
+      };
+
+      const commitText = (nextText: string) => {
+        editingTextRef.current = nextText;
+        setTemporaryText(nextText);
+        scheduleClipTextToStore(nextText);
+      };
+
+      const { currentText, caret, selStart, selEnd, hasSelection } = getCurrent();
 
       // Handle Select All (Ctrl/Cmd + A)
       if ((e.ctrlKey || e.metaKey) && e.key === "a") {
         e.preventDefault();
-        setSelectionStart(0);
-        setSelectionEnd(currentText.length);
-        setCaretPosition(currentText.length);
+        setSelection(0, currentText.length);
+        setCaret(currentText.length);
         return;
       }
 
@@ -583,8 +670,8 @@ const TextPreview: React.FC<
       if ((e.ctrlKey || e.metaKey) && e.key === "c") {
         e.preventDefault();
         if (hasSelection) {
-          const start = Math.min(selectionStart!, selectionEnd!);
-          const end = Math.max(selectionStart!, selectionEnd!);
+          const start = Math.min(selStart!, selEnd!);
+          const end = Math.max(selStart!, selEnd!);
           const selectedText = currentText.substring(start, end);
           navigator.clipboard.writeText(selectedText);
         }
@@ -595,8 +682,8 @@ const TextPreview: React.FC<
       if ((e.ctrlKey || e.metaKey) && e.key === "x") {
         e.preventDefault();
         if (hasSelection) {
-          const start = Math.min(selectionStart!, selectionEnd!);
-          const end = Math.max(selectionStart!, selectionEnd!);
+          const start = Math.min(selStart!, selEnd!);
+          const end = Math.max(selStart!, selEnd!);
           const selectedText = currentText.substring(start, end);
 
           // Copy to clipboard
@@ -607,13 +694,9 @@ const TextPreview: React.FC<
           const afterSelection = currentText.substring(end);
           const updatedText = beforeSelection + afterSelection;
 
-          setTemporaryText(updatedText);
-          const updateClipStore = useClipStore.getState().updateClip;
-          updateClipStore(clipId, { text: updatedText });
-
-          setCaretPosition(start);
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          commitText(updatedText);
+          setCaret(start);
+          setSelection(null, null);
         }
         return;
       }
@@ -625,24 +708,30 @@ const TextPreview: React.FC<
           if (!clipboardText) return;
 
           const ZERO_WIDTH_SPACE = "\u200B";
+          const {
+            currentText: textNow,
+            caret: caretNow,
+            selStart: selStartNow,
+            selEnd: selEndNow,
+            hasSelection: hasSelNow,
+          } = getCurrent();
           let updatedText: string;
           let newCaretPosition: number;
 
-          if (hasSelection) {
+          if (hasSelNow) {
             // Replace selection with pasted text
-            const start = Math.min(selectionStart!, selectionEnd!);
-            const end = Math.max(selectionStart!, selectionEnd!);
-            const beforeSelection = currentText.substring(0, start);
-            const afterSelection = currentText.substring(end);
+            const start = Math.min(selStartNow!, selEndNow!);
+            const end = Math.max(selStartNow!, selEndNow!);
+            const beforeSelection = textNow.substring(0, start);
+            const afterSelection = textNow.substring(end);
             updatedText = beforeSelection + clipboardText + afterSelection;
             newCaretPosition = start + clipboardText.length;
 
-            setSelectionStart(null);
-            setSelectionEnd(null);
+            setSelection(null, null);
           } else {
             // Insert at caret
-            const beforeCaret = currentText.substring(0, caretPosition);
-            let afterCaret = currentText.substring(caretPosition);
+            const beforeCaret = textNow.substring(0, caretNow);
+            let afterCaret = textNow.substring(caretNow);
 
             // Remove zero-width space if we're pasting right after it
             if (afterCaret.startsWith(ZERO_WIDTH_SPACE)) {
@@ -650,13 +739,11 @@ const TextPreview: React.FC<
             }
 
             updatedText = beforeCaret + clipboardText + afterCaret;
-            newCaretPosition = caretPosition + clipboardText.length;
+            newCaretPosition = caretNow + clipboardText.length;
           }
 
-          setTemporaryText(updatedText);
-          const updateClipStore = useClipStore.getState().updateClip;
-          updateClipStore(clipId, { text: updatedText });
-          setCaretPosition(newCaretPosition);
+          commitText(updatedText);
+          setCaret(newCaretPosition);
         });
         return;
       }
@@ -676,27 +763,25 @@ const TextPreview: React.FC<
       // Handle Home - Move to start of line
       if (e.key === "Home") {
         e.preventDefault();
-        const beforeCaret = currentText.substring(0, caretPosition);
+        const beforeCaret = currentText.substring(0, caret);
         const lastNewlineIndex = beforeCaret.lastIndexOf("\n");
         const lineStart = lastNewlineIndex + 1;
-        setCaretPosition(lineStart);
-        setSelectionStart(null);
-        setSelectionEnd(null);
+        setCaret(lineStart);
+        setSelection(null, null);
         return;
       }
 
       // Handle End - Move to end of line
       if (e.key === "End") {
         e.preventDefault();
-        const afterCaret = currentText.substring(caretPosition);
+        const afterCaret = currentText.substring(caret);
         const nextNewlineIndex = afterCaret.indexOf("\n");
         if (nextNewlineIndex >= 0) {
-          setCaretPosition(caretPosition + nextNewlineIndex);
+          setCaret(caret + nextNewlineIndex);
         } else {
-          setCaretPosition(currentText.length);
+          setCaret(currentText.length);
         }
-        setSelectionStart(null);
-        setSelectionEnd(null);
+        setSelection(null, null);
         return;
       }
 
@@ -705,12 +790,11 @@ const TextPreview: React.FC<
         e.preventDefault();
         if (hasSelection) {
           // If there's a selection, move to start of selection
-          const start = Math.min(selectionStart!, selectionEnd!);
-          setCaretPosition(start);
-          setSelectionStart(null);
-          setSelectionEnd(null);
-        } else if (caretPosition > 0) {
-          setCaretPosition(caretPosition - 1);
+          const start = Math.min(selStart!, selEnd!);
+          setCaret(start);
+          setSelection(null, null);
+        } else if (caret > 0) {
+          setCaret(caret - 1);
         }
         return;
       }
@@ -719,12 +803,11 @@ const TextPreview: React.FC<
         e.preventDefault();
         if (hasSelection) {
           // If there's a selection, move to end of selection
-          const end = Math.max(selectionStart!, selectionEnd!);
-          setCaretPosition(end);
-          setSelectionStart(null);
-          setSelectionEnd(null);
-        } else if (caretPosition < currentText.length) {
-          setCaretPosition(caretPosition + 1);
+          const end = Math.max(selStart!, selEnd!);
+          setCaret(end);
+          setSelection(null, null);
+        } else if (caret < currentText.length) {
+          setCaret(caret + 1);
         }
         return;
       }
@@ -733,21 +816,19 @@ const TextPreview: React.FC<
         e.preventDefault();
 
         if (characterBoundingBoxes.length === 0) {
-          setCaretPosition(0);
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          setCaret(0);
+          setSelection(null, null);
           return;
         }
 
         // Find current character box to get current X position
         const currentBox =
           characterBoundingBoxes[
-            Math.min(caretPosition, characterBoundingBoxes.length - 1)
+            Math.min(caret, characterBoundingBoxes.length - 1)
           ];
         if (!currentBox) {
-          setCaretPosition(0);
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          setCaret(0);
+          setSelection(null, null);
           return;
         }
 
@@ -761,9 +842,8 @@ const TextPreview: React.FC<
 
         if (boxesAbove.length === 0) {
           // No line above, move to start
-          setCaretPosition(0);
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          setCaret(0);
+          setSelection(null, null);
           return;
         }
 
@@ -785,9 +865,8 @@ const TextPreview: React.FC<
           }
         }
 
-        setCaretPosition(closestBox.index);
-        setSelectionStart(null);
-        setSelectionEnd(null);
+        setCaret(closestBox.index);
+        setSelection(null, null);
         return;
       }
 
@@ -795,21 +874,19 @@ const TextPreview: React.FC<
         e.preventDefault();
 
         if (characterBoundingBoxes.length === 0) {
-          setCaretPosition(0);
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          setCaret(0);
+          setSelection(null, null);
           return;
         }
 
         // Find current character box to get current X position
         const currentBox =
           characterBoundingBoxes[
-            Math.min(caretPosition, characterBoundingBoxes.length - 1)
+            Math.min(caret, characterBoundingBoxes.length - 1)
           ];
         if (!currentBox) {
-          setCaretPosition(currentText.length);
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          setCaret(currentText.length);
+          setSelection(null, null);
           return;
         }
 
@@ -823,9 +900,8 @@ const TextPreview: React.FC<
 
         if (boxesBelow.length === 0) {
           // No line below, move to end
-          setCaretPosition(currentText.length);
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          setCaret(currentText.length);
+          setSelection(null, null);
           return;
         }
 
@@ -850,13 +926,12 @@ const TextPreview: React.FC<
         // Check if we should position after this character or before
         const charMidpoint = closestBox.x + closestBox.width / 2;
         if (currentX > charMidpoint && closestBox.index < currentText.length) {
-          setCaretPosition(Math.min(closestBox.index + 1, currentText.length));
+          setCaret(Math.min(closestBox.index + 1, currentText.length));
         } else {
-          setCaretPosition(closestBox.index);
+          setCaret(closestBox.index);
         }
 
-        setSelectionStart(null);
-        setSelectionEnd(null);
+        setSelection(null, null);
         return;
       }
 
@@ -866,26 +941,22 @@ const TextPreview: React.FC<
 
         // Case 1: Text is selected - delete the selection
         if (hasSelection) {
-          const start = Math.min(selectionStart!, selectionEnd!);
-          const end = Math.max(selectionStart!, selectionEnd!);
+          const start = Math.min(selStart!, selEnd!);
+          const end = Math.max(selStart!, selEnd!);
 
           const beforeSelection = currentText.substring(0, start);
           const afterSelection = currentText.substring(end);
           const updatedText = beforeSelection + afterSelection;
 
-          setTemporaryText(updatedText);
-          const updateClipStore = useClipStore.getState().updateClip;
-          updateClipStore(clipId, { text: updatedText });
-
-          setCaretPosition(start);
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          commitText(updatedText);
+          setCaret(start);
+          setSelection(null, null);
         }
         // Case 2: No selection - delete character after caret
-        else if (caretPosition < currentText.length) {
+        else if (caret < currentText.length) {
           const ZERO_WIDTH_SPACE = "\u200B";
-          const beforeCaret = currentText.substring(0, caretPosition);
-          let afterCaret = currentText.substring(caretPosition + 1);
+          const beforeCaret = currentText.substring(0, caret);
+          let afterCaret = currentText.substring(caret + 1);
 
           // Also remove zero-width space if it's after the deleted character
           if (afterCaret.startsWith(ZERO_WIDTH_SPACE)) {
@@ -894,9 +965,7 @@ const TextPreview: React.FC<
 
           const updatedText = beforeCaret + afterCaret;
 
-          setTemporaryText(updatedText);
-          const updateClipStore = useClipStore.getState().updateClip;
-          updateClipStore(clipId, { text: updatedText });
+          commitText(updatedText);
 
           // Caret stays in same position
         }
@@ -909,27 +978,22 @@ const TextPreview: React.FC<
 
         // Case 1: Text is selected - delete the selection
         if (hasSelection) {
-          const start = Math.min(selectionStart!, selectionEnd!);
-          const end = Math.max(selectionStart!, selectionEnd!);
+          const start = Math.min(selStart!, selEnd!);
+          const end = Math.max(selStart!, selEnd!);
 
           const beforeSelection = currentText.substring(0, start);
           const afterSelection = currentText.substring(end);
           const updatedText = beforeSelection + afterSelection;
 
-          setTemporaryText(updatedText);
-          const updateClipStore = useClipStore.getState().updateClip;
-          updateClipStore(clipId, { text: updatedText });
-
-          // Move caret to start of deleted selection
-          setCaretPosition(start);
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          commitText(updatedText);
+          setCaret(start);
+          setSelection(null, null);
         }
         // Case 2: No selection - delete character before caret
-        else if (caretPosition > 0) {
+        else if (caret > 0) {
           const ZERO_WIDTH_SPACE = "\u200B";
-          let beforeCaret = currentText.substring(0, caretPosition - 1);
-          let afterCaret = currentText.substring(caretPosition);
+          let beforeCaret = currentText.substring(0, caret - 1);
+          let afterCaret = currentText.substring(caret);
 
           // Also remove zero-width space after if it's there
           if (afterCaret.startsWith(ZERO_WIDTH_SPACE)) {
@@ -938,12 +1002,8 @@ const TextPreview: React.FC<
 
           const updatedText = beforeCaret + afterCaret;
 
-          setTemporaryText(updatedText);
-          const updateClipStore = useClipStore.getState().updateClip;
-          updateClipStore(clipId, { text: updatedText });
-
-          // Move caret back one position
-          setCaretPosition(caretPosition - 1);
+          commitText(updatedText);
+          setCaret(caret - 1);
         }
         return;
       }
@@ -958,12 +1018,12 @@ const TextPreview: React.FC<
 
         // If there's a selection, replace it with the new character
         if (
-          selectionStart !== null &&
-          selectionEnd !== null &&
-          selectionStart !== selectionEnd
+          selStart !== null &&
+          selEnd !== null &&
+          selStart !== selEnd
         ) {
-          const start = Math.min(selectionStart, selectionEnd);
-          const end = Math.max(selectionStart, selectionEnd);
+          const start = Math.min(selStart, selEnd);
+          const end = Math.max(selStart, selEnd);
 
           const beforeSelection = currentText.substring(0, start);
           const afterSelection = currentText.substring(end);
@@ -971,12 +1031,11 @@ const TextPreview: React.FC<
           newCaretPosition = start + 1;
 
           // Clear selection
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          setSelection(null, null);
         } else {
           // No selection - insert at caret
-          const beforeCaret = currentText.substring(0, caretPosition);
-          let afterCaret = currentText.substring(caretPosition);
+          const beforeCaret = currentText.substring(0, caret);
+          let afterCaret = currentText.substring(caret);
 
           // Remove zero-width space if we're typing right after it
           if (afterCaret.startsWith(ZERO_WIDTH_SPACE)) {
@@ -984,16 +1043,14 @@ const TextPreview: React.FC<
           }
 
           updatedText = beforeCaret + newChar + afterCaret;
-          newCaretPosition = caretPosition + 1;
+          newCaretPosition = caret + 1;
         }
 
         // Update the text
-        setTemporaryText(updatedText);
-        const updateClipStore = useClipStore.getState().updateClip;
-        updateClipStore(clipId, { text: updatedText });
+        commitText(updatedText);
 
         // Move caret forward
-        setCaretPosition(newCaretPosition);
+        setCaret(newCaretPosition);
       }
       // Handle Enter key for newlines
       else if (e.key === "Enter") {
@@ -1005,8 +1062,8 @@ const TextPreview: React.FC<
 
         // If there's a selection, replace it with newline
         if (hasSelection) {
-          const start = Math.min(selectionStart!, selectionEnd!);
-          const end = Math.max(selectionStart!, selectionEnd!);
+          const start = Math.min(selStart!, selEnd!);
+          const end = Math.max(selStart!, selEnd!);
 
           const beforeSelection = currentText.substring(0, start);
           const afterSelection = currentText.substring(end);
@@ -1017,28 +1074,24 @@ const TextPreview: React.FC<
           newCaretPosition = start + 1;
 
           // Clear selection
-          setSelectionStart(null);
-          setSelectionEnd(null);
+          setSelection(null, null);
         } else {
           // No selection - insert at caret
-          const beforeCaret = currentText.substring(0, caretPosition);
-          const afterCaret = currentText.substring(caretPosition);
+          const beforeCaret = currentText.substring(0, caret);
+          const afterCaret = currentText.substring(caret);
 
           // Add zero-width space after newline to help with positioning
           updatedText = beforeCaret + "\n" + ZERO_WIDTH_SPACE + afterCaret;
-          newCaretPosition = caretPosition + 1;
+          newCaretPosition = caret + 1;
         }
 
-        setTemporaryText(updatedText);
-        const updateClipStore = useClipStore.getState().updateClip;
-        updateClipStore(clipId, { text: updatedText });
-
-        setCaretPosition(newCaretPosition);
+        commitText(updatedText);
+        setCaret(newCaretPosition);
 
         return;
       }
     },
-    [temporaryText, text, caretPosition, selectionStart, selectionEnd, clipId],
+    [clipId, characterBoundingBoxes, isEditing, isInFrame, scheduleClipTextToStore],
   );
 
   // Helper function to find the nearest character index using bounding boxes
@@ -1531,6 +1584,29 @@ const TextPreview: React.FC<
     clipTransform?.height,
     clipTransform?.rotation,
   ]);
+
+  // While editing: keep things snappy by rendering live (no filters/caching).
+  // We also clear any existing cache once when entering edit mode to avoid
+  // "stale bitmap until blur" behavior.
+  useEffect(() => {
+    if (!isInFrame) return;
+    if (!isEditing) return;
+    const node = textRef.current;
+    if (!node) return;
+
+    const bg = backgroundRef.current;
+    const raf = requestAnimationFrame(() => {
+      try {
+        node.clearCache();
+        bg?.clearCache();
+        //@ts-ignore
+        node.getLayer()?.batchDraw?.();
+      } catch {
+        // best-effort
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isInFrame, isEditing]);
 
   // Cache background rect bitmap when its visual attributes or active-range change and not interacting/editing
   useEffect(() => {
@@ -2083,7 +2159,7 @@ const TextPreview: React.FC<
             width={clipTransform?.width ?? defaultWidth}
             applicators={applicators}
             //@ts-ignore
-            filters={filtersArray}
+            filters={isEditing ? undefined : filtersArray}
             height={clipTransform?.height ?? defaultHeight}
             ref={backgroundRef}
             fill={backgroundColor}
@@ -2148,7 +2224,7 @@ const TextPreview: React.FC<
           onMouseOver={handleMouseOver}
           onMouseOut={handleMouseOut}
           //@ts-ignore
-          filters={filtersArray}
+          filters={isEditing ? undefined : filtersArray}
           onTransform={(e) => {
             const node = e.target as Konva.Text;
             const newWidth = node.width() * node.scaleX();

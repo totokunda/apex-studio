@@ -70,7 +70,7 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
   }, [points]);
 
   const handleClick = useCallback(
-    (e: KonvaEventObject<MouseEvent>) => {
+    (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
       if (!canInteract) return;
       e.cancelBubble = true;
       e.evt?.preventDefault?.();
