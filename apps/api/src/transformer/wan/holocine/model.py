@@ -1,11 +1,14 @@
-from flash_attn import flash_attn_varlen_func
+try:
+    from flash_attn import flash_attn_varlen_func
+except ImportError:
+    flash_attn_varlen_func = None
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
 from typing import Tuple, Optional
 from einops import rearrange
-from src.attention.functions import flash_attention_varlen
 from src.transformer.wan.holocine.camera import SimpleAdapter
 from einops import rearrange
 from typing import List, Sequence, Optional

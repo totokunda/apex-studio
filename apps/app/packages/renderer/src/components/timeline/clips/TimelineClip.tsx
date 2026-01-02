@@ -57,7 +57,6 @@ import {
   LuCheck as LuCheckIcon,
   LuPointer,
 } from "react-icons/lu";
-import { useManifestStore } from "@/lib/manifest/store";
 import { MdPhotoFilter as MdFilterIcon } from "react-icons/md";
 import { ManifestDocument } from "@/lib/manifest/api";
 import ModelClip from "./ModelClip";

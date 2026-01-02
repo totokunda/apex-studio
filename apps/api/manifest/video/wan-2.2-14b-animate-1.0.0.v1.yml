@@ -29,11 +29,13 @@ spec:
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   attention_types:
   - sdpa
   - flash
   - flash3
   - sage
+  - efficient_dot_product_attention
   loras:
   - source: Wan-AI/Wan2.2-Animate-14B/relighting_lora/adapter_model.safetensors
     scale: 1.0

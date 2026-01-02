@@ -1,4 +1,4 @@
-import { AnyClipProps, FilterClipProps } from "@/lib/types";
+import { FilterClipProps } from "@/lib/types";
 import { useControlsStore } from "@/lib/control";
 
 /**

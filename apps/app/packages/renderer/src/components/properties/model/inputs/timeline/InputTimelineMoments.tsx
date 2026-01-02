@@ -59,14 +59,15 @@ const TimelineMoments: React.FC<TimelineMomentsProps> = React.memo(
     const assetMaxZoomLevel = useAssetControlsStore((s) => s.maxZoomLevel);
     const assetMinZoomLevel = useAssetControlsStore((s) => s.minZoomLevel);
     const inputTimelineDuration = useInputControlsStore((s) =>
-      s.getTimelineDuration(inputId),
+      inputId ? s.getTimelineDuration(inputId) : ([0, 0] as [number, number]),
     );
-    const inputFps = useInputControlsStore((s) => s.getFps(inputId));
+    const inputFps = useInputControlsStore((s) => (inputId ? s.getFps(inputId) : 24));
     const inputZoomLevel = useInputControlsStore((s) =>
-      s.getZoomLevel(inputId),
+      inputId ? s.getZoomLevel(inputId) : 1,
     );
-    const inputMaxZoomLevel = useInputControlsStore((s) => s.maxZoomLevel);
-    const inputMinZoomLevel = useInputControlsStore((s) => s.minZoomLevel);
+    // Input timelines currently share the global zoom bounds.
+    const inputMaxZoomLevel = 10;
+    const inputMinZoomLevel = 1;
 
     const timelineDuration =
       mode === "asset" ? assetTimelineDuration : inputTimelineDuration;

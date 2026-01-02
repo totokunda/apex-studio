@@ -27,12 +27,14 @@ spec:
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   attention_types:
   - sdpa
   - flash
   - sage
   - flash3
   - flex-block-attn
+  - efficient_dot_product_attention
   components:
   - type: scheduler
     label: Scheduler

@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AnyClipProps, ImageClipProps, ModelClipProps, VideoClipProps } from "@/lib/types";
-import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
+import React, { useEffect, useMemo } from "react";
+import { ImageClipProps, ModelClipProps, VideoClipProps } from "@/lib/types";
+import { getMediaInfoCached } from "@/lib/media/utils";
 import VideoPreview from "./VideoPreview";
 import ImagePreview from "./ImagePreview";
 import { BaseClipApplicator } from "./apply/base";

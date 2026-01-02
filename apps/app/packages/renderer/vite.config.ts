@@ -5,8 +5,12 @@ import tsconfigPaths from "vite-tsconfig-paths";
 import path from "node:path";
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss(), tsconfigPaths()],
+  // When packaged, the renderer is loaded via `BrowserWindow.loadFile(...)` (file://...).
+  // Vite's default `base: "/"` would emit `/assets/...` URLs which break under file://.
+  // Use a relative base for production builds so CSS/JS load correctly from dist/.
+  base: mode === "development" ? "/" : "./",
   resolve: {
     alias: {
       "@app/export-renderer": path.resolve(

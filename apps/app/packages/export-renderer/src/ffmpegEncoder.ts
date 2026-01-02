@@ -32,7 +32,6 @@ export type FfmpegEncoderOptions = {
 export class FfmpegFrameEncoder implements FrameEncoder {
   private options: FfmpegEncoderOptions;
   private sessionId: string | null = null;
-  private outAbs: string | null = null;
 
   constructor(options: FfmpegEncoderOptions) {
     this.options = options;
@@ -46,7 +45,7 @@ export class FfmpegFrameEncoder implements FrameEncoder {
   }): Promise<void> {
     const { filename, format, codec, preset, crf, bitrate, resolution, alpha } =
       this.options;
-    const { sessionId, outAbs } = await exportVideoOpen({
+    const { sessionId } = await exportVideoOpen({
       filename,
       format,
       codec,
@@ -61,7 +60,6 @@ export class FfmpegFrameEncoder implements FrameEncoder {
       audioPath: opts.audioPath,
     });
     this.sessionId = sessionId;
-    this.outAbs = outAbs;
   }
 
   async addFrame(buffer: Uint8Array): Promise<void> {

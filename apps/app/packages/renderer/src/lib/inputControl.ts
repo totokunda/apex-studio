@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo } from "react";
+import React, { createContext, useContext } from "react";
 import { createStore, StoreApi } from "zustand/vanilla";
 import { useStore } from "zustand";
 import { ZoomLevel } from "./types";
