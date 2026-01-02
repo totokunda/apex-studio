@@ -7,13 +7,10 @@ import React, {
 } from "react";
 import {
   MediaInfo,
-  ImageClipProps,
-  MaskClipProps,
   PreprocessorClipProps,
   PreprocessorClipType,
-  VideoClipProps,
 } from "@/lib/types";
-import { getClipWidth, getTimelineHeightForClip, useClipStore } from "@/lib/clip";
+import { getClipWidth, useClipStore } from "@/lib/clip";
 import { Rect, Image } from "react-konva";
 import { Text } from "react-konva";
 import { Group } from "react-konva";
@@ -33,14 +30,10 @@ import {
 } from "@/lib/preprocessorHelpers";
 import {
   runPreprocessor,
-  usePreprocessorJob,
-  usePreprocessorJobActions,
-  getPreprocessorResult,
   cancelPreprocessor,
 } from "@/lib/preprocessor/api";
 import { toast } from "sonner";
-import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
-import { pathToFileURLString } from "@app/preload";
+import { getMediaInfoCached } from "@/lib/media/utils";
 import { generateTimelineSamples } from "@/lib/media/timeline";
 import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
 import { useWebGLFilters } from "@/components/preview/webgl-filters";
@@ -50,14 +43,6 @@ import { useWebGLMask } from "@/components/preview/mask/useWebGLMask";
 import { useViewportStore } from "@/lib/viewport";
 import { v4 as uuidv4 } from "uuid";
 const THUMBNAIL_TILE_SIZE = 36;
-
-const rangesOverlap = (aStart: number, aEnd: number, bStart: number, bEnd: number) => {
-  const as = Math.min(aStart, aEnd);
-  const ae = Math.max(aStart, aEnd);
-  const bs = Math.min(bStart, bEnd);
-  const be = Math.max(bStart, bEnd);
-  return Math.max(as, bs) < Math.min(ae, be);
-};
 
 interface PropsPreprocessorClip {
   preprocessor: PreprocessorClipProps;
@@ -150,7 +135,6 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
   const preprocessorEndFrame =
     preprocessor.endFrame ?? currentEndFrame - currentStartFrame;
   const textRef = useRef<Konva.Text>(null);
-  const addAsset = useClipStore((s) => s.addAsset);
 
   // Calculate parent clip dimensions
   const clipDuration = currentEndFrame - currentStartFrame;
@@ -197,20 +181,9 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     startFrame: currentStartFrame,
     endFrame: currentEndFrame,
   });
-  const didCreateNewClipRef = useRef(false);
   const [isCtrlPressed, setIsCtrlPressed] = useState(false);
   const previousMouseX = useRef<number | null>(null);
   const dragOffsetX = useRef<number>(0);
-  const preprocessorJobId = useMemo(
-    () =>
-      preprocessor.status === "running"
-        ? (preprocessor.activeJobId ?? null)
-        : null,
-    [preprocessor.activeJobId, preprocessor.status],
-  );
-  const { isProcessing, progress, result } =
-    usePreprocessorJob(preprocessorJobId);
-  const { clearJob, stopTracking } = usePreprocessorJobActions();
   const mediaInfoRef = useRef<MediaInfo | null>(
     getMediaInfoCached(preprocessor.assetId ?? "") ?? null,
   );
@@ -246,24 +219,19 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     clip: clip || undefined,
   });
 
+  const progress = useMemo(() => {
+    const p = (preprocessor as any)?.progress;
+    if (typeof p === "number" && isFinite(p)) return p;
+    return 0;
+  }, [preprocessor]);
+
   const showProgress = useMemo(() => {
-    if (preprocessor.status === "running") {
-      return true;
-    }
-    if (result !== null && result.result_path !== null) {
-      return false;
-    }
-    if (isProcessing || progress > 0) {
-      return true;
-    }
-    return false;
-  }, [
-    isProcessing,
-    progress,
-    result,
-    inputPreprocessor.id,
-    preprocessor.status,
-  ]);
+    // PreprocessorClip should only render based on clip-store state;
+    // tracking/updates are handled centrally by JobsMenu.
+    if (preprocessor.status === "running") return true;
+    if (preprocessor.status === "complete" || preprocessor.assetId) return false;
+    return progress > 0;
+  }, [preprocessor.status, preprocessor.assetId, progress]);
 
   const canResize = useMemo(() => {
     return preprocessor.status !== "running" && clip?.type === "video";
@@ -276,212 +244,8 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     return clipPosition.x + startSpanWidth;
   }, [clipPosition.x, preprocessorWidth, timelineDuration]);
 
-  const createNewClipFromResultAsset = useCallback(
-    async (resultAssetId: string, mediaInfo?: MediaInfo | null) => {
-      if (didCreateNewClipRef.current) return;
-
-      const state = useClipStore.getState();
-      const parentClip = state.getClipById(clipId);
-      if (!parentClip) return;
-      const parentTimelineId = parentClip.timelineId;
-      if (!parentTimelineId) return;
-
-      const asset = state.getAssetById(resultAssetId);
-      if (!asset?.path) return;
-
-      // Build absolute frame range aligned to the parent clip timeline position
-      const relStart = Math.max(0, Math.round(preprocessor.startFrame ?? 0));
-      const relEnd = Math.max(
-        relStart + 1,
-        Math.round(
-          preprocessor.endFrame ??
-            (parentClip.endFrame - parentClip.startFrame),
-        ),
-      );
-      const absStart = Math.max(
-        0,
-        Math.round((parentClip.startFrame ?? 0) + relStart),
-      );
-      const absEnd = Math.max(
-        absStart + 1,
-        Math.round((parentClip.startFrame ?? 0) + relEnd),
-      );
-
-      const chooseTimelineAbove = (
-        desiredType: "media",
-        startFrame: number,
-        endFrame: number,
-      ) => {
-        const timelines = state.timelines || [];
-        const clips = state.clips || [];
-        const parentIdx = timelines.findIndex(
-          (t) => t.timelineId === parentTimelineId,
-        );
-
-        // Find the closest compatible timeline above that has no overlap in the desired range.
-        for (let i = parentIdx - 1; i >= 0; i--) {
-          const t = timelines[i];
-          if (!t || t.type !== desiredType) continue;
-          const hasOverlap = clips.some((c) => {
-            if (!c || c.hidden) return false;
-            if (c.timelineId !== t.timelineId) return false;
-            return rangesOverlap(
-              startFrame,
-              endFrame,
-              c.startFrame ?? 0,
-              c.endFrame ?? 0,
-            );
-          });
-          if (!hasOverlap) return t.timelineId;
-        }
-
-        // Otherwise insert a new compatible timeline directly above the parent.
-        const newTimelineId = uuidv4();
-        const parentTimeline = timelines.find(
-          (t) => t.timelineId === parentTimelineId,
-        );
-        state.addTimeline(
-          {
-            timelineId: newTimelineId,
-            type: desiredType,
-            timelineHeight: getTimelineHeightForClip(desiredType),
-            timelineWidth:
-              parentTimeline?.timelineWidth ??
-              timelines[timelines.length - 1]?.timelineWidth ??
-              0,
-            timelinePadding:
-              parentTimeline?.timelinePadding ??
-              timelines[timelines.length - 1]?.timelinePadding ??
-              24,
-          },
-          parentIdx - 1,
-        );
-        return newTimelineId;
-      };
-
-      let mi = mediaInfo ?? (getMediaInfoCached(asset.path));
-      if (!mi) {
-        mi = await getMediaInfo(asset.path, { sourceDir: "apex-cache" });
-      }
-      const isVideo = !!mi?.video;
-
-      const timelineId = chooseTimelineAbove("media", absStart, absEnd);
-      const width = isVideo ? mi?.video?.displayWidth : mi?.image?.width;
-      const height = isVideo ? mi?.video?.displayHeight : mi?.image?.height;
-      const newClipId = uuidv4();
-      const base = {
-        clipId: newClipId,
-        timelineId,
-        startFrame: absStart,
-        endFrame: absEnd,
-        trimStart: 0,
-        trimEnd: 0,
-        mediaWidth: width,
-        mediaHeight: height,
-        assetId: resultAssetId,
-        assetIdHistory: [resultAssetId],
-        preprocessors: [] as PreprocessorClipProps[],
-        masks: [] as MaskClipProps[],
-        transform: clip?.transform ?? undefined,
-        originalTransform: clip?.originalTransform ?? undefined,
-      };
-
-      const newClip: VideoClipProps | ImageClipProps = isVideo
-        ? ({
-            ...base,
-            type: "video",
-          } as VideoClipProps)
-        : ({
-            ...base,
-            type: "image",
-          } as ImageClipProps);
-
-      // Important ordering: add the clip first so the asset won't be pruned
-      // when the preprocessor is removed from the parent clip.
-      didCreateNewClipRef.current = true;
-      state.addClip(newClip);
-      state.removePreprocessorFromClip(clipId, preprocessor.id);
-    },
-    [clipId, preprocessor.id, preprocessor.startFrame, preprocessor.endFrame, preprocessor.createNewClip],
-  );
-
-  useEffect(() => {
-    if (result?.result_path) {
-      const resultPath = result.result_path;
-      // convert to file url
-      const fileUrl = pathToFileURLString(resultPath);
-      const asset = addAsset({ path: fileUrl });
-      getMediaInfo(fileUrl, { sourceDir: "apex-cache" })
-        .then((mediaInfo) => {
-          mediaInfoRef.current = mediaInfo;
-          // If createNewClip is enabled (default), create a new clip from the result
-          // and remove the preprocessor WITHOUT attaching the result asset to the parent clip.
-          if (preprocessor.createNewClip !== false) {
-            createNewClipFromResultAsset(asset.id, mediaInfo);
-            return;
-          }
-          // Otherwise, attach the result to the preprocessor as before.
-          updatePreprocessor(clipId, preprocessor.id, {
-            assetId: asset.id,
-            status: "complete",
-          });
-        })
-        .catch(() => {
-          updatePreprocessor(clipId, preprocessor.id, {
-            status: "failed",
-          });
-        });
-    }
-  }, [result]);
-
-  // Fallback mechanism: if progress reaches 100% but result doesn't come through, manually fetch it
-  useEffect(() => {
-    if (preprocessor.status !== "running" || progress < 99.9) return;
-
-    const timeoutId = setTimeout(async () => {
-      // Check if we still don't have a result after waiting
-      if (!result?.result_path && preprocessor.status === "running") {
-        try {
-          const response = await getPreprocessorResult(
-            preprocessor.activeJobId || preprocessor.id,
-          );
-          if (response.success && response.data?.result_path) {
-            const resultPath = response.data.result_path;
-            const fileUrl = pathToFileURLString(resultPath);
-            const mediaInfo = await getMediaInfo(fileUrl, {
-              sourceDir: "apex-cache",
-            });
-
-            mediaInfoRef.current = mediaInfo;
-            const asset = addAsset({ path: fileUrl });
-            if (preprocessor.createNewClip !== false) {
-              await createNewClipFromResultAsset(asset.id, mediaInfo as any);
-            } else {
-              updatePreprocessor(clipId, preprocessor.id, {
-                assetId: asset.id,
-                status: "complete",
-              });
-            }
-          } else if (response.data?.status === "failed") {
-            updatePreprocessor(clipId, preprocessor.id, {
-              status: "failed",
-            });
-          }
-        } catch (error) {
-          console.error("Failed to fetch preprocessor result:", error);
-        }
-      }
-    }, 5000); // Wait 8 seconds after reaching 100% before trying to fetch
-
-    return () => clearTimeout(timeoutId);
-  }, [
-    preprocessor.status,
-    progress,
-    result,
-    preprocessor.id,
-    clipId,
-    updatePreprocessor,
-  ]);
+  // Result application + clip creation now happens in JobsMenu via
+  // `use-preprocessor-job-clip-sync`. PreprocessorClip renders state only.
 
   useEffect(() => {
     mediaInfoRef.current = getMediaInfoCached(preprocessor.assetId ?? "") ?? null;
@@ -1467,11 +1231,6 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     const clip = getClipFromPreprocessorId(preprocessor.id);
     if (!clip || !clip.assetId) return;
 
-    // Clear any existing job data for previous active job
-    if (preprocessor.activeJobId) {
-      clearJob(preprocessor.activeJobId);
-    }
-
     // If backend is remote and src is local-like, inform user about upload delay
     try {
       const { getBackendIsRemote, getFileShouldUpload } =
@@ -1514,6 +1273,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     updatePreprocessor(clipId, preprocessor.id, {
       status: "running",
       activeJobId: newJobId,
+      progress: 0,
       jobIds: [...(preprocessor.jobIds || []), newJobId],
     });
 
@@ -1544,7 +1304,6 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     updatePreprocessor,
     getClipFromPreprocessorId,
     preprocessor.status,
-    clearJob,
     fps,
     preprocessor.id,
     preprocessor.startFrame,
@@ -1556,18 +1315,17 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     if (preprocessor.status !== "running") return;
     const jobId = preprocessor.activeJobId || preprocessor.id;
 
-    // Stop tracking the job and clear it
-    try {
-      await cancelPreprocessor(jobId);
-    } catch {}
-    await stopTracking(jobId);
-    clearJob(jobId);
-
-    // Update preprocessor status to idle and clear active job id
+    // Optimistically reset UI immediately; backend cancellation can take a moment.
     updatePreprocessor(clipId, preprocessor.id, {
       status: undefined,
       activeJobId: undefined,
+      progress: 0,
     });
+
+    // Cancel the job; tracking/updates are handled by JobsMenu.
+    try {
+      await cancelPreprocessor(jobId);
+    } catch {}
 
     toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
   }, [
@@ -1575,8 +1333,6 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     preprocessor.activeJobId,
     preprocessor.id,
     preprocessor.preprocessor.name,
-    stopTracking,
-    clearJob,
     updatePreprocessor,
     clipId,
   ]);

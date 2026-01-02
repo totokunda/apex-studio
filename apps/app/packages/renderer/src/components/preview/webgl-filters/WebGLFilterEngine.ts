@@ -6,7 +6,6 @@
 export class WebGLFilterEngine {
   private gl: WebGLRenderingContext | null = null;
   private canvas: HTMLCanvasElement;
-  private program: WebGLProgram | null = null;
   private frameBuffer: WebGLFramebuffer | null = null;
   private tempTextures: WebGLTexture[] = [];
   private vertexBuffer: WebGLBuffer | null = null;

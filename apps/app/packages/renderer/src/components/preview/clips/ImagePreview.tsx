@@ -15,7 +15,7 @@ import { useViewportStore } from "@/lib/viewport";
 // (useClipStore already imported above)
 import { useWebGLFilters } from "@/components/preview/webgl-filters";
 import { BaseClipApplicator } from "./apply/base";
-import { useClipStore, getLocalFrame } from "@/lib/clip";
+import { useClipStore } from "@/lib/clip";
 import { useWebGLMask } from "../mask/useWebGLMask";
 import { useInputControlsStore } from "@/lib/inputControl";
 

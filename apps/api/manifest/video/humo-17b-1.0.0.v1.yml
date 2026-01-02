@@ -47,11 +47,13 @@ spec:
   - flash
   - flash3
   - sage
+  - efficient_dot_product_attention
   compute_requirements:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
     - cuda
     - cpu
+    - metal
   components:
   - type: scheduler
     label: Scheduler

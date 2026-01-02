@@ -1,6 +1,4 @@
 import {
-  createApplicatorFromClip,
-  getApplicableClips,
   type AnyClipProps,
   type TimelineLike,
   type ClipType,
@@ -320,7 +318,6 @@ export interface PrepareExportInput {
 function flattenSelection(
   selection: AnyClipProps[],
   allClips: AnyClipProps[],
-  timelines: TimelineLike[],
   includeHiddenChildrenInGroups: boolean,
 ): AnyClipProps[] {
   const byId = new Map(allClips.map((c) => [c.clipId, c] as const));
@@ -360,7 +357,7 @@ export function prepareExportClips(input: PrepareExportInput): ExportClip[] {
       : clips;
 
   // Build ungrouped view (content + applicators), ignoring group containers entirely
-  const { content: universeContent, applicators } = buildUngroupedView(
+  const { applicators } = buildUngroupedView(
     universe,
     timelines,
     includeHiddenChildrenInGroups,
@@ -370,7 +367,6 @@ export function prepareExportClips(input: PrepareExportInput): ExportClip[] {
   const targetContent = flattenSelection(
     clips,
     universe,
-    timelines,
     includeHiddenChildrenInGroups,
   ).filter(
     (c) => isRenderableContent(c) && !isTimelineHidden(timelines, c.timelineId),

@@ -22,8 +22,15 @@ spec:
   engine: flux2
   model_type: ti2i
   engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.0
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
   attention_types:
   - sdpa
+  - efficient_dot_product_attention
   loras:
     - name: Flux Dev 2 Turbo LORA
       label: Flux Dev 2 Turbo LORA

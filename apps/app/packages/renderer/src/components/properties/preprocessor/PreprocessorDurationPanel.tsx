@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import { useClipStore } from "@/lib/clip";
 import Input from "../Input";
 import { validatePreprocessorFrames } from "@/lib/preprocessorHelpers";
-import { PreprocessorClipType, PreprocessorClipProps } from "@/lib/types";
+import { PreprocessorClipType } from "@/lib/types";
 
 interface PreprocessorDurationPanelProps {
   preprocessorId: string;
