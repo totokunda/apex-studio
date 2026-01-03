@@ -210,7 +210,6 @@ class DwposeNlfDetector(DwposeDetector):
         
         model_state_dict = load_file(pretrained_nlf_safetensors_model_path)
         multimodel.load_state_dict(model_state_dict)
-        multimodel = multimodel.cuda()
         multimodel.crop_model.backbone.half()
         multimodel.crop_model.heatmap_head.layer.half()
 
@@ -499,7 +498,7 @@ class DwposeNlfDetector(DwposeDetector):
         bg_mode, bg_color = _parse_background(bg_arg, kwargs.get("background_color", None))
 
         # NLF batching params
-        batch_size = int(kwargs.get("batch_size", 64))
+        batch_size = int(kwargs.get("batch_size", 8))
         render_batch_size = int(kwargs.get("render_batch_size", 8))
 
         frame_records: Dict[int, Dict[str, Any]] = {}
@@ -610,12 +609,6 @@ class DwposeNlfDetector(DwposeDetector):
                         detected_map, frame_records[fidx]["target_size"]
                     )
 
-                if progress_callback is not None:
-                    # Progress by yielded frames (matches the generator contract)
-                    progress_callback(
-                        next_frame_to_yield + 1,
-                        total_frames if total_frames else next_frame_to_yield + 1,
-                    )
                 yield detected_map
                 next_frame_to_yield += 1
 
@@ -684,11 +677,13 @@ class DwposeNlfDetector(DwposeDetector):
                             _try_enqueue_ready_frames()
                             # Render queue flush (yield what we can)
                             yield from _flush_render_queue(force=False)
+                    if progress_callback is not None:
+                        progress_callback(frame_idx + 1, total_frames if total_frames else frame_idx + 1)
 
                 # After ingesting this frame, try to enqueue any completed frames and render in batches
                 _try_enqueue_ready_frames()
                 yield from _flush_render_queue(force=False)
-
+                
                 frame_idx += 1
 
             # Final flushes
@@ -696,8 +691,12 @@ class DwposeNlfDetector(DwposeDetector):
             _try_enqueue_ready_frames()
             yield from _flush_render_queue(force=True)
 
+        # Send final completion update (match BasePreprocessor.process_video signature)
         if progress_callback is not None:
-            progress_callback(next_frame_to_yield, next_frame_to_yield)
+            progress_callback(
+                next_frame_to_yield,
+                total_frames if total_frames else next_frame_to_yield,
+            )
         
         
     @torch.inference_mode()

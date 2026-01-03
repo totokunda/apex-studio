@@ -6,7 +6,7 @@ import type { AppInitConfig } from "../AppInitConfig.js";
 class WindowManager implements AppModule {
   readonly #preload: { path: string };
   readonly #renderer: { path: string } | URL;
-  readonly #openDevTools;
+  readonly #openDevTools: boolean;
   #launcherWindow: BrowserWindow | null = null;
   #mainWindow: BrowserWindow | null = null;
   #isQuitting = false;
@@ -20,7 +20,7 @@ class WindowManager implements AppModule {
   }) {
     this.#preload = initConfig.preload;
     this.#renderer = initConfig.renderer;
-    this.#openDevTools = openDevTools;
+    this.#openDevTools = Boolean(openDevTools);
   }
 
   async enable({ app }: ModuleContext): Promise<void> {
@@ -57,9 +57,6 @@ class WindowManager implements AppModule {
     browserWindow.once("ready-to-show", () => {
       if (browserWindow.isDestroyed()) return;
       browserWindow.show();
-      if (this.#openDevTools) {
-        browserWindow.webContents.openDevTools();
-      }
       browserWindow.focus();
     });
   }
@@ -99,6 +96,13 @@ class WindowManager implements AppModule {
     });
     this.#wireReadyToShow(browserWindow);
     await this.#loadRenderer(browserWindow, "launcher");
+    if (this.#openDevTools) {
+      try {
+        browserWindow.webContents.openDevTools({ mode: "detach" });
+      } catch {
+        // ignore
+      }
+    }
 
     browserWindow.on("closed", () => {
       if (this.#launcherWindow === browserWindow) {
@@ -124,6 +128,13 @@ class WindowManager implements AppModule {
     });
     this.#wireReadyToShow(browserWindow);
     await this.#loadRenderer(browserWindow, "main");
+    if (this.#openDevTools) {
+      try {
+        browserWindow.webContents.openDevTools({ mode: "detach" });
+      } catch {
+        // ignore
+      }
+    }
 
     // When the main window closes (user clicks X), return to the launcher.
     browserWindow.on("closed", () => {
@@ -154,10 +165,6 @@ class WindowManager implements AppModule {
 
     window?.show();
 
-    if (this.#openDevTools) {
-      window?.webContents.openDevTools();
-    }
-
     window.focus();
 
     return window;
@@ -179,9 +186,6 @@ class WindowManager implements AppModule {
     }
 
     window?.show();
-    if (this.#openDevTools) {
-      window?.webContents.openDevTools();
-    }
     window.focus();
     return window;
   }

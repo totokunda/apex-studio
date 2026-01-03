@@ -512,7 +512,12 @@ class MultipersonNLF(torch.nn.Module):
         poses3d_flat_submean, final_weights = weighted_geometric_median(
             poses3d_flat_submean, uncert_flat**-1.5, dim=-3, n_iter=10, eps=50.0
         )
-        poses3d_flat = poses3d_flat_submean.double() + mean.squeeze(1)
+        # MPS doesn't support double precision, so use float32 for MPS devices
+        is_mps = poses3d_flat.device.type == 'mps'
+        if is_mps:
+            poses3d_flat = poses3d_flat_submean.float() + mean.squeeze(1).float()
+        else:
+            poses3d_flat = poses3d_flat_submean.double() + mean.squeeze(1).double()
 
         uncert_flat = weighted_mean(uncert_flat, final_weights, dim=-2)
 
@@ -540,8 +545,14 @@ class MultipersonNLF(torch.nn.Module):
 
         n_box_per_image = torch.tensor(n_box_per_image_list, device=device)
         # Convert to world coordinates
+        # MPS doesn't support double precision, so use float32 for MPS devices
+        is_mps = device.type == 'mps'
+        if is_mps:
+            extrinsic_matrix_dtype = extrinsic_matrix.float()
+        else:
+            extrinsic_matrix_dtype = extrinsic_matrix.double()
         inv_extrinsic_matrix = torch.repeat_interleave(
-            torch.linalg.inv(extrinsic_matrix.double()), n_box_per_image, dim=0
+            torch.linalg.inv(extrinsic_matrix_dtype), n_box_per_image, dim=0
         )
         poses3d_flat = torch.einsum(
             'bnk,bjk->bnj',
@@ -685,12 +696,19 @@ class MultipersonNLF(torch.nn.Module):
         poses_flat, uncert_flat = self.crop_model.predict_multi_same_weights(
             crops_flat, new_intrinsic_matrix_flat, weights, aug_should_flip_flat
         )
-        poses_flat = poses_flat.double()
+        # MPS doesn't support double precision, so use float32 for MPS devices
+        is_mps = poses_flat.device.type == 'mps'
+        if is_mps:
+            poses_flat = poses_flat.float()
+            R_dtype = R.float()
+        else:
+            poses_flat = poses_flat.double()
+            R_dtype = R.double()
         n_joints = poses_flat.shape[-2]
 
         poses = torch.reshape(poses_flat, [-1, n_cases, n_joints, 3])
         uncert = torch.reshape(uncert_flat, [-1, n_cases, n_joints])
-        poses_orig_camspace = poses @ R.double()
+        poses_orig_camspace = poses @ R_dtype
 
         # Transpose to [n_boxes, num_aug, ...]
         return poses_orig_camspace.transpose(0, 1), uncert.transpose(0, 1)

@@ -18,7 +18,6 @@ from contextlib import asynccontextmanager
 import asyncio
 from typing import Optional
 
-
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
 

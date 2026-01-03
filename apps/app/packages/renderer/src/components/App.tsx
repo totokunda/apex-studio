@@ -25,6 +25,7 @@ import { VideoDecoderManagerProvider } from "@/lib/media/VideoDecoderManagerCont
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/react-query/queryClient";
 import { useContextMenuStore } from "@/lib/context-menu";
+
 type ManifestWithType = ManifestDocument & {
   type: "model";
 };
@@ -33,7 +34,7 @@ const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useLayoutConfigStore((s) => s.layout);
   const { ghostInStage, clips} = useClipStore();
-  const projectsLoaded = useProjectsStore((s) => (s as any).projectsLoaded);
+  const projectsLoaded = useProjectsStore((s) => s.projectsLoaded);
   const activeProject = useProjectsStore((s) => s.getActiveProject());
   const [activeDragItem, setActiveDragItem] = useState<
     MediaItem | Preprocessor | ManifestWithType | null

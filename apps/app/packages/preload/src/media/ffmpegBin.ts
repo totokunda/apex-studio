@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 
@@ -29,6 +30,13 @@ function getDevStaticBinaryPath(cmd: "ffmpeg" | "ffprobe"): string | null {
   return typeof p === "string" && existsSync(p) ? p : null;
 }
 
+function getUserInstalledBinaryPath(cmd: "ffmpeg" | "ffprobe"): string | null {
+  // This mirrors the installer module's install location.
+  const exeName = process.platform === "win32" ? `${cmd}.exe` : cmd;
+  const p = join(homedir(), ".apex-studio", "ffmpeg", exeName);
+  return existsSync(p) ? p : null;
+}
+
 export function resolveFfmpegCommand(cmd: "ffmpeg" | "ffprobe"): string {
   // Explicit override (useful for debugging / custom installs)
   const override =
@@ -36,6 +44,10 @@ export function resolveFfmpegCommand(cmd: "ffmpeg" | "ffprobe"): string {
       ? process.env.APEX_FFMPEG_PATH || process.env.FFMPEG_PATH
       : process.env.APEX_FFPROBE_PATH || process.env.FFPROBE_PATH;
   if (override && existsSync(override)) return override;
+
+  // User-installed via our installer module.
+  const userInstalled = getUserInstalledBinaryPath(cmd);
+  if (userInstalled) return userInstalled;
 
   // Packaged build: prefer the bundled binary in resources.
   const bundled = getBundledBinaryPath(cmd);

@@ -2,6 +2,7 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -21,6 +22,7 @@ import { cn } from "@/lib/utils";
 import {
   PREPROCESSOR_QUERY_KEY,
   PREPROCESSORS_LIST_QUERY_KEY,
+  fetchPreprocessor,
   usePreprocessorQuery,
 } from "@/lib/preprocessor/queries";
 import { useQueryClient } from "@tanstack/react-query";
@@ -196,6 +198,7 @@ const PreprocessorDownloadSection: React.FC<{
 
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const didFinalizeRef = useRef(false);
 
   // Shared polling cache (also used by JobsMenu); when a download is active, ensure it keeps polling.
   const { data: polledJobs = [] } = useQuery<RayJobStatus[]>({
@@ -230,7 +233,20 @@ const PreprocessorDownloadSection: React.FC<{
   };
 
   const terminalStatuses = useMemo(
-    () => new Set(["complete", "completed", "cancelled", "canceled", "error", "failed"]),
+    () =>
+      new Set([
+        "complete",
+        "completed",
+        "cancelled",
+        "canceled",
+        "error",
+        "failed",
+        // Some backends report success with different terminal labels.
+        "succeeded",
+        "success",
+        "finished",
+        "done",
+      ]),
     [],
   );
 
@@ -248,31 +264,52 @@ const PreprocessorDownloadSection: React.FC<{
 
   const isDownloading = starting || (jobUpdates?.length ?? 0) > 0 || isJobActive;
 
-  // When we observe the job complete (via polling), refresh preprocessor queries.
-  useEffect(() => {
-    if (!jobId || !polledJob) return;
-    if (!terminalStatuses.has(polledStatus)) return;
-    
-    void (async () => {
+  const finalize = useCallback(async () => {
+      if (didFinalizeRef.current) return;
+      didFinalizeRef.current = true;
       try {
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: PREPROCESSOR_QUERY_KEY(preprocessorId) }),
-        ]);
+        // Force-refresh the preprocessor so the parent can flip to "Downloaded Files".
+        await queryClient.fetchQuery({
+          queryKey: PREPROCESSOR_QUERY_KEY(preprocessorId),
+          queryFn: () => fetchPreprocessor(preprocessorId),
+          staleTime: 0,
+        });
       } catch {}
       try {
         await onDownloaded();
       } catch {}
+      try {
+        if (jobId) removeJobUpdates(jobId);
+      } catch {}
+      try {
+        removeSourceToJobId(preprocessorId);
+      } catch {}
+      setLocalJobId(null);
       setStarting(false);
       setCancelling(false);
-    })();
+    },
+    [
+      jobId,
+      onDownloaded,
+      preprocessorId,
+      queryClient,
+      removeJobUpdates,
+      removeSourceToJobId,
+    ],
+  );
+
+  // When we observe the job complete (via polling), refresh preprocessor queries.
+  useEffect(() => {
+    if (!jobId || !polledJob) return;
+    if (!terminalStatuses.has(polledStatus)) return;
+
+    void finalize();
   }, [
     jobId,
     polledJob,
     polledStatus,
     terminalStatuses,
-    onDownloaded,
-    queryClient,
-    preprocessorId,
+    finalize,
   ]);
 
   const wsFilesByName = useMemo(() => {
@@ -349,6 +386,56 @@ const PreprocessorDownloadSection: React.FC<{
   };
 
   const downloadFiles = unifiedDownloadWsUpdatesToFiles(jobUpdates) as any[];
+
+  // Some environments may not reliably report the terminal Ray job in the polling list.
+  // As a fallback, if all per-file updates look terminal, finalize and refresh.
+  useEffect(() => {
+    if (!jobId) return;
+    if (!downloadFiles.length) return;
+    if (terminalStatuses.size === 0) return;
+
+    const allTerminal = downloadFiles.every((f) => {
+      const status = String(f?.status || "").toLowerCase();
+      if (status && terminalStatuses.has(status)) return true;
+      const p = typeof f?.progress === "number" ? f.progress : null;
+      if (typeof p === "number" && p >= 0.999) return true;
+      const d = typeof f?.downloadedBytes === "number" ? f.downloadedBytes : null;
+      const t = typeof f?.totalBytes === "number" ? f.totalBytes : null;
+      return typeof d === "number" && typeof t === "number" && t > 0 && d >= t;
+    });
+
+    if (allTerminal) {
+      void finalize();
+    }
+  }, [downloadFiles, finalize, jobId, terminalStatuses]);
+
+  // Ultimate fallback: while downloading, poll the preprocessor until it becomes downloaded.
+  useEffect(() => {
+    if (!jobId) return;
+    if (!isDownloading) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const latest = await queryClient.fetchQuery({
+          queryKey: PREPROCESSOR_QUERY_KEY(preprocessorId),
+          queryFn: () => fetchPreprocessor(preprocessorId),
+          staleTime: 0,
+        });
+        if (!cancelled && latest?.is_downloaded) {
+          await finalize();
+        }
+      } catch {}
+    };
+
+    // Start immediately, then repeat.
+    void tick();
+    const id = window.setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [fetchPreprocessor, finalize, isDownloading, jobId, preprocessorId, queryClient]);
 
   return (
     <div className="mt-6">

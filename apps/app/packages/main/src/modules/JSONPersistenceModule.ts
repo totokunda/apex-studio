@@ -55,7 +55,10 @@ function ensureProjectJson(
     typeof metaIn.createdAt === "number" && Number.isFinite(metaIn.createdAt)
       ? metaIn.createdAt
       : now;
-  const lastModified = now;
+  const lastModified =
+    typeof metaIn.lastModified === "number" && Number.isFinite(metaIn.lastModified)
+      ? metaIn.lastModified
+      : now;
 
   const settings = {
     fps:
@@ -125,6 +128,7 @@ export class JSONPersistenceModule implements AppModule {
 
     try {
       await fs.mkdir(rootDir, { recursive: true });
+      await fs.mkdir(path.join(rootDir, "covers"), { recursive: true });
     } catch {
       // ignore mkdir errors; write will surface any real issues
     }
@@ -143,6 +147,10 @@ export class JSONPersistenceModule implements AppModule {
 
   private getProjectPath(projectId: number): string {
     return path.join(this.projectsDir, `project-${projectId}.json`);
+  }
+
+  private getProjectCoverPath(projectId: number): string {
+    return path.join(this.projectsDir, "covers", `project-${projectId}.jpg`);
   }
 
   private get localRootDir(): string {
@@ -890,6 +898,7 @@ export class JSONPersistenceModule implements AppModule {
             id,
             this.#appVersion ?? undefined,
           );
+          baseDoc.meta.lastModified = Date.now();
           const filePath = this.getProjectPath(id);
 
           await fs.writeFile(
@@ -968,6 +977,57 @@ export class JSONPersistenceModule implements AppModule {
       },
     );
 
+    ipcMain.handle(
+      "projects:save-cover",
+      async (
+        _event,
+        projectId: number,
+        buffer: Uint8Array,
+      ): Promise<JsonResponse<{ path: string }>> => {
+        try {
+          const id = Number(projectId);
+          if (!Number.isInteger(id) || id <= 0) {
+            return { success: false, error: "Invalid project id" };
+          }
+          const coverPath = this.getProjectCoverPath(id);
+          await fs.writeFile(coverPath, buffer);
+          return { success: true, data: { path: coverPath } };
+        } catch (err) {
+          console.error("Failed to save project cover", err);
+          return { success: false, error: String(err) };
+        }
+      },
+    );
+
+    ipcMain.handle(
+      "projects:clear-cover",
+      async (
+        _event,
+        projectId: number,
+      ): Promise<JsonResponse<{ ok: true }>> => {
+        try {
+          const id = Number(projectId);
+          if (!Number.isInteger(id) || id <= 0) {
+            return { success: false, error: "Invalid project id" };
+          }
+          const coverPath = this.getProjectCoverPath(id);
+          try {
+            await fs.unlink(coverPath);
+          } catch (err: any) {
+            if (err && err.code === "ENOENT") {
+              // Already cleared
+            } else {
+              throw err;
+            }
+          }
+          return { success: true, data: { ok: true } };
+        } catch (err) {
+          console.error("Failed to clear project cover", err);
+          return { success: false, error: String(err) };
+        }
+      },
+    );
+
     // List projects using only lightweight metadata from JSON files.
     ipcMain.handle(
       "projects:list-json",
@@ -979,17 +1039,33 @@ export class JSONPersistenceModule implements AppModule {
             fps: number;
             folderUuid: string;
             aspectRatio?: { width: number; height: number; id: string };
+            createdAt?: number;
+            lastModified?: number;
+            coverPath?: string;
           }>
         >
       > => {
         try {
           const entries = await fs.readdir(this.projectsDir);
+          
+          const coversDir = path.join(this.projectsDir, "covers");
+          const existingCovers = new Set<string>();
+          try {
+            const coverFiles = await fs.readdir(coversDir);
+            for (const f of coverFiles) existingCovers.add(f);
+          } catch {
+            // ignore
+          }
+
           const projects: Array<{
             id: number;
             name: string;
             fps: number;
             folderUuid: string;
             aspectRatio?: { width: number; height: number; id: string };
+            createdAt?: number;
+            lastModified?: number;
+            coverPath?: string;
           }> = [];
 
           for (const entry of entries) {
@@ -1039,6 +1115,14 @@ export class JSONPersistenceModule implements AppModule {
               typeof doc.meta?.id === "string" && doc.meta.id.length > 0
                 ? doc.meta.id
                 : `project-${id}`;
+            
+            const createdAt = doc.meta.createdAt;
+            const lastModified = doc.meta.lastModified;
+
+            const coverFilename = `project-${id}.jpg`;
+            const coverPath = existingCovers.has(coverFilename)
+              ? path.join(coversDir, coverFilename)
+              : undefined;
 
             projects.push({
               id,
@@ -1046,11 +1130,14 @@ export class JSONPersistenceModule implements AppModule {
               fps,
               folderUuid,
               aspectRatio,
+              createdAt,
+              lastModified,
+              coverPath,
             });
           }
 
-          // Sort projects by id for deterministic order
-          projects.sort((a, b) => a.id - b.id);
+          // Sort by last modified descending (newest first)
+          projects.sort((a, b) => (b.lastModified ?? 0) - (a.lastModified ?? 0));
 
           return { success: true, data: projects };
         } catch (error) {

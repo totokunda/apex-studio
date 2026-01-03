@@ -14,7 +14,8 @@ import { settingsModule } from "./modules/SettingsModule.js";
 import { jsonPersistenceModule } from "./modules/JSONPersistenceModule.js";
 import { appDirProtocol } from "./modules/AppDirProtocol.js";
 import { pythonProcess } from "./modules/PythonProcess.js";
-import { uvTool } from "./modules/UvTool.js";
+import { remoteVersioningModule } from "./modules/RemoteVersioningModule.js";
+import { installerModule } from "./modules/InstallerModule.js";
 
 export async function initApp(initConfig: AppInitConfig) {
   // Consider "dev mode" only when the renderer is served from an http(s) dev server.
@@ -32,8 +33,10 @@ export async function initApp(initConfig: AppInitConfig) {
     .init(appDirProtocol())
     // Python process management - starts bundled API in production
     .init(pythonProcess({ devMode: isDev, autoStart: !isDev }))
-    // uv tool (bundled in production) for environment installation/bootstrapping
-    .init(uvTool())
+    // Remote server bundle version discovery (GitHub releases)
+    .init(remoteVersioningModule())
+    // Local installer: extract server bundles + ensure ffmpeg is available
+    .init(installerModule())
     // Core backend IPC and persistence should be ready before any renderer windows load
     .init(apexApi())
     .init(jsonPersistenceModule())

@@ -19,6 +19,7 @@ import { useControlsStore } from "@/lib/control";
 import RoundedRegularPolygon from "./custom/RoundedRegularPolygon";
 import { BaseClipApplicator } from "./apply/base";
 import ApplicatorFilter from "./custom/ApplicatorFilter";
+import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 
 //@ts-ignore
 Konva.Filters.Applicator = ApplicatorFilter;
@@ -675,6 +676,12 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
 
     const sides = (clip as PolygonClipProps)?.sides ?? 3;
 
+    const safeCornerRadius = sanitizeCornerRadius(
+      clipTransform?.cornerRadius,
+      width,
+      height,
+    );
+
     const baseProps = {
       ref: shapeRef,
       scaleX,
@@ -719,7 +726,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
             {...cornerProps}
             width={width}
             height={height}
-            cornerRadius={clipTransform?.cornerRadius ?? 0}
+            cornerRadius={safeCornerRadius}
             applicators={applicators}
             filters={filtersArray}
           />
@@ -746,7 +753,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
             {...centerProps}
             sides={sides}
             radius={radius}
-            cornerRadius={clipTransform?.cornerRadius ?? 0}
+            cornerRadius={safeCornerRadius as number}
             applicators={applicators}
             filters={filtersArray}
           />
@@ -784,7 +791,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
             {...cornerProps}
             width={width}
             height={height}
-            cornerRadius={clipTransform?.cornerRadius ?? 0}
+            cornerRadius={safeCornerRadius}
             applicators={applicators}
             filters={filtersArray}
           />
