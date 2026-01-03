@@ -18,6 +18,7 @@ import { BaseClipApplicator } from "./apply/base";
 import { useClipStore } from "@/lib/clip";
 import { useWebGLMask } from "../mask/useWebGLMask";
 import { useInputControlsStore } from "@/lib/inputControl";
+import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 
 const ImagePreview: React.FC<
   ImageClipProps & {
@@ -969,6 +970,26 @@ const ImagePreview: React.FC<
     };
   }, [clipTransform?.crop, displayWidth, displayHeight]);
 
+  const nodeWidth = useMemo(
+    () =>
+      clipTransform?.width && clipTransform.width > 0
+        ? clipTransform.width
+        : displayWidth || 1,
+    [clipTransform?.width, displayWidth],
+  );
+  const nodeHeight = useMemo(
+    () =>
+      clipTransform?.height && clipTransform.height > 0
+        ? clipTransform.height
+        : displayHeight || 1,
+    [clipTransform?.height, displayHeight],
+  );
+  const safeCornerRadius = useMemo(
+    () =>
+      sanitizeCornerRadius(clipTransform?.cornerRadius, nodeWidth, nodeHeight),
+    [clipTransform?.cornerRadius, nodeWidth, nodeHeight],
+  );
+
   // Only mount Konva nodes when the clip is active for the current focus frame.
   if (!isInFrame) {
     return null;
@@ -986,21 +1007,13 @@ const ImagePreview: React.FC<
         <Image
           draggable={tool === "pointer" && !isTransforming && !inputMode}
           ref={imageRef}
-          cornerRadius={clipTransform?.cornerRadius ?? 0}
+          cornerRadius={safeCornerRadius}
           opacity={(clipTransform?.opacity ?? 100) / 100}
           image={canvasRef.current || undefined}
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}
-          width={
-            clipTransform?.width && clipTransform.width > 0
-              ? clipTransform.width
-              : displayWidth || 1
-          }
-          height={
-            clipTransform?.height && clipTransform.height > 0
-              ? clipTransform.height
-              : displayHeight || 1
-          }
+          width={nodeWidth}
+          height={nodeHeight}
           scaleX={clipTransform?.scaleX ?? 1}
           scaleY={clipTransform?.scaleY ?? 1}
           rotation={clipTransform?.rotation ?? 0}

@@ -212,10 +212,34 @@ class PersonDetector(nn.Module):
                 .astype(np_dtype, copy=False)
             )
 
-            outputs = self._ort_session.run(
-                self._ort_output_names, {self._ort_input_name: ort_input}
-            )
-            preds = torch.from_numpy(outputs[0]).to(device=device)
+            # Ensure NCHW with a batch dimension.
+            if ort_input.ndim == 3:
+                ort_input = ort_input[None, ...]
+
+            # Some exported YOLO ONNX models are fixed to batch=1.
+            # If so, run per-sample and concatenate to support our upstream batching.
+            expected_batch = self._ort_session.get_inputs()[0].shape[0]
+            if (
+                isinstance(expected_batch, int)
+                and expected_batch == 1
+                and ort_input.ndim == 4
+                and ort_input.shape[0] != 1
+            ):
+                outs = []
+                for i in range(int(ort_input.shape[0])):
+                    out_i = self._ort_session.run(
+                        self._ort_output_names,
+                        {self._ort_input_name: ort_input[i : i + 1]},
+                    )
+                    outs.append(out_i[0])
+                outputs0 = np.concatenate(outs, axis=0) if outs else ort_input[:0]
+            else:
+                outputs = self._ort_session.run(
+                    self._ort_output_names, {self._ort_input_name: ort_input}
+                )
+                outputs0 = outputs[0]
+
+            preds = torch.from_numpy(outputs0).to(device=device)
         else:
             preds = self._ts_model(images.to(dtype=torch.float16))
 
@@ -295,8 +319,9 @@ def resize_and_pad(images: torch.Tensor, input_size: int):
     w = float(images.shape[3])
     max_side = max(h, w)
     factor = float(input_size) / max_side
-    target_w = int(factor * w)
-    target_h = int(factor * h)
+    # Guard against extremely small images rounding down to 0 which would crash downstream
+    target_w = max(1, int(factor * w))
+    target_h = max(1, int(factor * h))
     y_factor = h / float(target_h)
     x_factor = w / float(target_w)
     pad_h = input_size - target_h
@@ -306,12 +331,39 @@ def resize_and_pad(images: torch.Tensor, input_size: int):
     half_pad_h_float = float(half_pad_h)
     half_pad_w_float = float(half_pad_w)
 
-    images = F.interpolate(
-        images,
-        (target_h, target_w),
-        mode='bilinear' if factor > 1 else 'area',
-        align_corners=False if factor > 1 else None,
-    )
+    # NOTE: On Apple Silicon (MPS), `mode="area"` can hit an unimplemented adaptive avg pool
+    # path unless input sizes are divisible by output sizes. Use bilinear downsampling instead.
+    if factor > 1:
+        images = F.interpolate(
+            images,
+            (target_h, target_w),
+            mode="bilinear",
+            align_corners=False,
+        )
+    else:
+        if images.device.type == "mps":
+            # Prefer antialiasing if available in this torch version.
+            try:
+                images = F.interpolate(
+                    images,
+                    (target_h, target_w),
+                    mode="bilinear",
+                    align_corners=False,
+                    antialias=True,
+                )
+            except TypeError:
+                images = F.interpolate(
+                    images,
+                    (target_h, target_w),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+        else:
+            images = F.interpolate(
+                images,
+                (target_h, target_w),
+                mode="area",
+            )
     # images = F.interpolate(
     #    images, (target_h, target_w), antialias=factor < 1)
     images **= 1 / 2.2

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   LuChevronDown,
   LuChevronUp,
@@ -9,7 +9,7 @@ import {
   LuTrash2,
 } from "react-icons/lu";
 import { useProjectsStore, type ProjectSettings } from "@/lib/projects";
-import { createProject, deleteProject } from "@app/preload";
+import { clearProjectCover, createProject, deleteProject } from "@app/preload";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -224,6 +224,9 @@ const TopBar: React.FC<TopBarProps> = () => {
       setIsDeletingProject(false);
     }
   };
+
+
+
   const handleExport = async (settings: ExportSettings) => {
     const outpath = `${settings.path}/${settings.name}.${settings.format}`;
 
@@ -348,6 +351,24 @@ const TopBar: React.FC<TopBarProps> = () => {
   });
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    const updateCover = async () => {
+      if (clips.length === 0 && activeProjectId && activeProject?.coverPath) {
+        try {
+          await clearProjectCover(activeProjectId);
+        } catch {
+          // ignore; best-effort
+        }
+        await updateProject(activeProjectId, {
+          coverPath: undefined,
+          lastModified: Date.now(),
+        });
+      }
+    };
+    
+    void updateCover();
+  }, [clips, activeProjectId, activeProject?.coverPath]);
 
   const canExport = useMemo(() => {
     if (!clips || clips.length === 0) return false;

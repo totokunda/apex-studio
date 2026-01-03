@@ -5,22 +5,6 @@ const { join } = require("node:path");
 const pkg = require("./package.json");
 const path = require("node:path");
 
-function resolveOptionalFfmpegBinaries() {
-  // These resolve to *host* platform binaries (build-machine). This is ideal when you
-  // build on each target OS (mac on mac, win on win, linux on linux).
-  // If you cross-build, you must vendor per-platform ffmpeg binaries yourself instead.
-  const out = { ffmpegPath: null, ffprobePath: null };
-  try {
-    const p = require("ffmpeg-static");
-    if (typeof p === "string") out.ffmpegPath = p;
-  } catch {}
-  try {
-    const mod = require("ffprobe-static");
-    const p = typeof mod === "string" ? mod : mod && mod.path;
-    if (typeof p === "string") out.ffprobePath = p;
-  } catch {}
-  return out;
-}
 
 /** @type {import("electron-builder").Configuration} */
 module.exports = {
@@ -36,11 +20,8 @@ module.exports = {
 
   // Extra binaries shipped alongside the app (available at runtime under `process.resourcesPath`)
   // - python-api: optional (bundled by separate build step)
-  // - uv: used to install/manage Python environments on first-run
   extraResources: (() => {
     const out = [];
-    const uvDir = path.join(__dirname, "buildResources", "uv");
-    if (existsSync(uvDir)) out.push({ from: uvDir, to: "uv" });
     const pythonApiDir = path.join(__dirname, "buildResources", "python-api");
     if (existsSync(pythonApiDir)) out.push({ from: pythonApiDir, to: "python-api" });
     return out;

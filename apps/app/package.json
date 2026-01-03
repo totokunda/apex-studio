@@ -35,16 +35,14 @@
     "publish:draft": "node scripts/build-app.js --publish --draft",
     "test": "npx playwright test ./tests/e2e.spec.ts",
     "start": "node packages/dev-mode.js",
-    "db:push": "npm rebuild better-sqlite3 && npx drizzle-kit push; npm run build --workspace @app/preload && npm run rebuild && npm run postinstall",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "electron-builder install-app-deps",
     "typecheck": "npm run typecheck -ws --if-present"
   },
   "devDependencies": {
     "@npmcli/map-workspaces": "5.0.0",
     "@playwright/test": "1.55.0",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "24.5.2",
+    "@types/tar-stream": "^3.1.4",
     "baseline-browser-mapping": "^2.8.32",
     "create-vite": "7.1.2",
     "drizzle-kit": "^0.31.7",
