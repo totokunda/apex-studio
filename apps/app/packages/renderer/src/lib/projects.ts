@@ -7,6 +7,9 @@ export interface ProjectSettings {
   fps: number;
   folderUuid: string;
   aspectRatio: { width: number; height: number; id: string };
+  createdAt?: number;
+  lastModified?: number;
+  coverPath?: string;
 }
 
 interface ProjectsStoreState {
@@ -18,7 +21,7 @@ interface ProjectsStoreState {
   addProject: (project: ProjectSettings) => void;
   updateProject: (
     id: string | number,
-    payload: Partial<Pick<ProjectSettings, "name" | "fps">>,
+    payload: Partial<ProjectSettings>,
   ) => void;
   removeProject: (id: string | number) => void;
   setActiveProjectId: (id: string | number) => void;

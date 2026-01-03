@@ -14,6 +14,7 @@ import { useViewportStore } from "@/lib/viewport";
 import { useClipStore } from "@/lib/clip";
 import { BaseClipApplicator } from "./apply/base";
 import ApplicatorFilter from "./custom/ApplicatorFilter";
+import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 // (duplicate removed)
 
 //@ts-ignore
@@ -2139,6 +2140,24 @@ const TextPreview: React.FC<
     textRef.current.getStage()!.container().style.cursor = "default";
   }, []);
 
+  const backgroundNodeWidth = useMemo(
+    () => clipTransform?.width ?? defaultWidth,
+    [clipTransform?.width, defaultWidth],
+  );
+  const backgroundNodeHeight = useMemo(
+    () => clipTransform?.height ?? defaultHeight,
+    [clipTransform?.height, defaultHeight],
+  );
+  const safeBackgroundCornerRadius = useMemo(
+    () =>
+      sanitizeCornerRadius(
+        backgroundCornerRadius,
+        backgroundNodeWidth,
+        backgroundNodeHeight,
+      ) as number,
+    [backgroundCornerRadius, backgroundNodeWidth, backgroundNodeHeight],
+  );
+
   if (!isInFrame) {
     return null;
   }
@@ -2156,18 +2175,18 @@ const TextPreview: React.FC<
           <Rect
             x={clipTransform?.x ?? offsetX}
             y={clipTransform?.y ?? offsetY}
-            width={clipTransform?.width ?? defaultWidth}
+            width={backgroundNodeWidth}
             applicators={applicators}
             //@ts-ignore
             filters={isEditing ? undefined : filtersArray}
-            height={clipTransform?.height ?? defaultHeight}
+            height={backgroundNodeHeight}
             ref={backgroundRef}
             fill={backgroundColor}
             opacity={
               ((backgroundOpacity ?? 100) / 100) *
               ((clipTransform?.opacity ?? 100) / 100)
             }
-            cornerRadius={backgroundCornerRadius}
+            cornerRadius={safeBackgroundCornerRadius}
             rotation={clipTransform?.rotation ?? 0}
             listening={false}
           />
@@ -2204,7 +2223,7 @@ const TextPreview: React.FC<
           backgroundEnabled={backgroundEnabled}
           backgroundColor={backgroundColor}
           backgroundOpacity={backgroundOpacity}
-          backgroundCornerRadius={backgroundCornerRadius}
+          backgroundCornerRadius={safeBackgroundCornerRadius}
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}
           width={clipTransform?.width ?? defaultWidth}

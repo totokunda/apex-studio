@@ -17,6 +17,7 @@ import { useControlsStore } from "@/lib/control";
 import { useAssetControlsStore } from "@/lib/assetControl";
 import { Image, Group, Rect, Text, Line } from "react-konva";
 import Konva from "konva";
+import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 import {
   MediaInfo,
   ShapeClipProps,
@@ -224,6 +225,11 @@ const TimelineClip: React.FC<
         3,
       ),
     [currentStartFrame, currentEndFrame, timelineWidth, timelineDuration],
+  );
+
+  const safeCornerRadius = useMemo(
+    () => sanitizeCornerRadius(cornerRadius, clipWidth, timelineHeight) as number,
+    [cornerRadius, clipWidth, timelineHeight],
   );
   const clipX = useMemo(
     () =>
@@ -1900,7 +1906,7 @@ const TimelineClip: React.FC<
                 y={0}
                 width={clipWidth}
                 height={timelineHeight}
-                cornerRadius={cornerRadius}
+                cornerRadius={safeCornerRadius}
                 fillLinearGradientStartPoint={{ x: 0, y: 0 }}
                 fillLinearGradientEndPoint={{ x: clipWidth, y: 0 }}
                 fillLinearGradientColorStops={[0, "#AE81CE", 1, "#6A5ACD"]}
@@ -2072,7 +2078,7 @@ const TimelineClip: React.FC<
                 <ModelClip
                   clipWidth={clipWidth}
                   timelineHeight={timelineHeight}
-                  cornerRadius={cornerRadius}
+                  cornerRadius={safeCornerRadius}
                   currentClip={currentClip as ModelClipProps}
                   modelUiCounts={modelUiCounts}
                   modelNameRef={modelNameRef}
@@ -2096,7 +2102,7 @@ const TimelineClip: React.FC<
                   image={imageCanvas}
                   width={imageWidth}
                   height={timelineHeight}
-                  cornerRadius={cornerRadius}
+                  cornerRadius={safeCornerRadius}
                   fill={clipType === "audio" ? "#1A2138" : "#FFFFFF"}
                 />
               )}
@@ -2300,7 +2306,7 @@ const TimelineClip: React.FC<
                     timelineHeight={timelineHeight}
                     isDragging={isDragging}
                     clipId={currentClipId}
-                    cornerRadius={cornerRadius}
+                    cornerRadius={safeCornerRadius}
                     timelinePadding={timelinePadding}
                   />
                 );
@@ -2335,7 +2341,7 @@ const TimelineClip: React.FC<
           !(clipType === "model" && isModelRunning)
         }
         height={timelineHeight}
-        cornerRadius={[0, cornerRadius, cornerRadius, 0]}
+        cornerRadius={[0, safeCornerRadius, safeCornerRadius, 0]}
         fill={isSelected ? "#FFFFFF" : "transparent"}
         onMouseOver={(e) => {
           if (isSelected && !(clipType === "model" && isModelRunning)) {
@@ -2375,7 +2381,7 @@ const TimelineClip: React.FC<
           !(clipType === "model" && isModelRunning)
         }
         height={timelineHeight}
-        cornerRadius={[cornerRadius, 0, 0, cornerRadius]}
+        cornerRadius={[safeCornerRadius, 0, 0, safeCornerRadius]}
         fill={isSelected ? "#FFFFFF" : "transparent"}
         onMouseOver={(e) => {
           if (isSelected && !(clipType === "model" && isModelRunning)) {

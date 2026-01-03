@@ -4,6 +4,10 @@
 // Core crypto/versioning
 export { sha256sum } from "./nodeCrypto.ts";
 export { versions } from "./versions.ts";
+export * from "./remoteVersions.ts";
+
+// Installer helpers (server bundle extraction, ffmpeg install)
+export * from "./installer.ts";
 
 // Media processing primitives
 export { processMediaTo24 } from "./media/process.ts";
@@ -82,8 +86,6 @@ export * from "./exportCache.ts";
 // Python process management (bundled API control)
 export * from "./python.ts";
 
-// uv tool (bundled) for environment installation/bootstrapping
-export * from "./uv.ts";
-
+// (uv removed) - we ship the full Python environment in the server bundle / python-api.
 // Launcher helpers (gate the main UI behind a setup/launcher screen)
 export * from "./launcher.ts";

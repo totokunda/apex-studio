@@ -2,9 +2,28 @@ import multiprocessing
 import os
 
 # Server socket
-_host = os.getenv("APEX_HOST", "0.0.0.0")
+_host = os.getenv("APEX_HOST", "127.0.0.1")
 _port = os.getenv("APEX_PORT", "8765")
-bind = f"{_host}:{_port}"
+
+
+def _format_bind(host: str, port: str) -> str:
+    """
+    Gunicorn expects IPv6 binds in bracket form: [::1]:8765.
+    """
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
+
+
+# Bind defaults are tuned for desktop/local usage:
+# - Prefer loopback (matches Electron default backend URL)
+# - Bind both IPv4 and IPv6 so `localhost` / `::1` works on macOS
+if _host in {"127.0.0.1", "localhost"}:
+    bind = [_format_bind("127.0.0.1", _port), _format_bind("::1", _port)]
+elif _host in {"0.0.0.0", "::", "[::]"}:
+    bind = [_format_bind("0.0.0.0", _port), _format_bind("::", _port)]
+else:
+    bind = _format_bind(_host, _port)
 backlog = 2048
 
 # Worker processes

@@ -9,6 +9,7 @@ import { useClipStore } from "@/lib/clip";
 import { generatePosterCanvas } from "@/lib/media/timeline";
 import { Image, Group, Rect, Text } from "react-konva";
 import Konva from "konva";
+import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 import {
   MediaInfo,
   ShapeClipProps,
@@ -176,6 +177,11 @@ const TimelineClip: React.FC<
   const clipWidth = useMemo(
     () => Math.max(3, Math.round((clipSpan / visibleSpan) * timelineWidth)),
     [clipSpan, visibleSpan, timelineWidth],
+  );
+
+  const safeCornerRadius = useMemo(
+    () => sanitizeCornerRadius(cornerRadius, clipWidth, timelineHeight) as number,
+    [cornerRadius, clipWidth, timelineHeight],
   );
 
   const clipX = useMemo(() => 0, []);
@@ -860,7 +866,7 @@ const TimelineClip: React.FC<
                 y={0}
                 width={clipWidth}
                 height={timelineHeight}
-                cornerRadius={cornerRadius}
+                cornerRadius={safeCornerRadius}
                 fillLinearGradientStartPoint={{ x: 0, y: 0 }}
                 fillLinearGradientEndPoint={{ x: clipWidth, y: 0 }}
                 fillLinearGradientColorStops={[0, "#AE81CE", 1, "#6A5ACD"]}
@@ -1035,7 +1041,7 @@ const TimelineClip: React.FC<
                     y={0}
                     width={clipWidth}
                     height={timelineHeight}
-                    cornerRadius={cornerRadius}
+                    cornerRadius={safeCornerRadius}
                     fillLinearGradientStartPoint={{ x: 0, y: 0 }}
                     fillLinearGradientEndPoint={{ x: 0, y: timelineHeight }}
                     fillLinearGradientColorStops={[
@@ -1209,7 +1215,7 @@ const TimelineClip: React.FC<
                   image={imageCanvas}
                   width={imageWidth}
                   height={timelineHeight}
-                  cornerRadius={cornerRadius}
+                  cornerRadius={safeCornerRadius}
                   fill={clipType === "audio" ? "#1A2138" : "#FFFFFF"}
                 />
               )}
@@ -1357,7 +1363,7 @@ const TimelineClip: React.FC<
                     timelineDuration={timelineDuration}
                     isDragging={false}
                     clipId={currentClip.clipId}
-                    cornerRadius={cornerRadius}
+                    cornerRadius={safeCornerRadius}
                     timelinePadding={timelinePadding}
                   />
                 );
