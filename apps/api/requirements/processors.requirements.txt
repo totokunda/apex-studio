@@ -27,7 +27,11 @@ rtree
 
 # Models / external repos
 git+https://github.com/xinyu1205/recognize-anything.git
-git+https://github.com/facebookresearch/sam2.git
+git+https://github.com/totokunda/sam2.git
+git+https://github.com/isarandi/simplepyutils.git
+git+https://github.com/totokunda/florch.git
+git+https://github.com/isarandi/smplfitter.git
+
 fairscale
 pycocotools
 

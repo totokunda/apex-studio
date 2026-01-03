@@ -93,14 +93,17 @@ const AppearanceProperties: React.FC<AppearancePropertiesProps> = ({
                 value={
                   clip?.transform?.cornerRadius?.toFixed(0).toString() ?? "0"
                 }
-                onChange={(value) =>
+                onChange={(value) => {
+                  const numValue = Number(value);
+                  if (!Number.isFinite(numValue)) return;
+                  const clamped = Math.max(0, Math.min(100, numValue));
                   updateClip(clipId, {
                     transform: {
                       ...clip?.transform!,
-                      cornerRadius: Number(value),
+                      cornerRadius: clamped,
                     },
-                  })
-                }
+                  });
+                }}
                 startLogo="R"
                 canStep
                 step={1}
