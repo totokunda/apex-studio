@@ -42,5 +42,7 @@ files:
   size_bytes: 134399116
 - path: yzd-v/DWPose/yolox_l.onnx
   size_bytes: 216746733
-- path: https://github.com/isarandi/nlf/releases/download/v0.3.2/nlf_l_multi_0.3.2.torchscript
-  size_bytes: 493000000
+- path: totoku/nlf_model/yolov8x.onnx
+  size_bytes: 273089435
+- path: totoku/nlf_model/nlf_l_multi_0.3.2.safetensors
+  size_bytes: 355279568
