@@ -10,6 +10,8 @@ import {
   setActiveProjectId,
   listManifests,
   listManifestModelTypes,
+  saveProjectCover,
+  clearProjectCover,
 } from "@app/preload";
 
 import type {
@@ -34,6 +36,9 @@ import { useViewportStore } from "../viewport";
 import { globalInputControlsStore } from "../inputControl";
 import { fetchPreprocessorsList } from "../preprocessor/queries";
 import { queryClient } from "../react-query/queryClient";
+import { exportSequence, type ExportClip } from "@app/export-renderer";
+import { prepareExportClipsForValue } from "../prepareExportClips";
+import { sortClipsForStacking } from "../clipOrdering";
 type JsonProjectSlice = {
   projects: Array<{
     id: number;
@@ -41,6 +46,9 @@ type JsonProjectSlice = {
     fps: number;
     aspectRatio: { width: number; height: number; id: string };
     folderUuid: string;
+    coverPath?: string;
+    createdAt?: number;
+    lastModified?: number;
   }>;
   addProject: (project: {
     id: number;
@@ -49,6 +57,18 @@ type JsonProjectSlice = {
     aspectRatio: { width: number; height: number; id: string };
     folderUuid: string;
   }) => void;
+  updateProject?: (
+    id: string | number,
+    payload: Partial<{
+      name: string;
+      fps: number;
+      aspectRatio: { width: number; height: number; id: string };
+      folderUuid: string;
+      coverPath?: string;
+      createdAt?: number;
+      lastModified?: number;
+    }>,
+  ) => void;
   activeProjectId: string | number | null;
   setProjects: (projects: {
     id: number;
@@ -802,6 +822,235 @@ let jsonProjectLoadGeneration = 0;
 let isHydratingFromJson = false;
 let currentHydratedProjectId: string | number | null = null;
 
+const isLauncherWindow = (): boolean => {
+  try {
+    return typeof window !== "undefined" && window.location?.hash === "#launcher";
+  } catch {
+    return false;
+  }
+};
+
+// Robust change detection for Zustand subscriptions.
+// We avoid relying on `prev` because some store updates may mutate data in-place,
+// which can make prev/current comparisons unreliable.
+let lastClipSignature: string | null = null;
+let lastTimelineSignature: string | null = null;
+let lastAssetSignature: string | null = null;
+
+const safeStringify = (value: unknown): string => {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    // Fallback: force "changed" on the next compare if serialization fails.
+    return `__unserializable__:${Date.now()}`;
+  }
+};
+
+const computeClipSignature = (clips: unknown): string => {
+  if (!Array.isArray(clips)) return "[]";
+  // Only include fields that impact the visual first-frame result.
+  const reduced = (clips as any[]).map((c) => ({
+    clipId: c?.clipId,
+    type: c?.type,
+    timelineId: c?.timelineId,
+    groupId: c?.groupId,
+    hidden: c?.hidden,
+    assetId: c?.assetId,
+    startFrame: c?.startFrame,
+    endFrame: c?.endFrame,
+    trimStart: c?.trimStart,
+    trimEnd: c?.trimEnd,
+    transform: c?.transform,
+    originalTransform: c?.originalTransform,
+    children: c?.type === "group" ? c?.children : undefined,
+  }));
+  return safeStringify(reduced);
+};
+
+const computeTimelineSignature = (timelines: unknown): string => {
+  if (!Array.isArray(timelines)) return "[]";
+  const reduced = (timelines as any[]).map((t) => ({
+    timelineId: t?.timelineId,
+    hidden: t?.hidden,
+    timelineY: t?.timelineY,
+    muted: t?.muted,
+  }));
+  return safeStringify(reduced);
+};
+
+const computeAssetSignature = (assets: unknown): string => {
+  if (!assets || typeof assets !== "object") return "{}";
+  const rec = assets as Record<string, any>;
+  const reduced = Object.keys(rec)
+    .sort()
+    .map((id) => {
+      const a = rec[id];
+      return [id, a?.type, a?.path];
+    });
+  return safeStringify(reduced);
+};
+
+// Cover generation debounce (export first frame as project cover when only clips change).
+let coverUpdateGeneration = 0;
+const debouncedGenerateProjectCover = _.debounce(
+  (gen: number, getProjectState: () => JsonProjectSlice) => {
+    void (async () => {
+      try {
+        // Never generate or persist covers from the launcher window.
+        // Launcher doesn't have authoritative clip state and must not write project artifacts.
+        if (isLauncherWindow()) return;
+        // If another request superseded this one, bail.
+        if (gen !== coverUpdateGeneration) return;
+        if (isHydratingFromJson) return;
+
+        const projectState = getProjectState();
+        const activeProjectId = projectState?.activeProjectId;
+        if (activeProjectId == null) return;
+
+        // Avoid writing covers for a project that isn't the one currently hydrated.
+        if (
+          currentHydratedProjectId != null &&
+          activeProjectId !== currentHydratedProjectId
+        ) {
+          return;
+        }
+
+        const clipState = useClipStore.getState();
+        const controlsState = useControlsStore.getState();
+        const viewportState = useViewportStore.getState();
+
+        const getAssetById = (clipState)?.getAssetById;
+        const getClipsForGroup = (clipState)?.getClipsForGroup;
+        const getClipsByType = (clipState)?.getClipsByType;
+        const getClipPositionScore = (clipState)?.getClipPositionScore;
+        if (
+          typeof getAssetById !== "function" ||
+          typeof getClipsForGroup !== "function" ||
+          typeof getClipsByType !== "function" ||
+          typeof getClipPositionScore !== "function"
+        ) {
+          return;
+        }
+
+        const fps = Number(controlsState?.fps || 0) || 24;
+        const aspect =
+          viewportState?.aspectRatio ||
+          (projectState.projects?.find((p) => p.id === activeProjectId)
+            ?.aspectRatio) ||
+          ({ width: 16, height: 9 });
+
+        const rawRatio = Number(aspect?.width) / Number(aspect?.height);
+        const ratio = Number.isFinite(rawRatio) && rawRatio > 0 ? rawRatio : 16 / 9;
+
+        // Keep cover reasonably sized.
+        const heightPx = 720;
+        const widthPx = Math.max(1, Math.round(heightPx * ratio));
+
+        const clips = Array.isArray((clipState as any)?.clips)
+          ? ((clipState as any).clips as AnyClipProps[])
+          : ([] as AnyClipProps[]);
+        const timelines = Array.isArray((clipState as any)?.timelines)
+          ? ((clipState as any).timelines as TimelineProps[])
+          : ([] as TimelineProps[]);
+
+        if (clips.length === 0) {
+          // If the timeline is empty, clear the project cover.
+          try {
+            await clearProjectCover(activeProjectId);
+          } catch {
+            // ignore; best-effort
+          }
+          projectState?.updateProject?.(activeProjectId, {
+            coverPath: undefined,
+            lastModified: Date.now(),
+          });
+          return;
+        }
+
+        // Mirror export prep used by Topbar: stacking + ignore hidden timelines + expand groups/filters.
+        let contentClips = sortClipsForStacking(clips, timelines);
+        contentClips = contentClips.filter((clip) => {
+          const timeline = timelines.find((t) => t.timelineId === clip.timelineId);
+          return !timeline?.hidden;
+        });
+
+        const preparedClips: ExportClip[] = [];
+        for (const clip of contentClips) {
+          if (!clip) continue;
+          if ((clip as any).type === "filter") continue;
+          const prepared = prepareExportClipsForValue(
+            clip as AnyClipProps,
+            {
+              aspectRatio: { width: Number(aspect.width), height: Number(aspect.height) },
+              getAssetById,
+              getClipsForGroup,
+              getClipsByType,
+              getClipPositionScore,
+              timelines,
+            },
+            {
+              clearMasks: false,
+              applyCentering: false,
+              dimensionsFrom: "aspect",
+              target: { width: widthPx, height: heightPx },
+            },
+          );
+          preparedClips.push(...(prepared.exportClips || []));
+        }
+
+        if (preparedClips.length === 0) return;
+
+        // Export first frame (frame 0) as PNG, then transcode to JPEG for saveProjectCover.
+        const result = await exportSequence({
+          mode: "image",
+          clips: preparedClips,
+          fps,
+          width: widthPx,
+          height: heightPx,
+          imageFrame: 0,
+          backgroundColor: "#000000",
+        } as any);
+
+        if (!(result instanceof Blob)) return;
+
+        let jpegBlob: Blob | null = null;
+        try {
+          const bitmap = await createImageBitmap(result);
+          const canvas = document.createElement("canvas");
+          canvas.width = widthPx;
+          canvas.height = heightPx;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return;
+          ctx.drawImage(bitmap, 0, 0, widthPx, heightPx);
+          jpegBlob = await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob(resolve, "image/jpeg", 0.85),
+          );
+        } catch {
+          jpegBlob = null;
+        }
+        if (!jpegBlob) return;
+
+        const buffer = await jpegBlob.arrayBuffer();
+        const res = await saveProjectCover(activeProjectId, new Uint8Array(buffer));
+
+        if (res?.success && res.data?.path) {
+          // Best-effort: update coverPath in the projects store so Launcher/Topbar can render it.
+          const anyState = projectState;
+          if (typeof anyState.updateProject === "function") {
+            anyState.updateProject(activeProjectId, {
+              coverPath: res.data.path,
+              lastModified: Date.now(),
+            });
+          }
+        }
+      } catch (err) {
+        console.error("jsonPersistence: failed to generate project cover", err);
+      }
+    })();
+  },
+  1000,
+);
+
 const hydrateStoresFromProjectJson = async (
   _projectId: string | number,
   doc: ProjectJsonSnapshot,
@@ -1366,6 +1615,10 @@ const hydrateStoresFromProjectJson = async (
 };
 
 const scheduleJsonProjectSave = (getProjectState: () => JsonProjectSlice) => {
+  // The launcher window is not an editor surface; it should never autosave
+  // timeline JSON because it may have empty/unhydrated stores and would overwrite
+  // the real project state created in the main window.
+  if (isLauncherWindow()) return;
   const state = getProjectState();
   if (!state || state.activeProjectId == null) return;
 
@@ -1405,13 +1658,40 @@ const initExternalSubscriptions = (getProjectState: () => JsonProjectSlice) => {
   try {
 
     if (useClipStore && typeof useClipStore.subscribe === "function") {
-      useClipStore.subscribe((state, prev) => {
+      useClipStore.subscribe((state) => {
+        const clipsSig = computeClipSignature((state as any)?.clips);
+        const timelinesSig = computeTimelineSignature((state as any)?.timelines);
+        const assetsSig = computeAssetSignature((state as any)?.assets);
+
+        // Initialize baseline signatures on first emission.
         if (
-          !_.isEqual(state?.clips, prev?.clips) ||
-          !_.isEqual(state?.timelines, prev?.timelines) ||
-          !_.isEqual(state?.assets, prev?.assets)
+          lastClipSignature == null ||
+          lastTimelineSignature == null ||
+          lastAssetSignature == null
         ) {
+          lastClipSignature = clipsSig;
+          lastTimelineSignature = timelinesSig;
+          lastAssetSignature = assetsSig;
+          return;
+        }
+
+        const clipsChanged = clipsSig !== lastClipSignature;
+        const timelinesChanged = timelinesSig !== lastTimelineSignature;
+        const assetsChanged = assetsSig !== lastAssetSignature;
+
+        lastClipSignature = clipsSig;
+        lastTimelineSignature = timelinesSig;
+        lastAssetSignature = assetsSig;
+
+        if (clipsChanged || timelinesChanged || assetsChanged) {
           scheduleJsonProjectSave(getProjectState);
+        }
+
+        // Only generate a new cover when *only* clips changed (no timeline/asset changes),
+        // and only after things have settled for at least 1s.
+        if (clipsChanged && !timelinesChanged && !assetsChanged) {
+          const gen = ++coverUpdateGeneration;
+          debouncedGenerateProjectCover(gen, getProjectState);
         }
       });
     } else {
@@ -1525,6 +1805,12 @@ export const withJsonProjectPersistence =
 
     const loadActiveProjectFromJson = async (projectId?: string | number) => {
       const myGen = ++jsonProjectLoadGeneration;
+      // Cancel any pending cover generation during project switches/hydration.
+      try {
+        debouncedGenerateProjectCover.cancel();
+      } catch {
+        // ignore
+      }
 
       try {
         // While we are hydrating from JSON, mark projects as not yet fully loaded
@@ -1546,7 +1832,16 @@ export const withJsonProjectPersistence =
        let projects = get().projects; 
        let hasAnyProjects = projects.length > 0;
         if (projects.length === 0) {
-            const res = await listProjects<{id: number; name: string; fps: number; aspectRatio: { width: number; height: number; id: string }; folderUuid: string;}>();
+            const res = await listProjects<{
+              id: number;
+              name: string;
+              fps: number;
+              aspectRatio: { width: number; height: number; id: string };
+              folderUuid: string;
+              coverPath?: string;
+              createdAt?: number;
+              lastModified?: number;
+            }>();
             if (res?.success && Array.isArray(res.data)) {
               projects = res.data;
             }
@@ -1645,6 +1940,11 @@ export const withJsonProjectPersistence =
             state?.activeProjectId !== prev?.activeProjectId;
 
           if (activeChanged) {
+            try {
+              debouncedGenerateProjectCover.cancel();
+            } catch {
+              // ignore
+            }
             void loadActiveProjectFromJson(state?.activeProjectId ?? undefined);
           }
 

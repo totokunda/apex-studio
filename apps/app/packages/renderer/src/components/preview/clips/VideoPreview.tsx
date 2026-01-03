@@ -22,6 +22,7 @@ import { useInputControlsStore } from "@/lib/inputControl";
 import { useVideoDecoderManager } from "@/lib/media/VideoDecoderManagerContext";
 import { useProjectsStore } from "@/lib/projects";
 import { generatePosterCanvas } from "@/lib/media/timeline";
+import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 // (prefetch helper removed by request; timeline-driven rendering only)
 
 const calculateIterateRange = (
@@ -241,6 +242,8 @@ const VideoPreview: React.FC<
     
     return f >= s && f <= e;
   }, [focusFrame, startFrameUsed, endFrameUsed]);
+
+
   const currentFrame = useMemo(
     () => focusFrame - startFrameUsed + (trimStart || 0),
     [focusFrame, startFrameUsed, trimStart],
@@ -1158,11 +1161,10 @@ const VideoPreview: React.FC<
       isAccurateSeekNeeded,
       selectedAssetId,
       makeDecoderId,
+      isInFrame
     ],
   );
   
-
-
 
   useEffect(() => {
     
@@ -1838,6 +1840,26 @@ const VideoPreview: React.FC<
     };
   }, [clipTransform?.crop, displayWidth, displayHeight]);
 
+  const nodeWidth = useMemo(
+    () =>
+      clipTransform?.width && clipTransform.width > 0
+        ? clipTransform.width
+        : displayWidth || 1,
+    [clipTransform?.width, displayWidth],
+  );
+  const nodeHeight = useMemo(
+    () =>
+      clipTransform?.height && clipTransform.height > 0
+        ? clipTransform.height
+        : displayHeight || 1,
+    [clipTransform?.height, displayHeight],
+  );
+  const safeCornerRadius = useMemo(
+    () =>
+      sanitizeCornerRadius(clipTransform?.cornerRadius, nodeWidth, nodeHeight),
+    [clipTransform?.cornerRadius, nodeWidth, nodeHeight],
+  );
+
   
 
   // Only render Konva nodes when the clip is active in the current frame and not explicitly hidden.
@@ -1866,20 +1888,12 @@ const VideoPreview: React.FC<
           image={imageSource || undefined}
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}
-          width={
-            clipTransform?.width && clipTransform.width > 0
-              ? clipTransform.width
-              : displayWidth || 1
-          }
-          height={
-            clipTransform?.height && clipTransform.height > 0
-              ? clipTransform.height
-              : displayHeight || 1
-          }
+          width={nodeWidth}
+          height={nodeHeight}
           scaleX={clipTransform?.scaleX ?? 1}
           scaleY={clipTransform?.scaleY ?? 1}
           rotation={clipTransform?.rotation ?? 0}
-          cornerRadius={clipTransform?.cornerRadius ?? 0}
+          cornerRadius={safeCornerRadius}
           opacity={(clipTransform?.opacity ?? 100) / 100}
           crop={pixelCrop}
           onDragMove={handleDragMove}

@@ -1,0 +1,1261 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ensureFfmpegInstalled,
+  extractServerBundle,
+  listServerReleaseBundles,
+  onInstallerProgress,
+  pickMediaPaths,
+  resolvePath,
+} from "@app/preload";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { ProgressBar } from "@/components/common/ProgressBar";
+import { LuCheck, LuLoader, LuX } from "react-icons/lu";
+import { FixedSizeList as VirtualList, type ListChildComponentProps } from "react-window";
+import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
+import { ScrollBar } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+type InstallerStepId = "version" | "storage" | "render" | "mask" | "install";
+
+type InstallerUIMode = "setup" | "installing" | "done";
+
+type InstallPhaseId =
+  | "download_bundle"
+  | "extract_bundle"
+  | "download_models"
+  | "update_configs";
+
+type InstallPhaseState = {
+  status: "pending" | "active" | "completed" | "skipped" | "error";
+  percent: number | null; // 0..100
+  message: string | null;
+};
+
+const VirtualScrollViewport = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <ScrollAreaPrimitive.Viewport
+    ref={ref}
+    className={["h-full w-full rounded-[inherit]", className].filter(Boolean).join(" ")}
+    {...props}
+  />
+));
+VirtualScrollViewport.displayName = "VirtualScrollViewport";
+
+const MASK_MODEL_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "sam2_tiny", label: "Sam2 Tiny" },
+  { value: "sam2_small", label: "Sam2 Small" },
+  { value: "sam2_base_plus", label: "Sam2 Base Plus" },
+  { value: "sam2_large", label: "Sam2 Large" },
+];
+
+const Installer: React.FC = () => {
+  const steps = useMemo(
+    () =>
+      [
+        { id: "version" as const, label: "Version" },
+        { id: "storage" as const, label: "Storage" },
+        { id: "render" as const, label: "Render" },
+        { id: "mask" as const, label: "Models" },
+        { id: "install" as const, label: "Install" },
+      ] satisfies Array<{ id: InstallerStepId; label: string }>,
+    [],
+  );
+
+  const [activeStep, setActiveStep] = useState<InstallerStepId>("version");
+  const appendSubdir = (basePath: string, subdir: string) => {
+    const base = String(basePath || "").trim();
+    if (!base) return subdir;
+    const sep = base.includes("\\") ? "\\" : "/";
+    const trimmed = base.replace(/[\\/]+$/, "");
+    return `${trimmed}${sep}${subdir}`;
+  };
+
+  const [saveLocation, setSaveLocation] = useState<string>(() =>
+    appendSubdir(resolvePath("~"), "apex-diffusion"),
+  );
+  const [codeLocation, setCodeLocation] = useState<string>(() =>
+    appendSubdir(resolvePath("~"), "apex-server"),
+  );
+  const [availableServerBundles, setAvailableServerBundles] = useState<
+    Array<{
+      tag: string;
+      tagVersion: string;
+      assetVersion: string;
+      assetName: string;
+      downloadUrl: string;
+      platform: string;
+      arch: string;
+      device: string;
+      pythonTag: string;
+      publishedAt?: string;
+      prerelease?: boolean;
+    }>
+  >([]);
+  const [serverBundlesHost, setServerBundlesHost] = useState<{
+    platform: string;
+    arch: string;
+  } | null>(null);
+  const [serverBundlesLoading, setServerBundlesLoading] =
+    useState<boolean>(true);
+  const [serverBundlesError, setServerBundlesError] = useState<string | null>(
+    null,
+  );
+  const [selectedServerBundleKey, setSelectedServerBundleKey] = useState<
+    string | null
+  >(null);
+
+  const [localBundlePath, setLocalBundlePath] = useState<string>("");
+  const [localBundleError, setLocalBundleError] = useState<string | null>(null);
+  const [showSelectedBundleDetails, setShowSelectedBundleDetails] =
+    useState<boolean>(false);
+  const [renderImage, setRenderImage] = useState<boolean>(false);
+  const [renderVideo, setRenderVideo] = useState<boolean>(false);
+  const [maskModel, setMaskModel] = useState<string>("sam2_base_plus");
+  const [installRifeFrameInterpolation, setInstallRifeFrameInterpolation] =
+    useState<boolean>(true);
+  const [installing, setInstalling] = useState<boolean>(false);
+  const [installStatus, setInstallStatus] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const [installJobId, setInstallJobId] = useState<string | null>(null);
+
+  const [uiMode, setUiMode] = useState<InstallerUIMode>("setup");
+  const phaseList = useMemo(
+    () =>
+      [
+        { id: "download_bundle" as const, label: "Download Bundle" },
+        { id: "extract_bundle" as const, label: "Extract Bundle" },
+        { id: "download_models" as const, label: "Download Models" },
+        { id: "update_configs" as const, label: "Update Configs" },
+      ] satisfies Array<{ id: InstallPhaseId; label: string }>,
+    [],
+  );
+  const [activePhase, setActivePhase] =
+    useState<InstallPhaseId>("download_bundle");
+  const activePhaseRef = useRef<InstallPhaseId>(activePhase);
+  useEffect(() => {
+    activePhaseRef.current = activePhase;
+  }, [activePhase]);
+  const [phaseState, setPhaseState] = useState<Record<InstallPhaseId, InstallPhaseState>>(() => ({
+    download_bundle: { status: "pending", percent: null, message: null },
+    extract_bundle: { status: "pending", percent: null, message: null },
+    download_models: { status: "pending", percent: null, message: null },
+    update_configs: { status: "pending", percent: null, message: null },
+  }));
+  const extractionFilesRef = useRef<string[]>([]);
+  const [extractionListVersion, setExtractionListVersion] = useState<number>(0);
+  const extractionPendingRef = useRef<string[]>([]);
+  const extractionFlushTimerRef = useRef<number | null>(null);
+  const extractionListContainerRef = useRef<HTMLDivElement | null>(null);
+  const [extractionListSize, setExtractionListSize] = useState<{
+    width: number;
+    height: number;
+  }>({ width: 0, height: 0 });
+
+  const lastDownloadUiUpdateAtRef = useRef<number>(0);
+  const lastDownloadPctRef = useRef<number | null>(null);
+  const lastExtractUiUpdateAtRef = useRef<number>(0);
+  const lastExtractPctRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    // The extraction panel mounts/unmounts based on the active phase, so we need to
+    // attach the observer whenever the container is present.
+    const el = extractionListContainerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const cr = entry.contentRect;
+      setExtractionListSize({
+        width: Math.max(0, Math.floor(cr.width)),
+        height: Math.max(0, Math.floor(cr.height)),
+      });
+    });
+    ro.observe(el);
+    // Initialize immediately too (some environments don't fire RO until a resize).
+    const rect = el.getBoundingClientRect();
+    setExtractionListSize({
+      width: Math.max(0, Math.floor(rect.width)),
+      height: Math.max(0, Math.floor(rect.height)),
+    });
+    return () => ro.disconnect();
+  }, [activePhase, uiMode, extractionListVersion]);
+
+  const flushExtractionEntries = () => {
+    const pending = extractionPendingRef.current;
+    if (pending.length === 0) return;
+    extractionPendingRef.current = [];
+    extractionFilesRef.current = extractionFilesRef.current.concat(pending);
+    setExtractionListVersion((v) => v + 1);
+  };
+
+  const patchPhase = (
+    id: InstallPhaseId,
+    patch: Partial<InstallPhaseState>,
+  ) => {
+    setPhaseState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  };
+
+  const activeIndex = useMemo(
+    () => Math.max(0, steps.findIndex((s) => s.id === activeStep)),
+    [activeStep, steps],
+  );
+
+  const canGoBack = activeIndex > 0;
+  const canGoNext = activeIndex >= 0 && activeIndex < steps.length - 1;
+
+  const goBack = () => {
+    if (!canGoBack) return;
+    setActiveStep(steps[activeIndex - 1]!.id);
+  };
+
+  const goNext = () => {
+    if (!canGoNext) return;
+    setActiveStep(steps[activeIndex + 1]!.id);
+  };
+
+  const fieldLabelClass =
+    "flex flex-col gap-0.5 text-[12px] font-medium text-brand-light/90";
+
+  const pickSaveLocation = async () => {
+    const picked = await pickMediaPaths({
+      directory: true,
+      title: "Choose a save location",
+      defaultPath: saveLocation || undefined,
+    });
+    const first = Array.isArray(picked) && picked.length > 0 ? picked[0] : null;
+    if (first) setSaveLocation(appendSubdir(first, "apex-diffusion"));
+  };
+
+  const pickCodeLocation = async () => {
+    const picked = await pickMediaPaths({
+      directory: true,
+      title: "Choose a code location",
+      defaultPath: codeLocation || undefined,
+    });
+    const first = Array.isArray(picked) && picked.length > 0 ? picked[0] : null;
+    if (first) setCodeLocation(appendSubdir(first, "apex-studio"));
+  };
+
+  const parsePythonApiAssetName = (
+    filename: string,
+  ):
+    | {
+        assetVersion: string;
+        platform: string;
+        arch: string;
+        device: string;
+        pythonTag: string;
+      }
+    | null => {
+    const re =
+      /^python-api-(?<version>[^-]+)-(?<platform>[^-]+)-(?<arch>[^-]+)-(?<device>[^-]+)-(?<python>[^.]+)\.tar\.zst$/i;
+    const m = re.exec(filename);
+    if (!m || !m.groups) return null;
+    return {
+      assetVersion: m.groups.version,
+      platform: m.groups.platform,
+      arch: m.groups.arch,
+      device: m.groups.device,
+      pythonTag: m.groups.python,
+    };
+  };
+
+  const validateLocalBundlePath = (p: string) => {
+    const trimmed = String(p || "").trim();
+    if (!trimmed) {
+      setLocalBundleError(null);
+      return;
+    }
+    if (!trimmed.toLowerCase().endsWith(".tar.zst")) {
+      setLocalBundleError("File must end with .tar.zst");
+      return;
+    }
+    const base = trimmed.split(/[\\/]/).pop() || trimmed;
+    const parsed = parsePythonApiAssetName(base);
+    if (!parsed) {
+      setLocalBundleError(
+        "Filename must match python-api-<version>-<platform>-<arch>-<device>-<python>.tar.zst",
+      );
+      return;
+    }
+    if (serverBundlesHost) {
+      if (parsed.platform !== serverBundlesHost.platform) {
+        setLocalBundleError(
+          `Platform mismatch: file is "${parsed.platform}" but this machine is "${serverBundlesHost.platform}"`,
+        );
+        return;
+      }
+      if (parsed.arch !== serverBundlesHost.arch) {
+        setLocalBundleError(
+          `Architecture mismatch: file is "${parsed.arch}" but this machine is "${serverBundlesHost.arch}"`,
+        );
+        return;
+      }
+    }
+    setLocalBundleError(null);
+  };
+
+  const pickLocalBundle = async () => {
+    const picked = await pickMediaPaths({
+      directory: false,
+      title: "Choose a .tar.zst bundle",
+      defaultPath: localBundlePath || undefined,
+      filters: [{ name: "Apex server bundle", extensions: ["zst"] }],
+    });
+    const first = Array.isArray(picked) && picked.length > 0 ? picked[0] : null;
+    if (first) {
+      setLocalBundlePath(first);
+      validateLocalBundlePath(first);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      setServerBundlesLoading(true);
+      setServerBundlesError(null);
+      try {
+        const res = await listServerReleaseBundles();
+        if (cancelled) return;
+        if (!res?.success || !res.data) {
+          setAvailableServerBundles([]);
+          setServerBundlesHost(null);
+          setServerBundlesError(res?.error || "Failed to load versions");
+          setServerBundlesLoading(false);
+          return;
+        }
+
+        const host = res.data.host;
+        setServerBundlesHost(host);
+        const items = Array.isArray(res.data.items) ? res.data.items : [];
+        const normalized = items.map((it) => ({
+          tag: it.tag,
+          tagVersion: it.tagVersion,
+          assetVersion: it.assetVersion,
+          assetName: it.assetName,
+          downloadUrl: it.downloadUrl,
+          platform: it.platform,
+          arch: it.arch,
+          device: it.device,
+          pythonTag: it.pythonTag,
+          publishedAt: it.publishedAt,
+          prerelease: it.prerelease,
+        }));
+
+        setAvailableServerBundles(normalized);
+        setSelectedServerBundleKey(
+          normalized.length > 0
+            ? `${normalized[0]!.tag}::${normalized[0]!.assetName}`
+            : null,
+        );
+        setShowSelectedBundleDetails(false);
+        setServerBundlesLoading(false);
+
+        if (localBundlePath) validateLocalBundlePath(localBundlePath);
+      } catch (e) {
+        if (cancelled) return;
+        setAvailableServerBundles([]);
+        setServerBundlesHost(null);
+        setServerBundlesError(
+          e instanceof Error ? e.message : "Failed to load versions",
+        );
+        setServerBundlesLoading(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const selectedServerBundle = useMemo(() => {
+    if (!selectedServerBundleKey) return null;
+    const [tag, assetName] = selectedServerBundleKey.split("::");
+    return (
+      availableServerBundles.find(
+        (b) => b.tag === tag && b.assetName === assetName,
+      ) || null
+    );
+  }, [availableServerBundles, selectedServerBundleKey]);
+
+  const runInstall = async () => {
+    if (installing) return;
+    setInstallError(null);
+    setInstallStatus(null);
+    extractionFilesRef.current = [];
+    setExtractionListVersion((v) => v + 1);
+    extractionPendingRef.current = [];
+    if (extractionFlushTimerRef.current !== null) {
+      window.clearTimeout(extractionFlushTimerRef.current);
+      extractionFlushTimerRef.current = null;
+    }
+
+    const dest = String(codeLocation || "").trim();
+    if (!dest) {
+      setInstallError("Code Location is required.");
+      return;
+    }
+
+    const hasLocal = Boolean(String(localBundlePath || "").trim());
+    if (!hasLocal && !selectedServerBundle) {
+      setInstallError("Please select a server bundle version or choose a local .tar.zst file.");
+      return;
+    }
+
+    // Lock the installer UI into phase mode; configuration can no longer be changed.
+    setUiMode("installing");
+
+    // Initialize phases
+    setPhaseState({
+      download_bundle: {
+        status: hasLocal ? "skipped" : "active",
+        percent: hasLocal ? 100 : null,
+        message: hasLocal ? "Using local bundle (download skipped)" : "Starting download…",
+      },
+      extract_bundle: { status: hasLocal ? "active" : "pending", percent: null, message: null },
+      download_models: { status: "pending", percent: null, message: null },
+      update_configs: { status: "pending", percent: null, message: null },
+    });
+    setActivePhase(hasLocal ? "extract_bundle" : "download_bundle");
+
+    const jobId =
+      (globalThis.crypto && "randomUUID" in globalThis.crypto
+        ? (globalThis.crypto as Crypto).randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`) || null;
+    setInstallJobId(jobId);
+
+    let unsubscribeProgress: null | (() => void) = null;
+    if (jobId) {
+      unsubscribeProgress = onInstallerProgress(jobId, (ev: any) => {
+        if (!ev) return;
+        if (ev.phase === "download") {
+          const now = Date.now();
+          const pctIntRaw =
+            typeof ev.percent === "number"
+              ? Math.round(Math.max(0, Math.min(1, ev.percent)) * 100)
+              : null;
+          const shouldUpdate =
+            (pctIntRaw !== null && pctIntRaw !== lastDownloadPctRef.current) ||
+            now - lastDownloadUiUpdateAtRef.current > 900;
+          if (!shouldUpdate && !ev.message) return;
+
+          lastDownloadUiUpdateAtRef.current = now;
+          if (pctIntRaw !== null) lastDownloadPctRef.current = pctIntRaw;
+
+          if (activePhaseRef.current !== "download_bundle") {
+            setActivePhase("download_bundle");
+          }
+          patchPhase("download_bundle", {
+            status: "active",
+            // Do not clear percent when the event doesn't carry it.
+            ...(pctIntRaw !== null ? { percent: pctIntRaw } : {}),
+            message: ev.message || "Downloading…",
+          });
+          if (typeof ev.percent === "number" && ev.percent >= 1) {
+            patchPhase("download_bundle", { status: "completed", percent: 100 });
+            patchPhase("extract_bundle", { status: "active" });
+            if (activePhaseRef.current !== "extract_bundle") {
+              setActivePhase("extract_bundle");
+            }
+          }
+        } else if (ev.phase === "extract") {
+          const now = Date.now();
+          const pctIntRaw =
+            typeof ev.percent === "number"
+              ? Math.round(Math.max(0, Math.min(1, ev.percent)) * 100)
+              : null;
+
+          if (activePhaseRef.current !== "extract_bundle") {
+            setActivePhase("extract_bundle");
+          }
+          const shouldUpdate =
+            (pctIntRaw !== null && pctIntRaw !== lastExtractPctRef.current) ||
+            now - lastExtractUiUpdateAtRef.current > 1200;
+          if (shouldUpdate) {
+            lastExtractUiUpdateAtRef.current = now;
+            if (pctIntRaw !== null) lastExtractPctRef.current = pctIntRaw;
+            patchPhase("extract_bundle", {
+              status: "active",
+              // Do not clear percent when the event doesn't carry it.
+              ...(pctIntRaw !== null ? { percent: pctIntRaw } : {}),
+              // Keep the progress/status text generic; filenames are shown only in the extraction log panel.
+              message:
+                typeof ev.percent === "number" && ev.percent >= 1
+                  ? "Extraction complete"
+                  : "Extracting…",
+            });
+          }
+          if (ev.entryName) {
+            extractionPendingRef.current.push(String(ev.entryName));
+            if (extractionFlushTimerRef.current === null) {
+              // Batch rapid extraction updates to avoid UI freezes.
+              extractionFlushTimerRef.current = window.setTimeout(() => {
+                extractionFlushTimerRef.current = null;
+                flushExtractionEntries();
+              }, 2000);
+            }
+          }
+          if (typeof ev.percent === "number" && ev.percent >= 1) {
+            patchPhase("extract_bundle", { status: "completed", percent: 100 });
+            // Flush any remaining extraction entries.
+            flushExtractionEntries();
+          }
+        } else if (ev.phase === "status") {
+          const msg = String(ev.message || "");
+          // Detect local bundle download skip emitted by main.
+          if (msg.toLowerCase().includes("local bundle")) {
+            patchPhase("download_bundle", {
+              status: "skipped",
+              percent: 100,
+              message: msg,
+            });
+            patchPhase("extract_bundle", { status: "active" });
+            if (activePhaseRef.current !== "extract_bundle") {
+              setActivePhase("extract_bundle");
+            }
+            return;
+          }
+          // Otherwise attach to the currently active phase.
+          patchPhase(activePhaseRef.current, { message: msg || null });
+        }
+      });
+    }
+
+    setInstalling(true);
+    try {
+      setInstallStatus("Running installer…");
+      const extractRes = await extractServerBundle({
+        source: hasLocal
+          ? { kind: "local", path: localBundlePath }
+          : {
+              kind: "remote",
+              url: selectedServerBundle!.downloadUrl,
+              assetName: selectedServerBundle!.assetName,
+            },
+        destinationDir: dest,
+        jobId: jobId || undefined,
+      });
+      if (!extractRes.success) {
+        throw new Error(extractRes.error || "Failed to extract server bundle");
+      }
+
+      // Download Models (not implemented yet)
+      patchPhase("download_models", {
+        status: "skipped",
+        percent: 100,
+        message: "Not implemented yet — skipping",
+      });
+
+      // Update Configs (for now, we treat ffmpeg installation as part of config/setup)
+      setActivePhase("update_configs");
+      patchPhase("update_configs", { status: "active", message: "Installing ffmpeg…" });
+
+      const ffRes = await ensureFfmpegInstalled();
+      if (!ffRes.success) {
+        throw new Error(ffRes.error || "Failed to install ffmpeg");
+      }
+
+      patchPhase("update_configs", {
+        status: "completed",
+        percent: 100,
+        message: `Completed (ffmpeg: ${ffRes.data?.method})`,
+      });
+      setUiMode("done");
+      setInstallStatus(`Installed. Extracted to ${extractRes.data?.extractedTo}.`);
+    } catch (e) {
+      setInstallError(e instanceof Error ? e.message : "Install failed");
+      setInstallStatus(null);
+      // Mark current phase as errored.
+      patchPhase(activePhase, {
+        status: "error",
+        message: e instanceof Error ? e.message : "Install failed",
+      });
+    } finally {
+      setInstalling(false);
+      if (unsubscribeProgress) unsubscribeProgress();
+      // Flush any remaining extraction entries.
+      flushExtractionEntries();
+      if (extractionFlushTimerRef.current !== null) {
+        window.clearTimeout(extractionFlushTimerRef.current);
+        extractionFlushTimerRef.current = null;
+      }
+    }
+  };
+
+  const renderPhaseIcon = (st: InstallPhaseState) => {
+    if (st.status === "active") return <LuLoader className="h-4 w-4 animate-spin" />;
+    if (st.status === "completed" || st.status === "skipped")
+      return <LuCheck className="h-4 w-4" />;
+    if (st.status === "error") return <LuX className="h-4 w-4" />;
+    return <span className="h-4 w-4 inline-block rounded-full border border-brand-light/25" />;
+  };
+
+  const ExtractRow = ({ index, style }: ListChildComponentProps) => {
+    const name = extractionFilesRef.current[index] ?? "";
+    return (
+      <div
+        style={style}
+        className="px-2 py-[2px] text-[10.5px] leading-relaxed text-brand-light/70 font-mono whitespace-nowrap overflow-hidden text-ellipsis"
+        title={name}
+      >
+        {name}
+      </div>
+    );
+  };
+
+  return (
+    <main className="w-full h-screen flex flex-col bg-black font-poppins">
+      <div className="relative flex-1 overflow-hidden">
+        <div className="absolute inset-0 bg-linear-to-br from-slate-950 via-black to-slate-900" />
+        <div className="absolute inset-0 backdrop-blur-md bg-black" />
+
+        <div className="relative z-10 h-full w-full flex flex-col items-center justify-center px-6 py-8">
+          <div className="w-full max-w-3xl">
+            <h3 className="text-2xl font-semibold tracking-tight text-brand-light text-center mb-2">
+              Apex Studio
+            </h3>
+            <div className="text-center mb-6">
+              <div className="text-[13px] uppercase tracking-[0.35em] text-brand-light/60">
+                Installer
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-brand-light/10 bg-brand-background-dark backdrop-blur-md shadow-lg">
+              {uiMode === "setup" ? (
+                <Tabs
+                  value={activeStep}
+                  onValueChange={(v) => setActiveStep(v as InstallerStepId)}
+                  className="w-full"
+                >
+                  <div className="p-4 border-b border-white/10">
+                    <TabsList className="bg-transparent p-0 gap-2 flex flex-wrap justify-center">
+                      {steps.map((s, idx) => (
+                        <TabsTrigger
+                          key={s.id}
+                          value={s.id}
+                          className="px-3 py-2 text-[11px] text-brand-light/80 data-[state=active]:text-brand-light data-[state=active]:bg-brand/70 rounded-[7px]"
+                        >
+                          <span className="mr-2 text-[10px] text-brand-light/50">
+                            {idx + 1}
+                          </span>
+                          {s.label}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                  </div>
+
+                  <div className="p-5 min-h-[320px]">
+                  <TabsContent value="version" className="m-0">
+                    <div className="flex flex-col gap-4 text-brand-light">
+                      <div className="flex flex-col gap-1 border-b border-brand-light/8 pb-4">
+                        <div className="text-[13px] font-semibold text-brand-light">
+                          Available Versions
+                        </div>
+                        <div className="flex flex-col gap-2 text-[10.5px] text-brand-light/60 font-normal">
+                          Select a server bundle version to download for your machine.
+                          {serverBundlesHost ? (
+                            <span>
+                              Detected:{" "}
+                              <span className="text-brand-light/75">
+                                {serverBundlesHost.platform} / {serverBundlesHost.arch}
+                              </span>
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-2.5">
+                        <label className={fieldLabelClass}>
+                          <span>Downloadable Versions</span>
+                          <span className="text-[10px] text-brand-light/60 font-normal">
+                            Fetched from GitHub releases and filtered by platform + architecture.
+                          </span>
+                        </label>
+
+                        {serverBundlesLoading ? (
+                          <div className="text-[11px] text-brand-light/60">
+                            Loading versions…
+                          </div>
+                        ) : availableServerBundles.length === 0 ? (
+                          <div className="text-[11px] text-brand-light/60">
+                            No versions available.
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            <Select
+                              value={selectedServerBundleKey ?? undefined}
+                                onValueChange={(v) => {
+                                  setSelectedServerBundleKey(v);
+                                  setShowSelectedBundleDetails(false);
+                                }}
+                            >
+                              <SelectTrigger
+                                size="sm"
+                                className="w-full h-8.5! text-[11.5px] bg-brand-background/70 font-medium rounded-[6px] border-white/10 text-brand-light"
+                              >
+                                <SelectValue placeholder="Select a version" />
+                              </SelectTrigger>
+                              <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                                {availableServerBundles.map((b) => {
+                                  const key = `${b.tag}::${b.assetName}`;
+                                  return (
+                                    <SelectItem
+                                      key={key}
+                                      value={key}
+                                      className="text-[11px] font-medium"
+                                    >
+                                      Version {b.tagVersion} · Python API {b.assetVersion} ·{" "}
+                                      {b.device.toUpperCase()} · {b.pythonTag}
+                                      {b.prerelease ? " (pre-release)" : ""}
+                                      
+                                    </SelectItem>
+                                  );
+                                })}
+                              </SelectContent>
+                            </Select>
+
+                            {selectedServerBundle ? (
+                              <div className="w-full">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-8 text-[11px] dark border-white/10 bg-brand-background text-brand-light/90 rounded-[6px] w-fit px-3"
+                                  onClick={() =>
+                                    setShowSelectedBundleDetails((s) => !s)
+                                  }
+                                >
+                                  {showSelectedBundleDetails
+                                    ? "Hide details"
+                                    : "Show details"}
+                                </Button>
+
+                                {showSelectedBundleDetails ? (
+                                  <div className="text-[10.5px] text-brand-light/60 leading-relaxed text-start w-full mt-2">
+                                    <div className="flex gap-1 flex-col text-start justify-start items-start mb-2">
+                                      <span className="text-brand-light font-medium">
+                                        Asset Name
+                                      </span>
+                                      <span className=" text-brand-light/80">
+                                        {selectedServerBundle.assetName}
+                                      </span>
+                                    </div>
+                                    <div className="flex gap-1 flex-col text-start justify-start items-start">
+                                      <span className="text-brand-light font-medium text-start">
+                                        Download URL
+                                      </span>
+                                      <span className="text-brand-light/80">
+                                        {selectedServerBundle.downloadUrl}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+
+                        {serverBundlesError ? (
+                          <div className="text-[11px] text-red-300/90">
+                            {serverBundlesError}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="flex flex-col gap-2.5">
+                        <label className={fieldLabelClass}>
+                          <span>Use a local bundle (.tar.zst)</span>
+                          <span className="text-[10px] text-brand-light/60 font-normal">
+                            If you already have a server bundle file, choose it from disk.
+                          </span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={localBundlePath}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setLocalBundlePath(v);
+                              validateLocalBundlePath(v);
+                            }}
+                            placeholder="/path/to/python-api-...tar.zst"
+                            className="h-9 text-[12px]!  bg-brand-background/80 border-white/10 text-brand-light rounded-[6px]"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-9  text-[11.5px] dark border-white/10 bg-brand-background text-brand-light/90 rounded-[6px]"
+                            onClick={() => void pickLocalBundle()}
+                          >
+                            Browse
+                          </Button>
+                        </div>
+                        {localBundleError ? (
+                          <div className="text-[11px] text-red-300/90">
+                            {localBundleError}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="storage" className="m-0">
+                    <div className="flex flex-col gap-4 text-brand-light">
+                    <div className="flex flex-col gap-1 border-b border-brand-light/8 pb-4">
+                        <div className="text-[13px] font-semibold  text-brand-light">
+                          Storage Configuration
+                        </div>
+                        <div className="flex flex-col gap-2 text-[10.5px] text-brand-light/60 font-normal">
+                          Configure where Apex Studio stores its data/resources and where downloaded server bundles are saved.
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-2.5">
+                        <label className={fieldLabelClass}>
+                          <span>Save Location</span>
+                          <span className="text-[10px] text-brand-light/60 font-normal">
+                            This folder will be used as the base location for all API config
+                            paths (cache, downloads, models, etc.).
+                          </span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={saveLocation}
+                            onChange={(e) => setSaveLocation(e.target.value)}
+                            placeholder="/path/to/save-location"
+                            className="h-9 text-[12px]!  bg-brand-background/80 border-white/10 text-brand-light rounded-[6px]"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-9  text-[11.5px] dark border-white/10 bg-brand-background text-brand-light/90 rounded-[6px]"
+                            onClick={() => void pickSaveLocation()}
+                          >
+                            Browse
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-2.5">
+                        <label className={fieldLabelClass}>
+                          <span>Code Location</span>
+                          <span className="text-[10px] text-brand-light/60 font-normal">
+                            This folder is where downloaded server bundle archives (.tar.zst)
+                            will be saved. This is separate from your Save Location.
+                          </span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={codeLocation}
+                            onChange={(e) => setCodeLocation(e.target.value)}
+                            placeholder="/path/to/code-location"
+                            className="h-9 text-[12px]!  bg-brand-background/80 border-white/10 text-brand-light rounded-[6px]"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-9  text-[11.5px] dark border-white/10 bg-brand-background text-brand-light/90 rounded-[6px]"
+                            onClick={() => void pickCodeLocation()}
+                          >
+                            Browse
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="render" className="m-0 ">
+                    <div className="flex flex-col gap-4 text-brand-light">
+                      <div className="flex flex-col gap-1 border-b border-brand-light/8 pb-4">
+                        <div className="text-[13px] font-semibold text-brand-light">
+                          Render Generation Steps
+                        </div>
+                        <div className="flex flex-col gap-2 text-[10.5px] text-brand-light/60 font-normal">
+                          Note that when we render generation steps, the generation speed will be much slower, and this will consume more system resources.
+                        </div>
+                      </div>
+                      
+
+                      <div className="flex items-start justify-between gap-3">
+                        <label
+                          htmlFor="installer-render-image"
+                          className={fieldLabelClass + " flex-1 cursor-pointer"}
+                        >
+                          <span>Render for Image</span>
+                          <span className="text-[10px] text-brand-light/60 font-normal">
+                            Enable image rendering outputs/steps where applicable.
+                          </span>
+                        </label>
+                        <Checkbox
+                          id="installer-render-image"
+                          checked={renderImage}
+                          onCheckedChange={(checked) =>
+                            setRenderImage(Boolean(checked))
+                          }
+                          className="mt-1"
+                        />
+                      </div>
+
+                      <div className="flex items-start justify-between gap-3">
+                        <label
+                          htmlFor="installer-render-video"
+                          className={fieldLabelClass + " flex-1 cursor-pointer"}
+                        >
+                          <span>Render for Video</span>
+                          <span className="text-[10px] text-brand-light/60 font-normal">
+                            Enable video rendering outputs/steps where applicable.
+                          </span>
+                        </label>
+                        <Checkbox
+                          id="installer-render-video"
+                          checked={renderVideo}
+                          onCheckedChange={(checked) =>
+                            setRenderVideo(Boolean(checked))
+                          }
+                          className="mt-1"
+                        />
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="mask" className="m-0">
+                    <div className="flex flex-col gap-4 text-brand-light">
+                    <div className="flex flex-col gap-1 border-b border-brand-light/8 pb-4">
+                        <div className="text-[13px] font-semibold text-brand-light">
+                          Models
+                        </div>
+                        <div className="flex flex-col gap-2 text-[10.5px] text-brand-light/60 font-normal">
+                          Models that will be downloaded to power advanced image and video generation features.
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-2.5">
+                        <label className={fieldLabelClass}>
+                          <span>Mask Model</span>
+                          <span className="text-[10px] text-brand-light/60 font-normal">
+                            The backend model to download and use for mask generation.
+                          </span>
+                        </label>
+                        <Select value={maskModel} onValueChange={setMaskModel}>
+                          <SelectTrigger
+                            size="sm"
+                            className="w-full h-8.5! text-[11.5px] bg-brand-background/70 font-medium rounded-[6px] border-white/10 text-brand-light"
+                          >
+                            <SelectValue placeholder="Select mask model" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                            {MASK_MODEL_OPTIONS.map((opt) => (
+                              <SelectItem
+                                key={opt.value}
+                                value={opt.value}
+                                className="text-[11px] font-medium"
+                              >
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="flex items-start justify-between gap-3">
+                        <label
+                          htmlFor="installer-install-rife"
+                          className={fieldLabelClass + " flex-1 cursor-pointer"}
+                        >
+                          <span>Install Rife Frame Interpolation</span>
+                          <span className="text-[10px] text-brand-light/60 font-normal">
+                            By selecting, we will install the rife model onto your machine as
+                            well.
+                          </span>
+                        </label>
+                        <Checkbox
+                          id="installer-install-rife"
+                          checked={installRifeFrameInterpolation}
+                          onCheckedChange={(checked) =>
+                            setInstallRifeFrameInterpolation(Boolean(checked))
+                          }
+                          className="mt-1"
+                        />
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="install" className="m-0">
+                    <div className="flex flex-col gap-4 text-brand-light">
+                      <div>
+                        <div className="text-[13px] font-semibold text-brand-light">
+                          Ready to Install
+                        </div>
+                        <div className="text-[11px] text-brand-light/60 mt-1">
+                          This will install the selected models and configurations to your machine.
+                        </div>
+                      </div>
+
+                      <div className="rounded-md border border-brand-light/5 bg-brand-background/70 backdrop-blur-md p-4 text-[11.5px]">
+                        <div className="flex items-center justify-between gap-4 mb-2">
+                          <span className="text-brand-light font-medium ">
+                            Server Bundle
+                          </span>
+                          <span className="text-brand-light/90 truncate max-w-[70%]">
+                            {localBundlePath
+                              ? localBundlePath
+                              : selectedServerBundle
+                                ? selectedServerBundle.tag
+                                : "—"}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-4">
+                          <span className="text-brand-light font-medium ">Save Location</span>
+                          <span className="text-brand-light/90 truncate max-w-[70%]">
+                            {saveLocation || "—"}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-4 mt-2">
+                          <span className="text-brand-light font-medium ">Code Location</span>
+                          <span className="text-brand-light/90 truncate max-w-[70%]">
+                            {codeLocation || "—"}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-4 mt-2">
+                          <span className="text-brand-light font-medium ">Render</span>
+                          <span className="text-brand-light/90">
+                            {renderImage ? "Image" : ""}
+                            {renderImage && renderVideo ? " + " : ""}
+                            {renderVideo ? "Video" : ""}
+                            {!renderImage && !renderVideo ? "—" : ""}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-4 mt-2">
+                           <span className="text-brand-light font-medium ">Mask Model</span>
+                          <span className="text-brand-light/90">{maskModel}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-4 mt-2">
+                          <span className="text-brand-light font-medium">Rife</span>
+                          <span className="text-brand-light/90">
+                            {installRifeFrameInterpolation ? "Install" : "Skip"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {installStatus ? (
+                        <div className="text-[11px] text-brand-light/70">
+                          {installStatus}
+                        </div>
+                      ) : null}
+                      {installError ? (
+                        <div className="text-[11px] text-red-300/90">
+                          {installError}
+                        </div>
+                      ) : null}
+
+                    </div>
+                  </TabsContent>
+                </div>
+
+                <div className="px-5 pb-5 pt-0 flex items-center justify-between gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-[6px]  bg-brand-background-light border border-brand-light/5 hover:bg-brand/70 hover:text-brand-light/90 px-6 py-2 dark text-brand-light/90 text-[11.5px]"
+                    disabled={!canGoBack}
+                    onClick={goBack}
+                  >
+                    Back
+                  </Button>
+
+                  <div className="text-[11px] text-brand-light/50">
+                    Step {activeIndex + 1} of {steps.length}
+                  </div>
+
+                  <Button
+                    type="button"
+                    className={`rounded-[6px] px-6 py-2 text-[11.5px] border border-brand-light/5 ${activeStep === "install" ? "bg-brand-accent-shade hover:bg-brand-accent-shade/80 border-brand-light/10 text-brand-light" : "bg-brand-background-light hover:bg-brand/70 hover:text-brand-light/90 text-brand-light"}`}
+                    disabled={
+                      installing || (!canGoNext && activeStep !== "install")
+                    }
+                    onClick={
+                      activeStep === "install"
+                        ? () => void runInstall()
+                        : goNext
+                    }
+                  >
+                    {canGoNext ? "Next" : installing ? "Installing…" : "Install"}
+                  </Button>
+                </div>
+                </Tabs>
+              ) : (
+                <div className="w-full flex h-[70vh] min-h-[420px] max-h-[620px] overflow-hidden min-w-0">
+                  {/* Left: vertical phase tabs */}
+                  <div className="w-[240px] border-r border-white/10 p-4 shrink-0">
+                    <div className="text-[11px] uppercase tracking-wide text-brand-light/60 mb-3">
+                      Installation Phases
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {phaseList.map((p) => {
+                        const st = phaseState[p.id];
+                        const isActive = activePhase === p.id;
+                        const isDisabled = st.status === "pending";
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            disabled={isDisabled}
+                            onClick={() => setActivePhase(p.id)}
+                            className={[
+                              "w-full text-left rounded-[8px] border px-3 py-2 flex items-center gap-2 transition-colors",
+                              isActive
+                                ? "bg-brand border-brand-light/15 hover:bg-brand!"
+                                : "bg-brand-background border-white/10",
+                              isDisabled
+                                ? "opacity-50 cursor-not-allowed"
+                                : "hover:bg-brand/70",
+                            ].join(" ")}
+                          >
+                            <span className={isActive ? "text-brand-light" : "text-brand-light/70"}>
+                              {renderPhaseIcon(st)}
+                            </span>
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-[11px] font-medium text-brand-light/90">
+                                {p.label}
+                              </span>
+                              <span className="text-[10px] text-brand-light/50 truncate">
+                                {st.status === "completed"
+                                  ? "Completed"
+                                  : st.status === "skipped"
+                                    ? "Skipped"
+                                    : st.status === "error"
+                                      ? "Error"
+                                      : st.status === "active"
+                                        ? "In progress"
+                                        : "Pending"}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Right: phase details */}
+                  <div className="flex-1 p-5 min-w-0 flex flex-col min-h-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex flex-col">
+                        <div className="text-[13px] font-semibold text-brand-light">
+                          {phaseList.find((p) => p.id === activePhase)?.label}
+                        </div>
+                        <div className="text-[11px] text-brand-light/60 mt-1">
+                          {phaseState[activePhase]?.message ||
+                            (phaseState[activePhase]?.status === "pending"
+                              ? "Waiting…"
+                              : "Working…")}
+                        </div>
+                      </div>
+                      {installJobId ? (
+                        <div className="text-[10px] text-brand-light/40 font-mono truncate max-w-[220px]">
+                          Job: {installJobId}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {phaseState[activePhase]?.percent !== null ? (
+                      <div className="mt-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[10.5px] text-brand-light/60">
+                            Progress
+                          </span>
+                          <span className="text-[10.5px] text-brand-light/60">
+                            {phaseState[activePhase]!.percent}%
+                          </span>
+                        </div>
+                        <ProgressBar
+                          percent={phaseState[activePhase]!.percent!}
+                          className="h-2 border-brand-light/15 bg-brand-background-dark/70"
+                          barClassName="bg-brand-accent"
+                        />
+                      </div>
+                    ) : null}
+
+                    {/* Phase-specific content */}
+                    <div className="mt-5 flex-1 min-h-0">
+                      {activePhase === "extract_bundle" ? (
+                        <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-3 h-full flex flex-col min-h-0">
+                          <div className="text-[11px] text-brand-light/70 mb-2">
+                            Extracted files (live)
+                          </div>
+                          <div className="text-[10px] text-brand-light/40 mb-2">
+                            {extractionFilesRef.current.length} files
+                          </div>
+                          <ScrollAreaPrimitive.Root
+                            ref={extractionListContainerRef}
+                            className="flex-1 min-h-0 rounded border border-brand-light/10 bg-black/30 overflow-hidden"
+                          >
+                            {extractionFilesRef.current.length === 0 ? (
+                              <div className="p-2 text-[10.5px] text-brand-light/50">
+                                Waiting for extraction to start…
+                              </div>
+                            ) : extractionListSize.height > 0 &&
+                              extractionListSize.width > 0 ? (
+                              <>
+                                <VirtualList
+                                  height={extractionListSize.height}
+                                  width={extractionListSize.width}
+                                  itemCount={extractionFilesRef.current.length}
+                                  itemSize={18}
+                                  outerElementType={VirtualScrollViewport as any}
+                                >
+                                  {ExtractRow}
+                                </VirtualList>
+                                <ScrollBar orientation="vertical" />
+                                <ScrollBar orientation="horizontal" />
+                                <ScrollAreaPrimitive.Corner />
+                              </>
+                            ) : null}
+                          </ScrollAreaPrimitive.Root>
+                        </div>
+                      ) : activePhase === "download_models" ? (
+                        <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
+                          Model download is not implemented yet.
+                        </div>
+                      ) : activePhase === "update_configs" ? (
+                        <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
+                          Config setup is partially implemented (currently: ffmpeg install).
+                        </div>
+                      ) : (
+                        <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
+                          Bundle download in progress.
+                        </div>
+                      )}
+                    </div>
+
+                    {installError ? (
+                      <div className="mt-4 text-[11px] text-red-300/90">
+                        {installError}
+                      </div>
+                    ) : null}
+                    {uiMode === "done" && installStatus ? (
+                      <div className="mt-4 text-[11px] text-brand-light/70">
+                        {installStatus}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+};
+
+export default Installer;
+
+

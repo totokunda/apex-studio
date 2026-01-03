@@ -38,6 +38,7 @@ import { generateTimelineSamples } from "@/lib/media/timeline";
 import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
 import { useWebGLFilters } from "@/components/preview/webgl-filters";
 import { toFrameRange } from "@/lib/media/fps";
+import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 import { cn } from "@/lib/utils";
 import { useWebGLMask } from "@/components/preview/mask/useWebGLMask";
 import { useViewportStore } from "@/lib/viewport";
@@ -167,6 +168,12 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
     }
     return Math.max((preprocessorDuration / clipDuration) * clipWidth, 3);
   }, [preprocessorDuration, clipDuration, clipWidth, clip?.type]);
+
+  const safeCornerRadius = useMemo(
+    () =>
+      sanitizeCornerRadius(cornerRadius, preprocessorWidth, timelineHeight) as number,
+    [cornerRadius, preprocessorWidth, timelineHeight],
+  );
   const selectedPreprocessorId = useClipStore((s) => s.selectedPreprocessorId);
   const setSelectedPreprocessorId = useClipStore(
     (s) => s.setSelectedPreprocessorId,
@@ -1407,7 +1414,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
                       : 2
                     : 0
               }
-              cornerRadius={cornerRadius}
+              cornerRadius={safeCornerRadius}
               onMouseOver={(e) => {
                 e.target.getStage()!.container().style.cursor = "grab";
               }}
@@ -1428,7 +1435,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
                 image={imageCanvas}
                 width={imageWidth}
                 height={timelineHeight}
-                cornerRadius={cornerRadius}
+                cornerRadius={safeCornerRadius}
                 fill={"black"}
                 listening={false}
               />
@@ -1445,7 +1452,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
                     : "rgba(255, 255, 255, 0.1)"
                 }
                 strokeWidth={selectedPreprocessorId === preprocessor.id ? 1 : 0}
-                cornerRadius={cornerRadius}
+                cornerRadius={safeCornerRadius}
                 listening={false}
               />
             </>
@@ -1458,7 +1465,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
               width={(preprocessorWidth * (progress ?? 0)) / 100}
               height={timelineHeight}
               fill={"rgb(174, 129, 206)"}
-              cornerRadius={cornerRadius}
+              cornerRadius={safeCornerRadius}
               listening={false}
             />
           )}
@@ -1547,7 +1554,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
               preprocessor.status !== "complete" &&
               clip?.type === "video"
             }
-            cornerRadius={[cornerRadius, 0, 0, cornerRadius]}
+            cornerRadius={[safeCornerRadius, 0, 0, safeCornerRadius]}
             fill={"white"}
             stroke={"white"}
             onMouseOver={(e) => {
@@ -1576,7 +1583,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
               preprocessor.status !== "complete" &&
               clip?.type === "video"
             }
-            cornerRadius={[0, cornerRadius, cornerRadius, 0]}
+            cornerRadius={[0, safeCornerRadius, safeCornerRadius, 0]}
             fill={"white"}
             stroke={"white"}
             onMouseOver={(e) => {

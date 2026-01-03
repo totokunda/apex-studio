@@ -590,7 +590,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     clearJob(jobId);
     
     // Update preprocessor status to idle
-    updatePreprocessor(clip.clipId, preprocessor.id, { status: undefined, activeJobId: undefined });
+    updatePreprocessor(clip.clipId, preprocessor.id, { status: undefined, activeJobId: undefined, progress: 0 });
     
     toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor, preprocessor]);
