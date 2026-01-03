@@ -24,6 +24,7 @@ import {
   generateTimelineThumbnailImage,
   generateTimelineThumbnailVideo,
 } from "./thumbnails";
+import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 
 type Props = {
   clipWidth: number;
@@ -66,6 +67,11 @@ const ModelClip: React.FC<Props> = ({
   timelineDuration,
   clipId,
 }) => {
+  const safeCornerRadius = useMemo(
+    () => sanitizeCornerRadius(cornerRadius, clipWidth, timelineHeight) as number,
+    [cornerRadius, clipWidth, timelineHeight],
+  );
+
   const updateClip = useClipStore((s) => s.updateClip);
   const getClipById = useClipStore((s) => s.getClipById);
   const getAssetById = useClipStore((s) => s.getAssetById);
@@ -310,7 +316,7 @@ const ModelClip: React.FC<Props> = ({
           image={displayCanvasRef.current}
           width={clipWidth}
           height={timelineHeight}
-          cornerRadius={cornerRadius}
+          cornerRadius={safeCornerRadius}
           fillLinearGradientStartPoint={{ x: 0, y: 0 }}
           fillLinearGradientEndPoint={{ x: 0, y: timelineHeight }}
           fillLinearGradientColorStops={[

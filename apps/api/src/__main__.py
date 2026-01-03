@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os, subprocess, signal, psutil, sys, shlex, importlib.util
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 from pathlib import Path
 import typer
 import torch
@@ -23,7 +24,9 @@ def _num_cpus():
 def create_procfile(procfile: Path, mode="dev"):
     # Ray manages workers internally, so we only need the API server
     if mode == "dev":
-        host = os.getenv("APEX_HOST", "0.0.0.0")
+        # Default to loopback so the desktop app can connect without extra config.
+        # Users who need LAN access can set APEX_HOST=0.0.0.0 or pass --host.
+        host = os.getenv("APEX_HOST", "127.0.0.1")
         port = os.getenv("APEX_PORT", "8765")
         start = (
             "api: uvicorn src.api.main:app " f"--host {host} --port {port} --reload\n"
@@ -184,6 +187,13 @@ def start(
     mode = "dev" if procfile_path.name.endswith(".dev") else "prod"
     create_procfile(procfile_path, mode)
 
+    # Helpful connection hint: 0.0.0.0 is a *bind address* (server-side), not a client URL.
+    # Most users should connect via 127.0.0.1 (or localhost).
+    effective_host = os.getenv("APEX_HOST") or ("127.0.0.1" if mode in {"dev", "prod"} else "127.0.0.1")
+    effective_port = os.getenv("APEX_PORT", "8765")
+    client_host = "127.0.0.1" if effective_host in {"0.0.0.0", "::", "[::]"} else effective_host
+    print(f"API should be reachable at: http://{client_host}:{effective_port}")
+
     log_path = (cwd / "apex-engine-start.log") if daemon else None
     _load_envfile_if_present(envfile_path)
 
@@ -220,8 +230,45 @@ def internal_serve():
 
     import uvicorn
 
+    def _binds_for(host_value: str) -> list[str]:
+        if host_value in {"127.0.0.1", "localhost"}:
+            return ["127.0.0.1", "::1"]
+        if host_value in {"0.0.0.0", "::", "[::]"}:
+            return ["0.0.0.0", "::"]
+        return [host_value]
+
+    binds = _binds_for(host)
+
     # Run the API server. In production we do not use --reload.
-    uvicorn.run("src.api.main:app", host=host, port=port, log_level="info")
+    # For macOS reliability we support dual-stack loopback binds.
+    if len(binds) == 1:
+        uvicorn.run("src.api.main:app", host=binds[0], port=port, log_level="info")
+        return
+
+    import multiprocessing as _mp
+    import time as _time
+
+    def _run_one(h: str) -> None:
+        uvicorn.run("src.api.main:app", host=h, port=port, log_level="info")
+
+    procs: list[_mp.Process] = []
+    for h in binds:
+        p = _mp.Process(target=_run_one, args=(h,))
+        p.start()
+        procs.append(p)
+
+    try:
+        while True:
+            # If either server dies, exit with non-zero to surface the failure.
+            for p in procs:
+                if not p.is_alive():
+                    raise SystemExit(1)
+            _time.sleep(0.25)
+    except KeyboardInterrupt:
+        for p in procs:
+            p.terminate()
+        for p in procs:
+            p.join(timeout=5)
 
 
 def _find_apex_processes():

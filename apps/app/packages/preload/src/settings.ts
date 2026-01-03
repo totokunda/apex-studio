@@ -10,6 +10,7 @@ function setActiveProjectId(projectId: string | number | null): Promise<void> {
 }
 
 type PathsPayload = {
+  apiPath?: string | null;
   cachePath?: string | null;
   componentsPath?: string | null;
   configPath?: string | null;
@@ -17,6 +18,14 @@ type PathsPayload = {
   preprocessorPath?: string | null;
   postprocessorPath?: string | null;
 };
+
+function getApiPathSetting(): Promise<string | null> {
+  return ipcRenderer.invoke("settings:get-api-path");
+}
+
+function setApiPathSetting(path: string | null): Promise<void> {
+  return ipcRenderer.invoke("settings:set-api-path", path);
+}
 
 function getCachePathSetting(): Promise<string | null> {
   return ipcRenderer.invoke("settings:get-cache-path");
@@ -140,6 +149,8 @@ function setUseFastDownloadSetting(
 export {
   getActiveProjectId,
   setActiveProjectId,
+  getApiPathSetting,
+  setApiPathSetting,
   getCachePathSetting,
   setCachePathSetting,
   getComponentsPathSetting,

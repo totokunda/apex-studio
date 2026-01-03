@@ -19,6 +19,12 @@ type PathKey =
 
 interface Settings {
   activeProjectId?: string | number | null;
+  /**
+   * Local path to the bundled/installed API runtime (e.g. python env, api package, etc).
+   * Used by the launcher to decide whether the app can proceed even if the API server
+   * isn't currently reachable.
+   */
+  apiPath?: string | null;
   cachePath?: string | null;
   componentsPath?: string | null;
   configPath?: string | null;
@@ -321,6 +327,16 @@ export class SettingsModule extends EventEmitter implements AppModule {
       },
     );
 
+    // API path storage (local-only)
+    ipcMain.handle("settings:get-api-path", () => {
+      return this.store.get("apiPath") ?? null;
+    });
+
+    ipcMain.handle("settings:set-api-path", (_event, apiPath: string | null) => {
+      const v = (apiPath ?? "").trim();
+      this.store.set("apiPath", v || null);
+    });
+
     // Individual path getters (ensure from backend if missing)
     ipcMain.handle("settings:get-cache-path", async () => {
       const current = this.store.get("cachePath") as string | null;
@@ -424,6 +440,7 @@ export class SettingsModule extends EventEmitter implements AppModule {
       async (
         _event,
         payload: Partial<PathsPayload> & {
+          apiPath?: string | null;
           hfToken?: string | null;
           civitaiApiKey?: string | null;
         },
@@ -453,6 +470,11 @@ export class SettingsModule extends EventEmitter implements AppModule {
           await this.setCivitaiApiKeyAndUpdateApi(
             payload.civitaiApiKey ?? null,
           );
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload, "apiPath")) {
+          const v = ((payload.apiPath ?? "") as string).trim();
+          this.store.set("apiPath", v || null);
         }
 
         return { success: true };

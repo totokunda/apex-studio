@@ -45,6 +45,19 @@ async function loadProjectJson(
   return await ipcRenderer.invoke("projects:load-json", projectId);
 }
 
+async function saveProjectCover(
+  projectId: string | number,
+  buffer: Uint8Array,
+): Promise<ConfigResponse<{ path: string }>> {
+  return await ipcRenderer.invoke("projects:save-cover", projectId, buffer);
+}
+
+async function clearProjectCover(
+  projectId: string | number,
+): Promise<ConfigResponse<{ ok: true }>> {
+  return await ipcRenderer.invoke("projects:clear-cover", projectId);
+}
+
 // Timelines API functions
 async function createTimeline(payload: {
   projectId: number;
@@ -209,6 +222,8 @@ export {
   updateProjectAspectRatio,
   saveProjectJson,
   loadProjectJson,
+  saveProjectCover,
+  clearProjectCover,
   createTimeline,
   listTimelines,
   deleteTimeline,

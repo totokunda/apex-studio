@@ -99,7 +99,7 @@ const RoundedRegularPolygon = React.forwardRef<
 
       // Calculate the effective corner radius (can't be larger than half the edge length)
       const maxRadius = Math.min(len1, len2) / 2;
-      const effectiveRadius = Math.min(cornerRadius, maxRadius);
+      const effectiveRadius = Math.min(Math.max(0, cornerRadius), maxRadius);
 
       // Calculate start and end points for the arc
       const startX = current.x - n1x * effectiveRadius;

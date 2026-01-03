@@ -42,8 +42,6 @@ function parseArgs() {
     arch: process.arch,
     cuda: "auto",
     skipSign: false,
-    uvVersion: null, // null => use GitHub releases "latest"
-    skipUv: false,
     publish: false,
     draft: false,
   };
@@ -59,12 +57,6 @@ function parseArgs() {
         break;
       case "--skip-sign":
         config.skipSign = true;
-        break;
-      case "--uv-version":
-        config.uvVersion = args[++i];
-        break;
-      case "--skip-uv":
-        config.skipUv = true;
         break;
       case "--publish":
         config.publish = true;
@@ -92,8 +84,6 @@ Usage:
 Options:
   --platform [darwin|linux|win32|all]  Target platform (default: current)
   --arch [x64|arm64|universal]         Target architecture (default: current)
-  --uv-version <tag>                   Pin uv GitHub release tag (default: latest)
-  --skip-uv                            Skip bundling uv binaries
   --skip-sign                          Skip code signing
   --publish                            Publish release after build
   --draft                              Create draft release
@@ -158,21 +148,7 @@ function runCommand(command, args, options = {}) {
   });
 }
 
-function getUvAssetName({ platform, arch }) {
-  const a = arch === "arm64" ? "aarch64" : "x86_64";
-  if (platform === "darwin") return `uv-${a}-apple-darwin.tar.gz`;
-  if (platform === "linux") return `uv-${a}-unknown-linux-gnu.tar.gz`;
-  if (platform === "win32") return `uv-${a}-pc-windows-msvc.zip`;
-  throw new Error(`Unsupported platform for uv: ${platform}`);
-}
-
-function uvDownloadUrl({ versionTag, assetName }) {
-  // Use GitHub's "latest" redirect by default to avoid hard pinning.
-  if (!versionTag) {
-    return `https://github.com/astral-sh/uv/releases/latest/download/${assetName}`;
-  }
-  return `https://github.com/astral-sh/uv/releases/download/${versionTag}/${assetName}`;
-}
+// (bundled tar removed) - installer prefers host `tar` when available, otherwise uses Node zstd+tar extraction.
 
 async function downloadFile(url, destPath) {
   await new Promise((resolve, reject) => {
@@ -258,89 +234,7 @@ async function extractArchive(archivePath, outDir) {
   throw new Error(`Unsupported archive format: ${archivePath}`);
 }
 
-async function ensureUvBinaries(config) {
-  if (config.skipUv) {
-    log("Skipping uv bundling (--skip-uv)", "warning");
-    return;
-  }
-
-  log("Ensuring uv binaries are bundled (mac/linux/windows)...", "step");
-
-  const uvRoot = join(APP_ROOT, "buildResources", "uv");
-  const tmpRoot = join(APP_ROOT, ".tmp", "uv");
-  mkdirSync(uvRoot, { recursive: true });
-  mkdirSync(tmpRoot, { recursive: true });
-
-  const platforms =
-    config.platform === "all" ? ["darwin", "linux", "win32"] : [config.platform];
-
-  /** @type {{platform:string, arch:string}[]} */
-  const targets = [];
-  for (const p of platforms) {
-    if (p === "darwin") {
-      if (config.arch === "universal") {
-        targets.push({ platform: "darwin", arch: "x64" }, { platform: "darwin", arch: "arm64" });
-      } else if (config.arch === "x64" || config.arch === "arm64") {
-        targets.push({ platform: "darwin", arch: config.arch });
-      } else {
-        targets.push({ platform: "darwin", arch: process.arch === "arm64" ? "arm64" : "x64" });
-      }
-    } else if (p === "win32") {
-      targets.push({ platform: "win32", arch: config.arch === "arm64" ? "arm64" : "x64" });
-    } else if (p === "linux") {
-      targets.push({ platform: "linux", arch: config.arch === "arm64" ? "arm64" : "x64" });
-    } else {
-      throw new Error(`Unsupported target platform: ${p}`);
-    }
-  }
-
-  for (const t of targets) {
-    const destDir = join(uvRoot, t.platform, t.arch);
-    mkdirSync(destDir, { recursive: true });
-
-    const exeSuffix = t.platform === "win32" ? ".exe" : "";
-    const destUv = join(destDir, `uv${exeSuffix}`);
-    const destUvx = join(destDir, `uvx${exeSuffix}`);
-
-    // Skip download if already present (makes rebuilds fast)
-    if (existsSync(destUv) && (t.platform === "win32" ? true : true)) {
-      log(`uv already present for ${t.platform}/${t.arch}`, "info");
-      continue;
-    }
-
-    const assetName = getUvAssetName(t);
-    const url = uvDownloadUrl({ versionTag: config.uvVersion, assetName });
-    const archivePath = join(tmpRoot, assetName);
-    const extractDir = join(tmpRoot, `${t.platform}-${t.arch}`);
-
-    log(`Downloading uv (${t.platform}/${t.arch}) from ${url}`, "info");
-    await downloadFile(url, archivePath);
-    await extractArchive(archivePath, extractDir);
-
-    const uvName = `uv${exeSuffix}`;
-    const uvxName = `uvx${exeSuffix}`;
-
-    const uvFound = findFileRecursive(extractDir, (name) => name === uvName);
-    const uvxFound = findFileRecursive(extractDir, (name) => name === uvxName);
-    if (!uvFound) throw new Error(`Failed to locate ${uvName} after extracting ${assetName}`);
-
-    cpSync(uvFound, destUv);
-    if (uvxFound) cpSync(uvxFound, destUvx);
-
-    if (t.platform !== "win32") {
-      try {
-        chmodSync(destUv, 0o755);
-      } catch {}
-      try {
-        if (existsSync(destUvx)) chmodSync(destUvx, 0o755);
-      } catch {}
-    }
-
-    log(`Bundled uv for ${t.platform}/${t.arch} -> ${destDir}`, "success");
-  }
-}
-
-
+// (uv removed) - we ship full Python via python-api/server bundles now.
 
 // Step 2: Build Electron app packages
 async function buildElectronPackages() {
@@ -443,8 +337,7 @@ async function main() {
 
     log("Prerequisites check passed", "success");
 
-    // Bundle uv binaries (used for environment installation/bootstrapping)
-    await ensureUvBinaries(config);
+    // (bundled tar removed)
 
     // Build Electron packages
     await buildElectronPackages();
