@@ -4,22 +4,22 @@ from typing import List, Tuple
 import torch
 import numpy as np
 import math
-import random
+import random 
 import copy
 from src.mixins.download_mixin import DownloadMixin
 from src.preprocess.dwpose_nlf.render_helpers import (
-    collect_smpl_poses,
-    draw_pose_to_canvas_np,
-    scale_image_hw_keep_size,
-    shift_dwpose_according_to_nlf,
+    collect_smpl_poses, 
+    draw_pose_to_canvas_np, 
+    scale_image_hw_keep_size, 
+    shift_dwpose_according_to_nlf, 
     render_whole,
     get_single_pose_cylinder_specs,
-)
+    )
 from src.preprocess.util import (
-    HWC3,
     resize_image_with_pad,
     custom_hf_download,
     DWPOSE_MODEL_NAME,
+    NLF_MODEL_NAME,
     DOWNLOAD_PROGRESS_CALLBACK,
     annotator_ckpts_path,
 )
@@ -28,10 +28,17 @@ from src.utils.defaults import get_torch_device
 import os
 from tqdm import tqdm
 from typing import Dict, Any, Optional
+import sys
+sys.path.append("src/preprocess/dwpose_nlf/nlf")
+import src.preprocess.dwpose_nlf.nlf.pt.backbones.builder as backbone_builder
+import src.preprocess.dwpose_nlf.nlf.pt.models.field as pt_field
+import src.preprocess.dwpose_nlf.nlf.pt.models.nlf_model as pt_nlf_model
+from src.preprocess.dwpose_nlf.nlf.pt.multiperson import multiperson_model, person_detector
+import yaml
+from safetensors.torch import load_file
 
 
 global_cached_dwpose = Wholebody()
-
 
 def _parse_background_color(val):
     if val is None:
@@ -51,7 +58,6 @@ def _parse_background_color(val):
         return (int(val[0]), int(val[1]), int(val[2]))
     raise ValueError(f"Invalid background_color: {val!r}")
 
-
 def _parse_background(background, background_color):
     """
     Returns:
@@ -69,7 +75,6 @@ def _parse_background(background, background_color):
     ):
         return ("source", None)
     return ("color", _parse_background_color(background))
-
 
 def _to_rgb_uint8(
     x: np.ndarray,
@@ -110,7 +115,6 @@ def _to_rgb_uint8(
         return y.clip(0, 255).astype(np.uint8)
     raise ValueError(f"Unsupported channel count: {C}")
 
-
 class DwposeNlfDetector(DwposeDetector):
     def __init__(self, dw_pose_estimation, nlf_model, device=None):
         super().__init__(dw_pose_estimation)
@@ -119,51 +123,8 @@ class DwposeNlfDetector(DwposeDetector):
             self.device = get_torch_device()
         else:
             self.device = device
-
-        # MPS (Apple Silicon) can fail on some ops inside the NLF TorchScript model
-        # (notably adaptive_avg_pool2d via interpolate(mode="area")) for non-divisible sizes.
-        # Default to running NLF on CPU when main device is MPS; allow override if desired.
-        allow_mps = os.getenv("DWPOSE_NLF_ALLOW_MPS", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-        }
-        self.nlf_device = self.device
-        if self.device.type == "mps" and not allow_mps:
-            self.nlf_device = torch.device("cpu")
-
-        self.nlf_model.to(self.nlf_device).eval()
-
-    def _detect_smpl_batched(self, frame_batch: torch.Tensor):
-        """
-        Run NLF TorchScript inference with an MPS-safe fallback.
-
-        On Apple MPS, some downsampling paths can throw:
-          "Adaptive pool MPS: input sizes must be divisible by output sizes"
-        In that case, retry on CPU.
-        """
-        try:
-            return self.nlf_model.detect_smpl_batched(frame_batch.to(self.nlf_device))
-        except RuntimeError as e:
-            msg = str(e)
-            if (
-                self.nlf_device.type == "mps"
-                and (
-                    "Adaptive pool MPS" in msg
-                    or "adaptive_avg_pool2d" in msg
-                    or "Non-divisible input sizes" in msg
-                )
-            ):
-                # Fallback: run on CPU (slower, but reliable).
-                self.nlf_device = torch.device("cpu")
-                try:
-                    self.nlf_model.to(self.nlf_device).eval()
-                except Exception:
-                    # If for some reason the scripted module can't be moved, still try CPU inputs.
-                    pass
-                return self.nlf_model.detect_smpl_batched(frame_batch.cpu())
-            raise
-
+        self.nlf_model.to(self.device).eval()
+        
     @staticmethod
     def download_nlf_model(url, nlf_model_filename):
         def _progress_cb(downloaded: int, total: int, _label: str = None):
@@ -185,38 +146,30 @@ class DwposeNlfDetector(DwposeDetector):
             progress_callback=_progress_cb,
         )
         return downloaded_path
-
+    
     @classmethod
     def from_pretrained(
         cls,
         pretrained_model_or_path=DWPOSE_MODEL_NAME,
         pretrained_det_model_or_path=None,
-        pretrained_nlf_model_or_path=None,
-        det_filename=None,
-        nlf_model_filename=None,
-        pose_filename=None,
+        pretrained_nlf_onnx_model_path=NLF_MODEL_NAME,
+        pretrained_nlf_safetensors_model_path=NLF_MODEL_NAME,
+        det_filename="yolox_l.onnx",
+        pose_filename="dw-ll_ucoco_384.onnx",
+        nlf_onnx_filename="yolov8x.onnx",
+        nlf_safetensors_filename="nlf_l_multi_0.3.2.safetensors",
         torchscript_device="cpu",
     ):
         global global_cached_dwpose
         pretrained_det_model_or_path = (
             pretrained_det_model_or_path or pretrained_model_or_path
         )
-
-        pose_filename = pose_filename or "dw-ll_ucoco_384.onnx"
-        nlf_model_filename = nlf_model_filename or "nlf_l_multi_0.3.2.torchscript"
-
-        det_filename = det_filename or "yolox_l.onnx"
-        det_model_path = custom_hf_download(pretrained_det_model_or_path, det_filename)
-
-        pose_model_path = custom_hf_download(pretrained_model_or_path, pose_filename)
-
-        if pretrained_nlf_model_or_path is None:
-            pretrained_nlf_model_or_path = "https://github.com/isarandi/nlf/releases/download/v0.3.2/nlf_l_multi_0.3.2.torchscript"
-
-        nlf_model_path = cls.download_nlf_model(
-            pretrained_nlf_model_or_path, nlf_model_filename
+        pretrained_nlf_onnx_model_path = custom_hf_download(pretrained_nlf_onnx_model_path, nlf_onnx_filename)
+        pretrained_nlf_safetensors_model_path = custom_hf_download(pretrained_nlf_safetensors_model_path, nlf_safetensors_filename)
+        det_model_path = custom_hf_download(
+            pretrained_det_model_or_path, det_filename
         )
-
+        pose_model_path = custom_hf_download(pretrained_model_or_path, pose_filename)
         if (
             global_cached_dwpose.det is None
             or global_cached_dwpose.det_filename != det_filename
@@ -234,32 +187,38 @@ class DwposeNlfDetector(DwposeDetector):
             t.det = global_cached_dwpose.det
             t.det_filename = global_cached_dwpose.det_filename
             global_cached_dwpose = t
+        
+        # load nlf model with torch.jit 
+        # use absoute file path
+        config_path = os.path.join(os.path.dirname(__file__), "nlf", "model_config.yaml")
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        backbone, normalizer, out_channels = backbone_builder.build_backbone(config)
+        weight_field = pt_field.build_field(config)
+        model_pytorch = pt_nlf_model.NLFModel(config, backbone, weight_field, normalizer, out_channels)
+        detector = person_detector.PersonDetector(pretrained_nlf_onnx_model_path)
 
-        # load nlf model with torch.jit
-        # Prefer loading NLF TorchScript model on CPU when default device is MPS to avoid
-        # MPS adaptive_avg_pool2d limitations (can be overridden via DWPOSE_NLF_ALLOW_MPS=1).
-        dev = get_torch_device()
-        allow_mps = os.getenv("DWPOSE_NLF_ALLOW_MPS", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-        }
-        map_location = "cpu" if (dev.type == "mps" and not allow_mps) else dev.type
-        nlf_model = torch.jit.load(nlf_model_path, map_location=map_location)
-        return cls(global_cached_dwpose, nlf_model)
+        multimodel = multiperson_model.MultipersonNLF(
+            model_pytorch,
+            detector,
+            pad_white_pixels=False,
+            smpl_config=config["smpl_config"],
+            smplx_config=config["smplx_config"],
+            fitter_smpl_config=config["fitter_smpl_config"],
+            fitter_smplx_config=config["fitter_smplx_config"],
+        )
+        
+        model_state_dict = load_file(pretrained_nlf_safetensors_model_path)
+        multimodel.load_state_dict(model_state_dict)
+        multimodel = multimodel.cuda()
+        multimodel.crop_model.backbone.half()
+        multimodel.crop_model.heatmap_head.layer.half()
 
-    def render_nlf_as_images(
-        self,
-        data,
-        poses,
-        reshape_pool=None,
-        intrinsic_matrix=None,
-        draw_2d=True,
-        aug_2d=False,
-        aug_cam=False,
-    ):
-        """return a list of images"""
-        height, width = data[0]["video_height"], data[0]["video_width"]
+        return cls(global_cached_dwpose, multimodel)
+
+    def render_nlf_as_images(self, data, poses, reshape_pool=None, intrinsic_matrix=None, draw_2d=True, aug_2d=False, aug_cam=False):
+        """ return a list of images """
+        height, width = data[0]['video_height'], data[0]['video_width']
         video_length = len(data)
 
         base_colors_255_dict = {
@@ -288,78 +247,56 @@ class DwposeNlfDetector(DwposeDetector):
         }
 
         ordered_colors_255 = [
-            base_colors_255_dict["Red"],  # Neck -> R. Shoulder (Red)
-            base_colors_255_dict["Cyan"],  # Neck -> L. Shoulder (Cyan)
-            base_colors_255_dict["Orange"],  # R. Shoulder -> R. Elbow (Orange)
-            base_colors_255_dict[
-                "Golden Orange"
-            ],  # R. Elbow -> R. Wrist (Golden Orange)
-            base_colors_255_dict["Sky Blue"],  # L. Shoulder -> L. Elbow (Sky Blue)
-            base_colors_255_dict["Medium Blue"],  # L. Elbow -> L. Wrist (Medium Blue)
-            base_colors_255_dict["Yellow-Green"],  # Neck -> R. Hip ( Yellow-Green)
-            base_colors_255_dict[
-                "Bright Green"
-            ],  # R. Hip -> R. Knee (Bright Green - transitioning warm to cool spectrum)
-            base_colors_255_dict[
-                "Light Green-Blue"
-            ],  # R. Knee -> R. Ankle (Light Green-Blue - transitioning)
-            base_colors_255_dict["Pure Blue"],  # Neck -> L. Hip (Pure Blue)
-            base_colors_255_dict["Purple-Blue"],  # L. Hip -> L. Knee (Purple-Blue)
-            base_colors_255_dict[
-                "Medium Purple"
-            ],  # L. Knee -> L. Ankle (Medium Purple)
-            base_colors_255_dict["Grey"],  # Neck -> Nose (Grey)
-            base_colors_255_dict["Pink-Magenta"],  # Nose -> R. Eye (Pink/Magenta)
-            base_colors_255_dict["Dark Violet"],  # R. Eye -> R. Ear (Dark Pink)
-            base_colors_255_dict["Pink-Magenta"],  # Nose -> L. Eye (Violet)
-            base_colors_255_dict["Dark Violet"],  # L. Eye -> L. Ear (Dark Violet)
+            base_colors_255_dict["Red"],              # Neck -> R. Shoulder (Red)
+            base_colors_255_dict["Cyan"],             # Neck -> L. Shoulder (Cyan)
+            base_colors_255_dict["Orange"],           # R. Shoulder -> R. Elbow (Orange)
+            base_colors_255_dict["Golden Orange"],    # R. Elbow -> R. Wrist (Golden Orange)
+            base_colors_255_dict["Sky Blue"],         # L. Shoulder -> L. Elbow (Sky Blue)
+            base_colors_255_dict["Medium Blue"],      # L. Elbow -> L. Wrist (Medium Blue)
+            base_colors_255_dict["Yellow-Green"],       # Neck -> R. Hip ( Yellow-Green)
+            base_colors_255_dict["Bright Green"],     # R. Hip -> R. Knee (Bright Green - transitioning warm to cool spectrum)
+            base_colors_255_dict["Light Green-Blue"], # R. Knee -> R. Ankle (Light Green-Blue - transitioning)
+            base_colors_255_dict["Pure Blue"],        # Neck -> L. Hip (Pure Blue)
+            base_colors_255_dict["Purple-Blue"],      # L. Hip -> L. Knee (Purple-Blue)
+            base_colors_255_dict["Medium Purple"],    # L. Knee -> L. Ankle (Medium Purple)
+            base_colors_255_dict["Grey"],             # Neck -> Nose (Grey)
+            base_colors_255_dict["Pink-Magenta"],     # Nose -> R. Eye (Pink/Magenta)
+            base_colors_255_dict["Dark Violet"],        # R. Eye -> R. Ear (Dark Pink)
+            base_colors_255_dict["Pink-Magenta"],           # Nose -> L. Eye (Violet)
+            base_colors_255_dict["Dark Violet"],      # L. Eye -> L. Ear (Dark Violet)
         ]
 
         limb_seq = [
-            [1, 2],  # 0 Neck -> R. Shoulder
-            [1, 5],  # 1 Neck -> L. Shoulder
-            [2, 3],  # 2 R. Shoulder -> R. Elbow
-            [3, 4],  # 3 R. Elbow -> R. Wrist
-            [5, 6],  # 4 L. Shoulder -> L. Elbow
-            [6, 7],  # 5 L. Elbow -> L. Wrist
-            [1, 8],  # 6 Neck -> R. Hip
-            [8, 9],  # 7 R. Hip -> R. Knee
-            [9, 10],  # 8 R. Knee -> R. Ankle
-            [1, 11],  # 9 Neck -> L. Hip
+            [1, 2],    # 0 Neck -> R. Shoulder
+            [1, 5],    # 1 Neck -> L. Shoulder
+            [2, 3],    # 2 R. Shoulder -> R. Elbow
+            [3, 4],    # 3 R. Elbow -> R. Wrist
+            [5, 6],    # 4 L. Shoulder -> L. Elbow
+            [6, 7],    # 5 L. Elbow -> L. Wrist
+            [1, 8],    # 6 Neck -> R. Hip
+            [8, 9],    # 7 R. Hip -> R. Knee
+            [9, 10],   # 8 R. Knee -> R. Ankle
+            [1, 11],   # 9 Neck -> L. Hip
             [11, 12],  # 10 L. Hip -> L. Knee
             [12, 13],  # 11 L. Knee -> L. Ankle
-            [1, 0],  # 12 Neck -> Nose
-            [0, 14],  # 13 Nose -> R. Eye
+            [1, 0],    # 12 Neck -> Nose
+            [0, 14],   # 13 Nose -> R. Eye
             [14, 16],  # 14 R. Eye -> R. Ear
-            [0, 15],  # 15 Nose -> L. Eye
+            [0, 15],   # 15 Nose -> L. Eye
             [15, 17],  # 16 L. Eye -> L. Ear
         ]
 
-        draw_seq = [
-            0,
-            2,
-            3,  # Neck -> R. Shoulder -> R. Elbow -> R. Wrist
-            1,
-            4,
-            5,  # Neck -> L. Shoulder -> L. Elbow -> L. Wrist
-            6,
-            7,
-            8,  # Neck -> R. Hip -> R. Knee -> R. Ankle
-            9,
-            10,
-            11,  # Neck -> L. Hip -> L. Knee -> L. Ankle
-            12,  # Neck -> Nose
-            13,
-            14,  # Nose -> R. Eye -> R. Ear
-            15,
-            16,  # Nose -> L. Eye -> L. Ear
-        ]  # 从近心端往外扩展
+        draw_seq = [0, 2, 3, # Neck -> R. Shoulder -> R. Elbow -> R. Wrist
+                    1, 4, 5, # Neck -> L. Shoulder -> L. Elbow -> L. Wrist
+                    6, 7, 8, # Neck -> R. Hip -> R. Knee -> R. Ankle
+                    9, 10, 11, # Neck -> L. Hip -> L. Knee -> L. Ankle
+                    12, # Neck -> Nose
+                    13, 14, # Nose -> R. Eye -> R. Ear
+                    15, 16, # Nose -> L. Eye -> L. Ear
+                    ]   # 从近心端往外扩展
 
-        colors = [
-            [c / 300 + 0.15 for c in color_rgb] + [0.8]
-            for color_rgb in ordered_colors_255
-        ]
-
+        colors = [[c / 300 + 0.15 for c in color_rgb] + [0.8] for color_rgb in ordered_colors_255]
+        
         if poses is not None:
             # 重新收集poses
             smpl_poses = collect_smpl_poses(data)
@@ -370,79 +307,39 @@ class DwposeNlfDetector(DwposeDetector):
                     poses_list = aligned_poses[i]
                     # 对里面每一个人，取关节并进行变形；并且修改2d；如果3d不存在，把2d的手/脸也去掉
                     for person_idx, person_joints in enumerate(persons_joints_list):
-                        candidate = poses_list["bodies"]["candidate"][person_idx]
-                        subset = poses_list["bodies"]["subset"][person_idx]
+                        candidate = poses_list['bodies']['candidate'][person_idx]
+                        subset = poses_list['bodies']['subset'][person_idx]
                         face = poses_list["faces"][person_idx]
                         right_hand = poses_list["hands"][2 * person_idx]
                         left_hand = poses_list["hands"][2 * person_idx + 1]
-                        reshape_pool.apply_random_reshapes(
-                            person_joints,
-                            candidate,
-                            left_hand,
-                            right_hand,
-                            face,
-                            subset,
-                        )
+                        reshape_pool.apply_random_reshapes(person_joints, candidate, left_hand, right_hand, face, subset)
         else:
-            smpl_poses = [
-                item["nlfpose"] for item in data
-            ]  # 主要为了兼容多人评测集；搭配process_video_nlf_original
-
+            smpl_poses = [item['nlfpose'] for item in data]      # 主要为了兼容多人评测集；搭配process_video_nlf_original
+            
         if intrinsic_matrix is None:
-            intrinsic_matrix = self._intrinsic_matrix_from_field_of_view(
-                (height, width)
-            )
-        focal_x = intrinsic_matrix[0, 0]
-        focal_y = intrinsic_matrix[1, 1]
-        princpt = (intrinsic_matrix[0, 2], intrinsic_matrix[1, 2])  # 主点 (cx, cy)
+            intrinsic_matrix = self._intrinsic_matrix_from_field_of_view((height, width))
+        focal_x = intrinsic_matrix[0,0]
+        focal_y = intrinsic_matrix[1,1]
+        princpt = (intrinsic_matrix[0,2], intrinsic_matrix[1,2])  # 主点 (cx, cy)
         if aug_cam and random.random() < 0.3:
             w_shift_factor = random.uniform(-0.04, 0.04)
             h_shift_factor = random.uniform(-0.04, 0.04)
-            princpt = (
-                princpt[0] - w_shift_factor * width,
-                princpt[1] - h_shift_factor * height,
-            )  # princpt变化和点的变化相反
+            princpt = (princpt[0] - w_shift_factor * width, princpt[1] - h_shift_factor * height)   # princpt变化和点的变化相反
             new_intrinsic_matrix = copy.deepcopy(intrinsic_matrix)
-            new_intrinsic_matrix[0, 2] = princpt[0]
-            new_intrinsic_matrix[1, 2] = princpt[1]
-            shift_dwpose_according_to_nlf(
-                smpl_poses,
-                aligned_poses,
-                intrinsic_matrix,
-                new_intrinsic_matrix,
-                height,
-                width,
-            )
+            new_intrinsic_matrix[0,2] = princpt[0]
+            new_intrinsic_matrix[1,2] = princpt[1]
+            shift_dwpose_according_to_nlf(smpl_poses, aligned_poses, intrinsic_matrix, new_intrinsic_matrix, height, width)
 
         # 串行获取每一帧的cylinder_specs
         cylinder_specs_list = []
         for i in range(video_length):
-            cylinder_specs = get_single_pose_cylinder_specs(
-                (i, smpl_poses[i], None, None, None, None, colors, limb_seq, draw_seq)
-            )
+            cylinder_specs = get_single_pose_cylinder_specs((i, smpl_poses[i], None, None, None, None, colors, limb_seq, draw_seq))
             cylinder_specs_list.append(cylinder_specs)
 
-        frames_np_rgba = render_whole(
-            cylinder_specs_list,
-            H=height,
-            W=width,
-            fx=focal_x,
-            fy=focal_y,
-            cx=princpt[0],
-            cy=princpt[1],
-        )
+
+        frames_np_rgba = render_whole(cylinder_specs_list, H=height, W=width, fx=focal_x, fy=focal_y, cx=princpt[0], cy=princpt[1])
         if poses is not None and draw_2d:
-            canvas_2d = draw_pose_to_canvas_np(
-                aligned_poses,
-                pool=None,
-                H=height,
-                W=width,
-                reshape_scale=0,
-                show_feet_flag=False,
-                show_body_flag=False,
-                show_cheek_flag=True,
-                dw_hand=True,
-            )
+            canvas_2d = draw_pose_to_canvas_np(aligned_poses, pool=None, H=height, W=width, reshape_scale=0, show_feet_flag=False, show_body_flag=False, show_cheek_flag=True, dw_hand=True)
             # 覆盖 + rescale
             scale_h = random.uniform(0.85, 1.15)
             scale_w = random.uniform(0.85, 1.15)
@@ -460,9 +357,7 @@ class DwposeNlfDetector(DwposeDetector):
                 frames_np_rgba[i] = frame_img
                 if aug_2d:
                     if rescale_flag:
-                        frames_np_rgba[i] = scale_image_hw_keep_size(
-                            frames_np_rgba[i], scale_h, scale_w
-                        )
+                        frames_np_rgba[i]  = scale_image_hw_keep_size(frames_np_rgba[i], scale_h, scale_w)
                     if reshape_pool is not None:
                         # 4%的概率完全消除某些帧
                         if random.random() < 0.04:
@@ -474,9 +369,7 @@ class DwposeNlfDetector(DwposeDetector):
             for i in range(len(frames_np_rgba)):
                 if aug_2d:
                     if rescale_flag:
-                        frames_np_rgba[i] = scale_image_hw_keep_size(
-                            frames_np_rgba[i], scale_h, scale_w
-                        )
+                        frames_np_rgba[i]  = scale_image_hw_keep_size(frames_np_rgba[i], scale_h, scale_w)
                     if reshape_pool is not None:
                         # 4%的概率完全消除某些帧
                         if random.random() < 0.04:
@@ -484,37 +377,35 @@ class DwposeNlfDetector(DwposeDetector):
 
         return frames_np_rgba
 
+    
+    
     def _get_multi_result_from_est(self, candidate, score_result, det_result, H, W):
         nums, keys, locs = candidate.shape  # n 所有身体关键点数量，坐标
         candidate[..., 0] /= float(W)
         candidate[..., 1] /= float(H)
-        subset_score = score_result[:, :24]  # 按照24个骨骼关键点来区分可见位置
+        subset_score = score_result[:, :24]              # 按照24个骨骼关键点来区分可见位置
         face_score = score_result[:, 24:92]
         hand_score = score_result[:, 92:113]
         hand_score = np.vstack([hand_score, score_result[:, 113:]])
 
-        body_candidate = candidate[:, :24].copy()  # body(n, 24, 2)
+        body_candidate = candidate[:, :24].copy()     # body(n, 24, 2)
         for i in range(len(subset_score)):  # n 个
             for j in range(len(subset_score[i])):
                 if subset_score[i][j] > 0.3:
-                    subset_score[i][
-                        j
-                    ] = j  # 标注序号，这样后续用的时候可以快速查出可用点
+                    subset_score[i][j] = j      # 标注序号，这样后续用的时候可以快速查出可用点
                 else:
-                    subset_score[i][j] = -1  # 躯干中去除掉不可见的骨骼
+                    subset_score[i][j] = -1    # 躯干中去除掉不可见的骨骼
 
-        un_visible = score_result < 0.3
-        candidate[un_visible] = -1  # 全部关键点中去掉不可见骨骼
+        un_visible = score_result < 0.3       
+        candidate[un_visible] = -1      # 全部关键点中去掉不可见骨骼
 
         faces = candidate[:, 24:92]
-        hands = candidate[:, 92:113]  # hands(2*n, 21, 2)
-        hands = np.vstack([hands, candidate[:, 113:]])
+        hands = candidate[:, 92:113]    # hands(2*n, 21, 2)
+        hands = np.vstack([hands, candidate[:, 113:]]) 
 
         bodies = dict(candidate=body_candidate, subset=subset_score)
         pose = dict(bodies=bodies, hands=hands, faces=faces)
-        score = dict(
-            body_score=subset_score, hand_score=hand_score, face_score=face_score
-        )
+        score = dict(body_score=subset_score, hand_score=hand_score, face_score=face_score)
 
         new_det_result = []
         for bbox in det_result:
@@ -526,32 +417,25 @@ class DwposeNlfDetector(DwposeDetector):
             new_bbox = [new_x1, new_y1, new_x2, new_y2]
             new_det_result.append(new_bbox)
 
-        return pose, score, new_det_result
-
+        return pose, score, new_det_result 
+    
     def detect_poses(self, input_image: np.ndarray):
-        candidate, subset, det_result = self.dw_pose_estimation(
-            input_image.copy(), return_keypoints_scores=True
-        )
-        return self._get_multi_result_from_est(
-            candidate, subset, det_result, input_image.shape[0], input_image.shape[1]
-        )
+        candidate, subset, det_result = self.dw_pose_estimation(input_image.copy(), return_keypoints_scores=True)
+        return self._get_multi_result_from_est(candidate, subset, det_result, input_image.shape[0], input_image.shape[1])
+    
 
-    def _intrinsic_matrix_from_field_of_view(
-        self, imshape, fov_degrees: float = 55
-    ):  # nlf default fov_degrees 55
+    def _intrinsic_matrix_from_field_of_view(self, imshape, fov_degrees:float =55):   # nlf default fov_degrees 55
         imshape = np.array(imshape)
         fov_radians = fov_degrees * np.array(np.pi / 180)
         larger_side = np.max(imshape)
         focal_length = larger_side / (np.tan(fov_radians / 2) * 2)
         # intrinsic_matrix 3*3
-        return np.array(
-            [
-                [focal_length, 0, imshape[1] / 2],
-                [0, focal_length, imshape[0] / 2],
-                [0, 0, 1],
-            ]
-        )
-
+        return np.array([   
+            [focal_length, 0, imshape[1] / 2],
+            [0, focal_length, imshape[0] / 2],
+            [0, 0, 1],
+        ])
+    
     def process(
         self,
         input_image: InputImage,
@@ -564,28 +448,16 @@ class DwposeNlfDetector(DwposeDetector):
         if not isinstance(input_image, np.ndarray):
             input_image = np.array(input_image, dtype=np.uint8)
         # Prefer explicit `background=` argument; fall back to kwargs only if caller didn't pass it.
-        bg_arg = (
-            background if background is not None else kwargs.get("background", None)
-        )
-        bg_mode, bg_color = _parse_background(
-            bg_arg, kwargs.get("background_color", None)
-        )
-        input_image, _ = resize_image_with_pad(
-            input_image, detect_resolution, upscale_method, skip_hwc3=True
-        )
+        bg_arg = background if background is not None else kwargs.get("background", None)
+        bg_mode, bg_color = _parse_background(bg_arg, kwargs.get("background_color", None))
+        input_image, _ = resize_image_with_pad(input_image, detect_resolution, upscale_method, skip_hwc3=True)
         poses, score, det_result = self.process_dwpose(input_image)
         nlf_poses = self.process_nlf(input_image, det_result)
         target_H, target_W = input_image.shape[:2]
-        ori_camera_pose = self._intrinsic_matrix_from_field_of_view(
-            [target_H, target_W]
-        )
-
-        frames_np_rgba = self.render_nlf_as_images(
-            [nlf_poses], [poses], reshape_pool=None, intrinsic_matrix=ori_camera_pose
-        )[0]
-        image, remove_pad = resize_image_with_pad(
-            frames_np_rgba, detect_resolution, upscale_method, skip_hwc3=True
-        )
+        ori_camera_pose = self._intrinsic_matrix_from_field_of_view([target_H, target_W])
+        
+        frames_np_rgba = self.render_nlf_as_images([nlf_poses], [poses], reshape_pool=None, intrinsic_matrix=ori_camera_pose)[0]
+        image, remove_pad = resize_image_with_pad(frames_np_rgba, detect_resolution, upscale_method, skip_hwc3=True)
         if bg_mode == "source":
             bg_img, bg_remove_pad = resize_image_with_pad(
                 input_image, detect_resolution, upscale_method, skip_hwc3=True
@@ -613,9 +485,7 @@ class DwposeNlfDetector(DwposeDetector):
         NLF inference across frames/bboxes (same approach as SCAIL process_pose.py / process_video_nlf).
         """
         # Check if input is already an iterator/generator
-        if hasattr(input_video, "__iter__") and not isinstance(
-            input_video, (list, str)
-        ):
+        if hasattr(input_video, "__iter__") and not isinstance(input_video, (list, str)):
             frames = input_video
             total_frames = kwargs.get("total_frames", None)
         else:
@@ -625,12 +495,8 @@ class DwposeNlfDetector(DwposeDetector):
         progress_callback = kwargs.get("progress_callback", None)
         ensure_image_size = kwargs.get("ensure_image_size", True)
         # Prefer explicit `background=` argument; fall back to kwargs only if caller didn't pass it.
-        bg_arg = (
-            background if background is not None else kwargs.get("background", None)
-        )
-        bg_mode, bg_color = _parse_background(
-            bg_arg, kwargs.get("background_color", None)
-        )
+        bg_arg = background if background is not None else kwargs.get("background", None)
+        bg_mode, bg_color = _parse_background(bg_arg, kwargs.get("background_color", None))
 
         # NLF batching params
         batch_size = int(kwargs.get("batch_size", 64))
@@ -666,7 +532,7 @@ class DwposeNlfDetector(DwposeDetector):
             if buffer_count <= 0:
                 return
             frame_batch = buffer[:buffer_count].permute(0, 3, 1, 2)
-            pred = self._detect_smpl_batched(frame_batch)
+            pred = self.nlf_model.detect_smpl_batched(frame_batch)
             if isinstance(pred, dict) and "joints3d_nonparam" in pred:
                 out_list = pred["joints3d_nonparam"]
             else:
@@ -676,9 +542,7 @@ class DwposeNlfDetector(DwposeDetector):
             for i, (fidx, bidx) in enumerate(sample_map[:buffer_count]):
                 out = out_list[i]
                 # Keep the same shape semantics as process_pose.py: nlfpose[bbox_idx][detect_idx]
-                frame_records[fidx]["data"]["nlfpose"][bidx] = (
-                    out if out is not None else []
-                )
+                frame_records[fidx]["data"]["nlfpose"][bidx] = out if out is not None else []
                 frame_records[fidx]["pending"] -= 1
 
             # Mark frames completed when all bboxes are resolved
@@ -699,9 +563,7 @@ class DwposeNlfDetector(DwposeDetector):
             if (not force) and len(render_queue) < render_batch_size:
                 return
 
-            batch = (
-                render_queue[:render_batch_size] if not force else list(render_queue)
-            )
+            batch = render_queue[:render_batch_size] if not force else list(render_queue)
             del render_queue[: len(batch)]
 
             data_batch = [frame_records[i]["data"] for i in batch]
@@ -719,7 +581,7 @@ class DwposeNlfDetector(DwposeDetector):
                 aug_2d=False,
                 aug_cam=False,
             )
-
+            
             for out_idx, frame_img_rgba in enumerate(frames_np_rgba):
                 fidx = batch[out_idx]
                 image, remove_pad = resize_image_with_pad(
@@ -748,33 +610,27 @@ class DwposeNlfDetector(DwposeDetector):
                         detected_map, frame_records[fidx]["target_size"]
                     )
 
+                if progress_callback is not None:
+                    # Progress by yielded frames (matches the generator contract)
+                    progress_callback(
+                        next_frame_to_yield + 1,
+                        total_frames if total_frames else next_frame_to_yield + 1,
+                    )
                 yield detected_map
                 next_frame_to_yield += 1
 
         frame_idx = 0
         with torch.inference_mode():
             for frame in tqdm(frames, desc="Processing frames", total=total_frames):
-                # Keep progress behavior consistent with BasePreprocessor.process_video():
-                # update progress once per input frame, even if we haven't yielded yet
-                # (render batching can otherwise delay progress updates).
-                if progress_callback is not None:
-                    progress_callback(
-                        frame_idx + 1, total_frames if total_frames else frame_idx + 1
-                    )
-
                 target_size = (
-                    frame.size
-                    if isinstance(frame, Image.Image)
-                    else self._get_image_size(frame)
+                    frame.size if isinstance(frame, Image.Image) else self._get_image_size(frame)
                 )
 
                 frame_np = frame
                 if not isinstance(frame_np, np.ndarray):
                     frame_np = np.array(frame_np, dtype=np.uint8)
 
-                frame_np, _ = resize_image_with_pad(
-                    frame_np, detect_resolution, upscale_method, skip_hwc3=True
-                )
+                frame_np, _ = resize_image_with_pad(frame_np, detect_resolution, upscale_method, skip_hwc3=True)
                 H, W = frame_np.shape[:2]
 
                 poses, score, det_result = self.process_dwpose(frame_np)
@@ -807,9 +663,7 @@ class DwposeNlfDetector(DwposeDetector):
                             device=self.device,
                         )
 
-                    frame_t = torch.from_numpy(frame_np).to(
-                        self.device, non_blocking=True
-                    )
+                    frame_t = torch.from_numpy(frame_np).to(self.device, non_blocking=True)
 
                     for bbox_idx, bbox in enumerate(det_result):
                         x1, y1, x2, y2 = bbox
@@ -819,9 +673,7 @@ class DwposeNlfDetector(DwposeDetector):
                         y2_px = min(H, math.ceil(y2 * H + H * 0.05))
 
                         cropped_region = frame_t[y1_px:y2_px, x1_px:x2_px, :]
-                        buffer[buffer_count, y1_px:y2_px, x1_px:x2_px, :] = (
-                            cropped_region
-                        )
+                        buffer[buffer_count, y1_px:y2_px, x1_px:x2_px, :] = cropped_region
 
                         sample_map.append((frame_idx, bbox_idx))
                         affected_frames_in_buffer.add(frame_idx)
@@ -845,9 +697,9 @@ class DwposeNlfDetector(DwposeDetector):
             yield from _flush_render_queue(force=True)
 
         if progress_callback is not None:
-            # Final completion signal (mirrors BasePreprocessor.process_video()).
-            progress_callback(frame_idx, total_frames if total_frames else frame_idx)
-
+            progress_callback(next_frame_to_yield, next_frame_to_yield)
+        
+        
     @torch.inference_mode()
     def process_dwpose(
         self,
@@ -855,44 +707,43 @@ class DwposeNlfDetector(DwposeDetector):
     ):
         poses = self.detect_poses(input_image)
         return poses
+    
 
     def recollect_nlf(self, item):
         new_item = item.copy()
-        if len(item["bboxes"]) > 0:
-            new_item["bboxes"] = item["bboxes"][:1]
-            new_item["nlfpose"] = item["nlfpose"][:1]
+        if len(item['bboxes']) > 0:
+            new_item['bboxes'] = item['bboxes'][:1]
+            new_item['nlfpose'] = item['nlfpose'][:1]
         return new_item
-
+    
     def recollect_dwposes(self, pose):
         new_pose = pose.copy()
         for i in range(1):
             bodies = pose["bodies"]
-            faces = pose["faces"][i : i + 1]
-            hands = pose["hands"][2 * i : 2 * i + 2]
-            candidate = bodies["candidate"][
-                i : i + 1
-            ]  # candidate是所有点的坐标和置信度
-            subset = bodies["subset"][i : i + 1]  # subset是认为的有效点
+            faces = pose["faces"][i:i+1]
+            hands = pose["hands"][2*i:2*i+2]
+            candidate = bodies["candidate"][i:i+1]  # candidate是所有点的坐标和置信度
+            subset = bodies["subset"][i:i+1]   # subset是认为的有效点
             new_pose = {
-                "bodies": {"candidate": candidate, "subset": subset},
+                "bodies": {
+                    "candidate": candidate,
+                    "subset": subset
+                },
                 "faces": faces,
-                "hands": hands,
+                "hands": hands
             }
         return new_pose
-
+        
     @torch.inference_mode()
-    def process_nlf(
-        self,
-        input_image: np.ndarray,
-        bbox_list: List[Tuple[int, int, int, int]],
-        **kwargs,
-    ):
+    def process_nlf(self, input_image: np.ndarray, bbox_list: List[Tuple[int, int, int, int]], **kwargs):
         height, width = input_image.shape[:2]
         input_image = torch.from_numpy(input_image)
         result_list = []
-        batch_size = kwargs.get("batch_size", 64)
+        batch_size = kwargs.get('batch_size', 64)
         buffer = torch.zeros(
-            (batch_size, height, width, 3), dtype=input_image.dtype, device=self.device
+            (batch_size, height, width, 3),
+            dtype=input_image.dtype,
+            device=self.device
         )
         buffer_count = 0
         for bbox in bbox_list:
@@ -906,26 +757,21 @@ class DwposeNlfDetector(DwposeDetector):
             buffer_count += 1
             if buffer_count == batch_size:
                 frame_batch = buffer.permute(0, 3, 1, 2)
-                pred = self._detect_smpl_batched(frame_batch)
-                if "joints3d_nonparam" in pred:
-                    result_list.extend(pred["joints3d_nonparam"])
+                pred = self.nlf_model.detect_smpl_batched(frame_batch)
+                if 'joints3d_nonparam' in pred:
+                    result_list.extend(pred['joints3d_nonparam'])
                 else:
                     result_list.extend([None] * buffer_count)
                 buffer.zero_()
                 buffer_count = 0
-
+        
         if buffer_count > 0:
             frame_batch = buffer[:buffer_count].permute(0, 3, 1, 2)
-            pred = self._detect_smpl_batched(frame_batch)
-            if "joints3d_nonparam" in pred:
-                result_list.extend(pred["joints3d_nonparam"])
+            pred = self.nlf_model.detect_smpl_batched(frame_batch)
+            if 'joints3d_nonparam' in pred:
+                result_list.extend(pred['joints3d_nonparam'])
             else:
                 result_list.extend([None] * buffer_count)
-        return self.recollect_nlf(
-            {
-                "video_height": height,
-                "video_width": width,
-                "bboxes": bbox_list,
-                "nlfpose": result_list,
-            }
-        )
+        return self.recollect_nlf({"video_height": height, "video_width": width, "bboxes": bbox_list, "nlfpose": result_list})
+    
+    

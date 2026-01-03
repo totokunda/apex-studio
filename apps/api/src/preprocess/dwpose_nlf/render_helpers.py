@@ -262,15 +262,15 @@ def flatten_specs(specs_list):
 
 def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radius=21.5):
     """
-    Fast Taichi-free renderer.
+    Taichi-look renderer without Taichi.
 
-    Instead of ray-marching SDF cylinders per pixel, we:
-    - project each 3D limb segment into 2D with the provided intrinsics
-    - draw thick anti-aliased lines (OpenCV C++ fast path)
-    - alpha composite in depth order (far -> near) for a decent occlusion approximation
+    The original implementation used Taichi to ray-march an SDF of *capped cylinders*
+    (a.k.a. capsules) and applied a simple diffuse + Blinn-Phong specular lighting model.
 
-    This is typically *much* faster on CPU than pure-Python rasterization and avoids any
-    extra external dependency beyond the already-imported `cv2`.
+    To make the NumPy implementation visually match the Taichi output (thick limbs,
+    well-defined shading, proper occlusion), this function performs an **analytic**
+    ray–capsule intersection per pixel (restricted to a tight 2D ROI per limb for speed),
+    then applies the same lighting + depth-fade math as the Taichi kernel.
     """
     n_frames = len(specs_list)
     # Handle empty specs (e.g., no detected people in the whole batch)
@@ -298,99 +298,252 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
     if depth_far <= depth_near + 1e-6:
         depth_far = depth_near + 1.0
 
-    max_thickness = max(2, int(round(0.06 * max(H, W))))
+    # --- Precompute camera rays (same as Taichi pixel_to_ray, with identity rotation) ---
+    xs = (np.arange(W, dtype=np.float32) - float(cx)) / float(fx)
+    ys = (np.arange(H, dtype=np.float32) - float(cy)) / float(fy)
+    grid_x, grid_y = np.meshgrid(xs, ys)  # (H,W)
+    rd_x = grid_x
+    rd_y = grid_y
+    rd_z = np.ones((H, W), dtype=np.float32)
+    inv_norm = 1.0 / np.sqrt(rd_x * rd_x + rd_y * rd_y + rd_z * rd_z)
+    rd_x *= inv_norm
+    rd_y *= inv_norm
+    rd_z *= inv_norm
+
+    # Half-vector for Blinn-Phong uses view_dir (-rd) and -light_dir = (0,0,-1)
+    # half_dir = normalize(view_dir + -light_dir) = normalize(-rd + (0,0,-1))
+    half_x = -rd_x
+    half_y = -rd_y
+    half_z = -rd_z - 1.0
+    inv_hn = 1.0 / np.sqrt(half_x * half_x + half_y * half_y + half_z * half_z + 1e-12)
+    half_x *= inv_hn
+    half_y *= inv_hn
+    half_z *= inv_hn
+
+    # World-space radius -> pixel padding for ROI (conservative to avoid missing pixels).
+    # (Taichi is in 3D; we only use ROI to limit work, not to approximate the result.)
+    roi_pad_px = max(3, int(round(0.08 * max(H, W))))
+
+    def _roi_from_endpoints(a: np.ndarray, b: np.ndarray) -> tuple[int, int, int, int]:
+        """Compute a conservative screen-space bounding box for a capsule segment."""
+        a = np.asarray(a, dtype=np.float32)
+        b = np.asarray(b, dtype=np.float32)
+        za = float(max(a[2], znear))
+        zb = float(max(b[2], znear))
+        ua = float(fx * (a[0] / za) + cx)
+        va = float(fy * (a[1] / za) + cy)
+        ub = float(fx * (b[0] / zb) + cx)
+        vb = float(fy * (b[1] / zb) + cy)
+        zm = 0.5 * (za + zb)
+        r_px = float(radius * (0.5 * (fx + fy)) / max(zm, znear))
+        pad = int(np.clip(np.ceil(r_px) + roi_pad_px, 4, max(H, W)))
+        x0 = max(0, int(np.floor(min(ua, ub))) - pad)
+        x1 = min(W, int(np.ceil(max(ua, ub))) + pad)
+        y0 = max(0, int(np.floor(min(va, vb))) - pad)
+        y1 = min(H, int(np.ceil(max(va, vb))) + pad)
+        return x0, x1, y0, y1
+
+    def _capsule_intersect_t_roi(
+        a: np.ndarray,
+        b: np.ndarray,
+        r: float,
+        x0: int,
+        x1: int,
+        y0: int,
+        y1: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Analytic ray-capsule intersection on a ROI.
+        Returns:
+          t_hit: (h,w) float32, inf where no hit
+          va: (3,) float32 unit axis (b-a normalized) (undefined if degenerate -> returns zeros)
+          h:  float length
+          a:  (3,) float32 (echo back as float32)
+        """
+        a = np.asarray(a, dtype=np.float32)
+        b = np.asarray(b, dtype=np.float32)
+        ba = b - a
+        h = float(np.linalg.norm(ba))
+        eps = 1e-8
+        if h < eps:
+            va = np.zeros((3,), dtype=np.float32)
+        else:
+            va = (ba / h).astype(np.float32)
+
+        r = float(r)
+
+        rx = rd_x[y0:y1, x0:x1]
+        ry = rd_y[y0:y1, x0:x1]
+        rz = rd_z[y0:y1, x0:x1]
+
+        inf = np.float32(np.inf)
+        t_best = np.full(rx.shape, inf, dtype=np.float32)
+
+        # --- Sphere at a ---
+        ocx, ocy, ocz = -float(a[0]), -float(a[1]), -float(a[2])
+        b_s = 2.0 * (ocx * rx + ocy * ry + ocz * rz)
+        c_s = (ocx * ocx + ocy * ocy + ocz * ocz) - r * r
+        disc = b_s * b_s - 4.0 * c_s
+        hit = disc >= 0.0
+        if np.any(hit):
+            sd = np.sqrt(np.maximum(disc, 0.0))
+            t = (-b_s - sd) * 0.5
+            ok = hit & (t >= znear)
+            t_best = np.where(ok, t.astype(np.float32), t_best)
+
+        # --- Sphere at b ---
+        ocx, ocy, ocz = -float(b[0]), -float(b[1]), -float(b[2])
+        b_s = 2.0 * (ocx * rx + ocy * ry + ocz * rz)
+        c_s = (ocx * ocx + ocy * ocy + ocz * ocz) - r * r
+        disc = b_s * b_s - 4.0 * c_s
+        hit = disc >= 0.0
+        if np.any(hit):
+            sd = np.sqrt(np.maximum(disc, 0.0))
+            t = (-b_s - sd) * 0.5
+            ok = hit & (t >= znear) & (t < t_best)
+            t_best = np.where(ok, t.astype(np.float32), t_best)
+
+        # --- Cylinder body (finite, capped handled by spheres above) ---
+        if h >= eps:
+            v0, v1, v2 = float(va[0]), float(va[1]), float(va[2])
+            d_dot = rx * v0 + ry * v1 + rz * v2
+            # ro=0 => delta = ro - a = -a
+            delta_dot = -(float(a[0]) * v0 + float(a[1]) * v1 + float(a[2]) * v2)
+            dpx = rx - v0 * d_dot
+            dpy = ry - v1 * d_dot
+            dpz = rz - v2 * d_dot
+            ddx = -float(a[0]) - v0 * delta_dot
+            ddy = -float(a[1]) - v1 * delta_dot
+            ddz = -float(a[2]) - v2 * delta_dot
+
+            A = dpx * dpx + dpy * dpy + dpz * dpz
+            B = 2.0 * (ddx * dpx + ddy * dpy + ddz * dpz)
+            C = (ddx * ddx + ddy * ddy + ddz * ddz) - r * r
+            disc = B * B - 4.0 * A * C
+            hit = (disc >= 0.0) & (A > 1e-12)
+            if np.any(hit):
+                sd = np.sqrt(np.maximum(disc, 0.0))
+                inv2A = 0.5 / A
+                t1 = (-B - sd) * inv2A
+                t2 = (-B + sd) * inv2A
+
+                y1 = delta_dot + d_dot * t1
+                y2 = delta_dot + d_dot * t2
+                ok1 = hit & (t1 >= znear) & (y1 >= 0.0) & (y1 <= h)
+                ok2 = hit & (t2 >= znear) & (y2 >= 0.0) & (y2 <= h)
+
+                t_cyl = np.full(rx.shape, inf, dtype=np.float32)
+                t_cyl = np.where(ok1, t1.astype(np.float32), t_cyl)
+                t_cyl = np.where(ok2 & (t2 < t_cyl), t2.astype(np.float32), t_cyl)
+
+                t_best = np.where(t_cyl < t_best, t_cyl, t_best)
+
+        return t_best, va, np.float32(h), a
 
     frames_np_rgba: list[np.ndarray] = []
 
-    # Reusable mask to avoid allocations in the inner loop.
-    mask = np.zeros((H, W), dtype=np.uint8)
-
     for specs in specs_list:
-        out_rgb = np.zeros((H, W, 3), dtype=np.float32)  # 0..1
-        out_a = np.zeros((H, W), dtype=np.float32)  # 0..1
-
         if len(specs) == 0:
             frames_np_rgba.append(np.zeros((H, W, 4), dtype=np.uint8))
             continue
 
-        # Vectorize projection + sort by depth (far -> near).
-        starts = np.asarray([s for (s, _e, _c) in specs], dtype=np.float32)
-        ends = np.asarray([e for (_s, e, _c) in specs], dtype=np.float32)
-        cols = np.asarray([c for (_s, _e, c) in specs], dtype=np.float32)
-        if cols.ndim == 1:
-            cols = cols[None, :]
-        if cols.shape[1] == 3:
-            alpha_col = np.ones((cols.shape[0], 1), dtype=np.float32)
-            cols = np.concatenate([cols, alpha_col], axis=1)
-        elif cols.shape[1] < 4:
-            # Pad up to RGBA
-            pad = np.zeros((cols.shape[0], 4 - cols.shape[1]), dtype=np.float32)
-            cols = np.concatenate([cols, pad], axis=1)
+        # Depth buffer + output (match Taichi: first hit along the ray)
+        t_img = np.full((H, W), np.float32(np.inf), dtype=np.float32)
+        out_rgb = np.zeros((H, W, 3), dtype=np.float32)  # 0..1
+        out_a = np.zeros((H, W), dtype=np.float32)  # 0..1
 
-        uv0, z0 = _project_points_pinhole_xyz_to_uv(starts, fx, fy, cx, cy)
-        uv1, z1 = _project_points_pinhole_xyz_to_uv(ends, fx, fy, cx, cy)
+        for (s, e, c) in specs:
+            s = np.asarray(s, dtype=np.float32)
+            e = np.asarray(e, dtype=np.float32)
+            c = np.asarray(c, dtype=np.float32)
+            if c.ndim != 1:
+                c = c.reshape(-1)
+            if c.shape[0] == 3:
+                c = np.concatenate([c, np.array([1.0], dtype=np.float32)], axis=0)
+            elif c.shape[0] < 4:
+                pad = np.zeros((4 - c.shape[0],), dtype=np.float32)
+                c = np.concatenate([c, pad], axis=0)
 
-        z_mean = 0.5 * (z0 + z1)
-        # Skip segments behind the camera / too close (matches the original znear behavior).
-        valid = (z0 > znear) & (z1 > znear) & np.isfinite(uv0).all(axis=1) & np.isfinite(
-            uv1
-        ).all(axis=1)
-        if not np.any(valid):
-            frames_np_rgba.append(np.zeros((H, W, 4), dtype=np.uint8))
-            continue
-
-        order = np.argsort(z_mean[valid])[::-1]  # far -> near
-        valid_idx = np.nonzero(valid)[0][order]
-
-        for i in valid_idx:
-            u0, v0 = float(uv0[i, 0]), float(uv0[i, 1])
-            u1, v1 = float(uv1[i, 0]), float(uv1[i, 1])
-            zm = float(z_mean[i])
-            if zm <= znear:
+            x0, x1, y0, y1 = _roi_from_endpoints(s, e)
+            if x1 <= x0 or y1 <= y0:
                 continue
 
-            # Thickness (world-space radius -> pixels). Clamp to avoid extreme sizes.
-            r_px = int(round(radius * (0.5 * (fx + fy)) / max(zm, znear)))
-            thickness = int(np.clip(r_px, 1, max_thickness))
-
-            # Depth fade similar to the Taichi version
-            depth_factor = 1.0 - (zm - depth_near) / (depth_far - znear)
-            depth_factor = float(np.clip(depth_factor, 0.0, 1.0))
-
-            rgb = cols[i, :3].astype(np.float32, copy=False)
-            a_src = float(np.clip(cols[i, 3], 0.0, 1.0))
-            rgb = np.clip(rgb * depth_factor, 0.0, 1.0)
-
-            # Draw mask for this segment
-            mask[:] = 0
-            cv2.line(
-                mask,
-                (int(round(u0)), int(round(v0))),
-                (int(round(u1)), int(round(v1))),
-                color=255,
-                thickness=thickness,
-                lineType=cv2.LINE_AA,
-            )
-
-            ys, xs = np.nonzero(mask)
-            if ys.size == 0:
+            t_hit, va, seg_len, a = _capsule_intersect_t_roi(s, e, radius, x0, x1, y0, y1)
+            if not np.isfinite(t_hit).any():
                 continue
 
-            y0b, y1b = int(ys.min()), int(ys.max()) + 1
-            x0b, x1b = int(xs.min()), int(xs.max()) + 1
+            t_roi = t_img[y0:y1, x0:x1]
+            update = t_hit < t_roi
+            if not np.any(update):
+                continue
 
-            m = (mask[y0b:y1b, x0b:x1b].astype(np.float32) / 255.0)[..., None]  # (h,w,1)
-            a = (a_src * m).astype(np.float32)  # (h,w,1)
+            # Compute shading on ROI, then apply updates.
+            rx = rd_x[y0:y1, x0:x1]
+            ry = rd_y[y0:y1, x0:x1]
+            rz = rd_z[y0:y1, x0:x1]
 
-            # "over" compositing on the ROI
-            roi_rgb = out_rgb[y0b:y1b, x0b:x1b, :]
-            roi_a = out_a[y0b:y1b, x0b:x1b][..., None]
+            t_use = np.where(update, t_hit, np.float32(0.0)).astype(np.float32)
+            px = rx * t_use
+            py = ry * t_use
+            pz = rz * t_use
 
-            roi_rgb[:] = roi_rgb * (1.0 - a) + rgb[None, None, :] * a
-            roi_a[:] = roi_a * (1.0 - a) + a
+            # Closest point on segment (clamp projection) -> capsule normal
+            if float(seg_len) > 1e-8:
+                v0, v1, v2 = float(va[0]), float(va[1]), float(va[2])
+                pax = px - float(a[0])
+                pay = py - float(a[1])
+                paz = pz - float(a[2])
+                t_ax = pax * v0 + pay * v1 + paz * v2  # along-axis distance from 'a'
+                t_ax = np.clip(t_ax, 0.0, float(seg_len))
+                qx = float(a[0]) + v0 * t_ax
+                qy = float(a[1]) + v1 * t_ax
+                qz = float(a[2]) + v2 * t_ax
+            else:
+                qx = float(a[0])
+                qy = float(a[1])
+                qz = float(a[2])
 
-            out_rgb[y0b:y1b, x0b:x1b, :] = roi_rgb
-            out_a[y0b:y1b, x0b:x1b] = roi_a[..., 0]
+            nx = px - qx
+            ny = py - qy
+            nz = pz - qz
+            inv_n = 1.0 / np.sqrt(nx * nx + ny * ny + nz * nz + 1e-12)
+            nx *= inv_n
+            ny *= inv_n
+            nz *= inv_n
+
+            # Taichi:
+            # diff = max(n.dot(-light_dir),0) with light_dir=(0,0,1) => -light_dir=(0,0,-1)
+            diff = np.maximum(-nz, 0.0)
+            diffuse_term = 0.3 + 0.7 * diff
+
+            # Specular (Blinn-Phong), Taichi: spec = max(n.dot(half_dir),0)**32
+            hx = half_x[y0:y1, x0:x1]
+            hy = half_y[y0:y1, x0:x1]
+            hz = half_z[y0:y1, x0:x1]
+            ndh = np.maximum(nx * hx + ny * hy + nz * hz, 0.0)
+            spec = ndh**32
+
+            # Depth fade (match Taichi math/denoms)
+            depth_factor = 1.0 - (pz - depth_near) / (depth_far - znear)
+            depth_factor = np.clip(depth_factor, 0.0, 1.0)
+
+            base_r = float(c[0]) * diffuse_term * depth_factor
+            base_g = float(c[1]) * diffuse_term * depth_factor
+            base_b = float(c[2]) * diffuse_term * depth_factor
+            hi = 0.5 * spec * depth_factor
+
+            rgb_r = base_r + hi
+            rgb_g = base_g + hi
+            rgb_b = base_b + hi
+
+            # Apply to buffers
+            t_roi[update] = t_hit[update]
+            out_rgb_roi = out_rgb[y0:y1, x0:x1, :]
+            out_rgb_roi[..., 0][update] = rgb_r[update]
+            out_rgb_roi[..., 1][update] = rgb_g[update]
+            out_rgb_roi[..., 2][update] = rgb_b[update]
+            out_rgb[y0:y1, x0:x1, :] = out_rgb_roi
+            out_a[y0:y1, x0:x1][update] = float(np.clip(c[3], 0.0, 1.0))
 
         rgba = np.zeros((H, W, 4), dtype=np.uint8)
         rgba[:, :, :3] = (np.clip(out_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)

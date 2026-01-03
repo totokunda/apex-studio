@@ -1,0 +1,8 @@
+## GPSNet config (no canonical_nodes3.npy needed)
+#
+# This uses per-forward min/max bounds computed from the input points passed into GPSNet.
+# It is the safest default when you don't have canonical node files.
+gps_norm_mode: dynamic
+gps_eps: 1e-6
+
+

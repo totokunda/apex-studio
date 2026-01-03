@@ -15,6 +15,7 @@ from src.utils.defaults import get_preprocessor_path, get_cache_path
 
 HF_MODEL_NAME = "lllyasviel/Annotators"
 DWPOSE_MODEL_NAME = "yzd-v/DWPose"
+NLF_MODEL_NAME = "totoku/nlf_model"
 BDS_MODEL_NAME = "bdsqlsz/qinglong_controlnet-lllite"
 DENSEPOSE_MODEL_NAME = "LayerNorm/DensePose-TorchScript-with-hint-image"
 MESH_GRAPHORMER_MODEL_NAME = "hr16/ControlNet-HandRefiner-pruned"
