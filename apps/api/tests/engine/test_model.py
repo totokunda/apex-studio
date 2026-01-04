@@ -16,7 +16,7 @@ from huggingface_hub import get_token
 import subprocess
 import shutil
 
-torch.set_printoptions(threshold=10000, linewidth=300)
+torch.set_printoptions(threshold=500, linewidth=300)
 
 directory = (
     "/home/tosin_coverquick_co/apex/runs/flux2-dev-text-to-image-edit-turbo-1.0.0.v1"

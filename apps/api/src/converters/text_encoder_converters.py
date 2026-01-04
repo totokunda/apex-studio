@@ -1,5 +1,4 @@
 from typing import Dict, Any
-from transformers import Qwen3ForCausalLM
 from src.converters.base_converter import BaseConverter
 
 
@@ -15,7 +14,7 @@ class Qwen2_5_VLTextEncoderConverter(TextEncoderConverter):
     def __init__(self):
         super().__init__()
         self.rename_dict = {
-            "^visual": "model.visual",
+            r"^visual": "model.visual",
             r"^model(?!\.(language_model|visual))": "model.language_model",
         }
 

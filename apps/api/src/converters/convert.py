@@ -55,7 +55,7 @@ from src.converters.vae_converters import (
 
 
 class NoOpConverter:
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
         return state_dict
 
 

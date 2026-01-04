@@ -12,7 +12,7 @@ from src.utils.assets import get_asset_path
 
 SPECIAL_TOKEN_PATH = get_asset_path("magi", "special_tokens.npz")
 
-SPECIAL_TOKEN = np.load(SPECIAL_TOKEN_PATH)
+SPECIAL_TOKEN = np.load(SPECIAL_TOKEN_PATH, allow_pickle=True)
 CAPTION_TOKEN = torch.tensor(SPECIAL_TOKEN["caption_token"].astype(np.float16))
 LOGO_TOKEN = torch.tensor(SPECIAL_TOKEN["logo_token"].astype(np.float16))
 TRANS_TOKEN = torch.tensor(SPECIAL_TOKEN["other_tokens"][:1].astype(np.float16))
