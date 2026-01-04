@@ -213,7 +213,7 @@ spec:
     config_path: Wan-AI/Wan2.2-T2V-A14B-Diffusers/transformer_2/config.json
   defaults:
     run:
-      num_inference_steps: 30
+      num_inference_steps: 4
       guidance_scale: 5.0
       return_latents: false
       timesteps_as_indices: true
@@ -328,7 +328,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: sampling
-      default: 50
+      default: 4
       min: 1
       max: 100
       step: 1
@@ -368,7 +368,7 @@ spec:
       value_type: float
       panel: sampling
       required: false
-      default: 4.0
+      default: 1.0
       min: 1.0
       max: 15.0
       step: 0.1
@@ -378,7 +378,7 @@ spec:
       value_type: float
       panel: sampling
       required: false
-      default: 3.0
+      default: 1.0
       min: 1.0
       max: 15.0
       step: 0.1

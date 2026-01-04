@@ -148,6 +148,7 @@ spec:
         flow: column
         rows:
         - - seed
+        - - num_inference_steps
     inputs:
     - id: prompt
       label: Prompt
@@ -229,3 +230,14 @@ spec:
       value_type: integer
       panel: sampling
       required: false
+    - id: num_inference_steps
+      label: Number of Inference Steps
+      description: The number of inference steps to use for the generation.
+      type: number
+      value_type: integer
+      panel: sampling
+      required: false
+      default: 9
+      min: 1
+      max: 100
+      step: 1

@@ -249,8 +249,8 @@ spec:
       file_size: 5300957696
   defaults:
     run:
-      num_inference_steps: 30
-      guidance_scale: 5.0
+      num_inference_steps: 6
+      guidance_scale: 1.0
       num_seconds_per_segment: 5.0
       num_motion_latent: 4
       return_latents: false

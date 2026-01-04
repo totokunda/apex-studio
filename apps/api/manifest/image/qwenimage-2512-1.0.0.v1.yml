@@ -28,6 +28,13 @@ spec:
   attention_types:
   - sdpa
   - efficient_dot_product_attention
+  loras:
+    - name: lightning-lora
+      source: lightx2v/Qwen-Image-2512-Lightning/Qwen-Image-2512-Lightning-4steps-V1.0-bf16.safetensors
+      scale: 1.0
+      verified: true
+      label: Lightning LoRA
+      component: transformer
   components:
   - type: scheduler
     label: Scheduler
@@ -159,11 +166,9 @@ spec:
       precision: q2_k
       type: gguf
 
-
-
   defaults:
     run:
-      num_inference_steps: 40
+      num_inference_steps: 4
       return_latents: false
       text_encoder_kwargs:
         add_special_tokens: false
@@ -271,7 +276,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: sampling
-      default: 40
+      default: 4
       min: 1
       max: 100
       step: 1
@@ -311,17 +316,7 @@ spec:
       value_type: float
       panel: sampling
       required: false
-      default: 4.0
+      default: 1.0
       min: 1.0
       max: 15.0
       step: 0.5
-    - id: guidance_scale
-      label: Guidance Scale
-      type: number+slider
-      value_type: float
-      panel: sampling
-      required: false
-      default: 1.0
-      min: 0.0
-      max: 10.0
-      step: 0.1

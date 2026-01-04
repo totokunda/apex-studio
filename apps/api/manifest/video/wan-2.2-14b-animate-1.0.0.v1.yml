@@ -180,7 +180,7 @@ spec:
       file_size: 1261596722
   defaults:
     run:
-      num_inference_steps: 20
+      num_inference_steps: 4
       guidance_scale: 1.0
       return_latents: false
       text_encoder_kwargs:
@@ -339,7 +339,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: sampling
-      default: 20
+      default: 4
       min: 1
       max: 100
       step: 1
