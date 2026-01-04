@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import os
 import sys
-import math
 import zipfile
 import shutil
-from typing import Any, List, Optional, Tuple, Union, Callable
+from typing import Any, List, Optional, Callable
 
 import numpy as np
 from src.types import InputVideo
 import torch
 from torch.nn import functional as F
 from loguru import logger
-from src.utils.defaults import DEFAULT_POSTPROCESSOR_SAVE_PATH, DEFAULT_DEVICE
+from src.utils.defaults import DEFAULT_POSTPROCESSOR_SAVE_PATH, get_torch_device
 
 from src.postprocess.base import (
     BasePostprocessor,
@@ -22,7 +21,6 @@ from src.postprocess.base import (
     postprocessor_registry,
 )
 from PIL import Image
-from collections import deque
 from tqdm import tqdm
 from src.utils.defaults import get_torch_device
 
@@ -79,9 +77,11 @@ class RifePostprocessor(BasePostprocessor):
         ssim_static_thresh: float = 0.996,  # treat near-identical frames as static
         ssim_hardcut_thresh: float = 0.20,  # when < thresh, fill with duplicates
         # Weights / code locations
-        device: torch.device = DEFAULT_DEVICE,
+        device: torch.device | None = None,
         save_path: str = DEFAULT_POSTPROCESSOR_SAVE_PATH,
         model_dir: str = "https://drive.google.com/uc?id=1zlKblGuKNatulJNFf5jdB-emp9AqGK05",
+        download_only: bool = False,
+        progress_callback: Optional[Callable[[int, int, Optional[str]], None]] = None,
         **kwargs: Any,
     ):
         super().__init__(engine, PostprocessorCategory.FRAME_INTERPOLATION, **kwargs)
@@ -91,13 +91,15 @@ class RifePostprocessor(BasePostprocessor):
         self.exp = exp
         self.ssim_static_thresh = ssim_static_thresh
         self.ssim_hardcut_thresh = ssim_hardcut_thresh
-        model_dir = self.download_rife(model_dir, save_path=save_path)
+        model_dir = self.download_rife(model_dir, save_path=save_path, progress_callback=progress_callback)
+        if download_only:
+            return
 
         # Build model
-        self.device = device
+        self.device = device or get_torch_device()
         self.model = _load_rife_model(model_dir, self.device, logger=logger)
 
-    def download_rife(self, model_dir: str, save_path: str):
+    def download_rife(self, model_dir: str, save_path: str, progress_callback: Optional[Callable[[int, int, Optional[str]], None]] = None):
         if self._is_url(model_dir):
             # check if the save_path exists
             save_rife_path = os.path.join(save_path, "rife")
@@ -126,7 +128,7 @@ class RifePostprocessor(BasePostprocessor):
                     pass
                 return os.path.join(save_rife_path, "train_log")
             os.makedirs(save_rife_path, exist_ok=True)
-            path = self._download_from_url(model_dir, save_path=save_path)
+            path = self._download_from_url(model_dir, save_path=save_path, progress_callback=progress_callback)
             # Extract full contents so Python modules under train_log are available
             with zipfile.ZipFile(path, "r") as zip_ref:
                 zip_ref.extractall(save_rife_path)

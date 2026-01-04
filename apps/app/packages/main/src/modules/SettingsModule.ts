@@ -37,6 +37,7 @@ interface Settings {
   renderImageSteps?: boolean;
   renderVideoSteps?: boolean;
   useFastDownload?: boolean;
+  autoUpdateEnabled?: boolean;
 }
 
 interface ConfigResponse<T> {
@@ -44,6 +45,20 @@ interface ConfigResponse<T> {
   data?: T;
   error?: string;
 }
+
+type BackendSyncedSettings = {
+  cachePath: string | null;
+  componentsPath: string | null;
+  configPath: string | null;
+  loraPath: string | null;
+  preprocessorPath: string | null;
+  postprocessorPath: string | null;
+  maskModel: string | null;
+  renderImageSteps: boolean;
+  renderVideoSteps: boolean;
+  useFastDownload: boolean;
+  autoUpdateEnabled: boolean;
+};
 
 type PathsPayload = Pick<
   Settings,
@@ -63,6 +78,8 @@ export class SettingsModule extends EventEmitter implements AppModule {
   private store: Store<Settings>;
   private backendUrl: string = DEFAULT_BACKEND_URL;
   private settingsPath: string | null = null;
+  private refreshInFlight: Promise<ConfigResponse<BackendSyncedSettings>> | null =
+    null;
 
   constructor() {
     super();
@@ -75,7 +92,9 @@ export class SettingsModule extends EventEmitter implements AppModule {
 
   enable({ app }: ModuleContext): void {
     this.settingsPath = path.join(app.getPath("userData"), "apex-settings.json");
-    this.backendUrl = this.readBackendUrlFromDisk(this.settingsPath);
+    this.backendUrl = this.normalizeBackendUrl(
+      this.readBackendUrlFromDisk(this.settingsPath),
+    );
     this.registerHandlers();
   }
 
@@ -83,10 +102,34 @@ export class SettingsModule extends EventEmitter implements AppModule {
     return this.backendUrl;
   }
 
+  getApiPath(): string | null {
+    const v = (this.store.get("apiPath") as string | null | undefined) ?? null;
+    const trimmed = typeof v === "string" ? v.trim() : "";
+    return trimmed ? trimmed : null;
+  }
+
   async setBackendUrl(url: string): Promise<void> {
-    this.backendUrl = url;
+    const next = this.normalizeBackendUrl(url);
+    if (next === this.backendUrl) return;
+    this.backendUrl = next;
     this.saveBackendUrlToDisk();
-    this.emit("backend-url-changed", url);
+    this.emit("backend-url-changed", next);
+    // Keep settings in sync with the selected backend. Fire-and-forget to avoid
+    // blocking the UI; renderer can also explicitly refresh when it needs results.
+    void this.refreshFromBackend().catch(() => undefined);
+  }
+
+  private normalizeBackendUrl(url: string): string {
+    const trimmed = String(url || "").trim();
+    if (!trimmed) return DEFAULT_BACKEND_URL;
+    try {
+      // Ensure it's a valid URL and normalize by removing trailing slash.
+      const u = new URL(trimmed);
+      return u.toString().replace(/\/$/, "");
+    } catch {
+      // Best-effort: keep user input but still remove trailing slash.
+      return trimmed.replace(/\/$/, "");
+    }
   }
 
   private saveBackendUrlToDisk(): void {
@@ -125,20 +168,26 @@ export class SettingsModule extends EventEmitter implements AppModule {
     method: "GET" | "POST",
     endpoint: string,
     body?: any,
+    timeoutMs: number = 6000,
   ): Promise<ConfigResponse<T>> {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       const options: RequestInit = {
         method,
         headers: {
           "Content-Type": "application/json",
         },
+        signal: controller.signal,
       };
 
       if (body && method !== "GET") {
         options.body = JSON.stringify(body);
       }
 
-      const response = await fetch(`${this.backendUrl}${endpoint}`, options);
+      const response = await fetch(`${this.backendUrl}${endpoint}`, options).finally(
+        () => clearTimeout(timeoutId),
+      );
       if (!response.ok) {
         const errorData = await response
           .json()
@@ -160,6 +209,210 @@ export class SettingsModule extends EventEmitter implements AppModule {
           error instanceof Error ? error.message : "Unknown error occurred",
       };
     }
+  }
+
+  private async makeConfigRequestAtUrl<T>(
+    baseUrl: string,
+    method: "GET" | "POST",
+    endpoint: string,
+    body?: any,
+    timeoutMs: number = 6000,
+  ): Promise<ConfigResponse<T>> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const options: RequestInit = {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      };
+
+      if (body && method !== "GET") {
+        options.body = JSON.stringify(body);
+      }
+
+      const response = await fetch(`${baseUrl}${endpoint}`, options).finally(() =>
+        clearTimeout(timeoutId),
+      );
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ detail: "Unknown error" }));
+        return {
+          success: false,
+          error:
+            errorData.detail ||
+            `HTTP ${response.status}: ${response.statusText}`,
+        };
+      }
+
+      const data = (await response.json()) as T;
+      return { success: true, data };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error occurred",
+      };
+    }
+  }
+
+  /**
+   * Force-refresh backend-derived settings (paths, toggles, etc.) from the current backendUrl.
+   * This is intended to be called ONLY when the backendUrl changes (or when renderer explicitly requests a refresh).
+   *
+   * Safety: if the backendUrl changes again while a refresh is in-flight, results are discarded.
+   */
+  async refreshFromBackend(): Promise<ConfigResponse<BackendSyncedSettings>> {
+    if (this.refreshInFlight) return this.refreshInFlight;
+    const urlAtStart = this.backendUrl;
+
+    const run = (async (): Promise<ConfigResponse<BackendSyncedSettings>> => {
+      const currentSnapshot = (): BackendSyncedSettings => ({
+        cachePath: (this.store.get("cachePath") as string | null | undefined) ?? null,
+        componentsPath:
+          (this.store.get("componentsPath") as string | null | undefined) ?? null,
+        configPath: (this.store.get("configPath") as string | null | undefined) ?? null,
+        loraPath: (this.store.get("loraPath") as string | null | undefined) ?? null,
+        preprocessorPath:
+          (this.store.get("preprocessorPath") as string | null | undefined) ?? null,
+        postprocessorPath:
+          (this.store.get("postprocessorPath") as string | null | undefined) ?? null,
+        maskModel: (this.store.get("maskModel") as string | null | undefined) ?? null,
+        renderImageSteps: Boolean(this.store.get("renderImageSteps")),
+        renderVideoSteps: Boolean(this.store.get("renderVideoSteps")),
+        useFastDownload: (() => {
+          const v = this.store.get("useFastDownload");
+          return v === undefined ? true : Boolean(v);
+        })(),
+        autoUpdateEnabled: (() => {
+          const v = this.store.get("autoUpdateEnabled");
+          return v === undefined ? true : Boolean(v);
+        })(),
+      });
+
+      let okCount = 0;
+      const next: BackendSyncedSettings = currentSnapshot();
+
+      const setIfStillCurrent = <K extends keyof BackendSyncedSettings>(
+        key: K,
+        value: BackendSyncedSettings[K],
+      ) => {
+        if (this.backendUrl !== urlAtStart) return;
+        (next as any)[key] = value;
+        // Mirror into electron-store keys where they exist.
+        if (
+          key === "cachePath" ||
+          key === "componentsPath" ||
+          key === "configPath" ||
+          key === "loraPath" ||
+          key === "preprocessorPath" ||
+          key === "postprocessorPath" ||
+          key === "maskModel"
+        ) {
+          this.store.set(key as any, value as any);
+        } else if (
+          key === "renderImageSteps" ||
+          key === "renderVideoSteps" ||
+          key === "useFastDownload" ||
+          key === "autoUpdateEnabled"
+        ) {
+          // Settings interface includes these booleans
+          this.store.set(key as any, Boolean(value));
+        }
+      };
+
+      // Paths + mask model
+      const pathKeys: PathKey[] = [
+        "cachePath",
+        "componentsPath",
+        "configPath",
+        "loraPath",
+        "preprocessorPath",
+        "postprocessorPath",
+        "maskModel",
+      ];
+      for (const key of pathKeys) {
+        const cfg = this.getPathConfig(key);
+        if (!cfg) continue;
+        const res = await this.makeConfigRequestAtUrl<any>(
+          urlAtStart,
+          "GET",
+          cfg.getEndpoint,
+        );
+        if (res.success && res.data) {
+          const v = res.data[cfg.responseField];
+          if (typeof v === "string") {
+            okCount++;
+            setIfStillCurrent(key as any, v || null);
+          }
+        }
+      }
+
+      // Booleans
+      const img = await this.makeConfigRequestAtUrl<any>(
+        urlAtStart,
+        "GET",
+        "/config/enable-image-render-steps",
+      );
+      if (img.success && img.data && typeof img.data.enabled === "boolean") {
+        okCount++;
+        setIfStillCurrent("renderImageSteps", Boolean(img.data.enabled));
+      }
+
+      const vid = await this.makeConfigRequestAtUrl<any>(
+        urlAtStart,
+        "GET",
+        "/config/enable-video-render-steps",
+      );
+      if (vid.success && vid.data && typeof vid.data.enabled === "boolean") {
+        okCount++;
+        setIfStillCurrent("renderVideoSteps", Boolean(vid.data.enabled));
+      }
+
+      const fast = await this.makeConfigRequestAtUrl<any>(
+        urlAtStart,
+        "GET",
+        "/config/enable-fast-download",
+      );
+      if (fast.success && fast.data && typeof fast.data.enabled === "boolean") {
+        okCount++;
+        setIfStillCurrent("useFastDownload", Boolean(fast.data.enabled));
+      }
+
+      const au = await this.makeConfigRequestAtUrl<any>(
+        urlAtStart,
+        "GET",
+        "/config/auto-update",
+      );
+      if (au.success && au.data && typeof au.data.enabled === "boolean") {
+        okCount++;
+        setIfStillCurrent("autoUpdateEnabled", Boolean(au.data.enabled));
+      }
+
+      // If backendUrl changed mid-refresh, discard to avoid stale writes.
+      if (this.backendUrl !== urlAtStart) {
+        return {
+          success: false,
+          error: "Backend URL changed while refreshing settings; discarded stale results.",
+        };
+      }
+
+      if (okCount === 0) {
+        return {
+          success: false,
+          error: "Failed to refresh settings: backend unreachable or missing config endpoints.",
+        };
+      }
+
+      return { success: true, data: next };
+    })();
+
+    this.refreshInFlight = run;
+    return await run.finally(() => {
+      this.refreshInFlight = null;
+    });
   }
 
   private async setCivitaiApiKeyAndUpdateApi(
@@ -286,6 +539,30 @@ export class SettingsModule extends EventEmitter implements AppModule {
     void this.makeConfigRequest<any>("POST", endpoint, {
       [requestField]: v,
     });
+  }
+
+  private async getAutoUpdateEnabledEnsuringFromApi(): Promise<boolean> {
+    const current = this.store.get("autoUpdateEnabled");
+    if (current !== undefined) return Boolean(current);
+
+    // Prefer backend source-of-truth (persisted on API side).
+    const res = await this.makeConfigRequest<any>("GET", "/config/auto-update").catch(
+      () => ({ success: false } as any),
+    );
+    const enabled =
+      res && res.success && res.data && typeof res.data.enabled === "boolean"
+        ? Boolean(res.data.enabled)
+        : true;
+    this.store.set("autoUpdateEnabled", enabled);
+    return enabled;
+  }
+
+  private setAutoUpdateEnabledAndUpdateApi(enabled: boolean): void {
+    const v = Boolean(enabled);
+    this.store.set("autoUpdateEnabled", v);
+    void this.makeConfigRequest<any>("POST", "/config/auto-update", {
+      enabled: v,
+    }).catch(() => undefined);
   }
 
   private async getAllPathsEnsuringFromApi(): Promise<PathsPayload> {
@@ -561,6 +838,24 @@ export class SettingsModule extends EventEmitter implements AppModule {
         return { success: true };
       },
     );
+
+    // API auto-update toggle (backend-persisted)
+    ipcMain.handle("settings:get-auto-update-enabled", async () => {
+      return await this.getAutoUpdateEnabledEnsuringFromApi();
+    });
+
+    ipcMain.handle(
+      "settings:set-auto-update-enabled",
+      (_event, enabled: boolean) => {
+        this.setAutoUpdateEnabledAndUpdateApi(enabled);
+        return { success: true };
+      },
+    );
+
+    // Force refresh settings from backend (intended to be used when backendUrl changes)
+    ipcMain.handle("settings:refresh-from-backend", async () => {
+      return await this.refreshFromBackend();
+    });
   }
 }
 
