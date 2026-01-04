@@ -7,10 +7,10 @@ import re
 import sys
 import time
 import urllib.request
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
-
 from src.utils.defaults import get_cache_path, get_config_store_path, DEFAULT_HEADERS
 
 
@@ -83,12 +83,12 @@ def get_auto_update_config() -> AutoUpdateConfig:
     repo_owner = str(
         persisted.get("auto_update_repo_owner")
         or os.environ.get("APEX_UPDATE_REPO_OWNER")
-        or "totokunda"
+        or "totoku"
     ).strip()
     repo_name = str(
         persisted.get("auto_update_repo_name")
         or os.environ.get("APEX_UPDATE_REPO_NAME")
-        or "apex-studio"
+        or "apex-studio-server"
     ).strip()
     include_prerelease = bool(
         persisted.get(
@@ -255,11 +255,20 @@ def _parse_python_code_asset(asset_name: str) -> Optional[dict]:
     }
 
 
-def _github_json(url: str) -> Any:
+def _encode_hf_path(path: str) -> str:
+    """
+    Encode a repo-relative path for Hugging Face URLs.
+    We must preserve "/" separators while percent-encoding each segment.
+    """
+    parts = [p for p in (path or "").split("/") if p]
+    return "/".join(urllib.parse.quote(p, safe="") for p in parts)
+
+
+def _hf_json(url: str) -> Any:
     req = urllib.request.Request(
         url,
         headers={
-            "Accept": "application/vnd.github+json",
+            "Accept": "application/json",
             "User-Agent": "apex-engine",
             **(DEFAULT_HEADERS or {}),
         },
@@ -269,49 +278,71 @@ def _github_json(url: str) -> Any:
     return json.loads(raw.decode("utf-8"))
 
 
-def list_remote_python_code_assets(cfg: AutoUpdateConfig) -> list[RemoteAsset]:
-    url = f"https://api.github.com/repos/{cfg.repo_owner}/{cfg.repo_name}/releases?per_page=100"
-    data = _github_json(url)
-    if not isinstance(data, list):
-        return []
+def _hf_list_tree(cfg: AutoUpdateConfig, path: str | None = None) -> list[dict]:
+    base = f"https://huggingface.co/api/models/{cfg.repo_owner}/{cfg.repo_name}/tree/main"
+    url = f"{base}/{_encode_hf_path(path)}" if path else base
+    data = _hf_json(url)
+    return data if isinstance(data, list) else []
 
+
+def list_remote_python_code_assets(cfg: AutoUpdateConfig) -> list[RemoteAsset]:
     plat_ok = _host_platform_candidates()
     arch_ok = _host_arch_candidates()
     py_tag = _python_tag().lower()
 
     out: list[RemoteAsset] = []
-    for rel in data:
-        if not isinstance(rel, dict):
+    root = _hf_list_tree(cfg)
+    version_dirs: list[str] = []
+    for item in root:
+        if not isinstance(item, dict):
             continue
-        tag = str(rel.get("tag_name") or "")
-        tag_m = re.fullmatch(r"v(\d+\.\d+\.\d+)-server", tag.strip(), flags=re.IGNORECASE)
-        if not tag_m:
+        if str(item.get("type") or "") != "directory":
             continue
-        tag_ver = tag_m.group(1)
-        prerelease = bool(rel.get("prerelease"))
-        if prerelease and not cfg.include_prerelease:
+        p = str(item.get("path") or "")
+        if not p:
             continue
+        base = (p.split("/")[-1] or "").strip()
+        if re.fullmatch(r"v?\d+\.\d+\.\d+", base, flags=re.IGNORECASE):
+            version_dirs.append(p)
 
-        assets = rel.get("assets") or []
-        if not isinstance(assets, list):
-            continue
-        for a in assets:
-            if not isinstance(a, dict):
+    def _dir_sort_key(p: str) -> tuple[int, int, int]:
+        base = (p.split("/")[-1] or "").lstrip("vV")
+        return _parse_semver_triplet(base) or (0, 0, 0)
+
+    version_dirs.sort(key=_dir_sort_key, reverse=True)
+
+    for dir_path in version_dirs:
+        base = (dir_path.split("/")[-1] or "").strip()
+        tag = base
+        tag_ver = base.lstrip("vV")
+
+        entries = _hf_list_tree(cfg, dir_path)
+        for e in entries:
+            if not isinstance(e, dict):
                 continue
-            asset_name = str(a.get("name") or "")
-            dl = str(a.get("browser_download_url") or "")
-            if not asset_name or not dl:
+            if str(e.get("type") or "") != "file":
                 continue
+            full_path = str(e.get("path") or "")
+            if not full_path:
+                continue
+            asset_name = full_path.split("/")[-1] or ""
+            if not asset_name:
+                continue
+
             parsed = _parse_python_code_asset(asset_name)
             if not parsed:
                 continue
-            if parsed["python_tag"].lower() != py_tag:
+            if str(parsed["python_tag"]).lower() != py_tag:
                 continue
             if str(parsed["platform"]).lower() not in plat_ok:
                 continue
             if str(parsed["arch"]).lower() not in arch_ok:
                 continue
 
+            dl = (
+                f"https://huggingface.co/{cfg.repo_owner}/{cfg.repo_name}/resolve/main/"
+                f"{_encode_hf_path(full_path)}?download=true"
+            )
             out.append(
                 RemoteAsset(
                     tag=tag,
@@ -323,8 +354,8 @@ def list_remote_python_code_assets(cfg: AutoUpdateConfig) -> list[RemoteAsset]:
                     arch=str(parsed["arch"]),
                     device=str(parsed["device"]),
                     python_tag=str(parsed["python_tag"]),
-                    prerelease=prerelease,
-                    published_at=str(rel.get("published_at") or "") or None,
+                    prerelease=False,
+                    published_at=None,
                 )
             )
 
