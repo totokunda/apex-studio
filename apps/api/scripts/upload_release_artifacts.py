@@ -18,18 +18,16 @@ load_dotenv()
 
 from huggingface_hub import HfApi
 
-
 DEFAULT_REPO_ID = "totoku/apex-studio-server"
 DEFAULT_REPO_TYPE = "model"
 DEFAULT_VERSION_FOLDER = "v0.1.0"
 
 DEFAULT_API_TAR = (
-    "/home/tosin_coverquick_co/apex-studio/apps/api/dist/"
-    "python-api-0.1.0-linux-x86_64-cuda126-cp312.tar.zst"
+    "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/dist/python-api-0.1.0-darwin-arm64-cpu-cp312.tar.zst"
 )
+
 DEFAULT_CODE_TAR = (
-    "/home/tosin_coverquick_co/apex-studio/apps/api/dist/"
-    "python-code-0.1.0-linux-x86_64-cuda126-cp312.tar.zst"
+    "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/dist/python-code-0.1.0-darwin-arm64-cpu-cp312.tar.zst"
 )
 
 
