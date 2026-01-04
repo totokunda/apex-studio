@@ -179,11 +179,3 @@ class TinyWANVAEConverter(VAEConverter):
         self.special_keys_map = {}
 
 
-class NoOpVAEConverter(VAEConverter):
-    def __init__(self):
-        super().__init__()
-        self.rename_dict = {}
-        self.special_keys_map = {}
-
-    def convert(self, state_dict: Dict[str, Any]):
-        return None
