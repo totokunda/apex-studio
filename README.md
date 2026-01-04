@@ -16,38 +16,10 @@
 
 <hr />
 
-### Optional: Rust-accelerated downloader (for max download throughput)
-
-`src/mixins/download_mixin.py` can use an optional Rust/PyO3 module (`apex_download_rs`) for faster URL downloads
-(less Python overhead, better chance of saturating network/disk).
-
-Build/install (requires Rust toolchain + cargo):
-
-```bash
-python -m pip install -U pip maturin
-cd rust/apex_download_rs
-maturin develop --release
-```
-
-Runtime toggles:
-- `APEX_USE_RUST_DOWNLOAD=0` to disable (default is enabled if the module is importable)
-- `APEX_DOWNLOAD_PROGRESS_INTERVAL` (seconds, default `0.2`) to throttle progress callbacks
-- `APEX_DOWNLOAD_PROGRESS_MIN_BYTES` (bytes, default `1048576`) to throttle progress callbacks
-
-Rust parallel range-download tuning (hf_transfer-style, signature unchanged; all optional):
-- `APEX_RUST_DOWNLOAD_MAX_FILES` (default `8`): max concurrent range requests / file handles
-- `APEX_RUST_DOWNLOAD_PARALLEL_FAILURES` (default `0`) + `APEX_RUST_DOWNLOAD_MAX_RETRIES` (default `0`): enable per-chunk retry with backoff
-- `APEX_RUST_DOWNLOAD_RETRY_BASE_MS` (default `300`) and `APEX_RUST_DOWNLOAD_RETRY_MAX_MS` (default `10000`)
-
 ## 🚀Quick Start
 
 - Packaged application
 - Available for MacOS and Windows machines
-
-### Terminal startup ([details](#terminal-startup))
-
-- Seperated studio and engine
-- Can be used with remote machines
 
 ## Run locally (development)
 
@@ -118,6 +90,31 @@ Then run:
 cd apps/api
 apex-engine dev
 ```
+
+
+### Optional: Rust-accelerated downloader (for max download throughput)
+
+`src/mixins/download_mixin.py` can use an optional Rust/PyO3 module (`apex_download_rs`) for faster URL downloads
+(less Python overhead, better chance of saturating network/disk).
+
+Build/install (requires Rust toolchain + cargo):
+
+```bash
+python -m pip install -U pip maturin
+cd rust/apex_download_rs
+maturin develop --release
+```
+
+Runtime toggles:
+- `APEX_USE_RUST_DOWNLOAD=0` to disable (default is enabled if the module is importable)
+- `APEX_DOWNLOAD_PROGRESS_INTERVAL` (seconds, default `0.2`) to throttle progress callbacks
+- `APEX_DOWNLOAD_PROGRESS_MIN_BYTES` (bytes, default `1048576`) to throttle progress callbacks
+
+Rust parallel range-download tuning (hf_transfer-style, signature unchanged; all optional):
+- `APEX_RUST_DOWNLOAD_MAX_FILES` (default `8`): max concurrent range requests / file handles
+- `APEX_RUST_DOWNLOAD_PARALLEL_FAILURES` (default `0`) + `APEX_RUST_DOWNLOAD_MAX_RETRIES` (default `0`): enable per-chunk retry with backoff
+- `APEX_RUST_DOWNLOAD_RETRY_BASE_MS` (default `300`) and `APEX_RUST_DOWNLOAD_RETRY_MAX_MS` (default `10000`)
+
 
 ## Features
 
