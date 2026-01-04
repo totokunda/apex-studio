@@ -8,14 +8,6 @@
   Apex was built around a simple belief: using free and open-source diffusion models should feel effortless. Making the model run shouldn’t be the challenge, the challenge should be the ambition, depth, and complexity of the content you choose to create.
 </p>
 
-## Documentation
-
-<hr />
-
-## Getting Started
-
-<hr />
-
 ## 🚀Quick Start
 
 - Packaged application
