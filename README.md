@@ -1,11 +1,5 @@
 <h1 align="center">Apex Studio</h1>
 
-<hr />
-
-<p align="center">
-  Content creation made easy with a video editor built around open-source models.
-</p>
-
 <p align="center">
   <img src="assets/images/apex-studio.png" alt="Apex Studio" />
 </p>
@@ -200,9 +194,6 @@ apex-engine dev
   - [SeedVR2 3B](apps/api/manifest/upscalers/seedvr2-3b.yml)
   - [SeedVR2 7B](apps/api/manifest/upscalers/seedvr2-7b.yml)
 
-## Terminal Startup
-
-<hr />
 
 
 
