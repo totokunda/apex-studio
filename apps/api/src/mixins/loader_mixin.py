@@ -138,7 +138,7 @@ class LoaderMixin(DownloadMixin):
         no_weights: bool = False,
         key_map: Dict[str, str] | None = None,
         extra_kwargs: Dict[str, Any] | None = None,
-    ) -> ModelMixin:
+    ):
 
         if not self.logger:
             self.logger = logger
@@ -207,7 +207,8 @@ class LoaderMixin(DownloadMixin):
             converter = get_text_encoder_converter(model_base)
         else:
             converter = NoOpConverter()
-
+            
+        
         if os.path.isdir(model_path):
             # look for a config.json file
             config_path = os.path.join(model_path, "config.json")
@@ -256,6 +257,8 @@ class LoaderMixin(DownloadMixin):
 
         if no_weights:
             return model
+        
+        model_keys = list(model.state_dict().keys())
 
         files_to_load = []
         if os.path.isdir(model_path):
@@ -315,7 +318,7 @@ class LoaderMixin(DownloadMixin):
                     device=load_device,
                     **gguf_kwargs,
                 )
-                converter.convert(state_dict)
+                converter.convert(state_dict, model_keys)
                 # Load GGMLTensors without replacing nn.Parameters by copying data
                 patch_model_ggml_from_state_dict(
                     model,
@@ -364,7 +367,7 @@ class LoaderMixin(DownloadMixin):
                             new_state_dict[k2] = v2
                 state_dict = new_state_dict
 
-            converter.convert(state_dict)
+            converter.convert(state_dict, model_keys)
             if load_dtype and not is_safetensors:
                 for k, v in state_dict.items():
                     state_dict[k] = v.to(load_dtype)

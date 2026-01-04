@@ -1,6 +1,6 @@
 from src.converters.utils import update_state_dict_
 import re
-from typing import Dict, Any, Iterable
+from typing import Dict, Any, Iterable, List
 
 
 class BaseConverter:
@@ -8,6 +8,94 @@ class BaseConverter:
         self.rename_dict = {}
         self.special_keys_map = {}
         self.pre_special_keys_map = {}
+
+    @staticmethod
+    def _strip_prefixes_for_overlap(
+        keys: List[str], reference_set: set, candidate_prefixes: Iterable[str]
+    ) -> List[str]:
+        """
+        Return a *new* list of keys where we strip unanimous wrapper prefixes only when
+        doing so increases overlap with `reference_set`.
+
+        This is used to align `model_keys` and checkpoint keys that may differ only by
+        common wrappers like "model." / "module.".
+        """
+        if not keys:
+            return keys
+        out = list(keys)
+
+        changed = True
+        while changed:
+            changed = False
+            for p in candidate_prefixes:
+                if not p:
+                    continue
+                if not all(k.startswith(p) for k in out):
+                    continue
+                stripped = [k[len(p) :] for k in out]
+                # Guard against empty keys and collisions.
+                if any(not k for k in stripped):
+                    continue
+                if len(set(stripped)) != len(stripped):
+                    continue
+
+                before = sum(1 for k in out if k in reference_set)
+                after = sum(1 for k in stripped if k in reference_set)
+                if after > before:
+                    out = stripped
+                    changed = True
+                    break
+        return out
+
+    @classmethod
+    def _model_keys_indicate_already_converted(
+        cls, state_keys: List[str], model_keys: List[str]
+    ) -> bool:
+        """
+        If `model_keys` is provided, use it as strong evidence that `state_keys` are
+        already in the target format.
+
+        This is conservative: we only return True when *most* checkpoint keys are
+        present in `model_keys` (allowing a small number of extras).
+        """
+        if not state_keys or not model_keys:
+            return False
+
+        state_set = set(state_keys)
+        model_set = set(model_keys)
+
+        # Try to align wrapper prefixes in either direction.
+        candidate_prefixes = (
+            "model.diffusion_model.",
+            "diffusion_model.model.",
+            "model.",
+            "diffusion_model.",
+            "module.",
+            "unet.",
+        )
+        # Normalize model keys against state, then state against model (symmetrically).
+        model_keys_norm = cls._strip_prefixes_for_overlap(
+            list(model_set), state_set, candidate_prefixes
+        )
+        model_set_norm = set(model_keys_norm)
+        state_keys_norm = cls._strip_prefixes_for_overlap(
+            list(state_set), model_set_norm, candidate_prefixes
+        )
+        state_set_norm = set(state_keys_norm)
+
+        matched = len(state_set_norm & model_set_norm)
+        total = len(state_set_norm)
+        if total == 0:
+            return False
+
+        # Require a meaningful number of matched keys to avoid tiny-dict false positives.
+        if matched < min(10, total):
+            return False
+
+        # Allow a small number of extra keys (e.g. EMA/aux tensors), but require that
+        # almost all checkpoint keys are recognized by the model.
+        unmatched = total - matched
+        return (matched / total) >= 0.98 and unmatched <= max(2, int(0.02 * total))
 
     @staticmethod
     def _looks_like_regex(pattern: str) -> bool:
@@ -114,7 +202,7 @@ class BaseConverter:
         # Prefer dotted/underscored fragments; otherwise require sufficient length.
         return ("." in s) or ("_" in s) or (len(s) >= 8)
 
-    def _already_converted(self, state_dict: Dict[str, Any]) -> bool:
+    def _already_converted(self, state_dict: Dict[str, Any], model_keys: List[str] = None) -> bool:
         """
         Best-effort heuristic to detect whether `state_dict` appears to already be in
         the *target* key format for this converter.
@@ -124,10 +212,18 @@ class BaseConverter:
         - Requires *absence* of source markers that strongly suggest an unconverted ckpt
         - Refuses to early-exit if we'd otherwise drop keys via pre/special handlers
         """
+        
         if not state_dict:
             return True
 
         keys = list(state_dict.keys())
+
+        # Strongest evidence: if the checkpoint keys already match the instantiated model's
+        # keys (modulo common wrapper prefixes), then we should treat this as converted.
+        # This helps especially for converters without strong target markers, and avoids
+        # running special/pre-special handlers on already-converted checkpoints.
+        if model_keys and self._model_keys_indicate_already_converted(keys, model_keys):
+            return True
 
         # Regex-based renames are hard to reason about via marker matching (source markers
         # won't appear verbatim in real keys, and some targets are intentionally generic,
@@ -140,6 +236,10 @@ class BaseConverter:
             self._looks_like_regex(k) or self._looks_like_glob_star(k)
             for k in self.rename_dict.keys()
         ):
+            # If a model-key check was provided and didn't match, don't early-exit just
+            # because the regex rules are a no-op; keep it conservative.
+            if model_keys:
+                return False
             return not any(self._apply_rename_dict(k) != k for k in keys)
 
         # Guard against partially-converted states introduced by placeholder hacks.
@@ -271,9 +371,7 @@ class BaseConverter:
         candidate_prefixes = (
             "model.diffusion_model.",
             "diffusion_model.model.",
-            "model.",
             "diffusion_model.",
-            "module.",
             "unet.",
         )
 
@@ -285,7 +383,7 @@ class BaseConverter:
                     changed = True
                     break
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
         self._sort_rename_dict()
         # Some checkpoints are stored under a wrapper prefix (e.g. "model." or
         # "diffusion_model."). If *every* key has the prefix and stripping it makes
@@ -294,7 +392,7 @@ class BaseConverter:
         # If this looks like a checkpoint that already matches the target key layout,
         # exit early to keep conversion idempotent.
 
-        if self._already_converted(state_dict):
+        if self._already_converted(state_dict, model_keys):
             return state_dict
         # Apply pre-special keys map
         for key in list(state_dict.keys()):
@@ -314,4 +412,6 @@ class BaseConverter:
                 if special_key not in key:
                     continue
                 handler_fn_inplace(key, state_dict)
+        
+
         return state_dict
