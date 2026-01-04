@@ -41,10 +41,10 @@ import importlib
 from diffusers.utils.torch_utils import randn_tensor
 import traceback
 from src.utils.defaults import (
-    DEFAULT_DEVICE,
     DEFAULT_CONFIG_SAVE_PATH,
     DEFAULT_SAVE_PATH,
     DEFAULT_LORA_SAVE_PATH,
+    get_torch_device,
 )
 from src.utils.compute import validate_compute_requirements, get_compute_capability
 from accelerate import cpu_offload
@@ -254,10 +254,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
     def __init__(
         self,
         yaml_path: str,
-        device: torch.device = DEFAULT_DEVICE,
+        device: torch.device | None = None,
         **kwargs,
     ):
-        self.device = device
+        self.device = device or get_torch_device()
         self._helpers = AutoLoadingHelperDict(self)
         # Keep a copy of the original initialization kwargs so that
         # `post_init` can access them after all subclasses have finished

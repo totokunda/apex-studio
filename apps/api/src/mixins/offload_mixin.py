@@ -1,15 +1,16 @@
-import torch
+from __future__ import annotations
+
 import gc
 import inspect
 import types
-import mlx.core as mx
-from mlx.nn import Module as MlxModule
 from typing import Literal
 from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
     from engine.base_engine import BaseEngine
+    import torch
+    import mlx.core as mx
 
     base_object = BaseEngine
 else:
@@ -17,6 +18,8 @@ else:
 
 
 def live_cuda_tensors():
+    import torch
+
     out = []
     for obj in gc.get_objects():
         try:
@@ -33,6 +36,7 @@ def live_cuda_tensors():
 
 
 def _tensor_bytes(t: torch.Tensor) -> int:
+    # Only used at runtime; keep torch import lazy.
     return t.numel() * t.element_size()
 
 
@@ -358,7 +362,6 @@ class OffloadMixin(base_object):
             self._offload(self.model)   # <- frees VRAM / MRAM
     """
 
-    @torch.no_grad()
     def _offload(
         self: "BaseEngine",
         module: torch.nn.Module | str | None,
@@ -387,39 +390,45 @@ class OffloadMixin(base_object):
         #         self._null_module_refs(module)
         #     return
 
-        if not module:
-            return
+        import torch
 
-        if isinstance(module, str):
-            module_obj = getattr(self, module, None)
-            if module_obj is None:
+        # Keep no_grad behavior without importing torch at module import time.
+        with torch.no_grad():
+            if not module:
                 return
-            if offload_type == "cpu":
-                module_obj.to("cpu")
-            elif offload_type == "discard":
-                component = self.get_component_by_name(module)
-                if component:
-                    module_type_obj = getattr(self, component.get("type"), None)
 
-                    if module_type_obj is module_obj:
-                        self.logger.info(f"Setting {component.get('type')} to None")
-                        setattr(self, component.get("type"), None)
-                else:
-                    component = self.get_component_by_type(module)
-                # check if type is helper
-                if component:
-                    if component.get("type") == "helper":
-                        try:
-                            self._helpers.pop(component.get("name"))
-                        except Exception:
-                            pass
-                self.logger.info(f"Setting {module} to None")
-                setattr(self, module, None)
-        else:
-            if offload_type == "cpu":
-                module.to("cpu")
-            elif offload_type == "discard":
-                raise ValueError(f"Invalid offload type: {offload_type} for module.")
+            if isinstance(module, str):
+                module_obj = getattr(self, module, None)
+                if module_obj is None:
+                    return
+                if offload_type == "cpu":
+                    module_obj.to("cpu")
+                elif offload_type == "discard":
+                    component = self.get_component_by_name(module)
+                    if component:
+                        module_type_obj = getattr(self, component.get("type"), None)
+
+                        if module_type_obj is module_obj:
+                            self.logger.info(f"Setting {component.get('type')} to None")
+                            setattr(self, component.get("type"), None)
+                    else:
+                        component = self.get_component_by_type(module)
+                    # check if type is helper
+                    if component:
+                        if component.get("type") == "helper":
+                            try:
+                                self._helpers.pop(component.get("name"))
+                            except Exception:
+                                pass
+                    self.logger.info(f"Setting {module} to None")
+                    setattr(self, module, None)
+            else:
+                if offload_type == "cpu":
+                    module.to("cpu")
+                elif offload_type == "discard":
+                    raise ValueError(
+                        f"Invalid offload type: {offload_type} for module."
+                    )
 
         gc.collect()
         # 4)  Reclaim CUDA VRAM
@@ -438,6 +447,8 @@ class OffloadMixin(base_object):
             torch.mps.empty_cache()
 
         try:
+            import mlx.core as mx
+
             mx.clear_cache()
         except Exception:
             pass

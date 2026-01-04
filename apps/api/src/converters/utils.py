@@ -1,9 +1,6 @@
-import json
-import os
+
 from typing import Dict, Any, Optional
 from accelerate import init_empty_weights
-from pydash import includes
-from src.utils.module import find_class_recursive
 import importlib
 import re
 from collections import Counter
@@ -13,37 +10,8 @@ from diffusers import ModelMixin
 from transformers import PreTrainedModel, PretrainedConfig
 import inspect
 
-TRANSFORMER_CONFIG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "transformer_configs"
-)
-
-VAE_CONFIG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "vae_configs"
-)
 
 
-def get_transformer_config(model_tag: str, config_path: str | None = None):
-    if config_path is None:
-        if "/" in model_tag:
-            model_base, model_tag = model_tag.split("/")
-        else:
-            model_base = model_tag.split("_")[0]
-        config_path = os.path.join(
-            TRANSFORMER_CONFIG_DIR, model_base, f"{model_tag}.json"
-        )
-    with open(config_path, "r") as f:
-        config = json.load(f)
-    return config
-
-
-def get_vae_config(vae_tag: str, config_path: str | None = None):
-    if config_path is None:
-        model_base = vae_tag.split("_")[0]
-        config_path = os.path.join(VAE_CONFIG_DIR, model_base, f"{vae_tag}.json")
-
-    with open(config_path, "r") as f:
-        config = json.load(f)
-    return config
 
 
 def get_model_class(

@@ -14,6 +14,8 @@ import { LuBox } from "react-icons/lu";
 import { useManifestStore } from "@/lib/manifest/store";
 import { RiAiGenerate } from "react-icons/ri";
 import GenerationsMenu from "../menus/GenerationsMenu";
+import { useQueryClient } from "@tanstack/react-query";
+import { prefetchModelMenuQueries } from "@/lib/manifest/queries";
 
 interface MediaModelPanelProps {
   order?: number;
@@ -36,6 +38,15 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
   const [canScrollRight, setCanScrollRight] = useState(false);
   const { section } = useSidebarStore();
   const { clearSelectedManifestId } = useManifestStore();
+  const queryClient = useQueryClient();
+
+  const warmModelMenu = useCallback(() => {
+    try {
+      void prefetchModelMenuQueries(queryClient);
+    } catch {
+      // best-effort
+    }
+  }, [queryClient]);
 
   const resizePanelOpen = useCallback(() => {
     setIsPanelOpenAnimation(true);
@@ -122,8 +133,10 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
             />
             <MediaModelTrigger
               onClick={() => {
+                warmModelMenu();
                 clearSelectedManifestId();
               }}
+              onPointerEnter={warmModelMenu}
               icon={<LuBox className="h-4 w-4 stroke-2" />}
               title="Models"
               section="models"

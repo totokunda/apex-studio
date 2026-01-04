@@ -1,4 +1,5 @@
-import torch
+from __future__ import annotations
+
 from loguru import logger as _logger
 from typing import Any, Dict
 
@@ -52,6 +53,13 @@ class CompileMixin:
         # Only PyTorch engines are supported for now.
         engine_type = getattr(self, "engine_type", "torch")
         if engine_type != "torch":
+            return module
+
+        # Import torch lazily so importing this module doesn't force torch import
+        # during lightweight contexts (e.g. packaging/setup).
+        try:
+            import torch  # type: ignore
+        except Exception:
             return module
 
         if not hasattr(torch, "compile"):

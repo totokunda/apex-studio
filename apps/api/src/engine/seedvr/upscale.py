@@ -22,13 +22,12 @@ from src.utils.cache import empty_cache
 from src.utils.progress import safe_emit_progress, make_mapped_progress
 from diffusers.video_processor import VideoProcessor
 from src.engine.seedvr.shared.colorfix import wavelet_reconstruction
+from src.utils.assets import get_asset_path
 
-# Path to pre-computed prompt embeddings
-ASSETS_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets", "seedvr")
-)
-POS_EMB_PATH = os.path.join(ASSETS_PATH, "pos_emb.pt")
-NEG_EMB_PATH = os.path.join(ASSETS_PATH, "neg_emb.pt")
+# Paths to pre-computed prompt embeddings (works in dev checkout and installed app bundle)
+# Don't hard-fail at import time; fail when the engine is actually used.
+POS_EMB_PATH = get_asset_path("seedvr", "pos_emb.pt", must_exist=False)
+NEG_EMB_PATH = get_asset_path("seedvr", "neg_emb.pt", must_exist=False)
 
 
 @dataclass

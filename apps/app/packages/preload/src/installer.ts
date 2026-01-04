@@ -24,12 +24,35 @@ export type InstallerProgressEvent =
     }
   | { phase: "status"; message: string };
 
+export type SetupProgressPayload = {
+  progress: number | null;
+  message: string;
+  status: string;
+  metadata?: Record<string, any>;
+};
+
+export type InstallerSetupRequest = {
+  apexHomeDir: string;
+  apiInstallDir: string;
+  maskModelType?: string | null;
+  installRife?: boolean;
+  enableImageRenderSteps?: boolean;
+  enableVideoRenderSteps?: boolean;
+  jobId?: string;
+};
+
 export async function extractServerBundle(request: {
   source: BundleSource;
   destinationDir: string;
   jobId?: string;
 }): Promise<ConfigResponse<{ extractedTo: string }>> {
   return await ipcRenderer.invoke("installer:extract-server-bundle", request);
+}
+
+export async function runSetupScript(
+  request: InstallerSetupRequest,
+): Promise<ConfigResponse<{ jobId: string }>> {
+  return await ipcRenderer.invoke("installer:run-setup", request);
 }
 
 export function onInstallerProgress(
@@ -39,6 +62,20 @@ export function onInstallerProgress(
   const channel = `installer:progress:${jobId}`;
   const handler = (_event: Electron.IpcRendererEvent, ev: InstallerProgressEvent) => {
     callback(ev);
+  };
+  ipcRenderer.on(channel, handler);
+  return () => {
+    ipcRenderer.off(channel, handler);
+  };
+}
+
+export function onInstallerSetupProgress(
+  jobId: string,
+  callback: (payload: SetupProgressPayload) => void,
+): () => void {
+  const channel = `installer:setup-progress:${jobId}`;
+  const handler = (_event: Electron.IpcRendererEvent, payload: SetupProgressPayload) => {
+    callback(payload);
   };
   ipcRenderer.on(channel, handler);
   return () => {

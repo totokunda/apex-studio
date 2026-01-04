@@ -4,4 +4,5 @@ cd /Users/tosinkuye/apex-workspace/apex-studio/apps/api \
     --cuda cpu \
     --output ./dist \
     --tar-zst \
-    --tar-zst-level 12
+    --tar-zst-level 12 \
+    --bundle-version 0.1.0
