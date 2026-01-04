@@ -1,7 +1,54 @@
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getManifest, getManifestPart } from "./api";
+import { getManifest, getManifestPart, listManifests, listModelTypes, type ModelTypeInfo } from "./api";
 import { ManifestDocument } from "@/lib/manifest";
 import _ from "lodash";
+
+export async function fetchManifestsAndPrimeCache(
+  queryClient: QueryClient,
+): Promise<ManifestDocument[]> {
+  const response = await listManifests();
+  if (!response.success) {
+    throw new Error(
+      response.error || "Backend is unavailable (failed to load manifests).",
+    );
+  }
+  const manifests = (response.data ?? []) as ManifestDocument[];
+  manifests.forEach((manifest) => {
+    const id = manifest?.metadata?.id;
+    if (id) {
+      queryClient.setQueryData(["manifest", id], manifest);
+    }
+  });
+  return manifests;
+}
+
+export async function fetchModelTypes(): Promise<ModelTypeInfo[]> {
+  const response = await listModelTypes();
+  if (!response.success) {
+    throw new Error(
+      response.error || "Backend is unavailable (failed to load model types).",
+    );
+  }
+  const data = response.data;
+  return (Array.isArray(data) ? data : []) as ModelTypeInfo[];
+}
+
+export async function prefetchModelMenuQueries(
+  queryClient: QueryClient,
+): Promise<void> {
+  await Promise.allSettled([
+    queryClient.prefetchQuery({
+      queryKey: ["manifest"],
+      queryFn: () => fetchManifestsAndPrimeCache(queryClient),
+      staleTime: 30_000,
+    }),
+    queryClient.prefetchQuery({
+      queryKey: ["modelTypes"],
+      queryFn: fetchModelTypes,
+      staleTime: 30_000,
+    }),
+  ]);
+}
 
 export const useManifestQuery = (manifestId: string | null, forceRefresh: boolean = false) => {
     const queryClient = useQueryClient();   

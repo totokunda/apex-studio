@@ -11,12 +11,14 @@
 import { AppModule } from "../AppModule.js";
 import { ModuleContext } from "../ModuleContext.js";
 import { App, ipcMain, dialog } from "electron";
-import { spawn, ChildProcess, exec } from "node:child_process";
+import { spawn, ChildProcess, exec, execFile } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { getSettingsModule } from "./SettingsModule.js";
 
 // Configuration constants
 const DEFAULT_API_PORT = 8765;
@@ -45,9 +47,19 @@ interface ProcessState {
   lastHealthCheck?: Date;
 }
 
+export type PythonRuntimeInfo = {
+  available: boolean;
+  mode: "dev" | "bundled" | "installed" | "missing";
+  installedApiPath: string | null;
+  bundleRoot: string | null;
+  pythonExe: string | null;
+  reason?: string;
+};
+
 export class PythonProcessManager extends EventEmitter implements AppModule {
   private app: App | null = null;
   private process: ChildProcess | null = null;
+  private lastSpawnedPid: number | null = null;
   private state: ProcessState;
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private config: PythonProcessConfig;
@@ -55,6 +67,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   private bundledPythonPath: string = "";
   private bundledBundleRoot: string = "";
   private isShuttingDown: boolean = false;
+  private runtimeVerifyCache:
+    | { at: number; ok: boolean; reason?: string }
+    | null = null;
 
   constructor(config: PythonProcessConfig = {}) {
     super();
@@ -100,6 +115,97 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
           this.emit("error", err);
         });
       }, 1000);
+    }
+  }
+
+  /**
+   * Snapshot of runtime discovery used by the launcher to decide whether the backend
+   * can be started locally (vs. installer required).
+   */
+  public getRuntimeInfoSnapshot(): PythonRuntimeInfo {
+    return this.getRuntimeInfo();
+  }
+
+  /**
+   * Strong runtime verification: ensures the backend runtime/code exist and can execute.
+   * This prevents false "healthy" when the backend code has been deleted.
+   */
+  public async verifyRuntime(): Promise<{ ok: boolean; reason?: string }> {
+    const now = Date.now();
+    const cached = this.runtimeVerifyCache;
+    // 30s TTL avoids repeated exec while still reacting to reinstall/delete quickly.
+    if (cached && now - cached.at < 30_000) {
+      return {
+        ok: cached.ok,
+        ...(cached.reason ? { reason: cached.reason } : {}),
+      };
+    }
+
+    const info = this.getRuntimeInfo();
+    if (!info.available) {
+      const reason = info.reason || "Runtime not available";
+      this.runtimeVerifyCache = { at: now, ok: false, reason };
+      return { ok: false, reason };
+    }
+
+    // Dev mode: ensure the API code directory exists (repo layout / apps/api).
+    if (info.mode === "dev") {
+      try {
+        const devApiPath = this.#resolveDevApiPath();
+        const marker = path.join(devApiPath, "pyproject.toml");
+        if (!fs.existsSync(marker)) {
+          const reason = `Backend code not found (missing ${marker})`;
+          this.runtimeVerifyCache = { at: now, ok: false, reason };
+          return { ok: false, reason };
+        }
+        this.runtimeVerifyCache = { at: now, ok: true };
+        return { ok: true };
+      } catch (e) {
+        const reason =
+          e instanceof Error ? e.message : "Failed to verify dev backend code";
+        this.runtimeVerifyCache = { at: now, ok: false, reason };
+        return { ok: false, reason };
+      }
+    }
+
+    const pythonExe = info.pythonExe || this.bundledPythonPath || null;
+    if (!pythonExe) {
+      const reason = "Python executable not resolved";
+      this.runtimeVerifyCache = { at: now, ok: false, reason };
+      return { ok: false, reason };
+    }
+    try {
+      if (!fs.existsSync(pythonExe)) {
+        const reason = `Python runtime not found: ${pythonExe}`;
+        this.runtimeVerifyCache = { at: now, ok: false, reason };
+        return { ok: false, reason };
+      }
+    } catch {
+      const reason = `Python runtime not accessible: ${pythonExe}`;
+      this.runtimeVerifyCache = { at: now, ok: false, reason };
+      return { ok: false, reason };
+    }
+
+    const execFileAsync = promisify(execFile);
+    try {
+      // Validate python can run AND backend code is present.
+      await execFileAsync(
+        pythonExe,
+        [
+          "-c",
+          "import importlib; importlib.import_module('apex_engine'); print('ok')",
+        ],
+        { timeout: 5000, windowsHide: true },
+      );
+      this.runtimeVerifyCache = { at: now, ok: true };
+      return { ok: true };
+    } catch (e) {
+      const reason =
+        e instanceof Error
+          ? `Backend runtime verification failed: ${e.message}`
+          : "Backend runtime verification failed";
+      this.runtimeVerifyCache = { at: now, ok: false, reason };
+      return { ok: false, reason };
     }
   }
 
@@ -174,6 +280,118 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     return path.join(resourcesPath, "python-api", "apex-engine");
   }
 
+  private resolveInstalledBundleRoot(apiInstallDir: string): string | null {
+    /**
+     * We want the directory that contains:
+     *   <bundleRoot>/apex-studio/(bin|Scripts)/python
+     *
+     * Supported layouts (apiInstallDir is user-chosen install dir / extraction dir):
+     * - <apiInstallDir>/python-api/apex-engine/apex-studio/...
+     * - <apiInstallDir>/apex-engine/apex-studio/...
+     * - <apiInstallDir> (already points at apex-engine root)
+     */
+    const root = String(apiInstallDir || "").trim();
+    if (!root) return null;
+
+    const candidates = [
+      path.join(root, "python-api", "apex-engine"),
+      path.join(root, "apex-engine"),
+      root,
+    ];
+
+    for (const p of candidates) {
+      try {
+        if (!fs.existsSync(p) || !fs.statSync(p).isDirectory()) continue;
+        const marker = path.join(p, "apex-studio");
+        if (fs.existsSync(marker) && fs.statSync(marker).isDirectory()) return p;
+      } catch {
+        // ignore
+      }
+    }
+    return null;
+  }
+
+  private resolveInstalledPythonExe(bundleRoot: string): string | null {
+    const base = path.join(bundleRoot, "apex-studio");
+    const candidates =
+      process.platform === "win32"
+        ? [path.join(base, "Scripts", "python.exe")]
+        : [path.join(base, "bin", "python"), path.join(base, "bin", "python3")];
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) return p;
+      } catch {
+        // ignore
+      }
+    }
+    return null;
+  }
+
+  private getRuntimeInfo(): PythonRuntimeInfo {
+    const installedApiPath = (() => {
+      try {
+        return getSettingsModule().getApiPath();
+      } catch {
+        return null;
+      }
+    })();
+
+    const isPackaged = this.app?.isPackaged ?? false;
+
+    // Dev: assume available (system python / venv).
+    if (this.config.devMode || !isPackaged) {
+      return {
+        available: true,
+        mode: "dev",
+        installedApiPath,
+        bundleRoot: null,
+        pythonExe: this.bundledPythonPath || null,
+      };
+    }
+
+    // Packaged: prefer installed bundle if valid.
+    if (installedApiPath) {
+      const installedBundleRoot = this.resolveInstalledBundleRoot(installedApiPath);
+      const installedPythonExe = installedBundleRoot
+        ? this.resolveInstalledPythonExe(installedBundleRoot)
+        : null;
+      if (installedBundleRoot && installedPythonExe) {
+        return {
+          available: true,
+          mode: "installed",
+          installedApiPath,
+          bundleRoot: installedBundleRoot,
+          pythonExe: installedPythonExe,
+        };
+      }
+    }
+
+    // Otherwise fall back to the app-bundled runtime.
+    try {
+      if (this.bundledPythonPath && fs.existsSync(this.bundledPythonPath)) {
+        return {
+          available: true,
+          mode: "bundled",
+          installedApiPath,
+          bundleRoot: this.bundledBundleRoot || null,
+          pythonExe: this.bundledPythonPath,
+        };
+      }
+    } catch {
+      // ignore
+    }
+
+    return {
+      available: false,
+      mode: "missing",
+      installedApiPath,
+      bundleRoot: null,
+      pythonExe: null,
+      reason:
+        "No bundled runtime found and no valid installed runtime detected from settings apiPath",
+    };
+  }
+
   #resolveDevApiPath(): string {
     // In ESM, __dirname is not available. Resolve relative to import.meta.url and cwd.
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -246,8 +464,23 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     });
 
     ipcMain.handle("python:health", async () => {
-      const healthy = await this.checkHealth();
+      const healthy = await this.checkApiHealth();
       return { success: true, data: { healthy, state: this.state } };
+    });
+
+    ipcMain.handle("python:runtime-info", async () => {
+      try {
+        const info = this.getRuntimeInfo();
+        return { success: true, data: info };
+      } catch (error) {
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to determine Python runtime availability",
+        };
+      }
     });
 
     ipcMain.handle("python:logs", async () => {
@@ -286,9 +519,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
     // Handle window-all-closed
     this.app.on("window-all-closed", async () => {
-      if (process.platform !== "darwin") {
-        await this.stop();
-      }
+      // On macOS the app may remain running after the last window closes.
+      // The launcher owns the API lifecycle, so if there are no windows, stop the API too.
+      await this.stop();
     });
 
     // Cleanup on unexpected exit
@@ -321,13 +554,36 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     this.state.status = "starting";
     this.emit("status", this.state);
 
-    // Check if bundled Python exists
+    // In production, we may be using either:
+    // - a python-api shipped inside app resources, OR
+    // - a user-installed server bundle path (settings apiPath) downloaded via the installer.
+    // Resolve the best candidate early so our existence check is correct.
+    const isPackaged = this.app?.isPackaged ?? false;
+    if (isPackaged && !this.config.devMode) {
+      try {
+        const settings = getSettingsModule();
+        const installedApiPath = settings.getApiPath();
+        const installedBundleRoot = installedApiPath
+          ? this.resolveInstalledBundleRoot(installedApiPath)
+          : null;
+        const installedPythonExe = installedBundleRoot
+          ? this.resolveInstalledPythonExe(installedBundleRoot)
+          : null;
+        if (installedBundleRoot && installedPythonExe) {
+          this.bundledBundleRoot = installedBundleRoot;
+          this.bundledPythonPath = installedPythonExe;
+        }
+      } catch {
+        // ignore; fall back to app-bundled resources path
+      }
+    }
+
     if (!this.config.devMode && !fs.existsSync(this.bundledPythonPath)) {
-      // In production, if bundled Python doesn't exist, show error
       this.state.status = "error";
-      this.state.error = `Bundled Python not found: ${this.bundledPythonPath}`;
-      this.emit("error", new Error(this.state.error));
-      return;
+      this.state.error = `Python runtime not found: ${this.bundledPythonPath}`;
+      const err = new Error(this.state.error);
+      this.emit("error", err);
+      throw err;
     }
 
     try {
@@ -349,7 +605,6 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
   private async spawnProcess(): Promise<void> {
     const isPackaged = this.app?.isPackaged ?? false;
-    const env = this.buildEnvironment();
 
     // Prepare log file
     const logStream = fs.createWriteStream(this.logPath, { flags: "a" });
@@ -359,35 +614,58 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     let args: string[];
 
     if (isPackaged) {
-      // Production: run bundled venv python and execute the CLI module
-      cmd = this.bundledPythonPath;
+      // Production: prefer user-installed server bundle (settings apiPath) if present;
+      // otherwise fall back to the app-bundled python-api.
+      const settings = getSettingsModule();
+      const installedApiPath = settings.getApiPath();
+      const installedBundleRoot = installedApiPath
+        ? this.resolveInstalledBundleRoot(installedApiPath)
+        : null;
+      const installedPythonExe = installedBundleRoot
+        ? this.resolveInstalledPythonExe(installedBundleRoot)
+        : null;
+
+      const useInstalled = Boolean(installedBundleRoot && installedPythonExe);
+      const bundleRoot = useInstalled ? installedBundleRoot! : this.bundledBundleRoot;
+      const pythonExe = useInstalled ? installedPythonExe! : this.bundledPythonPath;
+
+      // Persist for env builder + logs
+      this.bundledBundleRoot = bundleRoot;
+      this.bundledPythonPath = pythonExe;
+
+      cmd = pythonExe;
       args = [
         "-m",
         "src",
-        "start",
-        "--cwd",
-        this.bundledBundleRoot,
-        "--daemon",
-        "--port",
-        String(this.config.port),
+        // Avoid Procfile/Honcho indirection; run the API server directly so the
+        // Electron-spawned process remains the true owner of the server tree.
+        "serve",
       ];
     } else {
       // Development: run via Python module
-      const apiPath = path.resolve(__dirname, "../../../../..", "api");
+      const apiPath = this.#resolveDevApiPath();
       cmd = this.bundledPythonPath;
-      args = ["-m", "src", "start", "--cwd", apiPath];
+      args = ["-m", "src", "serve"];
+      // Ensure the Python process runs from the backend repo root (contains `src/`)
+      // so module imports resolve consistently in dev.
+      this.bundledBundleRoot = apiPath;
     }
 
     console.log(`Spawning: ${cmd} ${args.join(" ")}`);
 
+    const env = this.buildEnvironment();
+
     this.process = spawn(cmd, args, {
       env,
-      cwd: isPackaged ? this.bundledBundleRoot : undefined,
+      // Always run from the resolved bundle root so `-m src ...` resolves.
+      cwd: this.bundledBundleRoot || undefined,
       stdio: ["ignore", "pipe", "pipe"],
-      detached: false,
+      // Run in its own process group on Unix so we can reliably kill the whole tree.
+      detached: process.platform !== "win32",
     });
 
     this.state.pid = this.process.pid;
+    this.lastSpawnedPid = this.process.pid ?? null;
 
     // Handle stdout
     this.process.stdout?.on("data", (data) => {
@@ -432,6 +710,8 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     // Set API configuration
     env.APEX_HOST = this.config.host;
     env.APEX_PORT = String(this.config.port);
+    // Ownership: allow the server to self-terminate if the Electron parent dies.
+    env.APEX_PARENT_PID = String(process.pid);
     
     // Set Python paths for bundled deployment
     if (this.app?.isPackaged) {
@@ -492,6 +772,16 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Public health check used by IPC and launcher gating.
+   * Ensures we never report "healthy" if the backend runtime/code is missing.
+   */
+  public async checkApiHealth(): Promise<boolean> {
+    const v = await this.verifyRuntime();
+    if (!v.ok) return false;
+    return await this.checkHealth();
   }
 
   private startHealthChecks(): void {
@@ -574,6 +864,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
   private async gracefulShutdown(): Promise<void> {
     if (!this.process) return;
+    const pid = this.process.pid;
+    const ownedPids = pid ? await this.collectDescendantPids(pid) : new Set<number>();
+    if (pid) ownedPids.add(pid);
 
     // Try graceful shutdown first
     try {
@@ -590,7 +883,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     }
 
     // Send SIGTERM
-    this.process.kill("SIGTERM");
+    this.killProcessTree("SIGTERM");
+    // Also SIGTERM all known descendants (ownership-safe backstop, in case process groups aren't shared).
+    this.killPidSet(ownedPids, "SIGTERM");
 
     // Wait for process to exit
     const exitPromise = new Promise<void>((resolve) => {
@@ -617,20 +912,84 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
   private forceKill(): void {
     if (!this.process) return;
+    const pid = this.process.pid;
+    // Capture descendants before killing the parent so we can still target them if they orphan.
+    const ownedPidsPromise =
+      pid ? this.collectDescendantPids(pid).then((s) => (s.add(pid), s)) : Promise.resolve(new Set<number>());
 
     try {
       if (process.platform === "win32") {
         // Windows: use taskkill
         exec(`taskkill /pid ${this.process.pid} /T /F`);
       } else {
-        // Unix: send SIGKILL
-        this.process.kill("SIGKILL");
+        // Unix: kill the process group if possible, otherwise just the child process.
+        this.killProcessTree("SIGKILL");
       }
     } catch (error) {
       console.error("Failed to force kill Python process:", error);
     }
 
+    void ownedPidsPromise.then((owned) => this.killPidSet(owned, "SIGKILL"));
     this.process = null;
+  }
+
+  private killPidSet(pids: Set<number>, signal: NodeJS.Signals): void {
+    for (const pid of pids) {
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      try {
+        process.kill(pid, signal);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private async collectDescendantPids(rootPid: number): Promise<Set<number>> {
+    const out = new Set<number>();
+    if (!Number.isFinite(rootPid) || rootPid <= 0) return out;
+    if (process.platform === "win32") return out; // taskkill /T handles tree on Windows.
+
+    const execAsync = promisify(exec);
+    const queue: number[] = [rootPid];
+    while (queue.length) {
+      const pid = queue.pop()!;
+      try {
+        const { stdout } = await execAsync(`pgrep -P ${pid}`);
+        const children = stdout
+          .split(/\r?\n/)
+          .map((s) => Number(s.trim()))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        for (const c of children) {
+          if (!out.has(c)) {
+            out.add(c);
+            queue.push(c);
+          }
+        }
+      } catch {
+        // pgrep returns non-zero when there are no children; ignore
+      }
+    }
+    return out;
+  }
+
+  private killProcessTree(signal: NodeJS.Signals): void {
+    if (!this.process?.pid) return;
+    const pid = this.process.pid;
+    try {
+      if (process.platform === "win32") {
+        // Windows: use taskkill to terminate the full tree.
+        exec(`taskkill /pid ${pid} /T /F`);
+        return;
+      }
+      // Unix: prefer killing the whole process group (requires detached: true)
+      try {
+        process.kill(-pid, signal);
+      } catch {
+        this.process.kill(signal);
+      }
+    } catch (error) {
+      console.error(`Failed to kill Python process tree with ${signal}:`, error);
+    }
   }
 
   async restart(): Promise<void> {

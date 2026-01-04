@@ -16,6 +16,7 @@ import { appDirProtocol } from "./modules/AppDirProtocol.js";
 import { pythonProcess } from "./modules/PythonProcess.js";
 import { remoteVersioningModule } from "./modules/RemoteVersioningModule.js";
 import { installerModule } from "./modules/InstallerModule.js";
+import { launcherStatusModule } from "./modules/LauncherStatusModule.js";
 
 export async function initApp(initConfig: AppInitConfig) {
   // Consider "dev mode" only when the renderer is served from an http(s) dev server.
@@ -33,6 +34,8 @@ export async function initApp(initConfig: AppInitConfig) {
     .init(appDirProtocol())
     // Python process management - starts bundled API in production
     .init(pythonProcess({ devMode: isDev, autoStart: !isDev }))
+    // Launcher readiness/status aggregation (installer gating + background polling)
+    .init(launcherStatusModule())
     // Remote server bundle version discovery (GitHub releases)
     .init(remoteVersioningModule())
     // Local installer: extract server bundles + ensure ffmpeg is available

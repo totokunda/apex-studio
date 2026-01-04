@@ -3,9 +3,18 @@ import {
   ensureFfmpegInstalled,
   extractServerBundle,
   listServerReleaseBundles,
+  launchMainWindow,
   onInstallerProgress,
+  onInstallerSetupProgress,
   pickMediaPaths,
   resolvePath,
+  runSetupScript,
+  setApiPathSetting,
+  setMaskModelSetting,
+  setRenderImageStepsSetting,
+  setRenderVideoStepsSetting,
+  startPythonApi,
+  stopPythonApi,
 } from "@app/preload";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -59,7 +68,7 @@ const MASK_MODEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "sam2_large", label: "Sam2 Large" },
 ];
 
-const Installer: React.FC = () => {
+const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolean) => void }> = ({ hasBackend, setShowInstaller }) => {
   const steps = useMemo(
     () =>
       [
@@ -82,11 +91,25 @@ const Installer: React.FC = () => {
   };
 
   const [saveLocation, setSaveLocation] = useState<string>(() =>
-    appendSubdir(resolvePath("~"), "apex-diffusion"),
+    resolvePath("~"),
   );
   const [codeLocation, setCodeLocation] = useState<string>(() =>
     appendSubdir(resolvePath("~"), "apex-server"),
   );
+
+
+  useEffect(() => {
+    // stop the backend
+    (async () => {
+      const res = await stopPythonApi();
+      if (res?.success) {
+        console.log("Backend stopped");
+      } else {
+        console.error("Failed to stop backend:", res?.error);
+      }
+    })();
+  }, []);
+
   const [availableServerBundles, setAvailableServerBundles] = useState<
     Array<{
       tag: string;
@@ -130,6 +153,10 @@ const Installer: React.FC = () => {
   const [installJobId, setInstallJobId] = useState<string | null>(null);
 
   const [uiMode, setUiMode] = useState<InstallerUIMode>("setup");
+  const [backendStatus, setBackendStatus] = useState<
+    "idle" | "starting" | "started" | "error"
+  >("idle");
+  const [backendError, setBackendError] = useState<string | null>(null);
   const phaseList = useMemo(
     () =>
       [
@@ -199,6 +226,25 @@ const Installer: React.FC = () => {
     setExtractionListVersion((v) => v + 1);
   };
 
+  const resetToReadyToInstall = (opts?: { keepError?: boolean }) => {
+    setUiMode("setup");
+    setActiveStep("install");
+    setActivePhase("download_bundle");
+    setInstallJobId(null);
+    if (!opts?.keepError) {
+      setInstallError(null);
+      setInstallStatus(null);
+    }
+    setBackendStatus("idle");
+    setBackendError(null);
+    setPhaseState({
+      download_bundle: { status: "pending", percent: null, message: null },
+      extract_bundle: { status: "pending", percent: null, message: null },
+      download_models: { status: "pending", percent: null, message: null },
+      update_configs: { status: "pending", percent: null, message: null },
+    });
+  };
+
   const patchPhase = (
     id: InstallPhaseId,
     patch: Partial<InstallPhaseState>,
@@ -234,7 +280,7 @@ const Installer: React.FC = () => {
       defaultPath: saveLocation || undefined,
     });
     const first = Array.isArray(picked) && picked.length > 0 ? picked[0] : null;
-    if (first) setSaveLocation(appendSubdir(first, "apex-diffusion"));
+    if (first) setSaveLocation(first);
   };
 
   const pickCodeLocation = async () => {
@@ -394,6 +440,8 @@ const Installer: React.FC = () => {
     if (installing) return;
     setInstallError(null);
     setInstallStatus(null);
+    setBackendStatus("idle");
+    setBackendError(null);
     extractionFilesRef.current = [];
     setExtractionListVersion((v) => v + 1);
     extractionPendingRef.current = [];
@@ -514,6 +562,13 @@ const Installer: React.FC = () => {
           }
         } else if (ev.phase === "status") {
           const msg = String(ev.message || "");
+          // Streamed logs from setup.py (stdout/stderr). We log them to DevTools console
+          // but avoid spamming the phase UI message.
+          if (msg.startsWith("[setup:")) {
+            // eslint-disable-next-line no-console
+            console.log(msg);
+            return;
+          }
           // Detect local bundle download skip emitted by main.
           if (msg.toLowerCase().includes("local bundle")) {
             patchPhase("download_bundle", {
@@ -535,6 +590,15 @@ const Installer: React.FC = () => {
 
     setInstalling(true);
     try {
+      // IMPORTANT: stop any running Python backend before modifying/installing the runtime/code.
+      // Otherwise extraction/setup can fail or the app may keep using an old runtime.
+      try {
+        setInstallStatus("Stopping backend…");
+        
+      } catch {
+        // best-effort; continue install anyway
+      }
+
       setInstallStatus("Running installer…");
       const extractRes = await extractServerBundle({
         source: hasLocal
@@ -551,16 +615,140 @@ const Installer: React.FC = () => {
         throw new Error(extractRes.error || "Failed to extract server bundle");
       }
 
-      // Download Models (not implemented yet)
+      // Persist basic settings used by the launcher / app defaults.
+      // - apiPath is used by Launcher as a "we have something installed on disk" fallback.
+      // - mask model + render step toggles are used by the backend once it's running.
+      try {
+        await setApiPathSetting(dest);
+      } catch {}
+      try {
+        await setMaskModelSetting(maskModel);
+      } catch {}
+      try {
+        await setRenderImageStepsSetting(renderImage);
+      } catch {}
+      try {
+        await setRenderVideoStepsSetting(renderVideo);
+      } catch {}
+
+      // Run setup.py for BOTH:
+      // - Download Models (mask + optional RIFE)
+      // - Update Configs (render step toggles)
+      setActivePhase("download_models");
       patchPhase("download_models", {
-        status: "skipped",
-        percent: 100,
-        message: "Not implemented yet — skipping",
+        status: "active",
+        percent: 0,
+        message: "Starting setup…",
+      });
+      patchPhase("update_configs", {
+        status: "pending",
+        percent: null,
+        message: null,
       });
 
-      // Update Configs (for now, we treat ffmpeg installation as part of config/setup)
+      const setupRes = await runSetupScript({
+        apexHomeDir: saveLocation,
+        apiInstallDir: dest,
+        maskModelType: maskModel,
+        installRife: installRifeFrameInterpolation,
+        enableImageRenderSteps: renderImage,
+        enableVideoRenderSteps: renderVideo,
+        jobId: jobId || undefined,
+      });
+      if (!setupRes?.success) {
+        throw new Error(setupRes?.error || "Failed to start setup");
+      }
+      const setupJobId = setupRes.data?.jobId;
+      if (!setupJobId) {
+        throw new Error("Failed to start setup (missing jobId)");
+      }
+
+      // Listen to setup.py progress stream via IPC (stdout JSON), and map its task progress into our phases.
+      await new Promise<void>((resolve, reject) => {
+        let done = false;
+        let unsubscribeSetupProgress: (() => void) | null = null;
+
+        const finishOk = () => {
+          if (done) return;
+          done = true;
+          try {
+            unsubscribeSetupProgress?.();
+          } catch {}
+          resolve();
+        };
+        const finishErr = (err: unknown) => {
+          if (done) return;
+          done = true;
+          try {
+            unsubscribeSetupProgress?.();
+          } catch {}
+          reject(err instanceof Error ? err : new Error(String(err || "Setup failed")));
+        };
+
+        unsubscribeSetupProgress = onInstallerSetupProgress(setupJobId, (payload) => {
+          try {
+            const status = String(payload?.status || "processing");
+            const message = String(payload?.message || "");
+            const progressRaw = payload?.progress;
+            const pct =
+              typeof progressRaw === "number" && Number.isFinite(progressRaw)
+                ? Math.round(Math.max(0, Math.min(1, progressRaw)) * 100)
+                : null;
+            const task = String(payload?.metadata?.task || "");
+
+            if (task === "mask" || task === "rife") {
+              patchPhase("download_models", {
+                status: status === "error" ? "error" : "active",
+                ...(pct !== null ? { percent: pct } : {}),
+                message: message || "Downloading models…",
+              });
+            } else if (task === "config") {
+              patchPhase("update_configs", {
+                status: status === "error" ? "error" : "active",
+                ...(pct !== null ? { percent: pct } : {}),
+                message: message || "Updating config…",
+              });
+            } else if (task === "setup") {
+              // Final message from setup.py
+              if (status === "complete") {
+                finishOk();
+                return;
+              }
+            }
+
+            if (status === "error") {
+              finishErr(new Error(message || "Setup failed"));
+              return;
+            }
+
+            // Some clients only send the final "Setup complete" at task=setup.
+            // If we see it in the message, treat as done.
+            if (status === "complete" && message.toLowerCase().includes("setup complete")) {
+              finishOk();
+            }
+          } catch (e) {
+            finishErr(e);
+          }
+        });
+
+        patchPhase("download_models", {
+          status: "active",
+          message: "Running setup…",
+        });
+      });
+
+      patchPhase("download_models", {
+        status: "completed",
+        percent: 100,
+        message: "Models installed",
+      });
+
+      // Update Configs (ffmpeg install + any config flags already applied by setup.py)
       setActivePhase("update_configs");
-      patchPhase("update_configs", { status: "active", message: "Installing ffmpeg…" });
+      patchPhase("update_configs", {
+        status: "active",
+        message: "Installing ffmpeg…",
+      });
 
       const ffRes = await ensureFfmpegInstalled();
       if (!ffRes.success) {
@@ -573,7 +761,29 @@ const Installer: React.FC = () => {
         message: `Completed (ffmpeg: ${ffRes.data?.method})`,
       });
       setUiMode("done");
-      setInstallStatus(`Installed. Extracted to ${extractRes.data?.extractedTo}.`);
+
+      // After installation completes, start the Python API from the newly installed location.
+      setInstallStatus("Installed. Starting backend…");
+      setBackendStatus("starting");
+      const pyRes = await startPythonApi();
+      if (!pyRes?.success || !pyRes.data) {
+        const msg = pyRes?.error || "Failed to start backend";
+        setBackendStatus("error");
+        setBackendError(msg);
+        setInstallError(msg);
+        return;
+      }
+      if (pyRes.data.status !== "running") {
+        const msg = pyRes.data.error || `Backend did not start (status: ${pyRes.data.status})`;
+        setBackendStatus("error");
+        setBackendError(msg);
+        setInstallError(msg);
+        return;
+      }
+      setBackendStatus("started");
+      setInstallStatus(
+        `Installed. Backend running at http://${pyRes.data.host}:${pyRes.data.port}`,
+      );
     } catch (e) {
       setInstallError(e instanceof Error ? e.message : "Install failed");
       setInstallStatus(null);
@@ -582,6 +792,8 @@ const Installer: React.FC = () => {
         status: "error",
         message: e instanceof Error ? e.message : "Install failed",
       });
+      // Return to the setup tabs on any installation failure.
+      resetToReadyToInstall({ keepError: true });
     } finally {
       setInstalling(false);
       if (unsubscribeProgress) unsubscribeProgress();
@@ -755,7 +967,10 @@ const Installer: React.FC = () => {
                                       <span className="text-brand-light font-medium text-start">
                                         Download URL
                                       </span>
-                                      <span className="text-brand-light/80">
+                                      <span
+                                        className="text-brand-light/80 block max-w-full truncate"
+                                        title={selectedServerBundle.downloadUrl}
+                                      >
                                         {selectedServerBundle.downloadUrl}
                                       </span>
                                     </div>
@@ -823,8 +1038,7 @@ const Installer: React.FC = () => {
                         <label className={fieldLabelClass}>
                           <span>Save Location</span>
                           <span className="text-[10px] text-brand-light/60 font-normal">
-                            This folder will be used as the base location for all API config
-                            paths (cache, downloads, models, etc.).
+                            This folder will be used as the base location for all API related resources. The path <code className="text-brand-light">apex-diffusion</code> will be appended to the save location.
                           </span>
                         </label>
                         <div className="flex items-center gap-2">
@@ -1065,10 +1279,10 @@ const Installer: React.FC = () => {
                     type="button"
                     variant="outline"
                     className="rounded-[6px]  bg-brand-background-light border border-brand-light/5 hover:bg-brand/70 hover:text-brand-light/90 px-6 py-2 dark text-brand-light/90 text-[11.5px]"
-                    disabled={!canGoBack}
-                    onClick={goBack}
+                    disabled={!canGoBack && !hasBackend}
+                    onClick={canGoBack ? goBack : () => setShowInstaller(false)}
                   >
-                    Back
+                    {canGoBack ? "Back" : hasBackend ? "Cancel" : "Back"}
                   </Button>
 
                   <div className="text-[11px] text-brand-light/50">
@@ -1222,7 +1436,7 @@ const Installer: React.FC = () => {
                         </div>
                       ) : activePhase === "download_models" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
-                          Model download is not implemented yet.
+                          Models are being downloaded...
                         </div>
                       ) : activePhase === "update_configs" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
@@ -1243,6 +1457,40 @@ const Installer: React.FC = () => {
                     {uiMode === "done" && installStatus ? (
                       <div className="mt-4 text-[11px] text-brand-light/70">
                         {installStatus}
+                      </div>
+                    ) : null}
+
+                    {uiMode === "done" ? (
+                      <div className="mt-5 flex items-center justify-between gap-3">
+                        <div className="text-[11px] text-brand-light/60">
+                          {backendStatus === "starting"
+                            ? "Starting backend…"
+                            : backendStatus === "started"
+                              ? "Backend started"
+                              : backendStatus === "error"
+                                ? `Backend failed to start${backendError ? `: ${backendError}` : ""}`
+                                : null}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {backendStatus === "started" ? (
+                            <Button
+                              type="button"
+                              className="rounded-[6px] px-6 py-2 text-[11.5px] bg-brand-accent-shade hover:bg-brand-accent-shade/80 border border-brand-light/10 text-brand-light"
+                              onClick={async () => {
+                                const res = await launchMainWindow();
+                                setShowInstaller(false);
+                                if (!res.ok) {
+                                  setInstallError(res.error || "Failed to launch main window");
+                                } else {
+                                }
+                              }}
+                            >
+                              Launch
+                            </Button>
+                          ) : (
+                            null
+                          )}
+                        </div>
                       </div>
                     ) : null}
                   </div>

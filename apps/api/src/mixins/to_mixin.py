@@ -1,25 +1,42 @@
-import re
-import torch
-from typing import List
-from src.utils.cache import empty_cache
-from diffusers import ModelMixin
-from mlx import nn as mx_nn
-import mlx.core as mx
-from src.utils.mlx import convert_dtype_to_mlx
-from src.mlx.mixins.from_model_mixin import _flatten_leaf_arrays, _set_by_path
-from src.quantize.dequant import is_quantized
-from src.quantize.ggml_tensor import GGMLTensor
+from __future__ import annotations
 
-try:
-    # Private helpers/constants from Diffusers used to detect whether group offloading
-    # is enabled, and whether a particular module is controlled by a group-offload hook.
-    from diffusers.hooks.group_offloading import (
-        _is_group_offload_enabled as _hf_is_group_offload_enabled,
-        _GROUP_OFFLOADING as _HF_GROUP_OFFLOADING,
-    )
-except Exception:  # pragma: no cover - defensive fallback for older Diffusers versions
-    _hf_is_group_offload_enabled = None
-    _HF_GROUP_OFFLOADING = None
+import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
+    from diffusers import ModelMixin
+    from mlx import nn as mx_nn
+    import mlx.core as mx
+    from src.quantize.ggml_tensor import GGMLTensor
+
+# NOTE: Avoid importing diffusers/torch at module import time.
+# These are resolved lazily only when `to_device` is invoked.
+_hf_is_group_offload_enabled = None
+_HF_GROUP_OFFLOADING = None
+_GROUP_OFFLOAD_CHECKED = False
+
+
+def _ensure_group_offloading_helpers():
+    """
+    Lazily import Diffusers group-offloading helpers.
+    """
+    global _hf_is_group_offload_enabled, _HF_GROUP_OFFLOADING, _GROUP_OFFLOAD_CHECKED
+    if _GROUP_OFFLOAD_CHECKED:
+        return
+    try:
+        from diffusers.hooks.group_offloading import (  # type: ignore
+            _is_group_offload_enabled as _is_group_offload_enabled,
+            _GROUP_OFFLOADING as _GROUP_OFFLOADING,
+        )
+
+        _hf_is_group_offload_enabled = _is_group_offload_enabled
+        _HF_GROUP_OFFLOADING = _GROUP_OFFLOADING
+    except Exception:  # pragma: no cover - defensive fallback
+        _hf_is_group_offload_enabled = None
+        _HF_GROUP_OFFLOADING = None
+    finally:
+        _GROUP_OFFLOAD_CHECKED = True
 
 
 def _module_has_group_offload_hook(module: torch.nn.Module) -> bool:
@@ -27,6 +44,7 @@ def _module_has_group_offload_hook(module: torch.nn.Module) -> bool:
     Return True if this *specific* module has a Diffusers group-offloading hook
     registered on it (as opposed to any of its children).
     """
+    _ensure_group_offloading_helpers()
     if _HF_GROUP_OFFLOADING is None:
         return False
 
@@ -85,6 +103,8 @@ class ToMixin:
         """
         Convert a string or torch.dtype into a torch.dtype.
         """
+        import torch
+
         if isinstance(dtype, torch.dtype):
             return dtype
         mapping = {
@@ -106,17 +126,29 @@ class ToMixin:
         """
         Check if the module is quantized.
         """
+        import torch
+        from src.quantize.dequant import is_quantized
+        from src.quantize.ggml_tensor import GGMLTensor
+
         if isinstance(module, GGMLTensor):
             return is_quantized(module)
         elif isinstance(module, torch.nn.Parameter):
             return is_quantized(module.data)
-        elif isinstance(module, ModelMixin):
+        else:
+            # Import diffusers lazily; setup/build contexts should not need it.
+            try:
+                from diffusers import ModelMixin  # type: ignore
+            except Exception as e:
+                raise ValueError(
+                    "Diffusers is required to inspect quantization on ModelMixin modules."
+                ) from e
+
+        if isinstance(module, ModelMixin):
             for _, param in module.named_parameters():
                 if is_quantized(param.data):
                     return True
             return False
-        else:
-            raise ValueError(f"Unsupported module type: {type(module)}")
+        raise ValueError(f"Unsupported module type: {type(module)}")
 
     def _is_scaled_module(self, module: ModelMixin) -> bool:
         """
@@ -129,6 +161,8 @@ class ToMixin:
 
         In those cases we skip blanket casting to avoid breaking quantized models.
         """
+        import torch
+
         # First, honour any explicit quantization markers we know about.
         try:
             if self.check_quantized(module):
@@ -183,6 +217,8 @@ class ToMixin:
         storage_dtype / compute_dtype:
             Only used when `layerwise=True`.
         """
+        import torch
+
         target_dtype = self._parse_dtype(dtype)
 
         # ------------------------------------------------------------------
@@ -244,6 +280,10 @@ class ToMixin:
         module: mx_nn.Module
             The same module instance, with floating-point arrays cast in-place.
         """
+        import mlx.core as mx
+        from src.utils.mlx import convert_dtype_to_mlx
+        from src.mlx.mixins.from_model_mixin import _flatten_leaf_arrays, _set_by_path
+
         target_dtype: mx.Dtype = convert_dtype_to_mlx(dtype)
 
         keep_fp32_patterns = tuple(getattr(module, "_keep_in_fp32_modules", []) or [])
@@ -281,6 +321,10 @@ class ToMixin:
         If no components are provided, tries attributes:
         vae, text_encoder, transformer, scheduler, and self.helpers.values().
         """
+        import torch
+
+        _ensure_group_offloading_helpers()
+
         # Determine target device
         if device is None:
             device = getattr(self, "device", None) or torch.device("cpu")
@@ -321,6 +365,8 @@ class ToMixin:
 
         # Free up any unused CUDA memory
         try:
+            from src.utils.cache import empty_cache
+
             empty_cache()
         except Exception:
             pass

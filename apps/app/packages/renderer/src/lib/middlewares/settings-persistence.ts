@@ -14,6 +14,9 @@ import {
   setRenderVideoStepsSetting,
   getUseFastDownloadSetting,
   setUseFastDownloadSetting,
+  getAutoUpdateEnabledSetting,
+  setAutoUpdateEnabledSetting,
+  refreshSettingsFromBackend,
 } from "@app/preload";
 import { getBackendApiUrl, setBackendApiUrl } from "@/lib/config";
 
@@ -48,6 +51,9 @@ export type SettingsState = {
   // Downloads
   useFastDownload: boolean;
 
+  // API auto updates
+  autoUpdateEnabled: boolean;
+
   // Actions
   hydrate: () => Promise<void>;
   setCachePath: (value: string | null) => Promise<void>;
@@ -63,6 +69,7 @@ export type SettingsState = {
   setRenderImageSteps: (enabled: boolean) => Promise<void>;
   setRenderVideoSteps: (enabled: boolean) => Promise<void>;
   setUseFastDownload: (enabled: boolean) => Promise<void>;
+  setAutoUpdateEnabled: (enabled: boolean) => Promise<void>;
 };
 
 export const withSettingsPersistence =
@@ -86,6 +93,7 @@ export const withSettingsPersistence =
           renderImageSteps,
           renderVideoSteps,
           useFastDownload,
+          autoUpdateEnabled,
         ] = await Promise.all([
           getAllPathsSetting().catch(() => ({} as any)),
           getHfTokenSetting().catch(() => null),
@@ -95,6 +103,7 @@ export const withSettingsPersistence =
           getRenderImageStepsSetting().catch(() => false),
           getRenderVideoStepsSetting().catch(() => false),
           getUseFastDownloadSetting().catch(() => true),
+          getAutoUpdateEnabledSetting().catch(() => true),
         ]);
 
         const backendUrl =
@@ -116,6 +125,7 @@ export const withSettingsPersistence =
           renderImageSteps: Boolean(renderImageSteps),
           renderVideoSteps: Boolean(renderVideoSteps),
           useFastDownload: Boolean(useFastDownload),
+          autoUpdateEnabled: Boolean(autoUpdateEnabled),
           initialized: true,
           initializing: false,
           error: null,
@@ -186,9 +196,34 @@ export const withSettingsPersistence =
       },
       setBackendUrl: async (value: string | null) => {
         const url = (value ?? "").trim() || null;
+        const prev = (get().backendUrl ?? "").trim() || null;
         set({ backendUrl: url } as Partial<T>);
-        if (url) {
-          void setBackendApiUrl(url).catch(() => undefined);
+        if (!url) return;
+
+        // Persist in main process
+        const res = await setBackendApiUrl(url).catch(() => null);
+        if (!res?.success) return;
+
+        // Only force-refresh settings when the backend URL actually changes.
+        if (prev !== url) {
+          const refreshed = await refreshSettingsFromBackend().catch(() => null);
+          if (refreshed?.success && refreshed.data) {
+            set(
+              {
+                cachePath: refreshed.data.cachePath ?? null,
+                componentsPath: refreshed.data.componentsPath ?? null,
+                configPath: refreshed.data.configPath ?? null,
+                loraPath: refreshed.data.loraPath ?? null,
+                preprocessorPath: refreshed.data.preprocessorPath ?? null,
+                postprocessorPath: refreshed.data.postprocessorPath ?? null,
+                maskModel: refreshed.data.maskModel ?? null,
+                renderImageSteps: Boolean(refreshed.data.renderImageSteps),
+                renderVideoSteps: Boolean(refreshed.data.renderVideoSteps),
+                useFastDownload: Boolean(refreshed.data.useFastDownload),
+                autoUpdateEnabled: Boolean(refreshed.data.autoUpdateEnabled),
+              } as Partial<T>,
+            );
+          }
         }
       },
       setMaskModel: async (value: string | null) => {
@@ -211,6 +246,11 @@ export const withSettingsPersistence =
         const v = Boolean(enabled);
         set({ useFastDownload: v } as Partial<T>);
         void setUseFastDownloadSetting(v).catch(() => undefined);
+      },
+      setAutoUpdateEnabled: async (enabled: boolean) => {
+        const v = Boolean(enabled);
+        set({ autoUpdateEnabled: v } as Partial<T>);
+        void setAutoUpdateEnabledSetting(v).catch(() => undefined);
       },
     } as T;
 

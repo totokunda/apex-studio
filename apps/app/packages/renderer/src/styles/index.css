@@ -169,6 +169,12 @@ input {
   background: rgba(227, 227, 227, 0.2);
 }
 
+/* Firefox */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(227, 227, 227, 0.2) transparent;
+}
+
 @keyframes ripple {
   0% {
     box-shadow: 0 0 0 0 rgba(232, 232, 232, 0.35);
