@@ -13,7 +13,7 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=23.0.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "build": "npm run build -ws --if-present",

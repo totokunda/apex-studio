@@ -23,6 +23,15 @@ export interface PythonResponse<T = unknown> {
   error?: string;
 }
 
+export interface PythonRuntimeInfo {
+  available: boolean;
+  mode: "dev" | "bundled" | "installed" | "missing";
+  installedApiPath: string | null;
+  bundleRoot: string | null;
+  pythonExe: string | null;
+  reason?: string;
+}
+
 /**
  * Start the bundled Python API server
  */
@@ -56,6 +65,14 @@ export async function getPythonStatus(): Promise<PythonResponse<PythonProcessSta
  */
 export async function checkPythonHealth(): Promise<PythonResponse<{ healthy: boolean; state: PythonProcessState }>> {
   return ipcRenderer.invoke("python:health");
+}
+
+/**
+ * Check whether a Python runtime is available on disk (bundled or installed via apiPath).
+ * This is the correct signal for "should we show the installer?".
+ */
+export async function getPythonRuntimeInfo(): Promise<PythonResponse<PythonRuntimeInfo>> {
+  return ipcRenderer.invoke("python:runtime-info");
 }
 
 /**

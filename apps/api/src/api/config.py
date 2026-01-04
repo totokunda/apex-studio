@@ -3,14 +3,13 @@ import json
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 import socket
-import torch
+
 from src.utils.defaults import (
     set_torch_device,
     get_torch_device,
     HOME_DIR,
-    CONFIG_STORE_PATH,
     set_cache_path,
     get_cache_path as get_cache_path_default,
     set_components_path,
@@ -21,6 +20,7 @@ from src.utils.defaults import (
     set_preprocessor_path,
     get_postprocessor_path,
     set_postprocessor_path,
+    get_config_store_path,
 )
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -210,6 +210,7 @@ def get_device():
 @router.post("/torch-device", response_model=TorchDeviceResponse)
 def set_device(request: TorchDeviceRequest):
     """Set the torch device (cpu, cuda, mps, cuda:0, etc.)"""
+    import torch
     try:
         valid_devices = ["cpu", "cuda", "mps"]
         device_str = request.device.lower()
@@ -504,15 +505,16 @@ def set_mask_model(request: MaskModelRequest):
         )
 
 
-def _update_persisted_config(**updates: str) -> None:
+def _update_persisted_config(**updates: Any) -> None:
     """
     Persist config-related values (paths, hf_token, etc.) so they survive backend restarts.
     """
+    config_store_path = get_config_store_path()
     try:
         data = {}
-        if CONFIG_STORE_PATH.exists():
+        if config_store_path.exists():
             try:
-                with CONFIG_STORE_PATH.open("r", encoding="utf-8") as f:
+                with config_store_path.open("r", encoding="utf-8") as f:
                     existing = json.load(f)
                     if isinstance(existing, dict):
                         data = existing
@@ -523,13 +525,138 @@ def _update_persisted_config(**updates: str) -> None:
             if value is not None:
                 data[key] = value
 
-        CONFIG_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with CONFIG_STORE_PATH.open("w", encoding="utf-8") as f:
+        config_store_path.parent.mkdir(parents=True, exist_ok=True)
+        with config_store_path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception as e:
         # Silently ignore persistence errors; API behavior should not depend on disk writes.
         # For debugging, you may want to log this error.
         print(f"Warning: failed to persist config settings: {e}")
+
+
+class AutoUpdateConfigResponse(BaseModel):
+    enabled: bool
+    interval_hours: float
+    repo_owner: str
+    repo_name: str
+    include_prerelease: bool
+    status: dict[str, Any] = {}
+
+
+class AutoUpdateConfigRequest(BaseModel):
+    enabled: Optional[bool] = None
+    interval_hours: Optional[float] = None
+    repo_owner: Optional[str] = None
+    repo_name: Optional[str] = None
+    include_prerelease: Optional[bool] = None
+
+
+def _read_persisted_config_raw() -> dict:
+    p = Path(get_config_store_path())
+    try:
+        if p.exists():
+            with p.open("r", encoding="utf-8") as f:
+                d = json.load(f)
+                if isinstance(d, dict):
+                    return d
+    except Exception:
+        pass
+    return {}
+
+
+@router.get("/auto-update", response_model=AutoUpdateConfigResponse)
+def get_auto_update_config_api():
+    """
+    Get automatic API code-update configuration.
+    Defaults: enabled=true, interval_hours=4.
+    """
+    persisted = _read_persisted_config_raw()
+    enabled = bool(persisted.get("auto_update_enabled", True))
+    interval_raw = persisted.get("auto_update_interval_hours", 4)
+    try:
+        interval_hours = float(interval_raw)
+    except Exception:
+        interval_hours = 4.0
+
+    repo_owner = str(
+        persisted.get("auto_update_repo_owner")
+        or os.environ.get("APEX_UPDATE_REPO_OWNER")
+        or "totokunda"
+    ).strip()
+    repo_name = str(
+        persisted.get("auto_update_repo_name")
+        or os.environ.get("APEX_UPDATE_REPO_NAME")
+        or "apex-studio"
+    ).strip()
+    include_prerelease = bool(
+        persisted.get(
+            "auto_update_include_prerelease",
+            os.environ.get("APEX_UPDATE_INCLUDE_PRERELEASE", "").strip().lower()
+            in {"1", "true", "yes"},
+        )
+    )
+
+    # Include last-known status fields for UI/debugging.
+    status_keys = [
+        "auto_update_last_checked_at",
+        "auto_update_current_version",
+        "auto_update_current_gpu_support",
+        "auto_update_available_version",
+        "auto_update_available_asset",
+        "auto_update_available_tag",
+        "auto_update_download_url",
+        "auto_update_last_apply_started_at",
+        "auto_update_last_apply_finished_at",
+        "auto_update_last_apply_status",
+        "auto_update_last_apply_asset",
+        "auto_update_last_apply_version",
+        "auto_update_last_apply_output_tail",
+        "auto_update_last_error",
+        "auto_update_last_error_at",
+    ]
+    status: dict[str, Any] = {}
+    for k in status_keys:
+        if k in persisted:
+            status[k] = persisted.get(k)
+
+    return AutoUpdateConfigResponse(
+        enabled=enabled,
+        interval_hours=interval_hours,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        include_prerelease=include_prerelease,
+        status=status,
+    )
+
+
+@router.post("/auto-update", response_model=AutoUpdateConfigResponse)
+def set_auto_update_config_api(request: AutoUpdateConfigRequest):
+    """
+    Update automatic code-update configuration and persist it.
+    """
+    try:
+        updates: dict[str, Any] = {}
+        if request.enabled is not None:
+            updates["auto_update_enabled"] = bool(request.enabled)
+        if request.interval_hours is not None:
+            interval = float(request.interval_hours)
+            if interval <= 0:
+                raise HTTPException(status_code=400, detail="interval_hours must be > 0")
+            updates["auto_update_interval_hours"] = interval
+        if request.repo_owner is not None:
+            updates["auto_update_repo_owner"] = str(request.repo_owner).strip()
+        if request.repo_name is not None:
+            updates["auto_update_repo_name"] = str(request.repo_name).strip()
+        if request.include_prerelease is not None:
+            updates["auto_update_include_prerelease"] = bool(request.include_prerelease)
+
+        if updates:
+            _update_persisted_config(**updates)
+        return get_auto_update_config_api()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to set auto-update config: {e}")
 
 
 class HostnameResponse(BaseModel):

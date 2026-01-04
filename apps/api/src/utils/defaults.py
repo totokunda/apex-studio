@@ -1,4 +1,4 @@
-import torch
+
 import os
 import json
 from pathlib import Path
@@ -102,26 +102,21 @@ os.environ["HF_HOME"] = os.getenv(
 # Check if running in Ray worker (avoid MPS in forked processes)
 _IN_RAY_WORKER = os.environ.get("RAY_WORKER_NAME") or "ray::" in os.environ.get("_", "")
 
-if _IN_RAY_WORKER or os.environ.get("FORCE_CPU", ""):
-    # Force CPU in Ray workers to avoid MPS/CUDA fork issues
-    DEFAULT_DEVICE = torch.device("cpu")
-else:
-    DEFAULT_DEVICE = (
-        torch.device("cuda")
-        if torch.cuda.is_available()
-        else (
-            torch.device("mps")
-            if torch.backends.mps.is_available()
-            else torch.device("cpu")
-        )
-    )
+# NOTE: Do not import torch at module import time.
+# Many lightweight flows (setup/install, packaging) only need paths/config and should not
+# pay the torch import cost. Device selection is therefore lazily computed.
+DEFAULT_DEVICE = None  # populated on first call to get_torch_device()/set_torch_device()
+_DEFAULT_DEVICE_COMPUTED = False
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 }
 
 
-def set_torch_device(device: torch.device | str | None = None) -> None:
+def set_torch_device(device) -> None:
     global DEFAULT_DEVICE
+    global _DEFAULT_DEVICE_COMPUTED
+    import torch
+
     if device is None:
         DEFAULT_DEVICE = (
             torch.device("cuda")
@@ -136,16 +131,40 @@ def set_torch_device(device: torch.device | str | None = None) -> None:
     else:
         DEFAULT_DEVICE = torch.device(device)
     torch.set_default_device(DEFAULT_DEVICE)
+    _DEFAULT_DEVICE_COMPUTED = True
 
 
-def get_torch_device() -> torch.device:
+def get_torch_device():
+    import torch
+    global DEFAULT_DEVICE
+    global _DEFAULT_DEVICE_COMPUTED
+
+    if not _DEFAULT_DEVICE_COMPUTED or DEFAULT_DEVICE is None:
+        # Force CPU in Ray workers to avoid MPS/CUDA fork issues
+        if _IN_RAY_WORKER or os.environ.get("FORCE_CPU", ""):
+            DEFAULT_DEVICE = torch.device("cpu")
+        else:
+            DEFAULT_DEVICE = (
+                torch.device("cuda")
+                if torch.cuda.is_available()
+                else (
+                    torch.device("mps")
+                    if getattr(torch, "backends", None) is not None
+                    and torch.backends.mps.is_available()
+                    else torch.device("cpu")
+                )
+            )
+        _DEFAULT_DEVICE_COMPUTED = True
+
     # check if cuda or mps from default device is available otherwise return cpu
-    if DEFAULT_DEVICE.type == "cuda" and torch.cuda.is_available():
-        return DEFAULT_DEVICE
-    elif DEFAULT_DEVICE.type == "mps" and torch.backends.mps.is_available():
-        return DEFAULT_DEVICE
-    else:
-        return torch.device("cpu")
+    try:
+        if DEFAULT_DEVICE.type == "cuda" and torch.cuda.is_available():
+            return DEFAULT_DEVICE
+        if DEFAULT_DEVICE.type == "mps" and torch.backends.mps.is_available():
+            return DEFAULT_DEVICE
+    except Exception:
+        pass
+    return torch.device("cpu")
 
 
 def get_cache_path() -> str:
@@ -199,6 +218,8 @@ def set_preprocessor_path(path: str | None = None) -> None:
 def get_postprocessor_path() -> str:
     return DEFAULT_POSTPROCESSOR_SAVE_PATH
 
+def get_config_store_path() -> str:
+    return CONFIG_STORE_PATH
 
 def set_postprocessor_path(path: str | None = None) -> None:
     global DEFAULT_POSTPROCESSOR_SAVE_PATH

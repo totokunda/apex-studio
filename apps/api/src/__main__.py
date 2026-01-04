@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, subprocess, signal, psutil, sys, shlex, importlib.util
+import os, subprocess, signal, psutil, sys, shlex, importlib.util, time
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 from pathlib import Path
 import typer
@@ -15,10 +15,6 @@ def _num_gpus():
         return torch.cuda.device_count()
     else:
         return 1
-
-
-def _num_cpus():
-    return multiprocessing.cpu_count()
 
 
 def create_procfile(procfile: Path, mode="dev"):
@@ -166,7 +162,7 @@ def start(
     ),
 ):
     """
-    Start FastAPI + Celery (and anything else in your Procfile) via Honcho.
+    Start FastAPI (and anything else in your Procfile) via Honcho.
     Equivalent to: honcho start -f Procfile [-e .env]
     """
     cwd = cwd.resolve()
@@ -219,7 +215,8 @@ def start(
 
 
 @app.command(name="serve", hidden=True)
-def internal_serve():
+def internal_serve(
+):
     """
     Internal command used by frozen (PyInstaller) builds to start the API without relying on
     `python -m ...` module execution.
@@ -228,7 +225,10 @@ def internal_serve():
     host = os.getenv("APEX_HOST", "127.0.0.1")
     port = int(os.getenv("APEX_PORT", "8765"))
 
-    import uvicorn
+    # Mirror key production defaults from `apps/api/gunicorn.conf.py`, but for uvicorn.
+    backlog = 2048
+    keepalive = 2
+    max_requests = 1000
 
     def _binds_for(host_value: str) -> list[str]:
         if host_value in {"127.0.0.1", "localhost"}:
@@ -239,36 +239,83 @@ def internal_serve():
 
     binds = _binds_for(host)
 
-    # Run the API server. In production we do not use --reload.
-    # For macOS reliability we support dual-stack loopback binds.
-    if len(binds) == 1:
-        uvicorn.run("src.api.main:app", host=binds[0], port=port, log_level="info")
-        return
+    # Worker count + loglevel follow `gunicorn.conf.py` semantics.
+    env = os.getenv("ENVIRONMENT")
+    workers = int(os.getenv("APEX_UVICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1")
+    loglevel = "info"
+    reload = False
+    if env == "development":
+        reload = True
+        workers = 1
+        loglevel = "debug"
+    elif env == "staging":
+        workers = int(
+            os.getenv("APEX_UVICORN_WORKERS")
+            or os.getenv("WEB_CONCURRENCY")
+            or str(multiprocessing.cpu_count())
+        )
+        loglevel = "warning"
+    elif env == "production":
+        workers = int(os.getenv("APEX_UVICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1")
+        loglevel = "error"
 
-    import multiprocessing as _mp
-    import time as _time
+    def _uvicorn_cmd(h: str) -> list[str]:
+        cmd = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "src.api.main:app",
+            "--host",
+            h,
+            "--port",
+            str(port),
+            "--log-level",
+            loglevel,
+            "--backlog",
+            str(backlog),
+            "--timeout-keep-alive",
+            str(keepalive),
+            "--limit-max-requests",
+            str(max_requests),
+        ]
+        if reload:
+            cmd.append("--reload")
+        else:
+            # Uvicorn workers are only supported in non-reload mode.
+            if workers > 1:
+                cmd += ["--workers", str(workers)]
+        return cmd
 
-    def _run_one(h: str) -> None:
-        uvicorn.run("src.api.main:app", host=h, port=port, log_level="info")
-
-    procs: list[_mp.Process] = []
-    for h in binds:
-        p = _mp.Process(target=_run_one, args=(h,))
-        p.start()
-        procs.append(p)
-
+    # Run Uvicorn. On macOS we support dual-stack loopback binds by running two servers.
+    procs: list[subprocess.Popen] = []
     try:
+        for h in binds:
+            procs.append(subprocess.Popen(_uvicorn_cmd(h)))
+
+        # Wait: if any server exits, terminate the rest and bubble up the exit code.
         while True:
-            # If either server dies, exit with non-zero to surface the failure.
             for p in procs:
-                if not p.is_alive():
-                    raise SystemExit(1)
-            _time.sleep(0.25)
+                rc = p.poll()
+                if rc is not None:
+                    for other in procs:
+                        if other is not p and other.poll() is None:
+                            try:
+                                other.terminate()
+                            except Exception:
+                                pass
+                    raise SystemExit(rc)
+            time.sleep(0.25)
     except KeyboardInterrupt:
         for p in procs:
-            p.terminate()
+            try:
+                p.terminate()
+            except Exception:
+                pass
         for p in procs:
-            p.join(timeout=5)
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                pass
 
 
 def _find_apex_processes():

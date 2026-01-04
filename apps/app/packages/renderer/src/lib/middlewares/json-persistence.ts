@@ -9,7 +9,6 @@ import {
   getActiveProjectId,
   setActiveProjectId,
   listManifests,
-  listManifestModelTypes,
   saveProjectCover,
   clearProjectCover,
 } from "@app/preload";
@@ -31,7 +30,7 @@ import type {
 import _ from "lodash";
 import { getMediaInfo } from "../media/utils";
 import { Preprocessor } from "../preprocessor/api";
-import { ManifestDocument } from "../manifest/api";
+import { listModelTypes, type ManifestDocument, type ModelTypeInfo } from "../manifest/api";
 import { useViewportStore } from "../viewport";
 import { globalInputControlsStore } from "../inputControl";
 import { fetchPreprocessorsList } from "../preprocessor/queries";
@@ -1999,13 +1998,15 @@ export const withJsonProjectPersistence =
           queryClient.prefetchQuery({
             queryKey: ["modelTypes"],
             queryFn: async () => {
-              const response = await listManifestModelTypes();
+              const response = await listModelTypes();
               if (!response.success) {
                 throw new Error(
-                  response.error || "Backend is unavailable (failed to load manifest types).",
+                  response.error ||
+                    "Backend is unavailable (failed to load model types).",
                 );
               }
-              return response.data ?? {};
+              const data = response.data;
+              return (Array.isArray(data) ? data : []) as ModelTypeInfo[];
             },
           }),
           queryClient.prefetchQuery({

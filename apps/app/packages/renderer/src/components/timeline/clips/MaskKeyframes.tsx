@@ -122,7 +122,7 @@ const KEYFRAME_RADIUS = 12;
 // Avoid rendering thousands of keyframes at low zoom by enforcing a minimum pixel
 // spacing between rendered diamonds. As zoom increases, `pxPerFrame` increases,
 // which lowers the derived `minFrameDelta` and naturally renders more keyframes.
-const MIN_KEYFRAME_PIXEL_SPACING = Math.max(10, Math.round(KEYFRAME_RADIUS * 1.25));
+const MIN_KEYFRAME_PIXEL_SPACING = Math.max(4, Math.round(KEYFRAME_RADIUS * 0.25));
 
 const cloneKeyframes = (keyframes: MaskClipProps["keyframes"]) => {
   if (keyframes instanceof Map) {

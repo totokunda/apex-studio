@@ -1,5 +1,5 @@
 import type { AppModule } from "../AppModule.js";
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
 import * as tar from "tar-stream";
+import net from "node:net";
 
 type ConfigResponse<T> = { success: true; data: T } | { success: false; error: string };
 
@@ -21,6 +22,24 @@ type BundleSource =
 type ExtractBundleRequest = {
   source: BundleSource;
   destinationDir: string;
+  jobId?: string;
+};
+
+type RunSetupRequest = {
+  /**
+   * Base directory used by the Python API to persist config and downloads.
+   * This becomes the APEX_HOME_DIR env var and also passes --apex_home_dir to setup.py
+   */
+  apexHomeDir: string;
+  /**
+   * The directory where the server bundle (.tar.zst) was extracted.
+   * Typically contains an "apex-engine/" folder.
+   */
+  apiInstallDir: string;
+  maskModelType?: string | null;
+  installRife?: boolean;
+  enableImageRenderSteps?: boolean;
+  enableVideoRenderSteps?: boolean;
   jobId?: string;
 };
 
@@ -46,6 +65,13 @@ type InstallerProgressEvent =
       message: string;
     };
 
+type SetupProgressPayload = {
+  progress: number | null;
+  message: string;
+  status: string;
+  metadata?: Record<string, any>;
+};
+
 function getUserFfmpegInstallDir(): string {
   // Stable, user-writable location. Preload will also check this path for discovery.
   return path.join(os.homedir(), ".apex-studio", "ffmpeg");
@@ -55,44 +81,131 @@ function exeName(cmd: "ffmpeg" | "ffprobe") {
   return process.platform === "win32" ? `${cmd}.exe` : cmd;
 }
 
-async function runTarExtractZst(opts: {
-  archivePath: string;
-  destinationDir: string;
-}): Promise<void> {
-  const archivePath = opts.archivePath;
-  const destinationDir = opts.destinationDir;
+function resolveApiBundleRoot(apiInstallDir: string): string {
+  /**
+   * We want the directory that contains the bundled venv at:
+   *   <bundleRoot>/apex-studio/(bin|Scripts)/python
+   *
+   * Bundle layouts we support (apiInstallDir is user-chosen install dir / extraction dir):
+   * - <apiInstallDir>/python-api/apex-engine/apex-studio/...
+   * - <apiInstallDir>/apex-engine/apex-studio/...
+   * - <apiInstallDir>/python-api (already points at python-api root)
+   * - <apiInstallDir> (already points at apex-engine root)
+   */
+  const root = String(apiInstallDir || "").trim();
+  if (!root) return root;
 
-  // tar flag support varies between bsdtar/gnu tar; try a few.
-  const attempts: Array<{ args: string[]; label: string }> = [
-    { label: "tar --zstd", args: ["--zstd", "-xf", archivePath, "-C", destinationDir] },
-    {
-      label: "tar --use-compress-program zstd",
-      args: ["--use-compress-program", "zstd", "-xf", archivePath, "-C", destinationDir],
-    },
-    { label: "tar -I zstd", args: ["-I", "zstd", "-xf", archivePath, "-C", destinationDir] },
+  const candidates = [
+    // Most common for current bundles:
+    path.join(root, "python-api", "apex-engine"),
+    // Some older/dev bundles:
+    path.join(root, "apex-engine"),
+    // If caller already passed python-api root:
+    path.join(root, "apex-engine"),
+    // If caller already passed apex-engine root:
+    root,
   ];
 
-  let lastErr: string | null = null;
-  for (const a of attempts) {
-    const res = await new Promise<{ ok: boolean; stderr: string; error?: NodeJS.ErrnoException }>((resolve) => {
-      const p = spawn("tar", a.args, { stdio: ["ignore", "ignore", "pipe"] });
-      let stderr = "";
-      p.stderr?.on("data", (d) => (stderr += String(d)));
-      p.on("error", (err) => resolve({ ok: false, stderr, error: err }));
-      p.on("close", (code) => resolve({ ok: code === 0, stderr }));
-    });
-
-    if (res.ok) return;
-    if (res.error && (res.error as any)?.code === "ENOENT") {
-      const e = new Error(`'tar' not found on PATH (needed to extract .tar.zst bundles)`);
-      (e as any).code = "ENOENT";
-      throw e;
-    }
-    lastErr = `${a.label} failed${res.stderr ? `: ${res.stderr.trim()}` : ""}`;
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+        // Ensure it looks like a bundle root by checking for apex-studio folder.
+        const marker = path.join(p, "apex-studio");
+        if (fs.existsSync(marker) && fs.statSync(marker).isDirectory()) return p;
+      }
+    } catch {}
   }
 
-  throw new Error(lastErr || "Failed to extract bundle");
+  // Fall back to root if we can't confidently detect it.
+  return root;
 }
+
+function resolveExtractedPythonExe(bundleRoot: string): string | null {
+  // Mirror the structure used in packaged builds:
+  //   <bundleRoot>/apex-studio/bin/python (mac/linux)
+  //   <bundleRoot>/apex-studio/Scripts/python.exe (win)
+  const base = path.join(bundleRoot, "apex-studio");
+  const candidates =
+    process.platform === "win32"
+      ? [path.join(base, "Scripts", "python.exe")]
+      : [path.join(base, "bin", "python"), path.join(base, "bin", "python3")];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {}
+  }
+  return null;
+}
+
+function resolveDevApiRoot(): string | null {
+  // Locate <repo>/apps/api by looking for pyproject.toml.
+  const cwd = process.cwd();
+  const candidates = [
+    // common from repo root
+    path.resolve(cwd, "apps", "api"),
+    // common when running from apps/app
+    path.resolve(cwd, "..", "api"),
+    // fallback: traverse up a couple levels
+    path.resolve(cwd, "..", "..", "apps", "api"),
+  ];
+  for (const p of candidates) {
+    try {
+      const marker = path.join(p, "pyproject.toml");
+      if (fs.existsSync(marker)) return p;
+    } catch {}
+  }
+  return null;
+}
+
+function resolveSetupScriptPath(bundleRoot: string): string | null {
+  // Prefer a setup.py shipped alongside the bundle root (if present), otherwise fall back to dev repo path.
+  const fromBundle = path.join(bundleRoot, "scripts", "setup.py");
+  try {
+    if (fs.existsSync(fromBundle)) return fromBundle;
+  } catch {}
+
+  // Common bundle layout: <installDir>/python-api/apex-engine is bundleRoot, but setup.py lives in
+  // <installDir>/python-api/scripts/setup.py.
+  try {
+    const p = path.join(path.dirname(bundleRoot), "scripts", "setup.py");
+    if (fs.existsSync(p)) return p;
+  } catch {}
+
+  const devApiRoot = resolveDevApiRoot();
+  if (devApiRoot) {
+    const p = path.join(devApiRoot, "scripts", "setup.py");
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {}
+  }
+
+  // Packaged fallback: some builds may ship python-api sources in resourcesPath.
+  try {
+    const resources = process.resourcesPath;
+    const p = path.join(resources, "python-api", "scripts", "setup.py");
+    if (fs.existsSync(p)) return p;
+  } catch {}
+
+  // Last resort: the repo root path if available (for certain dev configurations)
+  try {
+    const p = path.resolve(process.cwd(), "apps", "api", "scripts", "setup.py");
+    if (fs.existsSync(p)) return p;
+  } catch {}
+
+  return null;
+}
+
+function appendEnvPath(existing: string | undefined, add: string): string {
+  const sep = process.platform === "win32" ? ";" : ":";
+  const a = String(add || "").trim();
+  if (!a) return existing || "";
+  const e = String(existing || "").trim();
+  if (!e) return a;
+  // Avoid duplicates in simple cases
+  if (e.split(sep).includes(a)) return e;
+  return `${a}${sep}${e}`;
+}
+
 
 function safeJoinWithinRoot(root: string, relative: string): string {
   // Normalize and ensure no traversal outside root.
@@ -278,6 +391,65 @@ async function downloadToTempFile(opts: {
   return outPath;
 }
 
+async function removeAppleDoubleFilesRecursively(opts: {
+  rootDir: string;
+  onStatus?: (msg: string) => void;
+}): Promise<{ removedFiles: number; removedDirs: number }> {
+  /**
+   * Defensive post-extraction cleanup.
+   *
+   * Some macOS workflows (Finder, certain zip/tar behaviors, network drives) can inject
+   * AppleDouble metadata files (`._*`) and `__MACOSX/` folders into archives.
+   *
+   * These can break Python libs that scan `*.py` (e.g. transformers) if `._*.py` exists.
+   */
+  const root = String(opts.rootDir || "").trim();
+  if (!root) return { removedFiles: 0, removedDirs: 0 };
+
+  let removedFiles = 0;
+  let removedDirs = 0;
+
+  const walk = async (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    await Promise.all(
+      entries.map(async (ent) => {
+        const name = ent.name;
+        const full = path.join(dir, name);
+        if (ent.isDirectory()) {
+          if (name === "__MACOSX") {
+            try {
+              await fsp.rm(full, { recursive: true, force: true });
+              removedDirs += 1;
+            } catch {}
+            return;
+          }
+          await walk(full);
+          return;
+        }
+        if (!ent.isFile()) return;
+        if (!name.startsWith("._")) return;
+        try {
+          await fsp.unlink(full);
+          removedFiles += 1;
+        } catch {}
+      }),
+    );
+  };
+
+  opts.onStatus?.("Cleaning up macOS metadata files (._*) …");
+  await walk(root);
+  if (removedFiles > 0 || removedDirs > 0) {
+    opts.onStatus?.(`Cleanup complete (removed ${removedFiles} file(s), ${removedDirs} dir(s))`);
+  }
+  return { removedFiles, removedDirs };
+}
+
 async function ensureFfmpegInstalled(): Promise<{
   installed: boolean;
   ffmpegPath: string;
@@ -341,6 +513,97 @@ async function ensureFfmpegInstalled(): Promise<{
   };
 }
 
+async function removeAppleDoublePyFiles(opts: {
+  pythonExe: string;
+  onStatus?: (msg: string) => void;
+}): Promise<{ scannedDirs: number; removedFiles: number }> {
+  /**
+   * On macOS it’s common for archives/copies to accidentally include AppleDouble files like:
+   *   transformers/._some_module.py
+   * These are binary metadata blobs (not UTF-8), but `transformers` scans `*.py` and will
+   * crash with UnicodeDecodeError when it hits them.
+   *
+   * We proactively delete them from site-packages before running setup.py.
+   */
+  const pythonExe = opts.pythonExe;
+  const onStatus = opts.onStatus;
+
+  const venvRoot =
+    process.platform === "win32"
+      ? path.dirname(path.dirname(pythonExe)) // .../apex-studio/Scripts/python.exe -> .../apex-studio
+      : path.dirname(path.dirname(pythonExe)); // .../apex-studio/bin/python -> .../apex-studio
+
+  const sitePackageCandidates: string[] = [];
+  if (process.platform === "win32") {
+    sitePackageCandidates.push(path.join(venvRoot, "Lib", "site-packages"));
+  } else {
+    // venvRoot/lib/pythonX.Y/site-packages
+    try {
+      const libDir = path.join(venvRoot, "lib");
+      const entries = await fsp.readdir(libDir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const name = e.name;
+        if (!/^python\\d+\\.\\d+$/.test(name)) continue;
+        sitePackageCandidates.push(path.join(libDir, name, "site-packages"));
+      }
+    } catch {}
+  }
+
+  const roots = sitePackageCandidates.filter((p) => {
+    try {
+      return fs.existsSync(p) && fs.statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+
+  let scannedDirs = 0;
+  let removedFiles = 0;
+
+  const walk = async (dir: string): Promise<void> => {
+    scannedDirs += 1;
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    await Promise.all(
+      entries.map(async (ent) => {
+        const name = ent.name;
+        const full = path.join(dir, name);
+        if (ent.isDirectory()) {
+          await walk(full);
+          return;
+        }
+        if (!ent.isFile()) return;
+        if (!name.startsWith("._") || !name.endsWith(".py")) return;
+        try {
+          await fsp.unlink(full);
+          removedFiles += 1;
+        } catch {}
+      }),
+    );
+  };
+
+  for (const sp of roots) {
+    // Target only transformers to keep this fast and avoid touching unrelated packages.
+    const transformersDir = path.join(sp, "transformers");
+    try {
+      if (fs.existsSync(transformersDir) && fs.statSync(transformersDir).isDirectory()) {
+        onStatus?.("Cleaning up macOS metadata files in transformers…");
+        await walk(transformersDir);
+      }
+    } catch {}
+  }
+
+  if (removedFiles > 0) {
+    onStatus?.(`Removed ${removedFiles} macOS metadata file(s) that can break transformers import`);
+  }
+  return { scannedDirs, removedFiles };
+}
+
 export class InstallerModule implements AppModule {
   async enable(): Promise<void> {
     // idempotent-ish registration
@@ -393,6 +656,14 @@ export class InstallerModule implements AppModule {
             onProgress: sendProgress,
           });
 
+          // Defensive cleanup: remove AppleDouble `._*` files that can slip into archives and break runtime.
+          try {
+            await removeAppleDoubleFilesRecursively({
+              rootDir: destinationDir,
+              onStatus: (m) => sendProgress({ phase: "status", message: m }),
+            });
+          } catch {}
+
           sendProgress({ phase: "status", message: "Bundle extracted" });
           return { success: true, data: { extractedTo: destinationDir } };
         } catch (e) {
@@ -416,6 +687,165 @@ export class InstallerModule implements AppModule {
           return { success: true, data };
         } catch (e) {
           return { success: false, error: e instanceof Error ? e.message : "Failed to install ffmpeg" };
+        }
+      },
+    );
+
+    ipcMain.handle(
+      "installer:run-setup",
+      async (
+        _evt,
+        req: RunSetupRequest,
+      ): Promise<ConfigResponse<{ jobId: string }>> => {
+        const jobId = String(req?.jobId || randomUUID());
+        const sendStatus = (message: string) => {
+          try {
+            _evt.sender.send(`installer:progress:${jobId}`, { phase: "status", message });
+          } catch {}
+        };
+        const sendSetupProgress = (payload: SetupProgressPayload) => {
+          try {
+            _evt.sender.send(`installer:setup-progress:${jobId}`, payload);
+          } catch {}
+        };
+        try {
+          const apexHomeDir = String(req?.apexHomeDir || "").trim();
+          const apiInstallDir = String(req?.apiInstallDir || "").trim();
+          if (!apexHomeDir) throw new Error("apexHomeDir is required");
+          if (!apiInstallDir) throw new Error("apiInstallDir is required");
+
+          await fsp.mkdir(apexHomeDir, { recursive: true });
+
+          const bundleRoot = resolveApiBundleRoot(apiInstallDir);
+          if (!bundleRoot) throw new Error("Failed to resolve API bundle root");
+          if (!fs.existsSync(bundleRoot)) {
+            throw new Error(`API bundle root does not exist: ${bundleRoot}`);
+          }
+
+          const pythonExe = resolveExtractedPythonExe(bundleRoot);
+          if (!pythonExe) {
+            throw new Error(
+              `Could not find bundled Python executable under: ${path.join(bundleRoot, "apex-studio")}`,
+            );
+          }
+
+          const setupScript = resolveSetupScriptPath(bundleRoot);
+          if (!setupScript) {
+            throw new Error(
+              "Could not locate setup.py. Expected it under the extracted bundle (scripts/setup.py) or the dev repo (apps/api/scripts/setup.py).",
+            );
+          }
+
+          const args: string[] = [
+            setupScript,
+            "--apex_home_dir",
+            apexHomeDir,
+            "--job_id",
+            jobId,
+          ];
+
+          const maskModelType = (req?.maskModelType ?? "").toString().trim();
+          if (maskModelType) {
+            args.push("--mask_model_type", maskModelType);
+          }
+          if (req?.installRife) args.push("--install_rife");
+          if (req?.enableImageRenderSteps) args.push("--enable_image_render_steps");
+          if (req?.enableVideoRenderSteps) args.push("--enable_video_render_steps");
+
+          const env: NodeJS.ProcessEnv = {
+            ...process.env,
+            APEX_HOME_DIR: apexHomeDir,
+            PYTHONUNBUFFERED: "1",
+            APEX_SETUP_PROGRESS_JSON: "1",
+            // Ensure `import src` works when running setup.py from the repo scripts directory.
+            PYTHONPATH: appendEnvPath(process.env.PYTHONPATH, bundleRoot),
+          };
+
+          sendStatus("Starting setup (models + config) …");
+
+          // Work around a known macOS packaging/extraction gotcha where AppleDouble files (._*.py)
+          // sneak into site-packages and crash transformers import.
+          try {
+            await removeAppleDoublePyFiles({ pythonExe, onStatus: sendStatus });
+          } catch {}
+
+          const child = spawn(pythonExe, args, {
+            cwd: bundleRoot,
+            env,
+            stdio: ["ignore", "pipe", "pipe"],
+            detached: false,
+          });
+
+          const sendSetupLogLine = (kind: "stdout" | "stderr", line: string) => {
+            const trimmed = String(line || "").replace(/\s+$/, "");
+            if (!trimmed) return;
+
+            // JSON progress events are emitted by setup.py when APEX_SETUP_PROGRESS_JSON=1.
+            // We forward them to the renderer so it can update installer phases without websockets.
+            if (kind === "stdout" && trimmed.startsWith("{") && trimmed.endsWith("}")) {
+              try {
+                const obj = JSON.parse(trimmed) as SetupProgressPayload;
+                if (obj && typeof obj === "object" && typeof (obj as any).message === "string") {
+                  sendSetupProgress(obj);
+                }
+              } catch {}
+            }
+
+            const msg = `[setup:${kind}] ${trimmed}`.slice(0, 1200);
+            // Emit to renderer (for DevTools console + debugging).
+            sendStatus(msg);
+            // Also log in main process console.
+            try {
+              // eslint-disable-next-line no-console
+              console.log(msg);
+            } catch {}
+          };
+
+          const makeLineEmitter = (kind: "stdout" | "stderr") => {
+            let buf = "";
+            return (d: Buffer | string) => {
+              buf += typeof d === "string" ? d : d.toString("utf8");
+              // Split on both \n and \r\n
+              const parts = buf.split(/\r?\n/);
+              buf = parts.pop() ?? "";
+              for (const p of parts) sendSetupLogLine(kind, p);
+              // Prevent unbounded growth if a process prints huge non-newline output.
+              if (buf.length > 16_000) {
+                sendSetupLogLine(kind, buf.slice(0, 16_000));
+                buf = "";
+              }
+            };
+          };
+
+          let stderr = "";
+          const emitStdout = makeLineEmitter("stdout");
+          const emitStderr = makeLineEmitter("stderr");
+          child.stdout?.setEncoding?.("utf8");
+          child.stderr?.setEncoding?.("utf8");
+          child.stdout?.on("data", emitStdout);
+          child.stderr?.on("data", (d) => {
+            stderr += String(d);
+            if (stderr.length > 20_000) stderr = stderr.slice(-20_000);
+            emitStderr(d as any);
+          });
+
+          child.on("error", (err) => {
+            sendStatus(`Setup process failed to start: ${err instanceof Error ? err.message : String(err)}`);
+          });
+
+          child.on("close", (code) => {
+            if (code === 0) {
+              sendStatus("Setup process finished");
+              return;
+            }
+            const suffix = stderr.trim() ? ` (stderr: ${stderr.trim().slice(0, 800)})` : "";
+            sendStatus(`Setup process exited with code ${code}${suffix}`);
+          });
+          return { success: true, data: { jobId } };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Failed to run setup";
+          sendStatus(`Setup failed: ${msg}`);
+          return { success: false, error: msg };
         }
       },
     );

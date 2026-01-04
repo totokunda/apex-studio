@@ -17,6 +17,21 @@ type PathsPayload = {
   loraPath?: string | null;
   preprocessorPath?: string | null;
   postprocessorPath?: string | null;
+  maskModel?: string | null;
+};
+
+export type BackendSyncedSettings = {
+  cachePath: string | null;
+  componentsPath: string | null;
+  configPath: string | null;
+  loraPath: string | null;
+  preprocessorPath: string | null;
+  postprocessorPath: string | null;
+  maskModel: string | null;
+  renderImageSteps: boolean;
+  renderVideoSteps: boolean;
+  useFastDownload: boolean;
+  autoUpdateEnabled: boolean;
 };
 
 function getApiPathSetting(): Promise<string | null> {
@@ -146,6 +161,20 @@ function setUseFastDownloadSetting(
   return ipcRenderer.invoke("settings:set-use-fast-download", enabled);
 }
 
+function getAutoUpdateEnabledSetting(): Promise<boolean> {
+  return ipcRenderer.invoke("settings:get-auto-update-enabled");
+}
+
+function setAutoUpdateEnabledSetting(
+  enabled: boolean,
+): Promise<{ success: boolean }> {
+  return ipcRenderer.invoke("settings:set-auto-update-enabled", enabled);
+}
+
+function refreshSettingsFromBackend(): Promise<ConfigResponse<BackendSyncedSettings>> {
+  return ipcRenderer.invoke("settings:refresh-from-backend");
+}
+
 export {
   getActiveProjectId,
   setActiveProjectId,
@@ -177,4 +206,7 @@ export {
   setRenderVideoStepsSetting,
   getUseFastDownloadSetting,
   setUseFastDownloadSetting,
+  getAutoUpdateEnabledSetting,
+  setAutoUpdateEnabledSetting,
+  refreshSettingsFromBackend,
 };
