@@ -19,6 +19,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -76,6 +77,7 @@ class PythonBundler:
 
         # Populated after bundling
         self.last_gpu_type: Optional[str] = None
+        self.last_machine_entry: Optional[Path] = None
         self.last_manifest: Optional[dict] = None
         self.last_code_manifest: Optional[dict] = None
 
@@ -368,6 +370,7 @@ class PythonBundler:
 
         # Add machine-specific requirements (expanded entrypoint)
         machine_entry = self.choose_machine_requirements_entrypoint(gpu_type)
+        self.last_machine_entry = machine_entry
         machine_lines = self._read_requirements_file(machine_entry)
         for line in machine_lines:
             # Skip any torch packages (we add them above, with correct index/pins)
@@ -511,9 +514,64 @@ class PythonBundler:
                 str(py_path),
                 "Cython>=0.29.36",
                 "numpy",
+                "psutil",
+                "enscons",
+                "pytoml",
             ],
             check=True,
         )
+
+        # Pre-install torch *before* installing the full requirements set.
+        #
+        # Why: some packages (notably `sageattention` from git) import `torch` at
+        # build/metadata time, but do not declare it as a build dependency. `uv pip`
+        # (like pip) can evaluate/build metadata for requirements before installing
+        # anything, so `torch` must already exist in the environment to avoid:
+        #   ModuleNotFoundError: No module named 'torch'
+        #
+        # We derive both the index options and the torch package specs from the
+        # generated requirements file so CUDA/CPU + Windows pins stay consistent.
+        try:
+            req_lines = [
+                ln.strip()
+                for ln in requirements_file.read_text(encoding="utf-8").splitlines()
+                if ln.strip()
+            ]
+            option_args: list[str] = []
+            for ln in req_lines:
+                if ln.startswith("--"):
+                    # Requirements files store options as a single line like:
+                    #   --extra-index-url https://...
+                    # but subprocess argv must be split into separate args.
+                    option_args.extend(shlex.split(ln))
+            torch_specs: list[str] = []
+            for ln in req_lines:
+                lower = ln.lower()
+                if lower.startswith("torch") or lower.startswith("torchvision") or lower.startswith("torchaudio"):
+                    # Exclude stray option lines, which also start with '-' in requirements.
+                    if ln.startswith("--"):
+                        continue
+                    torch_specs.append(ln)
+            # Only run if torch is part of this bundle's requirements.
+            if torch_specs:
+                subprocess.run(
+                    [
+                        str(uv_path),
+                        "pip",
+                        "install",
+                        "--python",
+                        str(py_path),
+                        "--no-build-isolation",
+                        "--index-strategy",
+                        "unsafe-best-match",
+                        *option_args,
+                        *torch_specs,
+                    ],
+                    check=True,
+                )
+        except Exception:
+            # Best-effort: don't fail bundling solely due to this preinstall step.
+            pass
         
         # Build & install Rust wheels (apex_download_rs) into the venv so they are
         # included in the final bundle.
@@ -530,6 +588,8 @@ class PythonBundler:
                 "--python",
                 str(py_path),
                 "--no-build-isolation",
+                "--index-strategy",
+                "unsafe-best-match",
                 "-r",
                 str(requirements_file),
             ],
@@ -635,6 +695,21 @@ class PythonBundler:
         # Only CUDA-capable platforms; skip macOS/ROCm/CPU bundles.
         if self.platform_name not in ("linux", "win32"):
             return
+
+        # Skip Nunchaku for SM90/Hopper bundles.
+        try:
+            if self.last_machine_entry and "cuda-sm90" in self.last_machine_entry.name:
+                return
+        except Exception:
+            pass
+        try:
+            cap = self.detect_cuda_compute_capability()
+            if cap:
+                major = int(cap.split(".")[0])
+                if major == 9:
+                    return
+        except Exception:
+            pass
 
         # Determine python tag (cp310/cp311/cp312/cp313) and torch major/minor.
         try:
@@ -793,7 +868,28 @@ class PythonBundler:
                 "Install Rust, or re-run with --skip-rust."
             ) from e
 
-        wheels_dir = self.output_dir / "wheels"
+        # Build wheels into a Python-ABI-specific directory so switching between
+        # Python versions (e.g. cp312 vs cp313) cannot accidentally install an
+        # incompatible stale wheel from a previous run.
+        try:
+            probe = subprocess.run(
+                [str(py_path), "-c", "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            py_tag = (probe.stdout or "").strip() or "unknown"
+        except Exception:
+            py_tag = "unknown"
+
+        wheels_dir = self.output_dir / "wheels" / py_tag
+        if wheels_dir.exists():
+            # Make this step idempotent and avoid picking up old wheels.
+            for p in wheels_dir.glob("*.whl"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
         wheels_dir.mkdir(parents=True, exist_ok=True)
 
         # Install maturin into the venv (pyproject build backend is maturin).
@@ -821,7 +917,7 @@ class PythonBundler:
             check=True,
         )
 
-        built_wheels = sorted(wheels_dir.glob("*.whl"))
+        built_wheels = sorted(wheels_dir.glob("*.whl"), key=lambda p: p.stat().st_mtime)
         if not built_wheels:
             raise RuntimeError(f"No wheels produced by maturin in: {wheels_dir}")
 
@@ -863,6 +959,33 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
         launcher.write_text(content, encoding="utf-8")
         os.chmod(launcher, 0o755)
 
+    def _choose_venv_libdir_to_ignore(self, venv_dir: Path) -> Optional[str]:
+        """
+        Linux venvs often contain both `lib/` and `lib64/`, where one is a symlink to the other.
+        Because we copy the venv with `symlinks=False` (dereference), we would otherwise duplicate
+        the same files in the shipped bundle. We keep the "real" directory and ignore the other.
+        """
+        lib = venv_dir / "lib"
+        lib64 = venv_dir / "lib64"
+        if not lib.exists() or not lib64.exists():
+            return None
+
+        try:
+            lib_is_link = lib.is_symlink()
+            lib64_is_link = lib64.is_symlink()
+        except Exception:
+            lib_is_link = False
+            lib64_is_link = False
+
+        # Prefer keeping the non-symlink directory.
+        if lib64_is_link and not lib_is_link:
+            return "lib64"
+        if lib_is_link and not lib64_is_link:
+            return "lib"
+
+        # If both are symlinks or both are real dirs, fall back to keeping `lib/`.
+        return "lib64"
+
     def create_venv_bundle(self, venv_dir: Path) -> Path:
         """
         Create a self-contained bundle built around a venv (no PyInstaller).
@@ -894,7 +1017,19 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
 
         # Copy venv (avoid symlinks for portability: we want a self-contained bundle).
         dest_venv = bundle_dir / self.venv_name
-        shutil.copytree(venv_dir, dest_venv, symlinks=False, ignore=ignore_junk)
+        ignore_libdir = self._choose_venv_libdir_to_ignore(venv_dir)
+
+        def _ignore_with_libdir(src: str, names: list[str]) -> set[str]:
+            ignored = set(ignore_junk(src, names) or [])
+            # Only apply the lib/lib64 exclusion at the venv root.
+            try:
+                if ignore_libdir and Path(src).resolve() == Path(venv_dir).resolve():
+                    ignored.add(ignore_libdir)
+            except Exception:
+                pass
+            return ignored
+
+        shutil.copytree(venv_dir, dest_venv, symlinks=False, ignore=_ignore_with_libdir)
 
         # Copy source code
         dest_src = bundle_dir / "src"
@@ -1637,6 +1772,12 @@ def main():
     cuda_version = args.cuda if args.cuda != "auto" else None
  
     py_exe = args.python_executable or sys.executable
+    # If the caller didn't specify a venv interpreter, prefer Python 3.12 when available.
+    # Many binary deps in our stack (e.g. ray) do not provide cp313 wheels yet.
+    if args.python_executable is None and not (sys.version_info.major == 3 and sys.version_info.minor == 12):
+        py312 = shutil.which("python3.12")
+        if py312:
+            py_exe = py312
     if args.require_python312:
         if not (sys.version_info.major == 3 and sys.version_info.minor == 12):
             # If they didn't pass --python, this is definitely wrong.
