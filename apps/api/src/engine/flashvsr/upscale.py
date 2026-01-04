@@ -4,23 +4,14 @@ from PIL import Image
 from src.engine.flashvsr.shared import FlashVSRShared
 from typing import Optional, Callable
 from src.transformer.wan.flashvsr.model import sinusoidal_embedding_1d
-import os
 import numpy as np
 from tqdm import tqdm
 from src.utils.cache import empty_cache
 from src.utils.progress import safe_emit_progress, make_mapped_progress
+from src.utils.assets import get_asset_path
 
-context_path = os.path.abspath(
-    os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "..",
-        "..",
-        "assets",
-        "flashvsr",
-        "posi_prompt.pth",
-    )
-)
+# Don't hard-fail at import time; fail when the engine is actually used.
+context_path = get_asset_path("flashvsr", "posi_prompt.pth", must_exist=False)
 from src.vae.tiny_wan.model import AutoencoderKLTinyWan
 
 

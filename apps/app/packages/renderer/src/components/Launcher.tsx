@@ -1,10 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { PiRocketLaunchFill } from "react-icons/pi";
 import {
-  checkPythonHealth,
-  getApiPathSetting,
-  getBackendUrl,
-  getPathExists,
   launchMainWindow,
   listProjects,
   setActiveProjectId,
@@ -12,10 +8,14 @@ import {
   readFileBuffer,
   createProject,
   deleteProject,
+  getLauncherStatus,
+  onLauncherStatusChange,
+  startLauncherStatusWatch,
+  stopLauncherStatusWatch,
 } from "@app/preload";
 import Installer from "@/components/Installer";
 import { ProjectSettings, useProjectsStore } from "@/lib/projects";
-import { LuFolder, LuClock, LuTrash, LuPlus } from "react-icons/lu";
+import { LuFolder, LuClock, LuTrash, LuPlus, LuRotateCcw } from "react-icons/lu";
 import { toast } from "sonner";
 import { DEFAULT_FPS } from "@/lib/settings";
 import { Input } from "@/components/ui/input";
@@ -213,7 +213,10 @@ const Launcher: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState(true);
   const [backendConnected, setBackendConnected] = useState(false);
-  const [apiPathExists, setApiPathExists] = useState(false);
+  const [runtimeAvailable, setRuntimeAvailable] = useState(false);
+  const [backendStarting, setBackendStarting] = useState(false);
+  const initialCheckDoneRef = useRef(false);
+  const [showInstaller, setShowInstaller] = useState(false);
   const projects = useProjectsStore((s) => s.projects);
   const setProjects = useProjectsStore((s) => s.setProjects);
   const removeProject = useProjectsStore((s) => s.removeProject);
@@ -245,8 +248,8 @@ const Launcher: React.FC = () => {
   };
 
   const hasBackend = useMemo(() => {
-    return backendConnected || apiPathExists;
-  }, [backendConnected, apiPathExists]);
+    return backendConnected || runtimeAvailable || backendStarting;
+  }, [backendConnected, runtimeAvailable, backendStarting]);
 
   const canLaunch = useMemo(() => {
     const hasProjects = projects.length > 0;
@@ -255,79 +258,69 @@ const Launcher: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
-    const run = async () => {
-      setIsChecking(true);
-      setError(null);
+    const applyStatus = (st: any) => {
+      const hasBackend = Boolean(st?.hasBackend);
+      const canStartLocal = Boolean(st?.canStartLocal);
+      const starting = Boolean(st?.backendStarting);
+      setBackendConnected(hasBackend);
+      setRuntimeAvailable(canStartLocal);
+      setBackendStarting(starting);
+      setError(
+        st?.lastError
+          ? String(st.lastError)
+          : st?.runtimeVerified?.ok === false && st?.runtimeVerified?.reason
+            ? String(st.runtimeVerified.reason)
+            : null,
+      );
+    };
 
-
-      
-
+    const runInitial = async () => {
+      // Only show the blocking "Checking installation…" screen on first load.
+      if (!initialCheckDoneRef.current) {
+        setIsChecking(true);
+      }
       try {
-        const apiPath = await getApiPathSetting();
-        const apiPathTrimmed = (apiPath ?? "").trim();
-
-        const [pythonHealthRes, backendUrlRes] = await Promise.all([
-          checkPythonHealth().catch(() => ({ success: false } as any)),
-          getBackendUrl().catch(() => ({ success: false } as any)),
-        ]);
-
-        // 1) Connected to a running bundled python API?
-        const pythonHealthy = Boolean(
-          pythonHealthRes?.success && pythonHealthRes?.data?.healthy,
-        );
-
-        // 2) Connected to configured backend URL?
-        let backendHealthy = false;
-        const backendUrl =
-          backendUrlRes?.success && backendUrlRes?.data?.url
-            ? String(backendUrlRes.data.url)
-            : null;
-        if (backendUrl) {
-          try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 1500);
-            const res = await fetch(`${backendUrl}/health`, {
-              signal: controller.signal,
-            }).finally(() => clearTimeout(timeout));
-            backendHealthy = res.ok;
-          } catch {
-            backendHealthy = false;
-          }
-        }
-
-        // 3) apiPath exists on disk?
-        let apiExists = false;
-        if (apiPathTrimmed) {
-          const existsRes = await getPathExists(apiPathTrimmed).catch(
-            () => null,
-          );
-          apiExists = Boolean(existsRes?.success && existsRes?.data?.exists);
-        }
-
+        const res = await getLauncherStatus();
         if (cancelled) return;
-        setBackendConnected(Boolean(pythonHealthy || backendHealthy));
-        setApiPathExists(apiExists);
+        if (res.success) {
+          applyStatus(res.data);
+        } else {
+          setError(res.error || "Failed to check launch prerequisites");
+          setBackendConnected(false);
+          setRuntimeAvailable(false);
+          setBackendStarting(false);
+        }
       } catch (e) {
         if (cancelled) return;
+        setError(e instanceof Error ? e.message : "Failed to check launch prerequisites");
         setBackendConnected(false);
-        setApiPathExists(false);
-        setError(
-          e instanceof Error ? e.message : "Failed to check launch prerequisites",
-        );
+        setRuntimeAvailable(false);
+        setBackendStarting(false);
       } finally {
-        if (!cancelled) setIsChecking(false);
+        if (!cancelled) {
+          initialCheckDoneRef.current = true;
+          setIsChecking(false);
+        }
       }
     };
 
-    void run();
-    const interval = setInterval(() => {
-      void run();
-    }, 3000);
+    void runInitial();
+
+    const unsubscribe = onLauncherStatusChange((st) => {
+      if (cancelled) return;
+      applyStatus(st);
+    });
+
+    void startLauncherStatusWatch({ intervalMs: 3000 });
+
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      unsubscribe();
+      void stopLauncherStatusWatch();
     };
   }, []);
+
+  // Auto-start logic is handled in the check loop above to keep decisions in one place.
 
   // Refresh projects list when (re)entering the launcher so covers/timestamps stay current
   // after actions performed in the main window (delete, cover regeneration, rename, etc.).
@@ -451,9 +444,29 @@ const Launcher: React.FC = () => {
     }
   };
 
-  if (!hasBackend) {
-    return <Installer />;
+
+  const showBlockingCheck =
+    !initialCheckDoneRef.current && (isChecking || backendStarting);
+
+  if (showBlockingCheck) {
+    return (
+      <main className="w-full h-screen flex flex-col items-center justify-center bg-black text-center font-poppins">
+        <div className="text-brand-light/70 text-sm">
+          {backendStarting ? "Starting backend…" : "Checking installation…"}
+        </div>
+        {error ? (
+          <div className="mt-2 text-red-400/90 text-[12px] max-w-[520px] px-6">
+            {error}
+          </div>
+        ) : null}
+      </main>
+    );
   }
+
+  if (!hasBackend || showInstaller) {
+    return <Installer hasBackend={hasBackend} setShowInstaller={setShowInstaller} />;
+  }
+
 
   return (
     <main className="w-full h-screen flex flex-col bg-black text-center font-poppins">
@@ -483,7 +496,20 @@ const Launcher: React.FC = () => {
           <span className="text-[12.5px] font-medium">Create</span>
         </button>
       </div>
-      <div className="absolute bottom-0 left-0 right-0 px-12 py-6 border-t bg-brand-background-dark border-brand-light/10 flex justify-end">
+      <div className="absolute bottom-0 left-0 right-0 px-12 py-6 border-t bg-brand-background-dark border-brand-light/10 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setShowInstaller(true);
+          }}
+          className="flex items-center gap-2 w-fit dark border bg-brand-background-light border-brand-light/15 text-brand-light hover:bg-brand-light/10 text-[11.5px] font-medium px-5 h-8 rounded-[6px] duration-200"
+        >
+          <span className="flex items-center gap-2">
+            <LuRotateCcw className="w-3.5 h-3.5" />
+            <span className="text-[13px] font-medium text-brand-light">Reinstall</span>
+          </span>
+        </button>
         <button 
           onClick={() => void onLaunch()}
           disabled={isChecking || isLaunching || !canLaunch}

@@ -58,6 +58,76 @@ Rust parallel range-download tuning (hf_transfer-style, signature unchanged; all
 - Seperated studio and engine
 - Can be used with remote machines
 
+## Run locally (development)
+
+### Prerequisites
+
+- **Node.js 24.x** (required)
+- **Python** (for `apex-engine`)
+
+### 1) Start the desktop app (Electron)
+
+From the app workspace:
+
+```bash
+cd apps/app
+npm i
+npm start
+```
+
+### 2) Install + run the engine (`apex-engine`)
+
+From the API workspace, install Python deps and the `apex-engine` CLI.
+
+#### Option A (recommended): use the dev pip installer (venv or current env)
+
+```bash
+cd apps/api
+
+# New virtualenv (recommended)
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install deps + apex-engine (pick one: mps/cpu/cuda-sm80-ampere/cuda-sm89-ada/cuda-sm90-hopper/cuda-sm100-blackwell/rocm)
+python3 scripts/dev_pip_install.py --machine mps
+```
+
+Then run the engine:
+
+```bash
+cd apps/api
+apex-engine dev
+
+# Or:
+# apex-engine start -f Procfile.dev
+```
+
+#### Option B: manual pip install (current environment)
+
+```bash
+cd apps/api
+python3 -m pip install -U pip setuptools wheel
+python3 -m pip install honcho
+
+# Install torch (pick one)
+python3 -m pip install torch torchvision torchaudio
+# python3 -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
+
+# Install platform requirements (pick one)
+python3 -m pip install -r requirements/machines/mps.txt
+# python3 -m pip install -r requirements/machines/cpu.txt
+
+# Install the CLI entrypoint
+python3 -m pip install -e . --no-deps
+```
+
+Then run:
+
+```bash
+cd apps/api
+apex-engine dev
+```
+
 ## Features
 
 <hr />

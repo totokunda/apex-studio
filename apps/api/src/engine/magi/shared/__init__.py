@@ -1,7 +1,6 @@
 import torch
 from typing import Dict, Any, Callable, List, Union, Optional, Tuple
 import math
-import os
 import numpy as np
 from PIL import Image
 import io
@@ -9,15 +8,9 @@ import ffmpeg
 from diffusers.video_processor import VideoProcessor
 from src.engine.base_engine import BaseEngine
 from .denoise import MagiDenoise
+from src.utils.assets import get_asset_path
 
-SPECIAL_TOKEN_PATH = os.path.join(
-    os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-    ),
-    "assets",
-    "magi",
-    "special_tokens.npz",
-)
+SPECIAL_TOKEN_PATH = get_asset_path("magi", "special_tokens.npz")
 
 SPECIAL_TOKEN = np.load(SPECIAL_TOKEN_PATH)
 CAPTION_TOKEN = torch.tensor(SPECIAL_TOKEN["caption_token"].astype(np.float16))

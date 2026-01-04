@@ -6,8 +6,6 @@ import React, {
   useState,
 } from "react";
 import {
-  listManifests,
-  listModelTypes,
   type ManifestDocument,
   type ModelTypeInfo,
 } from "@/lib/manifest";
@@ -42,7 +40,11 @@ import {
 } from "@/lib/clip";
 import { v4 as uuidv4 } from "uuid";
 import { useQuery, useQueryClient} from "@tanstack/react-query";
-import { useManifestQuery } from "@/lib/manifest/queries";
+import {
+  fetchManifestsAndPrimeCache,
+  fetchModelTypes,
+  useManifestQuery,
+} from "@/lib/manifest/queries";
 import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
 
 export const ModelItem: React.FC<{
@@ -95,7 +97,7 @@ export const ModelItem: React.FC<{
   }, [manifest.downloaded, isDownloading]);
 
   // Compute how many tags fit on a single line
-  useEffect(() => {
+  useLayoutEffect(() => {
     const computeVisibleTags = () => {
       const container = tagsContainerRef.current;
       const measure = hiddenMeasureRef.current;
@@ -393,25 +395,23 @@ const ModelCategory: React.FC<{
     }
   };
 
-  useEffect(() => {
-    const timeouts = [
-      setTimeout(checkScroll, 0),
-      setTimeout(checkScroll, 100),
-      setTimeout(checkScroll, 300),
-      setTimeout(checkScroll, 500),
-    ];
+  useLayoutEffect(() => {
     const carousel = carouselRef.current;
-    if (carousel) {
-      carousel.addEventListener("scroll", checkScroll);
-      window.addEventListener("resize", checkScroll);
-      return () => {
-        timeouts.forEach(clearTimeout);
-        carousel.removeEventListener("scroll", checkScroll);
-        window.removeEventListener("resize", checkScroll);
-      };
-    }
-    return () => timeouts.forEach(clearTimeout);
-  }, [manifests]);
+    if (!carousel) return;
+
+    checkScroll();
+    let raf = requestAnimationFrame(checkScroll);
+
+    const ro = new ResizeObserver(() => checkScroll());
+    ro.observe(carousel);
+
+    carousel.addEventListener("scroll", checkScroll, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      carousel.removeEventListener("scroll", checkScroll as EventListener);
+    };
+  }, [manifests, width]);
 
   const scroll = (direction: "left" | "right") => {
     if (carouselRef.current) {
@@ -467,7 +467,7 @@ const ModelCategory: React.FC<{
           }}
         >
           {manifests.map((manifest) => (
-            <div key={manifest.metadata?.id || ""} className="shrink-0">
+            <div key={manifest.metadata?.name || manifest.metadata?.id} className="shrink-0">
               <ModelItem manifest={manifest} category={category} />
             </div>
           ))}
@@ -558,19 +558,10 @@ const ModelMenu: React.FC = () => {
 
   const manifestsQuery = useQuery<ManifestDocument[]>({
     queryKey: ["manifest"],
-    queryFn: async () => {
-      const response = await listManifests();
-      if (!response.success) {
-        throw new Error(
-          response.error || "Backend is unavailable (failed to load manifests).",
-        );
-      }
-      response.data?.forEach((manifest) => {
-        queryClient.setQueryData(["manifest", manifest.metadata?.id], manifest);
-      })
-      return response.data ?? [];
-    },
-    placeholderData: (prev) => prev ?? [],
+    queryFn: () => fetchManifestsAndPrimeCache(queryClient),
+    initialData: () =>
+      queryClient.getQueryData<ManifestDocument[]>(["manifest"]),
+    placeholderData: (prev) => prev,
     retry: false,
     refetchOnWindowFocus: false,
     staleTime: 30000,
@@ -578,16 +569,9 @@ const ModelMenu: React.FC = () => {
   
   const modelTypesQuery = useQuery<ModelTypeInfo[]>({
     queryKey: ["modelTypes"],
-    queryFn: async () => {
-      const response = await listModelTypes();
-      if (!response.success) {
-        throw new Error(
-          response.error || "Backend is unavailable (failed to load model types).",
-        );
-      }
-      return response.data ?? [];
-    },
-    placeholderData: (prev) => prev ?? [],
+    queryFn: fetchModelTypes,
+    initialData: () => queryClient.getQueryData<ModelTypeInfo[]>(["modelTypes"]),
+    placeholderData: (prev) => prev,
     retry: false,
     refetchOnWindowFocus: false,
     staleTime: 30000,
@@ -596,7 +580,7 @@ const ModelMenu: React.FC = () => {
   const manifestsData = manifestsQuery.data;
   const modelTypesData = modelTypesQuery.data;
 
-  const backendUnavailable = manifestsQuery.data === undefined;
+  const backendUnavailable = manifestsQuery.isError;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -681,30 +665,39 @@ const ModelMenu: React.FC = () => {
     }
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+
+    let observed: Element | null = null;
+    let raf = 0;
+
     const updateWidth = () => {
-      if (scrollRef.current) {
-        const viewport = scrollRef.current.querySelector(
-          "[data-radix-scroll-area-viewport]",
-        ) as HTMLDivElement | null;
-        viewportRef.current = viewport;
-        const newWidth = (viewport || scrollRef.current).clientWidth;
-        if (newWidth > 0) setScrollWidth(newWidth);
+      const viewport = root.querySelector(
+        "[data-radix-scroll-area-viewport]",
+      ) as HTMLDivElement | null;
+      viewportRef.current = viewport;
+      const target = viewport ?? root;
+      const newWidth = target.clientWidth;
+      if (newWidth > 0) setScrollWidth(newWidth);
+
+      if (observed !== target) {
+        try {
+          if (observed) ro.unobserve(observed);
+        } catch {}
+        observed = target;
+        ro.observe(target);
       }
     };
-    const timeouts = [
-      setTimeout(updateWidth, 0),
-      setTimeout(updateWidth, 50),
-      setTimeout(updateWidth, 100),
-      setTimeout(updateWidth, 200),
-    ];
-    const resizeObserver = new ResizeObserver(updateWidth);
-    if (scrollRef.current) resizeObserver.observe(scrollRef.current);
-    window.addEventListener("resize", updateWidth);
+
+    const ro = new ResizeObserver(() => updateWidth());
+
+    updateWidth();
+    raf = requestAnimationFrame(updateWidth);
+
     return () => {
-      timeouts.forEach(clearTimeout);
-      resizeObserver.disconnect();
-      window.removeEventListener("resize", updateWidth);
+      cancelAnimationFrame(raf);
+      ro.disconnect();
     };
   }, [selectedCategory, selectedManifestId]);
 
@@ -837,7 +830,7 @@ const ModelMenu: React.FC = () => {
 
   const hasAnyManifests = manifests.length > 0;
   const hasAnyFiltered = filteredManifests.length > 0;
-  const showEmptyState = !hasAnyFiltered;
+  const showEmptyState = manifestsQuery.isFetched && !hasAnyFiltered;
 
   return (
     <>

@@ -84,6 +84,7 @@ uvicorn==0.35.0
 urllib3==2.6.2
 webcolors==25.10.0
 websocket_client==1.8.0
+wsproto==1.2.0
 xfuser==0.4.5
 yacs==0.1.8
 yapf==0.40.2

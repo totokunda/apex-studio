@@ -13,6 +13,7 @@ Usage:
     python scripts/bundle_python.py --platform [darwin|linux|win32] --output ./dist
 """
 
+
 import argparse
 import json
 import os
@@ -25,7 +26,6 @@ import tempfile
 import zipfile
 from pathlib import Path
 from typing import Optional, Set, List, Tuple
-
 
 class PythonBundler:
     """Bundles Python API for distribution (venv-based, no PyInstaller)."""
@@ -51,6 +51,7 @@ class PythonBundler:
         sign: bool = False,
         python_executable: Optional[str] = None,
         prefer_python_312: bool = True,
+        bundle_version: Optional[str] = None,
     ):
         self.platform_name = platform_name
         # Resolve to an absolute path so later subprocess calls that change cwd (e.g. Rust builds)
@@ -60,10 +61,14 @@ class PythonBundler:
         self.sign = sign
         self.python_executable = python_executable or sys.executable
         self.prefer_python_312 = prefer_python_312
+        self.bundle_version = (bundle_version or "").strip() or None
 
         self.project_root = Path(__file__).resolve().parent.parent
         self.src_dir = self.project_root / "src"
         self.dist_dir = self.output_dir / "python-api"
+        # Code-only update bundle output (no venv). Intended for frequent updates:
+        # ship updated `src/` + small configs/assets + a requirements spec for dependency syncing.
+        self.code_dist_dir = self.output_dir / "python-code"
 
         # Name of the venv directory we create & ship.
         # Users can activate it directly: `source apex-studio/bin/activate`
@@ -72,6 +77,7 @@ class PythonBundler:
         # Populated after bundling
         self.last_gpu_type: Optional[str] = None
         self.last_manifest: Optional[dict] = None
+        self.last_code_manifest: Optional[dict] = None
 
         # Whether to keep the *intermediate* build venv at `<output>/<venv_name>/`.
         # The shipped bundle contains its own copy at `<output>/python-api/apex-engine/<venv_name>/`.
@@ -377,6 +383,75 @@ class PythonBundler:
         print(f"Created requirements file: {req_file}")
         return req_file
 
+    def create_lockfile(self, *, requirements_file: Path, venv_dir: Path) -> Path:
+        """
+        Create a deterministic lockfile (`requirements.lock`) for update-time syncing.
+
+        We build the lockfile by:
+          - preserving resolver/index options from the generated requirements file
+            (e.g. --extra-index-url for CUDA PyTorch wheels),
+          - freezing the *actual* installed environment via `uv pip freeze`,
+          - filtering out local-path / editable artifacts that would be un-installable on end user machines
+            (notably our own `apex-engine` install done from a local directory during bundling).
+
+        The resulting file is suitable for:
+          - `uv pip sync -p <venv_python> requirements.lock`
+        """
+        lock_path = self.output_dir / "requirements.lock"
+
+        # Determine venv python
+        if self.platform_name == "win32":
+            py_path = venv_dir / "Scripts" / "python.exe"
+        else:
+            py_path = venv_dir / "bin" / "python"
+
+        uv = self._ensure_uv_available()
+
+        # Capture any pip option lines from the requirements file (indexes, find-links, etc.).
+        header_lines: list[str] = []
+        try:
+            for raw in requirements_file.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line:
+                    continue
+                if line.startswith("--"):
+                    header_lines.append(line)
+        except Exception:
+            header_lines = []
+
+        # Freeze installed packages from the venv.
+        res = subprocess.run(
+            [str(uv), "pip", "freeze", "--python", str(py_path), "--exclude-editable"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        frozen = [ln.strip() for ln in (res.stdout or "").splitlines() if ln.strip()]
+
+        def _keep(line: str) -> bool:
+            lower = line.lower()
+            # Exclude our own package, since it's installed from a local path during bundling
+            # and may not be publishable on an index.
+            if lower.startswith("apex-engine"):
+                return False
+            # Exclude local file references (un-installable on end-user machines).
+            # Example: package @ file:///... or package @ /abs/path
+            if " @ file:" in lower or lower.startswith("-e "):
+                return False
+            return True
+
+        filtered = [ln for ln in frozen if _keep(ln)]
+
+        out_lines: list[str] = []
+        out_lines.extend(header_lines)
+        if header_lines:
+            out_lines.append("")  # spacer
+        out_lines.extend(filtered)
+
+        lock_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        print(f"Created lockfile: {lock_path}")
+        return lock_path
+
     def create_venv(self, requirements_file: Path) -> Path:
         """
         Create a virtual environment with all dependencies.
@@ -480,7 +555,70 @@ class PythonBundler:
         # macOS/conda: ensure libpython is present so the venv can run after being moved/installed.
         self._ensure_macos_libpython_present(venv_dir)
 
+        # Final hygiene: remove cache/artifact files that should never ship in bundles.
+        # (Best-effort; don't fail bundling if cleanup has issues.)
+        try:
+            removed_files, removed_dirs = self._cleanup_bundle_tree(venv_dir)
+            if removed_files or removed_dirs:
+                print(f"Cleaned venv artifacts: removed_files={removed_files}, removed_dirs={removed_dirs}")
+        except Exception:
+            pass
+
         return venv_dir
+
+    def _cleanup_bundle_tree(self, root: Path) -> tuple[int, int]:
+        """
+        Remove filesystem junk / cache artifacts that should not be shipped.
+
+        This is intentionally defensive: even if copy/packaging excludes are configured,
+        these files can sneak in via platform-specific tooling and can break imports
+        (notably AppleDouble files like `._*.py` on macOS).
+        """
+        root = Path(root).resolve()
+        removed_files = 0
+        removed_dirs = 0
+
+        # Remove directories first (deepest-first) to avoid traversing deleted trees.
+        dir_names = {"__pycache__", "__MACOSX"}
+        dirs: list[Path] = []
+        try:
+            for p in root.rglob("*"):
+                try:
+                    if p.is_dir() and p.name in dir_names:
+                        dirs.append(p)
+                except Exception:
+                    continue
+        except Exception:
+            dirs = []
+
+        for d in sorted(dirs, key=lambda p: len(p.parts), reverse=True):
+            try:
+                shutil.rmtree(d, ignore_errors=True)
+                removed_dirs += 1
+            except Exception:
+                pass
+
+        # Remove files (AppleDouble, Finder junk, bytecode).
+        try:
+            for p in root.rglob("*"):
+                try:
+                    if not p.is_file():
+                        continue
+                    name = p.name
+                    if name == ".DS_Store" or name.startswith("._") or name.endswith((".pyc", ".pyo")):
+                        try:
+                            p.unlink(missing_ok=True)  # py3.8+
+                        except TypeError:
+                            # older python fallback
+                            if p.exists():
+                                p.unlink()
+                        removed_files += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        return removed_files, removed_dirs
 
     def _maybe_install_nunchaku(self, uv_path: Path, py_path: Path) -> None:
         """
@@ -742,27 +880,61 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
             shutil.rmtree(bundle_dir)
         bundle_dir.mkdir(parents=True, exist_ok=True)
 
+        # Avoid shipping filesystem metadata / cache artifacts into the bundle.
+        # - macOS: AppleDouble files like `._*.py` can crash libraries that scan `*.py` (e.g. transformers).
+        # - Python: `__pycache__` / `*.pyc` / `*.pyo` are noisy and not needed in release bundles.
+        ignore_junk = shutil.ignore_patterns(
+            ".DS_Store",
+            "._*",
+            "__MACOSX",
+            "__pycache__",
+            "*.pyc",
+            "*.pyo",
+        )
+
         # Copy venv (avoid symlinks for portability: we want a self-contained bundle).
         dest_venv = bundle_dir / self.venv_name
-        shutil.copytree(venv_dir, dest_venv, symlinks=False)
+        shutil.copytree(venv_dir, dest_venv, symlinks=False, ignore=ignore_junk)
 
         # Copy source code
         dest_src = bundle_dir / "src"
-        shutil.copytree(self.src_dir, dest_src)
+        shutil.copytree(self.src_dir, dest_src, ignore=ignore_junk)
 
         # Copy assets and configs
-        for folder in ["assets", "manifest", "transformer_configs", "vae_configs"]:
+        for folder in ["assets", "manifest"]:
             src = self.project_root / folder
             if src.exists():
-                shutil.copytree(src, bundle_dir / folder)
+                shutil.copytree(src, bundle_dir / folder, ignore=ignore_junk)
 
         # Copy gunicorn config
         shutil.copy(self.project_root / "gunicorn.conf.py", bundle_dir)
+
+        # Copy maintenance/update scripts into the bundle so installs can self-update without
+        # needing access to the repo checkout.
+        scripts_dir = bundle_dir / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        for rel in [
+            Path("scripts") / "apply_code_update.py",
+            Path("scripts") / "setup.py",
+        ]:
+            src = self.project_root / rel
+            try:
+                if src.exists():
+                    shutil.copy(src, scripts_dir / src.name)
+            except Exception:
+                # Best-effort: bundling should not fail because a helper script couldn't be copied.
+                pass
 
         # Create launcher scripts (for manual start-api testing)
         self._create_launcher(bundle_dir)
         # Create apex-engine entrypoint at bundle root (matches Electron/runtime expectations)
         self._create_apex_engine_entrypoint(bundle_dir)
+
+        # Defensive cleanup (in case platform tooling injected artifacts after the copy).
+        try:
+            self._cleanup_bundle_tree(bundle_dir)
+        except Exception:
+            pass
 
         return bundle_dir
 
@@ -856,8 +1028,9 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
     def create_manifest(self, bundle_dir: Path, gpu_type: str) -> dict:
         """Create a manifest file with bundle information"""
         py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        version = self.bundle_version or "0.0.0"
         manifest = {
-            "version": "0.1.0",
+            "version": version,
             "platform": self.platform_name,
             "arch": platform.machine(),
             "gpu_support": gpu_type,
@@ -902,7 +1075,12 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         Compute a descriptive default zip name based on the *actual* bundled config.
         """
         m = self.last_manifest or {}
-        prefix = "python-api" if zip_scope == "python-api" else "apex-engine"
+        if zip_scope == "python-api":
+            prefix = "python-api"
+        elif zip_scope == "python-code":
+            prefix = "python-code"
+        else:
+            prefix = "apex-engine"
         version = self._safe_filename_component(str(m.get("version", "0.0.0")))
         plat = self._safe_filename_component(str(m.get("platform", self.platform_name)))
         arch = self._safe_filename_component(str(m.get("arch", platform.machine())))
@@ -920,6 +1098,145 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         extra = ("-" + "-".join(extras)) if extras else ""
         return f"{prefix}-{version}-{plat}-{arch}-{gpu}-{py_tag}{extra}.zip"
 
+    def _write_code_update_manifest(self, bundle_dir: Path, gpu_type: str, requirements_file: Path) -> dict:
+        """
+        Create a small manifest describing the code-only update bundle.
+
+        The goal is to give the installer/updater enough metadata to:
+          - validate platform/arch/gpu/python compatibility,
+          - decide whether dependency syncing is needed (based on requirements file hash),
+          - display version info.
+        """
+        import hashlib
+
+        py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        req_bytes = requirements_file.read_bytes() if requirements_file.exists() else b""
+        req_sha256 = hashlib.sha256(req_bytes).hexdigest() if req_bytes else ""
+
+        lock_file = self.output_dir / "requirements.lock"
+        lock_bytes = lock_file.read_bytes() if lock_file.exists() else b""
+        lock_sha256 = hashlib.sha256(lock_bytes).hexdigest() if lock_bytes else ""
+
+        base = self.last_manifest or {}
+        manifest = {
+            "kind": "code-update",
+            # Keep versioning consistent with the full bundle when available.
+            "version": str(base.get("version", "0.1.0")),
+            "platform": self.platform_name,
+            "arch": platform.machine(),
+            "gpu_support": gpu_type,
+            "python_tag": py_tag,
+            "created_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "requirements": {
+                "filename": requirements_file.name,
+                "sha256": req_sha256,
+            },
+            "lockfile": (
+                {
+                    "filename": lock_file.name,
+                    "sha256": lock_sha256,
+                }
+                if lock_sha256
+                else None
+            ),
+        }
+
+        manifest_file = bundle_dir / "apex-code-update-manifest.json"
+        with open(manifest_file, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+        self.last_code_manifest = manifest
+        print(f"Created code update manifest: {manifest_file}")
+        return manifest
+
+    def create_code_only_bundle(self, requirements_file: Path, gpu_type: str) -> Path:
+        """
+        Create a code-only bundle intended for incremental updates.
+
+        Layout (code_bundle_dir):
+          - src/               # API code
+          - assets/, manifest/ # small static assets/configs
+          - gunicorn.conf.py
+          - requirements-bundle.txt (or whichever file was generated)
+          - apex-code-update-manifest.json
+
+        NOTE: This bundle intentionally does NOT contain the venv. The updater is expected
+        to apply this bundle on top of an existing installed runtime env and optionally
+        sync dependencies if the requirements file changed.
+        """
+        code_bundle_root = self.code_dist_dir
+        bundle_dir = code_bundle_root / "apex-engine"
+
+        if bundle_dir.exists():
+            shutil.rmtree(bundle_dir)
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+
+        ignore_junk = shutil.ignore_patterns(
+            ".DS_Store",
+            "._*",
+            "__MACOSX",
+            "__pycache__",
+            "*.pyc",
+            "*.pyo",
+        )
+
+        # Copy source code
+        dest_src = bundle_dir / "src"
+        shutil.copytree(self.src_dir, dest_src, ignore=ignore_junk)
+
+        # Copy assets/configs (match the full bundle semantics today)
+        for folder in ["assets", "manifest"]:
+            src = self.project_root / folder
+            if src.exists():
+                shutil.copytree(src, bundle_dir / folder, ignore=ignore_junk)
+
+        # Copy gunicorn config
+        try:
+            shutil.copy(self.project_root / "gunicorn.conf.py", bundle_dir)
+        except Exception:
+            pass
+
+        # Copy maintenance/update scripts (no venv in this bundle, but we want the updater/setup scripts
+        # available alongside the updated code when extracted).
+        try:
+            scripts_dir = bundle_dir / "scripts"
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            for rel in [
+                Path("scripts") / "apply_code_update.py",
+                Path("scripts") / "setup.py",
+            ]:
+                src = self.project_root / rel
+                if src.exists():
+                    shutil.copy(src, scripts_dir / src.name)
+        except Exception:
+            pass
+
+        # Copy the generated requirements spec into the bundle root for update-time comparison.
+        try:
+            if requirements_file.exists():
+                shutil.copy(requirements_file, bundle_dir / requirements_file.name)
+        except Exception:
+            pass
+
+        # Copy lockfile (if present)
+        try:
+            lock_file = self.output_dir / "requirements.lock"
+            if lock_file.exists():
+                shutil.copy(lock_file, bundle_dir / lock_file.name)
+        except Exception:
+            pass
+
+        # Create a small manifest that includes a hash of the requirements spec.
+        self._write_code_update_manifest(bundle_dir=bundle_dir, gpu_type=gpu_type, requirements_file=requirements_file)
+
+        # Defensive cleanup (code-only bundles should also be free of cache/artifact files).
+        try:
+            self._cleanup_bundle_tree(bundle_dir)
+        except Exception:
+            pass
+
+        print(f"Code-only bundle created: {bundle_dir}")
+        return bundle_dir
+
     def _should_exclude_from_zip(self, rel_path: Path) -> bool:
         """
         Exclude files that don't belong in release zips (noise / cache artifacts).
@@ -929,10 +1246,15 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         parts = set(rel_path.parts)
         if "__pycache__" in parts:
             return True
+        if "__MACOSX" in parts:
+            return True
         name = rel_path.name
         if name.endswith(".pyc") or name.endswith(".pyo"):
             return True
         if name == ".DS_Store":
+            return True
+        # AppleDouble files (Finder/zip/tar metadata). These can masquerade as .py files and break imports.
+        if name.startswith("._"):
             return True
         return False
 
@@ -1026,10 +1348,18 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         # We keep the same exclude semantics as zip to avoid cache noise.
         excludes = [
             "--exclude=__pycache__",
+            "--exclude=*/__pycache__",
             "--exclude=*.pyc",
             "--exclude=*.pyo",
             "--exclude=.DS_Store",
+            "--exclude=__MACOSX",
+            "--exclude=*/__MACOSX",
+            "--exclude=._*",
+            "--exclude=*/._*",
         ]
+        
+        env = os.environ.copy()
+        env["COPYFILE_DISABLE"] = "1"
 
         if include_root_dir:
             tar_cmd = [
@@ -1042,7 +1372,15 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
                 str(src_dir.name),
             ]
         else:
-            tar_cmd = [tar_bin, *excludes, "-C", str(src_dir), "-cf", "-", "."]
+            tar_cmd = [
+                tar_bin,
+                *excludes,
+                "-C",
+                str(src_dir),
+                "-cf",
+                "-",
+                ".",
+            ]
 
         # zstd reads from stdin and writes to file.
         # -T0 uses all cores.
@@ -1055,13 +1393,14 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         ]
 
         print(f"Creating tar.zst: {out_path.name} (from {src_dir})")
-        p1 = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p1 = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         try:
             p2 = subprocess.run(
                 zstd_cmd,
                 stdin=p1.stdout,
                 capture_output=True,
                 text=True,
+                env=env,
             )
         finally:
             # Ensure tar's stdout pipe is closed so tar can receive SIGPIPE if zstd exits early.
@@ -1091,7 +1430,7 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         return out_path
 
     def bundle(self) -> Path:
-        """Run the full bundling process"""
+        """Run the full bundling process (full env bundle + code-only update bundle)."""
         print(f"Bundling Python API for platform: {self.platform_name}")
 
         # Create output directory
@@ -1110,6 +1449,13 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
 
         # Patch third-party deps inside the venv before we copy it into the shipped bundle.
         self._patch_diffusers_set_adapter_scale(venv_dir)
+
+        # Create a lockfile for update-time dependency syncing.
+        # Do this after all installs/patches so the lock reflects the final environment.
+        try:
+            self.create_lockfile(requirements_file=req_file, venv_dir=venv_dir)
+        except Exception as e:
+            print(f"Warning: failed to create requirements.lock: {e}")
         
         # Build venv-based bundle (no PyInstaller)
         bundle_dir = self.create_venv_bundle(venv_dir)
@@ -1130,6 +1476,13 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
 
         # Create manifest
         self.create_manifest(bundle_dir, gpu_type=gpu_type)
+
+        # Create code-only update bundle (small; used for frequent updates)
+        try:
+            self.create_code_only_bundle(requirements_file=req_file, gpu_type=gpu_type)
+        except Exception as e:
+            # Best-effort: code-only bundle should not break full bundle creation.
+            print(f"Warning: failed to create code-only update bundle: {e}")
 
         print(f"Bundle created: {bundle_dir}")
         return bundle_dir
@@ -1162,6 +1515,14 @@ def main():
         help="Python interpreter to use for the venv (recommended: Python 3.12). Defaults to the current interpreter.",
     )
     parser.add_argument(
+        "--bundle-version",
+        default=None,
+        help=(
+            "Bundle version to write into manifests and artifact names. "
+            "Precedence: --bundle-version > APEX_BUNDLE_VERSION env var > pyproject.toml [project].version."
+        ),
+    )
+    parser.add_argument(
         "--require-python312",
         action="store_true",
         help="Fail fast if the selected interpreter is not Python 3.12.x",
@@ -1186,9 +1547,9 @@ def main():
     )
     parser.add_argument(
         "--zip-scope",
-        choices=["bundle", "python-api"],
+        choices=["bundle", "python-api", "python-code"],
         default="python-api",
-        help="What to zip: 'bundle' zips the apex-engine folder; 'python-api' zips the python-api folder containing apex-engine.",
+        help="What to zip: 'bundle' zips the apex-engine folder; 'python-api' zips the python-api folder containing apex-engine; 'python-code' zips the python-code folder containing apex-engine (code-only update bundle).",
     )
     parser.add_argument(
         "--zip-output",
@@ -1208,9 +1569,9 @@ def main():
     )
     parser.add_argument(
         "--tar-zst-scope",
-        choices=["bundle", "python-api"],
+        choices=["bundle", "python-api", "python-code"],
         default="python-api",
-        help="What to tar.zst: 'bundle' tars the apex-engine folder; 'python-api' tars the python-api folder containing apex-engine.",
+        help="What to tar.zst: 'bundle' tars the apex-engine folder; 'python-api' tars the python-api folder containing apex-engine; 'python-code' tars the python-code folder containing apex-engine (code-only update bundle).",
     )
     parser.add_argument(
         "--tar-zst-output",
@@ -1232,6 +1593,41 @@ def main():
 
     args = parser.parse_args()
 
+    def _read_project_version_from_pyproject(pyproject_path: Path) -> Optional[str]:
+        """
+        Best-effort parse of `pyproject.toml` to read `[project].version`.
+        Prefers stdlib `tomllib` (py3.11+), falls back to `tomli` if installed.
+        """
+        try:
+            data = pyproject_path.read_bytes()
+        except Exception:
+            return None
+
+        toml_loads = None
+        try:
+            import tomllib  # type: ignore
+
+            toml_loads = tomllib.loads
+        except Exception:
+            try:
+                import tomli  # type: ignore
+
+                toml_loads = tomli.loads
+            except Exception:
+                toml_loads = None
+
+        if not toml_loads:
+            return None
+
+        try:
+            obj = toml_loads(data.decode("utf-8"))
+            v = obj.get("project", {}).get("version")
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        except Exception:
+            return None
+        return None
+
     # Auto-detect platform
     platform_name = args.platform
     if platform_name == "auto":
@@ -1239,7 +1635,7 @@ def main():
 
     # Auto-detect CUDA
     cuda_version = args.cuda if args.cuda != "auto" else None
-
+ 
     py_exe = args.python_executable or sys.executable
     if args.require_python312:
         if not (sys.version_info.major == 3 and sys.version_info.minor == 12):
@@ -1256,12 +1652,20 @@ def main():
                 "For best compatibility with Windows wheels (cp312) and newer stacks, use Python 3.12."
             )
 
+    # Resolve bundle version (CLI > env > pyproject).
+    bundle_version = (args.bundle_version or "").strip() or None
+    if not bundle_version:
+        bundle_version = (os.environ.get("APEX_BUNDLE_VERSION", "") or "").strip() or None
+    if not bundle_version:
+        bundle_version = _read_project_version_from_pyproject(Path(__file__).resolve().parent.parent / "pyproject.toml")
+
     bundler = PythonBundler(
         platform_name=platform_name,
         output_dir=args.output,
         cuda_version=cuda_version,
         sign=args.sign,
         python_executable=py_exe,
+        bundle_version=bundle_version,
     )
     bundler.skip_rust = args.skip_rust
     bundler.keep_build_venv = args.keep_build_venv
@@ -1271,6 +1675,8 @@ def main():
     if args.zip:
         if args.zip_scope == "bundle":
             zip_src = bundle_dir
+        elif args.zip_scope == "python-code":
+            zip_src = bundler.code_dist_dir
         else:
             zip_src = bundler.dist_dir
 
@@ -1278,9 +1684,17 @@ def main():
         zip_path = args.zip_output or (bundler.output_dir / zip_name)
         bundler._zip_dir(zip_src, zip_path, include_root_dir=True)
 
+        # If the caller zipped the full python-api artifact, also emit a code-only zip by default.
+        if args.zip_scope == "python-api" and bundler.code_dist_dir.exists():
+            code_zip_name = bundler.default_zip_name("python-code")
+            code_zip_path = bundler.output_dir / code_zip_name
+            bundler._zip_dir(bundler.code_dist_dir, code_zip_path, include_root_dir=True)
+
     if args.tar_zst:
         if args.tar_zst_scope == "bundle":
             tar_src = bundle_dir
+        elif args.tar_zst_scope == "python-code":
+            tar_src = bundler.code_dist_dir
         else:
             tar_src = bundler.dist_dir
 
@@ -1288,6 +1702,12 @@ def main():
         tar_name = args.tar_zst_name or default_name
         tar_path = args.tar_zst_output or (bundler.output_dir / tar_name)
         bundler._tar_zst_dir(tar_src, tar_path, include_root_dir=True, level=args.tar_zst_level)
+
+        # If the caller created the full python-api tar.zst artifact, also emit a code-only tar.zst by default.
+        if args.tar_zst_scope == "python-api" and bundler.code_dist_dir.exists():
+            code_tar_name = bundler.default_zip_name("python-code").replace(".zip", ".tar.zst")
+            code_tar_path = bundler.output_dir / code_tar_name
+            bundler._tar_zst_dir(bundler.code_dist_dir, code_tar_path, include_root_dir=True, level=args.tar_zst_level)
 
     print(f"\nBundle complete: {bundle_dir}")
     if platform_name == "win32":
