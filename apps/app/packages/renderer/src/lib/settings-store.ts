@@ -22,6 +22,7 @@ export const useSettingsStore = create<SettingsState>(
     renderImageSteps: false,
     renderVideoSteps: false,
     useFastDownload: true,
+    autoUpdateEnabled: true,
 
     // These will be replaced by the middleware with real implementations.
     hydrate: async () => {},
@@ -38,6 +39,7 @@ export const useSettingsStore = create<SettingsState>(
     setRenderImageSteps: async () => {},
     setRenderVideoSteps: async () => {},
     setUseFastDownload: async () => {},
+    setAutoUpdateEnabled: async () => {},
   })),
 );
 

@@ -7,7 +7,7 @@ from transformers import AutoTokenizer
 from src.utils.defaults import (
     DEFAULT_PREPROCESSOR_SAVE_PATH,
     DEFAULT_CONFIG_SAVE_PATH,
-    DEFAULT_DEVICE,
+    get_torch_device,
 )
 from src.helpers.base import (
     PreprocessorType,
@@ -57,7 +57,7 @@ class PromptExtendHelper(BaseHelper):
         config_save_path: Optional[str] = DEFAULT_CONFIG_SAVE_PATH,
         save_path: Optional[str] = DEFAULT_PREPROCESSOR_SAVE_PATH,
         dtype: torch.dtype | None = None,
-        device: Optional[str] | torch.device = DEFAULT_DEVICE,
+        device: Optional[str] | torch.device | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -79,7 +79,9 @@ class PromptExtendHelper(BaseHelper):
             else:
                 dtype = torch.float32
         self.load_dtype = dtype
-        if isinstance(device, str):
+        if device is None:
+            self.device = get_torch_device()
+        elif isinstance(device, str):
             self.device = torch.device(device)
         else:
             self.device = device

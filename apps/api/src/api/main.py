@@ -17,9 +17,46 @@ from .ray_app import get_ray_app, shutdown_ray
 from contextlib import asynccontextmanager
 import asyncio
 from typing import Optional
+import os
+import threading
+import time
 
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
+
+
+def _start_parent_watchdog() -> None:
+    """
+    Ownership-safe shutdown: if this server was launched by Apex Studio (Electron),
+    it will set APEX_PARENT_PID. If that parent process goes away, we exit.
+    This avoids orphaned API servers without ever killing unrelated processes.
+    """
+    raw = os.getenv("APEX_PARENT_PID")
+    if not raw:
+        return
+    try:
+        parent_pid = int(raw)
+    except Exception:
+        return
+
+    def _exists(pid: int) -> bool:
+        try:
+            # signal 0: existence check (works on Unix; on Windows it raises if missing)
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+
+    def _loop() -> None:
+        # small delay so parent fully initializes
+        time.sleep(1.0)
+        while True:
+            if not _exists(parent_pid):
+                os._exit(0)
+            time.sleep(1.0)
+
+    t = threading.Thread(target=_loop, name="apex-parent-watchdog", daemon=True)
+    t.start()
 
 
 async def _start_background_services() -> None:
@@ -48,6 +85,7 @@ async def _start_background_services() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _start_parent_watchdog()
     # Startup: initialize Ray and related services in the background (non-blocking)
     startup_task = asyncio.create_task(_start_background_services())
 
@@ -56,17 +94,27 @@ async def lifespan(app: FastAPI):
 
     poll_task = asyncio.create_task(poll_ray_updates())
 
+    # Start background task for automatic code updates (non-blocking)
+    from .auto_update import auto_update_loop
+
+    auto_update_task = asyncio.create_task(auto_update_loop())
+
     yield
 
     # Shutdown: Cancel polling task and close Ray
     startup_task.cancel()
     poll_task.cancel()
+    auto_update_task.cancel()
     try:
         await startup_task
     except asyncio.CancelledError:
         pass
     try:
         await poll_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await auto_update_task
     except asyncio.CancelledError:
         pass
     shutdown_ray()

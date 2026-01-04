@@ -2,6 +2,7 @@ import type { AppModule } from "../AppModule.js";
 import { ModuleContext } from "../ModuleContext.js";
 import { BrowserWindow, ipcMain } from "electron";
 import type { AppInitConfig } from "../AppInitConfig.js";
+import { getPythonProcess } from "./PythonProcess.js";
 
 class WindowManager implements AppModule {
   readonly #preload: { path: string };
@@ -104,7 +105,26 @@ class WindowManager implements AppModule {
       }
     }
 
+    // The launcher owns the API lifecycle: when the launcher is closed, stop the API server too.
+    browserWindow.on("close", () => {
+      const py = getPythonProcess();
+      if (!py) return;
+      void py.stop().catch((error) => {
+        console.warn("[WindowManager] Failed to stop Python API on launcher close:", error);
+      });
+    });
+
     browserWindow.on("closed", () => {
+      // Backstop: some platforms/window managers can skip the 'close' path; ensure stop happens.
+      const py = getPythonProcess();
+      if (py) {
+        void py.stop().catch((error) => {
+          console.warn(
+            "[WindowManager] Failed to stop Python API on launcher closed backstop:",
+            error,
+          );
+        });
+      }
       if (this.#launcherWindow === browserWindow) {
         this.#launcherWindow = null;
       }

@@ -52,6 +52,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     renderImageSteps: renderImageStepsGlobal,
     renderVideoSteps: renderVideoStepsGlobal,
     useFastDownload: useFastDownloadGlobal,
+    autoUpdateEnabled: autoUpdateEnabledGlobal,
     maskModel: maskModelGlobal,
     setMaskModel: setMaskModelGlobal,
     setCachePath: setCachePathGlobal,
@@ -66,6 +67,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRenderImageSteps: setRenderImageStepsGlobal,
     setRenderVideoSteps: setRenderVideoStepsGlobal,
     setUseFastDownload: setUseFastDownloadGlobal,
+    setAutoUpdateEnabled: setAutoUpdateEnabledGlobal,
   } = useSettingsStore();
 
   const controlsFps = useControlsStore((s) => s.fps);
@@ -102,6 +104,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [renderImageSteps, setRenderImageSteps] = useState<boolean>(false);
   const [renderVideoSteps, setRenderVideoSteps] = useState<boolean>(false);
   const [useFastDownload, setUseFastDownload] = useState<boolean>(true);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
 
 
   useEffect(() => {
@@ -126,6 +129,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRenderImageSteps(Boolean(renderImageStepsGlobal));
     setRenderVideoSteps(Boolean(renderVideoStepsGlobal));
     setUseFastDownload(Boolean(useFastDownloadGlobal));
+    setAutoUpdateEnabled(Boolean(autoUpdateEnabledGlobal));
   }, [
     open,
     cachePathGlobal,
@@ -141,6 +145,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     renderImageStepsGlobal,
     renderVideoStepsGlobal,
     useFastDownloadGlobal,
+    autoUpdateEnabledGlobal,
   ]);
 
   const formatBytes = (bytes: number | null | undefined): string | null => {
@@ -224,7 +229,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <DialogTitle className="text-brand-light font-poppins text-xs font-medium px-5 pt-4 h-fit">
             Settings
         </DialogTitle>
-        <Tabs defaultValue="general" className="p-5 pt-0 mt-5 w-full">
+        <Tabs defaultValue="general" className="p-5 pt-0 mt-5 w-full flex-1 flex flex-col overflow-hidden">
           <TabsList className="font-poppins text-brand-light/90 dark gap-1 mb-1.5 w-full ">
           <TabsTrigger
               className="data-[state=active]:bg-brand-light/10 data-[state=active]:text-brand-light text-[11px] rounded-[6px] px-2 py-1 w-full!"
@@ -252,6 +257,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </TabsTrigger>
            
           </TabsList>
+          <div className="flex-1 overflow-y-auto pb-14 pr-2.5 custom-scrollbar">
           <TabsContent value="project">
             <div className="flex flex-col gap-4 font-poppins text-brand-light ">
               <div className="flex flex-col gap-1">
@@ -513,6 +519,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="mt-1"
                 />
               </div>
+
+              <div className="flex items-start justify-between gap-3">
+                <label
+                  htmlFor="api-auto-update"
+                  className={fieldLabelClass + " flex-1 cursor-pointer"}
+                >
+                  <span>Automatic API Updates</span>
+                  <span className="text-[10px] text-brand-light/60 font-normal">
+                    Check for and apply backend updates automatically (default:
+                    every 4 hours).
+                  </span>
+                </label>
+                <Checkbox
+                  id="api-auto-update"
+                  checked={autoUpdateEnabled}
+                  onCheckedChange={(checked) =>
+                    setAutoUpdateEnabled(Boolean(checked))
+                  }
+                  className="mt-1"
+                />
+              </div>
             </div>
           </TabsContent>
           <TabsContent value="paths">
@@ -741,8 +768,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
           </TabsContent>
+          </div>
         </Tabs>
-        <div className="px-4 py-3 border-t border-brand-light/10 h-16 flex items-center justify-end gap-2 absolute bottom-0 left-0 right-0">
+        <div className="px-4 py-3 border-t bg-brand-background rounded-b-[8px] border-brand-light/10 h-16 flex items-center justify-end gap-2 absolute bottom-0 left-0 right-0">
           <Button
             type="button"
             variant="ghost"
@@ -776,6 +804,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               void setRenderImageStepsGlobal(renderImageSteps);
               void setRenderVideoStepsGlobal(renderVideoSteps);
               void setUseFastDownloadGlobal(useFastDownload);
+              void setAutoUpdateEnabledGlobal(autoUpdateEnabled);
               onOpenChange(false);
             }}
           >

@@ -2,9 +2,9 @@ import torch
 import torch.nn.functional as F
 from math import exp
 import numpy as np
-from src.utils.defaults import DEFAULT_DEVICE
+from src.utils.defaults import get_torch_device
 
-device = DEFAULT_DEVICE
+device = get_torch_device()
 
 
 def gaussian(window_size, sigma):

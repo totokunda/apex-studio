@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 
 interface MediaModelTriggerProps {
   onClick?: () => void;
+  onPointerEnter?: () => void;
   icon: React.ReactNode;
   title: string;
   section: SidebarSection;
@@ -14,6 +15,7 @@ interface MediaModelTriggerProps {
 
 const MediaModelTrigger: React.FC<MediaModelTriggerProps> = ({
   onClick,
+  onPointerEnter,
   icon,
   title,
   section,
@@ -32,6 +34,7 @@ const MediaModelTrigger: React.FC<MediaModelTriggerProps> = ({
   return (
     <div
       onClick={handleClick}
+      onPointerEnter={onPointerEnter}
       className={cn(
         "flex flex-row font-medium items-center justify-center border border-transparent px-2.5 py-1.5 gap-x-1.5 rounded  text-brand-light/60  transition-all duration-200 cursor-pointer",
         {

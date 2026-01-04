@@ -1,15 +1,12 @@
+from __future__ import annotations
+
 from src.utils.defaults import DEFAULT_HEADERS
 from urllib.parse import urlparse
-import requests
 from pathlib import Path
 from typing import Dict, Any, Union
 import math
 import os
 import json
-import yaml
-from diffusers import ModelMixin
-from accelerate import init_empty_weights
-import torch
 from typing import Callable
 from logging import Logger
 from src.utils.module import find_class_recursive
@@ -18,35 +15,80 @@ import inspect
 from loguru import logger
 from src.utils.yaml import LoaderWithInclude
 from src.manifest.loader import validate_and_normalize
-from PIL import Image
 from io import BytesIO
-import numpy as np
-import PIL
 from typing import List
-import cv2
 import tempfile
 from glob import glob
-from transformers.modeling_utils import PreTrainedModel
-from src.quantize.ggml_layer import (
-    patch_model_from_state_dict as patch_model_ggml_from_state_dict,
-)
-from src.quantize.load import load_gguf
 from src.mixins.download_mixin import DownloadMixin
 from contextlib import nullcontext
-from tqdm import tqdm
 
 # Import pretrained config from transformers
-from transformers.configuration_utils import PretrainedConfig
-from src.utils.safetensors import is_safetensors_file, load_safetensors
-import mlx.core as mx
-from src.utils.mlx import check_mlx_convolutional_weights
 from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
 from src.types import InputImage, InputVideo, InputAudio
-import librosa
-import gguf
-import pydash
+import types
 
-ACCEPTABLE_DTYPES = [torch.float16, torch.float32, torch.bfloat16]
+
+class _LazyModule(types.ModuleType):
+    """
+    Minimal lazy-import proxy for heavyweight third-party modules.
+    We use this to keep importing `LoaderMixin` fast in contexts like setup/boot.
+    """
+
+    def __init__(self, module_name: str):
+        super().__init__(module_name)
+        self.__dict__["_module_name"] = module_name
+        self.__dict__["_loaded"] = None
+
+    def _load(self):
+        loaded = self.__dict__.get("_loaded")
+        if loaded is not None:
+            return loaded
+        mod = importlib.import_module(self.__dict__["_module_name"])
+        self.__dict__["_loaded"] = mod
+        return mod
+
+    def __getattr__(self, item: str):
+        return getattr(self._load(), item)
+
+
+def _lazy_import(module_name: str):
+    return _LazyModule(module_name)
+
+
+# Heavy deps are resolved lazily on first use.
+requests = _lazy_import("requests")
+yaml = _lazy_import("yaml")
+torch = _lazy_import("torch")
+np = _lazy_import("numpy")
+PIL = _lazy_import("PIL")
+Image = _lazy_import("PIL.Image")
+cv2 = _lazy_import("cv2")
+mx = _lazy_import("mlx.core")
+librosa = _lazy_import("librosa")
+gguf = _lazy_import("gguf")
+pydash = _lazy_import("pydash")
+
+
+def tqdm(*args, **kwargs):
+    return _lazy_import("tqdm").tqdm(*args, **kwargs)
+
+
+def init_empty_weights():
+    # used as: `with init_empty_weights():`
+    return _lazy_import("accelerate").init_empty_weights()
+
+
+def _PreTrainedModel():
+    from transformers.modeling_utils import PreTrainedModel
+
+    return PreTrainedModel
+
+
+def _PretrainedConfig():
+    from transformers.configuration_utils import PretrainedConfig
+
+    return PretrainedConfig
+
 IMAGE_EXTS = [
     "jpg",
     "jpeg",
@@ -185,6 +227,8 @@ class LoaderMixin(DownloadMixin):
             expects_pretrained_config = False
             if params:
                 first_param = params[0]
+                PretrainedConfig = _PretrainedConfig()
+                PreTrainedModel = _PreTrainedModel()
                 if (
                     first_param.annotation == PretrainedConfig
                     or (
@@ -251,12 +295,19 @@ class LoaderMixin(DownloadMixin):
                 # GGUF follows the same "files_to_load" pathway as other weight files.
                 if hasattr(self, "engine_type") and self.engine_type == "mlx":
                     # Can load gguf directly into mlx model; no need to convert.
+                    from src.utils.mlx import check_mlx_convolutional_weights
+
                     gguf_weights = mx.load(file_path)
                     check_mlx_convolutional_weights(gguf_weights, model)
                     model.load_weights(gguf_weights)
                     continue
 
                 logger.info(f"Loading GGUF model from {file_path}")
+                from src.quantize.ggml_layer import (
+                    patch_model_from_state_dict as patch_model_ggml_from_state_dict,
+                )
+                from src.quantize.load import load_gguf
+
                 state_dict, _ = load_gguf(
                     file_path,
                     type=component.get("type"),
@@ -282,6 +333,8 @@ class LoaderMixin(DownloadMixin):
 
                 model.load_state_dict(state_dict, assign=True, strict=False)
                 continue
+
+            from src.utils.safetensors import is_safetensors_file, load_safetensors
 
             is_safetensors = is_safetensors_file(file_path)
             if is_safetensors:
@@ -319,6 +372,8 @@ class LoaderMixin(DownloadMixin):
             # and patch the model with FPScaled* layers *before* loading
             # the state dict. We only do this once per model.
             if hasattr(self, "engine_type") and self.engine_type == "mlx":
+                from src.utils.mlx import check_mlx_convolutional_weights
+
                 check_mlx_convolutional_weights(state_dict, model)
             if (
                 not patched_for_fpscaled
@@ -382,6 +437,7 @@ class LoaderMixin(DownloadMixin):
             # `init_empty_weights()`, those params start on the meta device and will
             # remain meta if the state dict didn't contain them. Before treating
             # meta params as a hard error, attempt to materialize/tie lm_head.
+            PreTrainedModel = _PreTrainedModel()
             if isinstance(model, PreTrainedModel):
                 try:
                     out_emb = (
@@ -808,6 +864,13 @@ class LoaderMixin(DownloadMixin):
         component_type: str,
         **save_kwargs: Dict[str, Any],
     ):
+        try:
+            from diffusers import ModelMixin  # type: ignore
+        except Exception as e:
+            raise ValueError(
+                "Saving components requires Diffusers to be installed."
+            ) from e
+
         if component_type == "transformer":
             if issubclass(type(component), ModelMixin):
                 component.save_pretrained(model_path, **save_kwargs)
