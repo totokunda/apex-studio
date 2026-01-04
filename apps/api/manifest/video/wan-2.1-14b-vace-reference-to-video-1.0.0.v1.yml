@@ -165,8 +165,8 @@ spec:
       file_size: 7844059040
   defaults:
     run:
-      num_inference_steps: 30
-      guidance_scale: 5.0
+      num_inference_steps: 8
+      guidance_scale: 1.0
       return_latents: false
       timesteps_as_indices: true
       expand_timesteps: false
@@ -292,7 +292,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: sampling
-      default: 30
+      default: 8
       min: 1
       max: 100
       step: 1
@@ -332,7 +332,7 @@ spec:
       value_type: float
       panel: sampling
       required: false
-      default: 5.0
+      default: 1.0
       min: 1.0
       max: 15.0
       step: 0.5
