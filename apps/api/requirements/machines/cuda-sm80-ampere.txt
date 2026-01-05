@@ -32,5 +32,5 @@ sageattention==1.0.6; sys_platform == "linux"
 
 # FlashAttention: often easiest from source; this will compile.
 flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git; sys_platform == "linux"
-
+mlx[cpu]
 

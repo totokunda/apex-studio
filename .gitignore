@@ -211,3 +211,5 @@ packages/renderer/public/filters
 
 .github/workflows/*
 python-api-bundle/**
+test_model_qwen.py
+test_model.py

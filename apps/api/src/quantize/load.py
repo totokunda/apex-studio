@@ -106,8 +106,41 @@ MISTRAL_VISION_SD_MAP = {
     "ffn_gate": "feed_forward.gate_proj",
 }
 
+QWEN_VL_SD_MAP = {
+    "blk.": "model.layers.",
+    "token_embd.": "model.embed_tokens.",
+    ".attn_norm.": ".input_layernorm.",
+    ".ffn_norm.": ".post_attention_layernorm.",
+    ".attn_k": ".self_attn.k_proj",
+    ".attn_q": ".self_attn.q_proj",
+    ".attn_v": ".self_attn.v_proj",
+    ".attn_output": ".self_attn.o_proj",
+    ".ffn_down": ".mlp.down_proj",
+    ".ffn_up": ".mlp.up_proj",
+    ".ffn_gate": ".mlp.gate_proj",
+    ".output": ".lm_head",
+    "output_norm.": "model.norm.",
+}
 
-def remap_key(key: str, key_map: Literal["t5", "llama", "step", "mistral"] = "t5"):
+QWEN_VL_VISION_SD_MAP = {
+    "mm.0": "visual.merger.mlp.0",
+    "mm.2": "visual.merger.mlp.2",
+    "v.patch_embd.weight": "visual.patch_embed.proj.weight",
+    "v.patch_embd.weight.1": "visual.patch_embed.proj.weight.1",
+    "v.blk": "visual.blocks",
+    ".attn_q": ".attn.q",
+    ".attn_k": ".attn.k",
+    ".attn_v": ".attn.v",
+    ".attn_out.": ".attn.proj.",
+    ".ffn_down": ".mlp.down_proj",
+    ".ffn_up": ".mlp.up_proj",
+    ".ffn_gate": ".mlp.gate_proj",
+    ".ln1.": ".norm1.",
+    ".ln2.": ".norm2.",
+    "v.post_ln": "visual.merger.ln_q"
+}
+
+def remap_key(key: str, key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl"] = "t5"):
 
     if key_map == "t5":
         key_map = T5_SD_MAP
@@ -119,8 +152,11 @@ def remap_key(key: str, key_map: Literal["t5", "llama", "step", "mistral"] = "t5
         # Mistral multimodal GGUF can contain both language and vision keys.
         # Vision keys are prefixed with "v." and use different HF-style submodule names.
         key_map = MISTRAL_VISION_SD_MAP if key.startswith("v.") else MISTRAL_SD_MAP
+    elif key_map == "qwen_vl":
+        key_map = QWEN_VL_VISION_SD_MAP if (key.startswith("v.") or key.startswith("mm.")) else QWEN_VL_SD_MAP
     else:
         raise ValueError(f"Invalid key map: {key_map}")
+
     for k, v in key_map.items():
         key = key.replace(k, v)
     return key
@@ -128,7 +164,7 @@ def remap_key(key: str, key_map: Literal["t5", "llama", "step", "mistral"] = "t5
 
 def load_text_encoder_gguf(
     path: str,
-    key_map: Literal["t5", "llama", "step", "mistral"] = "t5",
+    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl"] = "t5",
     dequant_dtype: torch.dtype | str = torch.float16,
     device: str = "cpu",
     **kwargs,
@@ -146,6 +182,7 @@ def load_text_encoder_gguf(
 
     for tensor in tqdm(reader.tensors):
         name = remap_key(tensor.name, key_map)
+
         shape = torch.Size(tuple(int(v) for v in reversed(tensor.shape)))
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -277,7 +314,7 @@ def load_transformer_gguf(
 def load_gguf(
     path: str,
     type: Literal["text_encoder", "transformer"],
-    key_map: Literal["t5", "llama", "step"] | None = None,
+    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl"] | None = None,
     device: str = "cpu",
     **kwargs,
 ):
