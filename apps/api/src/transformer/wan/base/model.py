@@ -43,8 +43,64 @@ from .attention import WanAttnProcessor2_0
 
 from src.transformer.base import TRANSFORMERS_REGISTRY
 import types
+from src.utils.step_mem import step_mem
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
+
+def _chunked_modulated_norm(
+    norm_layer: nn.Module,
+    hidden_states: torch.Tensor,
+    scale: torch.Tensor,
+    shift: torch.Tensor,
+    chunk_size: int = 2048,
+) -> torch.Tensor:
+    """
+    Modulated layer norm with chunking to reduce peak memory.
+    
+    FP32LayerNorm internally does inputs.float() which creates a full fp32 copy.
+    By processing in chunks along the sequence dimension, we reduce peak memory
+    from O(seq_len) to O(chunk_size).
+    
+    Args:
+        norm_layer: The layer norm module (FP32LayerNorm)
+        hidden_states: [batch, seq_len, dim] in bf16/fp16
+        scale: modulation scale, same shape or broadcastable
+        shift: modulation shift, same shape or broadcastable
+        chunk_size: max tokens to process at once (tune based on available VRAM)
+    
+    Returns:
+        Modulated normalized hidden_states in original dtype
+    """
+    B, S, D = hidden_states.shape
+    
+    # If sequence is small enough, just do it directly
+    if S <= chunk_size:
+        return norm_layer(hidden_states) * (1 + scale) + shift
+    
+    # Pre-allocate output to avoid holding all chunks in memory
+    out = torch.empty_like(hidden_states)
+    
+    # Check if scale/shift need per-token slicing
+    scale_per_token = scale.dim() == 3 and scale.shape[1] == S
+    
+    for i in range(0, S, chunk_size):
+        end = min(i + chunk_size, S)
+        hs_chunk = hidden_states[:, i:end, :]
+        
+        if scale_per_token:
+            scale_chunk = scale[:, i:end, :]
+            shift_chunk = shift[:, i:end, :]
+        else:
+            scale_chunk = scale
+            shift_chunk = shift
+        
+        # Norm + modulate directly into pre-allocated output
+        normed = norm_layer(hs_chunk)
+        out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
+        del normed  # Free fp32 intermediate immediately
+    
+    return out
 
 # Global variables for EasyCache
 WANTF_GLOBAL_CNT = 0
@@ -913,12 +969,17 @@ class WanTransformerBlock(nn.Module):
         timestep_proj_ip: torch.Tensor = None,
         rotary_emb_chunk_size: int | None = None,
     ) -> torch.Tensor:
+        import torch 
+        
 
+        # Compute scale/shift in fp32 for numerical stability, then cast to hidden_states dtype
+        # to avoid fp32 intermediates during modulation (which would double memory).
+        hs_dtype = hidden_states.dtype
         if temb.ndim == 4:
             # temb: batch_size, seq_len, 6, inner_dim (wan2.2 ti2v)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
                 self.scale_shift_table.unsqueeze(0) + temb.float()
-            ).chunk(6, dim=2)
+            ).to(hs_dtype).chunk(6, dim=2)
             # batch_size, seq_len, 1, inner_dim
             shift_msa = shift_msa.squeeze(2)
             scale_msa = scale_msa.squeeze(2)
@@ -929,14 +990,18 @@ class WanTransformerBlock(nn.Module):
         else:
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
                 self.scale_shift_table + temb.float()
-            ).chunk(6, dim=1)
+            ).to(hs_dtype).chunk(6, dim=1)
+        step_mem(label="WanTransformerBlock.forward.scale_shift_table", device=hidden_states.device.index)
 
         # 1. Self-attention
-        norm_hidden_states = (
-            self.norm1(hidden_states.float()) * (1 + scale_msa) + shift_msa
-        ).type_as(hidden_states)
+        # Use chunked modulated norm to avoid 2GB fp32 spike inside FP32LayerNorm
+        norm_hidden_states = _chunked_modulated_norm(
+            self.norm1, hidden_states, scale_msa, shift_msa, chunk_size=8192
+        )
+        step_mem(label="WanTransformerBlock.forward.norm1", device=hidden_states.device.index)
 
         if hidden_states_ip is not None:
+            ip_dtype = hidden_states_ip.dtype
             (
                 shift_msa_ip,
                 scale_msa_ip,
@@ -944,24 +1009,28 @@ class WanTransformerBlock(nn.Module):
                 c_shift_msa_ip,
                 c_scale_msa_ip,
                 c_gate_msa_ip,
-            ) = (self.scale_shift_table + timestep_proj_ip.float()).chunk(6, dim=1)
+            ) = (self.scale_shift_table + timestep_proj_ip.float()).to(ip_dtype).chunk(6, dim=1)
 
             self.attn1.cond_size = hidden_states_ip.shape[1]
 
-            norm_hidden_states_ip = (
-                self.norm1(hidden_states_ip.float()) * (1 + scale_msa_ip) + shift_msa_ip
-            ).type_as(hidden_states_ip)
+            norm_hidden_states_ip = _chunked_modulated_norm(
+                self.norm1, hidden_states_ip, scale_msa_ip, shift_msa_ip, chunk_size=8192
+            )
 
             norm_hidden_states = torch.concat(
                 [norm_hidden_states, norm_hidden_states_ip], dim=1
             )
             self.attn1.kv_cache = None
+        
+        step_mem(label="WanTransformerBlock.forward.attn1", device=hidden_states.device.index)
 
         attn_output = self.attn1(
             hidden_states=norm_hidden_states,
             rotary_emb=rotary_emb,
             rotary_emb_chunk_size=rotary_emb_chunk_size,
         )
+        
+        step_mem(label="WanTransformerBlock.forward.attn1_output", device=hidden_states.device.index)
 
         if hidden_states_ip is not None:
             attn_output, attn_output_ip = (
@@ -969,45 +1038,45 @@ class WanTransformerBlock(nn.Module):
                 attn_output[:, -self.attn1.cond_size :],
             )
 
-        hidden_states = (hidden_states.float() + attn_output * gate_msa).type_as(
-            hidden_states
-        )
+        hidden_states = hidden_states + attn_output * gate_msa
+        
+        step_mem(label="WanTransformerBlock.forward.attn1_output_gate", device=hidden_states.device.index)
 
         # 2. Cross-attention
-        norm_hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
+        norm_hidden_states = self.norm2(hidden_states)
+        step_mem(label="WanTransformerBlock.forward.norm2", device=hidden_states.device.index)
         attn_output = self.attn2(
             hidden_states=norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states,
             no_cache=True,
             rotary_emb_chunk_size=rotary_emb_chunk_size,
         )
+        step_mem(label="WanTransformerBlock.forward.attn2", device=hidden_states.device.index)
 
         hidden_states = hidden_states + attn_output
 
         # 3. Feed-forward
-        norm_hidden_states = (
-            self.norm3(hidden_states.float()) * (1 + c_scale_msa) + c_shift_msa
-        ).type_as(hidden_states)
+        norm_hidden_states = _chunked_modulated_norm(
+            self.norm3, hidden_states, c_scale_msa, c_shift_msa, chunk_size=8192
+        )
+        step_mem(label="WanTransformerBlock.forward.norm3", device=hidden_states.device.index)
+
         ff_output = self.ffn(norm_hidden_states)
-        hidden_states = (
-            hidden_states.float() + ff_output.float() * c_gate_msa
-        ).type_as(hidden_states)
+
+        hidden_states = hidden_states + ff_output * c_gate_msa
 
         if hidden_states_ip is not None:
-            gated_hidden_states_ip = (
-                hidden_states_ip.float() + attn_output_ip.float() * gate_msa_ip
-            ).type_as(hidden_states_ip)
+            gated_hidden_states_ip = hidden_states_ip + attn_output_ip * gate_msa_ip
 
-            norm3_hidden_states_ip = (
-                self.norm3(gated_hidden_states_ip.float()) * (1 + c_scale_msa_ip)
-                + c_shift_msa_ip
-            ).type_as(hidden_states_ip)
+            norm3_hidden_states_ip = _chunked_modulated_norm(
+                self.norm3, gated_hidden_states_ip, c_scale_msa_ip, c_shift_msa_ip, chunk_size=8192
+            )
 
             ffn_output_ip = self.ffn(norm3_hidden_states_ip)
-            hidden_states_ip = (
-                gated_hidden_states_ip.float() + ffn_output_ip.float() * c_gate_msa_ip
-            ).type_as(hidden_states_ip)
+            hidden_states_ip = gated_hidden_states_ip + ffn_output_ip * c_gate_msa_ip
             hidden_states = torch.concat([hidden_states, hidden_states_ip], dim=1)
+        
+        step_mem(label="WanTransformerBlock.forward.hidden_states")
 
         return hidden_states
 
@@ -1224,6 +1293,8 @@ class WanTransformer3DModel(
                 logger.warning(
                     "Passing `scale` via `attention_kwargs` when not using the PEFT backend is ineffective."
                 )
+                
+        step_mem(label="WanTransformer3DModel.forward", device=hidden_states.device.index)
 
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
         p_t, p_h, p_w = self.config.patch_size
@@ -1243,6 +1314,8 @@ class WanTransformer3DModel(
             rotary_emb = torch.concat([rotary_emb, rotary_emb_ip], dim=2)
         else:
             hidden_states_ip = None
+            
+        step_mem(label="WanTransformer3DModel.patch_embedding", device=hidden_states.device.index)
 
         hidden_states = self.patch_embedding(hidden_states)
         hidden_states = hidden_states.flatten(2).transpose(1, 2)
@@ -1266,6 +1339,8 @@ class WanTransformer3DModel(
             ip_image_hidden_states,
             timestep_seq_len=ts_seq_len,
         )
+        
+        step_mem(label="WanTransformer3DModel.condition_embedder", device=hidden_states.device.index)
 
         if ts_seq_len is not None:
             # batch_size, seq_len, 6, inner_dim
@@ -1281,6 +1356,8 @@ class WanTransformer3DModel(
             encoder_hidden_states = torch.concat(
                 [encoder_hidden_states_image, encoder_hidden_states], dim=1
             )
+        
+        step_mem(label="WanTransformer3DModel.condition_embedder.unflatten", device=hidden_states.device.index)
 
         # 4. Transformer blocks
         if torch.is_grad_enabled() and self.gradient_checkpointing:
@@ -1293,6 +1370,11 @@ class WanTransformer3DModel(
                     rotary_emb,
                     hidden_states_ip,
                     timestep_proj_ip,
+                    rotary_emb_chunk_size=(
+                        attention_kwargs.get("rotary_emb_chunk_size", None)
+                        if attention_kwargs is not None
+                        else None
+                    ),
                 )
                 if hidden_states_ip is not None:
                     hidden_states, hidden_states_ip = (
