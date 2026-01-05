@@ -68,6 +68,9 @@ python3 -m pip install honcho
 python3 -m pip install torch torchvision torchaudio
 # python3 -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
 
+# Install global requirements
+python3 -m pip install -r requirements.txt
+
 # Install platform requirements (pick one)
 python3 -m pip install -r requirements/machines/mps.txt
 # python3 -m pip install -r requirements/machines/cpu.txt
