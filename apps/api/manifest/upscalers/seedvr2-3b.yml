@@ -2,14 +2,15 @@ api_version: apex/v1
 kind: Model
 metadata:
   id: seedvr2-3b
-  model: seedvr2 
+  model: seedvr2
   name: SeedVR2 3B
   version: 1.0.0
-  description: SeedVR2 3B is an upscaler model for video and image upscaling that uses a 3B VAE.
+  description: SeedVR2 3B is an upscaler model for video and image upscaling that
+    uses a 3B VAE.
   tags:
   - seedvr2
   - upscaler
-  - '3b'
+  - 3b
   author: SeedVR
   license: Apache-2.0
   demo_path: models/seedvr2-3b.png
@@ -41,18 +42,22 @@ spec:
       variant: default
       precision: fp16
       type: pth
+      file_size: 1002691902
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     config:
       act_fn: silu
       block_out_channels:
-        - 128
-        - 256
-        - 512
-        - 512
+      - 128
+      - 256
+      - 512
+      - 512
       down_block_types:
-        - DownEncoderBlock3D
-        - DownEncoderBlock3D
-        - DownEncoderBlock3D
-        - DownEncoderBlock3D
+      - DownEncoderBlock3D
+      - DownEncoderBlock3D
+      - DownEncoderBlock3D
+      - DownEncoderBlock3D
       in_channels: 3
       latent_channels: 16
       scaling_factor: 0.9152
@@ -63,10 +68,10 @@ spec:
       temporal_scale_num: 2
       inflation_mode: pad
       up_block_types:
-        - UpDecoderBlock3D
-        - UpDecoderBlock3D
-        - UpDecoderBlock3D
-        - UpDecoderBlock3D
+      - UpDecoderBlock3D
+      - UpDecoderBlock3D
+      - UpDecoderBlock3D
+      - UpDecoderBlock3D
       spatial_downsample_factor: 8
       temporal_downsample_factor: 4
       use_quant_conv: false
@@ -80,24 +85,48 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 13566090228
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 3660613984
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 2853998944
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
+      file_size: 2411661664
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
+      file_size: 1995344224
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
+      file_size: 1553006944
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     config:
       vid_in_channels: 33
       vid_out_channels: 16
@@ -108,27 +137,28 @@ spec:
       txt_dim: 2560
       emb_dim: 15360
       heads: 20
-      head_dim: 128 # llm-like
+      head_dim: 128
       expand_ratio: 4
       norm: rms
-      norm_eps: 0.000001
+      norm_eps: 1.0e-06
       ada: single
-      qk_bias: False
+      qk_bias: false
       qk_norm: rms
-      patch_size: [1, 2, 2]
-      num_layers: 32 # llm-like
+      patch_size:
+      - 1
+      - 2
+      - 2
+      num_layers: 32
       mm_layers: 10
       mlp_type: swiglu
       msa_type: null
       rope_type: mmrope3d
       rope_dim: 128
- 
   defaults:
     run:
-      # From inference_seedvr_3b.py (not training config!)
-      num_inference_steps: 1  
+      num_inference_steps: 1
       guidance_scale: 1
-      cond_noise_scale: 0.1  # Inference uses 0.1, not 0.25
+      cond_noise_scale: 0.1
       return_latents: false
       timesteps_as_indices: true
       expand_timesteps: false
@@ -179,7 +209,6 @@ spec:
         - - vae_norm_max_mem
         - - vae_split_size
         - - vae_memory_device
-
     - name: chunking
       label: Chunking
       collapsible: true
@@ -187,7 +216,7 @@ spec:
       layout:
         flow: column
         rows:
-        - - use_chunking  
+        - - use_chunking
         - - chunk_frames
         - - chunk_overlap
     inputs:
@@ -217,33 +246,33 @@ spec:
       required: false
       default: 720
       options:
-        - name: "720p"
-          value: 720
-        - name: "1080p"
-          value: 1080
-        - name: "1920p"
-          value: 1920
+      - name: 720p
+        value: 720
+      - name: 1080p
+        value: 1080
+      - name: 1920p
+        value: 1920
     - id: aspect_ratio
       label: Aspect Ratio
       description: Select the aspect ratio of the output image
       panel: size
       type: select
-      default: "16:9"
+      default: '16:9'
       options:
       - name: Wide
-        value: "16:9"
+        value: '16:9'
         ratio_w: 16
         ratio_h: 9
       - name: Vertical
-        value: "9:16"
+        value: '9:16'
         ratio_w: 9
         ratio_h: 16
       - name: Square
-        value: "1:1"
+        value: '1:1'
         ratio_w: 1
         ratio_h: 1
       - name: Classic
-        value: "4:3"
+        value: '4:3'
         ratio_w: 4
         ratio_h: 3
       - name: Custom
@@ -272,7 +301,7 @@ spec:
       step: 16
     - id: num_inference_steps
       label: Inference Steps
-      description: Number of denoising steps 
+      description: Number of denoising steps
       type: number+slider
       value_type: integer
       panel: sampling
@@ -299,7 +328,7 @@ spec:
       default: false
     - id: cfg_scale
       label: CFG Scale
-      description: CFG scale for the upscaling 
+      description: CFG scale for the upscaling
       type: number+slider
       value_type: float
       panel: sampling
@@ -310,7 +339,7 @@ spec:
       step: 0.5
     - id: cfg_rescale
       label: CFG Rescale
-      description: CFG rescale for the upscaling 
+      description: CFG rescale for the upscaling
       type: number+slider
       value_type: float
       panel: sampling
@@ -332,7 +361,7 @@ spec:
       step: 0.05
     - id: vae_conv_max_mem
       label: VAE Conv Max Mem
-      description: VAE conv max mem for the upscaling 
+      description: VAE conv max mem for the upscaling
       type: number+slider
       value_type: float
       panel: vae_settings
@@ -343,7 +372,7 @@ spec:
       step: 0.05
     - id: vae_norm_max_mem
       label: VAE Norm Max Mem
-      description: VAE norm max mem for the upscaling 
+      description: VAE norm max mem for the upscaling
       type: number+slider
       value_type: float
       panel: vae_settings
@@ -354,7 +383,7 @@ spec:
       step: 0.05
     - id: vae_split_size
       label: VAE Split Size
-      description: VAE split size for the upscaling 
+      description: VAE split size for the upscaling
       type: number+slider
       value_type: integer
       panel: vae_settings
@@ -365,26 +394,26 @@ spec:
       step: 1
     - id: vae_memory_device
       label: VAE Memory Device
-      description: VAE memory device for the upscaling 
+      description: VAE memory device for the upscaling
       type: select
       panel: vae_settings
       required: false
-      default: "same"
+      default: same
       options:
-        - name: "Same"
-          value: "same"
-        - name: "CPU"
-          value: "cpu"
+      - name: Same
+        value: same
+      - name: CPU
+        value: cpu
     - id: use_chunking
       label: Use Chunking
-      description: Use chunking for the upscaling 
+      description: Use chunking for the upscaling
       type: boolean
       panel: chunking
       required: false
       default: false
     - id: chunk_frames
       label: Chunk Frames
-      description: Chunk frames for the upscaling 
+      description: Chunk frames for the upscaling
       type: number+slider
       value_type: integer
       panel: sampling
@@ -394,7 +423,7 @@ spec:
       step: 1
     - id: chunk_overlap
       label: Chunk Overlap
-      description: Chunk overlap for the upscaling 
+      description: Chunk overlap for the upscaling
       type: number+slider
       value_type: integer
       panel: sampling
@@ -402,5 +431,3 @@ spec:
       default: 8
       min: 1
       step: 1
-
-      

@@ -23,11 +23,12 @@ import { getSettingsModule } from "./SettingsModule.js";
 // Configuration constants
 const DEFAULT_API_PORT = 8765;
 const DEFAULT_API_HOST = "127.0.0.1";
-const HEALTH_CHECK_INTERVAL_MS = 5000;
-const HEALTH_CHECK_TIMEOUT_MS = 3000;
+// Keep this tight: we want near-immediate detection/restart if the backend dies.
+const HEALTH_CHECK_INTERVAL_MS = 2000;
+const HEALTH_CHECK_TIMEOUT_MS = 1500;
 const MAX_STARTUP_WAIT_MS = 60000;
-const MAX_RESTART_ATTEMPTS = 3;
-const RESTART_DELAY_MS = 2000;
+// Small delay to avoid hot-looping the event loop on repeated instant exits.
+const RESTART_DELAY_MS = 500;
 
 interface PythonProcessConfig {
   port?: number;
@@ -35,6 +36,12 @@ interface PythonProcessConfig {
   autoStart?: boolean;
   devMode?: boolean;
   pythonPath?: string;
+  /**
+   * If true, stop the API when ALL windows are closed.
+   * Default is false because the API should be monitored by the main process
+   * across the whole application (launcher may close while the app stays alive).
+   */
+  stopOnAllWindowsClosed?: boolean;
 }
 
 interface ProcessState {
@@ -67,6 +74,11 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   private bundledPythonPath: string = "";
   private bundledBundleRoot: string = "";
   private isShuttingDown: boolean = false;
+  // Whether the user/app currently expects the backend to be running.
+  // Used to decide if we should auto-restart after crashes/unhealthy signals.
+  private desiredRunning: boolean = false;
+  // Serialize start/stop/restart to avoid races during window transitions / IPC spam.
+  private opQueue: Promise<void> = Promise.resolve();
   private runtimeVerifyCache:
     | { at: number; ok: boolean; reason?: string }
     | null = null;
@@ -79,6 +91,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       autoStart: config.autoStart ?? true,
       devMode: config.devMode ?? false,
       pythonPath: config.pythonPath,
+      stopOnAllWindowsClosed: config.stopOnAllWindowsClosed ?? false,
     };
     this.state = {
       status: "stopped",
@@ -518,11 +531,14 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     });
 
     // Handle window-all-closed
-    this.app.on("window-all-closed", async () => {
-      // On macOS the app may remain running after the last window closes.
-      // The launcher owns the API lifecycle, so if there are no windows, stop the API too.
-      await this.stop();
-    });
+    // IMPORTANT: do NOT stop the backend on window-all-closed by default.
+    // The Python process must be monitored across the whole application lifetime,
+    // not just a specific window (e.g. launcher can close while app continues).
+    if (this.config.stopOnAllWindowsClosed) {
+      this.app.on("window-all-closed", async () => {
+        await this.stop();
+      });
+    }
 
     // Cleanup on unexpected exit
     process.on("exit", () => {
@@ -541,66 +557,75 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   async start(): Promise<void> {
-    if (this.state.status === "running") {
-      console.log("Python API is already running");
-      return;
-    }
+    return await this.enqueue(async () => {
+      // The moment start is requested, we consider the backend "desired".
+      // This allows fast auto-restart if it crashes during startup.
+      this.desiredRunning = true;
 
-    if (this.state.status === "starting") {
-      console.log("Python API is already starting");
-      return;
-    }
-
-    this.state.status = "starting";
-    this.emit("status", this.state);
-
-    // In production, we may be using either:
-    // - a python-api shipped inside app resources, OR
-    // - a user-installed server bundle path (settings apiPath) downloaded via the installer.
-    // Resolve the best candidate early so our existence check is correct.
-    const isPackaged = this.app?.isPackaged ?? false;
-    if (isPackaged && !this.config.devMode) {
-      try {
-        const settings = getSettingsModule();
-        const installedApiPath = settings.getApiPath();
-        const installedBundleRoot = installedApiPath
-          ? this.resolveInstalledBundleRoot(installedApiPath)
-          : null;
-        const installedPythonExe = installedBundleRoot
-          ? this.resolveInstalledPythonExe(installedBundleRoot)
-          : null;
-        if (installedBundleRoot && installedPythonExe) {
-          this.bundledBundleRoot = installedBundleRoot;
-          this.bundledPythonPath = installedPythonExe;
-        }
-      } catch {
-        // ignore; fall back to app-bundled resources path
+      if (this.state.status === "running") {
+        console.log("Python API is already running");
+        return;
       }
-    }
 
-    if (!this.config.devMode && !fs.existsSync(this.bundledPythonPath)) {
-      this.state.status = "error";
-      this.state.error = `Python runtime not found: ${this.bundledPythonPath}`;
-      const err = new Error(this.state.error);
-      this.emit("error", err);
-      throw err;
-    }
+      if (this.state.status === "starting") {
+        console.log("Python API is already starting");
+        return;
+      }
 
-    try {
-      await this.spawnProcess();
-      await this.waitForHealthy();
-      this.startHealthChecks();
-      
-      this.state.status = "running";
-      this.state.error = undefined;
+      this.state.status = "starting";
       this.emit("status", this.state);
-      console.log(`Python API started on ${this.state.host}:${this.state.port}`);
-    } catch (error) {
-      this.state.status = "error";
-      this.state.error = error instanceof Error ? error.message : "Unknown error";
-      this.emit("error", error);
-      throw error;
-    }
+
+      // In production, we may be using either:
+      // - a python-api shipped inside app resources, OR
+      // - a user-installed server bundle path (settings apiPath) downloaded via the installer.
+      // Resolve the best candidate early so our existence check is correct.
+      const isPackaged = this.app?.isPackaged ?? false;
+      if (isPackaged && !this.config.devMode) {
+        try {
+          const settings = getSettingsModule();
+          const installedApiPath = settings.getApiPath();
+          const installedBundleRoot = installedApiPath
+            ? this.resolveInstalledBundleRoot(installedApiPath)
+            : null;
+          const installedPythonExe = installedBundleRoot
+            ? this.resolveInstalledPythonExe(installedBundleRoot)
+            : null;
+          if (installedBundleRoot && installedPythonExe) {
+            this.bundledBundleRoot = installedBundleRoot;
+            this.bundledPythonPath = installedPythonExe;
+          }
+        } catch {
+          // ignore; fall back to app-bundled resources path
+        }
+      }
+
+      if (!this.config.devMode && !fs.existsSync(this.bundledPythonPath)) {
+        this.state.status = "error";
+        this.state.error = `Python runtime not found: ${this.bundledPythonPath}`;
+        const err = new Error(this.state.error);
+        this.emit("error", err);
+        throw err;
+      }
+
+      try {
+        await this.spawnProcess();
+        await this.waitForHealthy();
+        this.startHealthChecks();
+
+        this.state.status = "running";
+        this.state.error = undefined;
+        this.emit("status", this.state);
+        console.log(`Python API started on ${this.state.host}:${this.state.port}`);
+      } catch (error) {
+        // If startup fails, keep desiredRunning=true so the watchdog can retry.
+        this.state.status = "error";
+        this.state.error = error instanceof Error ? error.message : "Unknown error";
+        this.emit("error", error);
+        // If the process died very quickly during startup, schedule a restart.
+        this.scheduleRestart("startup failure");
+        throw error;
+      }
+    });
   }
 
   private async spawnProcess(): Promise<void> {
@@ -682,14 +707,13 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     this.process.on("exit", (code, signal) => {
       logStream.write(`\n=== Process exited with code ${code}, signal ${signal} ===\n`);
       logStream.end();
+      // Ensure our state transitions even if exit happens during startup.
+      this.state.status = "stopped";
+      this.state.pid = undefined;
+      this.emit("status", this.state);
 
-      if (!this.isShuttingDown && this.state.status === "running") {
-        this.handleUnexpectedExit(code, signal);
-      } else {
-        this.state.status = "stopped";
-        this.state.pid = undefined;
-        this.emit("status", this.state);
-      }
+      // Fast-restart if the backend is supposed to be running.
+      this.handleProcessExit(code, signal);
     });
 
     // Handle errors
@@ -885,23 +909,15 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
     this.healthCheckInterval = setInterval(async () => {
       if (this.state.status !== "running") return;
+      if (!this.desiredRunning) return;
 
-      const healthy = await this.checkHealth();
-      
-      if (!healthy) {
-        console.warn("Python API health check failed");
-        this.emit("unhealthy");
-        
-        // Attempt restart if configured
-        if (this.state.restartCount < MAX_RESTART_ATTEMPTS) {
-          console.log(`Attempting restart (${this.state.restartCount + 1}/${MAX_RESTART_ATTEMPTS})`);
-          await this.restart();
-        } else {
-          this.state.status = "error";
-          this.state.error = "API became unhealthy and max restart attempts exceeded";
-          this.emit("error", new Error(this.state.error));
-        }
-      }
+      // Strong check: includes runtime verification so we don't "monitor" a missing backend.
+      const healthy = await this.checkApiHealth();
+      if (healthy) return;
+
+      console.warn("Python API health check failed (unhealthy or unreachable)");
+      this.emit("unhealthy");
+      this.scheduleRestart("health check failed");
     }, HEALTH_CHECK_INTERVAL_MS);
   }
 
@@ -920,42 +936,35 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     this.emit("status", this.state);
 
     // Attempt restart
-    if (this.state.restartCount < MAX_RESTART_ATTEMPTS) {
-      this.state.restartCount++;
-      console.log(`Attempting restart (${this.state.restartCount}/${MAX_RESTART_ATTEMPTS})`);
-      
-      setTimeout(() => {
-        this.start().catch((err) => {
-          console.error("Failed to restart Python API:", err);
-        });
-      }, RESTART_DELAY_MS);
-    } else {
-      this.state.status = "error";
-      this.state.error = "Process exited unexpectedly and max restart attempts exceeded";
-      this.emit("error", new Error(this.state.error));
-    }
+    if (!this.desiredRunning) return;
+    this.scheduleRestart("process exit");
   }
 
   async stop(): Promise<void> {
-    if (this.state.status === "stopped") {
-      return;
-    }
+    return await this.enqueue(async () => {
+      // Explicit stop means the backend is no longer desired; suppress auto-restarts.
+      this.desiredRunning = false;
 
-    this.state.status = "stopping";
-    this.emit("status", this.state);
+      if (this.state.status === "stopped") {
+        return;
+      }
 
-    this.stopHealthChecks();
+      this.state.status = "stopping";
+      this.emit("status", this.state);
 
-    if (this.process) {
-      await this.gracefulShutdown();
-    }
+      this.stopHealthChecks();
 
-    this.state.status = "stopped";
-    this.state.pid = undefined;
-    this.state.restartCount = 0;
-    this.emit("status", this.state);
-    
-    console.log("Python API stopped");
+      if (this.process) {
+        await this.gracefulShutdown();
+      }
+
+      this.state.status = "stopped";
+      this.state.pid = undefined;
+      this.state.restartCount = 0;
+      this.emit("status", this.state);
+
+      console.log("Python API stopped");
+    });
   }
 
   private async gracefulShutdown(): Promise<void> {
@@ -1090,10 +1099,55 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   async restart(): Promise<void> {
-    this.state.restartCount++;
-    await this.stop();
-    await this.sleep(RESTART_DELAY_MS);
-    await this.start();
+    return await this.enqueue(async () => {
+      // Restart is still "desired running".
+      this.desiredRunning = true;
+      this.state.restartCount++;
+      await this.stop();
+      // stop() sets desiredRunning=false; restore.
+      this.desiredRunning = true;
+      await this.sleep(RESTART_DELAY_MS);
+      await this.start();
+    });
+  }
+
+  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.opQueue.then(fn, fn);
+    // Ensure the queue continues regardless of success/failure.
+    this.opQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private handleProcessExit(
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void {
+    // Ignore exits during intentional shutdown or when the backend isn't desired.
+    if (this.isShuttingDown) return;
+    if (!this.desiredRunning) return;
+    this.handleUnexpectedExit(code, signal);
+  }
+
+  private scheduleRestart(reason: string): void {
+    if (this.isShuttingDown) return;
+    if (!this.desiredRunning) return;
+
+    // If we're already starting, let that attempt complete.
+    if (this.state.status === "starting") return;
+
+    // If a restart is already queued (because stop/start are serialized),
+    // avoid spamming multiple restarts.
+    // We don't have a separate flag; we rely on the opQueue serialization and status.
+    console.log(`[PythonProcess] Scheduling restart: ${reason}`);
+    setTimeout(() => {
+      // Use restart() so we always cleanly tear down any partial tree.
+      this.restart().catch((err) => {
+        console.error("Failed to restart Python API:", err);
+      });
+    }, RESTART_DELAY_MS);
   }
 
   private sleep(ms: number): Promise<void> {

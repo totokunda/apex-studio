@@ -58,8 +58,8 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 16
+        min_vram_gb: 11
+        recommended_vram_gb: 15
       file_size: 5042561442
   - type: transformer
     label: HunyuanVideo Transformer
@@ -70,32 +70,32 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 29
+        recommended_vram_gb: 39
       file_size: 33306633160
     - path: tencent/HunyuanVideo-1.5/transformer/480p_t2v_distilled
       variant: DISTILLED_480P
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 80
-        recommended_vram_gb: 240
+        min_vram_gb: 29
+        recommended_vram_gb: 39
       file_size: 33306633160
     - path: jayn7/HunyuanVideo-1.5_T2V_720p-GGUF/720p/hunyuanvideo1.5_720p_t2v-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 12
+        recommended_vram_gb: 16
       file_size: 8995313888
     - path: jayn7/HunyuanVideo-1.5_T2V_720p-GGUF/720p/hunyuanvideo1.5_720p_t2v-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 9
+        recommended_vram_gb: 13
       file_size: 7024833760
     - path: jayn7/HunyuanVideo-1.5_T2V_720p-GGUF/720p/hunyuanvideo1.5_720p_t2v-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
@@ -103,7 +103,7 @@ spec:
       type: gguf
       resource_requirements:
         min_vram_gb: 8
-        recommended_vram_gb: 24
+        recommended_vram_gb: 12
       file_size: 5940802784
     - path: jayn7/HunyuanVideo-1.5_T2V_720p-GGUF/720p/hunyuanvideo1.5_720p_t2v-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
@@ -111,39 +111,39 @@ spec:
       type: gguf
       resource_requirements:
         min_vram_gb: 8
-        recommended_vram_gb: 24
+        recommended_vram_gb: 12
       file_size: 6121288928
     - path: jayn7/HunyuanVideo-1.5_T2V_720p-GGUF/720p/hunyuanvideo1.5_720p_t2v-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 7
+        recommended_vram_gb: 11
       file_size: 5090407648
     - path: jayn7/HunyuanVideo-1.5_T2V_720p-GGUF/720p/hunyuanvideo1.5_720p_t2v-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 7
+        recommended_vram_gb: 11
       file_size: 4920538336
     - path: jayn7/HunyuanVideo-1.5_T2V_480p-GGUF/480p_distilled/hunyuanvideo1.5_480p_t2v_cfg_distilled-Q8_0.gguf
       variant: GGUF_Q8_0_DISTILLED
       precision: q8_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 12
+        recommended_vram_gb: 16
       file_size: 8995313888
     - path: jayn7/HunyuanVideo-1.5_T2V_480p-GGUF/480p_distilled/hunyuanvideo1.5_480p_t2v_cfg_distilled-Q6_K.gguf
       variant: GGUF_Q6_K_DISTILLED
       precision: q6_k
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 9
+        recommended_vram_gb: 13
       file_size: 7024833760
     - path: jayn7/HunyuanVideo-1.5_T2V_480p-GGUF/480p_distilled/hunyuanvideo1.5_480p_t2v_cfg_distilled-Q5_K_S.gguf
       variant: GGUF_Q5_K_S_DISTILLED
@@ -151,7 +151,7 @@ spec:
       type: gguf
       resource_requirements:
         min_vram_gb: 8
-        recommended_vram_gb: 24
+        recommended_vram_gb: 12
       file_size: 5940802784
     - path: jayn7/HunyuanVideo-1.5_T2V_480p-GGUF/480p_distilled/hunyuanvideo1.5_480p_t2v_cfg_distilled-Q5_K_M.gguf
       variant: GGUF_Q5_K_M_DISTILLED
@@ -159,23 +159,23 @@ spec:
       type: gguf
       resource_requirements:
         min_vram_gb: 8
-        recommended_vram_gb: 24
+        recommended_vram_gb: 12
       file_size: 6121288928
     - path: jayn7/HunyuanVideo-1.5_T2V_480p-GGUF/480p_distilled/hunyuanvideo1.5_480p_t2v_cfg_distilled-Q4_K_M.gguf
       variant: GGUF_Q4_K_M_DISTILLED
       precision: q4_k_m
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 7
+        recommended_vram_gb: 11
       file_size: 5090407648
     - path: jayn7/HunyuanVideo-1.5_T2V_480p-GGUF/480p_distilled/hunyuanvideo1.5_480p_t2v_cfg_distilled-Q4_K_S.gguf
       variant: GGUF_Q4_K_S_DISTILLED
       precision: q4_k_s
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 7
+        recommended_vram_gb: 11
       file_size: 4920538336
     config_path: tencent/HunyuanVideo-1.5/transformer/480p_t2v/config.json
   - type: helper
@@ -195,32 +195,32 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 24
+        min_vram_gb: 17
+        recommended_vram_gb: 23
       file_size: 16595981281
     - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 24
+        min_vram_gb: 11
+        recommended_vram_gb: 15
       file_size: 8098524032
     - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
+        min_vram_gb: 8
+        recommended_vram_gb: 12
       file_size: 6254197632
     - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       resource_requirements:
-        min_vram_gb: 4
-        recommended_vram_gb: 8
+        min_vram_gb: 6
+        recommended_vram_gb: 10
       file_size: 4457767808
   - type: helper
     label: HunyuanVideo Vision Encoder
@@ -237,8 +237,8 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 24
+        min_vram_gb: 5
+        recommended_vram_gb: 9
       file_size: 1115066805
   - type: helper
     label: HunyuanVideo Prompt Format
@@ -258,8 +258,8 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 24
+        min_vram_gb: 7
+        recommended_vram_gb: 11
       file_size: 877272248
   defaults:
     run:
@@ -301,7 +301,7 @@ spec:
         - - guidance_scale
         - - guidance_rescale
         - - seed
-    - name: cache 
+    - name: cache
       label: Cache
       collapsible: true
       default_open: false

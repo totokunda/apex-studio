@@ -5,11 +5,12 @@ metadata:
   model: seedvr2
   name: SeedVR2 7B
   version: 1.0.0
-  description: SeedVR2 7B is an upscaler model for video and image upscaling that uses a 7B VAE.
+  description: SeedVR2 7B is an upscaler model for video and image upscaling that
+    uses a 7B VAE.
   tags:
   - seedvr2
   - upscaler
-  - '7b'
+  - 7b
   author: SeedVR
   license: Apache-2.0
   demo_path: models/seedvr2-7b.png
@@ -41,18 +42,22 @@ spec:
       variant: default
       precision: fp16
       type: pth
+      file_size: 1002691902
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     config:
       act_fn: silu
       block_out_channels:
-        - 128
-        - 256
-        - 512
-        - 512
+      - 128
+      - 256
+      - 512
+      - 512
       down_block_types:
-        - DownEncoderBlock3D
-        - DownEncoderBlock3D
-        - DownEncoderBlock3D
-        - DownEncoderBlock3D
+      - DownEncoderBlock3D
+      - DownEncoderBlock3D
+      - DownEncoderBlock3D
+      - DownEncoderBlock3D
       in_channels: 3
       latent_channels: 16
       scaling_factor: 0.9152
@@ -63,10 +68,10 @@ spec:
       temporal_scale_num: 2
       inflation_mode: pad
       up_block_types:
-        - UpDecoderBlock3D
-        - UpDecoderBlock3D
-        - UpDecoderBlock3D
-        - UpDecoderBlock3D
+      - UpDecoderBlock3D
+      - UpDecoderBlock3D
+      - UpDecoderBlock3D
+      - UpDecoderBlock3D
       spatial_downsample_factor: 8
       temporal_downsample_factor: 4
       use_quant_conv: false
@@ -80,26 +85,50 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 32958774606
+      resource_requirements:
+        min_vram_gb: 29
+        recommended_vram_gb: 39
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 8835170080
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 6860439328
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
+      file_size: 5777522464
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
+      file_size: 4758306592
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
+      file_size: 3675389728
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     config:
       vid_in_channels: 33
       vid_out_channels: 16
@@ -110,18 +139,20 @@ spec:
       txt_dim: 3072
       emb_dim: 18432
       heads: 24
-      head_dim: 128 # llm-like
+      head_dim: 128
       expand_ratio: 4
-      qk_rope: True
+      qk_rope: true
       norm: rms
-      norm_eps: 0.000001
+      norm_eps: 1.0e-06
       ada: single
-      qk_bias: False
+      qk_bias: false
       qk_norm: rms
-      patch_size: [1, 2, 2]
-      num_layers: 36 # llm-like
+      patch_size:
+      - 1
+      - 2
+      - 2
+      num_layers: 36
       mlp_type: normal
- 
   defaults:
     run:
       num_inference_steps: 1
@@ -214,33 +245,33 @@ spec:
       required: false
       default: 720
       options:
-        - name: "720p"
-          value: 720
-        - name: "1080p"
-          value: 1080
-        - name: "1920p"
-          value: 1920
+      - name: 720p
+        value: 720
+      - name: 1080p
+        value: 1080
+      - name: 1920p
+        value: 1920
     - id: aspect_ratio
       label: Aspect Ratio
       description: Select the aspect ratio of the output image
       panel: size
       type: select
-      default: "16:9"
+      default: '16:9'
       options:
       - name: Wide
-        value: "16:9"
+        value: '16:9'
         ratio_w: 16
         ratio_h: 9
       - name: Vertical
-        value: "9:16"
+        value: '9:16'
         ratio_w: 9
         ratio_h: 16
       - name: Square
-        value: "1:1"
+        value: '1:1'
         ratio_w: 1
         ratio_h: 1
       - name: Classic
-        value: "4:3"
+        value: '4:3'
         ratio_w: 4
         ratio_h: 3
       - name: Custom
@@ -269,7 +300,7 @@ spec:
       step: 16
     - id: num_inference_steps
       label: Inference Steps
-      description: Number of denoising steps 
+      description: Number of denoising steps
       type: number+slider
       value_type: integer
       panel: sampling
@@ -296,7 +327,7 @@ spec:
       default: false
     - id: cfg_scale
       label: CFG Scale
-      description: CFG scale for the upscaling 
+      description: CFG scale for the upscaling
       type: number+slider
       value_type: float
       panel: sampling
@@ -307,7 +338,7 @@ spec:
       step: 0.5
     - id: cfg_rescale
       label: CFG Rescale
-      description: CFG rescale for the upscaling 
+      description: CFG rescale for the upscaling
       type: number+slider
       value_type: float
       panel: sampling
@@ -329,7 +360,7 @@ spec:
       step: 0.05
     - id: vae_conv_max_mem
       label: VAE Conv Max Mem
-      description: VAE conv max mem for the upscaling 
+      description: VAE conv max mem for the upscaling
       type: number+slider
       value_type: float
       panel: vae_settings
@@ -340,7 +371,7 @@ spec:
       step: 0.05
     - id: vae_norm_max_mem
       label: VAE Norm Max Mem
-      description: VAE norm max mem for the upscaling 
+      description: VAE norm max mem for the upscaling
       type: number+slider
       value_type: float
       panel: vae_settings
@@ -351,7 +382,7 @@ spec:
       step: 0.05
     - id: vae_split_size
       label: VAE Split Size
-      description: VAE split size for the upscaling 
+      description: VAE split size for the upscaling
       type: number+slider
       value_type: integer
       panel: vae_settings
@@ -362,26 +393,26 @@ spec:
       step: 1
     - id: vae_memory_device
       label: VAE Memory Device
-      description: VAE memory device for the upscaling 
+      description: VAE memory device for the upscaling
       type: select
       panel: vae_settings
       required: false
-      default: "same"
+      default: same
       options:
-        - name: "Same"
-          value: "same"
-        - name: "CPU"
-          value: "cpu"
+      - name: Same
+        value: same
+      - name: CPU
+        value: cpu
     - id: use_chunking
       label: Use Chunking
-      description: Use chunking for the upscaling 
+      description: Use chunking for the upscaling
       type: boolean
       panel: chunking
       required: false
       default: false
     - id: chunk_frames
       label: Chunk Frames
-      description: Chunk frames for the upscaling 
+      description: Chunk frames for the upscaling
       type: number+slider
       value_type: integer
       panel: sampling
@@ -391,7 +422,7 @@ spec:
       step: 1
     - id: chunk_overlap
       label: Chunk Overlap
-      description: Chunk overlap for the upscaling 
+      description: Chunk overlap for the upscaling
       type: number+slider
       value_type: integer
       panel: sampling
