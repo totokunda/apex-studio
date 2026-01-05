@@ -385,7 +385,14 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
         const host = res.data.host;
         setServerBundlesHost(host);
         const items = Array.isArray(res.data.items) ? res.data.items : [];
-        const normalized = items.map((it) => ({
+        // Installer expects a "python-api-*.tar.zst" server bundle (see local bundle validator below).
+        // The remote feed may contain other bundle types (e.g. python-code), so filter them out here.
+        const filteredItems = items.filter(
+          (it) =>
+            typeof it?.assetName === "string" &&
+            it.assetName.toLowerCase().startsWith("python-api-"),
+        );
+        const normalized = filteredItems.map((it) => ({
           tag: it.tag,
           tagVersion: it.tagVersion,
           assetVersion: it.assetVersion,
@@ -892,7 +899,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                         <label className={fieldLabelClass}>
                           <span>Downloadable Versions</span>
                           <span className="text-[10px] text-brand-light/60 font-normal">
-                            Fetched from GitHub releases and filtered by platform + architecture.
+                            Fetched from Hugging Face and filtered by platform + architecture.
                           </span>
                         </label>
 

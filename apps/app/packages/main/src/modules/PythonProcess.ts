@@ -193,7 +193,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
         pythonExe,
         [
           "-c",
-          "import importlib; importlib.import_module('apex_engine'); print('ok')",
+          "import sys; print(sys.version)",
         ],
         { timeout: 5000, windowsHide: true },
       );
@@ -336,18 +336,18 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       }
     })();
 
-    const isPackaged = this.app?.isPackaged ?? false;
-
-    // Dev: assume available (system python / venv).
-    if (this.config.devMode || !isPackaged) {
+    // check if path exists 
+    if (installedApiPath && !fs.existsSync(installedApiPath)) {
       return {
-        available: true,
-        mode: "dev",
+        available: false,
+        mode: "missing",
         installedApiPath,
         bundleRoot: null,
-        pythonExe: this.bundledPythonPath || null,
+        pythonExe: null,
+        reason: "Installed API path does not exist",
       };
     }
+
 
     // Packaged: prefer installed bundle if valid.
     if (installedApiPath) {
@@ -605,15 +605,21 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
   private async spawnProcess(): Promise<void> {
     const isPackaged = this.app?.isPackaged ?? false;
+    const mirrorPythonLogsToStdout = !isPackaged || this.config.devMode;
 
     // Prepare log file
     const logStream = fs.createWriteStream(this.logPath, { flags: "a" });
     logStream.write(`\n\n=== Starting Python API at ${new Date().toISOString()} ===\n`);
+    // Ensure the target port is free before spawning. This prevents "address already in use"
+    // situations when a previous backend crashed or a stale process is still listening.
+    await this.freePortIfOccupied(this.config.port!, (msg) => {
+      logStream.write(`${msg}\n`);
+      if (mirrorPythonLogsToStdout) process.stdout.write(`${msg}\n`);
+    });
 
     let cmd: string;
     let args: string[];
 
-    if (isPackaged) {
       // Production: prefer user-installed server bundle (settings apiPath) if present;
       // otherwise fall back to the app-bundled python-api.
       const settings = getSettingsModule();
@@ -641,18 +647,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
         // Electron-spawned process remains the true owner of the server tree.
         "serve",
       ];
-    } else {
-      // Development: run via Python module
-      const apiPath = this.#resolveDevApiPath();
-      cmd = this.bundledPythonPath;
-      args = ["-m", "src", "serve"];
-      // Ensure the Python process runs from the backend repo root (contains `src/`)
-      // so module imports resolve consistently in dev.
-      this.bundledBundleRoot = apiPath;
-    }
-
-    console.log(`Spawning: ${cmd} ${args.join(" ")}`);
-
+    
     const env = this.buildEnvironment();
 
     this.process = spawn(cmd, args, {
@@ -671,6 +666,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     this.process.stdout?.on("data", (data) => {
       const text = data.toString();
       logStream.write(text);
+      if (mirrorPythonLogsToStdout) process.stdout.write(text);
       this.emit("log", { type: "stdout", data: text });
     });
 
@@ -678,6 +674,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     this.process.stderr?.on("data", (data) => {
       const text = data.toString();
       logStream.write(text);
+      if (mirrorPythonLogsToStdout) process.stderr.write(text);
       this.emit("log", { type: "stderr", data: text });
     });
 
@@ -702,6 +699,105 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       this.state.error = error.message;
       this.emit("error", error);
     });
+  }
+
+  /**
+   * If anything is currently LISTENING on `port`, attempt to terminate it.
+   * This is intentionally best-effort and time-bounded; failures won't prevent
+   * the spawn attempt (but will likely surface as "port already in use").
+   */
+  private async freePortIfOccupied(
+    port: number,
+    log?: (msg: string) => void,
+  ): Promise<void> {
+    const logger = log ?? (() => {});
+    if (!Number.isFinite(port) || port <= 0) return;
+
+    const execAsync = promisify(exec);
+
+    const listListeningPids = async (): Promise<Set<number>> => {
+      const pids = new Set<number>();
+      if (process.platform === "win32") {
+        // Example:
+        // TCP    0.0.0.0:8765           0.0.0.0:0              LISTENING       1234
+        // TCP    [::]:8765              [::]:0                 LISTENING       1234
+        try {
+          const { stdout } = await execAsync(`netstat -ano -p tcp`);
+          for (const line of stdout.split(/\r?\n/)) {
+            if (!line.includes(`:${port}`)) continue;
+            if (!/LISTENING/i.test(line)) continue;
+            const parts = line.trim().split(/\s+/);
+            const pid = Number(parts[parts.length - 1]);
+            if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) pids.add(pid);
+          }
+        } catch {
+          // ignore
+        }
+        return pids;
+      }
+
+      // macOS/Linux: lsof is the simplest reliable way to find the LISTEN pid(s).
+      try {
+        const { stdout } = await execAsync(
+          `lsof -nP -iTCP:${port} -sTCP:LISTEN -t`,
+        );
+        for (const line of stdout.split(/\r?\n/)) {
+          const pid = Number(line.trim());
+          if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) pids.add(pid);
+        }
+      } catch {
+        // No listeners (or lsof not available). Ignore.
+      }
+      return pids;
+    };
+
+    const terminatePid = async (pid: number, force: boolean): Promise<void> => {
+      if (!Number.isFinite(pid) || pid <= 0) return;
+      if (pid === process.pid) return;
+      try {
+        if (process.platform === "win32") {
+          // /F if force; without /F is effectively a polite request.
+          await execAsync(`taskkill /pid ${pid} /T ${force ? "/F" : ""}`.trim());
+          return;
+        }
+        process.kill(pid, force ? "SIGKILL" : "SIGTERM");
+      } catch {
+        // ignore
+      }
+    };
+
+    try {
+      const found = await listListeningPids();
+      if (!found.size) return;
+
+      logger(
+        `[PythonProcess] Port ${port} is in use by PID(s): ${Array.from(found).join(", ")}. Attempting to terminate...`,
+      );
+
+      // First pass: SIGTERM / graceful kill.
+      for (const pid of found) await terminatePid(pid, false);
+      await this.sleep(500);
+
+      // Second pass: if still listening, force kill.
+      const still = await listListeningPids();
+      if (!still.size) {
+        logger(`[PythonProcess] Port ${port} freed successfully.`);
+        return;
+      }
+
+      logger(
+        `[PythonProcess] Port ${port} still in use by PID(s): ${Array.from(still).join(", ")}. Forcing termination...`,
+      );
+      for (const pid of still) await terminatePid(pid, true);
+      await this.sleep(500);
+    } catch (e) {
+      // Best-effort: don't block spawn on cleanup failures.
+      const msg =
+        e instanceof Error
+          ? `[PythonProcess] Failed to free port ${port}: ${e.message}`
+          : `[PythonProcess] Failed to free port ${port}`;
+      logger(msg);
+    }
   }
 
   private buildEnvironment(): NodeJS.ProcessEnv {
@@ -911,6 +1007,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   private forceKill(): void {
+  
     if (!this.process) return;
     const pid = this.process.pid;
     // Capture descendants before killing the parent so we can still target them if they orphan.
