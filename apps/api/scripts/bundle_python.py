@@ -711,6 +711,17 @@ class PythonBundler:
         except Exception:
             pass
 
+        # Nunchaku wheels we currently install are linked against CUDA runtime 13.
+        # If the build/runtime machine does not provide libcudart.so.13, importing Nunchaku
+        # will fail with: "libcudart.so.13: cannot open shared object file".
+        try:
+            import ctypes
+
+            ctypes.CDLL("libcudart.so.13")
+        except Exception:
+            print("Skipping Nunchaku wheel: CUDA runtime 13 not found (missing libcudart.so.13)")
+            return
+
         # Determine python tag (cp310/cp311/cp312/cp313) and torch major/minor.
         try:
             probe = subprocess.run(

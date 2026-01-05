@@ -333,6 +333,8 @@ class LoaderMixin(DownloadMixin):
                             gguf.GGMLQuantizationType.F16,
                         }:
                             state_dict[key] = value.to(load_dtype)
+                
+   
 
                 model.load_state_dict(state_dict, assign=True, strict=False)
                 continue
@@ -421,6 +423,7 @@ class LoaderMixin(DownloadMixin):
                 )
                 patched_for_fpscaled = True
             if hasattr(model, "load_state_dict"):
+          
                 model.load_state_dict(
                     state_dict, strict=False, assign=True
                 )  # must be false as we are iteratively loading the state dict
@@ -570,6 +573,7 @@ class LoaderMixin(DownloadMixin):
             #
             # This is intentionally cheap (type checks + dtype inspection) and only
             # runs when weights are loaded.
+       
             if not no_weights:
                 try:
                     import torch.nn as nn

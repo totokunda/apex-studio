@@ -398,6 +398,10 @@ class OffloadMixin(base_object):
                 return
 
             if isinstance(module, str):
+                # IMPORTANT:
+                # Keep a local reference for the duration of this function, but ensure we
+                # explicitly drop it BEFORE gc.collect()/empty_cache(). Otherwise, the module
+                # stays alive until this function returns and VRAM won't be reclaimed yet.
                 module_obj = getattr(self, module, None)
                 if module_obj is None:
                     return
@@ -430,15 +434,34 @@ class OffloadMixin(base_object):
                         f"Invalid offload type: {offload_type} for module."
                     )
 
+        # Drop strong references created in this function before collecting/clearing.
+        # This makes offloading effective immediately (instead of only after return).
+        try:
+            del module_type_obj
+        except Exception:
+            pass
+        try:
+            del component
+        except Exception:
+            pass
+        try:
+            del module_obj
+        except Exception:
+            pass
+
         gc.collect()
         # 4)  Reclaim CUDA VRAM
         if torch.cuda.is_available():
+            # Helps make memory reporting deterministic; does not significantly impact runtime here.
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
             torch.cuda.ipc_collect()
             torch.cuda.empty_cache()
             # Optional: reset statistics so future profiling starts fresh
             for dev_id in range(torch.cuda.device_count()):
                 torch.cuda.reset_peak_memory_stats(dev_id)
-
         # 5)  Reclaim Apple-silicon MPS memory
         if (
             getattr(torch, "mps", None) is not None
@@ -452,3 +475,5 @@ class OffloadMixin(base_object):
             mx.clear_cache()
         except Exception:
             pass
+        
+        gc.collect()
