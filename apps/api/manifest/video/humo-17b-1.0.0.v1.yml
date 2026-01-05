@@ -77,6 +77,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -87,11 +90,17 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
   - type: transformer
     base: wan.humo
@@ -122,31 +131,49 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 68224002820
+      resource_requirements:
+        min_vram_gb: 55
+        recommended_vram_gb: 74
     - path: calcuis/humo-gguf/humo-17b-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 18940742592
+      resource_requirements:
+        min_vram_gb: 19
+        recommended_vram_gb: 26
     - path: calcuis/humo-gguf/humo-17b-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 14877510592
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     - path: calcuis/humo-gguf/humo-17b-q5_0.gguf
       variant: GGUF_Q5_0
       precision: q5_0
       type: gguf
       file_size: 12826233792
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: calcuis/humo-gguf/humo-17b-q4_0.gguf
       variant: GGUF_Q4_0
       precision: q4_0
       type: gguf
       file_size: 10729081792
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: calcuis/humo-gguf/humo-17b-q3_k_s.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 8323910592
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
   - type: helper
     base: wan.humo_audio_processor
     label: HuMo Audio Processor
@@ -158,6 +185,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 24701695487
+      resource_requirements:
+        min_vram_gb: 23
+        recommended_vram_gb: 31
   defaults:
     run:
       num_inference_steps: 50

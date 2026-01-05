@@ -71,6 +71,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -81,11 +84,17 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder/config.json
   - type: transformer
     base: wan.s2v
@@ -96,71 +105,113 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 32591757808
+      resource_requirements:
+        min_vram_gb: 29
+        recommended_vram_gb: 39
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 19616577120
+      resource_requirements:
+        min_vram_gb: 20
+        recommended_vram_gb: 27
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 16213620320
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       file_size: 15002023520
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       file_size: 14347482720
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q5_1.gguf
       variant: GGUF_Q5_1
       precision: q5_1
       type: gguf
       file_size: 15225665120
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q5_0.gguf
       variant: GGUF_Q5_0
       precision: q5_0
       type: gguf
       file_size: 14524429920
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       file_size: 13861697120
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       file_size: 12958119520
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q4_1.gguf
       variant: GGUF_Q4_1
       precision: q4_1
       type: gguf
       file_size: 13469300320
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q4_0.gguf
       variant: GGUF_Q4_0
       precision: q4_0
       type: gguf
       file_size: 12768065120
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
       file_size: 11386074720
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 10724980320
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-S2V-14B-GGUF/Wan2.2-S2V-14B-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
       file_size: 9510925920
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     config_path: tolgacangoz/Wan2.2-S2V-14B-Diffusers/transformer/config.json
     config:
       pose_dim: null
@@ -175,6 +226,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 1841
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   - type: helper
     name: audio_encoder
     label: Audio Encoder
@@ -186,6 +240,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 1261945024
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   defaults:
     run:
       num_inference_steps: 8
@@ -304,22 +361,22 @@ spec:
       description: Select the aspect ratio of the output image
       panel: size
       type: select
-      default: "1:1"
+      default: '1:1'
       options:
       - name: Square
-        value: "1:1"
+        value: '1:1'
         ratio_w: 1
         ratio_h: 1
       - name: Wide
-        value: "16:9"
+        value: '16:9'
         ratio_w: 16
         ratio_h: 9
       - name: Vertical
-        value: "9:16"
+        value: '9:16'
         ratio_w: 9
         ratio_h: 16
       - name: Classic
-        value: "4:3"
+        value: '4:3'
         ratio_w: 4
         ratio_h: 3
       - name: Custom

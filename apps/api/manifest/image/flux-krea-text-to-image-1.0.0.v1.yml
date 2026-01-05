@@ -52,6 +52,9 @@ spec:
     - path: black-forest-labs/FLUX.1-Krea-dev/vae
       variant: default
       file_size: 167667722
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     name: text_encoder
     label: CLIP Text Encoder
@@ -60,6 +63,9 @@ spec:
     - path: black-forest-labs/FLUX.1-Krea-dev/text_encoder
       variant: default
       file_size: 246144965
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     tokenizer_class: CLIPTokenizer
     tokenizer_name: black-forest-labs/FLUX.1-Krea-dev
     tokenizer_kwargs:
@@ -72,6 +78,9 @@ spec:
     - path: black-forest-labs/FLUX.1-Krea-dev/text_encoder_2
       variant: default
       file_size: 9524669251
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     tokenizer_name: black-forest-labs/FLUX.1-Krea-dev
     tokenizer_kwargs:
       subfolder: tokenizer_2
@@ -82,13 +91,16 @@ spec:
     - path: black-forest-labs/FLUX.1-Krea-dev/transformer
       variant: default
       file_size: 23803075696
+      resource_requirements:
+        min_vram_gb: 22
+        recommended_vram_gb: 30
     - path: QuantStack/FLUX.1-Krea-dev-GGUF/flux1-krea-dev-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 14
+        min_vram_gb: 15
+        recommended_vram_gb: 20
       file_size: 12714452256
     - path: QuantStack/FLUX.1-Krea-dev-GGUF/flux1-krea-dev-Q6_K.gguf
       variant: GGUF_Q6_K
@@ -96,7 +108,7 @@ spec:
       type: gguf
       resource_requirements:
         min_vram_gb: 10
-        recommended_vram_gb: 12
+        recommended_vram_gb: 14
       file_size: 9848349984
     - path: QuantStack/FLUX.1-Krea-dev-GGUF/flux1-krea-dev-Q4_1.gguf
       variant: GGUF_Q4_1
@@ -104,10 +116,8 @@ spec:
       type: gguf
       resource_requirements:
         min_vram_gb: 8
-        recommended_vram_gb: 10
+        recommended_vram_gb: 12
       file_size: 7536977184
-    
-    
     config_path: black-forest-labs/FLUX.1-Krea-dev/transformer/config.json
   defaults:
     run:
@@ -185,7 +195,7 @@ spec:
       options:
       - name: HD
         value: 720
-      - name: Ultra HD  
+      - name: Ultra HD
         value: 1024
       - name: SD
         value: 480
@@ -196,22 +206,22 @@ spec:
       description: Select the aspect ratio of the output image
       panel: size
       type: select
-      default: "16:9"
+      default: '16:9'
       options:
       - name: Wide
-        value: "16:9"
+        value: '16:9'
         ratio_w: 16
         ratio_h: 9
       - name: Vertical
-        value: "9:16"
+        value: '9:16'
         ratio_w: 9
         ratio_h: 16
       - name: Square
-        value: "1:1"
+        value: '1:1'
         ratio_w: 1
         ratio_h: 1
       - name: Classic
-        value: "4:3"
+        value: '4:3'
         ratio_w: 4
         ratio_h: 3
       - name: Custom

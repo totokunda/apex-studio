@@ -76,6 +76,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
   - type: text_encoder
     label: WAN Text Encoder
@@ -87,11 +90,17 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
   - type: transformer
     base: wan.vace
@@ -102,71 +111,113 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 63252425327
+      resource_requirements:
+        min_vram_gb: 52
+        recommended_vram_gb: 70
     - path: spacepxl/Wan2.1_VACE_14B_fp8_scaled/wan2.1_vace_14B_fp8_scaled.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 17578334838
+      resource_requirements:
+        min_vram_gb: 21
+        recommended_vram_gb: 28
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-BF16.gguf
       variant: GGUF_BF16
       precision: bf16
       type: gguf
       file_size: 34691741600
+      resource_requirements:
+        min_vram_gb: 30
+        recommended_vram_gb: 40
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 18663274400
+      resource_requirements:
+        min_vram_gb: 19
+        recommended_vram_gb: 26
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 14522587040
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q5_1.gguf
       variant: GGUF_Q5_1
       precision: q5_1
       type: gguf
       file_size: 13320452000
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       file_size: 13037336480
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q5_0.gguf
       variant: GGUF_Q5_0
       precision: q5_0
       type: gguf
       file_size: 12464224160
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       file_size: 12251887520
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       file_size: 11639453600
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q4_1.gguf
       variant: GGUF_Q4_1
       precision: q4_1
       type: gguf
       file_size: 11183323040
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       file_size: 10552539040
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q4_0.gguf
       variant: GGUF_Q4_0
       precision: q4_0
       type: gguf
       file_size: 10327095200
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: QuantStack/Wan2.1_14B_VACE-GGUF/Wan2.1_14B_VACE-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 7844059040
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
   defaults:
     run:
       num_inference_steps: 8
