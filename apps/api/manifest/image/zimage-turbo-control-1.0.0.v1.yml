@@ -51,7 +51,7 @@ spec:
       type: safetensors
       resource_requirements:
         min_vram_gb: 8
-        recommended_vram_gb: 16
+        recommended_vram_gb: 12
       file_size: 167667707
   - type: text_encoder
     label: ZImage Turbo Text Encoder
@@ -64,7 +64,7 @@ spec:
       type: safetensors
       resource_requirements:
         min_vram_gb: 12
-        recommended_vram_gb: 24
+        recommended_vram_gb: 16
       file_size: 8045015784
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: Tongyi-MAI/Z-Image-Turbo
@@ -79,8 +79,8 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 24
-        recommended_vram_gb: 32
+        min_vram_gb: 23
+        recommended_vram_gb: 31
       file_size: 24619740330
   - type: extra_model_path
     label: ZImage Turbo Fun Controlnet Union 2.0
@@ -92,8 +92,8 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 24
-        recommended_vram_gb: 32
+        min_vram_gb: 10
+        recommended_vram_gb: 14
       file_size: 6712485600
   defaults:
     run:

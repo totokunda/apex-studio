@@ -63,6 +63,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -73,11 +76,17 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder/config.json
   - type: transformer
     label: High Noise Transformer
@@ -88,56 +97,90 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 28635485442
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
     - path: Kijai/WanVideo_comfy_fp8_scaled/T2V/Wan2_2-T2V-A14B_HIGH_fp8_e4m3fn_scaled_KJ.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 15001361458
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 15406608896
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 12003652096
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       file_size: 10792055296
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       file_size: 10137514496
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       file_size: 9651728896
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       file_size: 8748151296
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
       file_size: 7176106496
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 6514024096
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
       file_size: 5299319296
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     config_path: Wan-AI/Wan2.2-T2V-A14B-Diffusers/transformer/config.json
   - type: transformer
     label: Low Noise Transformer
@@ -148,56 +191,90 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 28635485442
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
     - path: Kijai/WanVideo_comfy_fp8_scaled/T2V/Wan2_2-T2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 15001361458
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 15404970496
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 12002013696
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       file_size: 10790416896
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       file_size: 10135876096
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       file_size: 9650090496
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       file_size: 8746512896
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
       file_size: 7174468096
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 6513373696
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
       file_size: 5299319296
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     config_path: Wan-AI/Wan2.2-T2V-A14B-Diffusers/transformer_2/config.json
   defaults:
     run:

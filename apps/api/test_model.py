@@ -16,7 +16,7 @@ engine = UniversalEngine(yaml_path=yaml_path, selected_components={
     }
 })
 
-prompt = """A hyper-realistic, macro cinematic shot of a colossal, floating obsidian compass suspended in the heart of a swirling nebula made of liquid gold and crushed amethyst. The compass face is a complex clockwork mechanism of translucent emerald gears and floating holographic star-charts. Etched into the outer obsidian ring in an elegant, glowing Art Deco font is the text "NAVIGATE THE UNSEEN". Swarms of tiny, bioluminescent mechanical dragonflies orbit the device, casting intricate shadows. The lighting is dramatic and iridescent, featuring ray-traced reflections, 8k resolution, ethereal atmosphere, and a depth of field that emphasizes the crystalline texture of the gears."""
+prompt = """Playful mirror selfie, full-body view, young curvy brunette woman with freckles across nose/cheeks, long brown hair in two high pigtails. Kneeling upright on white fluffy rug, mischievously sticking tongue out, holding silver iPhone 17 Pro Max (screen active) to take photo of reflection. Wearing cropped rat boi style mint green Henley top (buttons visible) with translucent super deep neck and have M-Z Cup: Bust over 12in larger than band Weighs over 9.5lbs. High-waisted mint green booty cut short shorts with super thick thighs with subtle hubby figure. Sharp focus on subject/reflection, slightly high angle. In Cosy room"""
 
 out = engine.run(
     prompt=prompt,
@@ -27,4 +27,4 @@ out = engine.run(
     seed=42,
 )
 
-out[0].save("output_zimage-turbo_gguf_q8.png")
+out[0].save("woman_with_iphone.png")

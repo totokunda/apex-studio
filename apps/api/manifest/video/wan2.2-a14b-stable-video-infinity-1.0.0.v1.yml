@@ -65,7 +65,6 @@ spec:
     label: Low Noise Lightning LoRA
     component: low_noise_transformer
     required: false
-  
   components:
   - type: scheduler
     label: Scheduler
@@ -76,7 +75,7 @@ spec:
       description: The UniPC Multistep Scheduler is used for WAN 2.2 SVI I2V.
       base: diffusers.UniPCMultistepScheduler
       config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/scheduler/scheduler_config.json
-      config: 
+      config:
         flow_shift: 5.0
     - name: FlowMatchScheduler
       label: FlowMatch Scheduler
@@ -99,6 +98,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -109,11 +111,17 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
   - type: transformer
     label: High Noise Transformer
@@ -126,61 +134,97 @@ spec:
       precision: bf16
       type: safetensors
       file_size: 28579400736
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
     - path: Kijai/WanVideo_comfy_fp8_scaled/I2V/Wan2_2-I2V-A14B-HIGH_fp8_e4m3fn_scaled_KJ.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 15002999858
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: FX-FeiHou/wan2.2-Remix/NSFW/Wan2.2_Remix_NSFW_i2v_14b_high_lighting_v2.0.safetensors
       variant: FP8_REMIX
       precision: fp8
       type: safetensors
       file_size: 15002999858
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 15406608896
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 12003652096
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       file_size: 10792055296
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       file_size: 10137514496
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       file_size: 9651728896
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       file_size: 8748151296
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
       file_size: 7176106496
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 6515012096
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
       file_size: 5300957696
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
   - type: transformer
     label: Low Noise Transformer
     name: low_noise_transformer
@@ -192,61 +236,97 @@ spec:
       precision: bf16
       type: safetensors
       file_size: 28579400728
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
     - path: Kijai/WanVideo_comfy_fp8_scaled/I2V/Wan2_2-I2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 15002999858
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: FX-FeiHou/wan2.2-Remix/NSFW/Wan2.2_Remix_NSFW_i2v_14b_low_lighting_v2.0.safetensors
       variant: FP8_REMIX
       precision: fp8
       type: safetensors
       file_size: 15002999858
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 15406608896
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 12003652096
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       file_size: 10792055296
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       file_size: 10137514496
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       file_size: 9651728896
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       file_size: 8748151296
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
       file_size: 7176106496
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 6515012096
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
       file_size: 5300957696
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
   defaults:
     run:
       num_inference_steps: 6
@@ -331,7 +411,8 @@ spec:
       scale_by: resolution
     - id: prompts
       label: Prompts
-      description: Describe the video you want to generate, with a prompt for each segment. Prompts will be repeated if there are less prompts than segments.
+      description: Describe the video you want to generate, with a prompt for each
+        segment. Prompts will be repeated if there are less prompts than segments.
       placeholder: A beautiful landscape at golden hour.
       type: text_list
       panel: prompting
@@ -343,7 +424,12 @@ spec:
       type: text
       panel: advanced_prompting
       required: false
-      default: bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards
+      default: bright tones, overexposed, static, blurred details, subtitles, style,
+        works, paintings, images, static, overall gray, worst quality, low quality,
+        JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands,
+        poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers,
+        still picture, messy background, three legs, many people in the background,
+        walking backwards
     - id: resolution
       label: Resolution
       description: Select the resolution of the output video
@@ -455,7 +541,8 @@ spec:
       step: 0.01
     - id: num_seconds_per_segment
       label: Number of Seconds per Segment
-      description: Number of seconds per segment. This will determine your video length, based on the duration and fps.
+      description: Number of seconds per segment. This will determine your video length,
+        based on the duration and fps.
       type: number+slider
       value_type: float
       panel: video_generation
