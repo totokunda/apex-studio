@@ -59,6 +59,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 2818779509
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -69,11 +72,17 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
   - type: transformer
     base: wan.base
@@ -84,61 +93,97 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 10184559920
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 5404990176
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 4216494816
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       file_size: 3815414496
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       file_size: 3564739296
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       file_size: 3437927136
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       file_size: 3121191648
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q4_0.gguf
       variant: GGUF_Q4_0
       precision: q4_0
       type: gguf
       file_size: 3033897696
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q3_K_L.gguf
       variant: GGUF_Q3_K_L
       precision: q3_k_l
       type: gguf
       file_size: 2786171616
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
       file_size: 2552601312
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 2299566816
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF/Wan2_2-TI2V-5B-Turbo-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
       file_size: 1858673376
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
     config_path: https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers/resolve/main/transformer/config.json
   defaults:
     run:

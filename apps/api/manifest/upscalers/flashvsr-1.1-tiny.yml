@@ -5,13 +5,14 @@ metadata:
   model: wan
   name: FlashVSR 1.1 Tiny
   version: 1.0.0
-  description: FlashVSR 1.1 Tiny is an upscaler model for video and image upscaling that uses a tiny VAE.
+  description: FlashVSR 1.1 Tiny is an upscaler model for video and image upscaling
+    that uses a tiny VAE.
   tags:
   - wan
   - upscaler
   - flashvsr
   - '1.1'
-  - 'tiny'
+  - tiny
   author: FlashVSR
   license: Apache-2.0
   demo_path: models/flashvsr-tiny.mp4
@@ -23,7 +24,6 @@ spec:
   engine_type: torch
   denoise_type: base
   default_duration_secs: 5.0
-
   compute_requirements:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
@@ -53,8 +53,16 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 189018333
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     config:
-      channels: [512, 256, 128, 128]
+      channels:
+      - 512
+      - 256
+      - 128
+      - 128
       z_dim: 784
   - type: transformer
     base: wan.flashvsr
@@ -64,9 +72,16 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 5676070392
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     config:
       has_image_input: false
-      patch_size: [1, 2, 2]
+      patch_size:
+      - 1
+      - 2
+      - 2
       in_dim: 16
       dim: 1536
       ffn_dim: 8960
@@ -75,7 +90,7 @@ spec:
       out_dim: 16
       num_heads: 12
       num_layers: 30
-      eps: 0.000001
+      eps: 1.0e-06
       use_causal_lq4x_proj: true
       use_buffer_lq4x_proj: false
       lq4x_proj_in_dim: 3
@@ -84,10 +99,14 @@ spec:
   - type: extra_model_path
     component: transformer
     model_path:
-      - path: JunhaoZhuang/FlashVSR-v1.1/LQ_proj_in.ckpt
-        variant: default
-        precision: fp16
-        type: safetensors
+    - path: JunhaoZhuang/FlashVSR-v1.1/LQ_proj_in.ckpt
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 575694948
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   defaults:
     run:
       num_inference_steps: 1
@@ -193,15 +212,15 @@ spec:
       panel: size
       required: false
       options:
-      - name: "720p"
+      - name: 720p
         value: 720
-      - name: "1080p"
+      - name: 1080p
         value: 1080
-      - name: "1440p"
+      - name: 1440p
         value: 1440
-      - name: "1920p"
+      - name: 1920p
         value: 1920
-      - name: "2160p" 
+      - name: 2160p
         value: 2160
     - id: seed
       label: Seed

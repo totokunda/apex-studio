@@ -48,13 +48,13 @@ spec:
       base: diffusers.FlowMatchEulerDiscreteScheduler
       config:
         base_image_seq_len: 256
-        base_shift: 1.0986122886681098  # We use shift=3 in distillation
+        base_shift: 1.0986122886681098
         invert_sigmas: false
         max_image_seq_len: 8192
-        max_shift: 1.0986122886681098  # We use shift=3 in distillation
+        max_shift: 1.0986122886681098
         num_train_timesteps: 1000
         shift: 1.0
-        shift_terminal: null # set shift_terminal to None
+        shift_terminal: null
         stochastic_sampling: false
         time_shift_type: exponential
         use_beta_sigmas: false
@@ -71,7 +71,7 @@ spec:
       type: safetensors
       resource_requirements:
         min_vram_gb: 8
-        recommended_vram_gb: 16
+        recommended_vram_gb: 12
       file_size: 253807696
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
@@ -82,16 +82,16 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 24
+        min_vram_gb: 19
+        recommended_vram_gb: 26
       file_size: 16584475660
     - path: RedHatAI/Qwen2.5-VL-7B-Instruct-FP8-Dynamic
       variant: FP8
       precision: fp8
       type: safetensors
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
+        min_vram_gb: 16
+        recommended_vram_gb: 22
       file_size: 10077908745
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: Qwen/Qwen-Image
@@ -108,21 +108,33 @@ spec:
       precision: int4
       type: safetensors
       file_size: 11521979944
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: nunchaku-tech/nunchaku-qwen-image/svdq-int4_r128-qwen-image-lightningv1.1-8steps.safetensors
       variant: INT4_R128
       precision: int4
       type: safetensors
       file_size: 12654443144
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     - path: nunchaku-tech/nunchaku-qwen-image/svdq-fp4_r32-qwen-image-lightningv1.1-8steps.safetensors
       variant: NF4_R32
       precision: fp4
       type: safetensors
       file_size: 11948923656
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: nunchaku-tech/nunchaku-qwen-image/svdq-fp4_r128-qwen-image-lightningv1.1-8steps.safetensors
       variant: NF4_R128
       precision: fp4
       type: safetensors
       file_size: 13081386856
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
   defaults:
     run:
       num_inference_steps: 8
