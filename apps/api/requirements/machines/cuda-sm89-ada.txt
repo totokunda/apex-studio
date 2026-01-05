@@ -11,6 +11,9 @@ rembg[gpu]
 triton==3.5.1; sys_platform == "linux"
 triton-windows; sys_platform == "win32"
 
+# Some CUDA source builds (e.g. flash-attn) import psutil during setup.
+psutil; sys_platform == "linux"
+
 # -------------------------
 # Windows CUDA stack (cu128 + torch2.7.1 + Python 3.12)
 # -------------------------
@@ -22,7 +25,8 @@ sageattention @ https://github.com/woct0rdho/SageAttention/releases/download/v2.
 
 xformers==0.0.33.post2; sys_platform == "linux"
 transformer_engine==2.10.0; sys_platform == "linux"
-apex==0.9.10dev; sys_platform == "linux"
+# NVIDIA Apex (NOT the unrelated `apex` PyPI package)
+apex @ git+https://github.com/NVIDIA/apex.git; sys_platform == "linux"
 
 # SageAttention: prefer source install for newest kernels; this will compile.
 sageattention @ git+https://github.com/thu-ml/SageAttention.git; sys_platform == "linux"

@@ -42,6 +42,37 @@ def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
     subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True)
 
 
+def _uv() -> str | None:
+    return shutil.which("uv")
+
+
+def _install(
+    py: Path,
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    use_no_build_isolation: bool = False,
+) -> None:
+    """
+    Install packages using uv (fast) when available, with a pip fallback.
+    `args` are pip-style arguments, e.g. ["-r", "requirements.txt"] or ["honcho"].
+    """
+    uv = _uv()
+    if uv:
+        cmd = [uv, "pip", "install", "--python", str(py)]
+        if use_no_build_isolation:
+            cmd.append("--no-build-isolation")
+        cmd += args
+        _run(cmd, cwd=cwd)
+        return
+
+    cmd = [str(py), "-m", "pip", "install"]
+    if use_no_build_isolation:
+        cmd.append("--no-build-isolation")
+    cmd += args
+    _run(cmd, cwd=cwd)
+
+
 def _venv_python(venv_dir: Path) -> Path:
     if sys.platform == "win32":
         return venv_dir / "Scripts" / "python.exe"
@@ -96,11 +127,25 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--build-isolation",
+        action="store_true",
+        help=(
+            "Force pip build isolation when installing machine requirements "
+            "(overrides the default/auto behavior)."
+        ),
+    )
+    parser.add_argument(
         "--no-build-isolation",
         action="store_true",
-        help="Pass --no-build-isolation while installing requirements (matches bundler behavior).",
+        help=(
+            "Disable pip build isolation while installing machine requirements "
+            "(often required for CUDA source builds that import torch at build time)."
+        ),
     )
     args = parser.parse_args()
+
+    if args.build_isolation and args.no_build_isolation:
+        raise SystemExit("Choose at most one: --build-isolation or --no-build-isolation")
 
     # Select interpreter (current env or venv)
     if args.venv:
@@ -122,39 +167,55 @@ def main() -> int:
     if torch_backend == "auto":
         torch_backend = _detect_default_torch_backend(args.machine)
 
+    # On Linux, default to disabling build isolation unless explicitly forced on.
+    # Reason: several sdists/VCS installs in our stack import runtime deps (e.g. numpy/torch)
+    # during metadata/build phases without declaring them as build deps, which breaks with
+    # PEP517 build isolation.
+    auto_no_build_isolation = sys.platform.startswith("linux") and not args.build_isolation
+    use_no_build_isolation = args.no_build_isolation or auto_no_build_isolation
+
     # 1) Tooling
-    _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    # Note: some packages in our requirements rely on "legacy" setup steps that
+    # expect common build helpers (e.g. Cython) to already be available when build
+    # isolation is disabled.
+    _install(
+        py,
+        [
+            "--upgrade",
+            "pip",
+            "setuptools",
+            "wheel",
+            # Pre-install build helpers that some sdists forget to declare.
+            # (Example: opendr/opendr-toolkit needs Cython/numpy at build time but doesn't specify them.)
+            "Cython>=0.29.36",
+            "numpy",
+            "psutil",
+            "enscons",
+            "pytoml",
+        ],
+        use_no_build_isolation=False,
+    )
 
     # 2) honcho (needed by `apex-engine dev`)
-    _run([str(py), "-m", "pip", "install", "honcho"])
+    _install(py, ["honcho"])
 
     # 3) torch
     if torch_backend == "pypi":
-        _run([str(py), "-m", "pip", "install", "torch", "torchvision", "torchaudio"])
+        _install(py, ["torch", "torchvision", "torchaudio"])
     else:
         index = TORCH_INDEX[torch_backend]
-        _run(
-            [
-                str(py),
-                "-m",
-                "pip",
-                "install",
-                "--index-url",
-                index,
-                "torch",
-                "torchvision",
-                "torchaudio",
-            ]
-        )
+        _install(py, ["--index-url", index, "torch", "torchvision", "torchaudio"])
 
     # 4) machine requirements
-    req_cmd = [str(py), "-m", "pip", "install", "-r", str(req_file)]
-    if args.no_build_isolation:
-        req_cmd.insert(5, "--no-build-isolation")
-    _run(req_cmd, cwd=project_root)
+    _install(
+        py,
+        ["-r", str(req_file)],
+        cwd=project_root,
+        use_no_build_isolation=use_no_build_isolation,
+    )
 
     # 5) install apex-engine itself (expose the CLI) without re-resolving deps
-    _run([str(py), "-m", "pip", "install", "-e", ".", "--no-deps"], cwd=project_root)
+    _install(py, ["-e", ".", "--no-deps"], cwd=project_root)
 
     print("\nDone.")
     if args.venv and sys.platform != "win32":
