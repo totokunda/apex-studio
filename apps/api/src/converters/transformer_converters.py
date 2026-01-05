@@ -1126,8 +1126,8 @@ class Flux2TransformerConverter(TransformerConverter):
     def __init__(self):
         super().__init__()
         self.rename_dict = {
-            "img_in.": "x_embedder",
-            "txt_in.": "context_embedder",
+            "img_in.": "x_embedder.",
+            "txt_in.": "context_embedder.",
             "double_blocks.": "transformer_blocks.",
             "single_blocks.": "single_transformer_blocks.",
             # Timestep and guidance embeddings

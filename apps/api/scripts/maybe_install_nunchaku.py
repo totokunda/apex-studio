@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 
-NUNCHAKU_VERSION = "1.1.0"
+NUNCHAKU_VERSION = "1.0.1"
 NUNCHAKU_RELEASE_TAG = f"v{NUNCHAKU_VERSION}"
 NUNCHAKU_RELEASE_BASE_URL = f"https://github.com/nunchaku-tech/nunchaku/releases/download/{NUNCHAKU_RELEASE_TAG}"
 
@@ -58,28 +58,6 @@ def _run(cmd: list[str], *, timeout: int | float | None = None) -> subprocess.Co
     )
 
 
-def _has_required_cuda_runtime_for_wheel() -> tuple[bool, str]:
-    """
-    Nunchaku wheels we install are currently linked against libcudart.so.13
-    (see user-reported import error and `ldd nunchaku/_C*.so`).
-    """
-    if sys.platform == "linux":
-        try:
-            import ctypes
-
-            ctypes.CDLL("libcudart.so.13")
-            return True, "ok"
-        except Exception as e:
-            return False, "missing libcudart.so.13 (CUDA runtime 13)"
-    if sys.platform == "win32":
-        try:
-            import ctypes
-
-            ctypes.WinDLL("cudart64_13.dll")
-            return True, "ok"
-        except Exception:
-            return False, "missing cudart64_13.dll (CUDA runtime 13)"
-    return False, f"unsupported platform for this check: {sys.platform}"
 
 
 def detect_cuda_compute_capability() -> Optional[str]:
@@ -194,18 +172,6 @@ def decide_nunchaku_install(
             torch_mm=torch_mm,
         )
 
-    ok_cudart, cudart_reason = _has_required_cuda_runtime_for_wheel()
-    if not ok_cudart:
-        return Decision(
-            allowed=False,
-            reason=f"{cudart_reason}; nunchaku wheel {NUNCHAKU_VERSION} is not compatible with this CUDA runtime",
-            platform_name=platform_name,
-            python=str(py_path),
-            uv=None,
-            compute_capability=cap,
-            python_tag=py_tag,
-            torch_mm=torch_mm,
-        )
 
     if platform_name == "linux":
         if torch_mm not in SUPPORTED_LINUX_TORCH_MM:

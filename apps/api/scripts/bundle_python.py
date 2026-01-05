@@ -689,7 +689,7 @@ class PythonBundler:
         the wrong wheel can hard-fail the whole bundle. Instead, we detect the *installed*
         torch version in the venv and install the matching wheel if one exists.
 
-        Release: https://github.com/nunchaku-tech/nunchaku/releases/tag/v1.1.0
+        Release: https://github.com/nunchaku-tech/nunchaku/releases/tag/v1.0.1
         """
 
         # Only CUDA-capable platforms; skip macOS/ROCm/CPU bundles.
@@ -710,17 +710,6 @@ class PythonBundler:
                     return
         except Exception:
             pass
-
-        # Nunchaku wheels we currently install are linked against CUDA runtime 13.
-        # If the build/runtime machine does not provide libcudart.so.13, importing Nunchaku
-        # will fail with: "libcudart.so.13: cannot open shared object file".
-        try:
-            import ctypes
-
-            ctypes.CDLL("libcudart.so.13")
-        except Exception:
-            print("Skipping Nunchaku wheel: CUDA runtime 13 not found (missing libcudart.so.13)")
-            return
 
         # Determine python tag (cp310/cp311/cp312/cp313) and torch major/minor.
         try:
@@ -748,7 +737,7 @@ class PythonBundler:
         py_tag = lines[0]  # e.g. cp312
         torch_mm = lines[1]  # e.g. 2.9
 
-        # Supported wheel builds in v1.1.0
+        # Supported wheel builds in v1.0.1
         supported_linux = {"2.7", "2.8", "2.9", "2.11"}
         supported_win = {"2.9", "2.11"}
 
@@ -767,8 +756,8 @@ class PythonBundler:
         # Example asset:
         #   nunchaku-1.1.0+torch2.9-cp312-cp312-win_amd64.whl
         # Note: the '+' is URL-encoded as %2B in the GitHub release URLs.
-        filename = f"nunchaku-1.1.0+torch{torch_mm}-{py_tag}-{py_tag}-{plat_suffix}.whl"
-        url = f"https://github.com/nunchaku-tech/nunchaku/releases/download/v1.1.0/{filename.replace('+', '%2B')}"
+        filename = f"nunchaku-1.0.1+torch{torch_mm}-{py_tag}-{py_tag}-{plat_suffix}.whl"
+        url = f"https://github.com/nunchaku-tech/nunchaku/releases/download/v1.0.1/{filename.replace('+', '%2B')}"
 
         print(f"Attempting Nunchaku install: {filename}")
         try:
