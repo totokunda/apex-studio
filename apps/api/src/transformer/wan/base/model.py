@@ -102,6 +102,58 @@ def _chunked_modulated_norm(
     
     return out
 
+
+def _chunked_feed_forward(
+    ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int
+) -> torch.Tensor:
+    """
+    Chunked feed-forward that **does not** require `hidden_states.shape[chunk_dim]` to be divisible by `chunk_size`.
+
+    This reduces peak memory when FFN intermediate activations are very large by running the FFN over smaller slices
+    along `chunk_dim` (typically the sequence dimension).
+    """
+    if chunk_size is None:
+        return ff(hidden_states)
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    dim_len = hidden_states.shape[chunk_dim]
+    if dim_len <= chunk_size:
+        return ff(hidden_states)
+
+    outputs = []
+    for start in range(0, dim_len, chunk_size):
+        end = min(start + chunk_size, dim_len)
+        # narrow avoids extra view/copy where possible
+        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
+        outputs.append(ff(hs_chunk))
+    return torch.cat(outputs, dim=chunk_dim)
+
+
+def _chunked_norm(norm_layer: nn.Module, hidden_states: torch.Tensor, chunk_size: int = 8192) -> torch.Tensor:
+    """
+    LayerNorm in chunks along the sequence dimension to reduce peak memory (notably when the norm internally casts to
+    fp32).
+
+    Expects `hidden_states` to be `[batch, seq_len, dim]`.
+    """
+    if isinstance(norm_layer, nn.Identity):
+        return hidden_states
+
+    if hidden_states.ndim != 3:
+        # Fallback for unexpected shapes.
+        return norm_layer(hidden_states)
+
+    B, S, D = hidden_states.shape
+    if S <= chunk_size:
+        return norm_layer(hidden_states)
+
+    out = torch.empty_like(hidden_states)
+    for i in range(0, S, chunk_size):
+        end = min(i + chunk_size, S)
+        out[:, i:end, :] = norm_layer(hidden_states[:, i:end, :])
+    return out
+
 # Global variables for EasyCache
 WANTF_GLOBAL_CNT = 0
 WANTF_GLOBAL_NUM_STEPS = 100
@@ -959,6 +1011,14 @@ class WanTransformerBlock(nn.Module):
 
         self.scale_shift_table = nn.Parameter(torch.randn(1, 6, dim) / dim**0.5)
 
+        # Chunked FFN (disabled by default). Chunking along dim=1 is typical for [B, seq, C].
+        self._ff_chunk_size: Optional[int] = None
+        self._ff_chunk_dim: int = 1
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        self._ff_chunk_size = chunk_size
+        self._ff_chunk_dim = dim
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -969,8 +1029,6 @@ class WanTransformerBlock(nn.Module):
         timestep_proj_ip: torch.Tensor = None,
         rotary_emb_chunk_size: int | None = None,
     ) -> torch.Tensor:
-        import torch 
-        
 
         # Compute scale/shift in fp32 for numerical stability, then cast to hidden_states dtype
         # to avoid fp32 intermediates during modulation (which would double memory).
@@ -991,6 +1049,7 @@ class WanTransformerBlock(nn.Module):
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
                 self.scale_shift_table + temb.float()
             ).to(hs_dtype).chunk(6, dim=1)
+        
         step_mem(label="WanTransformerBlock.forward.scale_shift_table", device=hidden_states.device.index)
 
         # 1. Self-attention
@@ -1043,7 +1102,7 @@ class WanTransformerBlock(nn.Module):
         step_mem(label="WanTransformerBlock.forward.attn1_output_gate", device=hidden_states.device.index)
 
         # 2. Cross-attention
-        norm_hidden_states = self.norm2(hidden_states)
+        norm_hidden_states = _chunked_norm(self.norm2, hidden_states, chunk_size=4096)
         step_mem(label="WanTransformerBlock.forward.norm2", device=hidden_states.device.index)
         attn_output = self.attn2(
             hidden_states=norm_hidden_states,
@@ -1051,6 +1110,7 @@ class WanTransformerBlock(nn.Module):
             no_cache=True,
             rotary_emb_chunk_size=rotary_emb_chunk_size,
         )
+        
         step_mem(label="WanTransformerBlock.forward.attn2", device=hidden_states.device.index)
 
         hidden_states = hidden_states + attn_output
@@ -1059,9 +1119,14 @@ class WanTransformerBlock(nn.Module):
         norm_hidden_states = _chunked_modulated_norm(
             self.norm3, hidden_states, c_scale_msa, c_shift_msa, chunk_size=8192
         )
-        step_mem(label="WanTransformerBlock.forward.norm3", device=hidden_states.device.index)
 
-        ff_output = self.ffn(norm_hidden_states)
+
+        if self._ff_chunk_size is not None:
+            ff_output = _chunked_feed_forward(
+                self.ffn, norm_hidden_states, self._ff_chunk_dim, self._ff_chunk_size
+            )
+        else:
+            ff_output = self.ffn(norm_hidden_states)
 
         hidden_states = hidden_states + ff_output * c_gate_msa
 
@@ -1072,11 +1137,17 @@ class WanTransformerBlock(nn.Module):
                 self.norm3, gated_hidden_states_ip, c_scale_msa_ip, c_shift_msa_ip, chunk_size=8192
             )
 
-            ffn_output_ip = self.ffn(norm3_hidden_states_ip)
+            if self._ff_chunk_size is not None:
+                ffn_output_ip = _chunked_feed_forward(
+                    self.ffn,
+                    norm3_hidden_states_ip,
+                    self._ff_chunk_dim,
+                    self._ff_chunk_size,
+                )
+            else:
+                ffn_output_ip = self.ffn(norm3_hidden_states_ip)
             hidden_states_ip = gated_hidden_states_ip + ffn_output_ip * c_gate_msa_ip
             hidden_states = torch.concat([hidden_states, hidden_states_ip], dim=1)
-        
-        step_mem(label="WanTransformerBlock.forward.hidden_states")
 
         return hidden_states
 
@@ -1154,6 +1225,8 @@ class WanTransformer3DModel(
         pos_embed_seq_len: Optional[int] = None,
         ip_adapter: bool = False,
         use_enhance: bool = False,
+        ffn_chunk_size: Optional[int] = None,
+        ffn_chunk_dim: int = 1,
     ) -> None:
         super().__init__()
 
@@ -1197,6 +1270,9 @@ class WanTransformer3DModel(
         if ip_adapter:
             self.init_ip_projections()
 
+        if ffn_chunk_size is not None:
+            self.set_chunk_feed_forward(ffn_chunk_size, dim=ffn_chunk_dim)
+
         # 4. Output norm & projection
         self.norm_out = FP32LayerNorm(inner_dim, eps, elementwise_affine=False)
         self.proj_out = nn.Linear(inner_dim, out_channels * math.prod(patch_size))
@@ -1205,6 +1281,18 @@ class WanTransformer3DModel(
         )
 
         self.gradient_checkpointing = False
+        self.set_chunk_feed_forward(512, 1)
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        """
+        Enable/disable chunked feed-forward on all Wan transformer blocks.
+
+        Args:
+            chunk_size: number of tokens to process per chunk along `dim`. Set to `None` to disable.
+            dim: dimension to chunk along (typically 1 for [B, seq, C]).
+        """
+        for block in self.blocks:
+            block.set_chunk_feed_forward(chunk_size, dim=dim)
 
     def init_ip_projections(
         self,
