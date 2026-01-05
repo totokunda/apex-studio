@@ -17,7 +17,8 @@ triton-windows; sys_platform == "win32"
 
 xformers==0.0.33.post2; sys_platform == "linux"
 transformer_engine==2.10.0; sys_platform == "linux"
-apex==0.9.10dev; sys_platform == "linux"
+# NVIDIA Apex (NOT the unrelated `apex` PyPI package)
+apex @ git+https://github.com/NVIDIA/apex.git; sys_platform == "linux"
 
 # SageAttention: source build recommended for Hopper.
 sageattention @ git+https://github.com/thu-ml/SageAttention.git; sys_platform == "linux"
