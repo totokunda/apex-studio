@@ -1,7 +1,20 @@
 import platform
 import warnings
 import torch
+import torch.backends.mps
 
+def _has_mps_bf16() -> bool:
+    if not torch.backends.mps.is_available():
+        return False
+    
+    try:
+        # Try to create a dummy tensor and perform a simple operation
+        device = torch.device("mps")
+        test_tensor = torch.ones(1, 1, device=device, dtype=torch.bfloat16)
+        _ = test_tensor * test_tensor
+        return True
+    except Exception:
+        return False
 
 def select_ideal_dtypes(
     *,
@@ -87,8 +100,12 @@ def select_ideal_dtypes(
         _warn(f"Using {dtype} on GPU: {gpu_name}")
 
     elif device == "mps":  # Apple Silicon
-        dtype = torch.float16
-        _warn("MPS backend detected (Apple Silicon) – using torch.float16")
+        # check if mps supports bfloat16
+        if _has_mps_bf16():
+            dtype = torch.bfloat16
+        else:
+            dtype = torch.float16
+        _warn(f"MPS backend detected (Apple Silicon) – using {dtype}")
 
     else:  # CPU only
         if prefer_bfloat16 and _has_cpu_bf16():
