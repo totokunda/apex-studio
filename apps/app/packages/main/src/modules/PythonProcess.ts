@@ -29,6 +29,10 @@ const HEALTH_CHECK_TIMEOUT_MS = 1500;
 const MAX_STARTUP_WAIT_MS = 60000;
 // Small delay to avoid hot-looping the event loop on repeated instant exits.
 const RESTART_DELAY_MS = 500;
+// Avoid flapping: require a few consecutive failures before restarting.
+const HEALTH_FAILURES_BEFORE_RESTART = 3;
+// If we intentionally stop a process (during restart/stop), suppress "unexpected exit" handling briefly.
+const EXPECTED_EXIT_WINDOW_MS = 10_000;
 
 interface PythonProcessConfig {
   port?: number;
@@ -70,7 +74,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   private state: ProcessState;
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private config: PythonProcessConfig;
-  private logPath: string = "";
+  private logDir: string = "";
+  private latestLogPath: string = "";
+  private sessionLogPath: string = "";
   private bundledPythonPath: string = "";
   private bundledBundleRoot: string = "";
   private isShuttingDown: boolean = false;
@@ -80,6 +86,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   // Serialize start/stop/restart to avoid races during window transitions / IPC spam.
   private opQueue: Promise<void> = Promise.resolve();
   private restartTimer: NodeJS.Timeout | null = null;
+  private consecutiveHealthFailures: number = 0;
+  private expectedExitPid: number | null = null;
+  private expectedExitUntilMs: number = 0;
   private runtimeVerifyCache:
     | { at: number; ok: boolean; reason?: string }
     | null = null;
@@ -105,9 +114,10 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   async enable(context: ModuleContext): Promise<void> {
     this.app = context.app;
 
-    // Set up paths
-    const userData = this.app.getPath("userData");
-    this.logPath = path.join(userData, "apex-api.log");
+    // Set up logging paths
+    // In production, write logs into the OS-specific "logs" folder (AppData Logs on Windows).
+    // In dev, keep it in userData so it's easy to find.
+    this.resolveAndPrepareLogPaths();
 
     // Determine the bundled Python path
     this.bundledPythonPath = this.getBundledPythonPath();
@@ -499,13 +509,30 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
     ipcMain.handle("python:logs", async () => {
       try {
-        if (fs.existsSync(this.logPath)) {
-          const logs = fs.readFileSync(this.logPath, "utf-8");
+        const p = this.latestLogPath || this.sessionLogPath;
+        if (p && fs.existsSync(p)) {
+          const logs = fs.readFileSync(p, "utf-8");
           // Return last 1000 lines
           const lines = logs.split("\n").slice(-1000).join("\n");
-          return { success: true, data: { logs: lines } };
+          return {
+            success: true,
+            data: {
+              logs: lines,
+              logDir: this.logDir,
+              latestLogPath: this.latestLogPath,
+              sessionLogPath: this.sessionLogPath,
+            },
+          };
         }
-        return { success: true, data: { logs: "" } };
+        return {
+          success: true,
+          data: {
+            logs: "",
+            logDir: this.logDir,
+            latestLogPath: this.latestLogPath,
+            sessionLogPath: this.sessionLogPath,
+          },
+        };
       } catch (error) {
         return {
           success: false,
@@ -513,6 +540,91 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
         };
       }
     });
+  }
+
+  private resolveAndPrepareLogPaths(): void {
+    if (!this.app) return;
+    const isPackaged = this.app.isPackaged;
+    const appNameSafe = (this.app.getName?.() || "apex-studio")
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-");
+
+    // Electron provides a dedicated "logs" path in production; fall back safely if missing.
+    const baseDir = (() => {
+      if (isPackaged) {
+        try {
+          // Available in modern Electron; OS-specific Logs folder (AppData/Logs on Windows).
+          return this.app!.getPath("logs");
+        } catch {
+          // Some environments may not expose "logs" path; fall back to userData.
+          return this.app!.getPath("userData");
+        }
+      }
+      return this.app!.getPath("userData");
+    })();
+
+    this.logDir = path.join(baseDir, appNameSafe);
+
+    try {
+      fs.mkdirSync(this.logDir, { recursive: true });
+    } catch {
+      // If directory creation fails, fall back to userData root.
+      const fallback = this.app.getPath("userData");
+      this.logDir = path.join(fallback, appNameSafe);
+      try {
+        fs.mkdirSync(this.logDir, { recursive: true });
+      } catch {
+        // Last resort: keep logs in userData root.
+        this.logDir = fallback;
+      }
+    }
+
+    // Keep a "latest" file for quick access, plus a session file per start for full history.
+    this.latestLogPath = path.join(this.logDir, "apex-api-latest.log");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    this.sessionLogPath = path.join(this.logDir, `apex-api-${stamp}.log`);
+  }
+
+  private appendSupervisorLog(line: string): void {
+    // Best-effort: never crash the app due to logging.
+    const msg = line.endsWith("\n") ? line : `${line}\n`;
+    const latest = this.latestLogPath;
+    const session = this.sessionLogPath;
+    if (latest) {
+      try {
+        fs.appendFileSync(latest, msg, { encoding: "utf-8" });
+      } catch {
+        // ignore
+      }
+    }
+    if (session) {
+      try {
+        fs.appendFileSync(session, msg, { encoding: "utf-8" });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private markExpectedExit(pid: number | null, reason: string): void {
+    if (!pid || !Number.isFinite(pid) || pid <= 0) return;
+    this.expectedExitPid = pid;
+    this.expectedExitUntilMs = Date.now() + EXPECTED_EXIT_WINDOW_MS;
+    this.appendSupervisorLog(
+      `[PythonProcess] Marking PID=${pid} as expected-to-exit (${reason}) for ${EXPECTED_EXIT_WINDOW_MS}ms`,
+    );
+  }
+
+  private isExpectedExit(pid: number | null): boolean {
+    if (!pid || !Number.isFinite(pid) || pid <= 0) return false;
+    if (this.expectedExitPid !== pid) return false;
+    if (Date.now() > this.expectedExitUntilMs) return false;
+    return true;
+  }
+
+  private clearExpectedExit(): void {
+    this.expectedExitPid = null;
+    this.expectedExitUntilMs = 0;
   }
 
   private setupLifecycleHooks(): void {
@@ -636,12 +748,43 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     const mirrorPythonLogsToStdout = !isPackaged || this.config.devMode;
 
     // Prepare log file
-    const logStream = fs.createWriteStream(this.logPath, { flags: "a" });
-    logStream.write(`\n\n=== Starting Python API at ${new Date().toISOString()} ===\n`);
+    if (!this.latestLogPath || !this.sessionLogPath) {
+      this.resolveAndPrepareLogPaths();
+    }
+
+    const latestStream = fs.createWriteStream(this.latestLogPath, { flags: "a" });
+    const sessionStream = fs.createWriteStream(this.sessionLogPath, { flags: "a" });
+
+    let logClosed = false;
+    const canWrite = (s: fs.WriteStream) =>
+      !logClosed && !s.destroyed && !s.writableEnded && !s.writableFinished;
+
+    const writeLog = (msg: string) => {
+      if (canWrite(latestStream)) {
+        try {
+          latestStream.write(msg);
+        } catch {
+          // ignore
+        }
+      }
+      if (canWrite(sessionStream)) {
+        try {
+          sessionStream.write(msg);
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    // Never crash the app due to logging failures.
+    latestStream.on("error", () => {});
+    sessionStream.on("error", () => {});
+
+    writeLog(`\n\n=== Starting Python API at ${new Date().toISOString()} ===\n`);
     // Ensure the target port is free before spawning. This prevents "address already in use"
     // situations when a previous backend crashed or a stale process is still listening.
     await this.freePortIfOccupied(this.config.port!, (msg) => {
-      logStream.write(`${msg}\n`);
+      writeLog(`${msg}\n`);
       if (mirrorPythonLogsToStdout) process.stdout.write(`${msg}\n`);
     });
 
@@ -689,27 +832,57 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
     this.state.pid = this.process.pid;
     this.lastSpawnedPid = this.process.pid ?? null;
+    const spawnedPid = this.process.pid ?? null;
+
+    writeLog(
+      `[PythonProcess] Spawned PID=${this.process.pid} cmd=${cmd} args=${JSON.stringify(
+        args,
+      )} cwd=${this.bundledBundleRoot || ""}\n`,
+    );
 
     // Handle stdout
-    this.process.stdout?.on("data", (data) => {
+    const onStdout = (data: Buffer) => {
       const text = data.toString();
-      logStream.write(text);
+      writeLog(text);
       if (mirrorPythonLogsToStdout) process.stdout.write(text);
       this.emit("log", { type: "stdout", data: text });
-    });
+    };
+    this.process.stdout?.on("data", onStdout);
 
     // Handle stderr
-    this.process.stderr?.on("data", (data) => {
+    const onStderr = (data: Buffer) => {
       const text = data.toString();
-      logStream.write(text);
+      writeLog(text);
       if (mirrorPythonLogsToStdout) process.stderr.write(text);
       this.emit("log", { type: "stderr", data: text });
-    });
+    };
+    this.process.stderr?.on("data", onStderr);
 
     // Handle exit
     this.process.on("exit", (code, signal) => {
-      logStream.write(`\n=== Process exited with code ${code}, signal ${signal} ===\n`);
-      logStream.end();
+      writeLog(`\n=== Process exited with code ${code}, signal ${signal} ===\n`);
+      // Prevent any late stdout/stderr chunks from trying to write after streams close.
+      logClosed = true;
+      try {
+        this.process?.stdout?.off("data", onStdout);
+      } catch {
+        // ignore
+      }
+      try {
+        this.process?.stderr?.off("data", onStderr);
+      } catch {
+        // ignore
+      }
+      try {
+        latestStream.end();
+      } catch {
+        // ignore
+      }
+      try {
+        sessionStream.end();
+      } catch {
+        // ignore
+      }
       // Ensure our state transitions even if exit happens during startup.
       this.state.status = "stopped";
       this.state.pid = undefined;
@@ -718,12 +891,12 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       this.process = null;
 
       // Fast-restart if the backend is supposed to be running.
-      this.handleProcessExit(code, signal);
+      this.handleProcessExit(spawnedPid, code, signal);
     });
 
     // Handle errors
     this.process.on("error", (error) => {
-      logStream.write(`\n=== Process error: ${error.message} ===\n`);
+      writeLog(`\n=== Process error: ${error.message} ===\n`);
       this.state.status = "error";
       this.state.error = error.message;
       this.emit("error", error);
@@ -918,10 +1091,19 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
       // Strong check: includes runtime verification so we don't "monitor" a missing backend.
       const healthy = await this.checkApiHealth();
-      if (healthy) return;
+      if (healthy) {
+        this.consecutiveHealthFailures = 0;
+        return;
+      }
 
       console.warn("Python API health check failed (unhealthy or unreachable)");
       this.emit("unhealthy");
+      this.consecutiveHealthFailures++;
+      this.appendSupervisorLog(
+        `[PythonProcess] Health failure ${this.consecutiveHealthFailures}/${HEALTH_FAILURES_BEFORE_RESTART}`,
+      );
+      if (this.consecutiveHealthFailures < HEALTH_FAILURES_BEFORE_RESTART) return;
+      this.consecutiveHealthFailures = 0;
       this.scheduleRestart("health check failed");
     }, HEALTH_CHECK_INTERVAL_MS);
   }
@@ -946,14 +1128,24 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   async stop(): Promise<void> {
-    return await this.enqueue(() => this.stopInternal({ markUndesired: true }));
+    return await this.enqueue(() =>
+      this.stopInternal({ markUndesired: true, suppressAutoRestartOnExit: true }),
+    );
   }
 
-  private async stopInternal(opts: { markUndesired: boolean }): Promise<void> {
+  private async stopInternal(opts: {
+    markUndesired: boolean;
+    suppressAutoRestartOnExit: boolean;
+  }): Promise<void> {
     // Explicit stop means the backend is no longer desired; suppress auto-restarts.
     if (opts.markUndesired) this.desiredRunning = false;
     // If we're stopping intentionally, cancel any pending restart timer.
     if (opts.markUndesired) this.clearRestartTimer();
+    this.consecutiveHealthFailures = 0;
+
+    if (opts.suppressAutoRestartOnExit) {
+      this.markExpectedExit(this.process?.pid ?? null, opts.markUndesired ? "stop" : "restart");
+    }
 
     // Always stop checks even if state already says "stopped" (it might be stale).
     this.stopHealthChecks();
@@ -1129,7 +1321,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     this.state.restartCount++;
 
     // IMPORTANT: call internal stop/start to avoid queue re-entrancy deadlocks.
-    await this.stopInternal({ markUndesired: false });
+    await this.stopInternal({ markUndesired: false, suppressAutoRestartOnExit: true });
     await this.sleep(RESTART_DELAY_MS);
     await this.startInternal();
   }
@@ -1145,12 +1337,20 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   private handleProcessExit(
+    pid: number | null,
     code: number | null,
     signal: NodeJS.Signals | null,
   ): void {
     // Ignore exits during intentional shutdown or when the backend isn't desired.
     if (this.isShuttingDown) return;
     if (!this.desiredRunning) return;
+    if (this.isExpectedExit(pid)) {
+      this.appendSupervisorLog(
+        `[PythonProcess] Observed expected exit for PID=${pid} (code=${code}, signal=${signal})`,
+      );
+      this.clearExpectedExit();
+      return;
+    }
     this.handleUnexpectedExit(code, signal);
   }
 
@@ -1165,11 +1365,15 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     if (this.restartTimer) return;
 
     console.log(`[PythonProcess] Scheduling restart: ${reason}`);
+    this.appendSupervisorLog(`[PythonProcess] Scheduling restart: ${reason}`);
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
       // Use restart() so we always cleanly tear down any partial tree.
       this.restart().catch((err) => {
         console.error("Failed to restart Python API:", err);
+        this.appendSupervisorLog(
+          `[PythonProcess] Restart failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       });
     }, RESTART_DELAY_MS);
   }
