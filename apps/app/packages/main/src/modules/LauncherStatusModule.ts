@@ -165,7 +165,6 @@ class LauncherStatusModule implements AppModule {
     const py = pythonProcess();
     const runtimeInfo = py.getRuntimeInfoSnapshot();
     const runtimeVerified = await py.verifyRuntime();
-
     // Health checks
     const backendHealthy = await checkHttpHealth(backendUrlRaw);
     const pythonHealthy = await py.checkApiHealth();
