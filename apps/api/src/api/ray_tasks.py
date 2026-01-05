@@ -2006,7 +2006,9 @@ def run_engine_from_manifest(
             if model_type.lower() != "ovi"
             else render_on_step_callback_ovi
         )
-        _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
+    
+        if os.environ.get("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
+            _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
 
         # get if the model is video or image
         if has_fps:

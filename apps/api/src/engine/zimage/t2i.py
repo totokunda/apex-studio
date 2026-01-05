@@ -199,6 +199,9 @@ class ZImageT2IEngine(ZImageShared):
         self._num_timesteps = len(timesteps)
 
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.40, 0.92)
+        
+        # get the model dtype
+        model_dtype = self.transformer.dtype
 
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -283,7 +286,7 @@ class ZImageT2IEngine(ZImageShared):
                     noise_pred.to(torch.float32), t, latents, return_dict=False
                 )[0]
                 assert latents.dtype == torch.float32
-
+                
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or (
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
@@ -298,7 +301,7 @@ class ZImageT2IEngine(ZImageShared):
                         )
                     except Exception:
                         pass
-
+        
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")
 
         if offload:

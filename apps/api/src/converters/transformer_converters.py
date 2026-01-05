@@ -22,6 +22,88 @@ class FlashVSRTransformerConverter(TransformerConverter):
         }
 
 
+class ZImageTransformerConverter(TransformerConverter):
+    def __init__(self):
+        super().__init__()
+        self.rename_dict = {
+            # ZImage "unstable" checkpoints use a slightly different key layout
+            # compared to the diffusers-style "stable" keys.
+            #
+            # NOTE: We anchor the top-level replacements to avoid double-application
+            # (e.g. "final_layer." is a substring of "all_final_layer.2-1.").
+            r"^final_layer\.": "all_final_layer.2-1.",
+            r"^x_embedder\.": "all_x_embedder.2-1.",
+            # Attention naming: {q_norm,k_norm,out} -> {norm_q,norm_k,to_out.0}
+            ".attention.q_norm.": ".attention.norm_q.",
+            ".attention.k_norm.": ".attention.norm_k.",
+            ".attention.out.": ".attention.to_out.0.",
+        }
+        self.special_keys_map = {
+            ".attention.qkv.": self._split_attention_qkv_,
+        }
+
+    @staticmethod
+    def _split_attention_qkv_(key: str, state_dict: Dict[str, Any]) -> None:
+        """
+        ZImage "unstable" checkpoints store fused attention projections under:
+          - *.attention.qkv.{weight,bias}
+        while "stable" expects separate:
+          - *.attention.to_q.{weight,bias}
+          - *.attention.to_k.{weight,bias}
+          - *.attention.to_v.{weight,bias}
+
+        For FP8/quantized checkpoints we may also see a sibling `*.scale_weight` tensor.
+        We replicate scalar scale tensors; otherwise we split them along the same fused dim.
+        """
+        # Only handle fused QKV tensors (weight/bias/scale_weight)
+        if ".attention.qkv." not in key:
+            return
+
+        def _guess_chunk_dim(t: torch.Tensor) -> int:
+            # Bias vectors: split on dim 0
+            if t.ndim <= 1:
+                return 0
+            # Matrices: prefer out-dim (0) but fall back to (1) if needed.
+            if t.shape[0] % 3 == 0:
+                return 0
+            if t.shape[1] % 3 == 0:
+                return 1
+            raise ValueError(
+                f"Expected a fused QKV dimension divisible by 3 for key='{key}', shape={tuple(t.shape)}"
+            )
+
+        def _write_qkv(src_key: str, t: torch.Tensor) -> None:
+            # Share per-tensor scales across Q/K/V.
+            if t.ndim == 0 or t.numel() == 1:
+                state_dict[src_key.replace(".attention.qkv.", ".attention.to_q.")] = t
+                state_dict[src_key.replace(".attention.qkv.", ".attention.to_k.")] = t
+                state_dict[src_key.replace(".attention.qkv.", ".attention.to_v.")] = t
+                return
+
+            dim = _guess_chunk_dim(t)
+            if t.shape[dim] % 3 != 0:
+                raise ValueError(
+                    f"Expected fused QKV dim divisible by 3 for key='{key}', shape={tuple(t.shape)}, dim={dim}"
+                )
+            to_q, to_k, to_v = ggml_chunk(t, 3, dim=dim)
+            state_dict[src_key.replace(".attention.qkv.", ".attention.to_q.")] = to_q
+            state_dict[src_key.replace(".attention.qkv.", ".attention.to_k.")] = to_k
+            state_dict[src_key.replace(".attention.qkv.", ".attention.to_v.")] = to_v
+
+        # Handle the primary fused tensor.
+        if key.endswith(".weight") or key.endswith(".bias") or key.endswith(".scale_weight"):
+            t = state_dict.pop(key, None)
+            if t is None:
+                return
+            _write_qkv(key, t)
+
+            # If we just split a fused weight/bias, also split/replicate a sibling scale_weight if present.
+            if key.endswith(".weight") or key.endswith(".bias"):
+                scale_key = key.replace(".weight", ".scale_weight").replace(".bias", ".scale_weight")
+                if scale_key in state_dict:
+                    scale_t = state_dict.pop(scale_key)
+                    _write_qkv(scale_key, scale_t)
+
 class WanTransformerConverter(TransformerConverter):
     def __init__(self):
         self.rename_dict = {

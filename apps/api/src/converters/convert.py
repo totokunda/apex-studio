@@ -30,6 +30,7 @@ from src.converters.transformer_converters import (
     Flux2TransformerConverter,
     WanS2VTransformerConverter,
     FlashVSRTransformerConverter,
+    ZImageTransformerConverter,
 )
 
 from src.converters.utils import (
@@ -101,6 +102,8 @@ def get_transformer_converter(model_base: str):
         return Flux2TransformerConverter()
     elif model_base == "wan.flashvsr":
         return FlashVSRTransformerConverter()
+    elif model_base == "zimage.base":
+        return ZImageTransformerConverter()
     else:
         return NoOpTransformerConverter()
 
@@ -136,6 +139,8 @@ def get_transformer_converter_by_model_name(model_name: str):
         return SkyReelsTransformerConverter()
     elif "Magi" in model_name:
         return MagiTransformerConverter()
+    elif "ZImage" in model_name:
+        return ZImageTransformerConverter()
     elif "Flux2" in model_name:
         return Flux2TransformerConverter()
     elif "Flux" in model_name or "Chroma" in model_name:
