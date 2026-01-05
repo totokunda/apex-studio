@@ -49,7 +49,7 @@ spec:
       type: safetensors
       resource_requirements:
         min_vram_gb: 8
-        recommended_vram_gb: 16
+        recommended_vram_gb: 12
       file_size: 253807696
       is_downloaded: true
     is_downloaded: true
@@ -65,8 +65,8 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 24
+        min_vram_gb: 19
+        recommended_vram_gb: 26
       file_size: 16584475660
       is_downloaded: true
     - path: QuantStack/Qwen-Image-Edit-GGUF/Qwen_Image_Edit-Q8_0.gguf
@@ -74,8 +74,8 @@ spec:
       precision: q8_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
+        min_vram_gb: 13
+        recommended_vram_gb: 18
       file_size: 8098524096
       is_downloaded: false
     - path: QuantStack/Qwen-Image-Edit-GGUF/Qwen_Image_Edit-Q6_K.gguf
@@ -83,8 +83,8 @@ spec:
       precision: q6_k
       type: gguf
       resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
+        min_vram_gb: 10
+        recommended_vram_gb: 14
       file_size: 6254197696
       is_downloaded: false
     tokenizer_class: Qwen2Tokenizer
@@ -102,43 +102,41 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 16
-        recommended_vram_gb: 24
+        min_vram_gb: 35
+        recommended_vram_gb: 47
       file_size: 40861227106
     - path: QuantStack/Qwen-Image-Edit-GGUF/Qwen_Image_Edit-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 24
-        recommended_vram_gb: 36
+        min_vram_gb: 22
+        recommended_vram_gb: 30
       file_size: 21761817120
     - path: QuantStack/Qwen-Image-Edit-GGUF/Qwen_Image_Edit-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       resource_requirements:
-        min_vram_gb: 18
-        recommended_vram_gb: 28
+        min_vram_gb: 15
+        recommended_vram_gb: 20
       file_size: 16824990240
     - path: QuantStack/Qwen-Image-Edit-GGUF/Qwen_Image_Edit-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 20
+        min_vram_gb: 10
+        recommended_vram_gb: 14
       file_size: 12140608032
     - path: QuantStack/Qwen-Image-Edit-GGUF/Qwen_Image_Edit-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
       resource_requirements:
-        min_vram_gb: 16
-        recommended_vram_gb: 24
+        min_vram_gb: 8
+        recommended_vram_gb: 12
       file_size: 7062518304
-    
-
   - type: helper
     name: image.processor
     label: Image Processor
@@ -150,6 +148,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 15879236
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   defaults:
     run:
       num_inference_steps: 40

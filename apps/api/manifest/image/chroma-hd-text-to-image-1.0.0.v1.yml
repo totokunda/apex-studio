@@ -49,6 +49,9 @@ spec:
       type: safetensors
       variant: default
       file_size: 167667721
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: T5 Text Encoder
     base: T5EncoderModel
@@ -58,6 +61,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 9524669246
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     tokenizer_class: T5Tokenizer
     tokenizer_name: lodestones/Chroma1-HD
     tokenizer_kwargs:
@@ -71,6 +77,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 17800194937
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: silveroxides/Chroma-GGUF/Chroma1-HD/Chroma1-HD-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
@@ -84,10 +93,9 @@ spec:
       precision: q4_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
+        min_vram_gb: 7
+        recommended_vram_gb: 11
       file_size: 5432053920
-   
   defaults:
     run:
       num_inference_steps: 50

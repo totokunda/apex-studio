@@ -5,8 +5,8 @@ metadata:
   model: wan
   name: Wan 2.1 14B SCAIL
   version: 1.0.0
-  description: Wan 2.1 14B is a 14B parameter model for SCAIL generation for character animation
-    using a pose video.
+  description: Wan 2.1 14B is a 14B parameter model for SCAIL generation for character
+    animation using a pose video.
   tags:
   - wan
   - scail
@@ -41,12 +41,12 @@ spec:
   - sage
   - efficient_dot_product_attention
   loras:
-    - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors
-      scale: 1.0
-      name: lightx2v_lora
-      label: Lightx2v LoRA
-      component: transformer
-      verified: true
+  - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors
+    scale: 1.0
+    name: lightx2v_lora
+    label: Lightx2v LoRA
+    component: transformer
+    verified: true
   components:
   - type: scheduler
     label: Scheduler
@@ -67,6 +67,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -77,11 +80,17 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
   - type: transformer
     base: wan.scail
@@ -91,82 +100,129 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 32790068352
+      resource_requirements:
+        min_vram_gb: 29
+        recommended_vram_gb: 39
     - path: Kijai/WanVideo_comfy_fp8_scaled/SCAIL/Wan21-14B-SCAIL-preview_fp8_e4m3fn_scaled_KJ.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
+      file_size: 16401525232
+      resource_requirements:
+        min_vram_gb: 20
+        recommended_vram_gb: 27
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 18144988672
+      resource_requirements:
+        min_vram_gb: 19
+        recommended_vram_gb: 26
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 14234127872
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q5_1.gguf
       variant: GGUF_Q5_1
       precision: q5_1
       type: gguf
       file_size: 13098716672
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       file_size: 12744003072
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q5_0.gguf
       variant: GGUF_Q5_0
       precision: q5_0
       type: gguf
       file_size: 12266409472
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       file_size: 12089462272
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       file_size: 11341532672
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q4_1.gguf
       variant: GGUF_Q4_1
       precision: q4_1
       type: gguf
       file_size: 11080207872
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       file_size: 10437955072
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q4_0.gguf
       variant: GGUF_Q4_0
       precision: q4_0
       type: gguf
       file_size: 10247900672
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
       file_size: 8587382272
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 7926287872
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: vantagewithai/SCAIL-Preview-GGUF/Wan21-14B-SCAIL-preview_comfy-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
       file_size: 6499241472
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     config:
       dim: 5120
-      eps: 0.000001
+      eps: 1.0e-06
       ffn_dim: 13824
       freq_dim: 256
       in_dim: 20
-      model_type: "i2v"
+      model_type: i2v
       num_heads: 40
       num_layers: 40
       out_dim: 16
@@ -181,6 +237,9 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 1264218342
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
     preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
     processor_class: CLIPImageProcessor
     model_class: CLIPVisionModel

@@ -51,6 +51,9 @@ spec:
     - path: black-forest-labs/FLUX.1-dev/vae
       variant: default
       file_size: 167667722
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     name: text_encoder
     label: CLIP Text Encoder
@@ -59,6 +62,9 @@ spec:
     - path: black-forest-labs/FLUX.1-dev/text_encoder
       variant: default
       file_size: 246144965
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     tokenizer_class: CLIPTokenizer
     tokenizer_name: black-forest-labs/FLUX.1-dev
     tokenizer_kwargs:
@@ -71,6 +77,9 @@ spec:
     - path: black-forest-labs/FLUX.1-dev/text_encoder_2
       variant: default
       file_size: 9524669251
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     tokenizer_class: T5Tokenizer
     tokenizer_name: black-forest-labs/FLUX.1-dev
     tokenizer_kwargs:
@@ -84,11 +93,17 @@ spec:
       precision: int4
       type: safetensors
       file_size: 6768309832
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: nunchaku-tech/nunchaku-flux.1-dev/svdq-fp4_r32-flux.1-dev.safetensors
       variant: nf4_r32
       precision: nf4
       type: safetensors
       file_size: 7038706888
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
   defaults:
     run:
       num_inference_steps: 40

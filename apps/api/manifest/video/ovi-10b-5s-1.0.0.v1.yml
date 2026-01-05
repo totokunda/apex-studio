@@ -5,7 +5,8 @@ metadata:
   model: wan
   name: Ovi 10B 5s
   version: 1.0.0
-  description: Ovi 10B is a 10B parameter model for text-to-video and image to video generation capable of generating 5s videos.
+  description: Ovi 10B is a 10B parameter model for text-to-video and image to video
+    generation capable of generating 5s videos.
   tags:
   - ovi
   - t2v
@@ -72,6 +73,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 2818779509
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
   - type: vae
     name: audio_vae
     label: Audio VAE
@@ -83,6 +88,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 449217313
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: extra_model_path
     name: audio_vae_extra_model_path
     label: Audio VAE Extra Model Path
@@ -92,6 +101,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 686652758
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -102,11 +115,17 @@ spec:
       precision: fp16
       type: safetensors
       file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder/config.json
   - type: transformer
     base: wan.ovi
@@ -117,42 +136,58 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 23321751056
+      resource_requirements:
+        min_vram_gb: 22
+        recommended_vram_gb: 30
     - path: Kijai/WanVideo_comfy_fp8_scaled/TI2V/Ovi/Wan2_2-5B-Ovi_960x960_fp8_e4m3fn_scaled_KJ.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
+      file_size: 12374673968
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 22
     config:
       video:
-        "patch_size": [1, 2, 2]
-        "model_type": "t2v"
-        "dim": 3072
-        "ffn_dim": 14336
-        "freq_dim": 256
-        "num_heads": 24
-        "num_layers": 30
-        "in_dim": 48 
-        "out_dim": 48 
-        "text_len": 512 
-        "window_size": [-1, -1]
-        "qk_norm": true
-        "cross_attn_norm": true
-        "eps": 0.000001
+        patch_size:
+        - 1
+        - 2
+        - 2
+        model_type: t2v
+        dim: 3072
+        ffn_dim: 14336
+        freq_dim: 256
+        num_heads: 24
+        num_layers: 30
+        in_dim: 48
+        out_dim: 48
+        text_len: 512
+        window_size:
+        - -1
+        - -1
+        qk_norm: true
+        cross_attn_norm: true
+        eps: 1.0e-06
       audio:
-        "patch_size": [1]
-        "model_type": "t2a"
-        "dim": 3072
-        "ffn_dim": 14336
-        "freq_dim": 256
-        "num_heads": 24
-        "num_layers": 30
-        "in_dim": 20 
-        "out_dim": 20 
-        "text_len": 512 
-        "window_size": [-1, -1]
-        "qk_norm": true
-        "cross_attn_norm": true
-        "eps": 0.000001
-        "temporal_rope_scaling_factor": 0.19676 
+        patch_size:
+        - 1
+        model_type: t2a
+        dim: 3072
+        ffn_dim: 14336
+        freq_dim: 256
+        num_heads: 24
+        num_layers: 30
+        in_dim: 20
+        out_dim: 20
+        text_len: 512
+        window_size:
+        - -1
+        - -1
+        qk_norm: true
+        cross_attn_norm: true
+        eps: 1.0e-06
+        temporal_rope_scaling_factor: 0.19676
   defaults:
     run:
       num_inference_steps: 50
@@ -233,8 +268,10 @@ spec:
       required: false
     - id: prompt
       label: Prompt
-      description: Describe the video you want to generate using the <S> and <E> tags for start and end of the text.
-      placeholder: A man in the video grumbles angrily and says <S>I love open source. I can create anything I want.<E> in a deep low voice.
+      description: Describe the video you want to generate using the <S> and <E> tags
+        for start and end of the text.
+      placeholder: A man in the video grumbles angrily and says <S>I love open source.
+        I can create anything I want.<E> in a deep low voice.
       type: text
       panel: prompting
       required: true
@@ -264,7 +301,7 @@ spec:
       - name: Full HD
         value: 960
       - name: HD
-        value:  720
+        value: 720
       - name: SD
         value: 480
       - name: Custom
@@ -274,22 +311,22 @@ spec:
       description: Select the aspect ratio of the output video
       panel: size
       type: select
-      default: "1:1"
+      default: '1:1'
       options:
       - name: Square
-        value: "1:1"
+        value: '1:1'
         ratio_w: 1
         ratio_h: 1
       - name: Wide
-        value: "16:9"
+        value: '16:9'
         ratio_w: 16
         ratio_h: 9
       - name: Vertical
-        value: "9:16"
+        value: '9:16'
         ratio_w: 9
         ratio_h: 16
       - name: Classic
-        value: "4:3"
+        value: '4:3'
         ratio_w: 4
         ratio_h: 3
       - name: Custom

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import sys
 import time
 import urllib.request
@@ -369,20 +370,25 @@ def list_remote_python_code_assets(cfg: AutoUpdateConfig) -> list[RemoteAsset]:
 
 
 def _download_file(url: str, dest: Path) -> None:
+    """
+    Download a file to an explicit destination path.
+
+    Uses the project's DownloadMixin for consistent behavior (resume support, .part files,
+    retries, shared headers, optional Rust fast-path).
+    """
+    dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "apex-engine", **(DEFAULT_HEADERS or {})},
+
+    # Delegate to shared download logic
+    from src.mixins.download_mixin import DownloadMixin
+
+    DownloadMixin()._download_from_url(  # noqa: SLF001 (internal helper, intentionally reused)
+        url=str(url),
+        save_path=str(dest.parent),
+        progress_callback=None,
+        filename=dest.name,
+        dest_path=str(dest),
     )
-    with urllib.request.urlopen(req, timeout=60) as r:
-        with tmp.open("wb") as f:
-            while True:
-                chunk = r.read(1024 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-    os.replace(str(tmp), str(dest))
 
 
 def _run_apply_code_update(archive_path: Path, target_root: Path) -> tuple[int, str]:
@@ -428,6 +434,54 @@ def _safe_to_update(root: Path) -> bool:
     if os.environ.get("APEX_ALLOW_DEV_AUTO_UPDATE", "").strip().lower() in {"1", "true", "yes"}:
         return True
     return False
+
+
+def _has_active_jobs() -> bool:
+    """
+    Best-effort: return True if any tracked Ray job is still running/queued.
+    Never raises: auto-update should not crash the API.
+    """
+    try:
+        import ray
+
+        # Local import to avoid import-time Ray initialization side effects.
+        from .job_store import job_store as unified_job_store
+
+        if not ray.is_initialized():
+            # If Ray isn't initialized, there shouldn't be active Ray jobs.
+            return False
+
+        for job_id in unified_job_store.all_job_ids():
+            info = unified_job_store.get(job_id) or {}
+            ref = info.get("ref")
+            if ref is None:
+                continue
+            ready, _ = ray.wait([ref], timeout=0)
+            if not ready:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _request_self_restart(reason: str) -> None:
+    """
+    Gracefully stop the API process so the supervisor (Apex Studio / systemd / etc.)
+    can restart it. SIGTERM should trigger FastAPI lifespan shutdown and `shutdown_ray()`.
+    """
+    try:
+        update_persisted_config(
+            auto_update_restart_reason=reason,
+            auto_update_restart_requested_at=_now_iso(),
+        )
+    except Exception:
+        pass
+
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except Exception:
+        # Last resort: hard exit
+        os._exit(0)
 
 
 def auto_update_once() -> None:
@@ -493,7 +547,11 @@ def auto_update_once() -> None:
             auto_update_last_apply_status="success",
             auto_update_last_apply_output_tail=tail,
             auto_update_current_version=candidate.asset_version,
+            auto_update_restart_pending=True,
         )
+        # Restart immediately if we're idle; otherwise, defer to the loop to retry.
+        if not _has_active_jobs():
+            _request_self_restart(reason=f"Auto-update applied {candidate.asset_version}")
     else:
         update_persisted_config(
             auto_update_last_apply_finished_at=_now_iso(),
@@ -510,6 +568,11 @@ async def auto_update_loop() -> None:
     while True:
         try:
             cfg = get_auto_update_config()
+            # If an update was applied earlier, restart once we're idle.
+            persisted = read_persisted_config()
+            if persisted.get("auto_update_restart_pending") and not _has_active_jobs():
+                update_persisted_config(auto_update_restart_pending=False)
+                _request_self_restart(reason="Auto-update pending restart (idle)")
             if cfg.enabled:
                 await asyncio.to_thread(auto_update_once)
             await asyncio.sleep(cfg.interval_seconds)
