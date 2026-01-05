@@ -230,14 +230,20 @@ def internal_serve(
     keepalive = 2
     max_requests = 1000
 
+    disable_dual_stack = bool(os.getenv("APEX_DISABLE_DUAL_STACK"))
+
     def _binds_for(host_value: str) -> list[str]:
         if host_value in {"127.0.0.1", "localhost"}:
-            return ["127.0.0.1", "::1"]
+            return ["127.0.0.1"] if disable_dual_stack else ["127.0.0.1", "::1"]
         if host_value in {"0.0.0.0", "::", "[::]"}:
-            return ["0.0.0.0", "::"]
+            return ["0.0.0.0"] if disable_dual_stack else ["0.0.0.0", "::"]
         return [host_value]
 
     binds = _binds_for(host)
+    if disable_dual_stack:
+        print(
+            f"APEX_DISABLE_DUAL_STACK is set; binding single address only: {binds[0]}:{port}"
+        )
 
     # Worker count + loglevel follow `gunicorn.conf.py` semantics.
     env = os.getenv("ENVIRONMENT")
