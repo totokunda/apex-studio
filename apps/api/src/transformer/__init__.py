@@ -50,7 +50,14 @@ def _auto_register_transformers():
             try:
                 module = importlib.import_module(module_name)
             except Exception as e:
-                logger.error(f"Error importing module {module_name}: {e}")
+                msg = str(e)
+                if "libcudart.so.13" in msg:
+                    msg = (
+                        f"{msg} (Nunchaku wheel requires CUDA runtime 13. "
+                        "Install CUDA runtime 13 / make it discoverable via LD_LIBRARY_PATH, "
+                        "or uninstall/avoid Nunchaku variants.)"
+                    )
+                logger.error(f"Error importing module {module_name}: {msg}")
                 # If import fails for any reason, skip auto-registration for this module.
                 continue
 

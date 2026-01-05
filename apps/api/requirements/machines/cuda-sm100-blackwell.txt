@@ -32,5 +32,5 @@ apex @ git+https://github.com/NVIDIA/apex.git; sys_platform == "linux"
 
 sageattention @ git+https://github.com/thu-ml/SageAttention.git; sys_platform == "linux"
 flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git; sys_platform == "linux"
-
+mlx[cpu]
 

@@ -31,6 +31,12 @@ spec:
   attention_types:
   - sdpa
   - efficient_dot_product_attention
+  loras:
+  - scale: 1.0
+    name: qwen_image_lightning
+    label: Qwen Image Lightning 4 Steps
+    verified: true
+    source: lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
   components:
   - type: scheduler
     label: Scheduler
@@ -57,6 +63,9 @@ spec:
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
     base: Qwen2_5_VLForConditionalGeneration
+    config_path: Qwen/Qwen-Image/text_encoder/config.json
+    gguf_kwargs:
+      key_map: qwen_vl
     model_path:
     - path: Qwen/Qwen-Image/text_encoder
       variant: default
@@ -66,7 +75,7 @@ spec:
         min_vram_gb: 19
         recommended_vram_gb: 26
       file_size: 16584475660
-    - path: mradermacher/CLOVER-Qwen2.5-VL-GGUF/CLOVER-Qwen2.5-VL.Q8_0.gguf
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
@@ -74,7 +83,7 @@ spec:
         min_vram_gb: 13
         recommended_vram_gb: 18
       file_size: 8098524096
-    - path: mradermacher/CLOVER-Qwen2.5-VL-GGUF/CLOVER-Qwen2.5-VL.Q6_K.gguf
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
@@ -86,6 +95,18 @@ spec:
     tokenizer_name: Qwen/Qwen-Image
     tokenizer_kwargs:
       subfolder: tokenizer
+  - type: extra_model_path
+    label: Qwen2.5 VL Vision Transformer
+    component: text_encoder
+    model_path:
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-BF16.gguf
+      variant: GGUF_BF16
+      precision: fp16
+      type: gguf
+      file_size: 1354163040
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
   - type: transformer
     label: QwenImage Transformer
     base: qwenimage.base
@@ -402,9 +423,3 @@ spec:
       min: 1.0
       max: 15.0
       step: 0.5
-  loras:
-  - scale: 0.0
-    name: qwen_image_lightning
-    label: Qwen Image Lightning 4 Steps
-    verified: true
-    source: lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors

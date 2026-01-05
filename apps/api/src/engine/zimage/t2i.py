@@ -117,10 +117,12 @@ class ZImageT2IEngine(ZImageShared):
                 progress_callback=encode_progress_callback,
             )
             safe_emit_progress(progress_callback, 0.18, "Prompts ready")
-
+            
+        
         if offload:
             self._offload("text_encoder")
             safe_emit_progress(progress_callback, 0.20, "Text encoder offloaded")
+
 
         if not self.transformer:
             safe_emit_progress(progress_callback, 0.21, "Loading transformer")

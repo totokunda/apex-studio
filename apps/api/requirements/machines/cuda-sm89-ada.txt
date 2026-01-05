@@ -33,5 +33,5 @@ sageattention @ git+https://github.com/thu-ml/SageAttention.git; sys_platform ==
 
 # FlashAttention: source build.
 flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git; sys_platform == "linux"
-
+mlx[cpu]
 

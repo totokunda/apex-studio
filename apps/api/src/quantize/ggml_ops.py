@@ -65,6 +65,58 @@ def ggml_cat(tensors: Iterable[torch.Tensor], dim: int = 0) -> torch.Tensor:
     return out
 
 
+def ggml_stack(tensors: Iterable[torch.Tensor], dim: int = 0) -> torch.Tensor:
+    """
+    A stack helper that preserves GGML metadata when inputs are GGMLTensor.
+
+    - If any inputs are GGMLTensor, the output is a GGMLTensor and metadata is
+      copied from the first GGML tensor, with `tensor_shape` updated to the new
+      shape (i.e. an inserted dimension of size `len(tensors)` at `dim`).
+    - Otherwise, this behaves exactly like `torch.stack` and returns a plain Tensor.
+    """
+    tensors = list(tensors)
+    out = torch.stack(tensors, dim=dim)
+
+    # ---- GGML path --------------------------------------------------------
+    ggml_inputs: List[GGMLTensor] = [t for t in tensors if isinstance(t, GGMLTensor)]
+    if ggml_inputs:
+        template = ggml_inputs[0]
+        wrapped = torch.Tensor._make_subclass(
+            GGMLTensor, out, require_grad=out.requires_grad
+        )
+        wrapped.tensor_type = getattr(template, "tensor_type", None)
+        wrapped.dequant_dtype = getattr(template, "dequant_dtype", None)
+        wrapped.patches = list(getattr(template, "patches", []))
+
+        # Compute logical tensor_shape by inserting a new dim of size N
+        base_shape = list(getattr(template, "tensor_shape", template.shape))
+        ndims = len(base_shape)
+        dim_normalized = dim if dim >= 0 else dim + ndims + 1
+        if not 0 <= dim_normalized <= ndims:
+            # Fallback: mirror runtime shape if something is inconsistent
+            wrapped.tensor_shape = torch.Size(out.shape)
+            return wrapped
+
+        base_shape.insert(dim_normalized, len(tensors))
+        wrapped.tensor_shape = torch.Size(base_shape)
+        return wrapped
+
+    # ---- FP8ScaledTensor path --------------------------------------------
+    fp8_inputs: List[FPScaledTensor] = [
+        t for t in tensors if isinstance(t, FPScaledTensor)
+    ]
+    if fp8_inputs:
+        template = fp8_inputs[0]
+        wrapped_fp8 = torch.Tensor._make_subclass(
+            FPScaledTensor, out, require_grad=out.requires_grad
+        )
+        wrapped_fp8.logical_dtype = getattr(template, "logical_dtype", None)
+        return wrapped_fp8
+
+    # Fallback: no special tensor subclasses, return plain tensor
+    return out
+
+
 def ggml_chunk(
     input: torch.Tensor, chunks: int, dim: int = 0
 ) -> Tuple[torch.Tensor, ...]:

@@ -55,10 +55,10 @@ spec:
     is_downloaded: true
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
-    config_path: Qwen/Qwen-Image/text_encoder/config.json
     base: Qwen2_5_VLForConditionalGeneration
+    config_path: Qwen/Qwen-Image/text_encoder/config.json
     gguf_kwargs:
-      key_map: llama
+      key_map: qwen_vl
     model_path:
     - path: Qwen/Qwen-Image/text_encoder
       variant: default
@@ -68,8 +68,7 @@ spec:
         min_vram_gb: 19
         recommended_vram_gb: 26
       file_size: 16584475660
-      is_downloaded: true
-    - path: QuantStack/Qwen-Image-Edit-GGUF/Qwen_Image_Edit-Q8_0.gguf
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
@@ -77,8 +76,7 @@ spec:
         min_vram_gb: 13
         recommended_vram_gb: 18
       file_size: 8098524096
-      is_downloaded: false
-    - path: QuantStack/Qwen-Image-Edit-GGUF/Qwen_Image_Edit-Q6_K.gguf
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
@@ -86,12 +84,22 @@ spec:
         min_vram_gb: 10
         recommended_vram_gb: 14
       file_size: 6254197696
-      is_downloaded: false
     tokenizer_class: Qwen2Tokenizer
-    tokenizer_name: Qwen/Qwen-Image-Edit
+    tokenizer_name: Qwen/Qwen-Image
     tokenizer_kwargs:
       subfolder: tokenizer
-    is_downloaded: true
+  - type: extra_model_path
+    label: Qwen2.5 VL Vision Transformer
+    component: text_encoder
+    model_path:
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-BF16.gguf
+      variant: GGUF_BF16
+      precision: fp16
+      type: gguf
+      file_size: 1354163040
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
   - type: transformer
     label: QwenImage Transformer
     base: qwenimage.base

@@ -54,7 +54,7 @@ cd apps/api
 apex-engine dev
 
 # Or:
-# apex-engine start -f Procfile.dev
+# python3 -m src serve
 ```
 
 #### Option B: manual pip install (current environment)
@@ -83,6 +83,12 @@ cd apps/api
 apex-engine dev
 ```
 
+### Nunchaku
+If you your machine supports using the Nunchakue models, you can install the Nunchaku models by running the following command:
+```bash
+python3 scripts/maybe_install_nunchaku.py --install
+```
+Which will install the Nunchaku models if your machine supports it.
 
 ### Optional: Rust-accelerated downloader (for max download throughput)
 
