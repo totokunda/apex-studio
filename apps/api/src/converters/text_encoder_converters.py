@@ -1,7 +1,7 @@
 from typing import Dict, Any
 from src.quantize.ggml_ops import ggml_cat, ggml_stack
 from src.converters.base_converter import BaseConverter
-
+from typing import List
 
 class TextEncoderConverter(BaseConverter):
     pass
@@ -208,7 +208,7 @@ class T5TextEncoderConverter(TextEncoderConverter):
         )
         return not has_source
 
-    def convert(self, state_dict: Dict[str, Any], **kwargs):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
         """
         Custom convert that allows multiple rename rules to apply to the same key.
 
@@ -219,7 +219,10 @@ class T5TextEncoderConverter(TextEncoderConverter):
         `encoder.block.0.layer.0.SelfAttention.q`). This override applies all
         applicable replacements first, then performs a single in-place update.
         """
-
+        
+        if self._already_converted(state_dict, model_keys):
+            return state_dict
+            
         # Keep the same ordering semantics as the base class.
         self._sort_rename_dict()
 

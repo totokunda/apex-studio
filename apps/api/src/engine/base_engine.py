@@ -1778,6 +1778,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         self.to_device(getattr(self, component_name))
 
         video = video.to(dtype=getattr(self, component_name).dtype, device=self.device)
+        
+        self.enable_vae_tiling(component_name=component_name)
 
         latents = getattr(self, component_name).encode(video, return_dict=False)[0]
         if sample_mode == "sample":
