@@ -5,13 +5,13 @@ export type HostPlatform = NodeJS.Platform;
 export type HostArch = NodeJS.Architecture;
 
 export interface ServerBundleAsset {
-  /** GitHub release tag name, e.g. "v0.0.1-server" */
+  /** Version folder name on the remote host, e.g. "v0.1.0" */
   tag: string;
-  /** Parsed semver from tag, e.g. "0.0.1" */
+  /** Parsed semver from tag, e.g. "0.1.0" */
   tagVersion: string;
-  /** GitHub release name (optional / may be empty) */
+  /** Optional display name (not currently provided for Hugging Face sources) */
   releaseName?: string;
-  /** ISO timestamp (published_at) */
+  /** ISO timestamp (not currently provided for Hugging Face sources) */
   publishedAt?: string;
   prerelease?: boolean;
 
@@ -19,7 +19,7 @@ export interface ServerBundleAsset {
   assetName: string;
   /** Browser download URL for the asset */
   downloadUrl: string;
-  /** Size in bytes (if provided by GitHub) */
+  /** Size in bytes (if provided by the remote host) */
   size?: number;
 
   /** Parsed from the asset filename */
@@ -66,12 +66,23 @@ function normalizePlatformCandidates(hostPlatform: HostPlatform): string[] {
 function normalizeArchCandidates(hostArch: HostArch): string[] {
   const base = hostArch;
   const out = new Set<string>([base]);
-  if (hostArch === "x64") out.add("amd64");
+  if (hostArch === "x64") {
+    out.add("amd64");
+    out.add("x86_64");
+  }
   if (hostArch === "arm64") out.add("aarch64");
   return [...out];
 }
 
-function parsePythonApiAssetName(filename: string): Omit<
+function encodePathSegments(path: string): string {
+  return path
+    .split("/")
+    .filter(Boolean)
+    .map((s) => encodeURIComponent(s))
+    .join("/");
+}
+
+function parsePythonBundleAssetName(filename: string): Omit<
   ServerBundleAsset,
   | "tag"
   | "tagVersion"
@@ -82,9 +93,11 @@ function parsePythonApiAssetName(filename: string): Omit<
   | "downloadUrl"
   | "size"
 > | null {
-  // Example: python-api-0.1.0-darwin-arm64-cpu-cp312.tar.zst
+  // Examples:
+  // - python-api-0.1.0-darwin-arm64-cpu-cp312.tar.zst
+  // - python-code-0.1.0-linux-x86_64-cuda126-cp312.tar.zst
   const re =
-    /^python-api-(?<version>[^-]+)-(?<platform>[^-]+)-(?<arch>[^-]+)-(?<device>[^-]+)-(?<python>[^.]+)\.tar\.zst$/i;
+    /^python-(?:api|code)-(?<version>[^-]+)-(?<platform>[^-]+)-(?<arch>[^-]+)-(?<device>[^-]+)-(?<python>[^.]+)\.tar\.zst$/i;
   const m = re.exec(filename);
   if (!m || !m.groups) return null;
   return {
@@ -96,22 +109,18 @@ function parsePythonApiAssetName(filename: string): Omit<
   };
 }
 
-type GitHubRelease = {
-  tag_name?: string;
-  name?: string;
-  prerelease?: boolean;
-  published_at?: string;
-  assets?: Array<{
-    name?: string;
-    browser_download_url?: string;
-    size?: number;
-  }>;
+type HfRepoTreeItem = {
+  type?: "file" | "directory";
+  path?: string;
+  size?: number;
+  lfs?: { size?: number };
 };
 
 class RemoteVersioningService {
   readonly #owner: string;
   readonly #repo: string;
-  readonly #apiBase = "https://api.github.com";
+  readonly #apiBase = "https://huggingface.co";
+  readonly #revision = "main";
   #cache:
     | {
         at: number;
@@ -125,6 +134,24 @@ class RemoteVersioningService {
     this.#repo = repo;
   }
 
+  async #listTree(path?: string): Promise<HfRepoTreeItem[]> {
+    const base = `${this.#apiBase}/api/models/${this.#owner}/${this.#repo}/tree/${this.#revision}`;
+    const url = path ? `${base}/${encodePathSegments(path)}` : base;
+    const res = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "apex-studio",
+      },
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Failed to fetch Hugging Face repo tree: ${res.status} ${res.statusText}`,
+      );
+    }
+    const json = (await res.json()) as unknown;
+    return Array.isArray(json) ? (json as HfRepoTreeItem[]) : [];
+  }
+
   async listServerVersionsForHost(host: {
     platform: HostPlatform;
     arch: HostArch;
@@ -135,38 +162,34 @@ class RemoteVersioningService {
       return this.#cache.payload;
     }
 
-    const url = `${this.#apiBase}/repos/${this.#owner}/${this.#repo}/releases?per_page=100`;
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "apex-studio",
-      },
-    });
-    if (!res.ok) {
-      throw new Error(
-        `Failed to fetch releases: ${res.status} ${res.statusText}`,
-      );
-    }
-
-    const releases = (await res.json()) as GitHubRelease[];
     const items: ServerBundleAsset[] = [];
     const platformCandidates = normalizePlatformCandidates(host.platform);
     const archCandidates = normalizeArchCandidates(host.arch);
 
-    for (const r of releases) {
-      const tag = String(r.tag_name || "");
-      const tagMatch = /^v(?<ver>\d+\.\d+\.\d+)-server$/i.exec(tag);
-      if (!tagMatch?.groups?.ver) continue;
-      const tagVersion = tagMatch.groups.ver;
+    const root = await this.#listTree();
+    const versionDirs = root
+      .filter((x) => x?.type === "directory" && typeof x.path === "string")
+      .map((x) => String(x.path))
+      .filter((p) => /^v?\d+\.\d+\.\d+$/i.test(p.split("/").pop() || ""))
+      .sort((a, b) => {
+        const va = (a.split("/").pop() || "").replace(/^v/i, "");
+        const vb = (b.split("/").pop() || "").replace(/^v/i, "");
+        return compareSemverDesc(va, vb);
+      });
 
-      const assets = Array.isArray(r.assets) ? r.assets : [];
-      for (const a of assets) {
-        const assetName = String(a.name || "");
-        const downloadUrl = String(a.browser_download_url || "");
-        if (!assetName || !downloadUrl) continue;
+    for (const dirPath of versionDirs) {
+      const dirName = dirPath.split("/").pop() || dirPath;
+      const tag = dirName;
+      const tagVersion = dirName.replace(/^v/i, "");
+
+      const entries = await this.#listTree(dirPath);
+      for (const e of entries) {
+        if (e?.type !== "file" || typeof e.path !== "string") continue;
+        const fullPath = String(e.path);
+        const assetName = fullPath.split("/").pop() || fullPath;
         if (!assetName.toLowerCase().endsWith(".tar.zst")) continue;
 
-        const parsed = parsePythonApiAssetName(assetName);
+        const parsed = parsePythonBundleAssetName(assetName);
         if (!parsed) continue;
 
         // Quick host verify (platform + arch)
@@ -174,15 +197,16 @@ class RemoteVersioningService {
         const archOk = archCandidates.includes(parsed.arch);
         if (!platformOk || !archOk) continue;
 
+        const downloadUrl = `${this.#apiBase}/${this.#owner}/${this.#repo}/resolve/${this.#revision}/${encodePathSegments(fullPath)}?download=true`;
+        const size = e.lfs?.size ?? e.size;
+
         items.push({
           tag,
           tagVersion,
-          releaseName: r.name || undefined,
-          publishedAt: r.published_at || undefined,
-          prerelease: Boolean(r.prerelease),
+          prerelease: false,
           assetName,
           downloadUrl,
-          size: a.size,
+          size,
           ...parsed,
         });
       }
@@ -239,8 +263,8 @@ export class RemoteVersioningModule implements AppModule {
 }
 
 export function remoteVersioningModule() {
-  // Repo where releases are published.
-  return new RemoteVersioningModule({ owner: "totokunda", repo: "apex-studio" });
+  // Hugging Face Hub repo where server bundles are published.
+  return new RemoteVersioningModule({ owner: "totoku", repo: "apex-studio-server" });
 }
 
 

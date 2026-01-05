@@ -31,6 +31,10 @@ def _start_parent_watchdog() -> None:
     it will set APEX_PARENT_PID. If that parent process goes away, we exit.
     This avoids orphaned API servers without ever killing unrelated processes.
     """
+    # Allow manual/CLI runs to opt out of parent ownership checks.
+    # Any non-empty value enables disablement (e.g. "1", "true").
+    if os.getenv("APEX_DISABLE_PARENT_WATCHDOG"):
+        return
     raw = os.getenv("APEX_PARENT_PID")
     if not raw:
         return
