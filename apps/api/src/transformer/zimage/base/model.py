@@ -144,7 +144,7 @@ class ZSingleStreamAttnProcessor:
         # Reshape back
         hidden_states = hidden_states.flatten(2, 3)
         hidden_states = hidden_states.to(dtype)
-
+        
         output = attn.to_out[0](hidden_states)
         if len(attn.to_out) > 1:  # dropout
             output = attn.to_out[1](output)
@@ -232,12 +232,14 @@ class ZImageTransformerBlock(nn.Module):
                 attention_mask=attn_mask,
                 freqs_cis=freqs_cis,
             )
-            x = x + gate_msa * self.attention_norm2(attn_out)
 
+
+            x = x + gate_msa * self.attention_norm2(attn_out)
             # FFN block
             x = x + gate_mlp * self.ffn_norm2(
                 self.feed_forward(self.ffn_norm1(x) * scale_mlp)
             )
+
         else:
             # Attention block
             attn_out = self.attention(
@@ -628,6 +630,7 @@ class ZImageTransformer2DModel(
         )
 
         x = pad_sequence(x, batch_first=True, padding_value=0.0)
+        
         x_freqs_cis = pad_sequence(x_freqs_cis, batch_first=True, padding_value=0.0)
         # Clarify the length matches to satisfy Dynamo due to "Symbolic Shape Inference" to avoid compilation errors
         x_freqs_cis = x_freqs_cis[:, : x.shape[1]]
@@ -637,6 +640,7 @@ class ZImageTransformer2DModel(
         )
         for i, seq_len in enumerate(x_item_seqlens):
             x_attn_mask[i, :seq_len] = 1
+        
 
         if torch.is_grad_enabled() and self.gradient_checkpointing:
             for layer in self.noise_refiner:
@@ -646,6 +650,9 @@ class ZImageTransformer2DModel(
         else:
             for layer in self.noise_refiner:
                 x = layer(x, x_attn_mask, x_freqs_cis, adaln_input)
+                
+        
+
 
         # cap embed & refine
         cap_item_seqlens = [len(_) for _ in cap_feats]
@@ -704,7 +711,9 @@ class ZImageTransformer2DModel(
         )
         for i, seq_len in enumerate(unified_item_seqlens):
             unified_attn_mask[i, :seq_len] = 1
+            
 
+        
         if torch.is_grad_enabled() and self.gradient_checkpointing:
             for layer in self.layers:
                 unified = self._gradient_checkpointing_func(
