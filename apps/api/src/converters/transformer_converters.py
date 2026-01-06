@@ -4,7 +4,7 @@ from src.quantize.ggml_ops import ggml_cat, ggml_chunk, ggml_split
 import torch
 import re
 from src.converters.base_converter import BaseConverter
-
+from typing import List
 
 class TransformerConverter(BaseConverter):
     pass
@@ -253,7 +253,10 @@ class WanAnimateTransformerConverter(TransformerConverter):
             "scaled_fp8": self.remove_keys_inplace,
         }
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
+        if model_keys is not None:
+            if self._already_converted(state_dict, model_keys):
+                return state_dict
         self._sort_rename_dict()
         for key in list(state_dict.keys()):
             new_key = self._apply_rename_dict(key)
@@ -671,9 +674,7 @@ class LTXTransformerConverter(TransformerConverter):
 
 
 class StepVideoTransformerConverter(TransformerConverter):
-    def convert(self, state_dict: Dict[str, Any]):
-        return state_dict
-
+    pass
 
 class HunyuanVideoTransformerConverter(TransformerConverter):
     def __init__(self):
@@ -1068,7 +1069,10 @@ class MochiTransformerConverter(TransformerConverter):
         new_key = f"transformer_blocks.{idx}.norm1_context.linear_1.{suffix}"
         sd[new_key] = tensor
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
+        if model_keys is not None:
+            if self._already_converted(state_dict, model_keys):
+                return state_dict
         for key in list(state_dict.keys()):
             # last layer’s mod_y handled separately first
             if f"blocks.{self.num_layers - 1}.mod_y." in key:
@@ -1340,7 +1344,10 @@ class FluxTransformerConverter(TransformerConverter):
 
         return num_layers, num_single_layers, inner_dim, mlp_ratio
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
+        if model_keys is not None:
+            if self._already_converted(state_dict, model_keys):
+                return state_dict
         """
         Convert a Flux transformer checkpoint to the diffusers format.
 
@@ -1695,7 +1702,7 @@ class LoraTransformerConverter(TransformerConverter):
 
         self._lora_converter = LoraConverter()
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
         # Delegate the heavy lifting to the dedicated LoRA converter.
         self._lora_converter.convert(state_dict)
         return state_dict
