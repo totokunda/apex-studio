@@ -1,3 +1,5 @@
+import os
+os.environ["APEX_USE_RUST_DOWNLOAD"] = "0"
 from .pose2d import Pose2d
 from src.preprocess.base_preprocessor import BasePreprocessor
 from src.utils.defaults import get_torch_device
@@ -28,6 +30,7 @@ class Pose2dDetector(BasePreprocessor):
         det_pretrained_model_or_path=POSE2D_MODEL_NAME,
         det_filepath="yolov10m.onnx",
     ):
+
         checkpoint = custom_hf_download(
             pretrained_model_or_path, filepath, subfolder="process_checkpoint/pose2d"
         )

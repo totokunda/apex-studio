@@ -1,4 +1,5 @@
 import os
+import hashlib
 from threading import local
 from typing import List, Dict, Any, Optional, Literal, Union
 from typing import TYPE_CHECKING, overload
@@ -17,6 +18,7 @@ from src.utils.defaults import (
     get_preprocessor_path,
     get_postprocessor_path,
     get_offload_path,
+    DEFAULT_CACHE_PATH,
 )
 from src.utils.module import find_class_recursive
 
@@ -51,6 +53,7 @@ from accelerate import cpu_offload
 import tempfile
 from src.transformer import _auto_register_transformers
 from src.mixins import LoaderMixin, ToMixin, OffloadMixin, CompileMixin
+from src.mixins.cache_mixin import CacheMixin
 from glob import glob
 from safetensors import safe_open
 import mlx.core as mx
@@ -62,6 +65,7 @@ import inspect
 from src.lora import LoraManager, LoraItem
 from src.helpers.helpers import helpers
 from src.utils.torch_patches import patch_torch_linalg_solve_for_cusolver
+from src.offload.group_offloading import apply_group_offloading
 
 try:
     torch.backends.cuda.preferred_linalg_library()
@@ -180,7 +184,7 @@ class AutoLoadingHelperDict(dict):
             return default
 
 
-class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
+class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     engine_type: Literal["torch", "mlx"] = "torch"
     config: Dict[str, Any]
     scheduler: SchedulerInterface | None = None
@@ -257,6 +261,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         device: torch.device | None = None,
         **kwargs,
     ):
+        self.yaml_path = yaml_path
         self.device = device or get_torch_device()
         self._helpers = AutoLoadingHelperDict(self)
         # Keep a copy of the original initialization kwargs so that
@@ -1777,6 +1782,64 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             self.load_component_by_type("vae")
         self.to_device(getattr(self, component_name))
 
+        # --- VAE encode cache (small, disk-backed) ---
+        # Cache is keyed by the *cast-to-VAE-dtype* input bytes + relevant encode args.
+        # This avoids recomputing expensive VAE encodes for repeated inputs.
+        # Only cache deterministic encodes. `sample_mode="sample"` is stochastic
+        # (generator advances), so caching would change behavior.
+        enable_vae_cache = getattr(self, "enable_cache", True) and sample_mode != "sample"
+        cache_file = None
+        prompt_hash = None
+        if enable_vae_cache:
+            vae_obj = getattr(self, component_name)
+            vae_id = (
+                getattr(getattr(vae_obj, "config", None), "_name_or_path", None)
+                or getattr(vae_obj, "_name_or_path", None)
+                or getattr(self, "yaml_path", None)
+                or self.__class__.__name__
+            )
+            safe_vae_id = str(vae_id).replace("/", "_")
+            cache_file = os.path.join(
+                DEFAULT_CACHE_PATH, f"{component_name}_encode_{safe_vae_id}.safetensors"
+            )
+
+            def _hash_tensor_content_cpu(t: torch.Tensor) -> str:
+                t_cpu = t.detach()
+                if t_cpu.device.type != "cpu":
+                    t_cpu = t_cpu.to("cpu")
+                t_cpu = t_cpu.contiguous()
+                # Reinterpret as bytes to avoid dtype-specific numpy limitations (e.g. bfloat16)
+                t_u8 = t_cpu.view(torch.uint8)
+                return hashlib.sha256(t_u8.numpy()).hexdigest()
+
+            vae_dtype = getattr(vae_obj, "dtype", None)
+            video_for_hash = video
+            if vae_dtype is not None and video_for_hash.dtype != vae_dtype:
+                video_for_hash = video_for_hash.to(dtype=vae_dtype)
+            video_hash = _hash_tensor_content_cpu(video_for_hash)
+            prompt_hash = self.hash(
+                {
+                    "fn": "vae_encode",
+                    "component": component_name,
+                    "vae_id": str(vae_id),
+                    "video_hash": video_hash,
+                    "video_shape": tuple(video.shape),
+                    "vae_dtype": str(vae_dtype),
+                    "sample_mode": sample_mode,
+                    "normalize_latents": normalize_latents,
+                    "normalize_latents_dtype": (
+                        str(normalize_latents_dtype) if normalize_latents else None
+                    ),
+                }
+            )
+
+            cached = self.load_cached(prompt_hash, cache_file=cache_file)
+            if cached is not None and len(cached) >= 1:
+                latents = cached[0].to(device=self.device)
+                if offload:
+                    self._offload(component_name, offload_type=offload_type)
+                return latents.to(dtype=dtype)
+
         video = video.to(dtype=getattr(self, component_name).dtype, device=self.device)
         
         self.enable_vae_tiling(component_name=component_name)
@@ -1795,6 +1858,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         if normalize_latents:
             latents = latents.to(dtype=normalize_latents_dtype)
             latents = getattr(self, component_name).normalize_latents(latents)
+
+        if enable_vae_cache and cache_file is not None and prompt_hash is not None:
+            # Keep cache tiny; latents can be large.
+            self.cache(prompt_hash, latents, cache_file=cache_file, max_cache_size=10)
 
         if offload:
             self._offload(component_name, offload_type=offload_type)
@@ -1942,15 +2009,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             )
             return False
 
-        enable_method = getattr(module, "enable_group_offload", None)
         try:
-            if callable(enable_method):
-                enable_method(**kwargs)
-            else:
-
-                from diffusers.hooks import apply_group_offloading
-
-                apply_group_offloading(module, **kwargs)
+            apply_group_offloading(module, **kwargs)
 
         except Exception as exc:
             self.logger.warning(

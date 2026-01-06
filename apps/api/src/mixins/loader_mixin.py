@@ -3,7 +3,7 @@ from __future__ import annotations
 from src.utils.defaults import DEFAULT_HEADERS
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import Dict, Any, Union
+from typing import Dict, Any
 import math
 import os
 import json
@@ -20,8 +20,6 @@ from typing import List
 import tempfile
 from glob import glob
 from src.mixins.download_mixin import DownloadMixin
-from contextlib import nullcontext
-
 # Import pretrained config from transformers
 from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
 from src.types import InputImage, InputVideo, InputAudio
@@ -167,7 +165,7 @@ class LoaderMixin(DownloadMixin):
             # Should be cpu often times since the model is loaded on the cpu
             load_device = "cpu"
 
-        if no_weights:
+        if True:
             load_device = "cpu"
 
         if getter_fn:

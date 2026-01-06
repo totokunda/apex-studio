@@ -37,8 +37,6 @@ moviepy==2.2.1
 # pulled in by librosa) on some platforms, especially when bundling.
 numpy==1.26.4
 omegaconf==2.3.0
-onnx==1.20.0
-onnxruntime==1.20.1
 # Prefer headless OpenCV. Keep this modern enough for albumentations.
 # (RetinaFace is installed from source in `processors.requirements.txt` to avoid
 # old OpenCV pins from the deprecated PyPI package.)
