@@ -538,6 +538,7 @@ class WanFunVACEEngine(WanShared):
         sigmas: Optional[List[float]] = None,
         vace_context_scale: float = 1.0,
         offload: bool = True,
+        chunking_profile: str = "none",
         **kwargs,
     ):
         safe_emit_progress(progress_callback, 0.0, "Starting FunVACE pipeline")
@@ -843,6 +844,7 @@ class WanFunVACEEngine(WanShared):
             scheduler=self.scheduler,
             guidance_scale=guidance_scale,
             extra_step_kwargs=extra_step_kwargs,
+            chunking_profile=chunking_profile,
         )
 
         if subject_ref_images is not None:

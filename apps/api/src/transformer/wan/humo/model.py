@@ -4,6 +4,7 @@ from torch import nn
 import torch.cuda.amp as amp
 import math
 import torch
+from typing import Dict, Optional, Tuple
 from einops import rearrange
 from torch import nn
 from einops import rearrange
@@ -15,6 +16,100 @@ from diffusers.models.modeling_outputs import Transformer2DModelOutput
 import warnings
 
 warnings.filterwarnings("ignore")
+
+
+def _chunked_modulated_norm(
+    norm_layer: nn.Module,
+    hidden_states: torch.Tensor,
+    scale: torch.Tensor,
+    shift: torch.Tensor,
+    chunk_size: Optional[int] = 2048,
+) -> torch.Tensor:
+    """
+    Modulated layer norm with chunking to reduce peak memory.
+    """
+    B, S, D = hidden_states.shape
+    in_dtype = hidden_states.dtype
+
+    if chunk_size is None:
+        out = norm_layer(hidden_states) * (1 + scale) + shift
+        return out.to(in_dtype) if out.dtype != in_dtype else out
+
+    if S <= chunk_size:
+        out = norm_layer(hidden_states) * (1 + scale) + shift
+        return out.to(in_dtype) if out.dtype != in_dtype else out
+
+    out = torch.empty_like(hidden_states)
+    scale_per_token = scale.dim() == 3 and scale.shape[1] == S
+
+    for i in range(0, S, chunk_size):
+        end = min(i + chunk_size, S)
+        hs_chunk = hidden_states[:, i:end, :]
+
+        if scale_per_token:
+            scale_chunk = scale[:, i:end, :]
+            shift_chunk = shift[:, i:end, :]
+        else:
+            scale_chunk = scale
+            shift_chunk = shift
+
+        normed = norm_layer(hs_chunk)
+        out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
+        del normed
+
+    return out
+
+
+def _chunked_feed_forward(
+    ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int
+) -> torch.Tensor:
+    """
+    Chunked feed-forward to reduce peak memory.
+    """
+    if chunk_size is None:
+        return ff(hidden_states)
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    dim_len = hidden_states.shape[chunk_dim]
+    if dim_len <= chunk_size:
+        return ff(hidden_states)
+
+    outputs = []
+    for start in range(0, dim_len, chunk_size):
+        end = min(start + chunk_size, dim_len)
+        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
+        outputs.append(ff(hs_chunk))
+    return torch.cat(outputs, dim=chunk_dim)
+
+
+def _chunked_norm(
+    norm_layer: nn.Module, hidden_states: torch.Tensor, chunk_size: Optional[int] = 8192
+) -> torch.Tensor:
+    """
+    LayerNorm in chunks along the sequence dimension to reduce peak memory.
+    """
+    if isinstance(norm_layer, nn.Identity):
+        return hidden_states
+
+    if hidden_states.ndim != 3:
+        out = norm_layer(hidden_states)
+        return out.to(hidden_states.dtype) if out.dtype != hidden_states.dtype else out
+
+    if chunk_size is None:
+        out = norm_layer(hidden_states)
+        return out.to(hidden_states.dtype) if out.dtype != hidden_states.dtype else out
+
+    B, S, D = hidden_states.shape
+    if S <= chunk_size:
+        out = norm_layer(hidden_states)
+        return out.to(hidden_states.dtype) if out.dtype != hidden_states.dtype else out
+
+    out = torch.empty_like(hidden_states)
+    for i in range(0, S, chunk_size):
+        end = min(i + chunk_size, S)
+        out[:, i:end, :] = norm_layer(hidden_states[:, i:end, :])
+    return out
 
 
 class WanRMSNorm(nn.Module):
@@ -501,6 +596,22 @@ class WanAttentionBlock(nn.Module):
                 dim, 1536, num_heads, qk_norm, eps
             )
 
+        # Chunking configuration (disabled by default)
+        self._ff_chunk_size: Optional[int] = None
+        self._ff_chunk_dim: int = 1
+        self._mod_norm_chunk_size: Optional[int] = None
+        self._norm_chunk_size: Optional[int] = None
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        self._ff_chunk_size = chunk_size
+        self._ff_chunk_dim = dim
+
+    def set_chunk_norms(
+        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+    ) -> None:
+        self._mod_norm_chunk_size = modulated_norm_chunk_size
+        self._norm_chunk_size = norm_chunk_size
+
     def forward(
         self,
         x,  # torch.Size([1, 9360, 5120])
@@ -529,24 +640,36 @@ class WanAttentionBlock(nn.Module):
             e = (self.modulation + e).chunk(6, dim=1)
         assert e[0].dtype == torch.float32
 
-        # self-attention
-        y = self.self_attn(
-            self.norm1(x).float() * (1 + e[1]) + e[0], seq_lens, grid_sizes, freqs
+        # self-attention with chunked modulated norm
+        norm_x = _chunked_modulated_norm(
+            self.norm1, x, e[1], e[0], chunk_size=self._mod_norm_chunk_size
         )
+        y = self.self_attn(norm_x.float(), seq_lens, grid_sizes, freqs)
         with amp.autocast(dtype=torch.float32):
             x = x + y * e[2]
 
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
-            x = x + self.cross_attn(self.norm3(x), context, context_lens)
+            x = x + self.cross_attn(
+                _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
+                context,
+                context_lens,
+            )
 
             if self.use_audio:
                 x = self.audio_cross_attn_wrapper(
                     x, audio, seq_lens, grid_sizes, freqs, audio_seq_len
                 )
 
-            ffn_x = self.norm2(x).float() * (1 + e[4]) + e[3]
-            y = self.ffn(ffn_x)
+            ffn_x = _chunked_modulated_norm(
+                self.norm2, x, e[4], e[3], chunk_size=self._mod_norm_chunk_size
+            )
+            if self._ff_chunk_size is not None:
+                y = _chunked_feed_forward(
+                    self.ffn, ffn_x.float(), self._ff_chunk_dim, self._ff_chunk_size
+                )
+            else:
+                y = self.ffn(ffn_x.float())
             with amp.autocast(dtype=torch.float32):
                 x = x + y * e[5]
             return x
@@ -573,6 +696,12 @@ class Head(nn.Module):
         # modulation
         self.modulation = nn.Parameter(torch.randn(1, 2, dim) / dim**0.5)
 
+        # Chunking configuration
+        self._mod_norm_chunk_size: Optional[int] = None
+
+    def set_chunk_norms(self, modulated_norm_chunk_size: Optional[int] = None) -> None:
+        self._mod_norm_chunk_size = modulated_norm_chunk_size
+
     def forward(self, x, e):
         r"""
         Args:
@@ -582,7 +711,10 @@ class Head(nn.Module):
         assert e.dtype == torch.float32
         with amp.autocast(dtype=torch.float32):
             e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
-            x = self.head(self.norm(x) * (1 + e[1]) + e[0])
+            norm_x = _chunked_modulated_norm(
+                self.norm, x, e[1], e[0], chunk_size=self._mod_norm_chunk_size
+            )
+            x = self.head(norm_x)
         return x
 
 
@@ -621,6 +753,34 @@ class HumoWanTransformerModel(
     _no_split_modules = ["WanAttentionBlock"]
 
     gradient_checkpointing = False
+
+    # Chunking profile presets
+    _CHUNKING_PROFILES: Dict[str, Dict[str, Optional[int]]] = {
+        "none": {
+            "ffn_chunk_size": None,
+            "modulated_norm_chunk_size": None,
+            "norm_chunk_size": None,
+            "out_modulated_norm_chunk_size": None,
+        },
+        "light": {
+            "ffn_chunk_size": 2048,
+            "modulated_norm_chunk_size": 16384,
+            "norm_chunk_size": 8192,
+            "out_modulated_norm_chunk_size": 16384,
+        },
+        "balanced": {
+            "ffn_chunk_size": 512,
+            "modulated_norm_chunk_size": 8192,
+            "norm_chunk_size": 4096,
+            "out_modulated_norm_chunk_size": 8192,
+        },
+        "aggressive": {
+            "ffn_chunk_size": 256,
+            "modulated_norm_chunk_size": 4096,
+            "norm_chunk_size": 2048,
+            "out_modulated_norm_chunk_size": 4096,
+        },
+    }
 
     @register_to_config
     def __init__(
@@ -759,6 +919,44 @@ class HumoWanTransformerModel(
 
         # initialize weights
         self.init_weights()
+
+        # Default: no chunking unless explicitly enabled
+        self.set_chunking_profile("none")
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        """Enable/disable chunked feed-forward on all transformer blocks."""
+        for block in self.blocks:
+            block.set_chunk_feed_forward(chunk_size, dim=dim)
+
+    def list_chunking_profiles(self) -> Tuple[str, ...]:
+        """Return available chunking profile names."""
+        return tuple(self._CHUNKING_PROFILES.keys())
+
+    def set_chunking_profile(self, profile_name: str) -> None:
+        """
+        Apply a predefined chunking profile across the whole model.
+        """
+        if profile_name not in self._CHUNKING_PROFILES:
+            raise ValueError(
+                f"Unknown chunking profile '{profile_name}'. "
+                f"Available: {sorted(self._CHUNKING_PROFILES.keys())}"
+            )
+
+        p = self._CHUNKING_PROFILES[profile_name]
+        self._chunking_profile_name = profile_name
+        self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+
+        self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
+        for block in self.blocks:
+            block.set_chunk_norms(
+                modulated_norm_chunk_size=p.get("modulated_norm_chunk_size", None),
+                norm_chunk_size=p.get("norm_chunk_size", None),
+            )
+
+        # Also configure head chunking
+        self.head.set_chunk_norms(
+            modulated_norm_chunk_size=p.get("out_modulated_norm_chunk_size", None)
+        )
 
     def forward(
         self,

@@ -328,6 +328,7 @@ class WanS2VEngine(WanShared):
         attention_kwargs: Dict[str, Any] = {},
         render_on_step_interval: int = 3,
         num_chunks: Optional[int] = None,
+        chunking_profile: str = "none", 
         **kwargs,
     ):
         safe_emit_progress(progress_callback, 0.0, "Starting s2v pipeline")
@@ -430,6 +431,8 @@ class WanS2VEngine(WanShared):
             safe_emit_progress(progress_callback, 0.30, "Loading transformer")
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
+        if chunking_profile != "none":
+            self.transformer.set_chunking_profile(chunking_profile)
         safe_emit_progress(progress_callback, 0.32, "Transformer ready")
 
         video_chunks = []

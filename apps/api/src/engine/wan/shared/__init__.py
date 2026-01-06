@@ -363,6 +363,7 @@ class WanShared(BaseEngine, WanMLXDenoise):
         total_steps = len(timesteps) if timesteps is not None else 0
         safe_emit_progress(denoise_progress_callback, 0.0, "Starting denoise")
         keep_moe_transformers_on_cpu = self._should_keep_moe_transformers_on_cpu()
+        chunking_profile = kwargs.get("chunking_profile", "none")
 
         if total_steps <= 8:
             render_on_step = False
@@ -418,6 +419,8 @@ class WanShared(BaseEngine, WanMLXDenoise):
                         self.to_device(self.high_noise_transformer)
                         self.high_noise_transformer.current_steps = i
                         self.high_noise_transformer.num_inference_steps = total_steps
+                        if chunking_profile != "none" and hasattr(self.high_noise_transformer, "set_chunking_profile"):
+                            self.high_noise_transformer.set_chunking_profile(chunking_profile)
                         if easy_cache_thresh > 0.0:
                             self.high_noise_transformer.enable_easy_cache(
                                 total_steps,
@@ -472,6 +475,8 @@ class WanShared(BaseEngine, WanMLXDenoise):
                         )
                         self.load_component_by_name("low_noise_transformer")
                         self.to_device(self.low_noise_transformer)
+                        if chunking_profile != "none" and hasattr(self.low_noise_transformer, "set_chunking_profile"):
+                            self.low_noise_transformer.set_chunking_profile(chunking_profile)
                         if easy_cache_thresh > 0.0:
                             self.low_noise_transformer.enable_easy_cache(
                                 total_steps,
@@ -576,7 +581,10 @@ class WanShared(BaseEngine, WanMLXDenoise):
         render_on_step_interval = kwargs.get("render_on_step_interval", 3)
         num_warmup_steps = kwargs.get("num_warmup_steps", 0)
         num_reference_images = kwargs.get("num_reference_images", 0)
-        offload = kwargs.get("offload", True)
+        chunking_profile = kwargs.get("chunking_profile", "none")
+        easy_cache_thresh = kwargs.get("easy_cache_thresh", 0.00)
+        easy_cache_ret_steps = kwargs.get("easy_cache_ret_steps", 10)
+        
         total_steps = len(timesteps) if timesteps is not None else 0
         safe_emit_progress(denoise_progress_callback, 0.0, "Starting denoise")
 
@@ -596,6 +604,16 @@ class WanShared(BaseEngine, WanMLXDenoise):
         if not self.transformer:
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
+        if chunking_profile != "none" and hasattr(self.transformer, "set_chunking_profile"):
+            self.transformer.set_chunking_profile(chunking_profile)
+        
+        if easy_cache_thresh > 0.0:
+            self.transformer.enable_easy_cache(
+                total_steps,
+                easy_cache_thresh,
+                easy_cache_ret_steps,
+                should_reset_global_cache=True,
+            )
 
         model_type_str = getattr(self, "model_type", "WAN")
 
