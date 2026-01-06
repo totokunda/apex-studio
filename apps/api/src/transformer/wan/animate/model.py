@@ -1332,7 +1332,7 @@ class WanAnimateTransformer3DModel(
         pad_face = torch.zeros_like(motion_vec[:, :1])
         motion_vec = torch.cat([pad_face, motion_vec], dim=1)
 
-        # 5. Transformer blocks with face adapter integration
+
         for block_idx, block in enumerate(self.blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states = self._gradient_checkpointing_func(
