@@ -219,6 +219,7 @@ class OviEngine(WanShared):
         easy_cache_thresh: float = 0.00,
         easy_cache_ret_steps: int = 10,
         easy_cache_cutoff_steps: int | None = None,
+        chunking_profile: str = "none",
         **kwargs,
     ):
         safe_emit_progress(
@@ -449,6 +450,8 @@ class OviEngine(WanShared):
             safe_emit_progress(progress_callback, 0.44, "Transformer loaded")
         safe_emit_progress(progress_callback, 0.445, "Moving transformer to device")
         self.to_device(self.transformer)
+        if chunking_profile != "none":
+            self.transformer.set_chunking_profile(chunking_profile)
 
         safe_emit_progress(progress_callback, 0.45, "Transformer ready")
 

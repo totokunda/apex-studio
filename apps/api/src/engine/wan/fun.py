@@ -77,6 +77,7 @@ class WanFunEngine(WanShared):
         timesteps_as_indices: bool = True,
         boundary_ratio: float | None = None,
         expand_timesteps: bool = False,
+        chunking_profile: str = "none",
         **kwargs,
     ):
 
@@ -489,6 +490,7 @@ class WanFunEngine(WanShared):
             denoise_progress_callback=denoise_progress_callback,
             scheduler=scheduler,
             guidance_scale=guidance_scale,
+            chunking_profile=chunking_profile,
         )
 
         if offload:
