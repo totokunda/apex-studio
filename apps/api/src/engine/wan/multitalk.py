@@ -49,6 +49,7 @@ class WanMultitalkEngine(WanShared):
         bbox: Optional[Dict[str, List[float]]] = None,
         render_on_step_interval: int = 1,
         attention_kwargs: Dict[str, Any] = {},
+        chunking_profile: str = "none",
         **kwargs,
     ):
         """
@@ -229,8 +230,11 @@ class WanMultitalkEngine(WanShared):
         if not self.transformer:
             safe_emit_progress(progress_callback, 0.22, "Loading transformer")
             self.load_component_by_type("transformer")
-            self.to_device(self.transformer)
-            safe_emit_progress(progress_callback, 0.23, "Transformer loaded")
+        
+        self.to_device(self.transformer)
+        safe_emit_progress(progress_callback, 0.23, "Transformer loaded")
+        if chunking_profile != "none":
+            self.transformer.set_chunking_profile(chunking_profile)
 
         using_video_input = input_video is not None
 
