@@ -73,8 +73,8 @@ spec:
     label: LTX2 Text Encoder
     name: text_encoder
     base: Gemma3ForConditionalGeneration
-    offloading_module: language_model
-    ignore_offloading_modules: ["lm_head"]
+    ignore_offloading_modules: ["lm_head", "embed_tokens"]
+    block_modules: ["model.language_model"]
     model_path:
     - path: blanchon/LTX-2-Distilled-diffusers/text_encoder
       variant: default
