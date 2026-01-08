@@ -66,7 +66,7 @@ from src.lora import LoraManager, LoraItem
 from src.helpers.helpers import helpers
 from src.utils.torch_patches import patch_torch_linalg_solve_for_cusolver
 from src.offload.group_offloading import apply_group_offloading
-
+import types
 try:
     torch.backends.cuda.preferred_linalg_library()
 except Exception as e:
@@ -98,7 +98,6 @@ class AutoLoadingHelperDict(dict):
         from src.helpers.hunyuanvideo.llama import HunyuanLlama
         from src.helpers.hunyuanvideo.avatar import HunyuanAvatar
         from src.helpers.hunyuanvideo15.vision import HunyuanVisionEncoder
-        from src.helpers.hunyuanvideo15.text import TextEncoder as HunyuanTextEncoder
         from src.helpers.hidream.llama import HidreamLlama
         from src.helpers.stepvideo.text_encoder import StepVideoTextEncoder
         from src.helpers.ltx.patchifier import SymmetricPatchifier
@@ -133,11 +132,6 @@ class AutoLoadingHelperDict(dict):
         def __getitem__(
             self, key: Literal["hunyuanvideo15.vision"]
         ) -> "HunyuanVisionEncoder": ...
-
-        @overload
-        def __getitem__(
-            self, key: Literal["hunyuanvideo15.text"]
-        ) -> "HunyuanTextEncoder": ...
 
         @overload
         def __getitem__(self, key: Literal["prompt_gen"]) -> "PromptGenHelper": ...
@@ -673,7 +667,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             return helper_class
 
         # create an instance of the helper class
-        if "model_path" in config:
+        if "model_path" in config and not "ignore_model_load" in component.get("extra_kwargs", {}):
             helper = self._load_model(
                 component, 
                 getter_fn=get_helper,
@@ -717,6 +711,14 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     helper = helper.to(device)
                 except Exception:
                     pass
+        
+        mm_config = self._resolve_memory_config_for_component(component)
+
+        if mm_config is not None:
+            helper._resolve_memory_config_for_component =  types.MethodType(
+                    lambda self, x: mm_config, helper
+                )
+            
         return helper
 
     def load_helper_by_type(self, helper_type: str):

@@ -195,18 +195,23 @@ spec:
         recommended_vram_gb: 11
       file_size: 4920538336
     config_path: tencent/HunyuanVideo-1.5/transformer/720p_i2v/config.json
-  - type: helper
+  - type: text_encoder
     label: Qwen2.5 VL Text Encoder
-    base: hunyuanvideo15.text
+    base: Qwen2_5_VLForConditionalGeneration
     name: text_encoder
-    text_encoder_type: llm
-    tokenizer_type: llm
-    hidden_state_skip_layer: 2
-    apply_final_norm: false
+    ignore_offloading_modules:
+    - lm_head
+    - embed_tokens
+    block_modules:
+    - model.language_model
+    # These are consumed by the hunyuanvideo15 engine's prompt formatting logic.
     prompt_template: li-dit-encode-image-json
     prompt_template_video: li-dit-encode-video-json
+    apply_final_norm: false
     config_path: Qwen/Qwen2.5-VL-7B-Instruct/config.json
     tokenizer_path: Qwen/Qwen2.5-VL-7B-Instruct
+    gguf_kwargs:
+      key_map: qwen_vl
     model_path:
     - path: Qwen/Qwen2.5-VL-7B-Instruct
       variant: default
@@ -240,10 +245,24 @@ spec:
         min_vram_gb: 6
         recommended_vram_gb: 10
       file_size: 4457767808
+  - type: extra_model_path
+    label: Qwen2.5 VL Vision Transformer
+    component: text_encoder
+    model_path:
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-BF16.gguf
+      variant: GGUF_BF16
+      precision: fp16
+      type: gguf
+      file_size: 1354163040
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
   - type: helper
     label: HunyuanVideo Vision Encoder
     base: hunyuanvideo15.vision
     name: vision_encoder
+    extra_kwargs:
+      ignore_model_load: true
     vision_encoder_type: siglip
     vision_encoder_precision: fp16
     processor_type: null

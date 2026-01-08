@@ -157,6 +157,8 @@ class LoaderMixin(DownloadMixin):
                     mm_config = resolve_mm_cfg(component)
                 except Exception:
                     mm_config = None
+                    
+        
 
         model_base = component.get("base")
         model_path = component.get("model_path")

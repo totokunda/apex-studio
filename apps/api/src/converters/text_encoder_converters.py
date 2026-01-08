@@ -47,12 +47,12 @@ class Qwen2_5_VLTextEncoderConverter(TextEncoderConverter):
         if key not in state_dict:
             return
         
-
-        weight = state_dict.pop(key)
-        weight_1 = state_dict.pop(key.replace("weight", "weight.1"))
-        
-        weight = ggml_stack([weight, weight_1], dim=2)
-        state_dict[key] = weight
+       
+        if key.replace("weight", "weight.1") in state_dict:
+            weight = state_dict.pop(key)
+            weight_1 = state_dict.pop(key.replace("weight", "weight.1"))
+            weight = ggml_stack([weight, weight_1], dim=2)
+            state_dict[key] = weight
 
     
     @staticmethod
@@ -63,19 +63,20 @@ class Qwen2_5_VLTextEncoderConverter(TextEncoderConverter):
         if key not in state_dict:
             return
         # merge q k v into a single tensor
-        if ".attn.q" in key:
+        
+        if ".attn.q." in key:
             q = state_dict.pop(key)
             k = state_dict.pop(key.replace(".attn.q.", ".attn.k."))
             v = state_dict.pop(key.replace(".attn.q.", ".attn.v."))
             qkv = ggml_cat([q, k, v], dim=0)
             state_dict[key.replace(".attn.q.", ".attn.qkv.")] = qkv
-        elif ".attn.k" in key:
+        elif ".attn.k." in key:
             k = state_dict.pop(key)
             q = state_dict.pop(key.replace(".attn.k.", ".attn.q."))
             v = state_dict.pop(key.replace(".attn.k.", ".attn.v."))
             qkv = ggml_cat([q, k, v], dim=0)
             state_dict[key.replace(".attn.k.", ".attn.qkv.")] = qkv
-        elif ".attn.v" in key:
+        elif ".attn.v." in key:
             v = state_dict.pop(key)
             q = state_dict.pop(key.replace(".attn.v.", ".attn.q."))
             k = state_dict.pop(key.replace(".attn.v.", ".attn.k."))
