@@ -260,7 +260,6 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             
             self.model_loaded = True
             
-        
         encode_device = device or self.device
         if encode_device is None:
             encode_device = getattr(self.model, "device", None)
@@ -326,10 +325,19 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         if output_type == "hidden_states_all" and hasattr(result, "hidden_states"):
             prompt_embeds = result.hidden_states
             prompt_embeds = torch.stack(prompt_embeds, dim=hidden_states_all_stack_dim)
-        elif output_type == "hidden_states" and hasattr(result, "last_hidden_state"):
-            prompt_embeds = result.last_hidden_state
-        elif output_type == "hidden_states" and hasattr(result, "hidden_states"):
-            prompt_embeds = result.hidden_states[hidden_states_idx]
+        elif output_type == "hidden_states":
+            # Prefer `hidden_states[...]` when caller requested an explicit layer,
+            # even if `last_hidden_state` exists (e.g. CLIP-skip style behavior).
+            if hasattr(result, "hidden_states") and (
+                hidden_states_idx != -1 or not hasattr(result, "last_hidden_state")
+            ):
+                prompt_embeds = result.hidden_states[hidden_states_idx]
+            elif hasattr(result, "last_hidden_state"):
+                prompt_embeds = result.last_hidden_state
+            elif hasattr(result, "hidden_states"):
+                prompt_embeds = result.hidden_states[hidden_states_idx]
+            else:
+                raise ValueError("Model output does not contain hidden states.")
         elif output_type == "pooler_output" and hasattr(result, "pooler_output"):
             prompt_embeds = result.pooler_output
         elif output_type == "text_embeds" and hasattr(result, "text_embeds"):

@@ -737,6 +737,33 @@ def apply_group_offloading(
     _apply_group_offloading(module, config)
 
 
+def _normalize_ignore_modules(ignore_modules: Optional[List[str]]) -> Set[str]:
+    """
+    Normalize ignore-module patterns.
+
+    Supported formats:
+    - immediate child names: "embed_tokens"
+    - dotted paths: "model.language_model.embed_tokens"
+    - optional leading dot: ".language_model.embed_tokens"
+    - optional convenience prefix "model.": will be accepted and stripped
+    """
+    out: Set[str] = set()
+    if not ignore_modules:
+        return out
+    for p in ignore_modules:
+        if not p:
+            continue
+        s = str(p).strip()
+        if not s:
+            continue
+        if s.startswith("."):
+            s = s[1:]
+        out.add(s)
+        if s.startswith("model."):
+            out.add(s[len("model.") :])
+    return out
+
+
 def _apply_group_offloading(module: torch.nn.Module, config: GroupOffloadingConfig) -> None:
     if config.offload_type == GroupOffloadingType.BLOCK_LEVEL:
         _apply_group_offloading_block_level(module, config)
@@ -759,7 +786,10 @@ def _apply_group_offloading_block_level(module: torch.nn.Module, config: GroupOf
     of each block within a group, keeping the GPU busy when VRAM allows for larger groups.
     """
     block_modules = set(config.block_modules) if config.block_modules is not None else set()
-    ignore_modules = set(config.ignore_modules) if config.ignore_modules is not None else set()
+    # When `apply_group_offloading` targets nested block modules, it propagates a
+    # `module_prefix` (e.g. "model.language_model.") so we can match against root-relative
+    # dotted paths by comparing to `full_name` below.
+    ignore_modules = _normalize_ignore_modules(config.ignore_modules)
 
     # Create module groups for ModuleList and Sequential blocks, and explicitly defined block modules
     modules_with_group_offloading = set()
@@ -767,8 +797,9 @@ def _apply_group_offloading_block_level(module: torch.nn.Module, config: GroupOf
     matched_module_groups = []
 
     for name, submodule in module.named_children():
+        full_name = f"{config.module_prefix}{name}" if config.module_prefix else name
         # Check if this is an explicitly defined block module
-        if name in ignore_modules:
+        if name in ignore_modules or full_name in ignore_modules:
             # Treat ignored modules as "never offload" by marking them as having a
             # group-offloading parent. This prevents their parameters/buffers from
             # being collected into the fallback `unmatched_group`, which would
@@ -776,6 +807,15 @@ def _apply_group_offloading_block_level(module: torch.nn.Module, config: GroupOf
             #
             # This is important for HF models with tied weights (e.g. lm_head <-> embed_tokens),
             # where offloading embeddings implicitly offloads lm_head as well.
+            # Also eagerly move the ignored module to the onload device. This matters
+            # when the ignored module lives under a group-offloaded parent subtree:
+            # device moves may intentionally skip that subtree (to avoid fighting the
+            # offloading hooks), so this ensures ignored modules actually end up on GPU.
+            try:
+                submodule.to(config.onload_device)
+            except Exception:
+                pass
+
             modules_with_group_offloading.add(name)
             continue
         if name in block_modules:
@@ -865,8 +905,21 @@ def _apply_group_offloading_leaf_level(module: torch.nn.Module, config: GroupOff
     reduce memory usage without any performance degradation.
     """
     # Create module groups for leaf modules and apply group offloading hooks
-    modules_with_group_offloading = set()
+    ignore_modules = _normalize_ignore_modules(config.ignore_modules)
+    modules_with_group_offloading: Set[str] = set()
     for name, submodule in module.named_modules():
+        full_name = f"{config.module_prefix}{name}" if config.module_prefix else name
+
+        # If this leaf module is ignored, do not attach any offloading hook and
+        # ensure its parameters are excluded from later parent-level offloading.
+        if name in ignore_modules or full_name in ignore_modules:
+            try:
+                submodule.to(config.onload_device)
+            except Exception:
+                pass
+            modules_with_group_offloading.add(name)
+            continue
+
         if not isinstance(submodule, _GO_LC_SUPPORTED_PYTORCH_LAYERS):
             continue
         group = ModuleGroup(

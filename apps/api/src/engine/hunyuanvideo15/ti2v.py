@@ -173,153 +173,6 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
 
         return {"byt5_text_states": byt5_embeddings, "byt5_text_mask": byt5_masks}
 
-    def encode_prompt(
-        self,
-        prompt: Union[str, List[str]],
-        device: torch.device,
-        num_videos_per_prompt: int,
-        do_classifier_free_guidance: bool,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
-        negative_attention_mask: Optional[torch.Tensor] = None,
-        clip_skip: Optional[int] = None,
-        text_encoder: Any = None,
-        data_type: str = "image",
-    ):
-        if text_encoder is None:
-            text_encoder = self.text_encoder
-
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
-
-        if prompt_embeds is None:
-            text_inputs = text_encoder.text2tokens(
-                prompt, data_type=data_type, max_length=text_encoder.max_length
-            )
-            if clip_skip is None:
-                prompt_outputs = text_encoder.encode(
-                    text_inputs, data_type=data_type, device=device
-                )
-                prompt_embeds = prompt_outputs.hidden_state
-            else:
-                prompt_outputs = text_encoder.encode(
-                    text_inputs,
-                    output_hidden_states=True,
-                    data_type=data_type,
-                    device=device,
-                )
-                prompt_embeds = prompt_outputs.hidden_states_list[-(clip_skip + 1)]
-                prompt_embeds = text_encoder.model.text_model.final_layer_norm(
-                    prompt_embeds
-                )
-
-            attention_mask = prompt_outputs.attention_mask
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(device)
-                bs_embed, seq_len = attention_mask.shape
-                attention_mask = attention_mask.repeat(1, num_videos_per_prompt)
-                attention_mask = attention_mask.view(
-                    bs_embed * num_videos_per_prompt, seq_len
-                )
-
-        if text_encoder is not None:
-            prompt_embeds_dtype = text_encoder.dtype or self.component_dtypes.get(
-                "text_encoder", None
-            )
-        elif self.transformer is not None:
-            prompt_embeds_dtype = self.transformer.dtype or self.component_dtypes.get(
-                "transformer", None
-            )
-        else:
-            prompt_embeds_dtype = prompt_embeds.dtype or self.component_dtypes.get(
-                "text_encoder", None
-            )
-
-        prompt_embeds = prompt_embeds.to(dtype=prompt_embeds_dtype, device=device)
-
-        if prompt_embeds.ndim == 2:
-            bs_embed, _ = prompt_embeds.shape
-            prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt)
-            prompt_embeds = prompt_embeds.view(bs_embed * num_videos_per_prompt, -1)
-        else:
-            bs_embed, seq_len, _ = prompt_embeds.shape
-            prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-            prompt_embeds = prompt_embeds.view(
-                bs_embed * num_videos_per_prompt, seq_len, -1
-            )
-
-        if do_classifier_free_guidance and negative_prompt_embeds is None:
-            if negative_prompt is None:
-                uncond_tokens = [""] * batch_size
-            elif prompt is not None and type(prompt) is not type(negative_prompt):
-                raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
-                )
-            elif isinstance(negative_prompt, str):
-                uncond_tokens = [negative_prompt]
-            elif batch_size != len(negative_prompt):
-                raise ValueError(
-                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
-                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
-                    " the batch size of `prompt`."
-                )
-            else:
-                uncond_tokens = negative_prompt
-
-            uncond_input = text_encoder.text2tokens(
-                uncond_tokens, data_type=data_type, max_length=text_encoder.max_length
-            )
-            negative_prompt_outputs = text_encoder.encode(
-                uncond_input, data_type=data_type
-            )
-            negative_prompt_embeds = negative_prompt_outputs.hidden_state
-
-            negative_attention_mask = negative_prompt_outputs.attention_mask
-            if negative_attention_mask is not None:
-                negative_attention_mask = negative_attention_mask.to(device)
-                _, seq_len = negative_attention_mask.shape
-                negative_attention_mask = negative_attention_mask.repeat(
-                    1, num_videos_per_prompt
-                )
-                negative_attention_mask = negative_attention_mask.view(
-                    batch_size * num_videos_per_prompt, seq_len
-                )
-
-        if do_classifier_free_guidance:
-            seq_len = negative_prompt_embeds.shape[1]
-            negative_prompt_embeds = negative_prompt_embeds.to(
-                dtype=prompt_embeds_dtype, device=device
-            )
-
-            if negative_prompt_embeds.ndim == 2:
-                negative_prompt_embeds = negative_prompt_embeds.repeat(
-                    1, num_videos_per_prompt
-                )
-                negative_prompt_embeds = negative_prompt_embeds.view(
-                    batch_size * num_videos_per_prompt, -1
-                )
-            else:
-                negative_prompt_embeds = negative_prompt_embeds.repeat(
-                    1, num_videos_per_prompt, 1
-                )
-                negative_prompt_embeds = negative_prompt_embeds.view(
-                    batch_size * num_videos_per_prompt, seq_len, -1
-                )
-
-        return (
-            prompt_embeds,
-            negative_prompt_embeds,
-            attention_mask,
-            negative_attention_mask,
-        )
-
     @staticmethod
     def prepare_extra_func_kwargs(func, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         extra_step_kwargs: Dict[str, Any] = {}
@@ -557,26 +410,22 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
 
     def _get_text_encoder(self):
         if self.text_encoder is None:
-            helper = self.helpers["text_encoder"]
-            if helper is not None:
-                self.text_encoder = helper
+            self.load_component_by_type("text_encoder")
+            if getattr(self, "text_encoder", None) is not None:
                 self.to_device(self.text_encoder)
             else:
-                logger.warning(
-                    "Text encoder helper 'hunyuanvideo15.text_encoder' not configured."
-                )
+                logger.warning("Text encoder component not configured.")
         return self.text_encoder
 
     def _get_text_encoder_2(self):
         if getattr(self, "text_encoder_2", None) is None:
-            helper = self.helpers["text_encoder_2"]
-            if helper is not None:
-                self.text_encoder_2 = helper
+            # Optional secondary text encoder (configured as a component named `text_encoder_2`)
+            try:
+                self.load_component_by_name("text_encoder_2")
+            except Exception:
+                self.text_encoder_2 = None
+            if getattr(self, "text_encoder_2", None) is not None:
                 self.to_device(self.text_encoder_2)
-            else:
-                logger.warning(
-                    "Text encoder helper 'hunyuanvideo15.text_encoder_2' not configured."
-                )
         return getattr(self, "text_encoder_2", None)
 
     def _get_prompt_format(self):
@@ -753,7 +602,7 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
             self._get_text_encoder()
         safe_emit_progress(progress_callback, 0.11, "Moving text encoder to device")
         self.to_device(self.text_encoder)
-        self.text_len = getattr(self.text_encoder, "max_length", 1000)
+        # Generic text encoder uses `max_sequence_length` passed into `encode_prompt`.
 
         safe_emit_progress(progress_callback, 0.12, "Encoding prompt (text encoder)")
         (
@@ -767,15 +616,15 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
             num_videos,
             self.do_classifier_free_guidance,
             negative_prompt,
-            clip_skip=self.clip_skip,
-            data_type="video",
+            clip_skip=self.clip_skip
         )
 
         prompt_embeds_2 = None
         negative_prompt_embeds_2 = None
         prompt_mask_2 = None
         negative_prompt_mask_2 = None
-
+        
+        
         if getattr(self, "text_encoder_2", None) is None:
             try:
                 safe_emit_progress(progress_callback, 0.14, "Loading text encoder 2")
@@ -805,7 +654,6 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
                 negative_prompt,
                 clip_skip=self.clip_skip,
                 text_encoder=self.text_encoder_2,
-                data_type="video",
             )
 
         if offload:
@@ -935,6 +783,13 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
             cache_helper.clear_cache()
             assert num_inference_steps == total_steps
 
+        # Pre-compute RoPE embeddings once to avoid recomputing every forward pass
+        freqs_cos, freqs_sin = self.transformer.get_rotary_pos_embed(
+            (latent_target_length, latent_height, latent_width)
+        )
+        freqs_cos = freqs_cos.to(device=device)
+        freqs_sin = freqs_sin.to(device=device)
+
         # Reserve a progress span for denoising [0.50, 0.90]
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.50, 0.90)
         safe_emit_progress(
@@ -957,6 +812,7 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
                     if self.do_classifier_free_guidance
                     else latents_concat
                 )
+                del latents_concat  # Free intermediate tensor immediately
 
                 if hasattr(self.scheduler, "scale_model_input"):
                     latent_model_input = self.scheduler.scale_model_input(
@@ -997,28 +853,39 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
                         prompt_mask,
                         timestep_r=timesteps_r,
                         vision_states=vision_states,
+                        freqs_cos=freqs_cos,
+                        freqs_sin=freqs_sin,
                         mask_type=task_type,
                         guidance=guidance_expand,
                         return_dict=False,
                         extra_kwargs=extra_kwargs,
                     )
                     noise_pred = output[0]
+                del latent_model_input, output  # Free immediately after use
 
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (
                         noise_pred_text - noise_pred_uncond
                     )
+                    del noise_pred_uncond  # Free intermediate
                     if self.guidance_rescale > 0.0:
                         noise_pred = self._rescale_noise_cfg(
                             noise_pred,
                             noise_pred_text,
                             guidance_rescale=self.guidance_rescale,
                         )
+                    del noise_pred_text  # Free intermediate
 
                 latents = self.scheduler.step(
                     noise_pred, t, latents, **extra_step_kwargs, return_dict=False
                 )[0]
+                del noise_pred  # Free after scheduler step
+
+                # Synchronize and clear CUDA cache to stabilize VRAM usage
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
+                    torch.cuda.empty_cache()
 
                 if i == len(timesteps) - 1 or (
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
@@ -1030,6 +897,11 @@ class HunyuanVideo15TI2VEngine(HunyuanVideo15Shared):
                     float(i + 1) / float(max(total_ts, 1)),
                     f"Denoising step {i + 1}/{total_ts}",
                 )
+
+        # Clean up RoPE embeddings and final sync
+        del freqs_cos, freqs_sin
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
         if offload:
             safe_emit_progress(progress_callback, 0.91, "Offloading transformer")

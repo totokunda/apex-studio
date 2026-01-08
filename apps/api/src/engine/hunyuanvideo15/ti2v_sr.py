@@ -179,7 +179,7 @@ class HunyuanVideo15TI2VSRengine(HunyuanVideo15TI2VEngine):
         if getattr(self, "text_encoder", None) is None:
             self.load_component_by_type("text_encoder")
         self.to_device(self.text_encoder)
-        self.text_len = getattr(self.text_encoder, "max_length", 1000)
+        # Generic text encoder uses `max_sequence_length` passed into `encode_prompt`.
 
         prompt = kwargs.get("prompt")
         negative_prompt = kwargs.get("negative_prompt")
