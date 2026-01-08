@@ -22,6 +22,22 @@ class FlashVSRTransformerConverter(TransformerConverter):
         }
 
 
+class LTX2TransformerConverter(TransformerConverter):
+    def __init__(self):
+        super().__init__()
+        self.rename_dict = {
+            "patchify_proj": "proj_in",
+            "audio_patchify_proj": "audio_proj_in",
+            "adaln_single": "time_embed",
+            "audio_adaln_single": "audio_time_embed",
+            "av_ca_video_scale_shift_adaln_single": "av_cross_attn_video_scale_shift",
+            "av_ca_audio_scale_shift_adaln_single": "av_cross_attn_audio_scale_shift",
+            "av_ca_a2v_gate_adaln_single": "av_cross_attn_video_a2v_gate",
+            "av_ca_v2a_gate_adaln_single": "av_cross_attn_audio_v2a_gate",
+            "scale_shift_table_a2v_ca_audio" : "audio_a2v_cross_attn_scale_shift_table",
+            "scale_shift_table_a2v_ca_video" : "video_a2v_cross_attn_scale_shift_table",
+        }
+
 class ZImageTransformerConverter(TransformerConverter):
     def __init__(self):
         super().__init__()

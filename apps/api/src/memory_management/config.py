@@ -1,7 +1,7 @@
 """Configuration settings for memory management module."""
 
 import dataclasses
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union, Dict, Any, List
 import torch
 
 
@@ -18,7 +18,9 @@ class MemoryConfig:
     group_offload_low_cpu_mem_usage: bool = True
     group_offload_offload_device: Union[str, torch.device] = "cpu"
     group_offload_disk_path: Optional[str] = None
-
+    ignore_modules: Optional[List[str]] = None
+    block_modules: Optional[List[str]] = None
+    
     def to_group_offload_kwargs(self, onload_device: torch.device) -> Dict[str, Any]:
         """
         Translate this config into keyword arguments expected by `model.enable_group_offload`.
@@ -40,6 +42,8 @@ class MemoryConfig:
             "use_stream": self.group_offload_use_stream,
             "record_stream": self.group_offload_record_stream,
             "low_cpu_mem_usage": self.group_offload_low_cpu_mem_usage,
+            "ignore_modules": self.ignore_modules,
+            "block_modules": self.block_modules,
         }
 
         if self.group_offload_num_blocks_per_group is not None:

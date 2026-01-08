@@ -169,7 +169,6 @@ class AutoLoadingHelperDict(dict):
             return super().__getitem__(key)
 
         # Try to load helper automatically
-
         helper = self._engine._auto_load_helper(key)
         if helper is not None:
             self[key] = helper
@@ -662,18 +661,26 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         config.pop("type")
         config.pop("name", None)
         module = config.pop("module", None)
-        # get the helper class
-        try:
-            helper_class = helpers.get(base)
-        except Exception:
-            helper_class = find_class_recursive(importlib.import_module(module), base)
-        if helper_class is None:
-            raise ValueError(f"Helper class {base} not found")
+
+        
+        def get_helper(base: str):
+            try:
+                helper_class = helpers.get(base)
+            except Exception:
+                helper_class = find_class_recursive(importlib.import_module(module), base)
+            if helper_class is None:
+                raise ValueError(f"Helper class {base} not found")
+            return helper_class
 
         # create an instance of the helper class
-        if hasattr(helper_class, "from_pretrained") and "model_path" in config:
-            helper = helper_class.from_pretrained(
-                config["model_path"], device_map=device
+        if "model_path" in config:
+            helper = self._load_model(
+                component, 
+                getter_fn=get_helper,
+                no_weights=False,
+                key_map=component.get("key_map", {}),
+                extra_kwargs=component.get("extra_kwargs", {}),
+                load_device=device,
             )
         else:
             # check for config_path
@@ -685,6 +692,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 except Exception:
                     pass
                 config = self._load_config_file(config_path)
+            
+            helper_class = get_helper(base)
 
             helper = helper_class(**config)
 
@@ -970,6 +979,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
                 if not already_enabled:
                     offloading_module = component.get("offloading_module", None)
+                    ignore_offloading_modules = component.get("ignore_offloading_modules", None)
+                    block_modules = component.get("block_modules", None)
+                    mm_config.ignore_modules = ignore_offloading_modules
+                    mm_config.block_modules = block_modules
                     if offloading_module:
                         model_to_offload = text_encoder.model.get_submodule(
                             offloading_module
@@ -1061,7 +1074,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
             label = component.get("name") or component.get("type") or "transformer"
             offloading_module = component.get("offloading_module", None)
-
+            ignore_offloading_modules = component.get("ignore_offloading_modules", None)
+            block_modules = component.get("block_modules", None)
+            mm_config.ignore_modules = ignore_offloading_modules
+            mm_config.block_modules = block_modules
             # If this engine will apply LoRAs/adapters later (e.g. Lynx), defer.
             should_defer = bool(
                 (not getattr(self, "auto_apply_loras", True))
@@ -1075,7 +1091,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 )
             else:
                 try:
-
+                    
                     model_to_offload = (
                         transformer.get_submodule(offloading_module)
                         if offloading_module
@@ -2805,7 +2821,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             min_frames = ((min_frames // 4) * 4) + 1
             duration = min(duration, min_frames)
 
-        return max(duration, 1)
+        return int(max(duration, 1))
 
     if TYPE_CHECKING:
         # Hint to type-checkers/IDEs: unknown attributes accessed on engines

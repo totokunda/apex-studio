@@ -12,10 +12,11 @@ Typical usage:
 
 from __future__ import annotations
 
+import gc
 import inspect
 import os
 import sys
-from typing import IO, Any, Dict, Optional
+from typing import IO, Any, Dict, List, Optional, Tuple
 
 import psutil
 
@@ -129,6 +130,129 @@ def _collect_cuda_mem(device: Optional[int] = None, sync: bool = True) -> Option
     }
 
 
+def _device_matches_filter(device_str: str, device_filter: Optional[str]) -> bool:
+    if not device_filter:
+        return True
+    filt = device_filter.strip().lower()
+    dev = device_str.strip().lower()
+    if filt in ("cuda", "gpu"):
+        return dev.startswith("cuda")
+    if filt in ("cpu",):
+        return dev == "cpu"
+    return dev == filt
+
+
+def _safe_storage_info(t: Any) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Return (storage_ptr, storage_nbytes) best-effort.
+    """
+    try:
+        # PyTorch 2.x preferred API
+        s = t.untyped_storage()
+        ptr = int(s.data_ptr())
+        nbytes = int(s.nbytes())
+        return ptr, nbytes
+    except Exception:
+        pass
+    try:
+        # Older API; may warn in newer versions
+        s = t.storage()
+        ptr = int(s.data_ptr())
+        nbytes = int(s.nbytes())
+        return ptr, nbytes
+    except Exception:
+        return None, None
+
+
+def _collect_live_tensors(
+    *,
+    device_filter: Optional[str] = None,
+    min_tensor_bytes: int = 0,
+    top_k: int = 50,
+) -> Optional[Dict[str, Any]]:
+    """
+    Best-effort inventory of live torch Tensors visible to Python's GC.
+
+    Notes:
+    - This can be slow (walks gc.get_objects()) and may be noisy.
+    - It will not show freed tensors, and may miss tensors not tracked by gc.
+    """
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return None
+
+    rows: List[Dict[str, Any]] = []
+    totals_by_device: Dict[str, int] = {}
+    storages_by_device: Dict[str, Dict[int, int]] = {}
+
+    for obj in gc.get_objects():
+        t = None
+        try:
+            if torch.is_tensor(obj):
+                t = obj
+            elif hasattr(obj, "data") and torch.is_tensor(getattr(obj, "data")):
+                t = getattr(obj, "data")
+            else:
+                continue
+
+            device_str = str(t.device)
+            if not _device_matches_filter(device_str, device_filter):
+                continue
+
+            # tensor bytes (view size), not necessarily unique storage
+            tensor_bytes = int(t.numel()) * int(t.element_size())
+            if tensor_bytes < int(min_tensor_bytes):
+                continue
+
+            storage_ptr, storage_nbytes = _safe_storage_info(t)
+
+            totals_by_device[device_str] = totals_by_device.get(device_str, 0) + tensor_bytes
+            if storage_ptr is not None and storage_nbytes is not None:
+                dev_storages = storages_by_device.setdefault(device_str, {})
+                # keep max nbytes for this ptr (should be stable; defensive for races)
+                prev = dev_storages.get(storage_ptr)
+                if prev is None or int(storage_nbytes) > int(prev):
+                    dev_storages[storage_ptr] = int(storage_nbytes)
+
+            grad_fn_name = None
+            try:
+                grad_fn = getattr(t, "grad_fn", None)
+                grad_fn_name = type(grad_fn).__name__ if grad_fn is not None else None
+            except Exception:
+                grad_fn_name = None
+
+            rows.append(
+                {
+                    "tensor_bytes": tensor_bytes,
+                    "storage_bytes": int(storage_nbytes) if storage_nbytes is not None else None,
+                    "shape": tuple(int(x) for x in t.shape) if getattr(t, "shape", None) is not None else None,
+                    "dtype": str(getattr(t, "dtype", None)),
+                    "device": device_str,
+                    "requires_grad": bool(getattr(t, "requires_grad", False)),
+                    "is_leaf": bool(getattr(t, "is_leaf", False)),
+                    "grad_fn": grad_fn_name,
+                }
+            )
+        except Exception:
+            continue
+
+    rows.sort(key=lambda r: int(r.get("tensor_bytes") or 0), reverse=True)
+    if int(top_k) > 0:
+        rows = rows[: int(top_k)]
+
+    unique_storage_bytes_by_device: Dict[str, int] = {}
+    for dev, ptr_map in storages_by_device.items():
+        unique_storage_bytes_by_device[dev] = int(sum(int(v) for v in ptr_map.values()))
+
+    return {
+        "rows": rows,
+        "totals_by_device": totals_by_device,
+        "unique_storage_bytes_by_device": unique_storage_bytes_by_device,
+        "n_rows": len(rows),
+    }
+
+
 def step_mem(
     label: Optional[str] = None,
     *,
@@ -136,6 +260,10 @@ def step_mem(
     pause: bool = True,
     reset_peak: bool = False,
     sync_cuda: bool = True,
+    log_tensors: bool = False,
+    tensors_top_k: int = 50,
+    tensors_min_bytes: int = 0,
+    tensors_device: Optional[str] = None,
     stream: Optional[IO[str]] = None,
 ) -> None:
     """
@@ -144,6 +272,7 @@ def step_mem(
     - Set env `APEX_STEP_MEM_DISABLE=1` to disable completely.
     - If stdin is not a TTY (non-interactive), it will NOT block, but still prints.
     - `reset_peak=True` resets PyTorch CUDA peak stats for the selected device.
+    - `log_tensors=True` walks Python GC to list live torch tensors (can be slow/noisy).
     """
     if os.environ.get("APEX_STEP_MEM_DISABLE", "").strip() not in ("", "0", "false", "False", "FALSE"):
         return
@@ -197,6 +326,49 @@ def step_mem(
                 print("  CUDA: reset_peak_memory_stats()", file=out, flush=True)
             except Exception as e:
                 print(f"  CUDA: failed to reset peak stats ({e})", file=out, flush=True)
+
+    if log_tensors:
+        inv = _collect_live_tensors(
+            device_filter=tensors_device,
+            min_tensor_bytes=int(tensors_min_bytes),
+            top_k=int(tensors_top_k),
+        )
+        if inv is None:
+            print("  TENSORS: n/a (torch not available)", file=out, flush=True)
+        else:
+            totals_by_device = inv.get("totals_by_device") or {}
+            unique_storage_by_device = inv.get("unique_storage_bytes_by_device") or {}
+            if not totals_by_device:
+                suffix = f" (filter={tensors_device})" if tensors_device else ""
+                print(f"  TENSORS: none found{suffix}", file=out, flush=True)
+            else:
+                suffix = f" (filter={tensors_device})" if tensors_device else ""
+                print(f"  TENSORS{suffix}:", file=out, flush=True)
+                for dev in sorted(set(list(totals_by_device.keys()) + list(unique_storage_by_device.keys()))):
+                    total = totals_by_device.get(dev)
+                    uniq = unique_storage_by_device.get(dev)
+                    print(
+                        f"    {dev}: tensor_bytes={_fmt_bytes(total)} | unique_storage={_fmt_bytes(uniq)}",
+                        file=out,
+                        flush=True,
+                    )
+                rows = inv.get("rows") or []
+                if rows:
+                    print(f"    top_k={len(rows)} (by tensor_bytes):", file=out, flush=True)
+                    for i, r in enumerate(rows, start=1):
+                        print(
+                            "      "
+                            f"{i:02d} tensor={_fmt_bytes(r.get('tensor_bytes'))}"
+                            f" storage={_fmt_bytes(r.get('storage_bytes'))}"
+                            f" device={r.get('device')}"
+                            f" dtype={r.get('dtype')}"
+                            f" shape={r.get('shape')}"
+                            f" req_grad={r.get('requires_grad')}"
+                            f" leaf={r.get('is_leaf')}"
+                            + (f" grad_fn={r.get('grad_fn')}" if r.get("grad_fn") else ""),
+                            file=out,
+                            flush=True,
+                        )
 
     # Pause last so you can read the output.
     should_pause = bool(pause) and sys.stdin is not None and sys.stdin.isatty()

@@ -404,7 +404,12 @@ class OffloadMixin(base_object):
                 # stays alive until this function returns and VRAM won't be reclaimed yet.
                 module_obj = getattr(self, module, None)
                 if module_obj is None:
-                    return
+                    # check if module is a helper
+                    if module in self._helpers:
+                        module_obj = self._helpers[module]
+                    else:
+                        return
+                
                 if offload_type == "cpu":
                     module_obj.to("cpu")
                 elif offload_type == "discard":
@@ -420,6 +425,10 @@ class OffloadMixin(base_object):
                     # check if type is helper
                     if component:
                         if component.get("type") == "helper":
+                            try:
+                                self._helpers.pop(component.get("base"))
+                            except Exception:
+                                pass
                             try:
                                 self._helpers.pop(component.get("name"))
                             except Exception:
