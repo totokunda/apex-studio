@@ -1,0 +1,298 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: ltx2-19b-text-to-image-to-video-distilled
+  model: ltx2
+  name: LTX2 19B Text to Image to Video Distilled
+  version: 1.0.0  
+  description: LTX2 19B is a 19B parameter model for text-to-video with audio generation.
+  tags:
+  - ltx2
+  - t2v
+  - 19b
+  author: Lightricks
+  license: Custom License
+  demo_path: models/ltx2-19b-text-to-image-to-video-distilled.mp4
+  categories:
+  - text-to-video
+  - image-to-video
+spec:
+  engine: ltx2
+  model_type: ti2v
+  engine_type: torch
+  default_duration_secs: 5.0
+  fps: 24
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - efficient_dot_product_attention
+  
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchDiscreteScheduler
+    scheduler_options:
+     - name: FlowMatchDiscreteScheduler
+       label: FlowMatch Discrete Scheduler
+       description: The FlowMatch Discrete Scheduler is a scheduler for the LTX2 19B model.
+       base: diffusers.schedulers.FlowMatchEulerDiscreteScheduler
+       config_path: Lightricks/LTX-2/scheduler/scheduler_config.json
+  - type: vae
+    label: LTX2 Video Vae
+    name: video_vae
+    base: ltx2
+    model_path:
+    - path: Lightricks/LTX-2/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: vae
+    label: LTX2 Audio Vae
+    name: audio_vae
+    base: ltx2audio
+    model_path:
+    - path: Lightricks/LTX-2/audio_vae
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: text_encoder
+    label: LTX2 Text Encoder
+    name: text_encoder
+    base: Gemma3ForConditionalGeneration
+    # Keep these on GPU; lm_head is often weight-tied to embed_tokens.
+    ignore_offloading_modules: ["lm_head", "embed_tokens"]
+    block_modules: ["model.language_model"]
+    model_path:
+    - path: blanchon/LTX-2-Distilled-diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+    config_path: Lightricks/LTX-2/text_encoder/config.json
+    tokenizer_class: GemmaTokenizer
+    tokenizer_name: Lightricks/LTX-2
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: transformer
+    label: LTX2 Transformer
+    name: transformer
+    base: ltx2.base
+    model_path:
+    - path: blanchon/LTX-2-Distilled-diffusers/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+  
+  - type: helper
+    label: LTX2 Connectors
+    name: connectors
+    base: ltx2.connectors
+    model_path:
+    - path: Lightricks/LTX-2/connectors
+      variant: default
+      precision: fp16
+      type: safetensors
+    
+  - type: helper
+    label: LTX2 Vocoder
+    name: vocoder
+    base: ltx2.vocoder
+    model_path:
+    - path: Lightricks/LTX-2/vocoder
+      variant: default
+      precision: fp16
+      type: safetensors
+  
+  - type: helper
+    label: LTX2 Spatial Upsampler
+    name: latent_upsampler
+    base: ltx2.upsampler
+    model_path:
+    - path: Lightricks/LTX-2/latent_upsampler
+      variant: default
+      precision: fp16
+      type: safetensors  
+
+  defaults:
+    run:
+      use_distilled_stage_1: true
+      guidance_scale: 1.0
+      guidance_rescale: 0.0
+      upsample: true
+      use_gradient_estimation: false
+      ge_gamma: 0.0
+
+  ui:
+    panels:
+    - name: media
+      label: Media
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    - name: chunking
+      label: Chunking
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
+    inputs:
+    - id: image
+      label: Image
+      description: The image to condition on.
+      type: image
+      panel: media
+      required: true
+      map_h: height
+      map_w: width
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 960
+      options:
+      - name: Full HD
+        value: 960
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: '1:1'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 720
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1280
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      description: Guidance scale for the model
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Select the chunking profile for the model
+      type: select
+      panel: sampling
+      default: none
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
