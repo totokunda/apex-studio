@@ -64,7 +64,12 @@ class GroupOffloadingConfig:
     block_modules: Optional[List[str]] = None
     exclude_kwargs: Optional[List[str]] = None
     module_prefix: Optional[str] = ""
-
+    ignore_modules: Optional[List[str]] = None
+    # When streams are enabled, Diffusers' lazy prefetch hook adds a tracker hook with a fixed name
+    # (`layer_execution_tracker`) to each offloaded submodule. If we accidentally apply lazy prefetch
+    # at multiple nested levels (e.g. via recursive `block_modules`), those tracker hook names can
+    # collide. This flag allows us to opt-out of lazy prefetch for nested applications.
+    allow_lazy_prefetch: bool = True
 
 class ModuleGroup:
     def __init__(
@@ -471,6 +476,10 @@ class LazyPrefetchGroupOffloadingHook(ModelHook):
                 # For the first forward pass, we have to load in a blocking manner
                 group_offloading_hook.group.non_blocking = False
                 layer_tracker_hook = LayerExecutionTrackerHook(make_execution_order_update_callback(name, submodule))
+                # Be defensive: nested group-offloading applications (or interrupted runs) can leave an existing
+                # tracker hook behind, and HookRegistry is strict about name collisions.
+                if registry.get_hook(_LAYER_EXECUTION_TRACKER) is not None:
+                    registry.remove_hook(_LAYER_EXECUTION_TRACKER, recurse=False)
                 registry.register_hook(layer_tracker_hook, _LAYER_EXECUTION_TRACKER)
                 self._layer_execution_tracker_module_names.add(name)
 
@@ -560,6 +569,7 @@ def apply_group_offloading(
     offload_to_disk_path: Optional[str] = None,
     block_modules: Optional[List[str]] = None,
     exclude_kwargs: Optional[List[str]] = None,
+    ignore_modules: Optional[List[str]] = None,
 ) -> None:
     r"""
     Applies group offloading to the internal layers of a torch.nn.Module. To understand what group offloading is, and
@@ -651,6 +661,7 @@ def apply_group_offloading(
     
     stream = None
     streams = None
+
     if use_stream:
         if torch.cuda.is_available():
             # Create multiple streams for parallel onloading when num_blocks_per_group > 1
@@ -694,7 +705,35 @@ def apply_group_offloading(
         offload_to_disk_path=offload_to_disk_path,
         block_modules=block_modules,
         exclude_kwargs=exclude_kwargs,
+        ignore_modules=ignore_modules,
+        allow_lazy_prefetch=True,
     )
+
+    # Support targeting nested modules directly, e.g. "model.language_model".
+    # This avoids having to list intermediate names (like "model") which can lead to nested
+    # lazy-prefetch hook applications (and tracker hook name collisions).
+    if config.offload_type == GroupOffloadingType.BLOCK_LEVEL and config.block_modules:
+        dotted = [m for m in config.block_modules if "." in m]
+        undotted = [m for m in config.block_modules if "." not in m]
+        if dotted:
+            for path in dotted:
+                try:
+                    target = module.get_submodule(path)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Invalid `block_modules` entry '{path}'. Expected a valid submodule path "
+                        f"relative to the provided module."
+                    ) from exc
+
+                prefix = f"{config.module_prefix}{path}." if config.module_prefix else f"{path}."
+                target_config = replace(config, module_prefix=prefix, block_modules=None)
+                _apply_group_offloading(target, target_config)
+
+            # If the user only specified dotted paths, we intentionally skip applying to the root module.
+            if not undotted:
+                return
+            config = replace(config, block_modules=undotted)
+
     _apply_group_offloading(module, config)
 
 
@@ -720,6 +759,7 @@ def _apply_group_offloading_block_level(module: torch.nn.Module, config: GroupOf
     of each block within a group, keeping the GPU busy when VRAM allows for larger groups.
     """
     block_modules = set(config.block_modules) if config.block_modules is not None else set()
+    ignore_modules = set(config.ignore_modules) if config.ignore_modules is not None else set()
 
     # Create module groups for ModuleList and Sequential blocks, and explicitly defined block modules
     modules_with_group_offloading = set()
@@ -728,13 +768,23 @@ def _apply_group_offloading_block_level(module: torch.nn.Module, config: GroupOf
 
     for name, submodule in module.named_children():
         # Check if this is an explicitly defined block module
+        if name in ignore_modules:
+            # Treat ignored modules as "never offload" by marking them as having a
+            # group-offloading parent. This prevents their parameters/buffers from
+            # being collected into the fallback `unmatched_group`, which would
+            # otherwise offload them to CPU/disk.
+            #
+            # This is important for HF models with tied weights (e.g. lm_head <-> embed_tokens),
+            # where offloading embeddings implicitly offloads lm_head as well.
+            modules_with_group_offloading.add(name)
+            continue
         if name in block_modules:
             # Track submodule using a prefix to avoid filename collisions during disk offload.
             # Without this, submodules sharing the same model class would be assigned identical
             # filenames (derived from the class name).
             prefix = f"{config.module_prefix}{name}." if config.module_prefix else f"{name}."
-            submodule_config = replace(config, module_prefix=prefix)
-
+            # Avoid applying lazy prefetch at nested levels to prevent hook-name collisions.
+            submodule_config = replace(config, module_prefix=prefix, allow_lazy_prefetch=False)
             _apply_group_offloading_block_level(submodule, submodule_config)
             modules_with_group_offloading.add(name)
 
@@ -800,7 +850,8 @@ def _apply_group_offloading_block_level(module: torch.nn.Module, config: GroupOf
             onload_self=True,
             group_id=f"{config.module_prefix}{module.__class__.__name__}_unmatched_group",
         )
-        if config.stream is None:
+        has_streams = config.stream is not None or (config.streams is not None and len(config.streams) > 0)
+        if not has_streams or not config.allow_lazy_prefetch:
             _apply_group_offloading_hook(module, unmatched_group, config=config)
         else:
             _apply_lazy_group_offloading_hook(module, unmatched_group, config=config)
@@ -881,7 +932,8 @@ def _apply_group_offloading_leaf_level(module: torch.nn.Module, config: GroupOff
         )
         _apply_group_offloading_hook(parent_module, group, config=config)
 
-    if config.stream is not None:
+    has_streams = config.stream is not None or (config.streams is not None and len(config.streams) > 0)
+    if has_streams and config.allow_lazy_prefetch:
         # When using streams, we need to know the layer execution order for applying prefetching (to overlap data transfer
         # and computation). Since we don't know the order beforehand, we apply a lazy prefetching hook that will find the
         # execution order and apply prefetching in the correct order.
@@ -934,6 +986,8 @@ def _apply_lazy_group_offloading_hook(
         registry.register_hook(hook, _GROUP_OFFLOADING)
 
     lazy_prefetch_hook = LazyPrefetchGroupOffloadingHook()
+    if registry.get_hook(_LAZY_PREFETCH_GROUP_OFFLOADING) is not None:
+        registry.remove_hook(_LAZY_PREFETCH_GROUP_OFFLOADING, recurse=False)
     registry.register_hook(lazy_prefetch_hook, _LAZY_PREFETCH_GROUP_OFFLOADING)
 
 

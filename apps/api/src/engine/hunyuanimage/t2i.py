@@ -9,7 +9,6 @@ from src.engine.base_engine import BaseEngine
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.utils.torch_utils import randn_tensor
 import re
-from loguru import logger
 
 
 class HunyuanImageT2IEngine(BaseEngine):

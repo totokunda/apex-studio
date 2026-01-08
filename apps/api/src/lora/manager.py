@@ -315,6 +315,8 @@ class LoraManager(DownloadMixin):
                     if adapter_names and i < len(adapter_names) and adapter_names[i]
                     else item.name or f"lora_{self._hash(item.source)}"
                 )
+                if item.scale == 0.0:
+                    continue
                 final_names.append(adapter_name)
                 final_scales.append(item.scale)
                 # diffusers supports str or dict mapping for multiple files; we load one-by-one if multiple

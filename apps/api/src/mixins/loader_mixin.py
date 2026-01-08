@@ -165,8 +165,6 @@ class LoaderMixin(DownloadMixin):
             # Should be cpu often times since the model is loaded on the cpu
             load_device = "cpu"
 
-        if True:
-            load_device = "cpu"
 
         if getter_fn:
             model_class = getter_fn(model_base)
@@ -698,6 +696,10 @@ class LoaderMixin(DownloadMixin):
                     or type(model).__name__
                 )
                 offloading_module = component.get("offloading_module", None)
+                ignore_offloading_modules = component.get("ignore_offloading_modules", None)
+                block_modules = component.get("block_modules", None)
+                mm_config.ignore_modules = ignore_offloading_modules
+                mm_config.block_modules = block_modules
                 if offloading_module:
                     model_to_offload = model.get_submodule(offloading_module)
                 else:

@@ -1,8 +1,5 @@
 import gc
 import torch
-from typing import Dict, Union
-from safetensors.torch import safe_open
-import os
 
 
 def empty_cache():

@@ -31,6 +31,7 @@ from src.converters.transformer_converters import (
     WanS2VTransformerConverter,
     FlashVSRTransformerConverter,
     ZImageTransformerConverter,
+    LTX2TransformerConverter,
 )
 
 from src.converters.utils import (
@@ -45,6 +46,7 @@ from src.converters.text_encoder_converters import (
     StepTextEncoderConverter,
     Qwen2_5_VLTextEncoderConverter,
     MistralTextEncoderConverter,
+    Gemma3TextEncoderConverter,
 )
 
 from src.converters.vae_converters import (
@@ -104,6 +106,8 @@ def get_transformer_converter(model_base: str):
         return FlashVSRTransformerConverter()
     elif model_base == "zimage.base":
         return ZImageTransformerConverter()
+    elif model_base == "ltx2.base":
+        return LTX2TransformerConverter()
     else:
         return NoOpTransformerConverter()
 
@@ -131,6 +135,8 @@ def get_transformer_converter_by_model_name(model_name: str):
         return HunyuanVideoTransformerConverter()
     elif "Mochi" in model_name:
         return MochiTransformerConverter()
+    elif "LTX2" in model_name:
+        return LTX2TransformerConverter()
     elif "LTX" in model_name:
         return LTXTransformerConverter()
     elif "StepVideo" in model_name:
@@ -147,6 +153,7 @@ def get_transformer_converter_by_model_name(model_name: str):
         return FluxTransformerConverter()
     elif "lora" in model_name:
         return LoraTransformerConverter()
+    
     return NoOpConverter()
 
 
@@ -175,6 +182,8 @@ def get_text_encoder_converter(text_encoder_type: str):
         return Qwen2_5_VLTextEncoderConverter()
     elif "mistral" in text_encoder_type:
         return MistralTextEncoderConverter()
+    elif "gemma3" in text_encoder_type:
+        return Gemma3TextEncoderConverter()
     else:
         return NoOpConverter()
 

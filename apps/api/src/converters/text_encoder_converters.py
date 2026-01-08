@@ -7,6 +7,20 @@ class TextEncoderConverter(BaseConverter):
     pass
 
 
+class Gemma3TextEncoderConverter(TextEncoderConverter):
+    """
+    Converter for Gemma3 text encoder checkpoints.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.rename_dict = {
+            "^language_model.model": "model.language_model",
+            "^vision_tower": "model.vision_tower",
+            "^multi_modal_projector": "model.multi_modal_projector",
+            "^language_model.lm_head": "lm_head",
+        }
+
 class Qwen2_5_VLTextEncoderConverter(TextEncoderConverter):
     """
     Converter for Qwen2.5 VL text encoder checkpoints.

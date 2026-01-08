@@ -13,7 +13,6 @@ import importlib
 from typing import TYPE_CHECKING
 
 __all__ = [
-    "LatentUpsamplerPostprocessor",
     "CosmosGuardrailPostprocessor",
     "RifePostprocessor",
     "BasePostprocessor",
@@ -23,7 +22,6 @@ __all__ = [
 
 _SYMBOL_TO_MODULE = {
     # Keep these as module names relative to this package.
-    "LatentUpsamplerPostprocessor": "ltx",
     "CosmosGuardrailPostprocessor": "cosmos",
     "RifePostprocessor": "rife",
     # Base symbols are also lazily imported to avoid importing torch at package import time.
@@ -39,7 +37,6 @@ if TYPE_CHECKING:
         postprocessor_registry as postprocessor_registry,
     )
     from .cosmos import CosmosGuardrailPostprocessor as CosmosGuardrailPostprocessor
-    from .ltx import LatentUpsamplerPostprocessor as LatentUpsamplerPostprocessor
     from .rife import RifePostprocessor as RifePostprocessor
 
 def __getattr__(name: str):
