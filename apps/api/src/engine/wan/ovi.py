@@ -553,8 +553,7 @@ class OviEngine(WanShared):
                     return_dict=False,
                 )[0].squeeze(0)
                 
-                print(video_noise.mean(), video_noise.std())
-                print(audio_noise.mean(), audio_noise.std())
+                # Avoid noisy per-step prints (slow + pollutes logs). If needed, use logger.debug.
 
                 # Optional per-step previews (if wired in from the orchestrator)
                 if (

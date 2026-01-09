@@ -12,6 +12,100 @@ from typing import Dict, Any
 from loguru import logger
 
 
+class OviFusionBlock(nn.Module):
+    """
+    A single fused audio+video block wrapper.
+
+    Key property: this wrapper is called exactly once per layer in `OviModel.forward`.
+    When group offloading targets `OviModel.fusion_blocks`, hooks attach to these wrappers
+    (not to the underlying audio/video blocks), avoiding repeated hook execution within
+    a single forward pass.
+    """
+
+    def __init__(self, vid_block: nn.Module, audio_block: nn.Module):
+        super().__init__()
+        self.vid_block = vid_block
+        self.audio_block = audio_block
+
+    def forward(
+        self,
+        *,
+        vid,
+        audio,
+        vid_e,
+        vid_seq_lens,
+        vid_grid_sizes,
+        vid_freqs,
+        vid_context,
+        vid_context_lens,
+        audio_e,
+        audio_seq_lens,
+        audio_grid_sizes,
+        audio_freqs,
+        audio_context,
+        audio_context_lens,
+    ):
+        # Audio: modulation + self-attention
+        audio, audio_e_chunked = self.audio_block(
+            x=audio,
+            e=audio_e,
+            seq_lens=audio_seq_lens,
+            grid_sizes=audio_grid_sizes,
+            freqs=audio_freqs,
+            context=audio_context,
+            context_lens=audio_context_lens,
+            mode="modulation_self_attn",
+        )
+
+        # Video: modulation + self-attention
+        vid, vid_e_chunked = self.vid_block(
+            x=vid,
+            e=vid_e,
+            seq_lens=vid_seq_lens,
+            grid_sizes=vid_grid_sizes,
+            freqs=vid_freqs,
+            context=vid_context,
+            context_lens=vid_context_lens,
+            mode="modulation_self_attn",
+        )
+
+        og_audio = audio
+
+        # Audio: fusion cross-attention + FFN (attends to video)
+        audio = self.audio_block(
+            x=audio,
+            e=audio_e_chunked,
+            seq_lens=audio_seq_lens,
+            grid_sizes=audio_grid_sizes,
+            freqs=audio_freqs,
+            context=audio_context,
+            context_lens=audio_context_lens,
+            mode="fusion_cross_attn_ffn",
+            target_seq=vid,
+            target_seq_lens=vid_seq_lens,
+            target_grid_sizes=vid_grid_sizes,
+            target_freqs=vid_freqs,
+        )
+
+        # Video: fusion cross-attention + FFN (attends to og_audio)
+        vid = self.vid_block(
+            x=vid,
+            e=vid_e_chunked,
+            seq_lens=vid_seq_lens,
+            grid_sizes=vid_grid_sizes,
+            freqs=vid_freqs,
+            context=vid_context,
+            context_lens=vid_context_lens,
+            mode="fusion_cross_attn_ffn",
+            target_seq=og_audio,
+            target_seq_lens=audio_seq_lens,
+            target_grid_sizes=audio_grid_sizes,
+            target_freqs=audio_freqs,
+        )
+
+        return vid, audio
+
+
 class OviModel(ModelMixin, ConfigMixin):
     config_name = "config.json"
     _supports_gradient_checkpointing = True
@@ -39,8 +133,29 @@ class OviModel(ModelMixin, ConfigMixin):
 
         if has_video and has_audio:
             assert len(self.video_model.blocks) == len(self.audio_model.blocks)
-            self.num_blocks = len(self.video_model.blocks)
             self.inject_cross_attention_kv_projections()
+
+            vid_blocks = list(self.video_model.blocks)
+            audio_blocks = list(self.audio_model.blocks)
+
+            # IMPORTANT:
+            # - We want group offloading to target `fusion_blocks`, so each offloaded "block"
+            #   is invoked once per iteration.
+            # - We therefore move the underlying blocks out of `video_model.blocks` /
+            #   `audio_model.blocks` and into the wrappers below.
+            #
+            # This prevents block-level offloading hooks from attaching to the raw blocks
+            # (which are invoked multiple times per iteration in the fused schedule).
+            self.video_model.blocks = nn.ModuleList()
+            self.audio_model.blocks = nn.ModuleList()
+
+            self.fusion_blocks = nn.ModuleList(
+                [
+                    OviFusionBlock(vid_block=v, audio_block=a)
+                    for v, a in zip(vid_blocks, audio_blocks)
+                ]
+            )
+            self.num_blocks = len(self.fusion_blocks)
 
         self.gradient_checkpointing = False
         self.init_weights()
@@ -228,31 +343,13 @@ class OviModel(ModelMixin, ConfigMixin):
         assert y is None
 
         if vid is None or all([x is None for x in vid]):
-            assert self.audio_model is not None
-
-            return None, self.audio_model(
-                x=audio,
-                t=t,
-                context=audio_context,
-                seq_len=audio_seq_len,
-                clip_fea=clip_fea_audio,
-                y=None,
+            raise ValueError(
+                "OviModel requires both `vid` and `audio` inputs for fused inference."
             )
 
         if audio is None or all([x is None for x in audio]):
-            assert self.video_model is not None
-
-            return (
-                self.video_model(
-                    x=vid,
-                    t=t,
-                    context=vid_context,
-                    seq_len=vid_seq_len,
-                    clip_fea=clip_fea,
-                    y=y,
-                    first_frame_is_clean=first_frame_is_clean,
-                ),
-                None,
+            raise ValueError(
+                "OviModel requires both `vid` and `audio` inputs for fused inference."
             )
 
         vid, vid_e, vid_kwargs = self.video_model.prepare_transformer_block_kwargs(
@@ -265,7 +362,8 @@ class OviModel(ModelMixin, ConfigMixin):
             first_frame_is_clean=first_frame_is_clean,
         )
         
-        print("vid", vid[0].mean(), "vid_e", vid_e[0].mean())
+        # NOTE: avoid per-step prints in production; this can severely slow generation.
+        # Use logging at DEBUG level if needed.
 
         audio, audio_e, audio_kwargs = (
             self.audio_model.prepare_transformer_block_kwargs(
@@ -279,23 +377,17 @@ class OviModel(ModelMixin, ConfigMixin):
             )
         )
         
-        print("audio", audio[0].mean(), "audio_e", audio_e[0].mean())
+        # NOTE: avoid per-step prints in production; this can severely slow generation.
+        # Use logging at DEBUG level if needed.
 
         kwargs = self.merge_kwargs(vid_kwargs, audio_kwargs)
 
-        for i in range(self.num_blocks):
-            """
-            1 fusion block refers to 1 audio block with 1 video block.
-            """
+        for i, block in enumerate(self.fusion_blocks):
             if slg_layer > 0 and i == slg_layer:
                 continue
-            vid_block = self.video_model.blocks[i]
-            audio_block = self.audio_model.blocks[i]
             vid, audio = gradient_checkpointing(
                 enabled=(self.training and self.gradient_checkpointing),
-                module=self.single_fusion_block_forward,
-                vid_block=vid_block,
-                audio_block=audio_block,
+                module=block,
                 vid=vid,
                 audio=audio,
                 **kwargs,
@@ -386,29 +478,13 @@ class OviModel(ModelMixin, ConfigMixin):
 
         # Handle single-modality cases (fall back to normal forward)
         if vid is None or all([x is None for x in vid]):
-            assert self.audio_model is not None
-            return None, self.audio_model(
-                x=audio,
-                t=t,
-                context=audio_context,
-                seq_len=audio_seq_len,
-                clip_fea=clip_fea_audio,
-                y=None,
+            raise ValueError(
+                "OviModel requires both `vid` and `audio` inputs for fused inference."
             )
 
         if audio is None or all([x is None for x in audio]):
-            assert self.video_model is not None
-            return (
-                self.video_model(
-                    x=vid,
-                    t=t,
-                    context=vid_context,
-                    seq_len=vid_seq_len,
-                    clip_fea=clip_fea,
-                    y=y,
-                    first_frame_is_clean=first_frame_is_clean,
-                ),
-                None,
+            raise ValueError(
+                "OviModel requires both `vid` and `audio` inputs for fused inference."
             )
 
         # Store original raw inputs for caching
@@ -586,16 +662,12 @@ class OviModel(ModelMixin, ConfigMixin):
 
         kwargs = self.merge_kwargs(vid_kwargs, audio_kwargs)
 
-        for i in range(self.num_blocks):
+        for i, block in enumerate(self.fusion_blocks):
             if slg_layer > 0 and i == slg_layer:
                 continue
-            vid_block = self.video_model.blocks[i]
-            audio_block = self.audio_model.blocks[i]
             vid, audio = gradient_checkpointing(
                 enabled=(self.training and self.gradient_checkpointing),
-                module=self.single_fusion_block_forward,
-                vid_block=vid_block,
-                audio_block=audio_block,
+                module=block,
                 vid=vid,
                 audio=audio,
                 **kwargs,
