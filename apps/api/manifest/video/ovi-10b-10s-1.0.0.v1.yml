@@ -140,7 +140,7 @@ spec:
       resource_requirements:
         min_vram_gb: 22
         recommended_vram_gb: 30
-    - path: Kijai/WanVideo_comfy_fp8_scaled/TI2V/Ovi/Wan2_2-5B-Ovi_960x960_10s_fp8_e4m3fn_scaled_KJ.safetensors
+    - path: totoku/ovi/transformer/ovi-fp8-960x960-10s.safetensors
       variant: FP8
       precision: fp8
       type: safetensors

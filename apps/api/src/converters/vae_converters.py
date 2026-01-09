@@ -1,7 +1,7 @@
 from typing import Dict, Any
 from src.converters.utils import update_state_dict_
 from src.converters.transformer_converters import TransformerConverter
-
+from typing import List
 
 class VAEConverter(TransformerConverter):
     pass
@@ -147,7 +147,9 @@ class MMAudioVAEConverter(VAEConverter):
         self.rename_dict = {}
         self.special_keys_map = {}
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
+        if self._already_converted(state_dict, model_keys):
+            return state_dict
         keys = list(state_dict.keys())
         generator_state = None
         decoder_state = None

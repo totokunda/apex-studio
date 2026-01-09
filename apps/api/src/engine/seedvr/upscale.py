@@ -390,6 +390,7 @@ class SeedVRUpscaleEngine(BaseEngine):
         norm_max_mem: float = 0.5,
         split_size: int = 4,
         memory_device: str = "same",
+        progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> List[Tensor]:
         """
         Encode samples using SeedVR VAE with proper scaling.
@@ -418,7 +419,10 @@ class SeedVRUpscaleEngine(BaseEngine):
         scale = self._vae_scaling_factor
         shift = self._vae_shifting_factor
 
-        for sample in samples:
+        total = len(samples)
+        safe_emit_progress(progress_callback, 0.0, "VAE encode: starting")
+
+        for idx, sample in enumerate(tqdm(samples, desc="Encoding samples")):
             # Add batch dimension and move to device
             sample = sample.unsqueeze(0).to(device=self.device, dtype=dtype)
 
@@ -435,6 +439,16 @@ class SeedVRUpscaleEngine(BaseEngine):
 
             # Remove batch dimension
             latents.append(latent.squeeze(0))
+
+            if total > 0:
+                p = (idx + 1) / total
+                safe_emit_progress(
+                    progress_callback,
+                    p,
+                    f"VAE encode: {idx + 1}/{total} ({int(p * 100)}%)",
+                )
+
+        safe_emit_progress(progress_callback, 1.0, "VAE encode: done")
 
         if offload:
             self._offload("vae")
@@ -454,6 +468,7 @@ class SeedVRUpscaleEngine(BaseEngine):
         norm_max_mem: float = 0.5,
         split_size: int = 4,
         memory_device: str = "same",
+        progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> List[Tensor]:
         """
         Decode latents using SeedVR VAE with proper scaling.
@@ -481,7 +496,10 @@ class SeedVRUpscaleEngine(BaseEngine):
         scale = self._vae_scaling_factor
         shift = self._vae_shifting_factor
 
-        for latent in latents:
+        total = len(latents)
+        safe_emit_progress(progress_callback, 0.0, "VAE decode: starting")
+
+        for idx, latent in enumerate(tqdm(latents, desc="Decoding latents")):
             # Add batch dimension
             latent = latent.unsqueeze(0).to(device=self.device, dtype=dtype)
 
@@ -496,7 +514,17 @@ class SeedVRUpscaleEngine(BaseEngine):
             if hasattr(self.vae, "postprocess"):
                 sample = self.vae.postprocess(sample)
 
-            samples.append(sample.squeeze(0))
+            samples.append(sample.squeeze(0).cpu())
+
+            if total > 0:
+                p = (idx + 1) / total
+                safe_emit_progress(
+                    progress_callback,
+                    p,
+                    f"VAE decode: {idx + 1}/{total} ({int(p * 100)}%)",
+                )
+
+        safe_emit_progress(progress_callback, 1.0, "VAE decode: done")
 
         if offload:
             self._offload("vae")
@@ -739,6 +767,14 @@ class SeedVRUpscaleEngine(BaseEngine):
         safe_emit_progress(progress_callback, 0.01, "Starting SeedVR sampling")
 
         # Sampling loop
+        sampling_end = 0.92 if decode else 1.0
+        emit_sampling_progress = make_mapped_progress(
+            progress_callback, 0.0, sampling_end
+        )
+        emit_decode_progress = (
+            make_mapped_progress(progress_callback, sampling_end, 1.0) if decode else None
+        )
+
         with self._progress_bar(total=num_steps, desc="SeedVR Sampling") as pbar:
             for i, (t, s) in enumerate(zip(timesteps[:-1], timesteps[1:])):
                 # Prepare model input
@@ -784,9 +820,8 @@ class SeedVRUpscaleEngine(BaseEngine):
 
                 pbar.update(1)
 
-                if progress_callback:
-                    lp = (i + 1) / num_steps
-                    progress_callback(lp, f"SeedVR Sampling {int(lp * 100)}%")
+                lp = (i + 1) / num_steps
+                emit_sampling_progress(lp, f"SeedVR Sampling {int(lp * 100)}%")
 
         if dit_offload:
             self._offload("transformer")
@@ -811,7 +846,11 @@ class SeedVRUpscaleEngine(BaseEngine):
 
         # VAE decode
         self.to_device(self.vae)
-        samples = self._seedvr_vae_decode(latents, offload=dit_offload)
+        samples = self._seedvr_vae_decode(
+            latents,
+            offload=dit_offload,
+            progress_callback=emit_decode_progress,
+        )
 
         # Free latents after decoding
         del latents
@@ -893,6 +932,7 @@ class SeedVRUpscaleEngine(BaseEngine):
         assert video is not None or image is not None, "video or image is required"
 
         safe_emit_progress(progress_callback, 0.0, "Starting SeedVR upscale")
+        vae_split_size = max(vae_split_size, 4)
 
         # Set random seed
         if seed is not None:
@@ -992,6 +1032,7 @@ class SeedVRUpscaleEngine(BaseEngine):
                 norm_max_mem=vae_norm_max_mem,
                 split_size=vae_split_size,
                 memory_device=vae_memory_device,
+                progress_callback=make_mapped_progress(progress_callback, 0.20, 0.28),
             )
 
             # Free padded inputs and move condition latents to CPU to reduce VRAM
@@ -1093,6 +1134,10 @@ class SeedVRUpscaleEngine(BaseEngine):
             del cond_latents_all
             gc.collect()
             empty_cache()
+            
+            # offload dit
+            if offload:
+                self._offload("transformer")
 
             # -----------------------------------------------------------------
             # Phase 3: decode chunk outputs, then blend on CPU
@@ -1105,6 +1150,7 @@ class SeedVRUpscaleEngine(BaseEngine):
                 norm_max_mem=vae_norm_max_mem,
                 split_size=vae_split_size,
                 memory_device=vae_memory_device,
+                progress_callback=make_mapped_progress(progress_callback, 0.82, 0.90),
             )
             del output_latents_cpu
             gc.collect()
@@ -1153,9 +1199,6 @@ class SeedVRUpscaleEngine(BaseEngine):
             )
             blended_sample = blended_sample.to(torch.uint8).cpu().numpy()
 
-            if offload:
-                self._offload("transformer")
-
             # Convert to PIL images
             output_frames = []
             for frame in blended_sample:
@@ -1180,6 +1223,7 @@ class SeedVRUpscaleEngine(BaseEngine):
                 norm_max_mem=vae_norm_max_mem,
                 split_size=vae_split_size,
                 memory_device=vae_memory_device,
+                progress_callback=make_mapped_progress(progress_callback, 0.18, 0.24),
             )
 
             # Generate noise and augmentation noise

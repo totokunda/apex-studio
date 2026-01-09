@@ -658,7 +658,7 @@ def apply_group_offloading(
     onload_device = torch.device(onload_device) if isinstance(onload_device, str) else onload_device
     offload_device = torch.device(offload_device) if isinstance(offload_device, str) else offload_device
     offload_type = GroupOffloadingType(offload_type)
-    
+
     stream = None
     streams = None
 

@@ -158,6 +158,10 @@ class WanMultitalkEngine(WanShared):
             bbox=bbox,
             face_scale=face_scale,
         )
+        
+        if offload:
+            del preprocessor
+            self._offload("wan.multitalk")
 
         human_masks = processed_inputs["human_masks"]
         human_num = processed_inputs["human_num"]
@@ -227,15 +231,7 @@ class WanMultitalkEngine(WanShared):
             self._offload("text_encoder")
         safe_emit_progress(progress_callback, 0.21, "Text encoder offloaded")
 
-        if not self.transformer:
-            safe_emit_progress(progress_callback, 0.22, "Loading transformer")
-            self.load_component_by_type("transformer")
-        
-        self.to_device(self.transformer)
-        safe_emit_progress(progress_callback, 0.23, "Transformer loaded")
-        if chunking_profile != "none":
-            self.transformer.set_chunking_profile(chunking_profile)
-
+    
         using_video_input = input_video is not None
 
         # Estimate total frame budget for monotonic progress across multiple clips
@@ -280,6 +276,13 @@ class WanMultitalkEngine(WanShared):
             clip_decode_progress = make_mapped_progress(
                 decode_progress, clip_start, clip_end
             )
+            
+            if not hasattr(self, "transformer") or not self.transformer:
+                safe_emit_progress(progress_callback, 0.22, "Loading transformer")
+                self.load_component_by_type("transformer")
+            self.to_device(self.transformer)
+            if chunking_profile != "none":
+                self.transformer.set_chunking_profile(chunking_profile)
 
             safe_emit_progress(
                 clip_pre_progress,
@@ -360,8 +363,9 @@ class WanMultitalkEngine(WanShared):
             ).to(transformer_dtype)
 
             if offload:
+                del clip_processor
                 safe_emit_progress(clip_pre_progress, 0.28, "Offloading CLIP")
-                self._offload("clip", offload_type="cpu")
+                self._offload("clip")
 
             # zero padding and vae encode
             # InfiniteTalk: always condition on the current source video frame when a video is provided;
@@ -611,6 +615,9 @@ class WanMultitalkEngine(WanShared):
                     )
 
                 self.logger.info("Denoising completed.")
+                if offload:
+                    self._offload("transformer", offload_type="cpu")
+                
             safe_emit_progress(
                 clip_denoise_progress, 1.0, f"Denoising completed (clip {clip_idx})"
             )
@@ -698,6 +705,7 @@ class WanMultitalkEngine(WanShared):
 
             if max_num_frames <= num_frames:
                 break
+
 
         if offload:
             safe_emit_progress(progress_callback, 0.985, "Offloading transformer")
