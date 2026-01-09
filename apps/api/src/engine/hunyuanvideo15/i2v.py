@@ -103,7 +103,9 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         **kwargs,
     ):
         
+        safe_emit_progress(progress_callback, 0.0, "Starting image-to-video pipeline")
         num_frames = self._parse_num_frames(duration, fps)
+        safe_emit_progress(progress_callback, 0.02, "Loading and resizing input image")
         image = self._load_image(image)
         image, height, width = self._aspect_ratio_resize(image, mod_value=32, max_area=height * width)
         image = self.video_processor.resize(image, height=height, width=width, resize_mode="crop")
@@ -128,6 +130,7 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
             batch_size = prompt_embeds.shape[0]
 
         # 3. Encode image
+        safe_emit_progress(progress_callback, 0.06, "Encoding image")
         image_embeds = self.encode_image(
             image=image,
             batch_size=batch_size * num_videos_per_prompt,
@@ -136,6 +139,7 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         )
 
         # 4. Encode input prompt
+        safe_emit_progress(progress_callback, 0.10, "Encoding prompt")
         prompt_embeds, prompt_embeds_mask, prompt_embeds_2, prompt_embeds_mask_2 = self.encode_prompt(
             prompt=prompt,
             device=device,
@@ -154,6 +158,7 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         )
 
         if do_classifier_free_guidance and negative_prompt is not None and negative_prompt_embeds is None:
+            safe_emit_progress(progress_callback, 0.14, "Encoding negative prompt (CFG)")
             (
                 negative_prompt_embeds,
                 negative_prompt_embeds_mask,
@@ -172,14 +177,17 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
             )
             
         if not self.scheduler:
+            safe_emit_progress(progress_callback, 0.18, "Loading scheduler")
             self.load_component_by_type("scheduler")
         self.to_device(self.scheduler)
 
         # 5. Prepare timesteps
+        safe_emit_progress(progress_callback, 0.20, "Preparing timesteps")
         sigmas = np.linspace(1.0, 0.0, num_inference_steps + 1)[:-1] if sigmas is None else sigmas
         timesteps, num_inference_steps = self._get_timesteps(self.scheduler, num_inference_steps,  sigmas=sigmas)
 
         # 6. Prepare latent variables
+        safe_emit_progress(progress_callback, 0.25, "Preparing latents")
         latents = self.prepare_latents(
             batch_size=batch_size * num_videos_per_prompt,
             num_channels_latents=self.num_channels_latents,
@@ -207,10 +215,17 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         self._num_timesteps = len(timesteps)
 
         if not self.transformer:
+            safe_emit_progress(progress_callback, 0.30, "Loading transformer")
             self.load_component_by_name("transformer")
         
         self.to_device(self.transformer)
 
+        denoise_progress_callback = make_mapped_progress(progress_callback, 0.50, 0.90)
+        safe_emit_progress(
+            progress_callback,
+            0.45,
+            f"Starting denoise (CFG: {'on' if do_classifier_free_guidance else 'off'})",
+        )
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
@@ -306,14 +321,21 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
+                    denoise_progress_callback(
+                        float(i + 1) / float(max(num_inference_steps, 1)),
+                        f"Denoising step {i + 1}/{num_inference_steps}",
+                    )
 
         self._current_timestep = None
         if offload:
             self._offload("transformer")
         
         if return_latents:
+            safe_emit_progress(progress_callback, 1.0, "Returning latents")
             return latents
         else:
+            safe_emit_progress(progress_callback, 0.95, "Decoding latents to video")
             video = self.vae_decode(latents, offload=offload)
             postprocessed_video = self._tensor_to_frames(video)
+            safe_emit_progress(progress_callback, 1.0, "Completed image-to-video pipeline")
             return postprocessed_video

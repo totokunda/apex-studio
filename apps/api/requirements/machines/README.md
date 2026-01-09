@@ -17,7 +17,8 @@ They are layered on top of:
 - **macOS / Apple Silicon (Metal/MPS)**: `mps.txt`
 - **AMD ROCm (Linux)**: `rocm.txt`
 - **NVIDIA CUDA (Ampere)**: `cuda-sm80-ampere.txt`
-- **NVIDIA CUDA (Ada / L4/L40/4090)**: `cuda-sm89-ada.txt`
+- **NVIDIA CUDA (Ada / sm_89, e.g. RTX 4070 / L4/L40)**: `cuda-sm89-ada.txt` (SageAttention v1)
+- **NVIDIA CUDA (Ada / RTX 4090)**: `cuda-sm89-ada-rtx4090.txt` (SageAttention v2)
 - **NVIDIA CUDA (Hopper / H100)**: `cuda-sm90-hopper.txt`
 - **NVIDIA CUDA (Blackwell)**: `cuda-sm100-blackwell.txt`
 
@@ -37,7 +38,7 @@ build toolchain + a matching CUDA toolkit.
 
 Windows-specific wheel installs are now included directly in the CUDA entrypoints:
 - `cuda-sm80-ampere.txt`: includes the FlashAttention Windows wheel (cu126/torch2.6.0/cp312)
-- `cuda-sm89-ada.txt`: includes the SageAttention Windows wheel (cu128/torch2.7.1/cp312)
+- `cuda-sm89-ada-rtx4090.txt`: includes the SageAttention Windows wheel (cu128/torch2.7.1/cp312)
 - `cuda-sm100-blackwell.txt`: includes the SageAttention Windows wheel (cu128/torch2.7.1/cp312)
 
 If you want the repo to handle this automatically, use:
