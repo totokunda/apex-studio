@@ -667,18 +667,21 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             return helper_class
 
         # create an instance of the helper class
+        helper = None
         if "model_path" in config and not "ignore_model_load" in component.get("extra_kwargs", {}):
-            helper = self._load_model(
-                component, 
-                getter_fn=get_helper,
-                no_weights=False,
-                key_map=component.get("key_map", {}),
-                extra_kwargs=component.get("extra_kwargs", {}),
-                load_device=device,
-            )
-        else:
-            # check for config_path
+            try:
+                helper = self._load_model(
+                    component, 
+                    getter_fn=get_helper,
+                    no_weights=False,
+                    key_map=component.get("key_map", {}),
+                    extra_kwargs=component.get("extra_kwargs", {}),
+                    load_device=device,
+                )
+            except Exception as e:
+                pass
 
+        if helper is None:
             if "config_path" in config and module is not None:
                 config_path = config.pop("config_path")
                 # try download the config file
@@ -687,10 +690,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 except Exception:
                     pass
                 config = self._load_config_file(config_path)
-            
             helper_class = get_helper(base)
-            
-            
             config.pop("label", None)
             config.pop("description", None)
             config.pop("base", None)
@@ -700,8 +700,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             config.pop("config_path", None)
             config.pop("extra_kwargs", None)
             config.pop("key_map", None)
-
-
             helper = helper_class(**config)
 
         # Store helper with multiple keys for easier access
