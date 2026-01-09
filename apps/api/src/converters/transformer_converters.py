@@ -36,6 +36,8 @@ class LTX2TransformerConverter(TransformerConverter):
             "av_ca_v2a_gate_adaln_single": "av_cross_attn_audio_v2a_gate",
             "scale_shift_table_a2v_ca_audio" : "audio_a2v_cross_attn_scale_shift_table",
             "scale_shift_table_a2v_ca_video" : "video_a2v_cross_attn_scale_shift_table",
+            ".k_norm.": ".norm_k.",
+            ".q_norm.": ".norm_q.",
         }
 
 class ZImageTransformerConverter(TransformerConverter):
