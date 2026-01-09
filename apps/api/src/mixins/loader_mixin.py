@@ -162,6 +162,8 @@ class LoaderMixin(DownloadMixin):
 
         model_base = component.get("base")
         model_path = component.get("model_path")
+        
+        
 
         if mm_config is not None:
             # Should be cpu often times since the model is loaded on the cpu
@@ -207,7 +209,7 @@ class LoaderMixin(DownloadMixin):
             converter = NoOpConverter()
             
         
-        if os.path.isdir(model_path):
+        if os.path.isdir(model_path) and not config_path:
             # look for a config.json file
             config_path = os.path.join(model_path, "config.json")
             if os.path.exists(config_path):

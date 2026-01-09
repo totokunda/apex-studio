@@ -9,8 +9,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "gzip", "brotli", "deflate"] }
-tokio = { version = "1.39", features = ["rt-multi-thread", "time", "fs", "io-util"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "gzip", "brotli", "deflate", "stream"] }
+tokio = { version = "1.39", features = ["rt-multi-thread", "time", "fs", "io-util", "macros"] }
 futures = "0.3"
 rand = "0.8"
 

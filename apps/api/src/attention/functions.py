@@ -188,15 +188,34 @@ def sdpa(
     softmax_scale=None,
     **kwargs,
 ):
-    return F.scaled_dot_product_attention(
-        q,
-        k,
-        v,
-        attn_mask=attn_mask,
-        dropout_p=dropout_p,
-        is_causal=is_causal,
-        scale=softmax_scale,
-    )
+    # When no mask, force efficient backends (flash or mem_efficient)
+    # The math kernel materializes full S×S attention matrix causing VRAM spikes
+    if attn_mask is None and q.is_cuda:
+        with torch.backends.cuda.sdp_kernel(
+            enable_flash=True, 
+            enable_math=False, 
+            enable_mem_efficient=True
+        ):
+            return F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=None,
+                dropout_p=dropout_p,
+                is_causal=is_causal,
+                scale=softmax_scale,
+            )
+    else:
+        # With mask, let PyTorch choose (may need math kernel for some mask formats)
+        return F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            dropout_p=dropout_p,
+            is_causal=is_causal,
+            scale=softmax_scale,
+        )
 
 
 @attention_register("sdpa_varlen")

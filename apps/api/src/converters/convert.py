@@ -129,7 +129,7 @@ def get_transformer_converter_by_model_name(model_name: str):
         return CogVideoXTransformerConverter()
     elif "HunyuanAvatar" in model_name:
         return HunyuanAvatarTransformerConverter()
-    elif "HunyuanVideo_1_5" in model_name:
+    elif "HunyuanVideo15" in model_name or "HunyuanVideo_1_5" in model_name:
         return HunyuanVideo15TransformerConverter()
     elif "HunyuanVideo" in model_name:
         return HunyuanVideoTransformerConverter()

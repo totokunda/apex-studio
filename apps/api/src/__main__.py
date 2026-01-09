@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os, subprocess, signal, psutil, sys, shlex, importlib.util, time
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
 from pathlib import Path
 import typer
 import torch
