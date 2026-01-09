@@ -89,6 +89,25 @@ def _progress_tqdm(desc: str) -> Tuple[tqdm, ProgressCb]:
     return bar, cb
 
 
+def _parse_hf_resolve_url(url: str) -> Tuple[str, str, str]:
+    """
+    Parse a Hugging Face `.../resolve/<rev>/<path>` URL into (repo_id, revision, filename).
+    Example:
+      https://huggingface.co/org/repo/resolve/main/path/to/file.bin
+    """
+    from urllib.parse import urlparse
+
+    p = urlparse(url)
+    parts = [x for x in p.path.split("/") if x]
+    # org/repo/resolve/rev/<file...>
+    if len(parts) < 5 or parts[2] != "resolve":
+        raise ValueError(f"Not a Hugging Face resolve URL: {url}")
+    repo_id = f"{parts[0]}/{parts[1]}"
+    revision = parts[3]
+    filename = "/".join(parts[4:])
+    return repo_id, revision, filename
+
+
 def download_python_requests(
     *,
     url: str,
@@ -209,6 +228,50 @@ def download_rust_extension(
         return 0
 
 
+def download_hf_transfer(
+    *,
+    url: str,
+    dest_path: str,
+    enable: bool = True,
+) -> int:
+    """
+    Download via `huggingface_hub` with HF Transfer enabled.
+    Note: hf_transfer only accelerates Hugging Face Hub downloads, so this expects a HF resolve URL.
+    """
+    from huggingface_hub import hf_hub_download
+
+    repo_id, revision, filename = _parse_hf_resolve_url(url)
+    out_dir = os.path.dirname(dest_path) or "."
+    _mkdirp(out_dir)
+
+    if enable:
+        os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+
+    # Force download for benchmarking (avoid cache hits)
+    path = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        revision=revision,
+        local_dir=out_dir,
+        local_dir_use_symlinks=False,
+        force_download=True,
+    )
+
+    # Ensure benchmark file is at dest_path (some hub versions already place it correctly)
+    if os.path.abspath(path) != os.path.abspath(dest_path):
+        try:
+            _remove_if_exists(dest_path)
+            os.replace(path, dest_path)
+        except Exception:
+            # leave as-is; measure the downloaded file
+            dest_path = path
+
+    try:
+        return os.path.getsize(dest_path)
+    except Exception:
+        return 0
+
+
 @dataclass
 class Result:
     name: str
@@ -232,27 +295,34 @@ def main() -> None:
     ap.add_argument("--url", required=True)
     ap.add_argument("--out-dir", default="/tmp/apex_download_bench")
     ap.add_argument("--python-chunk-bytes", type=int, default=1024 * 1024)
+    ap.add_argument("--no-progress", action="store_true", help="Disable tqdm progress callbacks")
     ap.add_argument(
         "--rust",
         action="store_true",
         help="Run Rust benchmark (requires apex_download_rs)",
     )
     ap.add_argument("--python", action="store_true", help="Run Python benchmark")
+    ap.add_argument(
+        "--hf-transfer",
+        action="store_true",
+        help="Run Hugging Face Hub download with hf_transfer (requires huggingface_hub + hf_transfer)",
+    )
     args = ap.parse_args()
 
     _mkdirp(args.out_dir)
     url = args.url
 
     # Default: run both (if rust is installed)
-    run_python = args.python or (not args.python and not args.rust)
-    run_rust = args.rust or (not args.python and not args.rust)
+    run_python = args.python or (not args.python and not args.rust and not args.hf_transfer)
+    run_rust = args.rust or (not args.python and not args.rust and not args.hf_transfer)
+    run_hf = args.hf_transfer or (not args.python and not args.rust and not args.hf_transfer)
 
     results: list[Result] = []
 
     if run_python:
         py_dest = os.path.join(args.out_dir, "python_download.bin")
         _remove_if_exists(py_dest)
-        bar, cb = _progress_tqdm("python")
+        bar, cb = (None, None) if args.no_progress else _progress_tqdm("python")
         try:
             results.append(
                 _bench_one(
@@ -260,13 +330,14 @@ def main() -> None:
                     lambda: download_python_requests(
                         url=url,
                         dest_path=py_dest,
-                        progress_callback=cb,
+                        progress_callback=cb if cb is not None else None,
                         chunk_size=args.python_chunk_bytes,
                     ),
                 )
             )
         finally:
-            bar.close()
+            if bar is not None:
+                bar.close()
 
     if run_rust:
         rust_dest = os.path.join(args.out_dir, "rust_download.bin")
@@ -280,7 +351,7 @@ def main() -> None:
                 f"Import error: {e}"
             )
         else:
-            bar, cb = _progress_tqdm("rust")
+            bar, cb = (None, None) if args.no_progress else _progress_tqdm("rust")
             try:
                 results.append(
                     _bench_one(
@@ -288,12 +359,28 @@ def main() -> None:
                         lambda: download_rust_extension(
                             url=url,
                             dest_path=rust_dest,
-                            progress_callback=cb,
+                            progress_callback=cb if cb is not None else None,
                         ),
                     )
                 )
             finally:
-                bar.close()
+                if bar is not None:
+                    bar.close()
+
+    if run_hf:
+        hf_dest = os.path.join(args.out_dir, "hf_transfer_download.bin")
+        _remove_if_exists(hf_dest)
+        # huggingface_hub/hf_transfer handle their own progress; we disable ours here.
+        results.append(
+            _bench_one(
+                "hf_transfer",
+                lambda: download_hf_transfer(
+                    url=url,
+                    dest_path=hf_dest,
+                    enable=True,
+                ),
+            )
+        )
 
     print("\n=== Results ===")
     for r in results:

@@ -326,10 +326,8 @@ class LoraManager(DownloadMixin):
                     local_path_state_dict = self.maybe_convert_state_dict(
                         local_path, class_name
                     )
+                    
 
-                    local_path_state_dict = strip_common_prefix(
-                        local_path_state_dict, model.state_dict()
-                    )
 
                     # Normalize keys that include an embedded adapter name, e.g.:
                     # "vace_blocks.0.attn2.to_k.lora_B.default.weight"
@@ -338,6 +336,8 @@ class LoraManager(DownloadMixin):
                     local_path_state_dict = self._strip_adapter_name_from_keys(
                         local_path_state_dict
                     )
+                    
+                    
 
                     # Embedding LoRA uses lora_embedding_* keys (no ".weight") and swaps A/B roles.
                     local_path_state_dict = remap_embedding_lora_keys(
@@ -357,6 +357,7 @@ class LoraManager(DownloadMixin):
                     if metadata is not None and prefix is not None:
                         # diffusers filters metadata keys by prefix and strips it, so prefix these keys to keep them.
                         metadata = {f"{prefix}.{k}": v for k, v in metadata.items()}
+
 
                     model.load_lora_adapter(
                         local_path_state_dict,
@@ -389,9 +390,10 @@ class LoraManager(DownloadMixin):
         converter = get_transformer_converter_by_model_name(model_name)
         lora_converter = LoraConverter()
         lora_converter.convert(state_dict)
-
+ 
         if converter is not None:
             converter.convert(state_dict)
+
         return state_dict
 
     def _format_to_extension(self, format: str) -> str:

@@ -678,7 +678,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             )
         else:
             # check for config_path
-            if "config_path" in config and config.get("module", None) is not None:
+
+            if "config_path" in config and module is not None:
                 config_path = config.pop("config_path")
                 # try download the config file
                 try:
@@ -688,6 +689,18 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 config = self._load_config_file(config_path)
             
             helper_class = get_helper(base)
+            
+            
+            config.pop("label", None)
+            config.pop("description", None)
+            config.pop("base", None)
+            config.pop("module", None)
+            config.pop("name", None)
+            config.pop("type", None)
+            config.pop("config_path", None)
+            config.pop("extra_kwargs", None)
+            config.pop("key_map", None)
+
 
             helper = helper_class(**config)
 
