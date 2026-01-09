@@ -511,8 +511,7 @@ class OviEngine(WanShared):
                     **pos_forward_args,
                 )
                 
-                print("pred_vid_pos", pred_vid_pos[0].mean(), "pred_audio_pos", pred_audio_pos[0].mean(), slg_layer)
-                
+              
                 # Negative forward
                 neg_forward_args = {
                     "audio_context": [text_embeddings_audio_neg],
@@ -530,8 +529,7 @@ class OviEngine(WanShared):
                     **neg_forward_args,
                 )
                 
-                print("pred_vid_neg", pred_vid_neg[0].mean(), "pred_audio_neg", pred_audio_neg[0].mean(), slg_layer)
-
+           
                 # Guidance
                 pred_video_guided = pred_vid_neg[0] + video_guidance_scale * (
                     pred_vid_pos[0] - pred_vid_neg[0]
@@ -540,8 +538,6 @@ class OviEngine(WanShared):
                     pred_audio_pos[0] - pred_audio_neg[0]
                 )
                 
-                
-
                 # Step
                 video_noise = self.transformer_scheduler.step(
                     pred_video_guided.unsqueeze(0),
@@ -556,6 +552,9 @@ class OviEngine(WanShared):
                     audio_noise.unsqueeze(0),
                     return_dict=False,
                 )[0].squeeze(0)
+                
+                print(video_noise.mean(), video_noise.std())
+                print(audio_noise.mean(), audio_noise.std())
 
                 # Optional per-step previews (if wired in from the orchestrator)
                 if (
