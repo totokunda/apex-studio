@@ -3,6 +3,7 @@ from typing import Union
 from src.utils.defaults import (
     DEFAULT_CONFIG_SAVE_PATH,
     DEFAULT_COMPONENTS_PATH,
+    get_components_path,
 )
 import numpy as np
 import torch
@@ -40,6 +41,8 @@ class CLIP(BaseHelper):
         processor_class = find_class_recursive(
             importlib.import_module("transformers"), processor_class
         )
+        
+        preprocessor_path = self._download(preprocessor_path, get_components_path())
 
         self.processor = processor_class.from_pretrained(preprocessor_path)
 

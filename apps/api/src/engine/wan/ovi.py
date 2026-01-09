@@ -208,7 +208,7 @@ class OviEngine(WanShared):
         video_guidance_scale: float = 5.0,
         audio_guidance_scale: float = 4.0,
         shift: float = 5.0,
-        slg_layer: int = 11,
+        slg_layer: int = -1,
         negative_prompt: str = "",
         audio_negative_prompt: str = "",
         offload: bool = True,
@@ -225,6 +225,7 @@ class OviEngine(WanShared):
         safe_emit_progress(
             progress_callback, 0.0, "Starting Ovi video+audio generation pipeline"
         )
+        
 
         specs = self._get_model_specs()
         if seed is None:
@@ -509,7 +510,8 @@ class OviEngine(WanShared):
                     t=timestep_input,
                     **pos_forward_args,
                 )
-
+                
+              
                 # Negative forward
                 neg_forward_args = {
                     "audio_context": [text_embeddings_audio_neg],
@@ -526,7 +528,8 @@ class OviEngine(WanShared):
                     t=timestep_input,
                     **neg_forward_args,
                 )
-
+                
+           
                 # Guidance
                 pred_video_guided = pred_vid_neg[0] + video_guidance_scale * (
                     pred_vid_pos[0] - pred_vid_neg[0]
@@ -534,7 +537,7 @@ class OviEngine(WanShared):
                 pred_audio_guided = pred_audio_neg[0] + audio_guidance_scale * (
                     pred_audio_pos[0] - pred_audio_neg[0]
                 )
-
+                
                 # Step
                 video_noise = self.transformer_scheduler.step(
                     pred_video_guided.unsqueeze(0),
@@ -549,6 +552,9 @@ class OviEngine(WanShared):
                     audio_noise.unsqueeze(0),
                     return_dict=False,
                 )[0].squeeze(0)
+                
+                print(video_noise.mean(), video_noise.std())
+                print(audio_noise.mean(), audio_noise.std())
 
                 # Optional per-step previews (if wired in from the orchestrator)
                 if (
