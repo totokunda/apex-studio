@@ -187,6 +187,33 @@ class WanTransformerConverter(TransformerConverter):
         }
 
 
+class OviTransformerConverter(TransformerConverter):
+    """
+    Converter for WAN Ovi checkpoints.
+
+    Ovi's transformer contains two WanModel backbones (`video_model` + `audio_model`).
+    We recently wrapped paired blocks into `OviModel.fusion_blocks[i].{vid_block,audio_block}`
+    so group-offloading can target `fusion_blocks` (one call per layer).
+
+    Older checkpoints store weights under:
+      - video_model.blocks.{i}.*
+      - audio_model.blocks.{i}.*
+
+    New model layout expects:
+      - fusion_blocks.{i}.vid_block.*
+      - fusion_blocks.{i}.audio_block.*
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.rename_dict = {
+            r"^video_model\.blocks\.(\d+)\.": r"fusion_blocks.\1.vid_block.",
+            r"^audio_model\.blocks\.(\d+)\.": r"fusion_blocks.\1.audio_block.",
+        }
+        self.pre_special_keys_map = {}
+        self.special_keys_map = {}
+
+
 class WanS2VTransformerConverter(WanTransformerConverter):
     def __init__(self):
         super().__init__()

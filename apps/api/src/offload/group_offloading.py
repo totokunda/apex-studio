@@ -523,6 +523,37 @@ class LazyPrefetchGroupOffloadingHook(ModelHook):
         for hook in group_offloading_hooks:
             hook.group.non_blocking = True
 
+        # Some models can invoke the same submodule (and therefore the same group-offloading hook) multiple
+        # times within a single forward pass (e.g. fused audio/video blocks). Diffusers' lazy-prefetch logic
+        # assumes a 1:1 mapping between "executed layer" and "unique group hook". If a hook appears multiple
+        # times, assigning `next_group` can create self-cycles or otherwise incorrect prefetch chains, which
+        # can lead to using partially-loaded weights and produce incorrect/nonsensical outputs.
+        #
+        # In these cases, disable prefetch chaining and fall back to safe per-group onloading.
+        hook_ids = [id(h) for h in group_offloading_hooks if h is not None]
+        if len(set(hook_ids)) != len(hook_ids):
+            if not torch.compiler.is_compiling():
+                logger.warning(
+                    "Detected repeated execution of one or more group-offloaded submodules within a single forward pass. "
+                    "Disabling lazy prefetch chaining for correctness."
+                )
+            try:
+                base_module_group_offloading_hook = base_module_registry.get_hook(_GROUP_OFFLOADING)
+                if base_module_group_offloading_hook is not None:
+                    base_module_group_offloading_hook.next_group = None
+            except Exception:
+                pass
+            for hook in group_offloading_hooks:
+                if hook is None:
+                    continue
+                hook.next_group = None
+                # Ensure each group loads itself synchronously on subsequent forwards.
+                try:
+                    hook.group.onload_self = True
+                except Exception:
+                    pass
+            return output
+
         # Set required attributes for prefetching
         if num_executed > 0:
             base_module_group_offloading_hook = base_module_registry.get_hook(_GROUP_OFFLOADING)
@@ -819,14 +850,61 @@ def _apply_group_offloading_block_level(module: torch.nn.Module, config: GroupOf
             modules_with_group_offloading.add(name)
             continue
         if name in block_modules:
-            # Track submodule using a prefix to avoid filename collisions during disk offload.
-            # Without this, submodules sharing the same model class would be assigned identical
-            # filenames (derived from the class name).
-            prefix = f"{config.module_prefix}{name}." if config.module_prefix else f"{name}."
-            # Avoid applying lazy prefetch at nested levels to prevent hook-name collisions.
-            submodule_config = replace(config, module_prefix=prefix, allow_lazy_prefetch=False)
-            _apply_group_offloading_block_level(submodule, submodule_config)
-            modules_with_group_offloading.add(name)
+            # Explicit block modules can point either at:
+            # - a regular nn.Module subtree (we recurse), or
+            # - a ModuleList / Sequential container (we should group its elements).
+            #
+            # The latter is important for models like Ovi where we want to group-offload
+            # `fusion_blocks` (a ModuleList). If we blindly recurse into a ModuleList,
+            # we end up attaching hooks to the container itself, but ModuleList has no
+            # forward() and is never called — so onload/offload never happens, leaving
+            # child weights on CPU and causing device-mismatch errors.
+            if isinstance(submodule, (torch.nn.ModuleList, torch.nn.Sequential)):
+                for i in range(0, len(submodule), config.num_blocks_per_group):
+                    current_modules = list(submodule[i : i + config.num_blocks_per_group])
+                    if len(current_modules) == 0:
+                        continue
+
+                    group_id = (
+                        f"{config.module_prefix}{name}_{i}_{i + len(current_modules) - 1}"
+                        if config.module_prefix
+                        else f"{name}_{i}_{i + len(current_modules) - 1}"
+                    )
+                    group = ModuleGroup(
+                        modules=current_modules,
+                        offload_device=config.offload_device,
+                        onload_device=config.onload_device,
+                        offload_to_disk_path=config.offload_to_disk_path,
+                        offload_leader=current_modules[-1],
+                        onload_leader=current_modules[0],
+                        non_blocking=config.non_blocking,
+                        stream=config.stream,
+                        streams=config.streams,
+                        record_stream=config.record_stream,
+                        low_cpu_mem_usage=config.low_cpu_mem_usage,
+                        onload_self=True,
+                        group_id=group_id,
+                    )
+                    matched_module_groups.append(group)
+                    for j in range(i, i + len(current_modules)):
+                        modules_with_group_offloading.add(f"{name}.{j}")
+                # Mark the container name as handled so it isn't picked up by fallback collection.
+                modules_with_group_offloading.add(name)
+            else:
+                # Track submodule using a prefix to avoid filename collisions during disk offload.
+                # Without this, submodules sharing the same model class would be assigned identical
+                # filenames (derived from the class name).
+                prefix = (
+                    f"{config.module_prefix}{name}."
+                    if config.module_prefix
+                    else f"{name}."
+                )
+                # Avoid applying lazy prefetch at nested levels to prevent hook-name collisions.
+                submodule_config = replace(
+                    config, module_prefix=prefix, allow_lazy_prefetch=False
+                )
+                _apply_group_offloading_block_level(submodule, submodule_config)
+                modules_with_group_offloading.add(name)
 
         elif isinstance(submodule, (torch.nn.ModuleList, torch.nn.Sequential)):
             # Handle ModuleList and Sequential blocks as before
