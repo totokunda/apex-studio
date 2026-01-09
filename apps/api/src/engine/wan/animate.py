@@ -420,6 +420,7 @@ class WanAnimateEngine(WanShared):
         offload: bool = True,
         render_step_interval: int = 3,
         attention_kwargs: Dict[str, Any] = None,
+        chunking_profile: str = "none",
         **kwargs,
     ) -> OutputVideo:
 
@@ -519,6 +520,8 @@ class WanAnimateEngine(WanShared):
         if self.transformer is None:
             self.load_component_by_type("transformer")
             self.to_device(self.transformer)
+        if chunking_profile != "none":
+            self.transformer.set_chunking_profile(chunking_profile)
         safe_emit_progress(progress_callback, 0.25, "Transformer ready")
 
         # 5. Encode conditioning videos (pose, face)
@@ -700,8 +703,6 @@ class WanAnimateEngine(WanShared):
             )
             self._num_timesteps = len(timesteps)
 
-            logger.info(f"\n\nlatents: {latents.shape} \n\n")
-            logger.info(f"\n\nattention_kwargs: {attention_kwargs} \n\n")
 
             latents = self.denoise(
                 timesteps=timesteps,

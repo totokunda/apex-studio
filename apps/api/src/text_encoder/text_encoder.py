@@ -99,6 +99,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             extra_kwargs=self.config.get("extra_kwargs", {}),
             load_device=self.device,
         )
+        
         if override_kwargs is not None:
             input_kwargs.update(override_kwargs)
         model = self._load_model(**input_kwargs)
@@ -196,6 +197,8 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             "hidden_states", "hidden_states_all", "pooler_output", "text_embeds", "raw"
         ] = "hidden_states",
         lower_case: bool = False,
+        hidden_states_idx: int = -1,
+        hidden_states_all_stack_dim: int = 0
     ):
         if isinstance(text, str):
             text = [text]
@@ -207,6 +210,8 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
                 dtype = getattr(torch, dtype.lstrip("torch."))
 
         batch_size = len(text)
+        
+        
 
         kwargs = {
             "text": text,
@@ -226,11 +231,8 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             "output_type": output_type,
             "lower_case": lower_case,
             "model_path": self.model_path,
-            "process_inputs_func": (
-                inspect.signature(process_inputs_func).parameters
-                if process_inputs_func is not None
-                else None
-            ),
+            "hidden_states_idx": hidden_states_idx,
+            "hidden_states_all_stack_dim": hidden_states_all_stack_dim
         }
 
         prompt_hash = self.hash(kwargs)
@@ -255,7 +257,12 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
 
         if not self.model_loaded:
             self.model = self.load_model(no_weights=False)
+            
             self.model_loaded = True
+            
+        encode_device = device or self.device
+        if encode_device is None:
+            encode_device = getattr(self.model, "device", None)
 
         dict_kwargs = dict(
             padding="max_length" if pad_to_max_length else "longest",
@@ -279,22 +286,22 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
 
         seq_lens = mask.gt(0).sum(dim=1).long()
-        inputs = {"input_ids": text_input_ids.to(device=self.model.device)}
+        inputs = {"input_ids": text_input_ids.to(device=encode_device)}
 
         if use_position_ids:
             position_ids = torch.arange(text_input_ids.shape[1]).expand(
                 batch_size, text_input_ids.shape[1]
             )
-            position_ids = position_ids.to(dtype=torch.long, device=self.model.device)
+            position_ids = position_ids.to(dtype=torch.long, device=encode_device)
             inputs["position_ids"] = position_ids
 
         if use_token_type_ids:
             inputs["token_type_ids"] = torch.zeros_like(text_input_ids).to(
-                device=self.model.device
+                device=encode_device
             )
 
         if use_attention_mask:
-            inputs["attention_mask"] = mask.to(device=self.model.device)
+            inputs["attention_mask"] = mask.to(device=encode_device)
 
         if arrange_attention_mask:
             seq_lengths = mask.sum(dim=1)
@@ -302,7 +309,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
                 torch.arange(mask.size(1)).unsqueeze(0).expand(batch_size, -1)
             )
             mask = (mask_indices <= seq_lengths.unsqueeze(1)).long()
-            inputs["attention_mask"] = mask.to(device=self.model.device)
+            inputs["attention_mask"] = mask.to(device=encode_device)
 
         self.model.apply(lambda m: m.register_forward_hook(nan_hook))
 
@@ -317,11 +324,20 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
 
         if output_type == "hidden_states_all" and hasattr(result, "hidden_states"):
             prompt_embeds = result.hidden_states
-            prompt_embeds = torch.stack(prompt_embeds, dim=0)
-        elif output_type == "hidden_states" and hasattr(result, "last_hidden_state"):
-            prompt_embeds = result.last_hidden_state
-        elif output_type == "hidden_states" and hasattr(result, "hidden_states"):
-            prompt_embeds = result.hidden_states[-1]
+            prompt_embeds = torch.stack(prompt_embeds, dim=hidden_states_all_stack_dim)
+        elif output_type == "hidden_states":
+            # Prefer `hidden_states[...]` when caller requested an explicit layer,
+            # even if `last_hidden_state` exists (e.g. CLIP-skip style behavior).
+            if hasattr(result, "hidden_states") and (
+                hidden_states_idx != -1 or not hasattr(result, "last_hidden_state")
+            ):
+                prompt_embeds = result.hidden_states[hidden_states_idx]
+            elif hasattr(result, "last_hidden_state"):
+                prompt_embeds = result.last_hidden_state
+            elif hasattr(result, "hidden_states"):
+                prompt_embeds = result.hidden_states[hidden_states_idx]
+            else:
+                raise ValueError("Model output does not contain hidden states.")
         elif output_type == "pooler_output" and hasattr(result, "pooler_output"):
             prompt_embeds = result.pooler_output
         elif output_type == "text_embeds" and hasattr(result, "text_embeds"):

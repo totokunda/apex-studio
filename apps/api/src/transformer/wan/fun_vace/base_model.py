@@ -7,7 +7,7 @@ import math
 import os
 import types
 import warnings
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -24,6 +24,100 @@ from torch import nn
 from src.attention import attention_register
 
 logger = logging.get_logger(__name__)
+
+
+def _chunked_modulated_norm(
+    norm_layer: nn.Module,
+    hidden_states: torch.Tensor,
+    scale: torch.Tensor,
+    shift: torch.Tensor,
+    chunk_size: Optional[int] = 2048,
+) -> torch.Tensor:
+    """
+    Modulated layer norm with chunking to reduce peak memory.
+    """
+    B, S, D = hidden_states.shape
+    in_dtype = hidden_states.dtype
+
+    if chunk_size is None:
+        out = norm_layer(hidden_states) * (1 + scale) + shift
+        return out.to(in_dtype) if out.dtype != in_dtype else out
+
+    if S <= chunk_size:
+        out = norm_layer(hidden_states) * (1 + scale) + shift
+        return out.to(in_dtype) if out.dtype != in_dtype else out
+
+    out = torch.empty_like(hidden_states)
+    scale_per_token = scale.dim() == 3 and scale.shape[1] == S
+
+    for i in range(0, S, chunk_size):
+        end = min(i + chunk_size, S)
+        hs_chunk = hidden_states[:, i:end, :]
+
+        if scale_per_token:
+            scale_chunk = scale[:, i:end, :]
+            shift_chunk = shift[:, i:end, :]
+        else:
+            scale_chunk = scale
+            shift_chunk = shift
+
+        normed = norm_layer(hs_chunk)
+        out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
+        del normed
+
+    return out
+
+
+def _chunked_feed_forward(
+    ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int
+) -> torch.Tensor:
+    """
+    Chunked feed-forward to reduce peak memory.
+    """
+    if chunk_size is None:
+        return ff(hidden_states)
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    dim_len = hidden_states.shape[chunk_dim]
+    if dim_len <= chunk_size:
+        return ff(hidden_states)
+
+    outputs = []
+    for start in range(0, dim_len, chunk_size):
+        end = min(start + chunk_size, dim_len)
+        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
+        outputs.append(ff(hs_chunk))
+    return torch.cat(outputs, dim=chunk_dim)
+
+
+def _chunked_norm(
+    norm_layer: nn.Module, hidden_states: torch.Tensor, chunk_size: Optional[int] = 8192
+) -> torch.Tensor:
+    """
+    LayerNorm in chunks along the sequence dimension to reduce peak memory.
+    """
+    if isinstance(norm_layer, nn.Identity):
+        return hidden_states
+
+    if hidden_states.ndim != 3:
+        out = norm_layer(hidden_states)
+        return out.to(hidden_states.dtype) if out.dtype != hidden_states.dtype else out
+
+    if chunk_size is None:
+        out = norm_layer(hidden_states)
+        return out.to(hidden_states.dtype) if out.dtype != hidden_states.dtype else out
+
+    B, S, D = hidden_states.shape
+    if S <= chunk_size:
+        out = norm_layer(hidden_states)
+        return out.to(hidden_states.dtype) if out.dtype != hidden_states.dtype else out
+
+    out = torch.empty_like(hidden_states)
+    for i in range(0, S, chunk_size):
+        end = min(i + chunk_size, S)
+        out[:, i:end, :] = norm_layer(hidden_states[:, i:end, :])
+    return out
 
 
 class ResidualBlock(nn.Module):
@@ -614,6 +708,22 @@ class WanAttentionBlock(nn.Module):
         # modulation
         self.modulation = nn.Parameter(torch.randn(1, 6, dim) / dim**0.5)
 
+        # Chunking configuration (disabled by default)
+        self._ff_chunk_size: Optional[int] = None
+        self._ff_chunk_dim: int = 1
+        self._mod_norm_chunk_size: Optional[int] = None
+        self._norm_chunk_size: Optional[int] = None
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        self._ff_chunk_size = chunk_size
+        self._ff_chunk_dim = dim
+
+    def set_chunk_norms(
+        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+    ) -> None:
+        self._mod_norm_chunk_size = modulated_norm_chunk_size
+        self._norm_chunk_size = norm_chunk_size
+
     def forward(
         self,
         x,
@@ -640,9 +750,10 @@ class WanAttentionBlock(nn.Module):
         else:
             e = (self.modulation + e).chunk(6, dim=1)
 
-        # self-attention
-        temp_x = self.norm1(x) * (1 + e[1]) + e[0]
-        temp_x = temp_x.to(dtype)
+        # self-attention with chunked modulated norm
+        temp_x = _chunked_modulated_norm(
+            self.norm1, x, e[1], e[0], chunk_size=self._mod_norm_chunk_size
+        ).to(dtype)
 
         y = self.self_attn(temp_x, seq_lens, grid_sizes, freqs, dtype, t=t)
         x = x + y * e[2]
@@ -650,15 +761,18 @@ class WanAttentionBlock(nn.Module):
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
             # cross-attention
-            x = x + self.cross_attn(
-                self.norm3(x.float()).type_as(x), context, context_lens, dtype, t=t
-            )
+            norm_x = _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size).type_as(x)
+            x = x + self.cross_attn(norm_x, context, context_lens, dtype, t=t)
 
-            # ffn function
-            temp_x = self.norm2(x.float()).type_as(x) * (1 + e[4]) + e[3]
-            temp_x = temp_x.to(dtype)
+            # ffn function with chunked modulated norm
+            temp_x = _chunked_modulated_norm(
+                self.norm2, x, e[4], e[3], chunk_size=self._mod_norm_chunk_size
+            ).to(dtype)
 
-            y = self.ffn(temp_x)
+            if self._ff_chunk_size is not None:
+                y = _chunked_feed_forward(self.ffn, temp_x, self._ff_chunk_dim, self._ff_chunk_size)
+            else:
+                y = self.ffn(temp_x)
             x = x + y * e[5]
             return x
 
@@ -683,6 +797,12 @@ class Head(nn.Module):
         # modulation
         self.modulation = nn.Parameter(torch.randn(1, 2, dim) / dim**0.5)
 
+        # Chunking configuration (disabled by default)
+        self._mod_norm_chunk_size: Optional[int] = None
+
+    def set_chunk_norms(self, *, modulated_norm_chunk_size: Optional[int] = None) -> None:
+        self._mod_norm_chunk_size = modulated_norm_chunk_size
+
     def forward(self, x, e):
         r"""
         Args:
@@ -695,7 +815,8 @@ class Head(nn.Module):
         else:
             e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
 
-        x = self.head(self.norm(x) * (1 + e[1]) + e[0])
+        x = _chunked_modulated_norm(self.norm, x, e[1], e[0], chunk_size=self._mod_norm_chunk_size)
+        x = self.head(x)
         return x
 
 
@@ -729,6 +850,34 @@ class WanTransformer3DModel(
     # ]
     # _no_split_modules = ['WanAttentionBlock']
     _supports_gradient_checkpointing = True
+
+    # Chunking profile presets
+    _CHUNKING_PROFILES: Dict[str, Dict[str, Optional[int]]] = {
+        "none": {
+            "ffn_chunk_size": None,
+            "modulated_norm_chunk_size": None,
+            "norm_chunk_size": None,
+            "head_modulated_norm_chunk_size": None,
+        },
+        "light": {
+            "ffn_chunk_size": 2048,
+            "modulated_norm_chunk_size": 16384,
+            "norm_chunk_size": 8192,
+            "head_modulated_norm_chunk_size": 16384,
+        },
+        "balanced": {
+            "ffn_chunk_size": 512,
+            "modulated_norm_chunk_size": 8192,
+            "norm_chunk_size": 4096,
+            "head_modulated_norm_chunk_size": 8192,
+        },
+        "aggressive": {
+            "ffn_chunk_size": 256,
+            "modulated_norm_chunk_size": 4096,
+            "norm_chunk_size": 2048,
+            "head_modulated_norm_chunk_size": 4096,
+        },
+    }
 
     @register_to_config
     def __init__(
@@ -894,6 +1043,41 @@ class WanTransformer3DModel(
         self.num_inference_steps = None
         self.gradient_checkpointing = False
         self.init_weights()
+
+        # Default: no chunking unless explicitly enabled
+        self.set_chunking_profile("none")
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        """Enable/disable chunked feed-forward on all transformer blocks."""
+        for block in self.blocks:
+            block.set_chunk_feed_forward(chunk_size, dim=dim)
+
+    def list_chunking_profiles(self) -> Tuple[str, ...]:
+        """Return available chunking profile names."""
+        return tuple(self._CHUNKING_PROFILES.keys())
+
+    def set_chunking_profile(self, profile_name: str) -> None:
+        """
+        Apply a predefined chunking profile across the whole model.
+        """
+        if profile_name not in self._CHUNKING_PROFILES:
+            raise ValueError(
+                f"Unknown chunking profile '{profile_name}'. "
+                f"Available: {sorted(self._CHUNKING_PROFILES.keys())}"
+            )
+
+        p = self._CHUNKING_PROFILES[profile_name]
+        self._chunking_profile_name = profile_name
+
+        self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
+        for block in self.blocks:
+            block.set_chunk_norms(
+                modulated_norm_chunk_size=p.get("modulated_norm_chunk_size", None),
+                norm_chunk_size=p.get("norm_chunk_size", None),
+            )
+        self.head.set_chunk_norms(
+            modulated_norm_chunk_size=p.get("head_modulated_norm_chunk_size", None)
+        )
 
     def _set_gradient_checkpointing(self, *args, **kwargs):
         if "value" in kwargs:

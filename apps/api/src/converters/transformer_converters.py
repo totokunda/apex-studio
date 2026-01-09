@@ -4,7 +4,7 @@ from src.quantize.ggml_ops import ggml_cat, ggml_chunk, ggml_split
 import torch
 import re
 from src.converters.base_converter import BaseConverter
-
+from typing import List
 
 class TransformerConverter(BaseConverter):
     pass
@@ -21,6 +21,22 @@ class FlashVSRTransformerConverter(TransformerConverter):
             r"^linear_layers\.": "LQ_proj_in.linear_layers.",
         }
 
+
+class LTX2TransformerConverter(TransformerConverter):
+    def __init__(self):
+        super().__init__()
+        self.rename_dict = {
+            "patchify_proj": "proj_in",
+            "audio_patchify_proj": "audio_proj_in",
+            "adaln_single": "time_embed",
+            "audio_adaln_single": "audio_time_embed",
+            "av_ca_video_scale_shift_adaln_single": "av_cross_attn_video_scale_shift",
+            "av_ca_audio_scale_shift_adaln_single": "av_cross_attn_audio_scale_shift",
+            "av_ca_a2v_gate_adaln_single": "av_cross_attn_video_a2v_gate",
+            "av_ca_v2a_gate_adaln_single": "av_cross_attn_audio_v2a_gate",
+            "scale_shift_table_a2v_ca_audio" : "audio_a2v_cross_attn_scale_shift_table",
+            "scale_shift_table_a2v_ca_video" : "video_a2v_cross_attn_scale_shift_table",
+        }
 
 class ZImageTransformerConverter(TransformerConverter):
     def __init__(self):
@@ -152,6 +168,7 @@ class WanTransformerConverter(TransformerConverter):
             "cross_attn.v_img": "attn2.add_v_proj",
             "cross_attn.norm_k_img": "attn2.norm_added_k",
         }
+        
         self.special_keys_map = {}
         # Drop auxiliary diff-bias / diff vectors that don't have a counterpart in the target Wan model.
         # Example keys:
@@ -253,7 +270,10 @@ class WanAnimateTransformerConverter(TransformerConverter):
             "scaled_fp8": self.remove_keys_inplace,
         }
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
+        if model_keys is not None:
+            if self._already_converted(state_dict, model_keys):
+                return state_dict
         self._sort_rename_dict()
         for key in list(state_dict.keys()):
             new_key = self._apply_rename_dict(key)
@@ -671,9 +691,7 @@ class LTXTransformerConverter(TransformerConverter):
 
 
 class StepVideoTransformerConverter(TransformerConverter):
-    def convert(self, state_dict: Dict[str, Any]):
-        return state_dict
-
+    pass
 
 class HunyuanVideoTransformerConverter(TransformerConverter):
     def __init__(self):
@@ -843,23 +861,106 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
     def __init__(self):
         super().__init__()
         self.rename_dict = {
-            "t_embedder.in_layer": "t_embedder.mlp.0",
-            "t_embedder.out_layer": "t_embedder.mlp.2",
-            "c_embedder.in_layer": "c_embedder.linear_1",
-            "c_embedder.out_layer": "c_embedder.linear_2",
-            "self_attn.proj": "self_attn_proj",
-            "self_attn.qkv": "self_attn_qkv",
-            "txt_in.individual_token_refiner.blocks.0.mlp.0": "txt_in.individual_token_refiner.blocks.0.mlp.fc1",
-            "txt_in.individual_token_refiner.blocks.0.mlp.2": "txt_in.individual_token_refiner.blocks.0.mlp.fc2",
-            "txt_in.individual_token_refiner.blocks.1.mlp.0": "txt_in.individual_token_refiner.blocks.1.mlp.fc1",
-            "txt_in.individual_token_refiner.blocks.1.mlp.2": "txt_in.individual_token_refiner.blocks.1.mlp.fc2",
-            "time_in.in_layer": "time_in.mlp.0",
-            "time_in.out_layer": "time_in.mlp.2",
+            "double_blocks": "transformer_blocks",
+            "txt_in.t_embedder.in_layer": "context_embedder.time_text_embed.timestep_embedder.linear_1",
+            "txt_in.t_embedder.out_layer": "context_embedder.time_text_embed.timestep_embedder.linear_2",
+            "txt_in.c_embedder.in_layer": "context_embedder.time_text_embed.text_embedder.linear_1",
+            "txt_in.c_embedder.out_layer": "context_embedder.time_text_embed.text_embedder.linear_2",
+            "txt_in.individual_token_refiner.blocks.*.self_attn.proj": "context_embedder.token_refiner.refiner_blocks.*.attn.to_out.0",
+            "txt_in.individual_token_refiner.blocks.*.mlp.0": "context_embedder.token_refiner.refiner_blocks.*.ff.net.0.proj",
+            "txt_in.individual_token_refiner.blocks.*.mlp.2": "context_embedder.token_refiner.refiner_blocks.*.ff.net.2",
+            "time_in.in_layer": "time_embed.timestep_embedder.linear_1",
+            "time_in.out_layer": "time_embed.timestep_embedder.linear_2",
+            "byt5_in.fc1": "context_embedder_2.linear_1",
+            "byt5_in.fc2": "context_embedder_2.linear_2",
+            "byt5_in.fc3": "context_embedder_2.linear_3",
+            "byt5_in.layernorm": "context_embedder_2.norm",
+            "cond_type_embedding": "cond_type_embed",
+            "time_in.mlp.0": "time_embed.timestep_embedder.linear_1",
+            "time_in.mlp.2": "time_embed.timestep_embedder.linear_2",
+            "time_r_in.mlp.0": "time_embed.timestep_embedder_r.linear_1",
+            "time_r_in.mlp.2": "time_embed.timestep_embedder_r.linear_2",
+            "final_layer.linear": "proj_out",
+            "final_layer.adaLN_modulation.1": "norm_out.linear",
+            "img_in.proj": "x_embedder.proj",
+            "vision_in.proj.0": "image_embedder.norm_in",
+            "vision_in.proj.1": "image_embedder.linear_1",
+            "vision_in.proj.3": "image_embedder.linear_2",
+            "vision_in.proj.4": "image_embedder.norm_out",
+            "txt_in.c_embedder.linear_1": "context_embedder.time_text_embed.text_embedder.linear_1",
+            "txt_in.c_embedder.linear_2": "context_embedder.time_text_embed.text_embedder.linear_2",
+            "txt_in.input_embedder" :"context_embedder.proj_in",
+            "txt_in.t_embedder.mlp.0": "context_embedder.time_text_embed.timestep_embedder.linear_1",
+            "txt_in.t_embedder.mlp.2": "context_embedder.time_text_embed.timestep_embedder.linear_2",
+            "txt_in.individual_token_refiner.blocks.*.adaLN_modulation.1": "context_embedder.token_refiner.refiner_blocks.*.norm_out.linear",
+            "txt_in.individual_token_refiner.blocks.*.norm1":"context_embedder.token_refiner.refiner_blocks.*.norm1",
+            "txt_in.individual_token_refiner.blocks.*.norm2":"context_embedder.token_refiner.refiner_blocks.*.norm2",
+            "txt_in.individual_token_refiner.blocks.*.mlp.fc1": "context_embedder.token_refiner.refiner_blocks.*.ff.net.0.proj",
+            "txt_in.individual_token_refiner.blocks.*.mlp.fc2": "context_embedder.token_refiner.refiner_blocks.*.ff.net.2",
+            "txt_in.individual_token_refiner.blocks.*.self_attn_proj": "context_embedder.token_refiner.refiner_blocks.*.attn.to_out.0",
+            "txt_in.individual_token_refiner.blocks.": "context_embedder.token_refiner.refiner_blocks.",
+            ".img_attn_k.": ".attn.to_k.",
+            ".img_attn_k_norm.": ".attn.norm_k.",
+            ".img_attn_q.": ".attn.to_q.",
+            ".img_attn_q_norm.": ".attn.norm_q.",
+            ".img_attn_v.": ".attn.to_v.",
+            ".img_attn_proj.": ".attn.to_out.0.",
+            ".txt_attn_k.": ".attn.add_k_proj.",
+            ".txt_attn_k_norm.": ".attn.norm_added_k.",
+            ".txt_attn_q.": ".attn.add_q_proj.",
+            ".txt_attn_q_norm.": ".attn.norm_added_q.",
+            ".txt_attn_v.": ".attn.add_v_proj.",  
+            ".txt_attn_proj.": ".attn.to_add_out.",
+            ".txt_mlp.fc1": ".ff_context.net.0.proj",
+            ".txt_mlp.fc2": ".ff_context.net.2",
+            ".img_mlp.fc1": ".ff.net.0.proj",
+            ".img_mlp.fc2": ".ff.net.2",
+            ".img_mod.linear": ".norm1.linear",
+            ".txt_mod.linear": ".norm1_context.linear",
+            ".img_attn.proj": ".attn.to_out.0",
+            ".txt_attn.proj": ".attn.to_add_out",
+            ".img_mod.lin.": ".norm1.linear.",
+            ".txt_mod.lin.": ".norm1_context.linear.",
+            ".img_mlp.0": ".ff.net.0.proj",
+            ".img_mlp.2": ".ff.net.2",
+            ".txt_mlp.0": ".ff_context.net.0.proj",
+            ".txt_mlp.2": ".ff_context.net.2",
         }
 
         self.special_keys_map = {
-            "double_blocks": self.remap_double_blocks_,
+            "double_blocks": self.remap_blocks_,
+            "transformer_blocks": self.remap_blocks_,
+            "self_attn_qkv": self.remap_self_attn_qkv_,
+            "self_attn.qkv": self.remap_self_attn_qkv_,
         }
+        
+    @staticmethod
+    def remap_self_attn_qkv_(key, state_dict):
+        """
+        txt_in.individual_token_refiner.blocks.*.self_attn_qkv --> context_embedder.token_refiner.refiner_blocks.*.attn.{to_q,to_k,to_v}
+        """
+        # check if lora_down or lora_A is in the key
+        def _is_lora_down(k: str) -> bool:
+            return (".lora_down" in k) or (".lora_A" in k) or k.endswith(".alpha")
+        if _is_lora_down(key):
+            weight = state_dict.pop(key)
+            key_to_replace = "self_attn_qkv" if "self_attn_qkv" in key else "self_attn.qkv"
+            state_dict[key.replace(key_to_replace, "attn.to_q")] = weight
+            state_dict[key.replace(key_to_replace, "attn.to_k")] = weight
+            state_dict[key.replace(key_to_replace, "attn.to_v")] = weight
+            return
+
+        weight = state_dict.pop(key)
+        to_q, to_k, to_v = ggml_chunk(weight, 3, dim=0)
+        if "self_attn_qkv" in key:
+            state_dict[key.replace("self_attn_qkv", "attn.to_q")] = to_q
+            state_dict[key.replace("self_attn_qkv", "attn.to_k")] = to_k
+            state_dict[key.replace("self_attn_qkv", "attn.to_v")] = to_v
+        elif "self_attn.qkv" in key:
+            state_dict[key.replace("self_attn.qkv", "attn.to_q")] = to_q
+            state_dict[key.replace("self_attn.qkv", "attn.to_k")] = to_k
+            state_dict[key.replace("self_attn.qkv", "attn.to_v")] = to_v
+    
 
     @staticmethod
     def get_chunk_dim(weight: torch.Tensor):
@@ -874,7 +975,7 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
         else:
             return 0
 
-    def remap_double_blocks_(self, key, state_dict):
+    def remap_blocks_(self, key, state_dict):
         def _is_lora_down(k: str) -> bool:
             # diffusers-style: ".lora_down.weight", PEFT-style: ".lora_A.weight"
             return (".lora_down" in k) or (".lora_A" in k) or k.endswith(".alpha")
@@ -902,7 +1003,8 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
                 state_dict[key.replace(prefix_src, prefix_k)] = w
                 state_dict[key.replace(prefix_src, prefix_v)] = w
                 return
-
+            
+            
             # FP-scaled checkpoints sometimes store scale tensors as scalars (0-d)
             # or as length-1 vectors. Those should be shared across Q/K/V.
             try:
@@ -922,56 +1024,26 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
                     f"Expected QKV fused dim divisible by 3 for key='{key}', shape={tuple(w.shape)}, chunk_dim={chunk_dim}"
                 )
             to_q, to_k, to_v = ggml_chunk(w, 3, dim=chunk_dim)
-            state_dict[key.replace(prefix_src, prefix_q)] = to_q
-            state_dict[key.replace(prefix_src, prefix_k)] = to_k
-            state_dict[key.replace(prefix_src, prefix_v)] = to_v
+            state_dict[key.replace(prefix_src, prefix_q).replace("double_blocks", "transformer_blocks")] = to_q
+            state_dict[key.replace(prefix_src, prefix_k).replace("double_blocks", "transformer_blocks")] = to_k
+            state_dict[key.replace(prefix_src, prefix_v).replace("double_blocks", "transformer_blocks")] = to_v
+            
 
         if "img_attn_qkv" in key:
             weight = state_dict.pop(key)
-            _write_qkv("img_attn_qkv", "img_attn_q", "img_attn_k", "img_attn_v", weight)
+            _write_qkv("img_attn_qkv", "attn.to_q", "attn.to_k", "attn.to_v", weight)
 
         if "img_attn.qkv" in key:
             weight = state_dict.pop(key)
-            _write_qkv("img_attn.qkv", "img_attn_q", "img_attn_k", "img_attn_v", weight)
+            _write_qkv("img_attn.qkv", "attn.to_q", "attn.to_k", "attn.to_v", weight)
 
         if "txt_attn_qkv" in key:
             weight = state_dict.pop(key)
-            _write_qkv("txt_attn_qkv", "txt_attn_q", "txt_attn_k", "txt_attn_v", weight)
+            _write_qkv("txt_attn_qkv", "attn.add_q_proj", "attn.add_k_proj", "attn.add_v_proj", weight)
 
         if "txt_attn.qkv" in key:
             weight = state_dict.pop(key)
-            _write_qkv("txt_attn.qkv", "txt_attn_q", "txt_attn_k", "txt_attn_v", weight)
-
-        if "img_attn.proj" in key:
-            weight = state_dict.pop(key)
-            state_dict[key.replace("img_attn.proj", "img_attn_proj")] = weight
-
-        if "txt_attn.proj" in key:
-            weight = state_dict.pop(key)
-            state_dict[key.replace("txt_attn.proj", "txt_attn_proj")] = weight
-
-        if "img_mod.lin." in key:
-            weight = state_dict.pop(key)
-            state_dict[key.replace("img_mod.lin.", "img_mod.linear.")] = weight
-
-        if "txt_mod.lin." in key:
-            weight = state_dict.pop(key)
-            state_dict[key.replace("txt_mod.lin.", "txt_mod.linear.")] = weight
-
-        if "img_mlp.0" in key:
-            weight = state_dict.pop(key)
-            state_dict[key.replace("img_mlp.0", "img_mlp.fc1")] = weight
-
-        if "img_mlp.2" in key:
-            weight = state_dict.pop(key)
-            state_dict[key.replace("img_mlp.2", "img_mlp.fc2")] = weight
-
-        if "txt_mlp.0" in key:
-            weight = state_dict.pop(key)
-            state_dict[key.replace("txt_mlp.0", "txt_mlp.fc1")] = weight
-        if "txt_mlp.2" in key:
-            weight = state_dict.pop(key)
-            state_dict[key.replace("txt_mlp.2", "txt_mlp.fc2")] = weight
+            _write_qkv("txt_attn.qkv", "attn.add_q_proj", "attn.add_k_proj", "attn.add_v_proj", weight)
 
 
 class MochiTransformerConverter(TransformerConverter):
@@ -1068,7 +1140,10 @@ class MochiTransformerConverter(TransformerConverter):
         new_key = f"transformer_blocks.{idx}.norm1_context.linear_1.{suffix}"
         sd[new_key] = tensor
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
+        if model_keys is not None:
+            if self._already_converted(state_dict, model_keys):
+                return state_dict
         for key in list(state_dict.keys()):
             # last layer’s mod_y handled separately first
             if f"blocks.{self.num_layers - 1}.mod_y." in key:
@@ -1340,7 +1415,10 @@ class FluxTransformerConverter(TransformerConverter):
 
         return num_layers, num_single_layers, inner_dim, mlp_ratio
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
+        if model_keys is not None:
+            if self._already_converted(state_dict, model_keys):
+                return state_dict
         """
         Convert a Flux transformer checkpoint to the diffusers format.
 
@@ -1695,7 +1773,7 @@ class LoraTransformerConverter(TransformerConverter):
 
         self._lora_converter = LoraConverter()
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
         # Delegate the heavy lifting to the dedicated LoRA converter.
         self._lora_converter.convert(state_dict)
         return state_dict

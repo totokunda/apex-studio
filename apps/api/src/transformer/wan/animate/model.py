@@ -40,6 +40,11 @@ from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import FP32LayerNorm
 from .attention import WanAttnProcessor, WanAnimateFaceBlockAttnProcessor
+from src.transformer.wan.base.model import (
+    _chunked_modulated_norm,
+    _chunked_norm,
+    _chunked_feed_forward,
+)
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -834,6 +839,33 @@ class WanTransformerBlock(nn.Module):
 
         self.scale_shift_table = nn.Parameter(torch.randn(1, 6, dim) / dim**0.5)
 
+        # Chunked FFN (disabled by default). Chunking along dim=1 is typical for [B, seq, C].
+        self._ff_chunk_size: Optional[int] = None
+        self._ff_chunk_dim: int = 1
+
+        # Chunked norms (disabled by default). These mainly mitigate FP32LayerNorm fp32-copy spikes.
+        self._mod_norm_chunk_size: Optional[int] = None  # used for modulated norms (norm1/norm3 + modulation)
+        self._norm_chunk_size: Optional[int] = None  # used for plain norms (e.g., norm2)
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        self._ff_chunk_size = chunk_size
+        self._ff_chunk_dim = dim
+
+    def set_chunk_norms(
+        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+    ) -> None:
+        """
+        Enable/disable chunking for norm operations inside the block.
+
+        Args:
+            modulated_norm_chunk_size: chunk size along sequence dim for modulated norms (norm1/norm3).
+                Set to None to disable chunking.
+            norm_chunk_size: chunk size along sequence dim for plain norms (norm2).
+                Set to None to disable chunking.
+        """
+        self._mod_norm_chunk_size = modulated_norm_chunk_size
+        self._norm_chunk_size = norm_chunk_size
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -841,11 +873,14 @@ class WanTransformerBlock(nn.Module):
         temb: torch.Tensor,
         rotary_emb: torch.Tensor,
     ) -> torch.Tensor:
+        # Compute scale/shift in fp32 for numerical stability, then cast to hidden_states dtype
+        # to avoid fp32 intermediates during modulation (which would double memory).
+        hs_dtype = hidden_states.dtype
         if temb.ndim == 4:
             # temb: batch_size, seq_len, 6, inner_dim (wan2.2 ti2v)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
                 self.scale_shift_table.unsqueeze(0) + temb.float()
-            ).chunk(6, dim=2)
+            ).to(hs_dtype).chunk(6, dim=2)
             # batch_size, seq_len, 1, inner_dim
             shift_msa = shift_msa.squeeze(2)
             scale_msa = scale_msa.squeeze(2)
@@ -857,30 +892,43 @@ class WanTransformerBlock(nn.Module):
             # temb: batch_size, 6, inner_dim (wan2.1/wan2.2 14B)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
                 self.scale_shift_table + temb.float()
-            ).chunk(6, dim=1)
+            ).to(hs_dtype).chunk(6, dim=1)
 
         # 1. Self-attention
-        norm_hidden_states = (
-            self.norm1(hidden_states.float()) * (1 + scale_msa) + shift_msa
-        ).type_as(hidden_states)
-        attn_output = self.attn1(norm_hidden_states, None, None, rotary_emb)
-        hidden_states = (hidden_states.float() + attn_output * gate_msa).type_as(
-            hidden_states
+        norm_hidden_states = _chunked_modulated_norm(
+            self.norm1,
+            hidden_states,
+            scale_msa,
+            shift_msa,
+            chunk_size=self._mod_norm_chunk_size,
         )
+        attn_output = self.attn1(norm_hidden_states, None, None, rotary_emb)
+        hidden_states = hidden_states + attn_output * gate_msa
 
         # 2. Cross-attention
-        norm_hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
+        norm_hidden_states = _chunked_norm(
+            self.norm2, hidden_states, chunk_size=self._norm_chunk_size
+        )
         attn_output = self.attn2(norm_hidden_states, encoder_hidden_states, None, None)
         hidden_states = hidden_states + attn_output
 
         # 3. Feed-forward
-        norm_hidden_states = (
-            self.norm3(hidden_states.float()) * (1 + c_scale_msa) + c_shift_msa
-        ).type_as(hidden_states)
-        ff_output = self.ffn(norm_hidden_states)
-        hidden_states = (
-            hidden_states.float() + ff_output.float() * c_gate_msa
-        ).type_as(hidden_states)
+        norm_hidden_states = _chunked_modulated_norm(
+            self.norm3,
+            hidden_states,
+            c_scale_msa,
+            c_shift_msa,
+            chunk_size=self._mod_norm_chunk_size,
+        )
+
+        if self._ff_chunk_size is not None:
+            ff_output = _chunked_feed_forward(
+                self.ffn, norm_hidden_states, self._ff_chunk_dim, self._ff_chunk_size
+            )
+        else:
+            ff_output = self.ffn(norm_hidden_states)
+
+        hidden_states = hidden_states + ff_output * c_gate_msa
 
         return hidden_states
 
@@ -1069,6 +1117,89 @@ class WanAnimateTransformer3DModel(
 
         self.gradient_checkpointing = False
 
+        # Default: no chunking unless explicitly enabled via a chunking profile.
+        self.set_chunking_profile("none")
+
+    # ----------------------------
+    # Chunking configuration
+    # ----------------------------
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        """
+        Enable/disable chunked feed-forward on all transformer blocks.
+
+        Args:
+            chunk_size: number of tokens to process per chunk along `dim`. Set to `None` to disable.
+            dim: dimension to chunk along (typically 1 for [B, seq, C]).
+        """
+        for block in self.blocks:
+            block.set_chunk_feed_forward(chunk_size, dim=dim)
+
+    # ----------------------------
+    # Chunking profile presets
+    # ----------------------------
+
+    _CHUNKING_PROFILES: Dict[str, Dict[str, Optional[int]]] = {
+        # No chunking anywhere.
+        "none": {
+            "ffn_chunk_size": None,
+            "modulated_norm_chunk_size": None,
+            "norm_chunk_size": None,
+            "out_modulated_norm_chunk_size": None,
+        },
+        # Light chunking: only kicks in for very long sequences.
+        "light": {
+            "ffn_chunk_size": 2048,
+            "modulated_norm_chunk_size": 16384,
+            "norm_chunk_size": 8192,
+            "out_modulated_norm_chunk_size": 16384,
+        },
+        # Balanced (close to current behavior, but configurable + optional).
+        "balanced": {
+            "ffn_chunk_size": 512,
+            "modulated_norm_chunk_size": 8192,
+            "norm_chunk_size": 4096,
+            "out_modulated_norm_chunk_size": 8192,
+        },
+        # Aggressive memory-saver: smaller chunks across the board.
+        "aggressive": {
+            "ffn_chunk_size": 256,
+            "modulated_norm_chunk_size": 4096,
+            "norm_chunk_size": 2048,
+            "out_modulated_norm_chunk_size": 4096,
+        },
+    }
+
+    def list_chunking_profiles(self) -> Tuple[str, ...]:
+        """Return available chunking profile names."""
+        return tuple(self._CHUNKING_PROFILES.keys())
+
+    def set_chunking_profile(self, profile_name: str) -> None:
+        """
+        Apply a predefined chunking profile across the whole model.
+
+        This controls:
+        - FFN chunking inside each transformer block
+        - Norm chunking (modulated norms and plain norms)
+        """
+        if profile_name not in self._CHUNKING_PROFILES:
+            raise ValueError(
+                f"Unknown chunking profile '{profile_name}'. "
+                f"Available: {sorted(self._CHUNKING_PROFILES.keys())}"
+            )
+
+        p = self._CHUNKING_PROFILES[profile_name]
+        self._chunking_profile_name = profile_name
+        self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+
+        # Apply to blocks.
+        self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
+        for block in self.blocks:
+            block.set_chunk_norms(
+                modulated_norm_chunk_size=p.get("modulated_norm_chunk_size", None),
+                norm_chunk_size=p.get("norm_chunk_size", None),
+            )
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -1201,7 +1332,7 @@ class WanAnimateTransformer3DModel(
         pad_face = torch.zeros_like(motion_vec[:, :1])
         motion_vec = torch.cat([pad_face, motion_vec], dim=1)
 
-        # 5. Transformer blocks with face adapter integration
+
         for block_idx, block in enumerate(self.blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states = self._gradient_checkpointing_func(
@@ -1232,21 +1363,25 @@ class WanAnimateTransformer3DModel(
                 hidden_states = face_adapter_output + hidden_states
 
         # 6. Output norm, projection & unpatchify
-        # batch_size, inner_dim
+        # Compute scale/shift in fp32 for numerical stability, then cast to hidden_states dtype.
+        hs_dtype = hidden_states.dtype
         shift, scale = (
             self.scale_shift_table.to(temb.device) + temb.unsqueeze(1)
-        ).chunk(2, dim=1)
+        ).to(hs_dtype).chunk(2, dim=1)
 
-        hidden_states_original_dtype = hidden_states.dtype
-        hidden_states = self.norm_out(hidden_states.float())
         # Move the shift and scale tensors to the same device as hidden_states.
         # When using multi-GPU inference via accelerate these will be on the
         # first device rather than the last device, which hidden_states ends up
         # on.
         shift = shift.to(hidden_states.device)
         scale = scale.to(hidden_states.device)
-        hidden_states = (hidden_states * (1 + scale) + shift).to(
-            dtype=hidden_states_original_dtype
+
+        hidden_states = _chunked_modulated_norm(
+            self.norm_out,
+            hidden_states,
+            scale,
+            shift,
+            chunk_size=getattr(self, "_out_modulated_norm_chunk_size", None),
         )
 
         hidden_states = self.proj_out(hidden_states)

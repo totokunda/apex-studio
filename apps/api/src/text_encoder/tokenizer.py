@@ -6,7 +6,6 @@ import json
 import transformers
 from src.utils.module import find_class_recursive
 
-
 def fetch_and_save_tokenizer_from_config(
     model_path: str,
     config_path: str | None = None,
@@ -52,8 +51,11 @@ def fetch_and_save_tokenizer_from_config(
             tokenizer_class = find_class_recursive(transformers, tokenizer_class)
         else:
             tokenizer_class = AutoTokenizer
-
-        tokenizer = tokenizer_class.from_pretrained(_name_or_path, **tokenizer_kwargs)
+        try:
+            tokenizer = tokenizer_class.from_pretrained(_name_or_path, **tokenizer_kwargs)
+        except Exception as e:
+            tokenizer_class = AutoTokenizer
+            tokenizer = tokenizer_class.from_pretrained(_name_or_path, **tokenizer_kwargs)
         save_dir = Path(model_path).parent
         os.makedirs(save_dir, exist_ok=True)
         tokenizer.save_pretrained(save_dir)

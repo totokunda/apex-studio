@@ -39,6 +39,7 @@ class WanI2VEngine(WanShared):
         expand_timesteps: bool = False,
         ip_image: Image.Image | str | np.ndarray | torch.Tensor = None,
         enhance_kwargs: Dict[str, Any] = {},
+        chunking_profile: str = "none",
         **kwargs,
     ):
         if (
@@ -290,6 +291,7 @@ class WanI2VEngine(WanShared):
             expand_timesteps=expand_timesteps,
             first_frame_mask=first_frame_mask,
             ip_image=ip_image,
+            chunking_profile=chunking_profile,
         )
 
         if offload:

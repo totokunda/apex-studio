@@ -1,11 +1,25 @@
 from typing import Dict, Any
 from src.quantize.ggml_ops import ggml_cat, ggml_stack
 from src.converters.base_converter import BaseConverter
-
+from typing import List
 
 class TextEncoderConverter(BaseConverter):
     pass
 
+
+class Gemma3TextEncoderConverter(TextEncoderConverter):
+    """
+    Converter for Gemma3 text encoder checkpoints.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.rename_dict = {
+            "^language_model.model": "model.language_model",
+            "^vision_tower": "model.vision_tower",
+            "^multi_modal_projector": "model.multi_modal_projector",
+            "^language_model.lm_head": "lm_head",
+        }
 
 class Qwen2_5_VLTextEncoderConverter(TextEncoderConverter):
     """
@@ -33,12 +47,12 @@ class Qwen2_5_VLTextEncoderConverter(TextEncoderConverter):
         if key not in state_dict:
             return
         
-
-        weight = state_dict.pop(key)
-        weight_1 = state_dict.pop(key.replace("weight", "weight.1"))
-        
-        weight = ggml_stack([weight, weight_1], dim=2)
-        state_dict[key] = weight
+       
+        if key.replace("weight", "weight.1") in state_dict:
+            weight = state_dict.pop(key)
+            weight_1 = state_dict.pop(key.replace("weight", "weight.1"))
+            weight = ggml_stack([weight, weight_1], dim=2)
+            state_dict[key] = weight
 
     
     @staticmethod
@@ -49,19 +63,20 @@ class Qwen2_5_VLTextEncoderConverter(TextEncoderConverter):
         if key not in state_dict:
             return
         # merge q k v into a single tensor
-        if ".attn.q" in key:
+        
+        if ".attn.q." in key:
             q = state_dict.pop(key)
             k = state_dict.pop(key.replace(".attn.q.", ".attn.k."))
             v = state_dict.pop(key.replace(".attn.q.", ".attn.v."))
             qkv = ggml_cat([q, k, v], dim=0)
             state_dict[key.replace(".attn.q.", ".attn.qkv.")] = qkv
-        elif ".attn.k" in key:
+        elif ".attn.k." in key:
             k = state_dict.pop(key)
             q = state_dict.pop(key.replace(".attn.k.", ".attn.q."))
             v = state_dict.pop(key.replace(".attn.k.", ".attn.v."))
             qkv = ggml_cat([q, k, v], dim=0)
             state_dict[key.replace(".attn.k.", ".attn.qkv.")] = qkv
-        elif ".attn.v" in key:
+        elif ".attn.v." in key:
             v = state_dict.pop(key)
             q = state_dict.pop(key.replace(".attn.v.", ".attn.q."))
             k = state_dict.pop(key.replace(".attn.v.", ".attn.k."))
@@ -208,7 +223,7 @@ class T5TextEncoderConverter(TextEncoderConverter):
         )
         return not has_source
 
-    def convert(self, state_dict: Dict[str, Any], **kwargs):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
         """
         Custom convert that allows multiple rename rules to apply to the same key.
 
@@ -219,7 +234,10 @@ class T5TextEncoderConverter(TextEncoderConverter):
         `encoder.block.0.layer.0.SelfAttention.q`). This override applies all
         applicable replacements first, then performs a single in-place update.
         """
-
+        
+        if self._already_converted(state_dict, model_keys):
+            return state_dict
+            
         # Keep the same ordering semantics as the base class.
         self._sort_rename_dict()
 
