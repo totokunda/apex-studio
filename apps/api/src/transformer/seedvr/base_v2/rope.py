@@ -131,12 +131,20 @@ class NaMMRotaryEmbedding3d(MMRotaryEmbeddingBase):
         torch.Tensor,
         torch.Tensor,
     ]:
-        vid_freqs = self.get_axial_freqs(1024, 128, 128)
-        txt_freqs = self.get_axial_freqs(1024)
+        # Calculate actual needed dimensions instead of hardcoded maximums
+        max_t, max_h, max_w, max_txt_len = 0, 0, 0, 0
+        for (f, h, w), l in zip(vid_shape.tolist(), txt_shape[:, 0].tolist()):
+            max_t = max(max_t, l + f)
+            max_h = max(max_h, h)
+            max_w = max(max_w, w)
+            max_txt_len = max(max_txt_len, l)
+
+        vid_freqs = self.get_axial_freqs(max_t, max_h, max_w)
+        txt_freqs = self.get_axial_freqs(max_txt_len) if max_txt_len > 0 else None
         vid_freq_list, txt_freq_list = [], []
         for (f, h, w), l in zip(vid_shape.tolist(), txt_shape[:, 0].tolist()):
             vid_freq = vid_freqs[l : l + f, :h, :w].reshape(-1, vid_freqs.size(-1))
-            txt_freq = txt_freqs[:l].repeat(1, 3).reshape(-1, vid_freqs.size(-1))
+            txt_freq = txt_freqs[:l].repeat(1, 3).reshape(-1, vid_freqs.size(-1)) if l > 0 else torch.empty(0, vid_freqs.size(-1), device=vid_freqs.device)
             vid_freq_list.append(vid_freq)
             txt_freq_list.append(txt_freq)
         return torch.cat(vid_freq_list, dim=0), torch.cat(txt_freq_list, dim=0)

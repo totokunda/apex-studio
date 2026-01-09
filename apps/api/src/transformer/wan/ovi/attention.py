@@ -91,7 +91,8 @@ if FLASH_ATTN_3_AVAILABLE or FLASH_ATTN_2_AVAILABLE:
             warnings.warn(
                 "Flash attention 3 is not available, use flash attention 2 instead."
             )
-
+            
+     
         # apply attention
         if (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
             # Note: dropout_p, window_size are not supported in FA3 now.

@@ -7,10 +7,7 @@ from .wan_base import (
     WanLayerNorm,
     WanRMSNorm,
     gradient_checkpointing,
-    rope_apply,
 )
-from src.attention import attention_register
-from .attention import flash_attention
 from typing import Dict, Any
 from loguru import logger
 
@@ -94,119 +91,6 @@ class OviModel(ModelMixin, ConfigMixin):
             merged_kwargs[f"audio_{key}"] = audio_kwargs[key]
         return merged_kwargs
 
-    def single_fusion_cross_attention_forward(
-        self,
-        cross_attn_block,
-        src_seq,
-        src_grid_sizes,
-        src_freqs,
-        target_seq,
-        target_seq_lens,
-        target_grid_sizes,
-        target_freqs,
-        context,
-        context_lens,
-    ):
-        b, n, d = src_seq.size(0), cross_attn_block.num_heads, cross_attn_block.head_dim
-        if hasattr(cross_attn_block, "k_img"):
-            ## means is i2v block
-            q, k, v, k_img, v_img = cross_attn_block.qkv_fn(src_seq, context)
-        else:
-            ## means is t2v block
-            q, k, v = cross_attn_block.qkv_fn(src_seq, context)
-            k_img = v_img = None
-
-        if attention_register.is_available("flash"):
-            x = flash_attention(q=q, k=k, v=v, k_lens=context_lens)
-        else:
-            x = attention_register.call(
-                q=q.transpose(1, 2),
-                k=k.transpose(1, 2),
-                v=v.transpose(1, 2),
-                k_lens=context_lens,
-            ).transpose(1, 2)
-
-        if k_img is not None:
-            if attention_register.is_available("flash"):
-                img_x = flash_attention(
-                    q=q,
-                    k=k_img,
-                    v=v_img,
-                    k_lens=None,
-                )
-            else:
-                img_x = attention_register.call(
-                    q=q.transpose(1, 2),
-                    k=k_img.transpose(1, 2),
-                    v=v_img.transpose(1, 2),
-                    k_lens=None,
-                ).transpose(1, 2)
-            x = x + img_x
-
-        is_vid = src_grid_sizes.shape[1] > 1
-        # compute target attention
-        target_seq = cross_attn_block.pre_attn_norm_fusion(target_seq)
-        k_target = cross_attn_block.norm_k_fusion(
-            cross_attn_block.k_fusion(target_seq)
-        ).view(b, -1, n, d)
-        v_target = cross_attn_block.v_fusion(target_seq).view(b, -1, n, d)
-
-        q = rope_apply(q, src_grid_sizes, src_freqs)
-        k_target = rope_apply(k_target, target_grid_sizes, target_freqs)
-
-        if attention_register.is_available("flash"):
-            target_x = flash_attention(
-                q=q, k=k_target, v=v_target, k_lens=target_seq_lens
-            )
-        else:
-            target_x = attention_register.call(
-                q=q.transpose(1, 2),
-                k=k_target.transpose(1, 2),
-                v=v_target.transpose(1, 2),
-                k_lens=target_seq_lens,
-            ).transpose(1, 2)
-
-        x = x + target_x
-        x = x.flatten(2)  # [B, L/P, C]
-
-        x = cross_attn_block.o(x)
-        return x
-
-    def single_fusion_cross_attention_ffn_forward(
-        self,
-        attn_block,
-        src_seq,
-        src_grid_sizes,
-        src_freqs,
-        target_seq,
-        target_seq_lens,
-        target_grid_sizes,
-        target_freqs,
-        context,
-        context_lens,
-        src_e,
-    ):
-
-        src_seq = src_seq + self.single_fusion_cross_attention_forward(
-            attn_block.cross_attn,
-            attn_block.norm3(src_seq),
-            src_grid_sizes=src_grid_sizes,
-            src_freqs=src_freqs,
-            target_seq=target_seq,
-            target_seq_lens=target_seq_lens,
-            target_grid_sizes=target_grid_sizes,
-            target_freqs=target_freqs,
-            context=context,
-            context_lens=context_lens,
-        )
-        y = attn_block.ffn(
-            attn_block.norm2(src_seq).bfloat16() * (1 + src_e[4].squeeze(2))
-            + src_e[3].squeeze(2)
-        )
-        with torch.amp.autocast(src_seq.device.type, dtype=torch.bfloat16):
-            src_seq = src_seq + y * src_e[5].squeeze(2)
-        return src_seq
-
     def single_fusion_block_forward(
         self,
         vid_block,
@@ -226,84 +110,85 @@ class OviModel(ModelMixin, ConfigMixin):
         audio_context,
         audio_context_lens,
     ):
-        ## audio modulation
-        assert audio_e.dtype == torch.bfloat16
-        assert (
-            len(audio_e.shape) == 4
-            and audio_e.size(2) == 6
-            and audio_e.shape[1] == audio.shape[1]
-        ), f"{audio_e.shape}, {audio.shape}"
-        with torch.amp.autocast(audio.device.type, dtype=torch.bfloat16):
-            audio_e = audio_block.modulation(audio_e).chunk(6, dim=2)
-        assert audio_e[0].dtype == torch.bfloat16
+        """
+        Fusion block forward that calls block.forward() with mode parameter.
+        All block operations happen inside forward() for offloading compatibility.
+        """
+        # Debug: check input tensors
+        if torch.isnan(vid).any():
+            print(f"NaN in vid input!")
+        if torch.isnan(audio).any():
+            print(f"NaN in audio input!")
+        if torch.isnan(vid_e).any():
+            print(f"NaN in vid_e!")
+        if torch.isnan(audio_e).any():
+            print(f"NaN in audio_e!")
 
-        # audio self-attention
-        audio_y = audio_block.self_attn(
-            audio_block.norm1(audio).bfloat16() * (1 + audio_e[1].squeeze(2))
-            + audio_e[0].squeeze(2),
-            audio_seq_lens,
-            audio_grid_sizes,
-            audio_freqs,
+        # Audio: modulation + self-attention (via forward with mode)
+        audio, audio_e_chunked = audio_block(
+            x=audio,
+            e=audio_e,
+            seq_lens=audio_seq_lens,
+            grid_sizes=audio_grid_sizes,
+            freqs=audio_freqs,
+            context=audio_context,
+            context_lens=audio_context_lens,
+            mode="modulation_self_attn",
         )
-        with torch.amp.autocast(audio.device.type, dtype=torch.bfloat16):
-            audio = audio + audio_y * audio_e[2].squeeze(2)
+        if torch.isnan(audio).any():
+            print(f"NaN after audio modulation_self_attn!")
 
-        ## video modulation
-        assert (
-            len(vid_e.shape) == 4
-            and vid_e.size(2) == 6
-            and vid_e.shape[1] == vid.shape[1]
-        ), f"{vid_e.shape}, {vid.shape}"
-        with torch.amp.autocast(vid.device.type, dtype=torch.bfloat16):
-            vid_e = vid_block.modulation(vid_e).chunk(6, dim=2)
-
-        # video self-attention
-        vid_y = vid_block.self_attn(
-            vid_block.norm1(vid).bfloat16() * (1 + vid_e[1].squeeze(2))
-            + vid_e[0].squeeze(2),
-            vid_seq_lens,
-            vid_grid_sizes,
-            vid_freqs,
+        # Video: modulation + self-attention (via forward with mode)
+        vid, vid_e_chunked = vid_block(
+            x=vid,
+            e=vid_e,
+            seq_lens=vid_seq_lens,
+            grid_sizes=vid_grid_sizes,
+            freqs=vid_freqs,
+            context=vid_context,
+            context_lens=vid_context_lens,
+            mode="modulation_self_attn",
         )
-
-        with torch.amp.autocast(vid.device.type, dtype=torch.bfloat16):
-            vid = vid + vid_y * vid_e[2].squeeze(2)
+        if torch.isnan(vid).any():
+            print(f"NaN after vid modulation_self_attn!")
 
         og_audio = audio
 
-        # audio cross-attention
-        audio = self.single_fusion_cross_attention_ffn_forward(
-            audio_block,
-            audio,
-            audio_grid_sizes,
-            audio_freqs,
-            vid,
-            vid_seq_lens,
-            vid_grid_sizes,
-            vid_freqs,
-            audio_context,
-            audio_context_lens,
-            audio_e,
+        # Audio: fusion cross-attention + FFN (attends to video, via forward with mode)
+        audio = audio_block(
+            x=audio,
+            e=audio_e_chunked,
+            seq_lens=audio_seq_lens,
+            grid_sizes=audio_grid_sizes,
+            freqs=audio_freqs,
+            context=audio_context,
+            context_lens=audio_context_lens,
+            mode="fusion_cross_attn_ffn",
+            target_seq=vid,
+            target_seq_lens=vid_seq_lens,
+            target_grid_sizes=vid_grid_sizes,
+            target_freqs=vid_freqs,
         )
+        if torch.isnan(audio).any():
+            print(f"NaN after audio fusion_cross_attn_ffn!")
 
-        assert not torch.equal(
-            og_audio, audio
-        ), "Audio should be changed after cross-attention!"
-
-        # video cross-attention
-        vid = self.single_fusion_cross_attention_ffn_forward(
-            vid_block,
-            vid,
-            vid_grid_sizes,
-            vid_freqs,
-            og_audio,
-            audio_seq_lens,
-            audio_grid_sizes,
-            audio_freqs,
-            vid_context,
-            vid_context_lens,
-            vid_e,
+        # Video: fusion cross-attention + FFN (attends to og_audio, via forward with mode)
+        vid = vid_block(
+            x=vid,
+            e=vid_e_chunked,
+            seq_lens=vid_seq_lens,
+            grid_sizes=vid_grid_sizes,
+            freqs=vid_freqs,
+            context=vid_context,
+            context_lens=vid_context_lens,
+            mode="fusion_cross_attn_ffn",
+            target_seq=og_audio,
+            target_seq_lens=audio_seq_lens,
+            target_grid_sizes=audio_grid_sizes,
+            target_freqs=audio_freqs,
         )
+        if torch.isnan(vid).any():
+            print(f"NaN after vid fusion_cross_attn_ffn!")
 
         return vid, audio
 
@@ -379,6 +264,8 @@ class OviModel(ModelMixin, ConfigMixin):
             y=y,
             first_frame_is_clean=first_frame_is_clean,
         )
+        
+        print("vid", vid[0].mean(), "vid_e", vid_e[0].mean())
 
         audio, audio_e, audio_kwargs = (
             self.audio_model.prepare_transformer_block_kwargs(
@@ -391,6 +278,8 @@ class OviModel(ModelMixin, ConfigMixin):
                 first_frame_is_clean=False,
             )
         )
+        
+        print("audio", audio[0].mean(), "audio_e", audio_e[0].mean())
 
         kwargs = self.merge_kwargs(vid_kwargs, audio_kwargs)
 

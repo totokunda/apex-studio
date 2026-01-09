@@ -32,7 +32,7 @@ mano==0.6.0
 matplotlib==3.10.8
 # NOTE: `mc==0.0` is not a real/published package and breaks dependency resolution.
 more_itertools==10.8.0
-moviepy==2.2.1
+moviepy==1.0.3
 # NOTE: numpy 2.x currently breaks a number of compiled deps (e.g. numba/llvmlite
 # pulled in by librosa) on some platforms, especially when bundling.
 numpy==1.26.4

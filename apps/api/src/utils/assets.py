@@ -41,6 +41,10 @@ def candidate_asset_roots() -> list[Path]:
         roots.append(here.parents[3] / "assets")
     except Exception:
         pass
+    
+    
+    # look in api/assets
+    roots.append(Path(__file__).parents[2] / "assets")
 
     # Installed bundle layout: assets live next to the embedded python prefix directory.
     try:

@@ -564,33 +564,152 @@ class WanAttentionBlock(nn.Module):
         freqs,
         context,
         context_lens,
+        mode: str = "full",
+        # Fusion mode kwargs (only used when mode != "full")
+        target_seq=None,
+        target_seq_lens=None,
+        target_grid_sizes=None,
+        target_freqs=None,
     ):
         r"""
         Args:
             x(Tensor): Shape [B, L, C]
-            e(Tensor): Shape [B, L1, 6, C]
+            e(Tensor): Shape [B, L1, 6, C] for full/modulation_self_attn modes,
+                       or tuple of chunked embeddings for fusion_cross_attn_ffn mode
             seq_lens(Tensor): Shape [B], length of each sequence in batch
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
+            context(Tensor): Context for cross-attention
+            context_lens(Tensor): Context lengths
+            mode(str): One of:
+                - "full": Normal forward (modulation + self-attn + cross-attn + ffn)
+                - "modulation_self_attn": Only modulation + self-attention, returns (x, e_chunked)
+                - "fusion_cross_attn_ffn": Fusion cross-attention + FFN, expects e as pre-chunked tuple
+            target_seq: Target sequence for fusion cross-attention (fusion modes only)
+            target_seq_lens: Target sequence lengths (fusion modes only)
+            target_grid_sizes: Target grid sizes (fusion modes only)
+            target_freqs: Target freqs (fusion modes only)
         """
 
-        assert (
-            len(e.shape) == 4 and e.size(2) == 6 and e.shape[1] == x.shape[1]
-        ), f"{e.shape}, {x.shape}"
-        with amp.autocast("cuda", dtype=torch.bfloat16):
-            e = self.modulation(e).chunk(6, dim=2)
-        assert e[0].dtype == torch.bfloat16
+        if mode == "modulation_self_attn":
+            # Fusion mode: modulation + self-attention only
+            assert (
+                len(e.shape) == 4 and e.size(2) == 6 and e.shape[1] == x.shape[1]
+            ), f"{e.shape}, {x.shape}"
+            with amp.autocast("cuda", dtype=torch.bfloat16):
+                e_chunked = self.modulation(e).chunk(6, dim=2)
+            assert e_chunked[0].dtype == torch.bfloat16
 
-        # self-attention with chunked modulated norm
-        norm_x = _chunked_modulated_norm(
-            self.norm1, x, e[1].squeeze(2), e[0].squeeze(2), chunk_size=self._mod_norm_chunk_size
-        )
-        y = self.self_attn(norm_x.bfloat16(), seq_lens, grid_sizes, freqs)
-        with amp.autocast("cuda", dtype=torch.bfloat16):
-            x = x + y * e[2].squeeze(2)
+            norm_x = _chunked_modulated_norm(
+                self.norm1, x, e_chunked[1].squeeze(2), e_chunked[0].squeeze(2),
+                chunk_size=self._mod_norm_chunk_size
+            )
+            y = self.self_attn(norm_x.bfloat16(), seq_lens, grid_sizes, freqs)
+            with amp.autocast("cuda", dtype=torch.bfloat16):
+                x = x + y * e_chunked[2].squeeze(2)
 
-        # cross-attention & ffn function
-        def cross_attn_ffn(x, context, context_lens, e):
+            return x, e_chunked
+
+        elif mode == "fusion_cross_attn_ffn":
+            # Fusion mode: cross-attention with target modality + FFN
+            # e is expected to be pre-chunked tuple from modulation_self_attn
+            e_chunked = e
+            b, n, d = x.size(0), self.cross_attn.num_heads, self.cross_attn.head_dim
+
+            # Standard cross-attention with context
+            if hasattr(self.cross_attn, "k_img"):
+                q, k, v, k_img, v_img = self.cross_attn.qkv_fn(
+                    _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
+                    context
+                )
+            else:
+                q, k, v = self.cross_attn.qkv_fn(
+                    _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
+                    context
+                )
+                k_img = v_img = None
+
+            if attention_register.is_available("flash"):
+                attn_out = flash_attention(q=q, k=k, v=v, k_lens=context_lens)
+            else:
+                attn_out = attention_register.call(
+                    q=q.transpose(1, 2),
+                    k=k.transpose(1, 2),
+                    v=v.transpose(1, 2),
+                    k_lens=context_lens,
+                ).transpose(1, 2)
+
+            if k_img is not None:
+                if attention_register.is_available("flash"):
+                    img_attn = flash_attention(q=q, k=k_img, v=v_img, k_lens=None)
+                else:
+                    img_attn = attention_register.call(
+                        q=q.transpose(1, 2),
+                        k=k_img.transpose(1, 2),
+                        v=v_img.transpose(1, 2),
+                        k_lens=None,
+                    ).transpose(1, 2)
+                attn_out = attn_out + img_attn
+
+            # Fusion cross-attention with target modality
+            target_seq_normed = self.cross_attn.pre_attn_norm_fusion(target_seq)
+            k_target = self.cross_attn.norm_k_fusion(
+                self.cross_attn.k_fusion(target_seq_normed)
+            ).view(b, -1, n, d)
+            v_target = self.cross_attn.v_fusion(target_seq_normed).view(b, -1, n, d)
+
+            q_rope = rope_apply(q, grid_sizes, freqs)
+            k_target_rope = rope_apply(k_target, target_grid_sizes, target_freqs)
+
+            if attention_register.is_available("flash"):
+                target_attn = flash_attention(
+                    q=q_rope, k=k_target_rope, v=v_target, k_lens=target_seq_lens
+                )
+            else:
+                target_attn = attention_register.call(
+                    q=q_rope.transpose(1, 2),
+                    k=k_target_rope.transpose(1, 2),
+                    v=v_target.transpose(1, 2),
+                    k_lens=target_seq_lens,
+                ).transpose(1, 2)
+
+            combined_attn = (attn_out + target_attn).flatten(2)
+            x = x + self.cross_attn.o(combined_attn)
+
+            # FFN
+            ffn_x = _chunked_modulated_norm(
+                self.norm2, x, e_chunked[4].squeeze(2), e_chunked[3].squeeze(2),
+                chunk_size=self._mod_norm_chunk_size
+            )
+            if self._ff_chunk_size is not None:
+                y = _chunked_feed_forward(
+                    self.ffn, ffn_x.bfloat16(), self._ff_chunk_dim, self._ff_chunk_size
+                )
+            else:
+                y = self.ffn(ffn_x.bfloat16())
+            with amp.autocast("cuda", dtype=torch.bfloat16):
+                x = x + y * e_chunked[5].squeeze(2)
+
+            return x
+
+        else:
+            # Default "full" mode: normal forward
+            assert (
+                len(e.shape) == 4 and e.size(2) == 6 and e.shape[1] == x.shape[1]
+            ), f"{e.shape}, {x.shape}"
+            with amp.autocast("cuda", dtype=torch.bfloat16):
+                e = self.modulation(e).chunk(6, dim=2)
+            assert e[0].dtype == torch.bfloat16
+
+            # self-attention with chunked modulated norm
+            norm_x = _chunked_modulated_norm(
+                self.norm1, x, e[1].squeeze(2), e[0].squeeze(2), chunk_size=self._mod_norm_chunk_size
+            )
+            y = self.self_attn(norm_x.bfloat16(), seq_lens, grid_sizes, freqs)
+            with amp.autocast("cuda", dtype=torch.bfloat16):
+                x = x + y * e[2].squeeze(2)
+
+            # cross-attention & ffn
             x = x + self.cross_attn(
                 _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
                 context,
@@ -607,10 +726,8 @@ class WanAttentionBlock(nn.Module):
                 y = self.ffn(ffn_x.bfloat16())
             with amp.autocast("cuda", dtype=torch.bfloat16):
                 x = x + y * e[5].squeeze(2)
-            return x
 
-        x = cross_attn_ffn(x, context, context_lens, e)
-        return x
+            return x
 
 
 class Head(nn.Module):
@@ -995,6 +1112,7 @@ class WanModel(ModelMixin, ConfigMixin):
         if y is not None:
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
 
+        self.patch_embedding.to(x[0].device)
         # embeddings
         x = [
             self.patch_embedding(u.unsqueeze(0)) for u in x
