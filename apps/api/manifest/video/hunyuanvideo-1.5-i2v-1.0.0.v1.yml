@@ -67,8 +67,8 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
+        min_vram_gb: 14
+        recommended_vram_gb: 19
       file_size: 5042561442
   - type: transformer
     label: HunyuanVideo Transformer
@@ -78,129 +78,137 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 33306830724
+      resource_requirements:
+        min_vram_gb: 33
+        recommended_vram_gb: 44
     - path: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v/transformer
       variant: DEFAULT_480P
       precision: fp16
       type: safetensors
+      file_size: 33306830724
+      resource_requirements:
+        min_vram_gb: 33
+        recommended_vram_gb: 44
     - path: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v_step_distilled/transformer
       variant: STEP_DISTILLED
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 29
-        recommended_vram_gb: 39
+        min_vram_gb: 33
+        recommended_vram_gb: 44
       file_size: 33325524303
     - path: tencent/HunyuanVideo-1.5/transformer/720p_i2v_distilled
       variant: DISTILLED
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 29
-        recommended_vram_gb: 39
+        min_vram_gb: 33
+        recommended_vram_gb: 44
       file_size: 33306633160
     - path: Comfy-Org/HunyuanVideo_1.5_repackaged/split_files/diffusion_models/hunyuanvideo1.5_720p_i2v_cfg_distilled_fp8_scaled.safetensors
       variant: FP8_DISTILLED
       precision: fp8
       type: safetensors
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
+        min_vram_gb: 16
+        recommended_vram_gb: 22
       file_size: 8330399746
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q8_0.gguf
       variant: GGUF_Q8_0_DISTILLED
       precision: q8_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
+        min_vram_gb: 16
+        recommended_vram_gb: 22
       file_size: 8995313888
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q6_K.gguf
       variant: GGUF_Q6_K_DISTILLED
       precision: q6_k
       type: gguf
       resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
+        min_vram_gb: 13
+        recommended_vram_gb: 18
       file_size: 7024833760
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q5_K_S.gguf
       variant: GGUF_Q5_K_S_DISTILLED
       precision: q5_k_s
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
+        min_vram_gb: 12
+        recommended_vram_gb: 16
       file_size: 5940802784
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q5_K_M.gguf
       variant: GGUF_Q5_K_M_DISTILLED
       precision: q5_k_m
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
+        min_vram_gb: 12
+        recommended_vram_gb: 16
       file_size: 6121288928
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q4_K_M.gguf
       variant: GGUF_Q4_K_M_DISTILLED
       precision: q4_k_m
       type: gguf
       resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
+        min_vram_gb: 11
+        recommended_vram_gb: 15
       file_size: 5090407648
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p_distilled/hunyuanvideo1.5_720p_i2v_cfg_distilled-Q4_K_S.gguf
       variant: GGUF_Q4_K_S_DISTILLED
       precision: q4_k_s
       type: gguf
       resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
+        min_vram_gb: 11
+        recommended_vram_gb: 15
       file_size: 4920538336
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
+        min_vram_gb: 16
+        recommended_vram_gb: 22
       file_size: 8995313888
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
+        min_vram_gb: 13
+        recommended_vram_gb: 18
       file_size: 7024833760
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
+        min_vram_gb: 12
+        recommended_vram_gb: 16
       file_size: 5940802784
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
+        min_vram_gb: 12
+        recommended_vram_gb: 16
       file_size: 6121288928
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
+        min_vram_gb: 11
+        recommended_vram_gb: 15
       file_size: 5090407648
     - path: jayn7/HunyuanVideo-1.5_I2V_720p-GGUF/720p/hunyuanvideo1.5_720p_i2v-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
+        min_vram_gb: 11
+        recommended_vram_gb: 15
       file_size: 4920538336
     config_path: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v/transformer/config.json
   - type: text_encoder
@@ -212,10 +220,9 @@ spec:
     - embed_tokens
     block_modules:
     - model.language_model
-    # These are consumed by the hunyuanvideo15 engine's prompt formatting logic.
     config_path: Qwen/Qwen2.5-VL-7B-Instruct/config.json
     tokenizer_class: Qwen2Tokenizer
-    tokenizer_name:  hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v
+    tokenizer_name: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v
     tokenizer_kwargs:
       subfolder: tokenizer
     gguf_kwargs:
@@ -226,32 +233,32 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 17
-        recommended_vram_gb: 23
+        min_vram_gb: 21
+        recommended_vram_gb: 28
       file_size: 16595981281
     - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
+        min_vram_gb: 15
+        recommended_vram_gb: 20
       file_size: 8098524032
     - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
+        min_vram_gb: 12
+        recommended_vram_gb: 16
       file_size: 6254197632
     - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
+        min_vram_gb: 10
+        recommended_vram_gb: 14
       file_size: 4457767808
   - type: extra_model_path
     label: Qwen2.5 VL Vision Transformer
@@ -276,8 +283,9 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+      file_size: 856506533
   - type: helper
     label: HunyuanVideo Image Feature Extractor
     base: SiglipImageProcessor
@@ -298,8 +306,8 @@ spec:
       precision: fp16
       type: safetensors
       resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
+        min_vram_gb: 9
+        recommended_vram_gb: 13
       file_size: 877272248
   defaults:
     run:
@@ -470,4 +478,3 @@ spec:
       min: 256
       max: 8192
       step: 16
-   
