@@ -30,6 +30,7 @@ def save_audio_video_output(
         import soundfile as wavfile
         import tempfile
         import math
+        import os
 
         def _resample_audio_numpy(
             audio: np.ndarray, src_rate: int, dst_rate: int
@@ -92,6 +93,22 @@ def save_audio_video_output(
                 y = y2.T if channel_first else y2
             return np.clip(y, -1.0, 1.0)
 
+        def _audio_to_soundfile_frames(audio: np.ndarray) -> np.ndarray:
+            """
+            Normalize audio array to the shape expected by soundfile: (n_frames,) or (n_frames, n_channels).
+            The engine may produce (channels, n_frames); we transpose that to (n_frames, channels).
+            """
+            x = np.asarray(audio)
+            if x.ndim == 1:
+                return np.clip(x.astype(np.float32, copy=False), -1.0, 1.0)
+            if x.ndim != 2:
+                raise ValueError(f"audio_numpy must be 1D or 2D, got shape={x.shape}")
+
+            # Heuristic: treat the smaller dimension as channels when ambiguous.
+            if x.shape[0] <= x.shape[1]:
+                x = x.T  # (n_frames, n_channels)
+            return np.clip(x.astype(np.float32, copy=False), -1.0, 1.0)
+
         # Validate inputs
         assert isinstance(
             video_numpy, np.ndarray
@@ -126,22 +143,37 @@ def save_audio_video_output(
         frames = list(video_numpy)
         # Create video clip
         clip = ImageSequenceClip(frames, fps=fps)
+        audio_path: Optional[str] = None
+        audio_clip = None
         # Add audio if provided
         if audio_numpy is not None:
-            with tempfile.NamedTemporaryFile(
-                suffix=".wav", mode="wb", delete=False
-            ) as temp_audio_file:
+            try:
+                # Create a path, close it, then let soundfile write it (avoid writing to an already-open handle).
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio_file:
+                    audio_path = temp_audio_file.name
+
+                audio_frames = _audio_to_soundfile_frames(audio_numpy)
                 wavfile.write(
-                    temp_audio_file.name,
-                    (audio_numpy * 32767).astype(np.int16),
+                    audio_path,
+                    audio_frames,
                     sample_rate,
+                    format="WAV",
+                    subtype="PCM_16",
                 )
-                audio_clip = AudioFileClip(temp_audio_file.name)
+
+                audio_clip = AudioFileClip(audio_path)
                 final_clip = clip.set_audio(audio_clip)
+            finally:
+                # MoviePy will hold the file open until the clip is closed; we clean up at the end.
+                # (See below where we close clips.)
+                pass
         else:
             final_clip = clip
         # Write final video to disk
-        output_path = str(job_dir / f"{filename_prefix}.mp4")
+        if job_dir is not None:
+            output_path = str(job_dir / f"{filename_prefix}.mp4")
+        else:
+            output_path = f"{filename_prefix}.mp4"
         final_clip.write_videofile(
             output_path,
             codec="libx264",
@@ -150,5 +182,17 @@ def save_audio_video_output(
             verbose=False,
             logger=None,
         )
-        final_clip.close()
+        # Ensure resources are released (especially the temp audio file on some platforms).
+        try:
+            final_clip.close()
+        finally:
+            try:
+                if audio_clip is not None:
+                    audio_clip.close()
+            finally:
+                if audio_numpy is not None and audio_path is not None:
+                    try:
+                        os.remove(audio_path)
+                    except OSError:
+                        pass
         return output_path, "video"

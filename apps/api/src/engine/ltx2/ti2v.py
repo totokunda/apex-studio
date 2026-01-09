@@ -36,7 +36,7 @@ class LTX2TI2VEngine(LTX2Shared):
         num_frames = (num_frames - 1) // self.vae_temporal_compression_ratio + 1
         
         shape = (batch_size, num_channels_latents, num_frames, height, width)
-        
+
         if latents is None:
             latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
 
@@ -332,6 +332,8 @@ class LTX2TI2VEngine(LTX2Shared):
         
         # Image conditioning should be applied in BOTH stages (stage-2 starts from upscaled latents but still
         # replaces latent slices + denoise mask), matching ltx-pipelines distilled behavior.
+        height = round(height / self.vae_spatial_compression_ratio) * self.vae_spatial_compression_ratio
+        width = round(width / self.vae_spatial_compression_ratio) * self.vae_spatial_compression_ratio
         
         
         self._guidance_scale = guidance_scale
@@ -353,7 +355,7 @@ class LTX2TI2VEngine(LTX2Shared):
             if not isinstance(image, list):
                 image = [image]
             image = [self._load_image(img) for img in image]
-            image = [self._aspect_ratio_resize(img, max_area=height * width, mod_value=32)[0] for img in image]
+            image = [self._aspect_ratio_resize(img, max_area=height * width, mod_value=self.vae_spatial_compression_ratio)[0] for img in image]
             if not use_distilled_stage_2:
                 width, height = image[0].size
                 
@@ -932,6 +934,7 @@ class LTX2TI2VEngine(LTX2Shared):
             safe_emit_progress(stage1_progress_callback, 0.45, "Starting denoise")
             with self._progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
+                    break
                     if self.interrupt:
                         continue
 
@@ -1252,8 +1255,8 @@ class LTX2TI2VEngine(LTX2Shared):
         if offload:
             self._offload("vocoder")
         
-        video = video.squeeze(0).cpu().numpy()
-        audio = audio.squeeze(0).float().numpy()
+        video = video.squeeze(0).cpu().float().numpy()
+        audio = audio.squeeze(0).cpu().float().numpy()
         
         safe_emit_progress(stage1_progress_callback, 1.0, "Completed text-to-image-to-video pipeline")
         

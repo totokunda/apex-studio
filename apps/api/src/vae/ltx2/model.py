@@ -956,7 +956,9 @@ class LTX2VideoDecoder3d(nn.Module):
         causal: Optional[bool] = None,
     ) -> torch.Tensor:
         causal = causal or self.is_causal
-
+        
+        
+    
         hidden_states = self.conv_in(hidden_states, causal=causal)
 
         if self.timestep_scale_multiplier is not None:
@@ -1137,8 +1139,8 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
 
         # When decoding temporally long video latents, the memory requirement is very high. By decoding latent frames
         # at a fixed frame batch size (based on `self.num_latent_frames_batch_sizes`), the memory requirement can be lowered.
-        self.use_framewise_encoding = False
-        self.use_framewise_decoding = False
+        self.use_framewise_encoding = True
+        self.use_framewise_decoding = True
 
         # This can be configured based on the amount of GPU memory available.
         # `16` for sample frames and `2` for latent frames are sensible defaults for consumer GPUs.
@@ -1149,12 +1151,12 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         # The minimal tile height and width for spatial tiling to be used
         self.tile_sample_min_height = 256
         self.tile_sample_min_width = 256
-        self.tile_sample_min_num_frames = 8
+        self.tile_sample_min_num_frames = 32
 
         # The minimal distance between two spatial tiles
         self.tile_sample_stride_height = 224
         self.tile_sample_stride_width = 224
-        self.tile_sample_stride_num_frames = 4
+        self.tile_sample_stride_num_frames = 32
 
     def enable_tiling(
         self,
@@ -1390,8 +1392,8 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         sample_height = height * self.spatial_compression_ratio
         sample_width = width * self.spatial_compression_ratio
 
-        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
-        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
+        tile_latent_min_height = 4 #self.tile_sample_min_height // self.spatial_compression_ratio
+        tile_latent_min_width = 4 #self.tile_sample_min_width // self.spatial_compression_ratio
         tile_latent_stride_height = self.tile_sample_stride_height // self.spatial_compression_ratio
         tile_latent_stride_width = self.tile_sample_stride_width // self.spatial_compression_ratio
 
@@ -1400,10 +1402,12 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
 
         # Split z into overlapping tiles and decode them separately.
         # The tiles have an overlap to avoid seams between tiles.
+        print(z.shape)
         rows = []
         for i in range(0, height, tile_latent_stride_height):
             row = []
             for j in range(0, width, tile_latent_stride_width):
+                print(z[:, :, :, i : i + tile_latent_min_height, j : j + tile_latent_min_width].shape, i, i + tile_latent_min_height, j, j + tile_latent_min_width)
                 time = self.decoder(
                     z[:, :, :, i : i + tile_latent_min_height, j : j + tile_latent_min_width], temb, causal=causal
                 )
@@ -1472,6 +1476,8 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         tile_latent_min_num_frames = self.tile_sample_min_num_frames // self.temporal_compression_ratio
         tile_latent_stride_num_frames = self.tile_sample_stride_num_frames // self.temporal_compression_ratio
         blend_num_frames = self.tile_sample_min_num_frames - self.tile_sample_stride_num_frames
+        
+ 
 
         row = []
         for i in range(0, num_frames, tile_latent_stride_num_frames):
