@@ -106,6 +106,7 @@ spec:
     label: LTX2 Transformer
     name: transformer
     base: ltx2.base
+    config_path: blanchon/LTX-2-Distilled-diffusers/transformer/config.json
     model_path:
     - path: blanchon/LTX-2-Distilled-diffusers/transformer
       variant: default
@@ -115,104 +116,8 @@ spec:
       resource_requirements:
         min_vram_gb: 33
         recommended_vram_gb: 44
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q8_0.gguf
-      variant: GGUF_DEV_Q8_0
-      precision: q8_0
-      type: gguf
-      file_size: 20407583616
-      resource_requirements:
-        min_vram_gb: 21
-        recommended_vram_gb: 28
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q6_K.gguf
-      variant: GGUF_DEV_Q6_K
-      precision: q6_k
-      type: gguf
-      file_size: 15921775488
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q5_K_M.gguf
-      variant: GGUF_DEV_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 14447805312
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q5_K_S.gguf
-      variant: GGUF_DEV_Q5_K_S
-      precision: q5_k_s
-      type: gguf
-      file_size: 13461816192
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q5_1.gguf
-      variant: GGUF_DEV_Q5_1
-      precision: q5_1
-      type: gguf
-      file_size: 14474740608
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q5_0.gguf
-      variant: GGUF_DEV_Q5_0
-      precision: q5_0
-      type: gguf
-      file_size: 13637976960
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q4_K_M.gguf
-      variant: GGUF_DEV_Q4_K_M
-      precision: q4_k_m
-      type: gguf
-      file_size: 12753044352
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q4_K_S.gguf
-      variant: GGUF_DEV_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 11788288896
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q4_1.gguf
-      variant: GGUF_DEV_Q4_1
-      precision: q4_1
-      type: gguf
-      file_size: 12448891776
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q4_0.gguf
-      variant: GGUF_DEV_Q4_0
-      precision: q4_0
-      type: gguf
-      file_size: 11612128128
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q3_K_M.gguf
-      variant: GGUF_DEV_Q3_K_M
-      precision: q3_k_m
-      type: gguf
-      file_size: 9961997184
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-    - path: vantagewithai/LTX-2-GGUF/dev/ltx-2-19b-dev-Q3_K_S.gguf
-      variant: GGUF_DEV_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 9283502976
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q8_0.gguf
-      variant: GGUF_DISTILLED_Q8_0
+      variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
       file_size: 20407583904
@@ -220,7 +125,7 @@ spec:
         min_vram_gb: 21
         recommended_vram_gb: 28
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q6_K.gguf
-      variant: GGUF_DISTILLED_Q6_K
+      variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
       file_size: 15921775776
@@ -228,7 +133,7 @@ spec:
         min_vram_gb: 14
         recommended_vram_gb: 19
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q5_K_M.gguf
-      variant: GGUF_DISTILLED_Q5_K_M
+      variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
       file_size: 14447805600
@@ -236,7 +141,7 @@ spec:
         min_vram_gb: 12
         recommended_vram_gb: 16
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q5_K_S.gguf
-      variant: GGUF_DISTILLED_Q5_K_S
+      variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
       file_size: 13461816480
@@ -244,7 +149,7 @@ spec:
         min_vram_gb: 11
         recommended_vram_gb: 15
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q5_1.gguf
-      variant: GGUF_DISTILLED_Q5_1
+      variant: GGUF_Q5_1
       precision: q5_1
       type: gguf
       file_size: 14474740896
@@ -252,7 +157,7 @@ spec:
         min_vram_gb: 12
         recommended_vram_gb: 16
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q5_0.gguf
-      variant: GGUF_DISTILLED_Q5_0
+      variant: GGUF_Q5_0
       precision: q5_0
       type: gguf
       file_size: 13637977248
@@ -260,7 +165,7 @@ spec:
         min_vram_gb: 11
         recommended_vram_gb: 15
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q4_K_M.gguf
-      variant: GGUF_DISTILLED_Q4_K_M
+      variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
       file_size: 12753044640
@@ -268,7 +173,7 @@ spec:
         min_vram_gb: 10
         recommended_vram_gb: 14
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q4_K_S.gguf
-      variant: GGUF_DISTILLED_Q4_K_S
+      variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
       file_size: 11788289184
@@ -276,7 +181,7 @@ spec:
         min_vram_gb: 9
         recommended_vram_gb: 13
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q4_1.gguf
-      variant: GGUF_DISTILLED_Q4_1
+      variant: GGUF_Q4_1
       precision: q4_1
       type: gguf
       file_size: 12448892064
@@ -284,7 +189,7 @@ spec:
         min_vram_gb: 10
         recommended_vram_gb: 14
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q4_0.gguf
-      variant: GGUF_DISTILLED_Q4_0
+      variant: GGUF_Q4_0
       precision: q4_0
       type: gguf
       file_size: 11612128416
@@ -292,7 +197,7 @@ spec:
         min_vram_gb: 9
         recommended_vram_gb: 13
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q3_K_M.gguf
-      variant: GGUF_DISTILLED_Q3_K_M
+      variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
       file_size: 9961997472
@@ -300,7 +205,7 @@ spec:
         min_vram_gb: 10
         recommended_vram_gb: 14
     - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q3_K_S.gguf
-      variant: GGUF_DISTILLED_Q3_K_S
+      variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
       file_size: 9283503264
