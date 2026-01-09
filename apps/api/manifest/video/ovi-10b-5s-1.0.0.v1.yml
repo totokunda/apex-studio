@@ -131,6 +131,14 @@ spec:
     base: wan.ovi
     label: Ovi Transformer
     name: 960x960_5s
+    ignore_offloading_modules:
+      - video_model.patch_embedding
+      - video_model.head
+      - audio_model.patch_embedding
+      - audio_model.head
+    block_modules: 
+      - video_model
+      - audio_model
     model_path:
     - path: chetwinlow1/Ovi/model_960x960.safetensors
       variant: default
@@ -140,7 +148,7 @@ spec:
       resource_requirements:
         min_vram_gb: 22
         recommended_vram_gb: 30
-    - path: Kijai/WanVideo_comfy_fp8_scaled/TI2V/Ovi/Wan2_2-5B-Ovi_960x960_fp8_e4m3fn_scaled_KJ.safetensors
+    - path: totoku/ovi/transformer/ovi-fp8-960x960.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
@@ -286,7 +294,7 @@ spec:
     - id: audio_negative_prompt
       label: Audio Negative Prompt
       description: Describe what to avoid in the generation.
-      placeholder: blurry, low quality, distorted, artifacts
+      placeholder: robotic, muffled, echo, distorted
       type: text
       panel: advanced_prompting
       required: false

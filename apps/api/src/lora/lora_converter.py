@@ -13,7 +13,7 @@ BASE_TO_PEFT = {
 }
 
 from enum import Enum
-
+from typing import List
 
 # Kohya "single_file" format flattens module path dots into underscores (keeping the
 # last two dots, e.g. `.lora_down.weight`). Many models (Flux/Hunyuan/etc) have
@@ -162,7 +162,7 @@ class LoraConverter(BaseConverter):
                     state_dict[up_key] = up_weight * scale_up
         return state_dict
 
-    def convert(self, state_dict: Dict[str, Any]):
+    def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
         state_dict_type = self._get_state_dict_type(state_dict)
         if state_dict_type == StateDictType.KOHYA_SS:
             convert_kohya_to_peft_state_dict(state_dict)
