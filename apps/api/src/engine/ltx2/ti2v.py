@@ -934,7 +934,6 @@ class LTX2TI2VEngine(LTX2Shared):
             safe_emit_progress(stage1_progress_callback, 0.45, "Starting denoise")
             with self._progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
-                    break
                     if self.interrupt:
                         continue
 
@@ -1255,8 +1254,12 @@ class LTX2TI2VEngine(LTX2Shared):
         if offload:
             self._offload("vocoder")
         
-        video = video.squeeze(0).cpu().float().numpy()
-        audio = audio.squeeze(0).cpu().float().numpy()
+        def _convert_to_uint8(frames: torch.Tensor) -> torch.Tensor:
+            frames = (((frames + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
+            frames = rearrange(frames[0], "c f h w -> f h w c")
+            return frames
+        video = _convert_to_uint8(video)
+        audio = audio.squeeze(0).cpu().float()
         
         safe_emit_progress(stage1_progress_callback, 1.0, "Completed text-to-image-to-video pipeline")
         
