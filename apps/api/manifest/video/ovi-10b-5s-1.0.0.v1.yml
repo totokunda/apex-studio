@@ -132,13 +132,14 @@ spec:
     label: Ovi Transformer
     name: 960x960_5s
     ignore_offloading_modules:
+      # Keep embedding/head components resident; blocks live in `fusion_blocks`.
       - video_model.patch_embedding
       - video_model.head
       - audio_model.patch_embedding
       - audio_model.head
-    block_modules: 
-      - video_model
-      - audio_model
+    # Apply block-level group offloading to fused blocks (one call per layer).
+    block_modules:
+      - fusion_blocks
     model_path:
     - path: chetwinlow1/Ovi/model_960x960.safetensors
       variant: default
