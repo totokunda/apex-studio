@@ -407,11 +407,14 @@ class BaseConverter:
             new_key = self._apply_rename_dict(key)
             update_state_dict_(state_dict, key, new_key)
 
+
         for key in list(state_dict.keys()):
             for special_key, handler_fn_inplace in self.special_keys_map.items():
                 if special_key not in key:
                     continue
+                
                 handler_fn_inplace(key, state_dict)
+                
         
 
         return state_dict

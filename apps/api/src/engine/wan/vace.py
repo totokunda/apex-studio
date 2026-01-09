@@ -44,6 +44,7 @@ class WanVaceEngine(WanShared):
         timesteps_as_indices: bool = True,
         ip_image: Image.Image | str | np.ndarray | torch.Tensor = None,
         enhance_kwargs: Dict[str, Any] = {},
+        chunking_profile: str = "none",
         **kwargs,
     ):
 
@@ -411,6 +412,7 @@ class WanVaceEngine(WanShared):
             guidance_scale=guidance_scale,
             ip_image=ip_image,
             num_reference_images=num_reference_images,
+            chunking_profile=chunking_profile,
         )
 
         if offload:

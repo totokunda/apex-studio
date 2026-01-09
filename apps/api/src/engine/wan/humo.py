@@ -377,6 +377,7 @@ class HuMoEngine(WanShared):
         return_latents: bool = False,
         resolution: int | None = None,
         aspect_ratio: str | None = None,
+        chunking_profile: str = "none",
         **kwargs,
     ):
 
@@ -535,6 +536,8 @@ class HuMoEngine(WanShared):
             safe_emit_progress(progress_callback, 0.42, "Loading transformer")
             self.load_component_by_type("transformer")
             self.to_device(self.transformer)
+        if chunking_profile != "none":
+            self.transformer.set_chunking_profile(chunking_profile)
         safe_emit_progress(progress_callback, 0.45, "Transformer ready")
 
         # HuMo has two variants: ~1.7B params and ~17B params.

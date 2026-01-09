@@ -842,3 +842,20 @@ class OviModel(ModelMixin, ConfigMixin):
     def set_rope_params(self):
         self.video_model.set_rope_params()
         self.audio_model.set_rope_params()
+
+    def set_chunking_profile(self, profile_name: str) -> None:
+        """
+        Apply a predefined chunking profile to both video and audio models.
+        """
+        if self.video_model is not None:
+            self.video_model.set_chunking_profile(profile_name)
+        if self.audio_model is not None:
+            self.audio_model.set_chunking_profile(profile_name)
+
+    def list_chunking_profiles(self):
+        """Return available chunking profile names."""
+        if self.video_model is not None:
+            return self.video_model.list_chunking_profiles()
+        if self.audio_model is not None:
+            return self.audio_model.list_chunking_profiles()
+        return ()
