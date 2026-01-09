@@ -1,34 +1,30 @@
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rand::{thread_rng, Rng};
-use futures::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_RANGE, RANGE};
 use reqwest::Url;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{
-    collections::VecDeque,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
-    },
-};
-use std::time::SystemTime;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tokio::time::sleep;
 
-fn clamp_usize(n: usize, low: usize, high: usize) -> usize {
-    if n < low {
-        low
-    } else if n > high {
-        high
-    } else {
-        n
-    }
+const BASE_WAIT_TIME_MS: usize = 300;
+const MAX_WAIT_TIME_MS: usize = 10_000;
+
+fn jitter_ms() -> usize {
+    thread_rng().gen_range(0..=500)
+}
+
+fn exponential_backoff_ms(base: usize, attempt: usize, max: usize) -> usize {
+    (base + attempt.pow(2) * 100 + jitter_ms()).min(max)
 }
 
 fn pydict_to_headermap(headers: Option<&Bound<'_, PyDict>>) -> PyResult<HeaderMap> {
@@ -57,27 +53,12 @@ fn ensure_parent_dir(path: &str) -> PyResult<()> {
     Ok(())
 }
 
-fn file_len_best_effort(path: &str) -> u64 {
-    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-}
-
 fn parse_total_from_content_range(cr: &str) -> Option<usize> {
-    // Content-Range: bytes 0-0/702517648
     cr.split('/').last()?.trim().parse::<usize>().ok()
 }
 
-fn jitter_ms() -> usize {
-    thread_rng().gen_range(0..=500)
-}
-
 fn default_ratelimit_wait() -> Duration {
-    // Fallback when a server returns 429 without ratelimit/retry-after headers.
-    // HuggingFace rate limits often require longer waits; use a more conservative default.
     Duration::from_millis((5000 + jitter_ms()) as u64)
-}
-
-fn exponential_backoff_ms(base_wait_ms: usize, n: usize, max_wait_ms: usize) -> usize {
-    (base_wait_ms + n.pow(2) + jitter_ms()).min(max_wait_ms)
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
@@ -87,19 +68,15 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or(Duration::from_secs(0))
-        .as_millis() as u64
-}
-
 fn parse_range_line(line: &str) -> Option<(usize, usize)> {
-    // "start,stop"
     let (a, b) = line.trim().split_once(',')?;
     let start = a.trim().parse::<usize>().ok()?;
     let stop = b.trim().parse::<usize>().ok()?;
-    if stop >= start { Some((start, stop)) } else { None }
+    if stop >= start {
+        Some((start, stop))
+    } else {
+        None
+    }
 }
 
 fn merge_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
@@ -122,7 +99,6 @@ fn merge_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
 }
 
 fn compute_missing_ranges(merged_done: &[(usize, usize)], length: usize) -> Vec<(usize, usize)> {
-    // returns missing inclusive ranges within [0, length-1]
     if length == 0 {
         return vec![];
     }
@@ -143,78 +119,94 @@ fn compute_missing_ranges(merged_done: &[(usize, usize)], length: usize) -> Vec<
     missing
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-struct RateLimitInfo {
-    resource_type: String,
-    remaining: u64,
-    reset_in_seconds: u64,
-    limit: Option<u64>,
-    window_seconds: Option<u64>,
-}
-
-fn parse_first_quoted_token(s: &str) -> Option<String> {
-    let start = s.find('"')?;
-    let rest = &s[start + 1..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
-
-fn parse_semicolon_kv_u64(s: &str, key: &str) -> Option<u64> {
-    for part in s.split(';') {
-        let part = part.trim();
-        let Some((k, v)) = part.split_once('=') else {
-            continue;
-        };
-        if k.trim() == key {
-            return v.trim().parse::<u64>().ok();
+fn parse_ratelimit_reset(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    // Try standard headers
+    if let Some(v) = headers.get("retry-after").and_then(|v| v.to_str().ok()) {
+        if let Ok(secs) = v.trim().parse::<u64>() {
+            return Some(secs.max(1));
+        }
+    }
+    // Try ratelimit header (IETF draft)
+    if let Some(v) = headers.get("ratelimit").and_then(|v| v.to_str().ok()) {
+        for part in v.split(';') {
+            let part = part.trim();
+            if let Some((k, val)) = part.split_once('=') {
+                if k.trim() == "t" {
+                    if let Ok(secs) = val.trim().parse::<u64>() {
+                        return Some(secs.max(1));
+                    }
+                }
+            }
         }
     }
     None
 }
 
-fn parse_ratelimit_headers(headers: &HeaderMap) -> Option<RateLimitInfo> {
-    // Follows IETF draft (subset): https://www.ietf.org/archive/id/draft-ietf-httpapi-ratelimit-headers-09.html
-    // Example:
-    //   ratelimit: '"api";r=0;t=55'
-    //   ratelimit-policy: '"fixed window";"api";q=500;w=300'
-    let ratelimit = headers.get("ratelimit")?.to_str().ok()?;
-    let resource_type = parse_first_quoted_token(ratelimit)?;
-    let remaining = parse_semicolon_kv_u64(ratelimit, "r")?;
-    let reset_in_seconds = parse_semicolon_kv_u64(ratelimit, "t")?;
-
-    let mut limit: Option<u64> = None;
-    let mut window_seconds: Option<u64> = None;
-    if let Some(policy) = headers.get("ratelimit-policy").and_then(|v| v.to_str().ok()) {
-        limit = parse_semicolon_kv_u64(policy, "q");
-        window_seconds = parse_semicolon_kv_u64(policy, "w");
-    }
-
-    Some(RateLimitInfo {
-        resource_type,
-        remaining,
-        reset_in_seconds,
-        limit,
-        window_seconds,
-    })
-}
-
-fn parse_retry_after_seconds(headers: &HeaderMap) -> Option<u64> {
-    headers
-        .get("retry-after")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.trim().parse::<u64>().ok())
-}
-
-enum DownloadChunkError {
+#[derive(Debug)]
+enum ChunkError {
     RateLimited(Duration),
-    Other(PyErr),
+    Retryable(String),
+    Fatal(String),
 }
 
-impl From<PyErr> for DownloadChunkError {
-    fn from(value: PyErr) -> Self {
-        Self::Other(value)
+/// Download a single chunk to memory, then write to file at offset.
+/// This matches hf_transfer's approach for maximum throughput.
+async fn download_chunk(
+    client: &reqwest::Client,
+    url: &str,
+    filename: &str,
+    start: usize,
+    stop: usize,
+    headers: HeaderMap,
+) -> Result<usize, ChunkError> {
+    let range = format!("bytes={start}-{stop}");
+
+    let response = client
+        .get(url)
+        .headers(headers)
+        .header(RANGE, range)
+        .send()
+        .await
+        .map_err(|e| ChunkError::Retryable(e.to_string()))?;
+
+    let status = response.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+    {
+        let wait = parse_ratelimit_reset(response.headers())
+            .map(Duration::from_secs)
+            .unwrap_or_else(default_ratelimit_wait);
+        return Err(ChunkError::RateLimited(wait));
     }
+
+    let response = response
+        .error_for_status()
+        .map_err(|e| ChunkError::Fatal(e.to_string()))?;
+
+    // Download entire chunk to memory (like hf_transfer)
+    let content = response
+        .bytes()
+        .await
+        .map_err(|e| ChunkError::Retryable(e.to_string()))?;
+
+    // Write to file at correct offset
+    let mut file = OpenOptions::new()
+        .write(true)
+        .truncate(false)
+        .create(true)
+        .open(filename)
+        .await
+        .map_err(|e| ChunkError::Fatal(e.to_string()))?;
+
+    file.seek(std::io::SeekFrom::Start(start as u64))
+        .await
+        .map_err(|e| ChunkError::Fatal(e.to_string()))?;
+
+    file.write_all(&content)
+        .await
+        .map_err(|e| ChunkError::Fatal(e.to_string()))?;
+
+    Ok(content.len())
 }
 
 #[pyfunction]
@@ -226,14 +218,15 @@ impl From<PyErr> for DownloadChunkError {
     verify_tls=true,
     progress_callback=None,
     adaptive=true,
-    chunk_size=1024*1024,
-    initial_chunk_size=512*1024,
+    chunk_size=10*1024*1024,
+    initial_chunk_size=10*1024*1024,
     target_chunk_seconds=0.25,
     min_chunk_size=64*1024,
-    max_chunk_size=16*1024*1024,
-    callback_min_interval_secs=0.2,
-    callback_min_bytes=1024*1024
+    max_chunk_size=64*1024*1024,
+    callback_min_interval_secs=0.1,
+    callback_min_bytes=512*1024
 ))]
+#[allow(clippy::too_many_arguments)]
 fn download_from_url(
     py: Python<'_>,
     url: String,
@@ -242,23 +235,22 @@ fn download_from_url(
     headers: Option<&Bound<'_, PyDict>>,
     verify_tls: bool,
     progress_callback: Option<PyObject>,
-    adaptive: bool,
+    #[allow(unused)] adaptive: bool, // kept for API compat
     chunk_size: usize,
-    initial_chunk_size: usize,
-    target_chunk_seconds: f64,
-    min_chunk_size: usize,
-    max_chunk_size: usize,
+    #[allow(unused)] initial_chunk_size: usize,
+    #[allow(unused)] target_chunk_seconds: f64,
+    #[allow(unused)] min_chunk_size: usize,
+    #[allow(unused)] max_chunk_size: usize,
     callback_min_interval_secs: f64,
     callback_min_bytes: usize,
 ) -> PyResult<String> {
-    // If already exists, skip
+    // Skip if already exists
     if Path::new(&file_path).exists() {
         return Ok(file_path);
     }
     ensure_parent_dir(&file_path)?;
 
     let mut hm = pydict_to_headermap(headers)?;
-    // Prefer identity encoding so content-length matches bytes written in most cases.
     if !hm.contains_key("accept-encoding") {
         hm.insert(
             HeaderName::from_static("accept-encoding"),
@@ -266,64 +258,33 @@ fn download_from_url(
         );
     }
 
-    // Resume size from .part
-    let resume_size = if Path::new(&part_path).exists() {
-        file_len_best_effort(&part_path)
-    } else {
-        0
-    };
+    // Config from env (hf_transfer style) - use aggressive defaults for throughput
+    let max_files = env_usize("APEX_RUST_DOWNLOAD_MAX_FILES", 64).max(1);
+    let parallel_failures = env_usize("APEX_RUST_DOWNLOAD_PARALLEL_FAILURES", 3).max(1);
+    let max_retries = env_usize("APEX_RUST_DOWNLOAD_MAX_RETRIES", 5);
+    // Force minimum 10MB chunks for throughput (matches hf_transfer)
+    let chunk_size = env_usize("APEX_RUST_DOWNLOAD_CHUNK_SIZE", chunk_size).max(10 * 1024 * 1024);
 
-    // Release GIL for the download; reacquire only for throttled callback calls.
     let url2 = url.clone();
     let file_path2 = file_path.clone();
     let part_path2 = part_path.clone();
-    let cb2 = progress_callback;
+    let cb = progress_callback;
     let hm2 = hm.clone();
-    let name2 = Path::new(&file_path)
+    let name = Path::new(&file_path)
         .file_name()
         .and_then(|s| s.to_str())
         .map(|s| s.to_string());
 
-    // Parallelization controls (hf_transfer-style) via env vars (signature unchanged):
-    // - APEX_RUST_DOWNLOAD_MAX_FILES (default 8)
-    // - APEX_RUST_DOWNLOAD_PARALLEL_FAILURES (default 0)
-    // - APEX_RUST_DOWNLOAD_MAX_RETRIES (default 0)
-    let max_files = env_usize("APEX_RUST_DOWNLOAD_MAX_FILES", 8).max(1);
-    let parallel_failures = env_usize("APEX_RUST_DOWNLOAD_PARALLEL_FAILURES", 3);
-    let max_retries = env_usize("APEX_RUST_DOWNLOAD_MAX_RETRIES", 5);
-    let base_wait_ms = env_usize("APEX_RUST_DOWNLOAD_RETRY_BASE_MS", 300);
-    let max_wait_ms = env_usize("APEX_RUST_DOWNLOAD_RETRY_MAX_MS", 10_000);
-    let target_chunk_seconds = target_chunk_seconds.max(0.0);
-    let adaptive_min_chunk_size = env_usize(
-        "APEX_RUST_DOWNLOAD_ADAPTIVE_MIN_CHUNK_SIZE",
-        min_chunk_size.max(1024 * 1024), // avoid tiny ranges that can crater throughput
-    );
-    // Initial chunk size (adaptive) or fixed chunk size (non-adaptive)
-    let init_chunk_size = if adaptive {
-        clamp_usize(
-            initial_chunk_size.max(adaptive_min_chunk_size),
-            adaptive_min_chunk_size,
-            max_chunk_size,
-        )
-    } else {
-        clamp_usize(chunk_size, min_chunk_size, max_chunk_size)
-    };
-
     py.allow_threads(move || -> PyResult<()> {
-        // Build a tokio runtime (hf_transfer-style)
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         rt.block_on(async move {
-            // Build async client (http2 keepalive helps for many range requests)
+            // Build client (like hf_transfer)
             let mut client_builder = reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
                 .http2_keep_alive_timeout(Duration::from_secs(15))
-                .http2_adaptive_window(true)
-                .tcp_keepalive(Some(Duration::from_secs(60)))
-                .tcp_nodelay(true)
                 .pool_max_idle_per_host(max_files)
                 .redirect(reqwest::redirect::Policy::limited(10));
             if !verify_tls {
@@ -333,12 +294,11 @@ fn download_from_url(
                 .build()
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-            // Handle redirected URL only once (hf_transfer trick):
-            // - make a single 0-0 range request to obtain final URL + content length from Content-Range
-            // - then download all chunks from the redirected URL to avoid extra hub requests
+            // Separate auth header (like hf_transfer)
             let mut headers = hm2.clone();
             let auth_header = headers.remove(AUTHORIZATION);
 
+            // Initial request to get redirected URL and file size
             let initial = loop {
                 let rb = if let Some(token) = auth_header.as_ref() {
                     client.get(&url2).header(AUTHORIZATION, token)
@@ -356,16 +316,10 @@ fn download_from_url(
                 if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
                     || resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
                 {
-                    // Never fail the overall request due to 429/503; wait and retry.
-                    // Prefer standardized ratelimit headers, fall back to Retry-After,
-                    // then fall back to a small default backoff.
-                    if let Some(info) = parse_ratelimit_headers(resp.headers()) {
-                        sleep(Duration::from_secs(info.reset_in_seconds.max(1))).await;
-                    } else if let Some(secs) = parse_retry_after_seconds(resp.headers()) {
-                        sleep(Duration::from_secs(secs.max(1))).await;
-                    } else {
-                        sleep(default_ratelimit_wait()).await;
-                    }
+                    let wait = parse_ratelimit_reset(resp.headers())
+                        .map(Duration::from_secs)
+                        .unwrap_or_else(default_ratelimit_wait);
+                    sleep(wait).await;
                     continue;
                 }
 
@@ -376,7 +330,7 @@ fn download_from_url(
 
             let redirected_url = initial.url().to_string();
 
-            // Re-add Authorization header only if redirect host matches original host
+            // Re-add auth if same host
             if let (Ok(orig), Ok(redir)) = (Url::parse(&url2), Url::parse(&redirected_url)) {
                 if orig.host_str() == redir.host_str() {
                     if let Some(token) = auth_header {
@@ -393,10 +347,9 @@ fn download_from_url(
                 .map_err(|e| PyRuntimeError::new_err(format!("Error while downloading: {e}")))?;
 
             let length = parse_total_from_content_range(cr)
-                .ok_or_else(|| PyRuntimeError::new_err("Error while downloading: could not parse size"))?;
+                .ok_or_else(|| PyRuntimeError::new_err("Could not parse file size"))?;
 
-            // Resume bookkeeping: because we preallocate the .part file, its length alone is NOT a safe
-            // indicator of completion. We track completed ranges in a sidecar file.
+            // Resume bookkeeping
             let ranges_path = format!("{part_path2}.ranges");
             let part_exists = Path::new(&part_path2).exists();
             let ranges_exists = Path::new(&ranges_path).exists();
@@ -404,10 +357,8 @@ fn download_from_url(
             let mut completed: Vec<(usize, usize)> = Vec::new();
             if part_exists {
                 if !ranges_exists {
-                    // Unsafe to resume without metadata; start clean.
                     let _ = fs::remove_file(&part_path2);
                 } else {
-                    // Parse completed ranges (best-effort).
                     if let Ok(txt) = fs::read_to_string(&ranges_path) {
                         for line in txt.lines() {
                             if let Some((s, e)) = parse_range_line(line) {
@@ -418,17 +369,17 @@ fn download_from_url(
                 }
             }
             let completed = merge_ranges(completed);
+
+            // Check if already complete
             if !completed.is_empty() {
-                // If all bytes covered, finalize quickly.
                 if completed.len() == 1 && completed[0].0 == 0 && completed[0].1 + 1 >= length {
                     ensure_parent_dir(&file_path2)?;
                     fs::rename(&part_path2, &file_path2)
                         .map_err(|e| PyOSError::new_err(e.to_string()))?;
                     let _ = fs::remove_file(&ranges_path);
-                    if let Some(cb) = cb2.as_ref() {
+                    if let Some(ref callback) = cb {
                         Python::with_gil(|py| {
-                            let cb = cb.bind(py);
-                            cb.call1((length as i64, Some(length as i64), name2.clone()))?;
+                            callback.call1(py, (length as i64, Some(length as i64), name.clone()))?;
                             Ok::<(), PyErr>(())
                         })?;
                     }
@@ -436,12 +387,13 @@ fn download_from_url(
                 }
             }
 
-            // Pre-create the .part file and set its length so random writes succeed
+            // Pre-create part file
             ensure_parent_dir(&part_path2)?;
             {
                 let f = OpenOptions::new()
                     .write(true)
                     .create(true)
+                    .truncate(false)
                     .open(&part_path2)
                     .await
                     .map_err(|e| PyOSError::new_err(e.to_string()))?;
@@ -450,316 +402,194 @@ fn download_from_url(
                     .map_err(|e| PyOSError::new_err(e.to_string()))?;
             }
 
-            // Progress tracking: downloaded bytes (contiguous resume bytes count as already done)
-            let done_total: u64 = completed
-                .iter()
-                .map(|(s, e)| (*e as u64).saturating_sub(*s as u64).saturating_add(1))
-                .sum();
-            let downloaded = Arc::new(AtomicU64::new(done_total.max(resume_size)));
-            let total_len_u64 = length as u64;
-            let cb_interval = Duration::from_secs_f64(callback_min_interval_secs.max(0.0));
-            let cb_min_bytes = callback_min_bytes.max(1) as u64;
-            let mut last_cb_at = Instant::now();
-            let mut last_cb_bytes = downloaded.load(Ordering::Relaxed);
-
-            // Work scheduling: queue missing ranges, split into chunks dynamically (adaptive) or fixed.
+            // Calculate chunks to download
             let missing = if completed.is_empty() {
                 vec![(0usize, length - 1)]
             } else {
                 compute_missing_ranges(&completed, length)
             };
-            let work = Arc::new(Mutex::new(VecDeque::<(usize, usize)>::from(missing)));
 
-            // Adaptive state shared across workers
-            #[derive(Debug)]
-            struct AdaptiveState {
-                chunk_size: usize,
-                speed_bps: Option<f64>,
+            // Split missing ranges into fixed-size chunks
+            let mut chunks: Vec<(usize, usize)> = Vec::new();
+            for (range_start, range_end) in missing {
+                let mut pos = range_start;
+                while pos <= range_end {
+                    let end = std::cmp::min(pos + chunk_size - 1, range_end);
+                    chunks.push((pos, end));
+                    pos = end + 1;
+                }
             }
-            let adaptive_state = Arc::new(Mutex::new(AdaptiveState {
-                chunk_size: init_chunk_size,
-                speed_bps: None,
-            }));
 
-            // Serialize appends to the ranges sidecar file
-            let ranges_file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&ranges_path)
-                .await
-                .map_err(|e| PyOSError::new_err(e.to_string()))?;
-            let ranges_file = Arc::new(Mutex::new(ranges_file));
-
-            // Failure controls/cancellation
-            let cancel = Arc::new(AtomicBool::new(false));
-            let parallel_failures_semaphore = Arc::new(tokio::sync::Semaphore::new(parallel_failures.max(1)));
-            // Global pause for all workers when any worker hits a 429/503 (prevents thrash)
-            let rate_limited_until_ms = Arc::new(AtomicU64::new(0));
-
-            async fn download_chunk(
-                client: &reqwest::Client,
-                url: &str,
-                file: &mut tokio::fs::File,
-                start: usize,
-                stop: usize,
-                headers: HeaderMap,
-            ) -> Result<usize, DownloadChunkError> {
-                let range = format!("bytes={start}-{stop}");
-                file.seek(std::io::SeekFrom::Start(start as u64))
-                    .await
+            let total_chunks = chunks.len();
+            if total_chunks == 0 {
+                // Nothing to download
+                ensure_parent_dir(&file_path2)?;
+                fs::rename(&part_path2, &file_path2)
                     .map_err(|e| PyOSError::new_err(e.to_string()))?;
-                let resp = client
-                    .get(url)
-                    .headers(headers)
-                    .header(RANGE, range)
-                    .send()
-                    .await
-                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                    || resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
-                {
-                    // Never treat 429/503 as a hard error; report a wait duration.
-                    if let Some(info) = parse_ratelimit_headers(resp.headers()) {
-                        return Err(DownloadChunkError::RateLimited(Duration::from_secs(
-                            info.reset_in_seconds.max(1),
-                        )));
-                    } else if let Some(secs) = parse_retry_after_seconds(resp.headers()) {
-                        return Err(DownloadChunkError::RateLimited(Duration::from_secs(secs.max(1))));
-                    } else {
-                        return Err(DownloadChunkError::RateLimited(default_ratelimit_wait()));
-                    }
-                }
-
-                let resp = resp
-                    .error_for_status()
-                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                let mut wrote = 0usize;
-                let mut stream = resp.bytes_stream();
-                while let Some(item) = stream.next().await {
-                    let bytes = item.map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    if bytes.is_empty() {
-                        continue;
-                    }
-                    file.write_all(&bytes)
-                        .await
-                        .map_err(|e| PyOSError::new_err(e.to_string()))?;
-                    wrote += bytes.len();
-                }
-                Ok(wrote)
+                let _ = fs::remove_file(&ranges_path);
+                return Ok::<(), PyErr>(());
             }
 
-            // Spawn a fixed-size worker pool (significantly less overhead than spawning per-chunk)
-            let mut handles = Vec::with_capacity(max_files);
-            for _ in 0..max_files {
+            // Progress tracking
+            let done_bytes: u64 = completed
+                .iter()
+                .map(|(s, e)| (*e as u64).saturating_sub(*s as u64).saturating_add(1))
+                .sum();
+            let downloaded = Arc::new(AtomicU64::new(done_bytes));
+            let total_len = length as u64;
+            let cb_interval = Duration::from_secs_f64(callback_min_interval_secs.max(0.0));
+            let cb_min_bytes = callback_min_bytes.max(1) as u64;
+
+            // Ranges file for resume - use unbounded channel to avoid blocking
+            let (ranges_tx, mut ranges_rx) = tokio::sync::mpsc::unbounded_channel::<(usize, usize)>();
+            
+            // Background task to batch-write completed ranges
+            let ranges_path_clone = ranges_path.clone();
+            let ranges_writer = tokio::spawn(async move {
+                let mut file = match OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&ranges_path_clone)
+                    .await
+                {
+                    Ok(f) => f,
+                    Err(_) => return,
+                };
+                while let Some((start, stop)) = ranges_rx.recv().await {
+                    let _ = file.write_all(format!("{start},{stop}\n").as_bytes()).await;
+                }
+            });
+
+            // Semaphores (hf_transfer style)
+            let semaphore = Arc::new(Semaphore::new(max_files));
+            let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
+            let cancel = Arc::new(AtomicBool::new(false));
+
+            // Spawn ALL chunk tasks upfront (key difference from worker pool)
+            let mut handles = FuturesUnordered::new();
+
+            for (start, stop) in chunks {
                 let client = client.clone();
                 let url = redirected_url.clone();
+                let part_path = part_path2.clone();
                 let headers = headers.clone();
-                let work = work.clone();
-                let downloaded = downloaded.clone();
-                let adaptive_state = adaptive_state.clone();
-                let ranges_file = ranges_file.clone();
-                let cancel = cancel.clone();
+                let semaphore = semaphore.clone();
                 let pf_sem = parallel_failures_semaphore.clone();
-                let part_path_worker = part_path2.clone();
-                let rate_limited_until_ms = rate_limited_until_ms.clone();
+                let ranges_tx = ranges_tx.clone();
+                let cancel = cancel.clone();
 
                 handles.push(tokio::spawn(async move {
-                    let mut file = OpenOptions::new()
-                        .write(true)
-                        .truncate(false)
-                        .create(true)
-                        .open(&part_path_worker)
+                    // Acquire semaphore (limits concurrent downloads)
+                    let permit = semaphore
+                        .acquire_owned()
                         .await
-                        .map_err(|e| PyOSError::new_err(e.to_string()))?;
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-                    loop {
+                    let mut attempt = 0usize;
+                    let result = loop {
                         if cancel.load(Ordering::Relaxed) {
-                            break;
+                            return Err(PyRuntimeError::new_err("Download cancelled"));
                         }
-                        // Respect global rate-limit pause (if any)
-                        loop {
-                            let until = rate_limited_until_ms.load(Ordering::Relaxed);
-                            if until == 0 {
-                                break;
-                            }
-                            let now = now_millis();
-                            if now >= until {
-                                // best-effort clear
-                                rate_limited_until_ms.store(0, Ordering::Relaxed);
-                                break;
-                            }
-                            sleep(Duration::from_millis((until - now).min(30_000))).await;
-                            if cancel.load(Ordering::Relaxed) {
-                                break;
-                            }
-                        }
-                        // determine current piece size
-                        let piece_size = if adaptive {
-                            let st = adaptive_state.lock().await;
-                            st.chunk_size
-                        } else {
-                            init_chunk_size
-                        };
 
-                        let maybe_piece = {
-                            let mut q = work.lock().await;
-                            let (s, e) = match q.pop_front() {
-                                None => break,
-                                Some(v) => v,
-                            };
-                            let max_stop = s.saturating_add(piece_size.saturating_sub(1));
-                            if max_stop >= e {
-                                Some((s, e))
-                            } else {
-                                // split: take [s, max_stop], push remainder back to front
-                                let rem = (max_stop + 1, e);
-                                q.push_front(rem);
-                                Some((s, max_stop))
+                        match download_chunk(&client, &url, &part_path, start, stop, headers.clone()).await {
+                            Ok(wrote) => {
+                                // Record completed range (non-blocking send)
+                                let _ = ranges_tx.send((start, stop));
+                                break Ok(wrote);
                             }
-                        };
-                        let Some((start, stop)) = maybe_piece else {
-                            break;
-                        };
-
-                        let mut attempt = 0usize;
-                        loop {
-                            if cancel.load(Ordering::Relaxed) {
-                                break;
+                            Err(ChunkError::RateLimited(wait)) => {
+                                sleep(wait).await;
+                                // Don't count as retry
                             }
-                            let t0 = Instant::now();
-                            match download_chunk(&client, &url, &mut file, start, stop, headers.clone()).await {
-                                Ok(wrote) => {
-                                    let dt = t0.elapsed().as_secs_f64();
-                                    if adaptive && dt > 0.0 && wrote > 0 {
-                                        let inst_bps = (wrote as f64) / dt;
-                                        let mut st = adaptive_state.lock().await;
-                                        st.speed_bps = Some(match st.speed_bps {
-                                            None => inst_bps,
-                                            Some(prev) => 0.7 * prev + 0.3 * inst_bps,
-                                        });
-                                        if let Some(speed) = st.speed_bps {
-                                            let desired = (speed * target_chunk_seconds.max(0.05)) as usize;
-                                            // Prevent huge swings in chunk size from transient stalls:
-                                            // allow at most 2x up or 0.5x down per update.
-                                            let cur = st.chunk_size.max(adaptive_min_chunk_size);
-                                            let lower = (cur as f64 * 0.5) as usize;
-                                            let upper = (cur as f64 * 2.0) as usize;
-                                            let bounded = desired.clamp(lower.max(adaptive_min_chunk_size), upper.max(adaptive_min_chunk_size));
-                                            st.chunk_size = clamp_usize(bounded, adaptive_min_chunk_size, max_chunk_size);
-                                        }
-                                    }
-                                    downloaded.fetch_add(wrote as u64, Ordering::Relaxed);
-                                    // record completed range for safe resume
-                                    {
-                                        let mut rf = ranges_file.lock().await;
-                                        rf.write_all(format!("{start},{stop}\n").as_bytes())
-                                            .await
-                                            .map_err(|e| PyOSError::new_err(e.to_string()))?;
-                                    }
-                                    break;
+                            Err(ChunkError::Retryable(msg)) => {
+                                if attempt >= max_retries {
+                                    break Err(PyRuntimeError::new_err(format!(
+                                        "Failed after {max_retries} retries: {msg}"
+                                    )));
                                 }
-                                Err(DownloadChunkError::RateLimited(wait)) => {
-                                    // Pause all workers and increase chunk size to reduce request rate.
-                                    let until = now_millis().saturating_add(wait.as_millis() as u64);
-                                    rate_limited_until_ms.fetch_max(until, Ordering::Relaxed);
-                                    if adaptive {
-                                        let mut st = adaptive_state.lock().await;
-                                        st.chunk_size = st.chunk_size.max(max_chunk_size);
-                                    }
-                                    sleep(wait).await;
-                                }
-                                Err(DownloadChunkError::Other(e)) => {
-                                    if parallel_failures == 0 || max_retries == 0 {
-                                        cancel.store(true, Ordering::Relaxed);
-                                        return Err(e);
-                                    }
-                                    if attempt >= max_retries {
-                                        cancel.store(true, Ordering::Relaxed);
-                                        return Err(PyRuntimeError::new_err(format!(
-                                            "Failed after too many retries ({max_retries})"
-                                        )));
-                                    }
-                                    // Limit failures in parallel (avoid self-DOS)
-                                    let _pf_permit = pf_sem
-                                        .clone()
-                                        .try_acquire_owned()
-                                        .map_err(|e| PyRuntimeError::new_err(format!(
-                                            "Failed too many failures in parallel ({parallel_failures}): {e}"
-                                        )))?;
-                                    let wait_ms = exponential_backoff_ms(base_wait_ms, attempt, max_wait_ms);
-                                    sleep(Duration::from_millis(wait_ms as u64)).await;
-                                    attempt += 1;
-                                }
+                                // Acquire failure permit
+                                let _pf_permit = pf_sem.clone().try_acquire_owned().map_err(|_| {
+                                    PyRuntimeError::new_err(format!(
+                                        "Too many parallel failures: {msg}"
+                                    ))
+                                })?;
+                                let wait = exponential_backoff_ms(BASE_WAIT_TIME_MS, attempt, MAX_WAIT_TIME_MS);
+                                sleep(Duration::from_millis(wait as u64)).await;
+                                attempt += 1;
+                            }
+                            Err(ChunkError::Fatal(msg)) => {
+                                break Err(PyRuntimeError::new_err(msg));
                             }
                         }
-                    }
-                    Ok::<(), PyErr>(())
+                    };
+
+                    drop(permit);
+                    result
                 }));
             }
+            // Drop the main sender so the background writer knows when to stop
+            drop(ranges_tx);
 
-            // Drive progress callback while workers run; fail fast on worker errors
-            let mut joins = futures::stream::FuturesUnordered::new();
-            for h in handles {
-                joins.push(h);
-            }
-            loop {
-                tokio::select! {
-                    res = joins.next() => {
-                        let Some(res) = res else { break; };
-                        match res {
-                            Ok(Ok(())) => {}
-                            Ok(Err(e)) => {
-                                cancel.store(true, Ordering::Relaxed);
-                                let _ = fs::remove_file(&part_path2);
-                                let _ = fs::remove_file(&ranges_path);
-                                return Err(e);
-                            }
-                            Err(e) => {
-                                cancel.store(true, Ordering::Relaxed);
-                                let _ = fs::remove_file(&part_path2);
-                                let _ = fs::remove_file(&ranges_path);
-                                return Err(PyRuntimeError::new_err(format!("Error while downloading: {e}")));
+            // Process results with progress callback
+            let mut last_cb_at = Instant::now();
+            let mut last_cb_bytes = downloaded.load(Ordering::Relaxed);
+
+            while let Some(result) = handles.next().await {
+                match result {
+                    Ok(Ok(size)) => {
+                        downloaded.fetch_add(size as u64, Ordering::Relaxed);
+
+                        // Progress callback (throttled)
+                        if let Some(ref callback) = cb {
+                            let now = Instant::now();
+                            let n = downloaded.load(Ordering::Relaxed);
+                            if now.duration_since(last_cb_at) >= cb_interval
+                                || n.saturating_sub(last_cb_bytes) >= cb_min_bytes
+                            {
+                                last_cb_at = now;
+                                last_cb_bytes = n;
+                                Python::with_gil(|py| -> PyResult<()> {
+                                    callback.call1(py, (n as i64, Some(total_len as i64), name.clone()))?;
+                                    Ok(())
+                                })?;
                             }
                         }
                     }
-                    _ = sleep(Duration::from_millis(100)) => {
-                        // tick
+                    Ok(Err(e)) => {
+                        cancel.store(true, Ordering::Relaxed);
+                        let _ = fs::remove_file(&part_path2);
+                        let _ = fs::remove_file(&ranges_path);
+                        return Err(e);
                     }
-                }
-                if cb2.is_some() {
-                    let now = Instant::now();
-                    let n = downloaded.load(Ordering::Relaxed);
-                    if now.duration_since(last_cb_at) >= cb_interval
-                        || n.saturating_sub(last_cb_bytes) >= cb_min_bytes
-                    {
-                        last_cb_at = now;
-                        last_cb_bytes = n;
-                        Python::with_gil(|py| -> PyResult<()> {
-                            if let Some(cb) = cb2.as_ref() {
-                                cb.call1(py, (n as i64, Some(total_len_u64 as i64), name2.clone()))?;
-                            }
-                            Ok(())
-                        })?;
+                    Err(e) => {
+                        cancel.store(true, Ordering::Relaxed);
+                        let _ = fs::remove_file(&part_path2);
+                        let _ = fs::remove_file(&ranges_path);
+                        return Err(PyRuntimeError::new_err(format!("Task error: {e}")));
                     }
                 }
             }
 
-            // Mark complete & final callback
-            downloaded.store(total_len_u64, Ordering::Relaxed);
-            if let Some(cb) = cb2.as_ref() {
+            // Wait for ranges writer to finish
+            let _ = ranges_writer.await;
+
+            // Final progress callback
+            downloaded.store(total_len, Ordering::Relaxed);
+            if let Some(ref callback) = cb {
                 Python::with_gil(|py| {
-                    cb.call1(py, (total_len_u64 as i64, Some(total_len_u64 as i64), name2.clone()))?;
+                    callback.call1(py, (total_len as i64, Some(total_len as i64), name.clone()))?;
                     Ok::<(), PyErr>(())
                 })?;
             }
 
-            // Atomic finalize: rename .part -> final
+            // Finalize
             ensure_parent_dir(&file_path2)?;
             fs::rename(&part_path2, &file_path2).map_err(|e| PyOSError::new_err(e.to_string()))?;
             let _ = fs::remove_file(&ranges_path);
+
             Ok::<(), PyErr>(())
         })?;
+
         Ok(())
     })?;
 
@@ -771,5 +601,3 @@ fn apex_download_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(download_from_url, m)?)?;
     Ok(())
 }
-
-
