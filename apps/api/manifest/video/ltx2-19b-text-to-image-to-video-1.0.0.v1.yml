@@ -113,6 +113,7 @@ spec:
     label: LTX2 Transformer
     name: transformer
     base: ltx2.base
+    config_path: Lightricks/LTX-2/transformer/config.json
     model_path:
     - path: Lightricks/LTX-2/transformer
       variant: default
