@@ -106,6 +106,7 @@ spec:
     label: LTX2 Transformer
     name: transformer
     base: ltx2.base
+    config_path: blanchon/LTX-2-Distilled-diffusers/transformer/config.json
     model_path:
     - path: blanchon/LTX-2-Distilled-diffusers/transformer
       variant: default

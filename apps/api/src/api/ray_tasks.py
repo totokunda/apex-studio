@@ -12,7 +12,7 @@ from src.preprocess.aux_cache import AuxillaryCache
 import importlib
 import os
 import shutil
-from src.utils.save_audio_video import save_audio_video_output
+from src.utils.save_audio_video import save_video_ovi, save_video_ltx2
 import torch
 import inspect
 import yaml
@@ -1875,7 +1875,11 @@ def run_engine_from_manifest(
             logger.info(
                 f"Saving audio video output at step {idx} with output object {output_obj[0].shape} and {output_obj[1].shape}"
             )
-            result_path, media_type = save_audio_video_output(
+            if model_type.lower() == "ovi":
+                save_func = save_video_ovi
+            else:
+                save_func = save_video_ltx2
+            result_path, media_type = save_func(
                 output_obj[0],
                 output_obj[1],
                 filename_prefix=f"preview_{idx:04d}" if not is_result else "result",
