@@ -1405,11 +1405,9 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         # Split z into overlapping tiles and decode them separately.
         # The tiles have an overlap to avoid seams between tiles.
         rows = []
-        print(z.shape)
         for i in range(0, height, tile_latent_stride_height):
             row = []
             for j in range(0, width, tile_latent_stride_width):
-                print(z[:, :, :, i : i + tile_latent_min_height, j : j + tile_latent_min_width].shape)
                 time = self.decoder(
                     z[:, :, :, i : i + tile_latent_min_height, j : j + tile_latent_min_width], temb, causal=causal
                 )
