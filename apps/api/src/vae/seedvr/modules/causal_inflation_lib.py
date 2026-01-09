@@ -105,6 +105,12 @@ class InflatedCausalConv3d(Conv3d):
         if prev_cache is not None:
             prev_cache = list(prev_cache.split(split_sizes, dim=split_dim))
 
+        # Collect results on CPU to minimize GPU memory, then copy back at end
+        results_cpu = []
+        output_sizes = []
+        result_device = None
+        result_dtype = None
+
         # Loop Fwd.
         cache = None
         for idx in range(len(x)):
@@ -139,17 +145,57 @@ class InflatedCausalConv3d(Conv3d):
                 )
 
             # Recursive.
-            x[idx] = self.memory_limit_conv(
+            result = self.memory_limit_conv(
                 x[idx],
                 split_dim=split_dim + 1,
                 padding=padding,
                 prev_cache=cache,
             )
 
+            # Free input slice immediately
+            x[idx] = None
+
+            # Store metadata from first result
+            if result_device is None:
+                result_device = result.device
+                result_dtype = result.dtype
+
+            # Move result to CPU immediately to free GPU memory
+            results_cpu.append(result.cpu())
+            output_sizes.append(result.size(split_dim))
+            del result
+
             # Update cache.
             cache = next_cache
 
-        return torch.cat(x, split_dim)
+        # Pre-allocate output and copy slices back
+        total_output_size = sum(output_sizes)
+        out_shape = list(results_cpu[0].shape)
+        out_shape[split_dim] = total_output_size
+
+        # Clear cache and try GPU allocation
+        if result_device.type == "cuda":
+            torch.cuda.empty_cache()
+
+        # Allocate on CPU first, then try to move to GPU
+        output = torch.empty(*out_shape, device="cpu", dtype=result_dtype, pin_memory=True)
+        offset = 0
+        for result_cpu, size in zip(results_cpu, output_sizes):
+            output.narrow(split_dim, offset, size).copy_(result_cpu)
+            offset += size
+        del results_cpu
+
+        # Try moving to GPU
+        if result_device.type == "cuda":
+            torch.cuda.empty_cache()
+            try:
+                output = output.to(result_device, non_blocking=True)
+            except torch.cuda.OutOfMemoryError:
+                # Keep on CPU - caller must handle this
+                logger.warning("OOM during memory_limit_conv output transfer, keeping on CPU")
+                pass
+
+        return output
 
     def forward(
         self,

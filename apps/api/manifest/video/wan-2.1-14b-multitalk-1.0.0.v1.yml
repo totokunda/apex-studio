@@ -182,6 +182,7 @@ spec:
       resource_requirements:
         min_vram_gb: 9
         recommended_vram_gb: 13
+    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/transformer/config.json
   - type: extra_model_path
     label: Wan 2.1 14B MultiTalk Transformer
     name: multitalk_transformer
@@ -195,10 +196,11 @@ spec:
       resource_requirements:
         min_vram_gb: 12
         recommended_vram_gb: 16
-    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/transformer/config.json
   - type: helper
     base: wan.multitalk
     label: Chinese Wav2Vec2 Base
+    extra_kwargs:
+      ignore_model_load: true
     model_path:
     - path: TencentGameMate/chinese-wav2vec2-base
       file_size: 1520899445
@@ -218,7 +220,7 @@ spec:
       resource_requirements:
         min_vram_gb: 5
         recommended_vram_gb: 9
-    preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
+    preprocessor_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_processor/preprocessor_config.json
     processor_class: CLIPImageProcessor
     model_class: CLIPVisionModel
   defaults:
@@ -288,6 +290,7 @@ spec:
         - - audio_guidance_scale
         - - seed
         - - num_frames
+        - - motion_frames
     inputs:
     - id: image
       label: Image
@@ -434,4 +437,14 @@ spec:
       default: 81
       min: 1
       max: 200
+      step: 1
+    - id: motion_frames
+      label: Number of Motion Frames
+      description: Number of motion frames to look back for the next input image
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 25
+      min: 0
+      max: 100
       step: 1

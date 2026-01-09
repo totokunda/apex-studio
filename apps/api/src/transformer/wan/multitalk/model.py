@@ -1021,13 +1021,19 @@ class WanMultiTalkTransformer3DModel(
     # Chunking profile presets
     # ----------------------------
 
-    _CHUNKING_PROFILES: Dict[str, Dict[str, Optional[int]]] = {
+    # NOTE: This is used for inference-time memory control. Values may be Optional[int]
+    # for chunk sizes, and may also include booleans for feature toggles.
+    _CHUNKING_PROFILES: Dict[str, Dict[str, Any]] = {
         # No chunking anywhere.
         "none": {
             "ffn_chunk_size": None,
             "modulated_norm_chunk_size": None,
             "norm_chunk_size": None,
             "out_modulated_norm_chunk_size": None,
+            # Attention-map chunking (x_ref_attn_map). Old behavior is no chunking.
+            "x_ref_attn_use_chunks": False,
+            "x_ref_attn_chunk_size_x": None,
+            "x_ref_attn_chunk_size_ref": None,
         },
         # Light chunking: only kicks in for very long sequences.
         "light": {
@@ -1035,6 +1041,10 @@ class WanMultiTalkTransformer3DModel(
             "modulated_norm_chunk_size": 16384,
             "norm_chunk_size": 8192,
             "out_modulated_norm_chunk_size": 16384,
+            # Keep fairly large chunks to reduce overhead.
+            "x_ref_attn_use_chunks": True,
+            "x_ref_attn_chunk_size_x": 4096,
+            "x_ref_attn_chunk_size_ref": 4096,
         },
         # Balanced (close to current behavior, but configurable + optional).
         "balanced": {
@@ -1042,6 +1052,9 @@ class WanMultiTalkTransformer3DModel(
             "modulated_norm_chunk_size": 8192,
             "norm_chunk_size": 4096,
             "out_modulated_norm_chunk_size": 8192,
+            "x_ref_attn_use_chunks": True,
+            "x_ref_attn_chunk_size_x": 2048,
+            "x_ref_attn_chunk_size_ref": 2048,
         },
         # Aggressive memory-saver: smaller chunks across the board.
         "aggressive": {
@@ -1049,6 +1062,9 @@ class WanMultiTalkTransformer3DModel(
             "modulated_norm_chunk_size": 4096,
             "norm_chunk_size": 2048,
             "out_modulated_norm_chunk_size": 4096,
+            "x_ref_attn_use_chunks": True,
+            "x_ref_attn_chunk_size_x": 1024,
+            "x_ref_attn_chunk_size_ref": 1024,
         },
     }
 
@@ -1071,6 +1087,12 @@ class WanMultiTalkTransformer3DModel(
 
         self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
 
+        # Defaults for attention-map chunking (used by MultiTalkWanAttnProcessor2_0).
+        # These are applied to each block's self-attention processor.
+        x_ref_use_chunks = bool(p.get("x_ref_attn_use_chunks", True))
+        x_ref_chunk_size_x = p.get("x_ref_attn_chunk_size_x", None)
+        x_ref_chunk_size_ref = p.get("x_ref_attn_chunk_size_ref", None)
+
         # Apply to blocks.
         self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
         for block in self.blocks:
@@ -1078,6 +1100,19 @@ class WanMultiTalkTransformer3DModel(
                 modulated_norm_chunk_size=p.get("modulated_norm_chunk_size", None),
                 norm_chunk_size=p.get("norm_chunk_size", None),
             )
+
+            # Apply attention-map chunking defaults if the processor supports it.
+            try:
+                processor = getattr(block.attn1, "processor", None)
+                if processor is not None and hasattr(processor, "set_x_ref_attn_chunking"):
+                    processor.set_x_ref_attn_chunking(
+                        use_chunks=x_ref_use_chunks,
+                        chunk_size_x=x_ref_chunk_size_x,
+                        chunk_size_ref=x_ref_chunk_size_ref,
+                    )
+            except Exception:
+                # Be resilient if the underlying attention implementation changes.
+                pass
 
     def forward(
         self,
