@@ -17,6 +17,10 @@ class Gemma3TextEncoderConverter(TextEncoderConverter):
         self.rename_dict = {
             "^language_model.model": "model.language_model",
             "^vision_tower": "model.vision_tower",
+            "^vision_model.": "model.vision_tower.vision_model.",
+            "model.embed_tokens": "model.language_model.model.embed_tokens",
+            "model.layers": "model.language_model.model.layers",
+            "model.norm": "model.language_model.model.norm",
             "^multi_modal_projector": "model.multi_modal_projector",
             "^language_model.lm_head": "lm_head",
         }
