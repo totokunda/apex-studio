@@ -22,10 +22,14 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin
 from diffusers.utils.accelerate_utils import apply_forward_hook
 from diffusers.models.activations import get_activation
-from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings
 from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.autoencoders.vae import AutoencoderMixin, DecoderOutput, DiagonalGaussianDistribution
+from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings
+from diffusers.models.autoencoders.vae import (
+    AutoencoderMixin,
+    DecoderOutput,
+    DiagonalGaussianDistribution,
+)
 
 
 class PerChannelRMSNorm(nn.Module):
@@ -1137,8 +1141,8 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
 
         # When decoding temporally long video latents, the memory requirement is very high. By decoding latent frames
         # at a fixed frame batch size (based on `self.num_latent_frames_batch_sizes`), the memory requirement can be lowered.
-        self.use_framewise_encoding = False
-        self.use_framewise_decoding = False
+        self.use_framewise_encoding = True
+        self.use_framewise_decoding = True
 
         # This can be configured based on the amount of GPU memory available.
         # `16` for sample frames and `2` for latent frames are sensible defaults for consumer GPUs.
@@ -1147,14 +1151,14 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         self.num_latent_frames_batch_size = 2
 
         # The minimal tile height and width for spatial tiling to be used
-        self.tile_sample_min_height = 256
-        self.tile_sample_min_width = 256
-        self.tile_sample_min_num_frames = 8
+        self.tile_sample_min_height = 512
+        self.tile_sample_min_width = 512
+        self.tile_sample_min_num_frames = 16
 
         # The minimal distance between two spatial tiles
-        self.tile_sample_stride_height = 224
-        self.tile_sample_stride_width = 224
-        self.tile_sample_stride_num_frames = 4
+        self.tile_sample_stride_height = 448
+        self.tile_sample_stride_width = 448
+        self.tile_sample_stride_num_frames = 8
 
     def enable_tiling(
         self,
@@ -1519,6 +1523,7 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         if not return_dict:
             return (dec.sample,)
         return dec
+    
     
     def denormalize_latents(self, latents: torch.Tensor):
         latents_mean = self.latents_mean.view(1, -1, 1, 1, 1).to(latents.device, latents.dtype)
