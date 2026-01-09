@@ -1,0 +1,39 @@
+# NVIDIA CUDA - Ada Lovelace (RTX 4090 / sm_89) with SageAttention v2
+#
+# Prereq: install a matching PyTorch CUDA wheel first (cu12x), then:
+#   pip install -r requirements/machines/cuda-sm89-ada-rtx4090.txt
+#
+-r ../requirements.txt
+-r ../processors.requirements.txt
+
+rembg[gpu]
+
+triton==3.5.1; sys_platform == "linux"
+triton-windows; sys_platform == "win32"
+
+# Some CUDA source builds (e.g. flash-attn) import psutil during setup.
+psutil; sys_platform == "linux"
+
+# -------------------------
+# Windows CUDA stack (cu128 + torch2.7.1 + Python 3.12)
+# -------------------------
+# We pin torch to match the SageAttention prebuilt wheel.
+torch==2.7.1; sys_platform == "win32" and python_version == "3.12"
+torchvision==0.22.1; sys_platform == "win32" and python_version == "3.12"
+torchaudio==2.7.1; sys_platform == "win32" and python_version == "3.12"
+sageattention @ https://github.com/woct0rdho/SageAttention/releases/download/v2.2.0-windows/sageattention-2.2.0+cu128torch2.7.1-cp312-cp312-win_amd64.whl; sys_platform == "win32" and python_version == "3.12"
+
+xformers==0.0.33.post2; sys_platform == "linux"
+transformer_engine==2.10.0; sys_platform == "linux"
+# NVIDIA Apex (NOT the unrelated `apex` PyPI package)
+apex @ git+https://github.com/NVIDIA/apex.git; sys_platform == "linux"
+
+# SageAttention v2: install from wheels for speed (Linux uses PyPI wheels).
+sageattention==2.2.0; sys_platform == "linux"
+
+# FlashAttention: source build.
+flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git; sys_platform == "linux"
+mlx[cpu]
+onnxruntime-gpu==1.23.2
+
+

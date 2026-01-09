@@ -8,6 +8,7 @@ from src.helpers.ltx2.upsampler import upsample_video
 from src.types import InputImage, InputAudio    
 from einops import rearrange   
 from src.utils.cache import empty_cache
+from src.utils.progress import safe_emit_progress, make_mapped_progress
 
 class LTX2TI2VEngine(LTX2Shared):
     """LTX2 Text-to-Image-to-Video Engine Implementation"""
@@ -310,8 +311,20 @@ class LTX2TI2VEngine(LTX2Shared):
         empty_cache_after_step: bool = True,
         cfg_sequential: bool = False,
         chunking_profile: str = "none",
+        progress_callback: Optional[Callable[[float, str], None]] = None,
     ):
         
+        # Progress mapping:
+        # - If `upsample=True` (stage-1 + stage-2 refinement), map stage-1 to [0.00, 0.90] and stage-2 to [0.90, 1.00]
+        #   so progress doesn't "reset" mid-run.
+        if upsample and not use_distilled_stage_2:
+            stage1_progress_callback = make_mapped_progress(progress_callback, 0.00, 0.90)
+            stage2_progress_callback = make_mapped_progress(progress_callback, 0.90, 1.00)
+        else:
+            stage1_progress_callback = progress_callback
+            stage2_progress_callback = progress_callback
+
+        safe_emit_progress(stage1_progress_callback, 0.0, "Starting text-to-image-to-video pipeline")
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
 
@@ -335,6 +348,7 @@ class LTX2TI2VEngine(LTX2Shared):
             
         
         if image is not None:
+            safe_emit_progress(stage1_progress_callback, 0.03, "Loading and preprocessing conditioning image(s)")
             # Multiple images are treated as multiple conditionings for a *single* latent sequence (not batch items).
             if not isinstance(image, list):
                 image = [image]
@@ -364,6 +378,7 @@ class LTX2TI2VEngine(LTX2Shared):
             self.preloaded_loras["ltx-2-19b-distilled-lora-384"].scale = 0.0
 
         # 3. Prepare text embeddings
+        safe_emit_progress(stage1_progress_callback, 0.08, "Encoding prompt")
         (
             prompt_embeds,
             prompt_attention_mask,
@@ -393,6 +408,7 @@ class LTX2TI2VEngine(LTX2Shared):
         self.to_device(connectors)
 
         additive_attention_mask = (1 - prompt_attention_mask.to(prompt_embeds.dtype)) * -1000000.0
+        safe_emit_progress(stage1_progress_callback, 0.12, "Running connector(s)")
         connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask = connectors(
             prompt_embeds, additive_attention_mask, additive_mask=True
         )
@@ -404,6 +420,7 @@ class LTX2TI2VEngine(LTX2Shared):
 
 
         # 4. Prepare latent variables
+        safe_emit_progress(stage1_progress_callback, 0.18, "Preparing latents")
         latent_num_frames = (num_frames - 1) // self.vae_temporal_compression_ratio + 1
         latent_height = height // self.vae_spatial_compression_ratio
         latent_width = width // self.vae_spatial_compression_ratio
@@ -542,6 +559,7 @@ class LTX2TI2VEngine(LTX2Shared):
         )
 
         # 5. Prepare timesteps
+        safe_emit_progress(stage1_progress_callback, 0.28, "Preparing timesteps")
         if use_distilled_stage_1:
             # Diffusers FlowMatchEulerDiscreteScheduler expects `sigmas` to be the per-step schedule
             # and will append a terminal 0 internally. Our config lists include that terminal 0 already
@@ -654,6 +672,8 @@ class LTX2TI2VEngine(LTX2Shared):
             prev_video_velocity_grid = None
             prev_audio_velocity = None
 
+            denoise_progress_callback = make_mapped_progress(stage1_progress_callback, 0.50, 0.90)
+            safe_emit_progress(stage1_progress_callback, 0.45, "Starting denoise (gradient-estimation)")
             with self._progress_bar(total=num_steps) as progress_bar:
                 for i, t in enumerate(timesteps_loop):
                     if self.interrupt:
@@ -888,6 +908,10 @@ class LTX2TI2VEngine(LTX2Shared):
                         (i + 1) % max(int(getattr(self.scheduler, "order", 1)), 1) == 0
                     ):
                         progress_bar.update()
+                        denoise_progress_callback(
+                            float(i + 1) / float(max(num_steps, 1)),
+                            f"Denoising step {i + 1}/{num_steps}",
+                        )
                 
                     if empty_cache_after_step:
                         empty_cache()
@@ -904,6 +928,8 @@ class LTX2TI2VEngine(LTX2Shared):
                     mu=mu,
                 )
 
+            denoise_progress_callback = make_mapped_progress(stage1_progress_callback, 0.50, 0.90)
+            safe_emit_progress(stage1_progress_callback, 0.45, "Starting denoise")
             with self._progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
                     if self.interrupt:
@@ -1078,6 +1104,10 @@ class LTX2TI2VEngine(LTX2Shared):
                         ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0)
                     ):
                         progress_bar.update()
+                        denoise_progress_callback(
+                            float(i + 1) / float(max(num_inference_steps, 1)),
+                            f"Denoising step {i + 1}/{num_inference_steps}",
+                        )
                     
                     if empty_cache_after_step:
                         empty_cache()
@@ -1086,6 +1116,7 @@ class LTX2TI2VEngine(LTX2Shared):
             self._offload("transformer")
 
         if upsample:
+            safe_emit_progress(stage1_progress_callback, 0.92, "Upsampling latents (stage-2 prep)")
             upsampler = self.helpers["latent_upsampler"]
             self.to_device(upsampler)
             vae_dtype = self.component_dtypes["vae"]
@@ -1118,6 +1149,7 @@ class LTX2TI2VEngine(LTX2Shared):
             # Stage 2 refinement: Do NOT pass image to avoid re-encoding at wrong resolution.
             # The upsampled latents already contain the conditioning from stage 1.
             # Pass image_strengths and image_pixel_frame_indices to maintain the denoise mask and freeze mechanism.
+            safe_emit_progress(stage1_progress_callback, 0.98, "Starting stage-2 refinement")
             return self.run(
                 image=None,  # Don't re-encode - use upsampled latents as conditioning
                 prompt=prompt,
@@ -1142,9 +1174,11 @@ class LTX2TI2VEngine(LTX2Shared):
                 noise_scale=noise_scale,
                 use_gradient_estimation=False,
                 ge_gamma=0.0,
+                progress_callback=stage2_progress_callback,
             )
 
         if return_latents:
+            safe_emit_progress(stage1_progress_callback, 1.0, "Returning latents")
             return (latents, audio_latents)
         
         latents = self._unpack_latents(
@@ -1183,6 +1217,7 @@ class LTX2TI2VEngine(LTX2Shared):
             ]
             latents = (1 - decode_noise_scale) * latents + decode_noise_scale * noise
         latents = latents.to(self.video_vae.dtype)
+        safe_emit_progress(stage1_progress_callback, 0.94, "Decoding video latents")
         video = self.video_vae.decode(latents, timestep, return_dict=False)[0]
 
         if offload:
@@ -1200,6 +1235,7 @@ class LTX2TI2VEngine(LTX2Shared):
         audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
         # enable tiling
         
+        safe_emit_progress(stage1_progress_callback, 0.96, "Decoding audio latents")
         generated_mel_spectrograms = self.audio_vae.decode(audio_latents, return_dict=False)[0]
         
         if offload:
@@ -1209,6 +1245,7 @@ class LTX2TI2VEngine(LTX2Shared):
         vocoder = self.helpers["vocoder"]
         self.to_device(vocoder)
         
+        safe_emit_progress(stage1_progress_callback, 0.98, "Vocoder synthesis")
         audio = vocoder(generated_mel_spectrograms)
         
         def _convert_to_uint8(frames: torch.Tensor) -> torch.Tensor:
@@ -1222,4 +1259,5 @@ class LTX2TI2VEngine(LTX2Shared):
         video = _convert_to_uint8(video)
         audio = audio.squeeze(0).float()
         
+        safe_emit_progress(stage1_progress_callback, 1.0, "Completed text-to-image-to-video pipeline")
         return video, audio
