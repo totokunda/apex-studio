@@ -263,6 +263,7 @@ def time_upload_blocks_to_gpu_with_prealloc_flat(
     *,
     include_buffers: bool = True,
     warmup: int = 1,
+    validate_layouts: bool = True,
 ) -> Dict[str, object]:
     """
     Assumption-driven benchmark:
@@ -298,14 +299,16 @@ def time_upload_blocks_to_gpu_with_prealloc_flat(
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
 
+    if validate_layouts:
+        for idx, block in enumerate(blocks):
+            spec = analyze_block_to_flat_spec(block, include_buffers=include_buffers)
+            if spec.total_numel != spec0.total_numel or spec.dtype != spec0.dtype or len(spec.entries) != len(spec0.entries):
+                raise ValueError(f"Block[{idx}] spec differs from Block[0]; cannot reuse single prealloc flat buffers.")
+            for a, b in zip(spec.entries, spec0.entries):
+                if (a.kind, a.name, tuple(a.shape), a.numel, a.dtype) != (b.kind, b.name, tuple(b.shape), b.numel, b.dtype):
+                    raise ValueError(f"Block[{idx}] layout differs from Block[0]; cannot reuse single prealloc flat buffers.")
+
     for idx, block in enumerate(blocks):
-        # Verify same packing layout (same total_numel and shapes) so the single prealloc works.
-        spec = analyze_block_to_flat_spec(block, include_buffers=include_buffers)
-        if spec.total_numel != spec0.total_numel or spec.dtype != spec0.dtype or len(spec.entries) != len(spec0.entries):
-            raise ValueError(f"Block[{idx}] spec differs from Block[0]; cannot reuse single prealloc flat buffers.")
-        for a, b in zip(spec.entries, spec0.entries):
-            if (a.kind, a.name, tuple(a.shape), a.numel, a.dtype) != (b.kind, b.name, tuple(b.shape), b.numel, b.dtype):
-                raise ValueError(f"Block[{idx}] layout differs from Block[0]; cannot reuse single prealloc flat buffers.")
 
         t0 = time.perf_counter()
         pack_block_to_flat(block, flat_cpu, spec0)
@@ -347,6 +350,75 @@ def time_upload_blocks_to_gpu_with_prealloc_flat(
         "sum_h2d_ms": sum_h2d_ms,
         "sum_view_ms": sum_view_ms,
         "overall_h2d_gbps": overall_bw,
+    }
+
+
+def time_blocks_to_cuda_and_back_ms(
+    blocks: Sequence[torch.nn.Module],
+    *,
+    include_buffers: bool = True,
+    warmup: int = 1,
+) -> Dict[str, object]:
+    """
+    Baseline comparison: for each block, time:
+    - CPU -> CUDA via `block.to("cuda")`
+    - CUDA -> CPU via `block.to("cpu")`
+
+    We move each block back to CPU immediately to avoid accumulating GPU memory.
+    """
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available")
+    if len(blocks) == 0:
+        return {"per_block": [], "sum_to_cuda_ms": 0.0, "sum_to_cpu_ms": 0.0, "sum_gb": 0.0}
+
+    # Warmup (first .to can pay extra setup).
+    for _ in range(max(warmup, 0)):
+        blocks[0].to("cuda")
+        torch.cuda.synchronize()
+        blocks[0].to("cpu")
+        torch.cuda.synchronize()
+
+    per_block: List[Dict[str, float]] = []
+    sum_to_cuda_ms = 0.0
+    sum_to_cpu_ms = 0.0
+    sum_gb = 0.0
+
+    for idx, block in enumerate(blocks):
+        gb = _block_size_gb(block, include_buffers=include_buffers)
+        sum_gb += gb
+
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        block.to("cuda")
+        torch.cuda.synchronize()
+        to_cuda_ms = (time.perf_counter() - t0) * 1000.0
+
+        torch.cuda.synchronize()
+        t1 = time.perf_counter()
+        block.to("cpu")
+        torch.cuda.synchronize()
+        to_cpu_ms = (time.perf_counter() - t1) * 1000.0
+
+        per_block.append(
+            {
+                "idx": float(idx),
+                "gb": gb,
+                "to_cuda_ms": to_cuda_ms,
+                "to_cpu_ms": to_cpu_ms,
+                "to_cuda_gbps": (gb / (to_cuda_ms / 1000.0)) if to_cuda_ms > 0 else float("inf"),
+                "to_cpu_gbps": (gb / (to_cpu_ms / 1000.0)) if to_cpu_ms > 0 else float("inf"),
+            }
+        )
+        sum_to_cuda_ms += to_cuda_ms
+        sum_to_cpu_ms += to_cpu_ms
+
+    return {
+        "per_block": per_block,
+        "sum_to_cuda_ms": sum_to_cuda_ms,
+        "sum_to_cpu_ms": sum_to_cpu_ms,
+        "sum_gb": sum_gb,
+        "overall_to_cuda_gbps": (sum_gb / (sum_to_cuda_ms / 1000.0)) if sum_to_cuda_ms > 0 else float("inf"),
+        "overall_to_cpu_gbps": (sum_gb / (sum_to_cpu_ms / 1000.0)) if sum_to_cpu_ms > 0 else float("inf"),
     }
 
 
@@ -445,7 +517,26 @@ def _main() -> None:
         blocks = list(transformer.video_model.blocks)
         print(f"timing blocks flat->gpu w/ prealloc (no block.to): num_blocks={len(blocks)}")
 
-        results = time_upload_blocks_to_gpu_with_prealloc_flat(blocks, include_buffers=True, warmup=1)
+        # Baseline: block.to("cuda") then block.to("cpu") (per-block, no accumulation on GPU)
+        baseline = time_blocks_to_cuda_and_back_ms(blocks, include_buffers=True, warmup=1)
+
+        # Your path: prealloc one-block flat buffers, then pack -> H2D copy -> view/reshape
+        results = time_upload_blocks_to_gpu_with_prealloc_flat(
+            blocks, include_buffers=True, warmup=1, validate_layouts=True
+        )
+
+        print("--- per-block comparison (upload) ---")
+        for b_row, f_row in zip(baseline["per_block"], results["per_block"]):
+            flat_total_ms = f_row["pack_ms"] + f_row["h2d_ms"] + f_row["view_ms"]
+            speedup = (b_row["to_cuda_ms"] / flat_total_ms) if flat_total_ms > 0 else float("inf")
+            print(
+                f"block[{int(b_row['idx'])}] "
+                f"to_cuda={b_row['to_cuda_ms']:.2f}ms "
+                f"flat(pack+h2d+view)={flat_total_ms:.2f}ms "
+                f"speedup={speedup:.2f}x"
+            )
+
+        print("--- details: flat path (per-block) ---")
         for row in results["per_block"]:
             print(
                 f"block[{int(row['idx'])}] "
@@ -453,8 +544,20 @@ def _main() -> None:
                 f"h2d={row['h2d_ms']:.2f}ms "
                 f"view={row['view_ms']:.2f}ms "
                 f"size={row['size_gb']:.4f}GB "
-                f"bw={row['h2d_gbps']:.2f}GB/s"
+                f"h2d_bw={row['h2d_gbps']:.2f}GB/s"
             )
+
+        print("--- details: block.to path (per-block) ---")
+        for row in baseline["per_block"]:
+            print(
+                f"block[{int(row['idx'])}] "
+                f"to_cuda={row['to_cuda_ms']:.2f}ms "
+                f"to_cpu={row['to_cpu_ms']:.2f}ms "
+                f"size={row['gb']:.4f}GB "
+                f"to_cuda_bw={row['to_cuda_gbps']:.2f}GB/s "
+                f"to_cpu_bw={row['to_cpu_gbps']:.2f}GB/s"
+            )
+
         print(
             "blocks aggregate (prealloc flat): "
             f"sum_pack_ms={results['sum_pack_ms']:.2f} "
@@ -463,6 +566,18 @@ def _main() -> None:
             f"size_per_block={results['size_gb']:.4f}GB "
             f"overall_h2d_bw={results['overall_h2d_gbps']:.2f}GB/s"
         )
+        print(
+            "blocks aggregate (block.to): "
+            f"sum_to_cuda_ms={baseline['sum_to_cuda_ms']:.2f} "
+            f"sum_to_cpu_ms={baseline['sum_to_cpu_ms']:.2f} "
+            f"sum_size={baseline['sum_gb']:.4f}GB "
+            f"overall_to_cuda_bw={baseline['overall_to_cuda_gbps']:.2f}GB/s "
+            f"overall_to_cpu_bw={baseline['overall_to_cpu_gbps']:.2f}GB/s"
+        )
+
+        flat_total_ms = results["sum_pack_ms"] + results["sum_h2d_ms"] + results["sum_view_ms"]
+        speedup_total = (baseline["sum_to_cuda_ms"] / flat_total_ms) if flat_total_ms > 0 else float("inf")
+        print(f"aggregate upload speedup (block.to_cuda / flat_total) = {speedup_total:.2f}x")
     else:
         print("CUDA not available; skipping block upload timing.")
 

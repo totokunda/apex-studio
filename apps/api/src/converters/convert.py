@@ -12,6 +12,7 @@ from mlx.utils import tree_flatten
 
 from src.converters.transformer_converters import (
     WanTransformerConverter,
+    OviTransformerConverter,
     WanVaceTransformerConverter,
     WanMultiTalkTransformerConverter,
     CogVideoXTransformerConverter,
@@ -72,6 +73,8 @@ def get_transformer_converter(model_base: str):
         or model_base == "wan.lynx_lite"
     ):
         return WanTransformerConverter()
+    elif model_base == "wan.ovi":
+        return OviTransformerConverter()
     elif model_base == "wan.s2v":
         return WanS2VTransformerConverter()
     elif model_base == "wan.vace":
