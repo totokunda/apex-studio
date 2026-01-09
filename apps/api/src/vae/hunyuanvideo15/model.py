@@ -1,126 +1,82 @@
-# Licensed under the TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT (the "License");
+# Copyright 2025 The Hunyuan Team and The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     https://github.com/Tencent-Hunyuan/HunyuanVideo-1.5/blob/main/LICENSE
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless and only to the extent required by applicable law, the Tencent Hunyuan works and any
-# output and results therefrom are provided "AS IS" without any express or implied warranties of
-# any kind including any warranties of title, merchantability, noninfringement, course of dealing,
-# usage of trade, or fitness for a particular purpose. You are solely responsible for determining the
-# appropriateness of using, reproducing, modifying, performing, displaying or distributing any of
-# the Tencent Hunyuan works or outputs and assume any and all risks associated with your or a
-# third party's use or distribution of any of the Tencent Hunyuan works or outputs and your exercise
-# of rights and permissions under this agreement.
-# See the License for the specific language governing permissions and limitations under the License.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
-from torch import Tensor, nn
-from torch.nn import Conv3d
-from torch import distributed as dist
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.models.autoencoders.vae import BaseOutput, DiagonalGaussianDistribution
+from diffusers.utils import logging
+from diffusers.utils.accelerate_utils import apply_forward_hook
+from diffusers.models.activations import get_activation
 from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from diffusers.models.modeling_utils import ModelMixin
+from diffusers.models.autoencoders.vae import AutoencoderMixin, DecoderOutput, DiagonalGaussianDistribution
+from src.attention.functions import attention_register
+
+logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-@dataclass
-class DecoderOutput(BaseOutput):
-    sample: torch.FloatTensor
-    posterior: Optional[DiagonalGaussianDistribution] = None
+class HunyuanVideo15CausalConv3d(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Union[int, Tuple[int, int, int]] = 3,
+        stride: Union[int, Tuple[int, int, int]] = 1,
+        padding: Union[int, Tuple[int, int, int]] = 0,
+        dilation: Union[int, Tuple[int, int, int]] = 1,
+        bias: bool = True,
+        pad_mode: str = "replicate",
+    ) -> None:
+        super().__init__()
 
+        kernel_size = (kernel_size, kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
 
-def swish(x: Tensor, inplace=False) -> Tensor:
-    """Applies the swish activation function (SiLU) with optional inplace support."""
-    return F.silu(x, inplace=inplace)
-
-
-def forward_with_checkpointing(module, *inputs, use_checkpointing=False):
-    """Forward with optional gradient checkpointing."""
-
-    def create_custom_forward(module):
-        def custom_forward(*inputs):
-            return module(*inputs)
-
-        return custom_forward
-
-    if use_checkpointing:
-        return torch.utils.checkpoint.checkpoint(
-            create_custom_forward(module), *inputs, use_reentrant=False
+        self.pad_mode = pad_mode
+        self.time_causal_padding = (
+            kernel_size[0] // 2,
+            kernel_size[0] // 2,
+            kernel_size[1] // 2,
+            kernel_size[1] // 2,
+            kernel_size[2] - 1,
+            0,
         )
-    else:
-        return module(*inputs)
+
+        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias=bias)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = F.pad(hidden_states, self.time_causal_padding, mode=self.pad_mode)
+        return self.conv(hidden_states)
 
 
-# Optimized implementation of CogVideoXSafeConv3d
-# https://github.com/huggingface/diffusers/blob/c9ff360966327ace3faad3807dc871a4e5447501/src/diffusers/models/autoencoders/autoencoder_kl_cogvideox.py#L38
-class PatchCausalConv3d(nn.Conv3d):
-    r"""Causal Conv3d with efficient patch processing for large tensors."""
+class HunyuanVideo15RMS_norm(nn.Module):
+    r"""
+    A custom RMS normalization layer.
 
-    def find_split_indices(self, seq_len, part_num):
-        ideal_interval = seq_len / part_num
-        possible_indices = list(range(0, seq_len, self.stride[0]))
-        selected_indices = []
+    Args:
+        dim (int): The number of dimensions to normalize over.
+        channel_first (bool, optional): Whether the input tensor has channels as the first dimension.
+            Default is True.
+        images (bool, optional): Whether the input represents image data. Default is True.
+        bias (bool, optional): Whether to include a learnable bias term. Default is False.
+    """
 
-        for i in range(1, part_num):
-            closest = min(
-                possible_indices, key=lambda x: abs(x - round(i * ideal_interval))
-            )
-            if closest not in selected_indices:
-                selected_indices.append(closest)
-
-        merged_indices = []
-        prev_idx = 0
-        for idx in selected_indices:
-            if idx - prev_idx >= self.kernel_size[0]:
-                merged_indices.append(idx)
-                prev_idx = idx
-
-        return merged_indices
-
-    def forward(self, input):
-        T = input.shape[2]  # input: NCTHW
-        memory_count = torch.prod(torch.tensor(input.shape)).item() * 2 / 1024**3
-        if T > self.kernel_size[0] and memory_count > 0.6:
-            kernel_size = self.kernel_size[0]
-            part_num = int(memory_count / 2) + 1
-            split_indices = self.find_split_indices(T, part_num)
-            input_chunks = (
-                torch.tensor_split(input, split_indices, dim=2)
-                if len(split_indices) > 0
-                else [input]
-            )
-            if kernel_size > 1:
-                input_chunks = [input_chunks[0]] + [
-                    torch.cat(
-                        (
-                            input_chunks[i - 1][:, :, -kernel_size + 1 :],
-                            input_chunks[i],
-                        ),
-                        dim=2,
-                    )
-                    for i in range(1, len(input_chunks))
-                ]
-            output_chunks = []
-            for input_chunk in input_chunks:
-                output_chunks.append(super().forward(input_chunk))
-            output = torch.cat(output_chunks, dim=2)
-            return output
-        else:
-            return super().forward(input)
-
-
-class RMS_norm(nn.Module):
-    """Root Mean Square Layer Normalization for Channel-First or Last"""
-
-    def __init__(self, dim, channel_first=True, images=True, bias=False):
+    def __init__(self, dim: int, channel_first: bool = True, images: bool = True, bias: bool = False) -> None:
         super().__init__()
         broadcastable_dims = (1, 1, 1) if not images else (1, 1)
         shape = (dim, *broadcastable_dims) if channel_first else (dim,)
@@ -131,722 +87,820 @@ class RMS_norm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.0
 
     def forward(self, x):
-        return (
-            F.normalize(x, dim=(1 if self.channel_first else -1))
-            * self.scale
-            * self.gamma
-            + self.bias
-        )
+        return F.normalize(x, dim=(1 if self.channel_first else -1)) * self.scale * self.gamma + self.bias
 
 
-class CausalConv3d(nn.Module):
-    """Causal Conv3d with configurable padding for temporal axis."""
-
-    def __init__(
-        self,
-        chan_in,
-        chan_out,
-        kernel_size: Union[int, Tuple[int, int, int]],
-        stride: Union[int, Tuple[int, int, int]] = 1,
-        dilation: Union[int, Tuple[int, int, int]] = 1,
-        pad_mode="replicate",
-        disable_causal=False,
-        enable_patch_conv=False,
-        **kwargs,
-    ):
-        super().__init__()
-
-        self.pad_mode = pad_mode
-        if disable_causal:
-            padding = (
-                kernel_size // 2,
-                kernel_size // 2,
-                kernel_size // 2,
-                kernel_size // 2,
-                kernel_size // 2,
-                kernel_size // 2,
-            )
-        else:
-            padding = (
-                kernel_size // 2,
-                kernel_size // 2,
-                kernel_size // 2,
-                kernel_size // 2,
-                kernel_size - 1,
-                0,
-            )  # W, H, T
-        self.time_causal_padding = padding
-
-        if enable_patch_conv:
-            self.conv = PatchCausalConv3d(
-                chan_in,
-                chan_out,
-                kernel_size,
-                stride=stride,
-                dilation=dilation,
-                **kwargs,
-            )
-        else:
-            self.conv = nn.Conv3d(
-                chan_in,
-                chan_out,
-                kernel_size,
-                stride=stride,
-                dilation=dilation,
-                **kwargs,
-            )
-
-    def forward(self, x):
-        x = F.pad(x, self.time_causal_padding, mode=self.pad_mode)
-        return self.conv(x)
-
-
-def prepare_causal_attention_mask(
-    n_frame: int, n_hw: int, dtype, device, batch_size: int = None
-):
-    """Prepare a causal attention mask for 3D videos.
-
-    Args:
-        n_frame (int): Number of frames (temporal length).
-        n_hw (int): Product of height and width.
-        dtype: Desired mask dtype.
-        device: Device for the mask.
-        batch_size (int, optional): If set, expands for batch.
-
-    Returns:
-        torch.Tensor: Causal attention mask.
-    """
-    seq_len = n_frame * n_hw
-    mask = torch.full((seq_len, seq_len), float("-inf"), dtype=dtype, device=device)
-    for i in range(seq_len):
-        i_frame = i // n_hw
-        mask[i, : (i_frame + 1) * n_hw] = 0
-    if batch_size is not None:
-        mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
-    return mask
-
-
-class AttnBlock(nn.Module):
-    """Self-attention block for 3D video tensors."""
-
+class HunyuanVideo15AttnBlock(nn.Module):
     def __init__(self, in_channels: int):
         super().__init__()
         self.in_channels = in_channels
 
-        self.norm = RMS_norm(in_channels, images=False)
+        self.norm = HunyuanVideo15RMS_norm(in_channels, images=False)
 
-        self.q = Conv3d(in_channels, in_channels, kernel_size=1)
-        self.k = Conv3d(in_channels, in_channels, kernel_size=1)
-        self.v = Conv3d(in_channels, in_channels, kernel_size=1)
-        self.proj_out = Conv3d(in_channels, in_channels, kernel_size=1)
+        self.to_q = nn.Conv3d(in_channels, in_channels, kernel_size=1)
+        self.to_k = nn.Conv3d(in_channels, in_channels, kernel_size=1)
+        self.to_v = nn.Conv3d(in_channels, in_channels, kernel_size=1)
+        self.proj_out = nn.Conv3d(in_channels, in_channels, kernel_size=1)
 
-    def attention(self, h_: Tensor) -> Tensor:
-        h_ = self.norm(h_)
-        q = self.q(h_)
-        k = self.k(h_)
-        v = self.v(h_)
+    @staticmethod
+    def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_size: int = None):
+        """Prepare a causal attention mask for 3D videos.
 
-        b, c, f, h, w = q.shape
-        q = rearrange(q, "b c f h w -> b 1 (f h w) c").contiguous()
-        k = rearrange(k, "b c f h w -> b 1 (f h w) c").contiguous()
-        v = rearrange(v, "b c f h w -> b 1 (f h w) c").contiguous()
-        attention_mask = prepare_causal_attention_mask(
-            f, h * w, h_.dtype, h_.device, batch_size=b
+        Args:
+            n_frame (int): Number of frames (temporal length).
+            n_hw (int): Product of height and width.
+            dtype: Desired mask dtype.
+            device: Device for the mask.
+            batch_size (int, optional): If set, expands for batch.
+
+        Returns:
+            torch.Tensor: Causal attention mask.
+        """
+        seq_len = n_frame * n_hw
+        mask = torch.full((seq_len, seq_len), float("-inf"), dtype=dtype, device=device)
+        for i in range(seq_len):
+            i_frame = i // n_hw
+            mask[i, : (i_frame + 1) * n_hw] = 0
+        if batch_size is not None:
+            mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
+        return mask
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+
+        x = self.norm(x)
+
+        query = self.to_q(x)
+        key = self.to_k(x)
+        value = self.to_v(x)
+
+        batch_size, channels, frames, height, width = query.shape
+
+        query = query.reshape(batch_size, channels, frames * height * width).permute(0, 2, 1).unsqueeze(1).contiguous()
+        key = key.reshape(batch_size, channels, frames * height * width).permute(0, 2, 1).unsqueeze(1).contiguous()
+        value = value.reshape(batch_size, channels, frames * height * width).permute(0, 2, 1).unsqueeze(1).contiguous()
+
+        attention_mask = self.prepare_causal_attention_mask(
+            frames, height * width, query.dtype, query.device, batch_size=batch_size
         )
-        h_ = nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=attention_mask.unsqueeze(1)
-        )
 
-        return rearrange(h_, "b 1 (f h w) c -> b c f h w", f=f, h=h, w=w, c=c, b=b)
+        x = attention_register.call(query, key, value, attn_mask=attention_mask, key="sdpa")
 
-    def forward(self, x: Tensor) -> Tensor:
-        return x + self.proj_out(self.attention(x))
+        # batch_size, 1, frames * height * width, channels
 
+        x = x.squeeze(1).reshape(batch_size, frames, height, width, channels).permute(0, 4, 1, 2, 3)
+        x = self.proj_out(x)
 
-class ResnetBlock(nn.Module):
-    """ResNet-style block for 3D video tensors."""
-
-    def __init__(self, in_channels: int, out_channels: int):
-        super().__init__()
-        self.in_channels = in_channels
-        out_channels = in_channels if out_channels is None else out_channels
-        self.out_channels = out_channels
-
-        self.norm1 = RMS_norm(in_channels, images=False)
-        self.conv1 = CausalConv3d(in_channels, out_channels, kernel_size=3)
-
-        self.norm2 = RMS_norm(out_channels, images=False)
-        self.conv2 = CausalConv3d(out_channels, out_channels, kernel_size=3)
-        if self.in_channels != self.out_channels:
-            self.nin_shortcut = Conv3d(
-                in_channels, out_channels, kernel_size=1, stride=1, padding=0
-            )
-
-    def forward(self, x):
-        h = x
-        h = self.norm1(h)
-        h = swish(h, inplace=True)
-        h = self.conv1(h)
-
-        h = self.norm2(h)
-        h = swish(h, inplace=True)
-        h = self.conv2(h)
-
-        if self.in_channels != self.out_channels:
-            x = self.nin_shortcut(x)
-        return x + h
+        return x + identity
 
 
-class Downsample(nn.Module):
-
-    def __init__(
-        self, in_channels: int, out_channels: int, add_temporal_downsample: bool = True
-    ):
-        super().__init__()
-        factor = 2 * 2 * 2 if add_temporal_downsample else 1 * 2 * 2
-        assert out_channels % factor == 0
-        self.conv = CausalConv3d(in_channels, out_channels // factor, kernel_size=3)
-        self.add_temporal_downsample = add_temporal_downsample
-        self.group_size = factor * in_channels // out_channels
-
-    def forward(self, x: Tensor):
-        r1 = 2 if self.add_temporal_downsample else 1
-        h = self.conv(x)
-        if self.add_temporal_downsample:
-            h_first = h[:, :, :1, :, :]
-            h_first = rearrange(
-                h_first, "b c f (h r2) (w r3) -> b (r2 r3 c) f h w", r2=2, r3=2
-            )
-            h_first = torch.cat([h_first, h_first], dim=1)
-            h_next = h[:, :, 1:, :, :]
-            h_next = rearrange(
-                h_next,
-                "b c (f r1) (h r2) (w r3) -> b (r1 r2 r3 c) f h w",
-                r1=r1,
-                r2=2,
-                r3=2,
-            )
-            h = torch.cat([h_first, h_next], dim=2)
-            # shortcut computation
-            x_first = x[:, :, :1, :, :]
-            x_first = rearrange(
-                x_first, "b c f (h r2) (w r3) -> b (r2 r3 c) f h w", r2=2, r3=2
-            )
-            B, C, T, H, W = x_first.shape
-            x_first = x_first.view(B, h.shape[1], self.group_size // 2, T, H, W).mean(
-                dim=2
-            )
-
-            x_next = x[:, :, 1:, :, :]
-            x_next = rearrange(
-                x_next,
-                "b c (f r1) (h r2) (w r3) -> b (r1 r2 r3 c) f h w",
-                r1=r1,
-                r2=2,
-                r3=2,
-            )
-            B, C, T, H, W = x_next.shape
-            x_next = x_next.view(B, h.shape[1], self.group_size, T, H, W).mean(dim=2)
-            shortcut = torch.cat([x_first, x_next], dim=2)
-        else:
-            h = rearrange(
-                h, "b c (f r1) (h r2) (w r3) -> b (r1 r2 r3 c) f h w", r1=r1, r2=2, r3=2
-            )
-            shortcut = rearrange(
-                x, "b c (f r1) (h r2) (w r3) -> b (r1 r2 r3 c) f h w", r1=r1, r2=2, r3=2
-            )
-            B, C, T, H, W = shortcut.shape
-            shortcut = shortcut.view(B, h.shape[1], self.group_size, T, H, W).mean(
-                dim=2
-            )
-
-        return h + shortcut
-
-
-class Upsample(nn.Module):
-    """Hierarchical upsampling with temporal/ spatial support."""
-
-    def __init__(
-        self, in_channels: int, out_channels: int, add_temporal_upsample: bool = True
-    ):
+class HunyuanVideo15Upsample(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, add_temporal_upsample: bool = True):
         super().__init__()
         factor = 2 * 2 * 2 if add_temporal_upsample else 1 * 2 * 2
-        self.conv = CausalConv3d(in_channels, out_channels * factor, kernel_size=3)
+        self.conv = HunyuanVideo15CausalConv3d(in_channels, out_channels * factor, kernel_size=3)
+
         self.add_temporal_upsample = add_temporal_upsample
         self.repeats = factor * out_channels // in_channels
 
-    def forward(self, x: Tensor):
+    @staticmethod
+    def _dcae_upsample_rearrange(tensor, r1=1, r2=2, r3=2):
+        """
+        Convert (b, r1*r2*r3*c, f, h, w) -> (b, c, r1*f, r2*h, r3*w)
+
+        Args:
+            tensor: Input tensor of shape (b, r1*r2*r3*c, f, h, w)
+            r1: temporal upsampling factor
+            r2: height upsampling factor
+            r3: width upsampling factor
+        """
+        b, packed_c, f, h, w = tensor.shape
+        factor = r1 * r2 * r3
+        c = packed_c // factor
+
+        tensor = tensor.view(b, r1, r2, r3, c, f, h, w)
+        tensor = tensor.permute(0, 4, 5, 1, 6, 2, 7, 3)
+        return tensor.reshape(b, c, f * r1, h * r2, w * r3)
+
+    def forward(self, x: torch.Tensor):
         r1 = 2 if self.add_temporal_upsample else 1
         h = self.conv(x)
         if self.add_temporal_upsample:
             h_first = h[:, :, :1, :, :]
-            h_first = rearrange(
-                h_first, "b (r2 r3 c) f h w -> b c f (h r2) (w r3)", r2=2, r3=2
-            )
+            h_first = self._dcae_upsample_rearrange(h_first, r1=1, r2=2, r3=2)
             h_first = h_first[:, : h_first.shape[1] // 2]
             h_next = h[:, :, 1:, :, :]
-            h_next = rearrange(
-                h_next,
-                "b (r1 r2 r3 c) f h w -> b c (f r1) (h r2) (w r3)",
-                r1=r1,
-                r2=2,
-                r3=2,
-            )
+            h_next = self._dcae_upsample_rearrange(h_next, r1=r1, r2=2, r3=2)
             h = torch.cat([h_first, h_next], dim=2)
 
             # shortcut computation
             x_first = x[:, :, :1, :, :]
-            x_first = rearrange(
-                x_first, "b (r2 r3 c) f h w -> b c f (h r2) (w r3)", r2=2, r3=2
-            )
+            x_first = self._dcae_upsample_rearrange(x_first, r1=1, r2=2, r3=2)
             x_first = x_first.repeat_interleave(repeats=self.repeats // 2, dim=1)
 
             x_next = x[:, :, 1:, :, :]
-            x_next = rearrange(
-                x_next,
-                "b (r1 r2 r3 c) f h w -> b c (f r1) (h r2) (w r3)",
-                r1=r1,
-                r2=2,
-                r3=2,
-            )
+            x_next = self._dcae_upsample_rearrange(x_next, r1=r1, r2=2, r3=2)
             x_next = x_next.repeat_interleave(repeats=self.repeats, dim=1)
             shortcut = torch.cat([x_first, x_next], dim=2)
 
         else:
-            h = rearrange(
-                h, "b (r1 r2 r3 c) f h w -> b c (f r1) (h r2) (w r3)", r1=r1, r2=2, r3=2
-            )
+            h = self._dcae_upsample_rearrange(h, r1=r1, r2=2, r3=2)
             shortcut = x.repeat_interleave(repeats=self.repeats, dim=1)
-            shortcut = rearrange(
-                shortcut,
-                "b (r1 r2 r3 c) f h w -> b c (f r1) (h r2) (w r3)",
-                r1=r1,
-                r2=2,
-                r3=2,
-            )
+            shortcut = self._dcae_upsample_rearrange(shortcut, r1=r1, r2=2, r3=2)
         return h + shortcut
 
 
-class Encoder(nn.Module):
-    """Hierarchical video encoder with temporal and spatial factorization."""
+class HunyuanVideo15Downsample(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, add_temporal_downsample: bool = True):
+        super().__init__()
+        factor = 2 * 2 * 2 if add_temporal_downsample else 1 * 2 * 2
+        self.conv = HunyuanVideo15CausalConv3d(in_channels, out_channels // factor, kernel_size=3)
 
+        self.add_temporal_downsample = add_temporal_downsample
+        self.group_size = factor * in_channels // out_channels
+
+    @staticmethod
+    def _dcae_downsample_rearrange(tensor, r1=1, r2=2, r3=2):
+        """
+        Convert (b, c, r1*f, r2*h, r3*w) -> (b, r1*r2*r3*c, f, h, w)
+
+        This packs spatial/temporal dimensions into channels (opposite of upsample)
+        """
+        b, c, packed_f, packed_h, packed_w = tensor.shape
+        f, h, w = packed_f // r1, packed_h // r2, packed_w // r3
+
+        tensor = tensor.view(b, c, f, r1, h, r2, w, r3)
+        tensor = tensor.permute(0, 3, 5, 7, 1, 2, 4, 6)
+        return tensor.reshape(b, r1 * r2 * r3 * c, f, h, w)
+
+    def forward(self, x: torch.Tensor):
+        r1 = 2 if self.add_temporal_downsample else 1
+        h = self.conv(x)
+        if self.add_temporal_downsample:
+            h_first = h[:, :, :1, :, :]
+            h_first = self._dcae_downsample_rearrange(h_first, r1=1, r2=2, r3=2)
+            h_first = torch.cat([h_first, h_first], dim=1)
+            h_next = h[:, :, 1:, :, :]
+            h_next = self._dcae_downsample_rearrange(h_next, r1=r1, r2=2, r3=2)
+            h = torch.cat([h_first, h_next], dim=2)
+
+            # shortcut computation
+            x_first = x[:, :, :1, :, :]
+            x_first = self._dcae_downsample_rearrange(x_first, r1=1, r2=2, r3=2)
+            B, C, T, H, W = x_first.shape
+            x_first = x_first.view(B, h.shape[1], self.group_size // 2, T, H, W).mean(dim=2)
+            x_next = x[:, :, 1:, :, :]
+            x_next = self._dcae_downsample_rearrange(x_next, r1=r1, r2=2, r3=2)
+            B, C, T, H, W = x_next.shape
+            x_next = x_next.view(B, h.shape[1], self.group_size, T, H, W).mean(dim=2)
+            shortcut = torch.cat([x_first, x_next], dim=2)
+        else:
+            h = self._dcae_downsample_rearrange(h, r1=r1, r2=2, r3=2)
+            shortcut = self._dcae_downsample_rearrange(x, r1=r1, r2=2, r3=2)
+            B, C, T, H, W = shortcut.shape
+            shortcut = shortcut.view(B, h.shape[1], self.group_size, T, H, W).mean(dim=2)
+
+        return h + shortcut
+
+
+class HunyuanVideo15ResnetBlock(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        z_channels: int,
-        block_out_channels: Tuple[int, ...],
-        num_res_blocks: int,
-        ffactor_spatial: int,
-        ffactor_temporal: int,
-        downsample_match_channel: bool = True,
-    ):
+        out_channels: Optional[int] = None,
+        non_linearity: str = "swish",
+    ) -> None:
         super().__init__()
-        assert block_out_channels[-1] % (2 * z_channels) == 0
+        out_channels = out_channels or in_channels
 
-        self.z_channels = z_channels
-        self.block_out_channels = block_out_channels
-        self.num_res_blocks = num_res_blocks
+        self.nonlinearity = get_activation(non_linearity)
 
-        # downsampling
-        self.conv_in = CausalConv3d(in_channels, block_out_channels[0], kernel_size=3)
+        self.norm1 = HunyuanVideo15RMS_norm(in_channels, images=False)
+        self.conv1 = HunyuanVideo15CausalConv3d(in_channels, out_channels, kernel_size=3)
 
-        self.down = nn.ModuleList()
-        block_in = block_out_channels[0]
-        for i_level, ch in enumerate(block_out_channels):
-            block = nn.ModuleList()
-            block_out = ch
-            for _ in range(self.num_res_blocks):
-                block.append(ResnetBlock(in_channels=block_in, out_channels=block_out))
-                block_in = block_out
-            down = nn.Module()
-            down.block = block
+        self.norm2 = HunyuanVideo15RMS_norm(out_channels, images=False)
+        self.conv2 = HunyuanVideo15CausalConv3d(out_channels, out_channels, kernel_size=3)
 
-            add_spatial_downsample = bool(i_level < np.log2(ffactor_spatial))
-            add_temporal_downsample = add_spatial_downsample and bool(
-                i_level >= np.log2(ffactor_spatial // ffactor_temporal)
+        self.conv_shortcut = None
+        if in_channels != out_channels:
+            self.conv_shortcut = nn.Conv3d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        residual = hidden_states
+
+        hidden_states = self.norm1(hidden_states)
+        hidden_states = self.nonlinearity(hidden_states)
+        hidden_states = self.conv1(hidden_states)
+
+        hidden_states = self.norm2(hidden_states)
+        hidden_states = self.nonlinearity(hidden_states)
+        hidden_states = self.conv2(hidden_states)
+
+        if self.conv_shortcut is not None:
+            residual = self.conv_shortcut(residual)
+
+        return hidden_states + residual
+
+
+class HunyuanVideo15MidBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        num_layers: int = 1,
+        add_attention: bool = True,
+    ) -> None:
+        super().__init__()
+        self.add_attention = add_attention
+
+        # There is always at least one resnet
+        resnets = [
+            HunyuanVideo15ResnetBlock(
+                in_channels=in_channels,
+                out_channels=in_channels,
             )
-            if add_spatial_downsample or add_temporal_downsample:
-                assert i_level < len(block_out_channels) - 1
-                block_out = (
-                    block_out_channels[i_level + 1]
-                    if downsample_match_channel
-                    else block_in
-                )
-                down.downsample = Downsample(
-                    block_in, block_out, add_temporal_downsample
-                )
-                block_in = block_out
-            self.down.append(down)
+        ]
+        attentions = []
 
-        # middle
-        self.mid = nn.Module()
-        self.mid.block_1 = ResnetBlock(in_channels=block_in, out_channels=block_in)
-        self.mid.attn_1 = AttnBlock(block_in)
-        self.mid.block_2 = ResnetBlock(in_channels=block_in, out_channels=block_in)
+        for _ in range(num_layers):
+            if self.add_attention:
+                attentions.append(HunyuanVideo15AttnBlock(in_channels))
+            else:
+                attentions.append(None)
 
-        # end
-        self.norm_out = RMS_norm(block_in, images=False)
-        self.conv_out = CausalConv3d(block_in, 2 * z_channels, kernel_size=3)
+            resnets.append(
+                HunyuanVideo15ResnetBlock(
+                    in_channels=in_channels,
+                    out_channels=in_channels,
+                )
+            )
+
+        self.attentions = nn.ModuleList(attentions)
+        self.resnets = nn.ModuleList(resnets)
 
         self.gradient_checkpointing = False
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Forward pass through the encoder."""
-        use_checkpointing = bool(self.training and self.gradient_checkpointing)
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.resnets[0](hidden_states)
 
-        # downsampling
-        h = self.conv_in(x)
-        for i_level in range(len(self.block_out_channels)):
-            for i_block in range(self.num_res_blocks):
-                h = forward_with_checkpointing(
-                    self.down[i_level].block[i_block],
-                    h,
-                    use_checkpointing=use_checkpointing,
+        for attn, resnet in zip(self.attentions, self.resnets[1:]):
+            if attn is not None:
+                hidden_states = attn(hidden_states)
+            hidden_states = resnet(hidden_states)
+
+        return hidden_states
+
+
+class HunyuanVideo15DownBlock3D(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        num_layers: int = 1,
+        downsample_out_channels: Optional[int] = None,
+        add_temporal_downsample: int = True,
+    ) -> None:
+        super().__init__()
+        resnets = []
+
+        for i in range(num_layers):
+            in_channels = in_channels if i == 0 else out_channels
+            resnets.append(
+                HunyuanVideo15ResnetBlock(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
                 )
-            if hasattr(self.down[i_level], "downsample"):
-                h = forward_with_checkpointing(
-                    self.down[i_level].downsample,
-                    h,
-                    use_checkpointing=use_checkpointing,
+            )
+
+        self.resnets = nn.ModuleList(resnets)
+
+        if downsample_out_channels is not None:
+            self.downsamplers = nn.ModuleList(
+                [
+                    HunyuanVideo15Downsample(
+                        out_channels,
+                        out_channels=downsample_out_channels,
+                        add_temporal_downsample=add_temporal_downsample,
+                    )
+                ]
+            )
+        else:
+            self.downsamplers = None
+
+        self.gradient_checkpointing = False
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        for resnet in self.resnets:
+            hidden_states = resnet(hidden_states)
+
+        if self.downsamplers is not None:
+            for downsampler in self.downsamplers:
+                hidden_states = downsampler(hidden_states)
+
+        return hidden_states
+
+
+class HunyuanVideo15UpBlock3D(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        num_layers: int = 1,
+        upsample_out_channels: Optional[int] = None,
+        add_temporal_upsample: bool = True,
+    ) -> None:
+        super().__init__()
+        resnets = []
+
+        for i in range(num_layers):
+            input_channels = in_channels if i == 0 else out_channels
+
+            resnets.append(
+                HunyuanVideo15ResnetBlock(
+                    in_channels=input_channels,
+                    out_channels=out_channels,
                 )
+            )
 
-        # middle
-        h = forward_with_checkpointing(
-            self.mid.block_1, h, use_checkpointing=use_checkpointing
-        )
-        h = forward_with_checkpointing(
-            self.mid.attn_1, h, use_checkpointing=use_checkpointing
-        )
-        h = forward_with_checkpointing(
-            self.mid.block_2, h, use_checkpointing=use_checkpointing
-        )
+        self.resnets = nn.ModuleList(resnets)
 
-        # end
-        group_size = self.block_out_channels[-1] // (2 * self.z_channels)
-        shortcut = rearrange(h, "b (c r) f h w -> b c r f h w", r=group_size).mean(
-            dim=2
-        )
-        h = self.norm_out(h)
-        h = swish(h, inplace=True)
-        h = self.conv_out(h)
-        h += shortcut
-        return h
+        if upsample_out_channels is not None:
+            self.upsamplers = nn.ModuleList(
+                [
+                    HunyuanVideo15Upsample(
+                        out_channels,
+                        out_channels=upsample_out_channels,
+                        add_temporal_upsample=add_temporal_upsample,
+                    )
+                ]
+            )
+        else:
+            self.upsamplers = None
+
+        self.gradient_checkpointing = False
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if torch.is_grad_enabled() and self.gradient_checkpointing:
+            for resnet in self.resnets:
+                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states)
+
+        else:
+            for resnet in self.resnets:
+                hidden_states = resnet(hidden_states)
+
+        if self.upsamplers is not None:
+            for upsampler in self.upsamplers:
+                hidden_states = upsampler(hidden_states)
+
+        return hidden_states
 
 
-class Decoder(nn.Module):
-    """Hierarchical video decoder with upsampling factories."""
+class HunyuanVideo15Encoder3D(nn.Module):
+    r"""
+    3D vae encoder for HunyuanImageRefiner.
+    """
 
     def __init__(
         self,
-        z_channels: int,
-        out_channels: int,
-        block_out_channels: Tuple[int, ...],
-        num_res_blocks: int,
-        ffactor_spatial: int,
-        ffactor_temporal: int,
-        upsample_match_channel: bool = True,
-    ):
+        in_channels: int = 3,
+        out_channels: int = 64,
+        block_out_channels: Tuple[int, ...] = (128, 256, 512, 1024, 1024),
+        layers_per_block: int = 2,
+        temporal_compression_ratio: int = 4,
+        spatial_compression_ratio: int = 16,
+        downsample_match_channel: bool = True,
+    ) -> None:
         super().__init__()
-        assert block_out_channels[0] % z_channels == 0
 
-        self.z_channels = z_channels
-        self.block_out_channels = block_out_channels
-        self.num_res_blocks = num_res_blocks
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.group_size = block_out_channels[-1] // self.out_channels
 
-        block_in = block_out_channels[0]
-        self.conv_in = CausalConv3d(z_channels, block_in, kernel_size=3)
+        self.conv_in = HunyuanVideo15CausalConv3d(in_channels, block_out_channels[0], kernel_size=3)
+        self.mid_block = None
+        self.down_blocks = nn.ModuleList([])
 
-        # middle
-        self.mid = nn.Module()
-        self.mid.block_1 = ResnetBlock(in_channels=block_in, out_channels=block_in)
-        self.mid.attn_1 = AttnBlock(block_in)
-        self.mid.block_2 = ResnetBlock(in_channels=block_in, out_channels=block_in)
-
-        # upsampling
-        self.up = nn.ModuleList()
-        for i_level, ch in enumerate(block_out_channels):
-            block = nn.ModuleList()
-            block_out = ch
-            for _ in range(self.num_res_blocks + 1):
-                block.append(ResnetBlock(in_channels=block_in, out_channels=block_out))
-                block_in = block_out
-            up = nn.Module()
-            up.block = block
-
-            add_spatial_upsample = bool(i_level < np.log2(ffactor_spatial))
-            add_temporal_upsample = bool(i_level < np.log2(ffactor_temporal))
-            if add_spatial_upsample or add_temporal_upsample:
-                assert i_level < len(block_out_channels) - 1
-                block_out = (
-                    block_out_channels[i_level + 1]
-                    if upsample_match_channel
-                    else block_in
+        input_channel = block_out_channels[0]
+        for i in range(len(block_out_channels)):
+            add_spatial_downsample = i < np.log2(spatial_compression_ratio)
+            output_channel = block_out_channels[i]
+            if not add_spatial_downsample:
+                down_block = HunyuanVideo15DownBlock3D(
+                    num_layers=layers_per_block,
+                    in_channels=input_channel,
+                    out_channels=output_channel,
+                    downsample_out_channels=None,
+                    add_temporal_downsample=False,
                 )
-                up.upsample = Upsample(block_in, block_out, add_temporal_upsample)
-                block_in = block_out
-            self.up.append(up)
+                input_channel = output_channel
+            else:
+                add_temporal_downsample = i >= np.log2(spatial_compression_ratio // temporal_compression_ratio)
+                downsample_out_channels = block_out_channels[i + 1] if downsample_match_channel else output_channel
+                down_block = HunyuanVideo15DownBlock3D(
+                    num_layers=layers_per_block,
+                    in_channels=input_channel,
+                    out_channels=output_channel,
+                    downsample_out_channels=downsample_out_channels,
+                    add_temporal_downsample=add_temporal_downsample,
+                )
+                input_channel = downsample_out_channels
 
-        # end
-        self.norm_out = RMS_norm(block_in, images=False)
-        self.conv_out = CausalConv3d(block_in, out_channels, kernel_size=3)
+            self.down_blocks.append(down_block)
+
+        self.mid_block = HunyuanVideo15MidBlock(in_channels=block_out_channels[-1])
+
+        self.norm_out = HunyuanVideo15RMS_norm(block_out_channels[-1], images=False)
+        self.conv_act = nn.SiLU()
+        self.conv_out = HunyuanVideo15CausalConv3d(block_out_channels[-1], out_channels, kernel_size=3)
 
         self.gradient_checkpointing = False
 
-    def forward(self, z: Tensor) -> Tensor:
-        """Forward pass through the decoder."""
-        use_checkpointing = bool(self.training and self.gradient_checkpointing)
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.conv_in(hidden_states)
 
-        # z to block_in
-        repeats = self.block_out_channels[0] // (self.z_channels)
-        h = self.conv_in(z) + z.repeat_interleave(repeats=repeats, dim=1)
+        if torch.is_grad_enabled() and self.gradient_checkpointing:
+            for down_block in self.down_blocks:
+                hidden_states = self._gradient_checkpointing_func(down_block, hidden_states)
 
-        # middle
-        h = forward_with_checkpointing(
-            self.mid.block_1, h, use_checkpointing=use_checkpointing
-        )
-        h = forward_with_checkpointing(
-            self.mid.attn_1, h, use_checkpointing=use_checkpointing
-        )
-        h = forward_with_checkpointing(
-            self.mid.block_2, h, use_checkpointing=use_checkpointing
-        )
+            hidden_states = self._gradient_checkpointing_func(self.mid_block, hidden_states)
+        else:
+            for down_block in self.down_blocks:
+                hidden_states = down_block(hidden_states)
 
-        # upsampling
-        for i_level in range(len(self.block_out_channels)):
-            for i_block in range(self.num_res_blocks + 1):
-                h = forward_with_checkpointing(
-                    self.up[i_level].block[i_block],
-                    h,
-                    use_checkpointing=use_checkpointing,
+            hidden_states = self.mid_block(hidden_states)
+
+        batch_size, _, frame, height, width = hidden_states.shape
+        short_cut = hidden_states.view(batch_size, -1, self.group_size, frame, height, width).mean(dim=2)
+
+        hidden_states = self.norm_out(hidden_states)
+        hidden_states = self.conv_act(hidden_states)
+        hidden_states = self.conv_out(hidden_states)
+
+        hidden_states += short_cut
+
+        return hidden_states
+
+
+class HunyuanVideo15Decoder3D(nn.Module):
+    r"""
+    Causal decoder for 3D video-like data used for HunyuanImage-1.5 Refiner.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 32,
+        out_channels: int = 3,
+        block_out_channels: Tuple[int, ...] = (1024, 1024, 512, 256, 128),
+        layers_per_block: int = 2,
+        spatial_compression_ratio: int = 16,
+        temporal_compression_ratio: int = 4,
+        upsample_match_channel: bool = True,
+    ):
+        super().__init__()
+        self.layers_per_block = layers_per_block
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.repeat = block_out_channels[0] // self.in_channels
+
+        self.conv_in = HunyuanVideo15CausalConv3d(self.in_channels, block_out_channels[0], kernel_size=3)
+        self.up_blocks = nn.ModuleList([])
+
+        # mid
+        self.mid_block = HunyuanVideo15MidBlock(in_channels=block_out_channels[0])
+
+        # up
+        input_channel = block_out_channels[0]
+        for i in range(len(block_out_channels)):
+            output_channel = block_out_channels[i]
+
+            add_spatial_upsample = i < np.log2(spatial_compression_ratio)
+            add_temporal_upsample = i < np.log2(temporal_compression_ratio)
+            if add_spatial_upsample or add_temporal_upsample:
+                upsample_out_channels = block_out_channels[i + 1] if upsample_match_channel else output_channel
+                up_block = HunyuanVideo15UpBlock3D(
+                    num_layers=self.layers_per_block + 1,
+                    in_channels=input_channel,
+                    out_channels=output_channel,
+                    upsample_out_channels=upsample_out_channels,
+                    add_temporal_upsample=add_temporal_upsample,
                 )
-            if hasattr(self.up[i_level], "upsample"):
-                h = forward_with_checkpointing(
-                    self.up[i_level].upsample, h, use_checkpointing=use_checkpointing
+                input_channel = upsample_out_channels
+            else:
+                up_block = HunyuanVideo15UpBlock3D(
+                    num_layers=self.layers_per_block + 1,
+                    in_channels=input_channel,
+                    out_channels=output_channel,
+                    upsample_out_channels=None,
+                    add_temporal_upsample=False,
                 )
+                input_channel = output_channel
 
-        # end
-        h = self.norm_out(h)
-        h = swish(h, inplace=True)
-        h = self.conv_out(h)
-        return h
+            self.up_blocks.append(up_block)
+
+        # out
+        self.norm_out = HunyuanVideo15RMS_norm(block_out_channels[-1], images=False)
+        self.conv_act = nn.SiLU()
+        self.conv_out = HunyuanVideo15CausalConv3d(block_out_channels[-1], out_channels, kernel_size=3)
+
+        self.gradient_checkpointing = False
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.conv_in(hidden_states) + hidden_states.repeat_interleave(repeats=self.repeat, dim=1)
+
+        if torch.is_grad_enabled() and self.gradient_checkpointing:
+            hidden_states = self._gradient_checkpointing_func(self.mid_block, hidden_states)
+
+            for up_block in self.up_blocks:
+                hidden_states = self._gradient_checkpointing_func(up_block, hidden_states)
+        else:
+            hidden_states = self.mid_block(hidden_states)
+
+            for up_block in self.up_blocks:
+                hidden_states = up_block(hidden_states)
+
+        # post-process
+        hidden_states = self.norm_out(hidden_states)
+        hidden_states = self.conv_act(hidden_states)
+        hidden_states = self.conv_out(hidden_states)
+        return hidden_states
 
 
-class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
-    """KL regularized 3D Conv VAE with advanced tiling and slicing strategies."""
+class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
+    r"""
+    A VAE model with KL loss for encoding videos into latents and decoding latent representations into videos. Used for
+    HunyuanVideo-1.5.
+
+    This model inherits from [`ModelMixin`]. Check the superclass documentation for it's generic methods implemented
+    for all models (such as downloading or saving).
+    """
 
     _supports_gradient_checkpointing = True
 
     @register_to_config
     def __init__(
         self,
-        in_channels: int,
-        out_channels: int,
-        latent_channels: int,
-        block_out_channels: Tuple[int, ...],
-        layers_per_block: int,
-        ffactor_spatial: int,
-        ffactor_temporal: int,
-        sample_size: int,
-        sample_tsize: int,
-        scaling_factor: float = None,
-        shift_factor: Optional[float] = None,
+        in_channels: int = 3,
+        out_channels: int = 3,
+        latent_channels: int = 32,
+        block_out_channels: Tuple[int] = (128, 256, 512, 1024, 1024),
+        layers_per_block: int = 2,
+        spatial_compression_ratio: int = 16,
+        temporal_compression_ratio: int = 4,
         downsample_match_channel: bool = True,
         upsample_match_channel: bool = True,
-    ):
+        scaling_factor: float = 1.03682,
+    ) -> None:
         super().__init__()
-        self.ffactor_spatial = ffactor_spatial
-        self.ffactor_temporal = ffactor_temporal
-        self.scaling_factor = scaling_factor
-        self.shift_factor = shift_factor
 
-        self.encoder = Encoder(
+        self.encoder = HunyuanVideo15Encoder3D(
             in_channels=in_channels,
-            z_channels=latent_channels,
+            out_channels=latent_channels * 2,
             block_out_channels=block_out_channels,
-            num_res_blocks=layers_per_block,
-            ffactor_spatial=ffactor_spatial,
-            ffactor_temporal=ffactor_temporal,
+            layers_per_block=layers_per_block,
+            temporal_compression_ratio=temporal_compression_ratio,
+            spatial_compression_ratio=spatial_compression_ratio,
             downsample_match_channel=downsample_match_channel,
         )
-        self.decoder = Decoder(
-            z_channels=latent_channels,
+
+        self.decoder = HunyuanVideo15Decoder3D(
+            in_channels=latent_channels,
             out_channels=out_channels,
             block_out_channels=list(reversed(block_out_channels)),
-            num_res_blocks=layers_per_block,
-            ffactor_spatial=ffactor_spatial,
-            ffactor_temporal=ffactor_temporal,
+            layers_per_block=layers_per_block,
+            temporal_compression_ratio=temporal_compression_ratio,
+            spatial_compression_ratio=spatial_compression_ratio,
             upsample_match_channel=upsample_match_channel,
         )
 
-        self.use_slicing = False
-        self.use_spatial_tiling = False
-        self.use_temporal_tiling = False
+        self.spatial_compression_ratio = spatial_compression_ratio
+        self.temporal_compression_ratio = temporal_compression_ratio
 
-        # only relevant if vae tiling is enabled
-        self.tile_sample_min_size = sample_size
-        self.tile_latent_min_size = sample_size // ffactor_spatial
-        self.tile_sample_min_tsize = sample_tsize
-        self.tile_latent_min_tsize = sample_tsize // ffactor_temporal
+        # When decoding a batch of video latents at a time, one can save memory by slicing across the batch dimension
+        # to perform decoding of a single video latent at a time.
+        self.use_slicing = False
+
+        # When decoding spatially large video latents, the memory requirement is very high. By breaking the video latent
+        # frames spatially into smaller tiles and performing multiple forward passes for decoding, and then blending the
+        # intermediate tiles together, the memory requirement can be lowered.
+        self.use_tiling = False
+
+        # The minimal tile height and width for spatial tiling to be used
+        self.tile_sample_min_height = 128
+        self.tile_sample_min_width = 128
+
+        # The minimal tile height and width in latent space
+        self.tile_latent_min_height = self.tile_sample_min_height // spatial_compression_ratio
+        self.tile_latent_min_width = self.tile_sample_min_width // spatial_compression_ratio
         self.tile_overlap_factor = 0.25
 
-        self._tile_parallelism_enabled = False
+    def enable_tiling(
+        self,
+        tile_sample_min_height: Optional[int] = None,
+        tile_sample_min_width: Optional[int] = None,
+        tile_latent_min_height: Optional[int] = None,
+        tile_latent_min_width: Optional[int] = None,
+        tile_overlap_factor: Optional[float] = None,
+    ) -> None:
+        r"""
+        Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
+        compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
+        processing larger images.
 
-    def set_tile_sample_min_size(
-        self, sample_size: int, tile_overlap_factor: float = 0.2
-    ):
-        self.tile_sample_min_size = sample_size
-        self.tile_latent_min_size = sample_size // self.ffactor_spatial
-        self.tile_overlap_factor = tile_overlap_factor
+        Args:
+            tile_sample_min_height (`int`, *optional*):
+                The minimum height required for a sample to be separated into tiles across the height dimension.
+            tile_sample_min_width (`int`, *optional*):
+                The minimum width required for a sample to be separated into tiles across the width dimension.
+            tile_latent_min_height (`int`, *optional*):
+                The minimum height required for a latent to be separated into tiles across the height dimension.
+            tile_latent_min_width (`int`, *optional*):
+                The minimum width required for a latent to be separated into tiles across the width dimension.
+        """
+        self.use_tiling = True
+        self.tile_sample_min_height = tile_sample_min_height or self.tile_sample_min_height
+        self.tile_sample_min_width = tile_sample_min_width or self.tile_sample_min_width
+        self.tile_latent_min_height = tile_latent_min_height or self.tile_latent_min_height
+        self.tile_latent_min_width = tile_latent_min_width or self.tile_latent_min_width
+        self.tile_overlap_factor = tile_overlap_factor or self.tile_overlap_factor
 
-        assert (
-            self.tile_latent_min_size * self.tile_overlap_factor
-        ).is_integer(), "self.tile_latent_min_size multiplied by tile_overlap_factor must be an integer"
+    def _encode(self, x: torch.Tensor) -> torch.Tensor:
+        _, _, _, height, width = x.shape
 
-    def _set_gradient_checkpointing(self, module, value=False):
-        """Enable or disable gradient checkpointing on encoder and decoder."""
-        if isinstance(module, (Encoder, Decoder)):
-            module.gradient_checkpointing = value
+        if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
+            return self.tiled_encode(x)
 
-    def enable_temporal_tiling(self, use_tiling: bool = True):
-        raise RuntimeError("Temporal tiling is not supported for this VAE.")
-        self.use_temporal_tiling = use_tiling
+        x = self.encoder(x)
+        return x
 
-    def disable_temporal_tiling(self):
-        self.enable_temporal_tiling(False)
+    @apply_forward_hook
+    def encode(
+        self, x: torch.Tensor, return_dict: bool = True
+    ) -> Union[AutoencoderKLOutput, Tuple[DiagonalGaussianDistribution]]:
+        r"""
+        Encode a batch of images into latents.
 
-    def enable_spatial_tiling(self, use_tiling: bool = True):
-        self.use_spatial_tiling = use_tiling
+        Args:
+            x (`torch.Tensor`): Input batch of images.
+            return_dict (`bool`, *optional*, defaults to `True`):
+                Whether to return a [`~models.autoencoder_kl.AutoencoderKLOutput`] instead of a plain tuple.
 
-    def disable_spatial_tiling(self):
-        self.enable_spatial_tiling(False)
+        Returns:
+                The latent representations of the encoded videos. If `return_dict` is True, a
+                [`~models.autoencoder_kl.AutoencoderKLOutput`] is returned, otherwise a plain `tuple` is returned.
+        """
+        if self.use_slicing and x.shape[0] > 1:
+            encoded_slices = [self._encode(x_slice) for x_slice in x.split(1)]
+            h = torch.cat(encoded_slices)
+        else:
+            h = self._encode(x)
 
-    def enable_tiling(self, use_tiling: bool = True):
-        self.enable_spatial_tiling(use_tiling)
+        posterior = DiagonalGaussianDistribution(h)
 
-    def disable_tiling(self):
-        self.disable_spatial_tiling()
+        if not return_dict:
+            return (posterior,)
+        return AutoencoderKLOutput(latent_dist=posterior)
 
-    def enable_slicing(self):
-        self.use_slicing = True
+    def _decode(self, z: torch.Tensor) -> torch.Tensor:
+        _, _, _, height, width = z.shape
 
-    def disable_slicing(self):
-        self.use_slicing = False
+        if self.use_tiling and (width > self.tile_latent_min_width or height > self.tile_latent_min_height):
+            return self.tiled_decode(z)
 
-    def blend_h(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int):
-        """Blend tensor b horizontally into a at blend_extent region."""
-        blend_extent = min(a.shape[-1], b.shape[-1], blend_extent)
-        for x in range(blend_extent):
-            b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (
-                1 - x / blend_extent
-            ) + b[:, :, :, :, x] * (x / blend_extent)
-        return b
+        dec = self.decoder(z)
 
-    def blend_v(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int):
-        """Blend tensor b vertically into a at blend_extent region."""
+        return dec
+
+    @apply_forward_hook
+    def decode(self, z: torch.Tensor, return_dict: bool = True) -> Union[DecoderOutput, torch.Tensor]:
+        r"""
+        Decode a batch of images.
+
+        Args:
+            z (`torch.Tensor`): Input batch of latent vectors.
+            return_dict (`bool`, *optional*, defaults to `True`):
+                Whether to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
+
+        Returns:
+            [`~models.vae.DecoderOutput`] or `tuple`:
+                If return_dict is True, a [`~models.vae.DecoderOutput`] is returned, otherwise a plain `tuple` is
+                returned.
+        """
+        if self.use_slicing and z.shape[0] > 1:
+            decoded_slices = [self._decode(z_slice) for z_slice in z.split(1)]
+            decoded = torch.cat(decoded_slices)
+        else:
+            decoded = self._decode(z)
+
+        if not return_dict:
+            return (decoded,)
+
+        return DecoderOutput(sample=decoded)
+
+    def blend_v(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
         blend_extent = min(a.shape[-2], b.shape[-2], blend_extent)
         for y in range(blend_extent):
-            b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (
-                1 - y / blend_extent
-            ) + b[:, :, :, y, :] * (y / blend_extent)
+            b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (1 - y / blend_extent) + b[:, :, :, y, :] * (
+                y / blend_extent
+            )
         return b
 
-    def blend_t(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int):
-        """Blend tensor b temporally into a at blend_extent region."""
+    def blend_h(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
+        blend_extent = min(a.shape[-1], b.shape[-1], blend_extent)
+        for x in range(blend_extent):
+            b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, :, x] * (
+                x / blend_extent
+            )
+        return b
+
+    def blend_t(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
         blend_extent = min(a.shape[-3], b.shape[-3], blend_extent)
         for x in range(blend_extent):
-            b[:, :, x, :, :] = a[:, :, -blend_extent + x, :, :] * (
-                1 - x / blend_extent
-            ) + b[:, :, x, :, :] * (x / blend_extent)
+            b[:, :, x, :, :] = a[:, :, -blend_extent + x, :, :] * (1 - x / blend_extent) + b[:, :, x, :, :] * (
+                x / blend_extent
+            )
         return b
 
-    def spatial_tiled_encode(self, x: torch.Tensor):
-        """Tiled spatial encoding for large inputs via overlapping."""
-        B, C, T, H, W = x.shape
-        overlap_size = int(self.tile_sample_min_size * (1 - self.tile_overlap_factor))
-        blend_extent = int(self.tile_latent_min_size * self.tile_overlap_factor)
-        row_limit = self.tile_latent_min_size - blend_extent
+    def tiled_encode(self, x: torch.Tensor) -> torch.Tensor:
+        r"""Encode a batch of images using a tiled encoder.
+
+        Args:
+            x (`torch.Tensor`): Input batch of videos.
+
+        Returns:
+            `torch.Tensor`:
+                The latent representation of the encoded videos.
+        """
+        _, _, _, height, width = x.shape
+
+        overlap_height = int(self.tile_sample_min_height * (1 - self.tile_overlap_factor))  # 256 * (1 - 0.25) = 192
+        overlap_width = int(self.tile_sample_min_width * (1 - self.tile_overlap_factor))  # 256 * (1 - 0.25) = 192
+        blend_height = int(self.tile_latent_min_height * self.tile_overlap_factor)  # 8 * 0.25 = 2
+        blend_width = int(self.tile_latent_min_width * self.tile_overlap_factor)  # 8 * 0.25 = 2
+        row_limit_height = self.tile_latent_min_height - blend_height  # 8 - 2 = 6
+        row_limit_width = self.tile_latent_min_width - blend_width  # 8 - 2 = 6
 
         rows = []
-        for i in range(0, H, overlap_size):
+        for i in range(0, height, overlap_height):
             row = []
-            for j in range(0, W, overlap_size):
+            for j in range(0, width, overlap_width):
                 tile = x[
                     :,
                     :,
                     :,
-                    i : i + self.tile_sample_min_size,
-                    j : j + self.tile_sample_min_size,
+                    i : i + self.tile_sample_min_height,
+                    j : j + self.tile_sample_min_width,
                 ]
                 tile = self.encoder(tile)
                 row.append(tile)
             rows.append(row)
+
         result_rows = []
         for i, row in enumerate(rows):
             result_row = []
             for j, tile in enumerate(row):
                 if i > 0:
-                    tile = self.blend_v(rows[i - 1][j], tile, blend_extent)
+                    tile = self.blend_v(rows[i - 1][j], tile, blend_height)
                 if j > 0:
-                    tile = self.blend_h(row[j - 1], tile, blend_extent)
-                result_row.append(tile[:, :, :, :row_limit, :row_limit])
+                    tile = self.blend_h(row[j - 1], tile, blend_width)
+                result_row.append(tile[:, :, :, :row_limit_height, :row_limit_width])
             result_rows.append(torch.cat(result_row, dim=-1))
         moments = torch.cat(result_rows, dim=-2)
+
         return moments
 
-    def temporal_tiled_encode(self, x: torch.Tensor):
-        """Tiled temporal encoding for large video sequences."""
-        raise RuntimeError("Temporal tiling is not supported for this VAE.")
-        B, C, T, H, W = x.shape
-        overlap_size = int(self.tile_sample_min_tsize * (1 - self.tile_overlap_factor))
-        blend_extent = int(self.tile_latent_min_tsize * self.tile_overlap_factor)
-        t_limit = self.tile_latent_min_tsize - blend_extent
+    def tiled_decode(self, z: torch.Tensor) -> torch.Tensor:
+        r"""
+        Decode a batch of images using a tiled decoder.
 
-        row = []
-        for i in range(0, T, overlap_size):
-            tile = x[:, :, i : i + self.tile_sample_min_tsize + 1, :, :]
-            if self.use_spatial_tiling and (
-                tile.shape[-1] > self.tile_sample_min_size
-                or tile.shape[-2] > self.tile_sample_min_size
-            ):
-                tile = self.spatial_tiled_encode(tile)
-            else:
-                tile = self.encoder(tile)
-            if i > 0:
-                tile = tile[:, :, 1:, :, :]
-            row.append(tile)
-        result_row = []
-        for i, tile in enumerate(row):
-            if i > 0:
-                tile = self.blend_t(row[i - 1], tile, blend_extent)
-                result_row.append(tile[:, :, :t_limit, :, :])
-            else:
-                result_row.append(tile[:, :, : t_limit + 1, :, :])
-        moments = torch.cat(result_row, dim=-3)
-        return moments
+        Args:
+            z (`torch.Tensor`): Input batch of latent vectors.
+            return_dict (`bool`, *optional*, defaults to `True`):
+                Whether or not to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
 
-    def enable_tile_parallelism(self):
-        self._tile_parallelism_enabled = True
+        Returns:
+            [`~models.vae.DecoderOutput`] or `tuple`:
+                If return_dict is True, a [`~models.vae.DecoderOutput`] is returned, otherwise a plain `tuple` is
+                returned.
+        """
 
-    def disable_tile_parallelism(self):
-        self._tile_parallelism_enabled = False
+        _, _, _, height, width = z.shape
 
-    def spatial_tiled_decode(self, z: torch.Tensor):
-
-        B, C, T, H, W = z.shape
-        overlap_size = int(self.tile_latent_min_size * (1 - self.tile_overlap_factor))
-        blend_extent = int(self.tile_sample_min_size * self.tile_overlap_factor)
-        row_limit = self.tile_sample_min_size - blend_extent
+        overlap_height = int(self.tile_latent_min_height * (1 - self.tile_overlap_factor))  # 8 * (1 - 0.25) = 6
+        overlap_width = int(self.tile_latent_min_width * (1 - self.tile_overlap_factor))  # 8 * (1 - 0.25) = 6
+        blend_height = int(self.tile_sample_min_height * self.tile_overlap_factor)  # 256 * 0.25 = 64
+        blend_width = int(self.tile_sample_min_width * self.tile_overlap_factor)  # 256 * 0.25 = 64
+        row_limit_height = self.tile_sample_min_height - blend_height  # 256 - 64 = 192
+        row_limit_width = self.tile_sample_min_width - blend_width  # 256 - 64 = 192
 
         rows = []
-        for i in range(0, H, overlap_size):
+        for i in range(0, height, overlap_height):
             row = []
-            for j in range(0, W, overlap_size):
+            for j in range(0, width, overlap_width):
                 tile = z[
                     :,
                     :,
                     :,
-                    i : i + self.tile_latent_min_size,
-                    j : j + self.tile_latent_min_size,
+                    i : i + self.tile_latent_min_height,
+                    j : j + self.tile_latent_min_width,
                 ]
                 decoded = self.decoder(tile)
                 row.append(decoded)
@@ -857,112 +911,39 @@ class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
             result_row = []
             for j, tile in enumerate(row):
                 if i > 0:
-                    tile = self.blend_v(rows[i - 1][j], tile, blend_extent)
+                    tile = self.blend_v(rows[i - 1][j], tile, blend_height)
                 if j > 0:
-                    tile = self.blend_h(row[j - 1], tile, blend_extent)
-                result_row.append(tile[:, :, :, :row_limit, :row_limit])
+                    tile = self.blend_h(row[j - 1], tile, blend_width)
+                result_row.append(tile[:, :, :, :row_limit_height, :row_limit_width])
             result_rows.append(torch.cat(result_row, dim=-1))
         dec = torch.cat(result_rows, dim=-2)
+
         return dec
-
-    def temporal_tiled_decode(self, z: torch.Tensor):
-        """Tiled temporal decoding for long sequence latents."""
-        raise RuntimeError("Temporal tiling is not supported for this VAE.")
-        B, C, T, H, W = z.shape
-        overlap_size = int(self.tile_latent_min_tsize * (1 - self.tile_overlap_factor))
-        blend_extent = int(self.tile_sample_min_tsize * self.tile_overlap_factor)
-        t_limit = self.tile_sample_min_tsize - blend_extent
-        assert 0 < overlap_size < self.tile_latent_min_tsize
-
-        row = []
-        for i in range(0, T, overlap_size):
-            tile = z[:, :, i : i + self.tile_latent_min_tsize + 1, :, :]
-            if self.use_spatial_tiling and (
-                tile.shape[-1] > self.tile_latent_min_size
-                or tile.shape[-2] > self.tile_latent_min_size
-            ):
-                decoded = self.spatial_tiled_decode(tile)
-            else:
-                decoded = self.decoder(tile)
-            if i > 0:
-                decoded = decoded[:, :, 1:, :, :]
-            row.append(decoded)
-
-        result_row = []
-        for i, tile in enumerate(row):
-            if i > 0:
-                tile = self.blend_t(row[i - 1], tile, blend_extent)
-                result_row.append(tile[:, :, :t_limit, :, :])
-            else:
-                result_row.append(tile[:, :, : t_limit + 1, :, :])
-        dec = torch.cat(result_row, dim=-3)
-        return dec
-
-    def encode(self, x: Tensor, return_dict: bool = True):
-
-        def _encode(x):
-            if self.use_temporal_tiling and x.shape[-3] > self.tile_sample_min_tsize:
-                return self.temporal_tiled_encode(x)
-            if self.use_spatial_tiling and (
-                x.shape[-1] > self.tile_sample_min_size
-                or x.shape[-2] > self.tile_sample_min_size
-            ):
-                return self.spatial_tiled_encode(x)
-            return self.encoder(x)
-
-        assert len(x.shape) == 5  # (B, C, T, H, W)
-
-        if self.use_slicing and x.shape[0] > 1:
-            encoded_slices = [_encode(x_slice) for x_slice in x.split(1)]
-            h = torch.cat(encoded_slices)
-        else:
-            h = _encode(x)
-        posterior = DiagonalGaussianDistribution(h)
-
-        if not return_dict:
-            return (posterior,)
-
-        return AutoencoderKLOutput(latent_dist=posterior)
-
-    def decode(self, z: Tensor, return_dict: bool = True, generator=None):
-
-        def _decode(z):
-            if self.use_temporal_tiling and z.shape[-3] > self.tile_latent_min_tsize:
-                return self.temporal_tiled_decode(z)
-            if self.use_spatial_tiling and (
-                z.shape[-1] > self.tile_latent_min_size
-                or z.shape[-2] > self.tile_latent_min_size
-            ):
-                return self.spatial_tiled_decode(z)
-            return self.decoder(z)
-
-        if self.use_slicing and z.shape[0] > 1:
-            decoded_slices = [_decode(z_slice) for z_slice in z.split(1)]
-            decoded = torch.cat(decoded_slices)
-        else:
-            decoded = _decode(z)
-
-        if not return_dict:
-            return (decoded,)
-
-        return DecoderOutput(sample=decoded)
 
     def forward(
         self,
         sample: torch.Tensor,
         sample_posterior: bool = False,
-        return_posterior: bool = True,
         return_dict: bool = True,
-    ):
-        """Forward autoencoder pass. Returns both reconstruction and optionally the posterior."""
-        posterior = self.encode(sample).latent_dist
-        z = posterior.sample() if sample_posterior else posterior.mode()
-        dec = self.decode(z).sample
-        return (
-            DecoderOutput(sample=dec, posterior=posterior)
-            if return_dict
-            else (dec, posterior)
-        )
+        generator: Optional[torch.Generator] = None,
+    ) -> Union[DecoderOutput, torch.Tensor]:
+        r"""
+        Args:
+            sample (`torch.Tensor`): Input sample.
+            sample_posterior (`bool`, *optional*, defaults to `False`):
+                Whether to sample from the posterior.
+            return_dict (`bool`, *optional*, defaults to `True`):
+                Whether or not to return a [`DecoderOutput`] instead of a plain tuple.
+        """
+        x = sample
+        posterior = self.encode(x).latent_dist
+        if sample_posterior:
+            z = posterior.sample(generator=generator)
+        else:
+            z = posterior.mode()
+        dec = self.decode(z, return_dict=return_dict)
+        return dec
+
 
     def denormalize_latents(self, latents: torch.Tensor):
         if hasattr(self.config, "shift_factor") and self.config.shift_factor:
