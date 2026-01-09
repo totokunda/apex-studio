@@ -423,6 +423,7 @@ class LoaderMixin(DownloadMixin):
                 )
                 patched_for_fpscaled = True
             if hasattr(model, "load_state_dict"):
+                
           
                 model.load_state_dict(
                     state_dict, strict=False, assign=True
