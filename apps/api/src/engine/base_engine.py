@@ -1,4 +1,5 @@
 import os
+import hashlib
 from threading import local
 from typing import List, Dict, Any, Optional, Literal, Union
 from typing import TYPE_CHECKING, overload
@@ -17,6 +18,7 @@ from src.utils.defaults import (
     get_preprocessor_path,
     get_postprocessor_path,
     get_offload_path,
+    DEFAULT_CACHE_PATH,
 )
 from src.utils.module import find_class_recursive
 
@@ -51,6 +53,7 @@ from accelerate import cpu_offload
 import tempfile
 from src.transformer import _auto_register_transformers
 from src.mixins import LoaderMixin, ToMixin, OffloadMixin, CompileMixin
+from src.mixins.cache_mixin import CacheMixin
 from glob import glob
 from safetensors import safe_open
 import mlx.core as mx
@@ -62,7 +65,8 @@ import inspect
 from src.lora import LoraManager, LoraItem
 from src.helpers.helpers import helpers
 from src.utils.torch_patches import patch_torch_linalg_solve_for_cusolver
-
+from src.offload.group_offloading import apply_group_offloading
+import types
 try:
     torch.backends.cuda.preferred_linalg_library()
 except Exception as e:
@@ -94,7 +98,6 @@ class AutoLoadingHelperDict(dict):
         from src.helpers.hunyuanvideo.llama import HunyuanLlama
         from src.helpers.hunyuanvideo.avatar import HunyuanAvatar
         from src.helpers.hunyuanvideo15.vision import HunyuanVisionEncoder
-        from src.helpers.hunyuanvideo15.text import TextEncoder as HunyuanTextEncoder
         from src.helpers.hidream.llama import HidreamLlama
         from src.helpers.stepvideo.text_encoder import StepVideoTextEncoder
         from src.helpers.ltx.patchifier import SymmetricPatchifier
@@ -131,11 +134,6 @@ class AutoLoadingHelperDict(dict):
         ) -> "HunyuanVisionEncoder": ...
 
         @overload
-        def __getitem__(
-            self, key: Literal["hunyuanvideo15.text"]
-        ) -> "HunyuanTextEncoder": ...
-
-        @overload
         def __getitem__(self, key: Literal["prompt_gen"]) -> "PromptGenHelper": ...
 
         @overload
@@ -165,7 +163,6 @@ class AutoLoadingHelperDict(dict):
             return super().__getitem__(key)
 
         # Try to load helper automatically
-
         helper = self._engine._auto_load_helper(key)
         if helper is not None:
             self[key] = helper
@@ -180,7 +177,7 @@ class AutoLoadingHelperDict(dict):
             return default
 
 
-class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
+class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     engine_type: Literal["torch", "mlx"] = "torch"
     config: Dict[str, Any]
     scheduler: SchedulerInterface | None = None
@@ -257,6 +254,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         device: torch.device | None = None,
         **kwargs,
     ):
+        self.yaml_path = yaml_path
         self.device = device or get_torch_device()
         self._helpers = AutoLoadingHelperDict(self)
         # Keep a copy of the original initialization kwargs so that
@@ -657,22 +655,31 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         config.pop("type")
         config.pop("name", None)
         module = config.pop("module", None)
-        # get the helper class
-        try:
-            helper_class = helpers.get(base)
-        except Exception:
-            helper_class = find_class_recursive(importlib.import_module(module), base)
-        if helper_class is None:
-            raise ValueError(f"Helper class {base} not found")
+
+        
+        def get_helper(base: str):
+            try:
+                helper_class = helpers.get(base)
+            except Exception:
+                helper_class = find_class_recursive(importlib.import_module(module), base)
+            if helper_class is None:
+                raise ValueError(f"Helper class {base} not found")
+            return helper_class
 
         # create an instance of the helper class
-        if hasattr(helper_class, "from_pretrained") and "model_path" in config:
-            helper = helper_class.from_pretrained(
-                config["model_path"], device_map=device
+        if "model_path" in config and not "ignore_model_load" in component.get("extra_kwargs", {}):
+            helper = self._load_model(
+                component, 
+                getter_fn=get_helper,
+                no_weights=False,
+                key_map=component.get("key_map", {}),
+                extra_kwargs=component.get("extra_kwargs", {}),
+                load_device=device,
             )
         else:
             # check for config_path
-            if "config_path" in config and config.get("module", None) is not None:
+
+            if "config_path" in config and module is not None:
                 config_path = config.pop("config_path")
                 # try download the config file
                 try:
@@ -680,6 +687,20 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 except Exception:
                     pass
                 config = self._load_config_file(config_path)
+            
+            helper_class = get_helper(base)
+            
+            
+            config.pop("label", None)
+            config.pop("description", None)
+            config.pop("base", None)
+            config.pop("module", None)
+            config.pop("name", None)
+            config.pop("type", None)
+            config.pop("config_path", None)
+            config.pop("extra_kwargs", None)
+            config.pop("key_map", None)
+
 
             helper = helper_class(**config)
 
@@ -703,6 +724,14 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                     helper = helper.to(device)
                 except Exception:
                     pass
+        
+        mm_config = self._resolve_memory_config_for_component(component)
+
+        if mm_config is not None:
+            helper._resolve_memory_config_for_component =  types.MethodType(
+                    lambda self, x: mm_config, helper
+                )
+            
         return helper
 
     def load_helper_by_type(self, helper_type: str):
@@ -965,6 +994,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
 
                 if not already_enabled:
                     offloading_module = component.get("offloading_module", None)
+                    ignore_offloading_modules = component.get("ignore_offloading_modules", None)
+                    block_modules = component.get("block_modules", None)
+                    mm_config.ignore_modules = ignore_offloading_modules
+                    mm_config.block_modules = block_modules
                     if offloading_module:
                         model_to_offload = text_encoder.model.get_submodule(
                             offloading_module
@@ -1056,7 +1089,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
 
             label = component.get("name") or component.get("type") or "transformer"
             offloading_module = component.get("offloading_module", None)
-
+            ignore_offloading_modules = component.get("ignore_offloading_modules", None)
+            block_modules = component.get("block_modules", None)
+            mm_config.ignore_modules = ignore_offloading_modules
+            mm_config.block_modules = block_modules
             # If this engine will apply LoRAs/adapters later (e.g. Lynx), defer.
             should_defer = bool(
                 (not getattr(self, "auto_apply_loras", True))
@@ -1070,7 +1106,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
                 )
             else:
                 try:
-
+                    
                     model_to_offload = (
                         transformer.get_submodule(offloading_module)
                         if offloading_module
@@ -1777,7 +1813,67 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             self.load_component_by_type("vae")
         self.to_device(getattr(self, component_name))
 
+        # --- VAE encode cache (small, disk-backed) ---
+        # Cache is keyed by the *cast-to-VAE-dtype* input bytes + relevant encode args.
+        # This avoids recomputing expensive VAE encodes for repeated inputs.
+        # Only cache deterministic encodes. `sample_mode="sample"` is stochastic
+        # (generator advances), so caching would change behavior.
+        enable_vae_cache = getattr(self, "enable_cache", True) and sample_mode != "sample"
+        cache_file = None
+        prompt_hash = None
+        if enable_vae_cache:
+            vae_obj = getattr(self, component_name)
+            vae_id = (
+                getattr(getattr(vae_obj, "config", None), "_name_or_path", None)
+                or getattr(vae_obj, "_name_or_path", None)
+                or getattr(self, "yaml_path", None)
+                or self.__class__.__name__
+            )
+            safe_vae_id = str(vae_id).replace("/", "_")
+            cache_file = os.path.join(
+                DEFAULT_CACHE_PATH, f"{component_name}_encode_{safe_vae_id}.safetensors"
+            )
+
+            def _hash_tensor_content_cpu(t: torch.Tensor) -> str:
+                t_cpu = t.detach()
+                if t_cpu.device.type != "cpu":
+                    t_cpu = t_cpu.to("cpu")
+                t_cpu = t_cpu.contiguous()
+                # Reinterpret as bytes to avoid dtype-specific numpy limitations (e.g. bfloat16)
+                t_u8 = t_cpu.view(torch.uint8)
+                return hashlib.sha256(t_u8.numpy()).hexdigest()
+
+            vae_dtype = getattr(vae_obj, "dtype", None)
+            video_for_hash = video
+            if vae_dtype is not None and video_for_hash.dtype != vae_dtype:
+                video_for_hash = video_for_hash.to(dtype=vae_dtype)
+            video_hash = _hash_tensor_content_cpu(video_for_hash)
+            prompt_hash = self.hash(
+                {
+                    "fn": "vae_encode",
+                    "component": component_name,
+                    "vae_id": str(vae_id),
+                    "video_hash": video_hash,
+                    "video_shape": tuple(video.shape),
+                    "vae_dtype": str(vae_dtype),
+                    "sample_mode": sample_mode,
+                    "normalize_latents": normalize_latents,
+                    "normalize_latents_dtype": (
+                        str(normalize_latents_dtype) if normalize_latents else None
+                    ),
+                }
+            )
+
+            cached = self.load_cached(prompt_hash, cache_file=cache_file)
+            if cached is not None and len(cached) >= 1:
+                latents = cached[0].to(device=self.device)
+                if offload:
+                    self._offload(component_name, offload_type=offload_type)
+                return latents.to(dtype=dtype)
+
         video = video.to(dtype=getattr(self, component_name).dtype, device=self.device)
+        
+        self.enable_vae_tiling(component_name=component_name)
 
         latents = getattr(self, component_name).encode(video, return_dict=False)[0]
         if sample_mode == "sample":
@@ -1793,6 +1889,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
         if normalize_latents:
             latents = latents.to(dtype=normalize_latents_dtype)
             latents = getattr(self, component_name).normalize_latents(latents)
+
+        if enable_vae_cache and cache_file is not None and prompt_hash is not None:
+            # Keep cache tiny; latents can be large.
+            self.cache(prompt_hash, latents, cache_file=cache_file, max_cache_size=10)
 
         if offload:
             self._offload(component_name, offload_type=offload_type)
@@ -1940,15 +2040,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             )
             return False
 
-        enable_method = getattr(module, "enable_group_offload", None)
         try:
-            if callable(enable_method):
-                enable_method(**kwargs)
-            else:
-
-                from diffusers.hooks import apply_group_offloading
-
-                apply_group_offloading(module, **kwargs)
+            apply_group_offloading(module, **kwargs)
 
         except Exception as exc:
             self.logger.warning(
@@ -2743,7 +2836,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin):
             min_frames = ((min_frames // 4) * 4) + 1
             duration = min(duration, min_frames)
 
-        return max(duration, 1)
+        return int(max(duration, 1))
 
     if TYPE_CHECKING:
         # Hint to type-checkers/IDEs: unknown attributes accessed on engines

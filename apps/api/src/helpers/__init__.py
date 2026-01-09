@@ -10,6 +10,9 @@ from src.helpers.ltx import SymmetricPatchifier, Patchifier
 from src.helpers.hidream.llama import HidreamLlama
 from src.helpers.fibo.prompt_gen import PromptGenHelper
 from src.helpers.wan.humo_audio_processor import HuMoAudioProcessor
+from src.helpers.ltx2.connectors import LTX2TextConnectors
+from src.helpers.ltx2.vocoder import LTX2Vocoder
+from src.helpers.ltx2.upsampler import LTXLatentUpsamplerModel
 
 __all__ = [
     "CLIP",
@@ -25,4 +28,7 @@ __all__ = [
     "HidreamLlama",
     "PromptGenHelper",
     "HuMoAudioProcessor",
+    "LTX2TextConnectors",
+    "LTX2Vocoder",
+    "LTXLatentUpsamplerModel",
 ]

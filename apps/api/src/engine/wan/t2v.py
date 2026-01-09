@@ -38,6 +38,7 @@ class WanT2VEngine(WanShared):
         expand_timesteps: bool = False,
         ip_image: Image.Image | str | np.ndarray | torch.Tensor = None,
         enhance_kwargs: Dict[str, Any] = {},
+        chunking_profile: str = "none",
         **kwargs,
     ):
 
@@ -220,6 +221,7 @@ class WanT2VEngine(WanShared):
             scheduler=scheduler,
             guidance_scale=guidance_scale,
             ip_image=ip_image,
+            chunking_profile=chunking_profile,
         )
 
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")

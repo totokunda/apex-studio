@@ -3,7 +3,7 @@ from __future__ import annotations
 from src.utils.defaults import DEFAULT_HEADERS
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import Dict, Any, Union
+from typing import Dict, Any
 import math
 import os
 import json
@@ -20,8 +20,6 @@ from typing import List
 import tempfile
 from glob import glob
 from src.mixins.download_mixin import DownloadMixin
-from contextlib import nullcontext
-
 # Import pretrained config from transformers
 from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
 from src.types import InputImage, InputVideo, InputAudio
@@ -159,16 +157,18 @@ class LoaderMixin(DownloadMixin):
                     mm_config = resolve_mm_cfg(component)
                 except Exception:
                     mm_config = None
+                    
+        
 
         model_base = component.get("base")
         model_path = component.get("model_path")
+        
+        
 
         if mm_config is not None:
             # Should be cpu often times since the model is loaded on the cpu
             load_device = "cpu"
 
-        if no_weights:
-            load_device = "cpu"
 
         if getter_fn:
             model_class = getter_fn(model_base)
@@ -209,7 +209,7 @@ class LoaderMixin(DownloadMixin):
             converter = NoOpConverter()
             
         
-        if os.path.isdir(model_path):
+        if os.path.isdir(model_path) and not config_path:
             # look for a config.json file
             config_path = os.path.join(model_path, "config.json")
             if os.path.exists(config_path):
@@ -700,6 +700,10 @@ class LoaderMixin(DownloadMixin):
                     or type(model).__name__
                 )
                 offloading_module = component.get("offloading_module", None)
+                ignore_offloading_modules = component.get("ignore_offloading_modules", None)
+                block_modules = component.get("block_modules", None)
+                mm_config.ignore_modules = ignore_offloading_modules
+                mm_config.block_modules = block_modules
                 if offloading_module:
                     model_to_offload = model.get_submodule(offloading_module)
                 else:

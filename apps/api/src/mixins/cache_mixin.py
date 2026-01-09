@@ -67,7 +67,9 @@ class CacheMixin:
         data = pickle.dumps(canonical, protocol=5)
         return hashlib.sha256(data).hexdigest()
 
-    def get_cached_keys_for_prompt(self, hash: str) -> List[str]:
+    def get_cached_keys_for_prompt(
+        self, hash: str, cache_file: str | None = None
+    ) -> List[str]:
         """Return the most recent cache keys for a given hash.
 
         - Supports an arbitrary number of tensors per hash.
@@ -77,13 +79,17 @@ class CacheMixin:
         if not self.enable_cache:
             return []
 
-        if self.cache_file is None:
-            self.cache_file = os.path.join(
+        cache_file_eff = cache_file or self.cache_file
+        if cache_file_eff is None:
+            # Back-compat default for existing TextEncoder cache usage
+            if not getattr(self, "model_path", None):
+                return []
+            cache_file_eff = os.path.join(
                 DEFAULT_CACHE_PATH,
                 f"text_encoder_{self.model_path.replace('/', '_')}.safetensors",
             )
 
-        if not os.path.exists(self.cache_file):
+        if not os.path.exists(cache_file_eff):
             return []
 
         # Key format (new, generic):
@@ -104,7 +110,7 @@ class CacheMixin:
         latest_by_index: Dict[int, Tuple[int, str]] = {}
 
         try:
-            with safe_open(self.cache_file, framework="pt", device="cpu") as f:
+            with safe_open(cache_file_eff, framework="pt", device="cpu") as f:
                 for key in f.keys():
                     parsed = parse_entry_key(key)
                     if parsed is None:
@@ -121,17 +127,22 @@ class CacheMixin:
         # Return keys ordered by their positional index
         return [latest_by_index[i][1] for i in sorted(latest_by_index.keys())]
 
-    def load_cached(self, hash: str) -> Tuple[torch.Tensor, ...] | None:
+    def load_cached(
+        self, hash: str, cache_file: str | None = None
+    ) -> Tuple[torch.Tensor, ...] | None:
         """Load cached tensors for the given prompt hash if present.
 
         Returns a tuple of tensors in the same order they were cached,
         or None if no valid cached entry exists.
         """
-        keys = self.get_cached_keys_for_prompt(hash)
+        keys = self.get_cached_keys_for_prompt(hash, cache_file=cache_file)
         if not keys:
             return None
         try:
-            with safe_open(self.cache_file, framework="pt", device="cpu") as f:
+            cache_file_eff = cache_file or self.cache_file
+            if cache_file_eff is None:
+                return None
+            with safe_open(cache_file_eff, framework="pt", device="cpu") as f:
                 tensors: List[torch.Tensor] = []
                 for key in keys:
                     tensors.append(f.get_tensor(key))
@@ -143,6 +154,8 @@ class CacheMixin:
         self,
         hash: str,
         *tensors: torch.Tensor,
+        cache_file: str | None = None,
+        max_cache_size: int | None = None,
     ) -> None:
         """Persist an arbitrary number of tensors with LRU-style eviction.
 
@@ -161,18 +174,22 @@ class CacheMixin:
             return
 
         # Ensure cache path exists
-        if self.cache_file is None:
-            self.cache_file = os.path.join(
+        cache_file_eff = cache_file or self.cache_file
+        if cache_file_eff is None:
+            # Back-compat default for existing TextEncoder cache usage
+            if not getattr(self, "model_path", None):
+                return
+            cache_file_eff = os.path.join(
                 DEFAULT_CACHE_PATH,
                 f"text_encoder_{self.model_path.replace('/', '_')}.safetensors",
             )
-        os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+        os.makedirs(os.path.dirname(cache_file_eff), exist_ok=True)
 
         # Load existing cache tensors (best-effort)
         existing_tensors: Dict[str, torch.Tensor] = {}
-        if os.path.exists(self.cache_file):
+        if os.path.exists(cache_file_eff):
             try:
-                with safe_open(self.cache_file, framework="pt", device="cpu") as f:
+                with safe_open(cache_file_eff, framework="pt", device="cpu") as f:
                     for key in f.keys():
                         # Lazy: only load when needed for rewrite; we need all to rewrite cleanly
                         existing_tensors[key] = f.get_tensor(key)
@@ -228,10 +245,13 @@ class CacheMixin:
         # Enforce max_cache_size (unique prompt hashes)
         unique_hashes = list(entries_by_hash.keys())
         num_prompts = len(unique_hashes)
+        max_cache_size_eff = (
+            max_cache_size if max_cache_size is not None else self.max_cache_size
+        )
         if (
-            self.max_cache_size is not None
-            and self.max_cache_size > 0
-            and num_prompts > self.max_cache_size
+            max_cache_size_eff is not None
+            and max_cache_size_eff > 0
+            and num_prompts > max_cache_size_eff
         ):
             # Compute recency per hash (latest timestamp across kinds)
             hash_to_latest_ts = {
@@ -242,7 +262,7 @@ class CacheMixin:
             eviction_order = sorted(hash_to_latest_ts.items(), key=lambda x: x[1])
             # Do not evict the newly added prompt; prioritize evicting others first
             eviction_candidates = [h for h, _ in eviction_order if h != hash]
-            num_to_evict = num_prompts - self.max_cache_size
+            num_to_evict = num_prompts - max_cache_size_eff
             for hsh in eviction_candidates[:num_to_evict]:
                 indices = entries_by_hash.pop(hsh, {})
                 for _index, (_ts, key) in indices.items():
@@ -250,7 +270,7 @@ class CacheMixin:
 
         # Rewrite cache file atomically
         try:
-            save_file(existing_tensors, self.cache_file)
+            save_file(existing_tensors, cache_file_eff)
         except Exception:
             # As a fallback, avoid crashing the caller; drop caching if write fails
             pass
