@@ -114,6 +114,38 @@ spec:
       resource_requirements:
         min_vram_gb: 33
         recommended_vram_gb: 44
+    - path: QuantStack/LTX-2-GGUF/LTX-2-dev/LTX-2-dev-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 12317819776
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/LTX-2-GGUF/LTX-2-dev/LTX-2-dev-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 10317595520
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/LTX-2-GGUF/LTX-2-dev/LTX-2-dev-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 9574482816
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: QuantStack/LTX-2-GGUF/LTX-2-dev/LTX-2-dev-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      file_size: 8026456960
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
   - type: helper
     label: LTX2 Connectors
     name: connectors
