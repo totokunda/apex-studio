@@ -1206,7 +1206,8 @@ class LTX2TI2VEngine(LTX2Shared):
                             audio_timestep_2b = timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
                         else:
                             audio_timestep_2b = timestep_2b
-                            
+                        
+                        
                  
                         with self.transformer.cache_context("cond_uncond"):
                             noise_pred_video, noise_pred_audio = self.transformer(
