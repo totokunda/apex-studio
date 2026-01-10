@@ -24,7 +24,7 @@ from src.mixins.download_mixin import DownloadMixin
 from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
 from src.types import InputImage, InputVideo, InputAudio
 import types
-
+import numpy as np
 
 class _LazyModule(types.ModuleType):
     """
@@ -1207,7 +1207,7 @@ class LoaderMixin(DownloadMixin):
         # Handle lists by loading each element and concatenating.
         if isinstance(audio_input, list):
             arrays = [
-                self.load_audio(item, sample_rate=sample_rate, normalize=normalize)
+                self._load_audio(item, sample_rate=sample_rate, normalize=normalize)
                 for item in audio_input
             ]
             # Ensure all items are 1D arrays for concatenation.
@@ -1253,6 +1253,7 @@ class LoaderMixin(DownloadMixin):
                 audio_array, sr = librosa.load(audio_path, sr=sample_rate)
                 if normalize:
                     audio_array = self._normalize_audio(audio_array, sr)
+            
             return audio_array
         finally:
             # Clean up any temporary file we created for remote inputs.
