@@ -489,10 +489,9 @@ def time_move_blocks_to_gpu_ms(
 
 def _main() -> None:
     engine = UniversalEngine(
-        yaml_path="manifest/video/ovi-10b-5s-1.0.0.v1.yml",
+        yaml_path="manifest/video/ltx2-19b-text-to-image-to-video-distilled-1.0.0.v1.yml",
         selected_components={
-            "transformer": {"variant": "FP8"},
-            "text_encoder": {"variant": "FP8"},
+            "transformer": {"variant": "default"},
         },
         attention_type="sdpa",
     ).engine
@@ -500,7 +499,8 @@ def _main() -> None:
     engine.load_component_by_type("transformer")
     transformer = engine.transformer
     
-    block = transformer.video_model.blocks[0]
+    block = transformer.transformer_blocks[0]
+    
 
     # --- Time how long it takes to put the block on the GPU (weights upload) ---
     if torch.cuda.is_available():
@@ -514,7 +514,7 @@ def _main() -> None:
         )
 
         # --- Assumption: prealloc one-block space, only copy flat -> GPU, then reshape (views) ---
-        blocks = list(transformer.video_model.blocks)
+        blocks = list(transformer.transformer_blocks)
         print(f"timing blocks flat->gpu w/ prealloc (no block.to): num_blocks={len(blocks)}")
 
         # Baseline: block.to("cuda") then block.to("cpu") (per-block, no accumulation on GPU)
