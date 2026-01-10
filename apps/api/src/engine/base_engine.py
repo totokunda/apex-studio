@@ -36,7 +36,6 @@ from src.utils.cache import empty_cache
 from logging import Logger
 from src.scheduler import SchedulerInterface
 from typing import Callable
-from src.utils.mlx import convert_dtype_to_torch, convert_dtype_to_mlx
 from src.memory_management import MemoryConfig
 import torch.nn as nn
 import importlib
@@ -56,6 +55,7 @@ from src.mixins import LoaderMixin, ToMixin, OffloadMixin, CompileMixin
 from src.mixins.cache_mixin import CacheMixin
 from glob import glob
 from safetensors import safe_open
+from src.utils.mlx import convert_dtype_to_torch, convert_dtype_to_mlx
 import mlx.core as mx
 import mlx.nn as mx_nn
 import numpy as np
