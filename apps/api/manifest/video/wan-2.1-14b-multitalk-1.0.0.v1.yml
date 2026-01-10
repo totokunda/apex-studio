@@ -291,6 +291,7 @@ spec:
         - - seed
         - - num_frames
         - - motion_frames
+        - - chunking_profile  
     inputs:
     - id: image
       label: Image
@@ -448,3 +449,18 @@ spec:
       min: 0
       max: 100
       step: 1
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: sampling
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive

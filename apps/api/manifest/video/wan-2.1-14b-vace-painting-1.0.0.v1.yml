@@ -276,6 +276,7 @@ spec:
         - - conditioning_scale
         - - guidance_scale
         - - seed
+        - - chunking_profile
     inputs:
     - id: video
       label: Video
@@ -409,3 +410,18 @@ spec:
       min: 0.0
       max: 15.0
       step: 0.1
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: sampling
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive 

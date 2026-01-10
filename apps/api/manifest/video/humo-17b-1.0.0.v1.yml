@@ -245,6 +245,7 @@ spec:
         - - guidance_scale_t
         - - seed
         - - use_audio_length
+        - - chunking_profile
     inputs:
     - id: audio
       label: Audio
@@ -385,3 +386,18 @@ spec:
       panel: sampling
       required: true
       default: false
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: sampling
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
