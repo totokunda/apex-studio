@@ -326,6 +326,7 @@ def save_video_ltx2(
     fps: int = 25,
     video_chunks_number: int = 1,
 ) -> None:
+    
     if isinstance(video, torch.Tensor):
         video = iter([video])
 

@@ -30,7 +30,7 @@ from diffusers.models.autoencoders.vae import (
     DecoderOutput,
     DiagonalGaussianDistribution,
 )
-
+from tqdm import tqdm
 
 class PerChannelRMSNorm(nn.Module):
     """
@@ -1405,11 +1405,9 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         # Split z into overlapping tiles and decode them separately.
         # The tiles have an overlap to avoid seams between tiles.
         rows = []
-        print(z.shape)
         for i in range(0, height, tile_latent_stride_height):
             row = []
             for j in range(0, width, tile_latent_stride_width):
-                print(z[:, :, :, i : i + tile_latent_min_height, j : j + tile_latent_min_width].shape)
                 time = self.decoder(
                     z[:, :, :, i : i + tile_latent_min_height, j : j + tile_latent_min_width], temb, causal=causal
                 )
@@ -1480,7 +1478,7 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         blend_num_frames = self.tile_sample_min_num_frames - self.tile_sample_stride_num_frames
 
         row = []
-        for i in range(0, num_frames, tile_latent_stride_num_frames):
+        for i in tqdm(range(0, num_frames, tile_latent_stride_num_frames), desc="Temporal tiled decode"):
             tile = z[:, :, i : i + tile_latent_min_num_frames + 1, :, :]
             if self.use_tiling and (tile.shape[-1] > tile_latent_min_width or tile.shape[-2] > tile_latent_min_height):
                 decoded = self.tiled_decode(tile, temb, causal=causal, return_dict=True).sample

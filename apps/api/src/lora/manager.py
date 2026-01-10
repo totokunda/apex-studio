@@ -4,8 +4,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from src.converters.convert import (
-    get_transformer_converter_by_model_name,
-    strip_common_prefix,
+    get_transformer_converter_by_model_name
 )
 from src.lora.lora_converter import LoraConverter
 import torch
@@ -282,6 +281,7 @@ class LoraManager(DownloadMixin):
         final_names: List[str] = []
         final_scales: List[float] = []
         loaded_resolved: List[LoraItem] = []
+        model_keys = list(model.state_dict().keys())
         for idx, entry in enumerate(loras):
             scale: float = 1.0
             if isinstance(entry, tuple):
@@ -324,7 +324,7 @@ class LoraManager(DownloadMixin):
                 for local_path in item.local_paths:
                     class_name = model.__class__.__name__
                     local_path_state_dict = self.maybe_convert_state_dict(
-                        local_path, class_name
+                        local_path, class_name, model_keys
                     )
                     
 
@@ -336,8 +336,7 @@ class LoraManager(DownloadMixin):
                     local_path_state_dict = self._strip_adapter_name_from_keys(
                         local_path_state_dict
                     )
-                    
-                    
+
 
                     # Embedding LoRA uses lora_embedding_* keys (no ".weight") and swaps A/B roles.
                     local_path_state_dict = remap_embedding_lora_keys(
@@ -348,12 +347,11 @@ class LoraManager(DownloadMixin):
                     prefix = self._get_prefix_key(keys)
                     # ensure adapter name is not too long and does not have . or / in it if so remove it
                     adapter_name = self._clean_adapter_name(adapter_name)
-                    # convert to dtype of the model
-                    model_dtype = next(model.parameters()).dtype
 
                     metadata = self._build_lora_config_metadata_from_state_dict(
                         local_path_state_dict
                     )
+                    
                     if metadata is not None and prefix is not None:
                         # diffusers filters metadata keys by prefix and strips it, so prefix these keys to keep them.
                         metadata = {f"{prefix}.{k}": v for k, v in metadata.items()}
@@ -385,14 +383,14 @@ class LoraManager(DownloadMixin):
 
         return loaded_resolved
 
-    def maybe_convert_state_dict(self, local_path: str, model_name: str):
+    def maybe_convert_state_dict(self, local_path: str, model_name: str, model_keys: List[str] = None):
         state_dict = self.load_file(local_path)
         converter = get_transformer_converter_by_model_name(model_name)
         lora_converter = LoraConverter()
-        lora_converter.convert(state_dict)
+        lora_converter.convert(state_dict, model_keys)
  
         if converter is not None:
-            converter.convert(state_dict)
+            converter.convert(state_dict, model_keys)
 
         return state_dict
 
