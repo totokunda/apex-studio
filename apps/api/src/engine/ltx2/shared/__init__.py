@@ -4,8 +4,9 @@ from typing import Optional, Union, List
 from PIL import Image
 import torch
 from diffusers.utils.torch_utils import randn_tensor
+from src.engine.ltx2.shared.audio_processing import LTX2AudioProcessingMixin
 
-class LTX2Shared(BaseEngine):
+class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     """LTX2 Shared Engine Implementation"""
 
     def __init__(self, yaml_path: str, **kwargs):
