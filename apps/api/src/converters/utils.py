@@ -104,9 +104,10 @@ def update_state_dict_(sd: Dict[str, Any], old_key: str, new_key: str):
 def strip_common_prefix(
     src_state: Dict[str, Any],
     ref_state: Optional[Dict[str, Any]] = None,
+    model_keys: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Return a *new* state-dict whose keys no longer have an extra prefix.
+    Strip a (safe) common prefix from keys *in place* when doing so improves matching.
 
     Parameters
     ----------
@@ -126,85 +127,134 @@ def strip_common_prefix(
     >>> strip_common_prefix(dirty_sd, clean_sd).keys()
     dict_keys(['blocks.0.attn1.to_q.weight'])
     """
-    if ref_state is None:
-        # Heuristic: do *all* keys share the same first token?
-        first_tokens = {k.split(".", 1)[0] for k in src_state.keys()}
-
-        if len(first_tokens) == 1:  # unanimous
-            prefix = next(iter(first_tokens)) + "."
-        else:
-            return src_state  # nothing to strip
-    else:
-        ref_keys = set(ref_state.keys())
-        prefix_counter: Counter[str] = Counter()
-
-        # Normalize LoRA-style suffixes so we can compare against base model keys.
-        # Examples:
-        #   "attn1.to_q.lora_down.weight" -> "attn1.to_q.weight"
-        #   "attn1.to_q.lora_A.weight"   -> "attn1.to_q.weight"
-        #   "... .lora.up.weight"        -> "... .weight"
-        def _normalize_lora_suffix(suffix: str) -> str:
-            tokens = suffix.split(".")
-            if not tokens:
-                return suffix
-
-            has_lora_marker = any(
-                t == "lora" or t.startswith("lora_") or t.endswith("_lora")
-                for t in tokens
-            )
-
-            drop_tokens = {
-                "lora",
-                "loras",
-                "lora_up",
-                "lora_down",
-                "lora_A",
-                "lora_B",
-                "lora_embedding_A",
-                "lora_embedding_B",
-                "alpha",
-                "rank",
-                "rank_num",
-                "ranknum",
-            }
-
-            cleaned = []
-            for t in tokens:
-                if t in drop_tokens:
-                    continue
-                # Some formats use "lora.up"/"lora.down" or just "A"/"B" tokens
-                if has_lora_marker and t in {"up", "down", "A", "B"}:
-                    continue
-                cleaned.append(t)
-
-            return ".".join(cleaned)
-
-        # Look for candidate prefixes
-        for k in src_state.keys():
-            # Skip keys that already match
-            if k in ref_keys:
-                continue
-            # Try every prefix ending at a dot
-            for m in re.finditer(r"\.", k):
-                p = k[: m.start() + 1]  # keep the trailing dot
-                suffix = k[len(p) :]
-                normalized_suffix = _normalize_lora_suffix(suffix)
-                if normalized_suffix in ref_keys:
-                    prefix_counter[p] += 1
-                    # shortest prefix that works is good enough
-                    break
-
-        if not prefix_counter:
-            return src_state  # nothing matched → keep as-is
-
-        # Use the prefix that matched the *most* keys
-        prefix, _ = prefix_counter.most_common(1)[0]
-
-    # Actually build a new state-dict with the prefix removed
-    stripped_state = {
-        (k[len(prefix) :] if k.startswith(prefix) else k): v
-        for k, v in src_state.items()
+    # --- Helpers -----------------------------------------------------------
+    # We only want to strip *wrapper* prefixes like `model.` / `diffusion_model.`
+    # (and short combinations like `model.diffusion_model.`), never deeper structural
+    # tokens like `blocks.` / `output_blocks.`.
+    _SAFE_PREFIX_TOKENS = {
+        # common wrappers
+        "model",
+        "module",
+        "diffusion_model",
+        "transformer",
+        "unet",
+        "vae",
+        "text_encoder",
+        "text_encoder_2",
+        "first_stage_model",
+        "cond_stage_model",
+        "base_model",
+        "network",
+        "net",
+        "backbone",
+        "encoder",
+        "decoder",
     }
-    
-    
-    return stripped_state
+
+    def _normalize_lora_key_for_ref_match(k: str) -> str:
+        """
+        Normalize LoRA-style keys so they can be compared against base-model keys.
+        Only applies when the key looks like a LoRA key; otherwise returns `k` unchanged.
+        """
+        tokens = k.split(".")
+        if not tokens:
+            return k
+
+        has_lora_marker = any(
+            t == "lora" or t.startswith("lora_") or t.endswith("_lora") for t in tokens
+        )
+        if not has_lora_marker:
+            return k
+
+        drop_tokens = {
+            "lora",
+            "loras",
+            "lora_up",
+            "lora_down",
+            "lora_A",
+            "lora_B",
+            "lora_embedding_A",
+            "lora_embedding_B",
+            "alpha",
+            "rank",
+            "rank_num",
+            "ranknum",
+        }
+
+        cleaned: list[str] = []
+        for t in tokens:
+            if t in drop_tokens:
+                continue
+            # Some formats use "lora.up"/"lora.down" or just "A"/"B" tokens
+            if t in {"up", "down", "A", "B"}:
+                continue
+            cleaned.append(t)
+
+        return ".".join(cleaned)
+
+    def _apply_prefix(p: str, k: str) -> str:
+        return k[len(p) :] if p and k.startswith(p) else k
+
+    # --- Determine reference keys -----------------------------------------
+    ref_keys: Optional[set[str]] = None
+    if ref_state is not None:
+        ref_keys = set(ref_state.keys())
+    elif model_keys:
+        ref_keys = set(model_keys)
+
+    keys = list(src_state.keys())
+    if not keys:
+        return src_state
+
+    # --- Candidate prefixes (1-2 leading safe tokens) ----------------------
+    candidates: set[str] = set()
+    for k in keys:
+        parts = k.split(".")
+        if len(parts) < 2:
+            continue
+        if parts[0] in _SAFE_PREFIX_TOKENS:
+            candidates.add(parts[0] + ".")
+            if len(parts) >= 3 and parts[1] in _SAFE_PREFIX_TOKENS:
+                candidates.add(parts[0] + "." + parts[1] + ".")
+
+    # --- If we don't have ref keys, only do a very safe unanimous strip ----
+    if ref_keys is None:
+        first_tokens = {k.split(".", 1)[0] for k in keys if "." in k}
+        if len(first_tokens) == 1:
+            token = next(iter(first_tokens))
+            if token in _SAFE_PREFIX_TOKENS:
+                prefix = token + "."
+                items = list(src_state.items())
+                src_state.clear()
+                for k, v in items:
+                    src_state[_apply_prefix(prefix, k)] = v
+                return src_state
+        return src_state
+
+    # --- Otherwise, pick the safe prefix that improves overlap -------------
+    def score(prefix: str) -> int:
+        c = 0
+        for k in keys:
+            k2 = _apply_prefix(prefix, k)
+            if _normalize_lora_key_for_ref_match(k2) in ref_keys:
+                c += 1
+        return c
+
+    baseline = score("")
+    best_prefix = ""
+    best_score = baseline
+
+    for p in candidates:
+        s = score(p)
+        if s > best_score or (s == best_score and best_prefix and len(p) < len(best_prefix)):
+            best_prefix = p
+            best_score = s
+
+    if best_prefix and best_score > baseline:
+        items = list(src_state.items())
+        src_state.clear()
+        for k, v in items:
+            src_state[_apply_prefix(best_prefix, k)] = v
+        return src_state
+
+    return src_state
