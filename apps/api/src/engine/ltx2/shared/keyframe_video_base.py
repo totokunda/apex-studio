@@ -216,8 +216,9 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
         num_channels_latents_audio = (
             self.audio_vae.config.latent_channels if getattr(self, "audio_vae", None) is not None else 8
         )
-        audio_latents, audio_num_frames = self.prepare_audio_latents(
-            batch_size * num_videos_per_prompt,
+        audio_latents, audio_num_frames, _, _ = self.prepare_audio_latents(
+            audio=None,
+            batch_size=batch_size * num_videos_per_prompt,
             num_channels_latents=num_channels_latents_audio,
             num_mel_bins=num_mel_bins,
             num_frames=num_frames,
