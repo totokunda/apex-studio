@@ -87,7 +87,7 @@ apex-engine dev
 ```
 
 ### Nunchaku
-If you your machine supports using the Nunchakue models, you can install the Nunchaku models by running the following command:
+If you your machine supports using the Nunchaku models, you can install the Nunchaku models by running the following command:
 ```bash
 python3 scripts/maybe_install_nunchaku.py --install
 ```

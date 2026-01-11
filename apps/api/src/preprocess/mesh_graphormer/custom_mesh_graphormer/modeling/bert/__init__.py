@@ -15,8 +15,7 @@ from .modeling_utils import (
     TF_WEIGHTS_NAME,
     PretrainedConfig,
     PreTrainedModel,
-    prune_layer,
-    Conv1D,
 )
 
+from transformers.pytorch_utils import prune_linear_layer, Conv1D
 from .file_utils import PYTORCH_PRETRAINED_BERT_CACHE

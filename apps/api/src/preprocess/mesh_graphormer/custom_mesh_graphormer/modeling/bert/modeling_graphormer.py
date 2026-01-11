@@ -25,7 +25,8 @@ from src.preprocess.mesh_graphormer.custom_mesh_graphormer.modeling._gcnn import
     GraphConvolution,
     GraphResBlock,
 )
-from .modeling_utils import prune_linear_layer
+
+from transformers.pytorch_utils import prune_linear_layer
 
 LayerNormClass = torch.nn.LayerNorm
 BertLayerNorm = torch.nn.LayerNorm

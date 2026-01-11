@@ -819,6 +819,12 @@ class LTX2TI2VEngine(LTX2Shared):
         # For gradient estimation we implement the Euler update directly, matching ltx-pipelines:
         #   v_k = (x_k - x0_k) / sigma_k,  v_total = ge_gamma*(v_k - v_{k-1}) + v_{k-1}
         #   x_{k+1} = x_k + (sigma_{k+1} - sigma_k) * v_total
+        self._latent_num_frames = latent_num_frames
+        self._latent_height = latent_height
+        self._latent_width = latent_width
+        self._audio_num_frames = audio_num_frames
+        self._latent_mel_bins = latent_mel_bins
+        
         sigmas_t = getattr(self.scheduler, "sigmas", None)
         if use_gradient_estimation:
             if getattr(getattr(self.scheduler, "config", None), "stochastic_sampling", False):
@@ -1447,18 +1453,13 @@ class LTX2TI2VEngine(LTX2Shared):
         safe_emit_progress(stage1_progress_callback, 0.98, "Vocoder synthesis")
         audio = vocoder(generated_mel_spectrograms)
         
-
         if offload:
             self._offload("vocoder")
-        
-        def _convert_to_uint8(frames: torch.Tensor) -> torch.Tensor:
-            frames = (((frames + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
-            frames = rearrange(frames[0], "c f h w -> f h w c")
-            return frames
-        
-        video = _convert_to_uint8(video).cpu()
+
+        video = self._convert_to_uint8(video).cpu()
         audio = audio.squeeze(0).cpu().float()
         
         safe_emit_progress(stage1_progress_callback, 1.0, "Completed text-to-image-to-video pipeline")
         
         return video, audio
+    

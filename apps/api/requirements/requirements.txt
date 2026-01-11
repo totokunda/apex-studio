@@ -10,7 +10,6 @@ azureml==0.2.7
 boltons==23.0.0
 boto3==1.35.53
 botocore==1.35.99
-cityscapesscripts==2.2.4
 einops==0.8.1
 fastapi==0.128.0
 diffusers @ git+https://github.com/huggingface/diffusers.git
@@ -49,7 +48,7 @@ plyfile==1.1.3
 python-multipart==0.0.20
 pooch==1.8.2
 prettytable==3.17.0
-protobuf==6.33.2
+protobuf==4.25.8
 psutil==5.9.0
 pydantic==2.12.5
 pydash==8.0.5

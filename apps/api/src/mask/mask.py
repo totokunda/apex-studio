@@ -13,6 +13,7 @@ import traceback
 from datetime import datetime
 import gc
 import time
+from src.preprocess.custom_mmpkg.custom_mmcv.video.io import VideoReader as MMCVVideoReader
 
 # get the default device
 from src.utils.defaults import DEFAULT_PREPROCESSOR_SAVE_PATH
@@ -46,9 +47,52 @@ MODEL_CONFIGS = {
 }
 
 
+class _Cv2Frame:
+    """Minimal frame wrapper to mimic `.asnumpy()` used by the previous backend."""
+
+    def __init__(self, rgb: np.ndarray):
+        self._rgb = rgb
+
+    def asnumpy(self) -> np.ndarray:
+        return self._rgb
+
+    @property
+    def shape(self):
+        return self._rgb.shape
+
+
+class Cv2VideoReader:
+    """OpenCV-backed video reader with a small, frame-indexing surface area."""
+
+    def __init__(self, video_path: str, cache_capacity: int = 10):
+        self._vr = MMCVVideoReader(video_path, cache_capacity=cache_capacity)
+        if not self._vr.opened:
+            raise ValueError(f"Cannot open video file: {video_path}")
+
+    def __len__(self) -> int:
+        return len(self._vr)
+
+    def __getitem__(self, idx: int) -> _Cv2Frame:
+        frame_bgr = self._vr[idx]
+        if frame_bgr is None:
+            raise IndexError(f"Failed to read frame {idx}")
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        return _Cv2Frame(frame_rgb)
+
+    def get_avg_fps(self) -> float:
+        fps = float(self._vr.fps or 0.0)
+        return fps if fps > 0 else 0.0
+
+    def release(self) -> None:
+        try:
+            self._vr.vcap.release()
+        except Exception:
+            pass
+
+
 def extract_video_frame(video_path: str, frame_number: int) -> np.ndarray:
     """
-    Extract a specific frame from a video file using decord.
+    Extract a specific frame from a video file using OpenCV.
 
     Args:
         video_path: Path to the video file
@@ -58,10 +102,7 @@ def extract_video_frame(video_path: str, frame_number: int) -> np.ndarray:
         numpy array of shape (H, W, 3) in RGB format
     """
     try:
-        from decord import VideoReader, cpu
-
-        # Use CPU context for frame extraction
-        vr = VideoReader(video_path, ctx=cpu(0))
+        vr = Cv2VideoReader(video_path, cache_capacity=10)
 
         # Validate frame number
         total_frames = len(vr)
@@ -70,7 +111,7 @@ def extract_video_frame(video_path: str, frame_number: int) -> np.ndarray:
                 f"Frame number {frame_number} out of range [0, {total_frames-1}]"
             )
 
-        # Extract frame (decord returns RGB)
+        # Extract frame (RGB)
         frame = vr[frame_number].asnumpy()
 
         logger.info(
@@ -78,10 +119,6 @@ def extract_video_frame(video_path: str, frame_number: int) -> np.ndarray:
         )
         return frame
 
-    except ImportError:
-        raise ImportError(
-            "decord is required for video frame extraction. Install with: pip install decord"
-        )
     except Exception as e:
         logger.error(f"Failed to extract frame from video: {str(e)}")
         raise
@@ -484,20 +521,13 @@ def _inject_focus_points_for_bounds(
                 ".m4v",
             }
             if is_video:
-                try:
-                    from decord import VideoReader, cpu
-
-                    vr = VideoReader(str(path), ctx=cpu(0))
-                    frame_rgb = vr[frame_idx].asnumpy()
-                    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                except Exception:
-                    cap = cv2.VideoCapture(str(path))
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                    ok, bgr = cap.read()
-                    cap.release()
-                    if not ok:
-                        return
-                    frame_bgr = bgr
+                cap = cv2.VideoCapture(str(path))
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ok, bgr = cap.read()
+                cap.release()
+                if not ok:
+                    return
+                frame_bgr = bgr
             else:
                 img = Image.open(str(path)).convert("RGB")
                 frame_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
@@ -757,18 +787,7 @@ def debug_save_rectangles(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if is_video:
-        # Prefer decord for accuracy/perf; fallback to OpenCV if unavailable
-        vr = None
-        try:
-            from decord import VideoReader, cpu
-
-            vr = VideoReader(str(path), ctx=cpu(0))
-            rgb_reader = True
-        except Exception:
-            cap = cv2.VideoCapture(str(path))
-            vr = cap
-            rgb_reader = False
-
+        cap = cv2.VideoCapture(str(path))
         try:
             for item in frame_results:
                 idx = int(item.get("frame_number", 0))
@@ -777,26 +796,10 @@ def debug_save_rectangles(
                 if not bounds:
                     bounds = rect_from_contours(item.get("contours", []) or [])
 
-                if "VideoReader" in type(vr).__name__:
-                    try:
-                        frame_rgb = vr[idx].asnumpy()
-                    except Exception:
-                        # fallback: read sequentially from OpenCV if random access fails
-                        cap = cv2.VideoCapture(str(path))
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                        ok, bgr = cap.read()
-                        if not ok:
-                            continue
-                        frame_bgr = bgr
-                    else:
-                        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                else:
-                    # OpenCV VideoCapture path
-                    vr.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                    ok, bgr = vr.read()
-                    if not ok:
-                        continue
-                    frame_bgr = bgr
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ok, frame_bgr = cap.read()
+                if not ok:
+                    continue
 
                 # Render correct shape type if provided
                 if (
@@ -809,8 +812,7 @@ def debug_save_rectangles(
                 out_file = out_dir / f"frame_{idx:06d}.png"
                 cv2.imwrite(str(out_file), frame_bgr)
         finally:
-            if vr is not None and hasattr(vr, "release"):
-                vr.release()
+            cap.release()
     else:
         # Single image case
         img = Image.open(str(path)).convert("RGB")
@@ -868,23 +870,15 @@ class LazyFrameLoader:
         self.is_video = path.suffix.lower() in video_extensions
 
         if self.is_video:
-            # For videos, use cached decord VideoReader
+            # For videos, use cached OpenCV reader
             if input_path not in self._video_reader_cache:
-                try:
-                    from decord import VideoReader, cpu
+                # Clean up old cached readers if we exceed max
+                if len(self._video_reader_cache) >= self._max_cached_readers:
+                    oldest_key = next(iter(self._video_reader_cache))
+                    del self._video_reader_cache[oldest_key]
 
-                    # Clean up old cached readers if we exceed max
-                    if len(self._video_reader_cache) >= self._max_cached_readers:
-                        oldest_key = next(iter(self._video_reader_cache))
-                        del self._video_reader_cache[oldest_key]
-
-                    # Cache the VideoReader
-                    vr = VideoReader(input_path, ctx=cpu(0))
-                    self._video_reader_cache[input_path] = vr
-                except ImportError:
-                    raise ImportError(
-                        "decord is required for video support. Install with: pip install decord"
-                    )
+                vr = Cv2VideoReader(input_path, cache_capacity=10)
+                self._video_reader_cache[input_path] = vr
 
             vr = self._video_reader_cache[input_path]
 
@@ -986,18 +980,11 @@ class MultiFrameLoader:
         self.max_frames = max_frames
 
         if input_path not in self._video_reader_cache:
-            try:
-                from decord import VideoReader, cpu
-
-                if len(self._video_reader_cache) >= self._max_cached_readers:
-                    oldest_key = next(iter(self._video_reader_cache))
-                    del self._video_reader_cache[oldest_key]
-                vr = VideoReader(input_path, ctx=cpu(0))
-                self._video_reader_cache[input_path] = vr
-            except ImportError:
-                raise ImportError(
-                    "decord is required for video support. Install with: pip install decord"
-                )
+            if len(self._video_reader_cache) >= self._max_cached_readers:
+                oldest_key = next(iter(self._video_reader_cache))
+                del self._video_reader_cache[oldest_key]
+            vr = Cv2VideoReader(input_path, cache_capacity=10)
+            self._video_reader_cache[input_path] = vr
 
         self.vr = self._video_reader_cache[input_path]
 
