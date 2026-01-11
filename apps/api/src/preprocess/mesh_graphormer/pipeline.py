@@ -6,7 +6,6 @@ from src.preprocess.mesh_graphormer.depth_preprocessor import Preprocessor
 
 import torchvision.models as models
 from src.preprocess.mesh_graphormer.custom_mesh_graphormer.modeling.bert import (
-    BertConfig,
     Graphormer,
 )
 from src.preprocess.mesh_graphormer.custom_mesh_graphormer.modeling.bert import (
@@ -25,9 +24,9 @@ from src.preprocess.mesh_graphormer.custom_mesh_graphormer.modeling.hrnet.config
 from src.preprocess.mesh_graphormer.custom_mesh_graphormer.modeling.hrnet.config import (
     update_config as hrnet_update_config,
 )
-from src.preprocess.mesh_graphormer.custom_mesh_graphormer.utils.miscellaneous import (
-    set_seed,
-)
+
+from transformers import BertConfig
+
 from argparse import Namespace
 from pathlib import Path
 import cv2
@@ -84,20 +83,6 @@ class MeshGraphormerMediapipe(Preprocessor):
     def __init__(self, args=args, detect_thr=0.6, presence_thr=0.6) -> None:
         # global logger
         # Setup CUDA, GPU & distributed training
-        args.num_gpus = (
-            int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
-        )
-        os.environ["OMP_NUM_THREADS"] = str(args.num_workers)
-        print(
-            "set os.environ[OMP_NUM_THREADS] to {}".format(
-                os.environ["OMP_NUM_THREADS"]
-            )
-        )
-
-        # mkdir(args.output_dir)
-        # logger = setup_logger("Graphormer", args.output_dir, get_rank())
-        set_seed(args.seed, args.num_gpus)
-        # logger.info("Using {} GPUs".format(args.num_gpus))
 
         # Mesh and MANO utils
         mano_model = MANO().to(args.device)

@@ -24,6 +24,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Optional, Set, List, Tuple
@@ -843,29 +845,60 @@ class PythonBundler:
         py_tag = lines[0]  # e.g. cp312
         torch_mm = lines[1]  # e.g. 2.9
 
-        # Supported wheel builds in v1.0.1
+        # NOTE: torch wheel ABI compatibility
+        # We treat torch 2.9 as compatible with the torch 2.8 Nunchaku wheel.
+        # This avoids hard failures when a torch2.9-specific wheel isn't desirable/available.
+        nunchaku_torch_mm = torch_mm
+        if torch_mm == "2.9":
+            nunchaku_torch_mm = "2.8"
+            print("Torch 2.9 detected; installing Nunchaku torch2.8 wheel (compatible).")
+
+        nunchaku_version = "1.0.1"
+
+        # Supported wheel builds in v1.1.0
         supported_linux = {"2.7", "2.8", "2.9", "2.11"}
         supported_win = {"2.9", "2.11"}
 
         if self.platform_name == "linux":
-            if torch_mm not in supported_linux:
-                print(f"Skipping Nunchaku wheel: no v1.1.0 linux wheel for torch {torch_mm} ({py_tag})")
+            if nunchaku_torch_mm not in supported_linux:
+                print(
+                    f"Skipping Nunchaku wheel: no v{nunchaku_version} linux wheel for torch {nunchaku_torch_mm} "
+                    f"(detected torch {torch_mm}, {py_tag})"
+                )
                 return
             plat_suffix = "linux_x86_64"
         else:
-            if torch_mm not in supported_win:
-                print(f"Skipping Nunchaku wheel: no v1.1.0 windows wheel for torch {torch_mm} ({py_tag})")
+            if nunchaku_torch_mm not in supported_win:
+                print(
+                    f"Skipping Nunchaku wheel: no v{nunchaku_version} windows wheel for torch {nunchaku_torch_mm} "
+                    f"(detected torch {torch_mm}, {py_tag})"
+                )
                 return
             plat_suffix = "win_amd64"
 
         # Build the exact filename/URL for the matching wheel.
         # Example asset:
-        #   nunchaku-1.1.0+torch2.9-cp312-cp312-win_amd64.whl
+        #   nunchaku-1.1.0+torch2.8-cp312-cp312-linux_x86_64.whl
         # Note: the '+' is URL-encoded as %2B in the GitHub release URLs.
-        filename = f"nunchaku-1.0.1+torch{torch_mm}-{py_tag}-{py_tag}-{plat_suffix}.whl"
-        url = f"https://github.com/nunchaku-tech/nunchaku/releases/download/v1.0.1/{filename.replace('+', '%2B')}"
+        filename = f"nunchaku-{nunchaku_version}+torch{nunchaku_torch_mm}-{py_tag}-{py_tag}-{plat_suffix}.whl"
+        url = f"https://github.com/nunchaku-tech/nunchaku/releases/download/v{nunchaku_version}/{filename.replace('+', '%2B')}"
 
         print(f"Attempting Nunchaku install: {filename}")
+        print(f"Nunchaku URL: {url}")
+        # Avoid noisy `uv pip install` 404s: preflight the asset exists.
+        try:
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "apex-studio-bundler"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                status = int(getattr(resp, "status", 200))
+                if status >= 400:
+                    print(f"Skipping Nunchaku wheel: HTTP {status} for {url}")
+                    return
+        except urllib.error.HTTPError as e:
+            print(f"Skipping Nunchaku wheel: HTTP {e.code} for {url}")
+            return
+        except Exception as e:
+            # If we can't check, fall back to attempting install (best effort).
+            print(f"Nunchaku preflight check failed ({type(e).__name__}): {e}; attempting install anyway")
         try:
             subprocess.run(
                 [str(uv_path), "pip", "install", "--python", str(py_path), url],

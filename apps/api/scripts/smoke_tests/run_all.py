@@ -5,6 +5,17 @@ import argparse
 import sys
 from pathlib import Path
 
+# NOTE:
+# This file is executed as a script from `scripts/smoke_tests/run_all.py`.
+# When you run a file directly, Python sets `sys.path[0]` to the directory
+# containing that file (i.e. `.../scripts/smoke_tests`). In that context,
+# importing `smoke_tests.common` fails because the *parent* directory isn't on
+# sys.path. Add it so `smoke_tests.*` imports are stable in both repo + bundle.
+_smoke_dir = Path(__file__).resolve().parent
+_parent = _smoke_dir.parent
+if str(_parent) not in sys.path:
+    sys.path.insert(0, str(_parent))
+
 from smoke_tests.common import SmokeContext, log, fail, resolve_bundle_root, ensure_bundle_on_syspath
 
 from smoke_tests import (

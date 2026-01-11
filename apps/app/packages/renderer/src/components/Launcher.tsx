@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PiRocketLaunchFill } from "react-icons/pi";
 import {
   launchMainWindow,
@@ -15,7 +15,18 @@ import {
 } from "@app/preload";
 import Installer from "@/components/Installer";
 import { ProjectSettings, useProjectsStore } from "@/lib/projects";
-import { LuFolder, LuClock, LuTrash, LuPlus, LuRotateCcw } from "react-icons/lu";
+import {
+  LuFolder,
+  LuClock,
+  LuTrash,
+  LuPlus,
+  LuRotateCcw,
+  LuCheck,
+  LuX,
+  LuChevronDown,
+  LuChevronUp,
+  LuCopy,
+} from "react-icons/lu";
 import { toast } from "sonner";
 import { DEFAULT_FPS } from "@/lib/settings";
 import { Input } from "@/components/ui/input";
@@ -217,6 +228,7 @@ const Launcher: React.FC = () => {
   const [backendStarting, setBackendStarting] = useState(false);
   const initialCheckDoneRef = useRef(false);
   const [showInstaller, setShowInstaller] = useState(false);
+  const [showBlockingDetails, setShowBlockingDetails] = useState(false);
   const projects = useProjectsStore((s) => s.projects);
   const setProjects = useProjectsStore((s) => s.setProjects);
   const removeProject = useProjectsStore((s) => s.removeProject);
@@ -256,29 +268,56 @@ const Launcher: React.FC = () => {
     return hasBackend && hasProjects;
   }, [hasBackend, projects.length]);
 
+  const applyStatus = useCallback((st: any) => {
+    const hasBackend = Boolean(st?.hasBackend);
+    const canStartLocal = Boolean(st?.canStartLocal);
+    const starting = Boolean(st?.backendStarting);
+    setBackendConnected(hasBackend);
+    setRuntimeAvailable(canStartLocal);
+    setBackendStarting(starting);
+    setError(
+      st?.lastError
+        ? String(st.lastError)
+        : st?.runtimeVerified?.ok === false && st?.runtimeVerified?.reason
+          ? String(st.runtimeVerified.reason)
+          : null,
+    );
+  }, []);
+
+  const refreshLauncherStatus = useCallback(
+    async ({ showBlocking = false }: { showBlocking?: boolean } = {}) => {
+      if (showBlocking) setIsChecking(true);
+      try {
+        const res = await getLauncherStatus();
+        if (res.success) {
+          applyStatus(res.data);
+        } else {
+          setError(res.error || "Failed to check launch prerequisites");
+          setBackendConnected(false);
+          setRuntimeAvailable(false);
+          setBackendStarting(false);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to check launch prerequisites");
+        setBackendConnected(false);
+        setRuntimeAvailable(false);
+        setBackendStarting(false);
+      } finally {
+        if (showBlocking) {
+          initialCheckDoneRef.current = true;
+          setIsChecking(false);
+        }
+      }
+    },
+    [applyStatus],
+  );
+
   useEffect(() => {
     let cancelled = false;
-    const applyStatus = (st: any) => {
-      const hasBackend = Boolean(st?.hasBackend);
-      const canStartLocal = Boolean(st?.canStartLocal);
-      const starting = Boolean(st?.backendStarting);
-      setBackendConnected(hasBackend);
-      setRuntimeAvailable(canStartLocal);
-      setBackendStarting(starting);
-      setError(
-        st?.lastError
-          ? String(st.lastError)
-          : st?.runtimeVerified?.ok === false && st?.runtimeVerified?.reason
-            ? String(st.runtimeVerified.reason)
-            : null,
-      );
-    };
 
     const runInitial = async () => {
       // Only show the blocking "Checking installation…" screen on first load.
-      if (!initialCheckDoneRef.current) {
-        setIsChecking(true);
-      }
+      if (!initialCheckDoneRef.current) setIsChecking(true);
       try {
         const res = await getLauncherStatus();
         if (cancelled) return;
@@ -318,7 +357,7 @@ const Launcher: React.FC = () => {
       unsubscribe();
       void stopLauncherStatusWatch();
     };
-  }, []);
+  }, [applyStatus]);
 
   // Auto-start logic is handled in the check loop above to keep decisions in one place.
 
@@ -449,16 +488,215 @@ const Launcher: React.FC = () => {
     !initialCheckDoneRef.current && (isChecking || backendStarting);
 
   if (showBlockingCheck) {
+    const title = backendStarting ? "Starting backend" : "Checking installation";
+    const subtitle = backendStarting
+      ? "Warming things up. This usually takes a few seconds."
+      : "Verifying your runtime and connecting to the backend.";
+
+    const StatusPill = ({
+      label,
+      state,
+    }: {
+      label: string;
+      state: "ok" | "bad" | "pending";
+    }) => {
+      const base =
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium";
+      if (state === "ok") {
+        return (
+          <span className={`${base} border-emerald-400/20 bg-emerald-400/10 text-emerald-200`}>
+            <LuCheck className="h-3.5 w-3.5" />
+            {label}
+          </span>
+        );
+      }
+      if (state === "bad") {
+        return (
+          <span className={`${base} border-red-400/20 bg-red-400/10 text-red-200`}>
+            <LuX className="h-3.5 w-3.5" />
+            {label}
+          </span>
+        );
+      }
+      return (
+        <span className={`${base} border-brand-light/10 bg-brand-light/5 text-brand-light/70`}>
+          <span className="h-2 w-2 rounded-full bg-brand-light/30 animate-pulse" />
+          {label}
+        </span>
+      );
+    };
+
     return (
-      <main className="w-full h-screen flex flex-col items-center justify-center bg-black text-center font-poppins">
-        <div className="text-brand-light/70 text-sm">
-          {backendStarting ? "Starting backend…" : "Checking installation…"}
+      <main className="w-full h-screen flex flex-col items-center justify-center bg-black text-center font-poppins relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -top-24 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-brand-accent-two-shade/15 blur-3xl" />
+          <div className="absolute -bottom-32 right-[-120px] h-[520px] w-[520px] rounded-full bg-brand-accent-shade/10 blur-3xl" />
+          <div className="absolute inset-0 bg-gradient-to-b from-black via-black to-brand-background-dark/60" />
         </div>
-        {error ? (
-          <div className="mt-2 text-red-400/90 text-[12px] max-w-[520px] px-6">
-            {error}
+
+        <div className="relative w-full max-w-[720px] px-6">
+          <div className="rounded-2xl border border-brand-light/10 bg-brand-background/30 backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_25px_80px_rgba(0,0,0,0.55)] overflow-hidden">
+            <div className="px-8 pt-8 pb-6">
+              <div className="flex items-start justify-between gap-6">
+                <div className="flex items-center gap-4">
+                  <div className="relative">
+                    <div className="absolute inset-0 rounded-2xl bg-brand-accent-two-shade/25 blur-xl" />
+                    <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-light/10 bg-black/40">
+                      <PiRocketLaunchFill className="h-5 w-5 text-brand-light/90" />
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    <div className="text-[11px] uppercase tracking-[0.35em] text-brand-light/45">
+                      Apex Studio
+                    </div>
+                    <div className="mt-1 text-xl font-semibold tracking-tight text-brand-light">
+                      {title}
+                    </div>
+                    <div className="mt-1 text-[13px] text-brand-light/60">{subtitle}</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowBlockingDetails((v: boolean) => !v)}
+                    className="inline-flex items-center gap-2 rounded-md border border-brand-light/10 bg-brand-light/5 px-3 py-2 text-[12px] font-medium text-brand-light/75 hover:bg-brand-light/10 hover:text-brand-light transition-colors"
+                  >
+                    {showBlockingDetails ? (
+                      <>
+                        <LuChevronUp className="h-4 w-4" />
+                        Hide details
+                      </>
+                    ) : (
+                      <>
+                        <LuChevronDown className="h-4 w-4" />
+                        Show details
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center gap-3 justify-between">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusPill
+                    label={runtimeAvailable ? "Runtime ready" : "Runtime"}
+                    state={error && !runtimeAvailable ? "bad" : runtimeAvailable ? "ok" : "pending"}
+                  />
+                  <StatusPill
+                    label={backendConnected ? "Backend connected" : backendStarting ? "Backend starting" : "Backend"}
+                    state={
+                      error && !backendConnected && !backendStarting
+                        ? "bad"
+                        : backendConnected
+                          ? "ok"
+                          : "pending"
+                    }
+                  />
+                  <StatusPill
+                    label={projects.length > 0 ? `${projects.length} project${projects.length === 1 ? "" : "s"}` : "Projects"}
+                    state={projects.length > 0 ? "ok" : "pending"}
+                  />
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="h-5 w-5 rounded-full border-2 border-brand-light/15 border-t-brand-accent-two-shade animate-spin" />
+                  <div className="text-[12px] text-brand-light/55">
+                    {backendStarting ? "Booting…" : "Checking…"}
+                  </div>
+                </div>
+              </div>
+
+              {error ? (
+                <div className="mt-5 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-left">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[12px] font-semibold text-red-200">Something needs attention</div>
+                      <div className="mt-1 text-[12px] leading-relaxed text-red-200/80 break-words">
+                        {error}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          if (error) {
+                            await navigator.clipboard.writeText(error);
+                            toast("Copied", { description: "Error copied to clipboard" });
+                          }
+                        } catch {
+                          toast("Copy failed", { description: "Could not access clipboard" });
+                        }
+                      }}
+                      className="shrink-0 inline-flex items-center gap-2 rounded-md border border-red-400/20 bg-red-500/10 px-3 py-2 text-[12px] font-medium text-red-100/90 hover:bg-red-500/15 transition-colors"
+                    >
+                      <LuCopy className="h-4 w-4" />
+                      Copy
+                    </button>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        void refreshLauncherStatus({ showBlocking: true });
+                      }}
+                      className="inline-flex items-center gap-2 rounded-md bg-brand-accent-two-shade text-brand-light px-4 py-2 text-[12px] font-semibold hover:bg-brand-accent-shade transition-colors"
+                    >
+                      <LuRotateCcw className="h-4 w-4" />
+                      Retry
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setShowInstaller(true);
+                      }}
+                      className="inline-flex items-center gap-2 rounded-md border border-brand-light/15 bg-brand-background-light px-4 py-2 text-[12px] font-semibold text-brand-light hover:bg-brand-light/10 transition-colors"
+                    >
+                      <LuRotateCcw className="h-4 w-4" />
+                      Reinstall
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            {showBlockingDetails ? (
+              <div className="border-t border-brand-light/10 bg-black/20 px-8 py-6 text-left">
+                <div className="text-[11px] uppercase tracking-[0.3em] text-brand-light/45">
+                  Live details
+                </div>
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-[12px] text-brand-light/70">
+                  <div className="rounded-lg border border-brand-light/10 bg-brand-light/5 px-3 py-2">
+                    <div className="text-brand-light/50">Runtime available</div>
+                    <div className="mt-1 text-brand-light">
+                      {runtimeAvailable ? "Yes" : "Not yet"}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-brand-light/10 bg-brand-light/5 px-3 py-2">
+                    <div className="text-brand-light/50">Backend connected</div>
+                    <div className="mt-1 text-brand-light">
+                      {backendConnected ? "Yes" : backendStarting ? "Starting" : "No"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void refreshLauncherStatus()}
+                    className="inline-flex items-center gap-2 rounded-md border border-brand-light/10 bg-brand-light/5 px-3 py-2 text-[12px] font-medium text-brand-light/80 hover:bg-brand-light/10 hover:text-brand-light transition-colors"
+                  >
+                    <LuRotateCcw className="h-4 w-4" />
+                    Refresh status
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
-        ) : null}
+        </div>
       </main>
     );
   }
