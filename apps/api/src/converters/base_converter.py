@@ -350,6 +350,7 @@ class BaseConverter:
             return False
 
         stripped = [k[len(prefix) :] for k in keys]
+
         # Guard against pathological prefixes and key collisions.
         if any(not k for k in stripped):
             return False

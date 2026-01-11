@@ -6,10 +6,6 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Dict, Optional
-try:
-    import decord
-except ImportError:
-    decord = None
 
 try:
     import cv2
@@ -67,7 +63,6 @@ class AuxillaryCache:
         # make sure the cache path exists
         self._video = None
         self._video_info = None
-        self._video_backend = None  # "decord" | "cv2" | None
         self._image = None
         self._metadata = None
         self.cached_frames = set()
@@ -152,25 +147,12 @@ class AuxillaryCache:
 
     def _get_video(self):
         """
-        Open a video reader, preferring decord but falling back to OpenCV when decord isn't available.
+        Open a video reader using OpenCV.
         """
-        if decord is not None:
-            try:
-                video = decord.VideoReader(self.path)
-            except Exception as e:
-                raise ValueError(f"Cannot open video file: {self.path}") from e
-            self._video_backend = "decord"
-            return {
-                "fps": float(video.get_avg_fps()),
-                "width": int(video[0].shape[1]),
-                "height": int(video[0].shape[0]),
-                "frame_count": int(len(video)),
-            }, video
-
         if cv2 is None:
             raise ValueError(
-                "Cannot open video: neither 'decord' nor 'cv2' is available. "
-                "Install one of them to enable video preprocessing."
+                "Cannot open video: 'cv2' is not available. "
+                "Install OpenCV to enable video preprocessing."
             )
 
         cap = cv2.VideoCapture(self.path)
@@ -205,7 +187,6 @@ class AuxillaryCache:
                 height, width = frame0.shape[:2]
             cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
 
-        self._video_backend = "cv2"
         return {
             "fps": fps,
             "width": width,
@@ -217,16 +198,12 @@ class AuxillaryCache:
         """
         Read a single frame as an RGB numpy array (H, W, C).
         """
-        if self._video_backend == "decord":
-            return self._video[frame_index].asnumpy()
-        if self._video_backend == "cv2":
-            self._video.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
-            ok, frame = self._video.read()
-            if not ok or frame is None:
-                raise ValueError(f"Failed to read frame {frame_index} from video")
-            # OpenCV returns BGR; convert to RGB to match decord's convention.
-            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        raise ValueError("Video backend not initialized")
+        self._video.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+        ok, frame = self._video.read()
+        if not ok or frame is None:
+            raise ValueError(f"Failed to read frame {frame_index} from video")
+        # OpenCV returns BGR; convert to RGB.
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     def _read_video_frames_batch(self, frame_indices: list[int]) -> list[np.ndarray]:
         """
@@ -234,16 +211,10 @@ class AuxillaryCache:
         """
         if not frame_indices:
             return []
-        if self._video_backend == "decord":
-            if len(frame_indices) == 1:
-                return [self._video[int(frame_indices[0])].asnumpy()]
-            return self._video.get_batch([int(i) for i in frame_indices]).asnumpy()
-        if self._video_backend == "cv2":
-            frames: list[np.ndarray] = []
-            for i in frame_indices:
-                frames.append(self._read_video_frame(int(i)))
-            return frames
-        raise ValueError("Video backend not initialized")
+        frames: list[np.ndarray] = []
+        for i in frame_indices:
+            frames.append(self._read_video_frame(int(i)))
+        return frames
 
     def _read_cached_result_frames_first_n(self, n: int) -> list[np.ndarray]:
         """
@@ -254,18 +225,9 @@ class AuxillaryCache:
             return []
         result_path_str = str(self.result_path)
 
-        if decord is not None:
-            result_video = decord.VideoReader(result_path_str)
-            n = min(n, len(result_video))
-            if n <= 0:
-                return []
-            if n == 1:
-                return [result_video[0].asnumpy()]
-            return result_video.get_batch(list(range(n))).asnumpy()
-
         if cv2 is None:
             raise ValueError(
-                "Cannot read cached result: neither 'decord' nor 'cv2' is available."
+                "Cannot read cached result: 'cv2' is not available."
             )
 
         cap = cv2.VideoCapture(result_path_str)

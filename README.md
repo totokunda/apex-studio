@@ -15,6 +15,22 @@
 
 ## Run locally (development)
 
+### 0) Clone the repo (Git + Git LFS)
+
+This repo uses **Git submodules** and **Git LFS** (Large File Storage) for some assets.
+
+```bash
+# Install Git LFS (if you don't already have it)
+git lfs install
+
+# Clone + init submodules
+git clone --recurse-submodules https://github.com/totokunda/apex-studio.git
+cd apex-studio
+
+# Fetch LFS files (recommended after cloning)
+git lfs pull
+```
+
 ### Prerequisites
 
 - **Node.js 24.x** (required)
@@ -62,7 +78,6 @@ apex-engine dev
 ```bash
 cd apps/api
 python3 -m pip install -U pip setuptools wheel
-python3 -m pip install honcho
 
 # Install torch (pick one)
 python3 -m pip install torch torchvision torchaudio
@@ -87,7 +102,7 @@ apex-engine dev
 ```
 
 ### Nunchaku
-If you your machine supports using the Nunchakue models, you can install the Nunchaku models by running the following command:
+If you your machine supports using the Nunchaku models, you can install the Nunchaku models by running the following command:
 ```bash
 python3 scripts/maybe_install_nunchaku.py --install
 ```

@@ -378,6 +378,7 @@ export type ModelClipProps = ClipProps & {
       num_blocks?: number;
       use_stream?: boolean;
       record_stream?: boolean;
+      low_cpu_mem_usage?: boolean;
     }
   >;
   generations?: GenerationModelClipProps[];

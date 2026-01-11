@@ -223,10 +223,10 @@ def sdpa_varlen(
     q,  # [total_q, n_heads, head_dim]
     k,  # [total_k, n_heads, head_dim]
     v,  # [total_k, n_heads, head_dim]
-    cu_seqlens_q,  # 1-D (B+1) cumulative -> 0, sq1, sq1+sq2, …
-    cu_seqlens_kv,  # 1-D (B+1)
-    max_seqlen_q: int,
-    max_seqlen_kv: int,
+    cu_seqlens_q=None,  # 1-D (B+1) cumulative -> 0, sq1, sq1+sq2, …
+    cu_seqlens_kv=None,  # 1-D (B+1)
+    max_seqlen_q: int | None = None,
+    max_seqlen_kv: int | None = None,
     deterministic: bool = False,  # same flag you forwarded to flash-attn
     is_causal: bool = False,  # set True for decoder causal attention
     **kwargs,
@@ -235,14 +235,81 @@ def sdpa_varlen(
     Drop-in replacement for flash_attn_varlen_func that calls
     torch.scaled_dot_product_attention instead.
     Returns: packed tensor with shape [total_q, n_heads, head_dim]
+
+    If `max_seqlen_q` / `max_seqlen_kv` are omitted, they are computed from
+    `cu_seqlens_q` / `cu_seqlens_kv`.
+
+    If `cu_seqlens_q` / `cu_seqlens_kv` are omitted, this function assumes
+    a single sequence (B=1) and synthesizes cumulative seqlens from
+    `q.shape[0]` and `k.shape[0]`.
     """
     if deterministic:
         torch.use_deterministic_algorithms(True)
 
+    # Padded path: smoke tests (and some call sites) may call all attention
+    # backends with (B, H, S, D) tensors. In that case, just use SDPA directly.
+    if q.ndim == 4:
+        if (cu_seqlens_q is not None) or (cu_seqlens_kv is not None):
+            raise ValueError(
+                "sdpa_varlen received padded (B, H, S, D) inputs but cu_seqlens_* "
+                "were provided. Omit cu_seqlens_* for padded inputs, or pass packed "
+                "(total, H, D) tensors for var-len inputs."
+            )
+
+        if k.ndim != 4 or v.ndim != 4:
+            raise ValueError("For padded inputs, q/k/v must all be 4D (B, H, S, D).")
+
+        # Handle multi-query/grouped-query attention by expanding k,v if needed
+        if k.shape[1] != q.shape[1]:
+            n_heads_q = q.shape[1]
+            n_heads_k = k.shape[1]
+            if n_heads_q % n_heads_k != 0:
+                raise ValueError(
+                    f"Number of query heads ({n_heads_q}) must be divisible by key heads ({n_heads_k})"
+                )
+            expand_ratio = n_heads_q // n_heads_k
+            k = k.repeat_interleave(expand_ratio, dim=1)
+            v = v.repeat_interleave(expand_ratio, dim=1)
+
+        attn_mask = kwargs.get("attn_mask", None)
+        if attn_mask is None:
+            attn_mask = kwargs.get("attention_mask", None)
+
+        dropout_p = float(kwargs.get("dropout_p", 0.0) or 0.0)
+        softmax_scale = kwargs.get("softmax_scale", None)
+        return sdpa(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            dropout_p=dropout_p,
+            is_causal=is_causal,
+            softmax_scale=softmax_scale,
+        )
+
+    if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
+        raise ValueError(
+            "sdpa_varlen expects packed inputs with shape (total, H, D) "
+            "or padded inputs with shape (B, H, S, D)."
+        )
+
+    if (cu_seqlens_q is None) ^ (cu_seqlens_kv is None):
+        raise ValueError(
+            "cu_seqlens_q and cu_seqlens_kv must be provided together, or both omitted."
+        )
+    if cu_seqlens_q is None and cu_seqlens_kv is None:
+        # Treat packed inputs as a single batch element.
+        cu_seqlens_q = torch.tensor(
+            [0, int(q.shape[0])], device=q.device, dtype=torch.int32
+        )
+        cu_seqlens_kv = torch.tensor(
+            [0, int(k.shape[0])], device=q.device, dtype=torch.int32
+        )
+
     B = cu_seqlens_q.numel() - 1
-    n_heads_q, head_dim_q = q.shape[1:]
-    n_heads_k, head_dim_k = k.shape[1:]
-    n_heads_v, head_dim_v = v.shape[1:]
+    _, n_heads_q, head_dim_q = q.shape
+    _, n_heads_k, head_dim_k = k.shape
+    _, n_heads_v, head_dim_v = v.shape
 
     # Validate shapes
     if head_dim_q != head_dim_k or head_dim_q != head_dim_v:
@@ -255,6 +322,13 @@ def sdpa_varlen(
     # 1. recover individual sequence lengths
     seq_lens_q = (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).tolist()
     seq_lens_k = (cu_seqlens_kv[1:] - cu_seqlens_kv[:-1]).tolist()
+
+    # Allow callers to omit max seq lens (flash-attn varlen API requires them,
+    # but they are fully derivable from the cumulative seqlens).
+    if max_seqlen_q is None:
+        max_seqlen_q = int(max(seq_lens_q)) if len(seq_lens_q) else 0
+    if max_seqlen_kv is None:
+        max_seqlen_kv = int(max(seq_lens_k)) if len(seq_lens_k) else 0
 
     # 2. pad into (B, H, L, D)
     q_pad = q.new_zeros(B, n_heads_q, max_seqlen_q, head_dim)
@@ -283,6 +357,8 @@ def sdpa_varlen(
 
     # 4. SDPA call with per-batch processing to avoid large mask materialization
     out_pad = torch.zeros_like(q_pad)
+    softmax_scale = kwargs.get("softmax_scale", None)
+    dropout_p = float(kwargs.get("dropout_p", 0.0) or 0.0)
 
     for b in range(B):
         # Create minimal mask only for this batch item
@@ -299,8 +375,9 @@ def sdpa_varlen(
                 k_pad[b : b + 1, :, : seq_lens_k[b]],
                 v_pad[b : b + 1, :, : seq_lens_k[b]],
                 attn_mask=batch_mask,
-                dropout_p=0.0,
+                dropout_p=dropout_p,
                 is_causal=is_causal,
+                scale=softmax_scale,
             )
         else:
             # No padding, no mask needed
@@ -309,8 +386,9 @@ def sdpa_varlen(
                 k_pad[b : b + 1, :, : seq_lens_k[b]],
                 v_pad[b : b + 1, :, : seq_lens_k[b]],
                 attn_mask=None,
-                dropout_p=0.0,
+                dropout_p=dropout_p,
                 is_causal=is_causal,
+                scale=softmax_scale,
             )
         out_pad[b, :, : seq_lens_q[b]] = batch_out[0]
 
@@ -708,15 +786,31 @@ def sage_attention(
         k = k.to(default_dtype)
         v = v.to(default_dtype)
 
+    # SageAttention supports both (B, H, S, D) and (B, S, H, D). We standardize
+    # to (B, S, H, D) to match the library's `NHD` layout and then transpose back
+    # so callers consistently get (B, H, S, D).
+    #
+    # This avoids silent head/sequence swaps if the upstream library's layout
+    # conventions differ from ours.
+    q_nhd = q.transpose(1, 2).contiguous()  # (B, S, H, D)
+    k_nhd = k.transpose(1, 2).contiguous()
+    v_nhd = v.transpose(1, 2).contiguous()
+
+    # IMPORTANT: SageAttention defaults `smooth_k=True` (subtract mean from k),
+    # which changes the math vs PyTorch SDPA and can cause large output diffs.
+    # For SDPA-compatibility we default this off, but allow overriding via kwargs.
+    smooth_k = bool(kwargs.get("smooth_k", False))
+
     attn_output = sageattn(
-        q,
-        k,
-        v,
-        tensor_layout="HND",
+        q_nhd,
+        k_nhd,
+        v_nhd,
+        tensor_layout="NHD",
         is_causal=is_causal,
         sm_scale=softmax_scale,
+        smooth_k=smooth_k,
     )
-    return attn_output
+    return attn_output.transpose(1, 2)
 
 
 @attention_register("xla_flash", available=xla_flash_attention_func is not None)

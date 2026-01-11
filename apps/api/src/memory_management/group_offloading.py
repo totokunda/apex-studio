@@ -22,7 +22,6 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 
 import safetensors.torch
 import torch
-
 from diffusers.utils import get_logger, is_accelerate_available
 from diffusers.hooks._common import _GO_LC_SUPPORTED_PYTORCH_LAYERS
 from diffusers.hooks.group_offloading import HookRegistry, ModelHook

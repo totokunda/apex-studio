@@ -180,7 +180,21 @@ export interface GenerateContext {
   setSelectedTab: (tab: string) => void;
 }
 
-const mapOffloadToEngineInputs = (offload: Record<string, { enabled?: boolean, level?: string, num_blocks?: number, use_stream?: boolean, record_stream?: boolean }> | undefined): Record<string, any> => {
+const mapOffloadToEngineInputs = (
+  offload:
+    | Record<
+        string,
+        {
+          enabled?: boolean;
+          level?: string;
+          num_blocks?: number;
+          use_stream?: boolean;
+          record_stream?: boolean;
+          low_cpu_mem_usage?: boolean;
+        }
+      >
+    | undefined,
+): Record<string, any> => {
     if (!offload) return {};
     const mappedObject: Record<string, any> = {};
     Object.entries(offload).forEach(([key, value]) => {
@@ -188,8 +202,10 @@ const mapOffloadToEngineInputs = (offload: Record<string, { enabled?: boolean, l
         mappedObject[key] = {
           group_offload_type: value.level === "leaf" ? "leaf_level" : "block_level",
           group_offload_num_blocks_per_group: value.num_blocks,
-          group_offload_use_stream: value.use_stream,
-          group_offload_record_stream: value.record_stream,
+          // Defaults: treat unset as enabled (UI defaults)
+          group_offload_use_stream: value.use_stream ?? true,
+          group_offload_record_stream: value.record_stream ?? true,
+          group_offload_low_cpu_mem_usage: value.low_cpu_mem_usage ?? true,
         }
       }
     });

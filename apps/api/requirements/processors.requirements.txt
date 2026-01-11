@@ -10,7 +10,7 @@
 # Vision / segmentation / detection
 facexlib==0.3.0
 insightface==0.7.3
-mediapipe==0.10.31
+mediapipe==0.10.21
 mmengine==0.10.7
 # NOTE: `opendr` builds native OpenGL bindings; it currently fails to build on
 # some modern macOS/arm64 toolchains. Keep it out of the default darwin bundle.
@@ -38,7 +38,7 @@ pycocotools
 # Background removal (extras are selected in machine-specific requirements)
 rembg
 
-# Video decode (platform-specific)
-decord; sys_platform == "linux" or sys_platform == "win32"
-# NOTE: `eva-decord` does not publish macOS arm64 wheels for some recent macOS
-# platform tags. Keep it out of the default darwin bundle to avoid solver failure.
+#
+# Video decode
+#
+# Use OpenCV (`opencv_python_headless`) from `requirements/requirements.txt`.
