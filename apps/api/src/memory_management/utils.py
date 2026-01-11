@@ -222,13 +222,25 @@ def unpack_flat_to_block(
             # Check if we can use zero-copy aliasing (set_)
             # Conditions: Byte offset is divisible by element size (alignment)
             elem_size = base.element_size()
+            # Destination tensor must match the spec's physical dtype; otherwise offsets/byte sizes won't line up.
+            if _physical_dtype(t) != e.physical_dtype:
+                raise ValueError(
+                    f"Destination tensor dtype mismatch for {e.kind}:{e.name}: "
+                    f"dest physical dtype={_physical_dtype(t)} but spec expects {e.physical_dtype}. "
+                    "Make sure the destination block template is instantiated/cast to match the spec."
+                )
             
-            if (e.byte_start % elem_size == 0) and (base.numel() * elem_size == (e.byte_end - e.byte_start)):
+            expected_bytes = e.numel * elem_size
+            if (e.byte_start % elem_size == 0) and (expected_bytes == (e.byte_end - e.byte_start)):
                 # Aliasing path: Set `t` storage to point into `flat`.
                 offset_elem = e.byte_start // elem_size
                 # Use untyped_storage() to access the raw bytes of flat.
                 # set_ creates a contiguous view of the storage segment.
-                t.set_(flat.untyped_storage(), offset_elem, base.size())
+                #
+                # Important: use the *spec* shape, not the current tensor shape. This allows
+                # initializing destination tensors as empty placeholders (e.g. 0 numel) and
+                # later binding them to real storage here.
+                t.set_(flat.untyped_storage(), offset_elem, e.shape)
             else:
                 # Copy path (fallback for unaligned or special layouts)
                 dst_bytes = base.reshape(-1).view(torch.uint8)
