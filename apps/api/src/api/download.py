@@ -195,9 +195,34 @@ def start_unified_download(request: UnifiedDownloadRequest):
     Cancel via:   /download/cancel/{job_id} (or /jobs/cancel/{job_id})
     """
     try:
+        req_key = _request_key(request.item_type, request.source, request.save_path)
+
+        # If we have an identical request already in-flight, reuse that job id instead of
+        # starting duplicate Ray work (helps when the UI retries/polls aggressively).
+        # Can be disabled with: APEX_DOWNLOAD_DEDUPE_INFLIGHT=0
+        dedupe_inflight = os.getenv("APEX_DOWNLOAD_DEDUPE_INFLIGHT", "1") not in {
+            "0",
+            "false",
+            "False",
+        }
+        if dedupe_inflight:
+            existing_job_id = _request_key_to_job_id.get(req_key)
+            if existing_job_id:
+                try:
+                    existing_status = unified_job_store.status(existing_job_id).get(
+                        "status", "unknown"
+                    )
+                    if existing_status in {"queued", "running"}:
+                        return JobResponse(
+                            job_id=existing_job_id,
+                            status=existing_status,
+                            message="Reusing in-flight download job",
+                        )
+                except Exception:
+                    pass
+
         # Always create a fresh job id to avoid stale websocket/job-store state reuse.
         job_id = _new_unique_job_id(request.job_id)
-        req_key = _request_key(request.item_type, request.source, request.save_path)
 
         # If already downloaded and no need to start a job
         downloaded, _ = _already_downloaded(
