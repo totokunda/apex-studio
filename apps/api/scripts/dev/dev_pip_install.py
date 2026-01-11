@@ -96,7 +96,9 @@ def _detect_default_torch_backend(machine: str) -> str:
 
 
 def main() -> int:
-    project_root = Path(__file__).resolve().parent.parent
+    # This file lives at scripts/dev/dev_pip_install.py.
+    # Project root is apps/api/.
+    project_root = Path(__file__).resolve().parent.parent.parent
     machines_dir = project_root / "requirements" / "machines"
 
     machine_choices = sorted(p.stem for p in machines_dir.glob("*.txt"))
