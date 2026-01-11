@@ -35,7 +35,7 @@ spec:
   - sage
   - efficient_dot_product_attention
   loras:
-  - path: Lightricks/LTX-2/ltx-2-19b-distilled-lora-384.safetensors
+  - source: Lightricks/LTX-2/ltx-2-19b-distilled-lora-384.safetensors
     name: ltx-2-19b-distilled-lora-384
     label: LTX2 19B Distilled LoRA 384
     verified: true
