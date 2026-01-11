@@ -20,6 +20,7 @@ from typing import Optional
 import os
 import threading
 import time
+from .stability import install_stability_middleware
 
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
@@ -125,6 +126,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(name="Apex Engine", lifespan=lifespan)
+
+# Keep the local API stable even if the desktop app becomes "chatty" (polling loops, retries, etc.).
+install_stability_middleware(app)
+
 app.include_router(ws_router)
 app.include_router(manifest_router)
 app.include_router(config_router)

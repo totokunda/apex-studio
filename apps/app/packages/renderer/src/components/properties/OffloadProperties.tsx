@@ -251,12 +251,14 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
       const existing = map[key] || {};
       const enabled = !!existing.enabled;
       const level: OffloadLevel = (existing.level as OffloadLevel) || "leaf";
-      const use_stream = !!existing.use_stream;
-      const record_stream = !!existing.record_stream;
+      // Defaults: stream + record + low CPU memory ON unless explicitly disabled
+      const use_stream = existing.use_stream ?? true;
+      const record_stream = existing.record_stream ?? true;
+      const low_cpu_mem_usage = existing.low_cpu_mem_usage ?? true;
       const num_blocks_raw = typeof existing.num_blocks === "number" ? existing.num_blocks : 1;
       const num_blocks = Math.max(1, Math.floor(Number.isFinite(num_blocks_raw) ? num_blocks_raw : 1));
 
-      return { enabled, level, num_blocks, use_stream, record_stream };
+      return { enabled, level, num_blocks, use_stream, record_stream, low_cpu_mem_usage };
     },
     [clip.offload],
   );
@@ -272,18 +274,21 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
     let nextEntry = { ...prevEntry, ...patch };
 
     // Normalize/clamp
-    const useStream = !!nextEntry.use_stream;
+    const useStream = nextEntry.use_stream ?? true;
     const level = (nextEntry.level as OffloadLevel) || "leaf";
     let numBlocks = typeof nextEntry.num_blocks === "number" ? nextEntry.num_blocks : 1;
     numBlocks = Math.max(1, Math.floor(Number.isFinite(numBlocks) ? numBlocks : 1));
+    const lowCpuMemUsage = nextEntry.low_cpu_mem_usage ?? true;
 
     if (useStream) {
       numBlocks = 1;
-      nextEntry.record_stream = !!nextEntry.record_stream;
+      // Default record_stream ON when streaming is enabled (unless explicitly disabled)
+      nextEntry.record_stream = nextEntry.record_stream ?? true;
     }
 
     nextEntry.level = level;
     nextEntry.num_blocks = numBlocks;
+    nextEntry.low_cpu_mem_usage = lowCpuMemUsage;
 
     // If stream is disabled, keep record_stream but it will be ignored by the engine unless stream is on
     nextEntry.use_stream = useStream;
@@ -381,6 +386,7 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
                           patchOffload(key, {
                             use_stream: next,
                             num_blocks: next ? 1 : state.num_blocks,
+                            record_stream: next ? (state.record_stream ?? true) : state.record_stream,
                           })
                         }
                         ariaLabel={state.use_stream ? "Disable use stream" : "Enable use stream"}
@@ -410,6 +416,24 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
                           state.record_stream
                             ? "Disable record stream"
                             : "Enable record stream"
+                        }
+                      />
+                    </div>
+
+                    <div className="flex flex-row items-center justify-between w-full gap-x-3">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="text-brand-light text-[11px] font-medium">
+                          Low CPU Memory
+                        </div>
+                        <InfoTip text="Reduce CPU RAM usage during offloading by using a lower-memory pathway. This can be slightly slower, but helps avoid CPU OOMs on large models." />
+                      </div>
+                      <Toggle
+                        checked={state.low_cpu_mem_usage}
+                        onChange={(next) => patchOffload(key, { low_cpu_mem_usage: next })}
+                        ariaLabel={
+                          state.low_cpu_mem_usage
+                            ? "Disable low CPU memory"
+                            : "Enable low CPU memory"
                         }
                       />
                     </div>

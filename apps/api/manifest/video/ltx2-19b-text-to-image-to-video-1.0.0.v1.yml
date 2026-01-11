@@ -35,7 +35,7 @@ spec:
   - sage
   - efficient_dot_product_attention
   loras:
-  - path: Lightricks/LTX-2/ltx-2-19b-distilled-lora-384.safetensors
+  - source: Lightricks/LTX-2/ltx-2-19b-distilled-lora-384.safetensors
     name: ltx-2-19b-distilled-lora-384
     label: LTX2 19B Distilled LoRA 384
     verified: true
@@ -277,6 +277,7 @@ spec:
         flow: column
         rows:
         - - image
+        - - audio
     - name: prompting
       label: Prompting
       collapsible: true
@@ -330,9 +331,15 @@ spec:
       description: The image to condition on.
       type: image
       panel: media
-      required: true
+      required: false
       map_h: height
       map_w: width
+    - id: audio
+      label: Audio
+      description: The audio to condition on.
+      type: audio
+      panel: media
+      required: false
     - id: prompt
       label: Prompt
       description: Describe the video you want to generate.
