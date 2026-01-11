@@ -84,6 +84,110 @@ class PythonBundler:
         # Whether to keep the *intermediate* build venv at `<output>/<venv_name>/`.
         # The shipped bundle contains its own copy at `<output>/python-api/apex-engine/<venv_name>/`.
         self.keep_build_venv: bool = False
+        # Whether to run smoke tests against the shipped bundle.
+        # This is strongly recommended to avoid shipping broken bundles.
+        self.run_smoke_tests: bool = True
+        # If True, fail bundling when optional GPU-only smoke tests are skipped
+        # due to missing CUDA at build time.
+        self.smoke_tests_strict: bool = False
+
+    def _bundle_python_path_env(self, bundle_dir: Path, env: dict) -> dict:
+        """
+        Ensure the bundle root is on PYTHONPATH, matching runtime launch behavior.
+        """
+        bundle_dir = Path(bundle_dir).resolve()
+        env = dict(env or {})
+        sep = ";" if self.platform_name == "win32" else ":"
+        existing = env.get("PYTHONPATH", "")
+        parts = [str(bundle_dir)]
+        if existing:
+            parts.append(existing)
+        env["PYTHONPATH"] = sep.join(parts)
+        # Provide an explicit separator hint for in-venv smoke scripts (useful if the
+        # build host OS differs from the target platform).
+        env["APEX_PYTHONPATH_SEP"] = sep
+        return env
+
+    def _smoke_py_path(self, bundle_dir: Path) -> Path:
+        if self.platform_name == "win32":
+            return bundle_dir / self.venv_name / "Scripts" / "python.exe"
+        return bundle_dir / self.venv_name / "bin" / "python"
+
+    def _run_smoke_tests(self, *, bundle_dir: Path, gpu_type: str) -> None:
+        """
+        Run smoke tests inside the *shipped* bundle venv.
+
+        Goal: catch "imports fine locally, broken on user machines" failures early:
+          - broken dependency graphs (`pip check`)
+          - native extension import failures (missing shared libs)
+          - manifest parse/import regressions
+          - attention backend unusable despite being "installed"
+          - optional Nunchaku presence sanity
+        """
+        bundle_dir = Path(bundle_dir).resolve()
+        py_path = self._smoke_py_path(bundle_dir)
+        if not py_path.exists():
+            raise RuntimeError(f"Smoke tests: bundle venv python not found: {py_path}")
+
+        env = self._bundle_python_path_env(bundle_dir, os.environ.copy())
+        env["APEX_BUNDLE_SMOKE_TEST"] = "1"
+        env["APEX_BUNDLE_GPU_TYPE"] = str(gpu_type or "")
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+
+        print("\n--- Running bundle smoke tests (inside shipped venv) ---")
+        print(f"Bundle dir: {bundle_dir}")
+        print(f"Python: {py_path}")
+
+        smoke_runner = bundle_dir / "scripts" / "smoke_tests" / "run_all.py"
+        if not smoke_runner.exists():
+            raise RuntimeError(f"Smoke tests runner not found in bundle: {smoke_runner}")
+
+        args = [
+            str(py_path),
+            str(smoke_runner),
+            "--bundle-root",
+            str(bundle_dir),
+            "--gpu-type",
+            str(gpu_type or ""),
+        ]
+        if self.smoke_tests_strict:
+            args.append("--strict-gpu")
+
+        res = subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(bundle_dir),
+        )
+        if res.stdout:
+            print(res.stdout)
+        if res.returncode != 0:
+            stderr = (res.stderr or "").strip()
+            raise RuntimeError(f"Bundle smoke tests failed (exit {res.returncode}). stderr:\n{stderr}")
+
+        # If building a CUDA bundle but CUDA isn't available on the build machine, optionally fail fast.
+        if self.smoke_tests_strict and str(gpu_type or "").startswith("cuda"):
+            # The in-venv harness will report cuda_available=False; enforce here for clarity.
+            try:
+                probe = subprocess.run(
+                    [str(py_path), "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 2)"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    cwd=str(bundle_dir),
+                )
+                if probe.returncode != 0:
+                    raise RuntimeError(
+                        "Smoke tests strict mode: building a CUDA bundle but CUDA was not available "
+                        "on the build machine, so GPU kernel smoke tests could not run."
+                    )
+            except Exception:
+                raise
+
+        print("--- Bundle smoke tests passed ---\n")
 
     def _run(self, cmd: List[str], timeout: int = 5) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -1048,17 +1152,25 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
         # needing access to the repo checkout.
         scripts_dir = bundle_dir / "scripts"
         scripts_dir.mkdir(parents=True, exist_ok=True)
-        for rel in [
-            Path("scripts") / "apply_code_update.py",
-            Path("scripts") / "setup.py",
-        ]:
+        # Copy known helper scripts
+        for rel in [Path("scripts") / "apply_code_update.py", Path("scripts") / "setup.py"]:
             src = self.project_root / rel
             try:
                 if src.exists():
                     shutil.copy(src, scripts_dir / src.name)
             except Exception:
-                # Best-effort: bundling should not fail because a helper script couldn't be copied.
                 pass
+
+        # Copy smoke tests (directory) for post-install diagnostics and for bundling-time execution.
+        try:
+            smoke_src = self.project_root / "scripts" / "smoke_tests"
+            smoke_dst = scripts_dir / "smoke_tests"
+            if smoke_src.exists() and smoke_src.is_dir():
+                if smoke_dst.exists():
+                    shutil.rmtree(smoke_dst)
+                shutil.copytree(smoke_src, smoke_dst, ignore=ignore_junk)
+        except Exception:
+            pass
 
         # Create launcher scripts (for manual start-api testing)
         self._create_launcher(bundle_dir)
@@ -1335,13 +1447,18 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         try:
             scripts_dir = bundle_dir / "scripts"
             scripts_dir.mkdir(parents=True, exist_ok=True)
-            for rel in [
-                Path("scripts") / "apply_code_update.py",
-                Path("scripts") / "setup.py",
-            ]:
+            for rel in [Path("scripts") / "apply_code_update.py", Path("scripts") / "setup.py"]:
                 src = self.project_root / rel
                 if src.exists():
                     shutil.copy(src, scripts_dir / src.name)
+
+            # Copy smoke tests (directory) for update bundles as well.
+            smoke_src = self.project_root / "scripts" / "smoke_tests"
+            smoke_dst = scripts_dir / "smoke_tests"
+            if smoke_src.exists() and smoke_src.is_dir():
+                if smoke_dst.exists():
+                    shutil.rmtree(smoke_dst)
+                shutil.copytree(smoke_src, smoke_dst, ignore=ignore_junk)
         except Exception:
             pass
 
@@ -1606,6 +1723,11 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
                 # Best-effort: don't fail bundling just because cleanup didn't work.
                 pass
 
+        # Smoke test the shipped bundle (strongly recommended).
+        smoke_env = os.environ.get("APEX_BUNDLE_SMOKE_TESTS")
+        if self.run_smoke_tests and (smoke_env is None or str(smoke_env).strip().lower() not in ("0", "false", "no", "off")):
+            self._run_smoke_tests(bundle_dir=bundle_dir, gpu_type=gpu_type)
+
         # Sign the bundle
         self.sign_bundle(bundle_dir)
 
@@ -1669,6 +1791,16 @@ def main():
         "--skip-rust",
         action="store_true",
         help="Skip building/installing Rust wheels (apex_download_rs).",
+    )
+    parser.add_argument(
+        "--skip-smoke-tests",
+        action="store_true",
+        help="Skip running smoke tests against the shipped bundle venv (NOT recommended).",
+    )
+    parser.add_argument(
+        "--smoke-tests-strict",
+        action="store_true",
+        help="Fail if building a CUDA bundle but CUDA is not available to run GPU kernel smoke tests.",
     )
     parser.add_argument(
         "--keep-build-venv",
@@ -1810,6 +1942,8 @@ def main():
     )
     bundler.skip_rust = args.skip_rust
     bundler.keep_build_venv = args.keep_build_venv
+    bundler.run_smoke_tests = not args.skip_smoke_tests
+    bundler.smoke_tests_strict = bool(args.smoke_tests_strict)
 
     bundle_dir = bundler.bundle()
 
