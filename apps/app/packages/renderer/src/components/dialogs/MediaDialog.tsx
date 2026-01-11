@@ -1546,11 +1546,12 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                       applyAspectRatioCrop(value, { force: true });
                     }
                   }}
+                  
                 >
                   <SelectTrigger className="w-[100px] h-7.5! bg-secondary/50 border-none text-[11px] font-medium rounded-[6px]">
                     <SelectValue placeholder="Select ratio" />
                   </SelectTrigger>
-                  <SelectContent className="bg-background text-foreground font-poppins dark">
+                  <SelectContent className="bg-background text-foreground font-poppins dark z-101!">
                     {ASPECT_RATIOS.map((ratio) => (
                       <SelectItem
                         key={ratio.value}
