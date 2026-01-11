@@ -34,8 +34,11 @@ backlog = 2048
 workers = int(os.getenv("APEX_GUNICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1")
 worker_class = "uvicorn.workers.UvicornWorker"
 worker_connections = 1000
-max_requests = 1000
-max_requests_jitter = 100
+# Desktop/local stability: do NOT terminate workers after N requests by default.
+# Enable (e.g. to mitigate long-running memory leaks) by setting:
+#   APEX_MAX_REQUESTS=1000
+max_requests = int(os.getenv("APEX_MAX_REQUESTS", "0") or "0")
+max_requests_jitter = 100 if max_requests > 0 else 0
 
 # Timeout
 timeout = 120
