@@ -65,7 +65,7 @@ import inspect
 from src.lora import LoraManager, LoraItem
 from src.helpers.helpers import helpers
 from src.utils.torch_patches import patch_torch_linalg_solve_for_cusolver
-from src.offload.group_offloading import apply_group_offloading
+from src.memory_management import apply_group_offloading
 import types
 try:
     torch.backends.cuda.preferred_linalg_library()
