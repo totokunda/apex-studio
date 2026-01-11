@@ -78,7 +78,6 @@ apex-engine dev
 ```bash
 cd apps/api
 python3 -m pip install -U pip setuptools wheel
-python3 -m pip install honcho
 
 # Install torch (pick one)
 python3 -m pip install torch torchvision torchaudio
