@@ -6,7 +6,7 @@ from diffusers.utils.state_dict_utils import (
     DIFFUSERS_OLD_TO_PEFT,
 )
 from src.converters.base_converter import BaseConverter
-
+from src.converters.utils import strip_common_prefix
 BASE_TO_PEFT = {
     "lora_down": "lora_A",
     "lora_up": "lora_B",
@@ -163,6 +163,7 @@ class LoraConverter(BaseConverter):
         return state_dict
 
     def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
+        state_dict = strip_common_prefix(state_dict, model_keys=model_keys)
         state_dict_type = self._get_state_dict_type(state_dict)
         if state_dict_type == StateDictType.KOHYA_SS:
             convert_kohya_to_peft_state_dict(state_dict)

@@ -229,7 +229,11 @@ def internal_serve(
     # Mirror key production defaults from `apps/api/gunicorn.conf.py`, but for uvicorn.
     backlog = 2048
     keepalive = 2
-    max_requests = 1000
+    # Desktop/local stability: do NOT terminate the server after N requests by default.
+    # This can still be enabled (e.g. to mitigate long-running memory leaks) by setting:
+    #   APEX_MAX_REQUESTS=1000
+    # Note: Uvicorn expects "None" (or CLI flag omitted) to disable.
+    max_requests = int(os.getenv("APEX_MAX_REQUESTS", "0") or "0")
 
     disable_dual_stack = bool(os.getenv("APEX_DISABLE_DUAL_STACK"))
 
@@ -282,9 +286,9 @@ def internal_serve(
             str(backlog),
             "--timeout-keep-alive",
             str(keepalive),
-            "--limit-max-requests",
-            str(max_requests),
         ]
+        if max_requests > 0:
+            cmd += ["--limit-max-requests", str(max_requests)]
         if reload:
             cmd.append("--reload")
         else:

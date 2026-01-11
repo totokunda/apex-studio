@@ -528,7 +528,7 @@ class WanAnimateEngine(WanShared):
         pose_video = self.pad_video_frames(pose_video, num_target_frames)
         face_video = self.pad_video_frames(face_video, num_target_frames)
 
-        # TODO: also support np.ndarray input (e.g. from decord like the original implementation?)
+        # TODO: also support np.ndarray input (e.g. from a video reader like the original implementation?)
         pose_video_width, pose_video_height = pose_video[0].size
         if pose_video_height != height or pose_video_width != width:
             self.logger.warning(
