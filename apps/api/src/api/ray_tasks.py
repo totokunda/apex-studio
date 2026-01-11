@@ -1919,11 +1919,13 @@ def run_engine_from_manifest(
                 engine_stage_start + bounded * engine_stage_span, message, metadata
             )
 
+        
         # Persist a snapshot of the invocation into the structured `runs` directory
+
         render_func = (
-            render_on_step_callback
-            if model_type.lower() not in ["ovi", "ltx2"]
-            else render_on_step_callback_audio_video
+            render_on_step_callback_audio_video
+            if model_type.lower() == "ovi" or engine_type.lower() == "ltx2"
+            else render_on_step_callback
         )
     
         if os.environ.get("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
@@ -1960,7 +1962,7 @@ def run_engine_from_manifest(
 
         # OVI models return a tuple of (video_tensor, audio_numpy). Use a dedicated
         # saver so we correctly embed the generated audio into the MP4 output.
-        if isinstance(model_type, str) and model_type.lower() == "ovi":
+        if isinstance(model_type, str) and model_type.lower() == "ovi" or model_type.lower() == "ti2v":
             result_path, media_type = render_func(
                 output,
                 is_result=True,
