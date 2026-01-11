@@ -15,6 +15,22 @@
 
 ## Run locally (development)
 
+### 0) Clone the repo (Git + Git LFS)
+
+This repo uses **Git submodules** and **Git LFS** (Large File Storage) for some assets.
+
+```bash
+# Install Git LFS (if you don't already have it)
+git lfs install
+
+# Clone + init submodules
+git clone --recurse-submodules https://github.com/totokunda/apex-studio.git
+cd apex-studio
+
+# Fetch LFS files (recommended after cloning)
+git lfs pull
+```
+
 ### Prerequisites
 
 - **Node.js 24.x** (required)
