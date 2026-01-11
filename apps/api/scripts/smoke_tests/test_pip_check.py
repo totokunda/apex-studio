@@ -8,6 +8,8 @@ from .common import log, fail, SmokeContext
 
 def run(ctx: SmokeContext) -> None:
     log("[smoke] pip check")
+    log(f"cwd: {str(ctx.bundle_root)}")
+    log(f"sys.executable: {sys.executable}")
     res = subprocess.run(
         [sys.executable, "-m", "pip", "check"],
         check=False,
