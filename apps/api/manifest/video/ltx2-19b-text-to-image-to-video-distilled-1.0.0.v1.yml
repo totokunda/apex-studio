@@ -422,10 +422,10 @@ spec:
       step: 0.5
     - id: chunking_profile
       label: Chunking Profile
-      description: Select the chunking profile for the model
+      description: Spliting tensors into smaller chunks to reduce memory usage.
       type: select
       panel: sampling
-      default: none
+      default: balanced
       options:
       - name: None
         value: none
@@ -433,3 +433,5 @@ spec:
         value: light
       - name: Balanced
         value: balanced
+      - name: Aggressive
+        value: aggressive

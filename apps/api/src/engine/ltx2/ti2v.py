@@ -473,6 +473,7 @@ class LTX2TI2VEngine(LTX2Shared):
         cfg_sequential: bool = False,
         chunking_profile: str = "none",
         progress_callback: Optional[Callable[[float, str], None]] = None,
+        **kwargs,
     ):
         
         # Progress mapping:
