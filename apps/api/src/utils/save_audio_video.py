@@ -12,6 +12,7 @@ from einops import rearrange
 from PIL import Image
 from torch._prims_common import DeviceLikeType
 from tqdm import tqdm
+from loguru import logger
 
 DEFAULT_IMAGE_CRF = 33
 
@@ -325,8 +326,12 @@ def save_video_ltx2(
     sample_rate: int | None = 24000,
     fps: int = 25,
     video_chunks_number: int = 1,
+    job_dir: Optional[str] = None,
 ) -> None:
-    
+    if job_dir is not None:
+        output_path = str(job_dir / f"{filename_prefix}.mp4")
+    else:
+        output_path = f"{filename_prefix}.mp4"
     if isinstance(video, torch.Tensor):
         video = iter([video])
 
@@ -334,7 +339,7 @@ def save_video_ltx2(
 
     _, height, width, _ = first_chunk.shape
 
-    container = av.open(f"{filename_prefix}.mp4", mode="w")
+    container = av.open(output_path, mode="w")
     stream = container.add_stream("libx264", rate=int(fps))
     stream.width = width
     stream.height = height
@@ -367,7 +372,7 @@ def save_video_ltx2(
         _write_audio(container, audio_stream, audio, sample_rate)
 
     container.close()
-
+    return output_path, "video"
 
 def decode_audio_from_file(path: str, device: torch.device) -> torch.Tensor | None:
     container = av.open(path)
