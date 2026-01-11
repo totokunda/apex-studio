@@ -1,10 +1,11 @@
 from src.engine.base_engine import BaseEngine
 from diffusers.video_processor import VideoProcessor
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Callable
 from PIL import Image
 import torch
 from diffusers.utils.torch_utils import randn_tensor
 from src.engine.ltx2.shared.audio_processing import LTX2AudioProcessingMixin
+from einops import rearrange
 
 class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     """LTX2 Shared Engine Implementation"""
@@ -418,3 +419,84 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     @property
     def distilled_stage_2_sigma_values(self):
         return self.config.get("distilled_stage_2_sigma_values", [0.909375, 0.725, 0.421875, 0.0])
+    
+    @staticmethod
+    def _convert_to_uint8(frames: torch.Tensor) -> torch.Tensor:
+        frames = (((frames + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
+        frames = rearrange(frames[0], "c f h w -> f h w c")
+        return frames
+    
+    def _render_step(self, latents:torch.Tensor, render_on_step_callback:Callable):
+        
+        latent_num_frames = self._latent_num_frames
+        latent_height = self._latent_height
+        latent_width = self._latent_width
+        latents = self._unpack_latents(
+                latents,
+                latent_num_frames,
+                latent_height,
+                latent_width,
+                self.transformer_spatial_patch_size,
+                self.transformer_temporal_patch_size,
+            )
+        
+        
+        if not getattr(self, "video_vae", None):
+            self.load_component_by_name("video_vae")
+        device = self.device
+        self.to_device(self.video_vae)
+        
+        latents = self.video_vae.denormalize_latents(
+            latents
+        )
+        self.video_vae.enable_tiling()
+        batch_size = latents.shape[0]
+        latents = latents.to(self.video_vae.dtype)
+    
+        if not self.video_vae.config.timestep_conditioning:
+            timestep = None
+        else:
+            noise = randn_tensor(latents.shape, device=device, dtype=latents.dtype)
+            if not isinstance(decode_timestep, list):
+                decode_timestep = [decode_timestep] * batch_size
+            if decode_noise_scale is None:
+                decode_noise_scale = decode_timestep
+            elif not isinstance(decode_noise_scale, list):
+                decode_noise_scale = [decode_noise_scale] * batch_size
+            timestep = torch.tensor(decode_timestep, device=device, dtype=latents.dtype)
+            decode_noise_scale = torch.tensor(decode_noise_scale, device=device, dtype=latents.dtype)[
+                :, None, None, None, None
+            ]
+            latents = (1 - decode_noise_scale) * latents + decode_noise_scale * noise
+        video = self.video_vae.decode(latents, timestep, return_dict=False)[0]
+        self._offload("video_vae")
+        
+        if not getattr(self, "audio_vae", None):
+            self.load_component_by_name("audio_vae")
+            
+        self.to_device(self.audio_vae)
+        audio_latents = audio_latents.to(self.audio_vae.dtype)
+        audio_latents = self.audio_vae.denormalize_latents(
+            audio_latents
+        )
+        
+        audio_num_frames = self._audio_num_frames
+        latent_mel_bins = self._latent_mel_bins
+
+        audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
+        # enable tiling
+        generated_mel_spectrograms = self.audio_vae.decode(audio_latents, return_dict=False)[0]
+        self._offload("audio_vae")
+            
+        # load vocoder
+        vocoder = self.helpers["vocoder"]
+        self.to_device(vocoder)
+
+        audio = vocoder(generated_mel_spectrograms)
+
+        self._offload("vocoder")
+        
+        video = self._convert_to_uint8(video).cpu()
+        audio = audio.squeeze(0).cpu().float()
+        
+        return video, audio

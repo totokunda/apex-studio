@@ -277,6 +277,7 @@ spec:
         flow: column
         rows:
         - - image
+        - - audio
     - name: prompting
       label: Prompting
       collapsible: true
@@ -330,9 +331,15 @@ spec:
       description: The image to condition on.
       type: image
       panel: media
-      required: true
+      required: false
       map_h: height
       map_w: width
+    - id: audio
+      label: Audio
+      description: The audio to condition on.
+      type: audio
+      panel: media
+      required: false
     - id: prompt
       label: Prompt
       description: Describe the video you want to generate.
