@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 import json
@@ -5,7 +7,11 @@ import math
 import shutil
 from pathlib import Path
 from typing import Dict, Iterator, Iterable, Tuple, Any, Optional
-import mlx.core as mx
+
+try:
+    import mlx.core as mx  # type: ignore
+except Exception:  # pragma: no cover - MLX is not available on Windows/Linux
+    mx = None  # type: ignore
 import numpy as np
 import torch
 from safetensors import safe_open

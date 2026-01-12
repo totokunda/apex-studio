@@ -1534,6 +1534,7 @@ def run_engine_from_manifest(
             """
             import subprocess
             import os
+            from src.utils.ffmpeg import get_ffmpeg_path
 
             try:
                 valid_audio_paths = [
@@ -1547,7 +1548,7 @@ def run_engine_from_manifest(
                 # video so that the final saved filename remains unchanged.
                 temp_out_path = base.with_name(f"{base.stem}_with_audio{base.suffix}")
 
-                cmd: List[str] = ["ffmpeg", "-y", "-i", video_path]
+                cmd: List[str] = [get_ffmpeg_path(), "-y", "-i", video_path]
                 for ap in valid_audio_paths:
                     cmd.extend(["-i", ap])
 
@@ -1620,6 +1621,7 @@ def run_engine_from_manifest(
             """
             import subprocess
             import os
+            from src.utils.ffmpeg import get_ffmpeg_path
 
             try:
                 if not (
@@ -1637,7 +1639,7 @@ def run_engine_from_manifest(
                 # Video from generated output (0), audio from source input (1).
                 # Encode audio to AAC for MP4 compatibility; copy video stream.
                 cmd: List[str] = [
-                    "ffmpeg",
+                    get_ffmpeg_path(),
                     "-y",
                     "-i",
                     video_path,
@@ -2091,11 +2093,13 @@ def run_frame_interpolation(
         # Try to mux audio from input_path into the final output without changing rate/tempo
         # If no audio is present, fall back to the video-only file
         try:
+            from src.utils.ffmpeg import get_ffmpeg_path
+
             # Use ffmpeg with stream copy to preserve original audio rate/tempo
             # -map 0:v:0 takes video from the first input (our generated video)
             # -map 1:a:0? takes the first audio track from the second input if it exists
             ffmpeg_cmd = [
-                "ffmpeg",
+                get_ffmpeg_path(),
                 "-y",
                 "-i",
                 video_only_path,

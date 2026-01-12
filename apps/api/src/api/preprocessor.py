@@ -37,6 +37,10 @@ async def poll_ray_updates():
     bridge = None
     logger.info("Starting polling Ray bridge for websocket updates")
 
+    poll_interval_s = float(os.environ.get("RAY_WS_POLL_INTERVAL_S", "0.1"))
+    max_updates_per_pull = int(os.environ.get("RAY_WS_MAX_UPDATES_PER_PULL", "200"))
+    max_bridge_job_ids = int(os.environ.get("RAY_WS_MAX_BRIDGE_JOB_IDS", "5000"))
+
     while True:
         try:
             if bridge is None:
@@ -62,7 +66,9 @@ async def poll_ray_updates():
 
             # Also check the bridge for any job IDs it knows about
             try:
-                bridge_job_ids = ray.get(bridge.get_all_job_ids.remote(), timeout=0.05)
+                bridge_job_ids = ray.get(
+                    bridge.get_all_job_ids.remote(max_bridge_job_ids), timeout=0.05
+                )
                 all_job_ids.update(bridge_job_ids)
             except:
                 pass
@@ -70,16 +76,26 @@ async def poll_ray_updates():
             # Check each job for updates
             for job_id in all_job_ids:
                 try:
-                    updates = ray.get(bridge.get_updates.remote(job_id), timeout=0.05)
+                    updates = ray.get(
+                        bridge.get_updates.remote(job_id, max_updates_per_pull),
+                        timeout=0.05,
+                    )
                     if updates:
                         for update in updates:
                             await websocket_manager.send_update(job_id, update)
                 except ray.exceptions.GetTimeoutError:
                     pass  # No updates available
                 except Exception as e:
+                    # If an oversized msgpack buffer caused this, the safest recovery is
+                    # to clear the queued updates for this job so polling can resume.
+                    try:
+                        if "Unable to allocate internal buffer" in str(e):
+                            ray.get(bridge.clear_updates.remote(job_id), timeout=0.05)
+                    except Exception:
+                        pass
                     logger.error(f"Error getting updates for job {job_id}: {e}")
 
-            await asyncio.sleep(0.1)  # Poll every 100ms
+            await asyncio.sleep(poll_interval_s)
         except Exception as e:
             logger.error(f"Error in poll_ray_updates: {e}")
             import traceback

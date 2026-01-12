@@ -11,6 +11,89 @@ from src.utils.defaults import DEFAULT_CACHE_PATH
 import pickle
 
 
+def sanitize_path_for_filename(path: str) -> str:
+    """Sanitize a file path to be safe for use in a filename.
+    
+    Replaces path separators and invalid filename characters with underscores.
+    Handles Windows drive letters and UNC paths properly.
+    """
+    if not path:
+        return "unknown"
+    
+    # Replace both forward and back slashes
+    sanitized = path.replace("\\", "_").replace("/", "_")
+    
+    # Remove Windows drive letter colon if present (e.g., "C:" -> "C")
+    # This handles cases where the path starts with a drive letter
+    if len(sanitized) >= 2 and sanitized[1] == ":":
+        sanitized = sanitized[0] + sanitized[2:]
+    
+    # Remove or replace other invalid filename characters
+    # Windows: < > : " | ? * \
+    # Unix: / (already handled above)
+    invalid_chars = '<>:"|?*'
+    for char in invalid_chars:
+        sanitized = sanitized.replace(char, "_")
+    
+    # Remove leading/trailing dots and spaces (Windows doesn't allow these)
+    sanitized = sanitized.strip(". ")
+    
+    # Collapse multiple consecutive underscores
+    sanitized = re.sub(r"_+", "_", sanitized)
+    
+    # Remove leading/trailing underscores
+    sanitized = sanitized.strip("_")
+    
+    return sanitized if sanitized else "unknown"
+
+
+def normalize_cache_file_path(cache_file: str) -> str:
+    """Normalize a cache file path so it's safe to use on the current OS.
+
+    This is primarily a Windows hardening layer: callers sometimes accidentally
+    embed a full Windows path (e.g. "C:\\...") into what is meant to be a *filename*.
+    That can create illegal path segments like "vae_encode_C:" and crash with:
+      WinError 123: The filename, directory name, or volume label syntax is incorrect
+    """
+    if not cache_file:
+        return cache_file
+
+    # Only Windows has the "colon is illegal except after drive letter" issue.
+    if os.name != "nt":
+        return cache_file
+
+    # If any path segment contains ":" (except the leading drive "C:"), the path is unsafe.
+    # Example bad input:
+    #   <cache_dir>\\vae_encode_C:\\Users\\me\\...\\.safetensors
+    parts = re.split(r"[\\/]+", str(cache_file))
+    unsafe = False
+    for i, part in enumerate(parts):
+        if not part:
+            continue
+        # Allow the leading drive token: "C:"
+        if i == 0 and re.fullmatch(r"[A-Za-z]:", part):
+            continue
+        if ":" in part:
+            unsafe = True
+            break
+
+    if unsafe:
+        filename = sanitize_path_for_filename(str(cache_file))
+        if not filename.lower().endswith(".safetensors"):
+            filename = f"{filename}.safetensors"
+        return os.path.join(DEFAULT_CACHE_PATH, filename)
+
+    # Also sanitize the basename if it contains Windows-invalid characters.
+    base = os.path.basename(cache_file)
+    if re.search(r'[<>:"|?*]', base):
+        safe_base = sanitize_path_for_filename(base)
+        if not safe_base.lower().endswith(".safetensors") and base.lower().endswith(".safetensors"):
+            safe_base = f"{safe_base}.safetensors"
+        return os.path.join(os.path.dirname(cache_file), safe_base)
+
+    return cache_file
+
+
 class CacheMixin:
     enable_cache: bool = True
     cache_file: str | None = None
@@ -86,8 +169,10 @@ class CacheMixin:
                 return []
             cache_file_eff = os.path.join(
                 DEFAULT_CACHE_PATH,
-                f"text_encoder_{self.model_path.replace('/', '_')}.safetensors",
+                f"text_encoder_{sanitize_path_for_filename(self.model_path)}.safetensors",
             )
+
+        cache_file_eff = normalize_cache_file_path(cache_file_eff)
 
         if not os.path.exists(cache_file_eff):
             return []
@@ -142,10 +227,18 @@ class CacheMixin:
             cache_file_eff = cache_file or self.cache_file
             if cache_file_eff is None:
                 return None
+            cache_file_eff = normalize_cache_file_path(cache_file_eff)
             with safe_open(cache_file_eff, framework="pt", device="cpu") as f:
                 tensors: List[torch.Tensor] = []
                 for key in keys:
-                    tensors.append(f.get_tensor(key))
+                    t = f.get_tensor(key)
+                    # On Windows, safetensors often returns mmap-backed CPU tensors.
+                    # Keeping those alive can prevent later cache rewrites with:
+                    #   "file with a user-mapped section open (os error 1224)".
+                    # Clone forces a real in-memory copy so the mmap can be released.
+                    if os.name == "nt":
+                        t = t.clone()
+                    tensors.append(t)
             return tuple(tensors)
         except Exception:
             return None
@@ -175,15 +268,29 @@ class CacheMixin:
 
         # Ensure cache path exists
         cache_file_eff = cache_file or self.cache_file
+
         if cache_file_eff is None:
             # Back-compat default for existing TextEncoder cache usage
             if not getattr(self, "model_path", None):
                 return
             cache_file_eff = os.path.join(
                 DEFAULT_CACHE_PATH,
-                f"text_encoder_{self.model_path.replace('/', '_')}.safetensors",
+                f"text_encoder_{sanitize_path_for_filename(self.model_path)}.safetensors",
             )
-        os.makedirs(os.path.dirname(cache_file_eff), exist_ok=True)
+
+        cache_file_eff = normalize_cache_file_path(cache_file_eff)
+
+        # Safely create directory - ensure dirname is valid and not empty
+        cache_dir = os.path.dirname(cache_file_eff)
+        if cache_dir and cache_dir.strip():
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+            except OSError:
+                # Last-resort fallback: remap to a safe filename under DEFAULT_CACHE_PATH.
+                cache_file_eff = normalize_cache_file_path(cache_file_eff)
+                cache_dir = os.path.dirname(cache_file_eff)
+                if cache_dir and cache_dir.strip():
+                    os.makedirs(cache_dir, exist_ok=True)
 
         # Load existing cache tensors (best-effort)
         existing_tensors: Dict[str, torch.Tensor] = {}
@@ -192,7 +299,10 @@ class CacheMixin:
                 with safe_open(cache_file_eff, framework="pt", device="cpu") as f:
                     for key in f.keys():
                         # Lazy: only load when needed for rewrite; we need all to rewrite cleanly
-                        existing_tensors[key] = f.get_tensor(key)
+                        t = f.get_tensor(key)
+                        if os.name == "nt":
+                            t = t.clone()
+                        existing_tensors[key] = t
             except Exception:
                 # Corrupt or unreadable cache file; reset it
                 existing_tensors = {}
@@ -268,10 +378,22 @@ class CacheMixin:
                 for _index, (_ts, key) in indices.items():
                     existing_tensors.pop(key, None)
 
-        # Rewrite cache file atomically
+        # Rewrite cache file atomically (temp write + replace).
+        # Avoid in-place overwrite which can fail on Windows if the file is/was
+        # memory-mapped (os error 1224).
         try:
-            save_file(existing_tensors, cache_file_eff)
-        except Exception:
+            timestamp_ms = int(time.time() * 1000)
+            tmp_path = f"{cache_file_eff}.tmp.{os.getpid()}.{timestamp_ms}"
+            save_file(existing_tensors, tmp_path)
+            os.replace(tmp_path, cache_file_eff)
+        except Exception as e:
+            print(e)
+            # Best-effort cleanup of temp file
+            try:
+                if "tmp_path" in locals() and os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
             # As a fallback, avoid crashing the caller; drop caching if write fails
             pass
 

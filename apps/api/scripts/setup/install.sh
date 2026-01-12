@@ -494,31 +494,17 @@ fi
 export MAX_JOBS=$MAX_JOBS
 
 # Install Flash Attention
-print_status "Installing Flash Attention..."
+print_status "Installing Flash Attention (FlashAttention 3 wheels)..."
 if [[ "$CUDA_AVAILABLE" == true ]]; then
-    # Check if flash-attention is installed in the conda environment and install it if not
-    if [[ ! -d "$CONDA_PREFIX/lib/python3.10/site-packages/flash_attn" ]]; then
-        if [[ ! -d "flash-attention" ]]; then
-            clone_and_install "https://github.com/Dao-AILab/flash-attention.git" "flash-attention" "$CONDA_RUN pip install . --no-build-isolation"
-        else
-            cd flash-attention
-            print_status "Installing Flash Attention from existing directory..."
-            $CONDA_RUN pip install . --verbose --no-build-isolation
-            cd ..
-        fi
+    # Prefer prebuilt FlashAttention 3 wheels (CUDA 12.8 + Torch 2.9.0) which work on both
+    # Linux and Windows. (Repo: https://windreamer.github.io/flash-attention3-wheels/)
+    if ! $CONDA_RUN python -c "import flash_attn_interface" >/dev/null 2>&1; then
+        print_status "Installing FlashAttention 3 wheels (cu128 + torch2.9.0)..."
+        $CONDA_RUN pip install flash_attn_3 \
+            --find-links https://windreamer.github.io/flash-attention3-wheels/cu128_torch290 \
+            --extra-index-url https://download.pytorch.org/whl/cu128
     else
-        print_status "Flash Attention is already installed in the conda environment."
-    fi
-    # check if flash-attention 3 is installed in the conda environment and install it if not
-    if [[ "$SUPPORTS_HOPPER" == true ]]; then
-        if [[ ! -d "$CONDA_PREFIX/lib/python3.10/site-packages/flash_attn/flash_attn_interface.cpython-310-x86_64-linux-gnu.so" ]]; then
-        print_status "Flash Attention is being compiled with support for Hopper GPUs."
-            cd flash-attention/hopper/
-            $CONDA_RUN pip install . --verbose
-            cd ../..
-        else
-            print_status "Flash Attention is already compiled with support for Hopper GPUs."
-        fi
+        print_status "FlashAttention 3 is already installed in the conda environment."
     fi
 else
     print_warning "CUDA not available, skipping installation."

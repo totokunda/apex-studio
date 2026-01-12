@@ -13,7 +13,7 @@
 # // limitations under the License.
 
 from typing import Callable, Optional
-from diffusers.models.normalization import RMSNorm
+from torch.nn import RMSNorm
 from torch import nn
 
 # (dim: int, eps: float, elementwise_affine: bool)
