@@ -12,9 +12,6 @@ facexlib==0.3.0
 insightface==0.7.3
 mediapipe==0.10.21
 mmengine==0.10.7
-# NOTE: `opendr` builds native OpenGL bindings; it currently fails to build on
-# some modern macOS/arm64 toolchains. Keep it out of the default darwin bundle.
-opendr==0.78; sys_platform != "darwin"
 ptlflow
 raft
 # NOTE: RetinaFace is optional.

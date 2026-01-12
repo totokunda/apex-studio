@@ -11,10 +11,187 @@ from __future__ import print_function
 import numpy as np
 import cv2
 import code
-from opendr.camera import ProjectPoints
-from opendr.renderer import ColoredRenderer, TexturedRenderer
-from opendr.lighting import LambertianPointLight
 import random
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class _PointLight:
+    pos: np.ndarray  # (3,)
+    color: np.ndarray  # (3,)
+
+
+def _normalize(v: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    n = np.linalg.norm(v, axis=-1, keepdims=True)
+    return v / np.maximum(n, eps)
+
+
+def _as_float_rgb01(img: np.ndarray) -> np.ndarray:
+    """
+    Convert an image to float32 RGB in [0, 1].
+
+    MeshGraphormer code expects float images in [0, 1] and later does:
+      cv2.imwrite(..., visual[:, :, ::-1] * 255)
+    """
+    if img is None:
+        raise ValueError("img cannot be None here")
+    if img.dtype == np.uint8:
+        return img.astype(np.float32) / 255.0
+    return img.astype(np.float32)
+
+
+def _project_points(
+    vertices: np.ndarray,
+    *,
+    camera_rot: np.ndarray,
+    camera_t: np.ndarray,
+    focal_length: float,
+    camera_center: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Pinhole projection roughly matching opendr ProjectPoints usage in this repo.
+
+    Returns:
+      - proj_xy: (N, 2) float32 pixel coordinates
+      - depth_z: (N,) float32 depth in camera space (used for z-buffering)
+    """
+    # camera_rot is used as a Rodrigues rotation vector throughout this codebase.
+    rvec = np.asarray(camera_rot, dtype=np.float32).reshape(3)
+    tvec = np.asarray(camera_t, dtype=np.float32).reshape(3)
+    R, _ = cv2.Rodrigues(rvec)
+
+    v = np.asarray(vertices, dtype=np.float32)
+    v_cam = (v @ R.T) + tvec[None, :]
+    z = v_cam[:, 2].astype(np.float32)
+    z_safe = np.where(np.abs(z) < 1e-6, 1e-6, z)
+
+    f = float(focal_length)
+    c = np.asarray(camera_center, dtype=np.float32).reshape(2)
+    x = (v_cam[:, 0] / z_safe) * f + c[0]
+    y = (v_cam[:, 1] / z_safe) * f + c[1]
+    proj = np.stack([x, y], axis=1).astype(np.float32)
+    return proj, z
+
+
+def _compute_face_colors(
+    vertices_world: np.ndarray,
+    faces: np.ndarray,
+    *,
+    base_color_rgb: np.ndarray,
+) -> np.ndarray:
+    """
+    Approximate the OpenDR lighting stack used previously:
+      vc = LambertianPointLight(..., vc=albedo, light_color=L1)
+      vc += LambertianPointLight(..., vc=albedo, light_color=L2)
+      vc += LambertianPointLight(..., vc=albedo, light_color=L3)
+    """
+    v = np.asarray(vertices_world, dtype=np.float32)
+    f = np.asarray(faces, dtype=np.int32)
+
+    v0 = v[f[:, 0]]
+    v1 = v[f[:, 1]]
+    v2 = v[f[:, 2]]
+
+    normals = _normalize(np.cross(v1 - v0, v2 - v0))  # (F, 3)
+    centers = (v0 + v1 + v2) / 3.0  # (F, 3)
+
+    yrot = np.radians(120.0).astype(np.float32)
+    lights = [
+        _PointLight(
+            pos=rotateY(np.array([-200, -100, -100], dtype=np.float32), yrot),
+            color=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+        ),
+        _PointLight(
+            pos=rotateY(np.array([800, 10, 300], dtype=np.float32), yrot),
+            color=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+        ),
+        _PointLight(
+            pos=rotateY(np.array([-500, 500, 1000], dtype=np.float32), yrot),
+            color=np.array([0.7, 0.7, 0.7], dtype=np.float32),
+        ),
+    ]
+
+    intensity_rgb = np.zeros((f.shape[0], 3), dtype=np.float32)
+    for L in lights:
+        ldir = _normalize(L.pos[None, :] - centers)  # (F, 3)
+        ndotl = np.maximum(0.0, np.sum(normals * ldir, axis=1, keepdims=True))  # (F,1)
+        intensity_rgb += ndotl * L.color[None, :]
+
+    base = np.asarray(base_color_rgb, dtype=np.float32).reshape(1, 3)
+    face_rgb = np.clip(base * intensity_rgb, 0.0, 1.0).astype(np.float32)
+    return face_rgb
+
+
+def _rasterize(
+    proj_xy: np.ndarray,
+    depth_z: np.ndarray,
+    faces: np.ndarray,
+    face_rgb: np.ndarray,
+    *,
+    out_h: int,
+    out_w: int,
+    background_rgb01: np.ndarray,
+) -> np.ndarray:
+    """
+    Simple triangle rasterizer with a z-buffer. Output is float32 RGB in [0, 1].
+    """
+    img = np.array(background_rgb01, dtype=np.float32, copy=True)
+    if img.shape[:2] != (out_h, out_w) or img.shape[2] != 3:
+        raise ValueError(f"background image must be (H,W,3); got {img.shape}")
+
+    zbuf = np.full((out_h, out_w), np.inf, dtype=np.float32)
+
+    p = np.asarray(proj_xy, dtype=np.float32)
+    z = np.asarray(depth_z, dtype=np.float32)
+    f = np.asarray(faces, dtype=np.int32)
+    c = np.asarray(face_rgb, dtype=np.float32)
+
+    for fi in range(f.shape[0]):
+        i0, i1, i2 = f[fi]
+        x0, y0 = p[i0]
+        x1, y1 = p[i1]
+        x2, y2 = p[i2]
+
+        # Backface cull in screen space (optional). Keep it off to mimic OpenDR's default-ish behavior.
+
+        min_x = int(max(0, np.floor(min(x0, x1, x2))))
+        max_x = int(min(out_w - 1, np.ceil(max(x0, x1, x2))))
+        min_y = int(max(0, np.floor(min(y0, y1, y2))))
+        max_y = int(min(out_h - 1, np.ceil(max(y0, y1, y2))))
+        if max_x < min_x or max_y < min_y:
+            continue
+
+        denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+        if np.abs(denom) < 1e-8:
+            continue
+
+        xs = np.arange(min_x, max_x + 1, dtype=np.float32)
+        ys = np.arange(min_y, max_y + 1, dtype=np.float32)
+        X, Y = np.meshgrid(xs, ys)
+
+        w0 = ((y1 - y2) * (X - x2) + (x2 - x1) * (Y - y2)) / denom
+        w1 = ((y2 - y0) * (X - x2) + (x0 - x2) * (Y - y2)) / denom
+        w2 = 1.0 - w0 - w1
+
+        inside = (w0 >= 0) & (w1 >= 0) & (w2 >= 0)
+        if not np.any(inside):
+            continue
+
+        z0, z1, z2 = z[i0], z[i1], z[i2]
+        depth = (w0 * z0 + w1 * z1 + w2 * z2).astype(np.float32)
+
+        yy0, xx0 = min_y, min_x
+        zb_patch = zbuf[yy0 : max_y + 1, xx0 : max_x + 1]
+        img_patch = img[yy0 : max_y + 1, xx0 : max_x + 1]
+
+        closer = inside & (depth < zb_patch)
+        if not np.any(closer):
+            continue
+
+        zb_patch[closer] = depth[closer]
+        img_patch[closer] = c[fi]
+
+    return img
 
 
 # Rotate the points by a specified angle.
@@ -666,7 +843,11 @@ def cam2pixel(cam_coord, f, c):
 
 class Renderer(object):
     """
-    Render mesh using OpenDR for visualization.
+    Render mesh for visualization using a tiny NumPy + OpenCV software rasterizer.
+
+    This replaces the legacy `opendr` dependency (which is hard to install on Windows
+    due to OSMesa/GL toolchain requirements) while keeping the API used by the
+    MeshGraphormer code.
     """
 
     def __init__(self, width=800, height=600, near=0.5, far=1000, faces=None):
@@ -678,7 +859,8 @@ class Renderer(object):
         self.width = width
         self.height = height
         self.faces = faces
-        self.renderer = ColoredRenderer()
+        # Kept for compatibility with old call sites that might introspect it.
+        self.renderer = None
 
     def render(
         self,
@@ -708,72 +890,48 @@ class Renderer(object):
         if camera_center is None:
             camera_center = np.array([width * 0.5, height * 0.5])
 
-        self.renderer.camera = ProjectPoints(
-            rt=camera_rot,
-            t=camera_t,
-            f=focal_length * np.ones(2),
-            c=camera_center,
-            k=np.zeros(5),
-        )
-        dist = np.abs(self.renderer.camera.t.r[2] - np.mean(vertices, axis=0)[2])
-        far = dist + 20
-
-        self.renderer.frustum = {
-            "near": 1.0,
-            "far": far,
-            "width": width,
-            "height": height,
-        }
-
-        if img is not None:
-            if use_bg:
-                self.renderer.background_image = img
-            else:
-                self.renderer.background_image = np.ones_like(img) * np.array(bg_color)
-
         if body_color is None:
             color = self.colors["light_blue"]
         else:
             color = self.colors[body_color]
 
-        if isinstance(self.renderer, TexturedRenderer):
-            color = [1.0, 1.0, 1.0]
+        if img is not None:
+            img_rgb01 = _as_float_rgb01(img)
+            if use_bg:
+                background = img_rgb01
+            else:
+                background = np.ones_like(img_rgb01, dtype=np.float32) * np.asarray(
+                    bg_color, dtype=np.float32
+                ).reshape(1, 1, 3)
+        else:
+            background = np.ones((height, width, 3), dtype=np.float32) * np.asarray(
+                bg_color, dtype=np.float32
+            ).reshape(1, 1, 3)
 
-        self.renderer.set(v=vertices, f=faces, vc=color, bgcolor=np.ones(3))
-        albedo = self.renderer.vc
-        # Construct Back Light (on back right corner)
-        yrot = np.radians(120)
-
-        self.renderer.vc = LambertianPointLight(
-            f=self.renderer.f,
-            v=self.renderer.v,
-            num_verts=self.renderer.v.shape[0],
-            light_pos=rotateY(np.array([-200, -100, -100]), yrot),
-            vc=albedo,
-            light_color=np.array([1, 1, 1]),
+        proj_xy, depth_z = _project_points(
+            np.asarray(vertices, dtype=np.float32),
+            camera_rot=camera_rot,
+            camera_t=camera_t,
+            focal_length=float(focal_length),
+            camera_center=np.asarray(camera_center, dtype=np.float32),
         )
 
-        # Construct Left Light
-        self.renderer.vc += LambertianPointLight(
-            f=self.renderer.f,
-            v=self.renderer.v,
-            num_verts=self.renderer.v.shape[0],
-            light_pos=rotateY(np.array([800, 10, 300]), yrot),
-            vc=albedo,
-            light_color=np.array([1, 1, 1]),
+        face_rgb = _compute_face_colors(
+            np.asarray(vertices, dtype=np.float32),
+            np.asarray(faces, dtype=np.int32),
+            base_color_rgb=np.asarray(color, dtype=np.float32),
         )
 
-        #  Construct Right Light
-        self.renderer.vc += LambertianPointLight(
-            f=self.renderer.f,
-            v=self.renderer.v,
-            num_verts=self.renderer.v.shape[0],
-            light_pos=rotateY(np.array([-500, 500, 1000]), yrot),
-            vc=albedo,
-            light_color=np.array([0.7, 0.7, 0.7]),
+        out = _rasterize(
+            proj_xy,
+            depth_z,
+            np.asarray(faces, dtype=np.int32),
+            face_rgb,
+            out_h=height,
+            out_w=width,
+            background_rgb01=background,
         )
-
-        return self.renderer.r
+        return out
 
     def render_vertex_color(
         self,
@@ -803,64 +961,43 @@ class Renderer(object):
         if camera_center is None:
             camera_center = np.array([width * 0.5, height * 0.5])
 
-        self.renderer.camera = ProjectPoints(
-            rt=camera_rot,
-            t=camera_t,
-            f=focal_length * np.ones(2),
-            c=camera_center,
-            k=np.zeros(5),
-        )
-        dist = np.abs(self.renderer.camera.t.r[2] - np.mean(vertices, axis=0)[2])
-        far = dist + 20
-
-        self.renderer.frustum = {
-            "near": 1.0,
-            "far": far,
-            "width": width,
-            "height": height,
-        }
-
-        if img is not None:
-            if use_bg:
-                self.renderer.background_image = img
-            else:
-                self.renderer.background_image = np.ones_like(img) * np.array(bg_color)
-
         if vertex_color is None:
             vertex_color = self.colors["light_blue"]
 
-        self.renderer.set(v=vertices, f=faces, vc=vertex_color, bgcolor=np.ones(3))
-        albedo = self.renderer.vc
-        # Construct Back Light (on back right corner)
-        yrot = np.radians(120)
+        if img is not None:
+            img_rgb01 = _as_float_rgb01(img)
+            if use_bg:
+                background = img_rgb01
+            else:
+                background = np.ones_like(img_rgb01, dtype=np.float32) * np.asarray(
+                    bg_color, dtype=np.float32
+                ).reshape(1, 1, 3)
+        else:
+            background = np.ones((height, width, 3), dtype=np.float32) * np.asarray(
+                bg_color, dtype=np.float32
+            ).reshape(1, 1, 3)
 
-        self.renderer.vc = LambertianPointLight(
-            f=self.renderer.f,
-            v=self.renderer.v,
-            num_verts=self.renderer.v.shape[0],
-            light_pos=rotateY(np.array([-200, -100, -100]), yrot),
-            vc=albedo,
-            light_color=np.array([1, 1, 1]),
+        proj_xy, depth_z = _project_points(
+            np.asarray(vertices, dtype=np.float32),
+            camera_rot=camera_rot,
+            camera_t=camera_t,
+            focal_length=float(focal_length),
+            camera_center=np.asarray(camera_center, dtype=np.float32),
         )
 
-        # Construct Left Light
-        self.renderer.vc += LambertianPointLight(
-            f=self.renderer.f,
-            v=self.renderer.v,
-            num_verts=self.renderer.v.shape[0],
-            light_pos=rotateY(np.array([800, 10, 300]), yrot),
-            vc=albedo,
-            light_color=np.array([1, 1, 1]),
+        face_rgb = _compute_face_colors(
+            np.asarray(vertices, dtype=np.float32),
+            np.asarray(faces, dtype=np.int32),
+            base_color_rgb=np.asarray(vertex_color, dtype=np.float32),
         )
 
-        #  Construct Right Light
-        self.renderer.vc += LambertianPointLight(
-            f=self.renderer.f,
-            v=self.renderer.v,
-            num_verts=self.renderer.v.shape[0],
-            light_pos=rotateY(np.array([-500, 500, 1000]), yrot),
-            vc=albedo,
-            light_color=np.array([0.7, 0.7, 0.7]),
+        out = _rasterize(
+            proj_xy,
+            depth_z,
+            np.asarray(faces, dtype=np.int32),
+            face_rgb,
+            out_h=height,
+            out_w=width,
+            background_rgb01=background,
         )
-
-        return self.renderer.r
+        return out

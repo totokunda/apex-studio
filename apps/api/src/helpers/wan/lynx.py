@@ -13,7 +13,7 @@ from safetensors.torch import load_file
 from skimage import transform as trans
 from accelerate import init_empty_weights
 from src.helpers.base import BaseHelper
-from diffusers.models.normalization import RMSNorm
+from torch.nn import RMSNorm
 from src.attention import attention_register
 
 try:

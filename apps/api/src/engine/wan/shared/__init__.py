@@ -11,7 +11,20 @@ from diffusers.video_processor import VideoProcessor
 from diffusers.image_processor import VaeImageProcessor
 from src.utils.progress import safe_emit_progress
 from src.utils.cache import empty_cache
-from .mlx import WanMLXDenoise
+
+try:
+    from .mlx import WanMLXDenoise
+except Exception:  # pragma: no cover - MLX is not available on Windows/Linux
+
+    class WanMLXDenoise:  # type: ignore
+        """
+        Fallback stub to keep imports working when MLX isn't available.
+        """
+
+        def mlx_moe_denoise(self, *args, **kwargs):
+            raise RuntimeError(
+                "MLX denoise requested, but MLX is not available on this platform."
+            )
 from torch import Tensor
 import os
 import gc

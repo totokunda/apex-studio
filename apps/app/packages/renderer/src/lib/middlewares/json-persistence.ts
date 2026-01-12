@@ -30,7 +30,12 @@ import type {
 import _ from "lodash";
 import { getMediaInfo } from "../media/utils";
 import { Preprocessor } from "../preprocessor/api";
-import { listModelTypes, type ManifestDocument, type ModelTypeInfo } from "../manifest/api";
+import {
+  getManifest,
+  listModelTypes,
+  type ManifestDocument,
+  type ModelTypeInfo,
+} from "../manifest/api";
 import { useViewportStore } from "../viewport";
 import { globalInputControlsStore } from "../inputControl";
 import { fetchPreprocessorsList } from "../preprocessor/queries";
@@ -216,6 +221,7 @@ type TimelineClipJson = TimelineClipBaseForJson & {
   masks?: SerializedMaskForJson[];
   preprocessors?: SerializedPreprocessorForJson[];
   manifestRef?: string;
+  manifestVersion?: string;
 };
 
 const serializeMaskKeyframesForJson = (
@@ -316,6 +322,36 @@ const getManifestRefForModelClip = (clip: AnyClipProps): string | undefined => {
   const id = manifest.id ?? manifest.name;
   if (id == null) return undefined;
   return String(id);
+};
+
+const getManifestVersionForModelClip = (
+  clip: AnyClipProps,
+): string | undefined => {
+  if (clip.type !== "model") return undefined;
+  const model = clip as ModelClipProps;
+  const manifest = model.manifest;
+  if (!manifest || typeof manifest !== "object") return undefined;
+  const version =
+    typeof (manifest as any).version === "string"
+      ? ((manifest as any).version as string)
+      : typeof (manifest as any)?.metadata?.version === "string"
+        ? ((manifest as any).metadata.version as string)
+        : undefined;
+  return version && version.trim().length > 0 ? version.trim() : undefined;
+};
+
+/**
+ * Versioned manifest cache key. This allows us to keep multiple manifest
+ * revisions locally and ensures clips hydrate with the exact manifest they
+ * were saved with (when available).
+ */
+const makeManifestCacheKey = (
+  manifestId: string,
+  manifestVersion?: string,
+): string => {
+  const id = String(manifestId ?? "").trim();
+  const v = String(manifestVersion ?? "").trim();
+  return id && v ? `${id}@@${v}` : id;
 };
 
 /**
@@ -561,12 +597,14 @@ const buildProjectJsonSnapshot = (
           const id = manifest.id ?? manifest.name;
           if (id != null) {
             const key = String(id);
-            if (!localManifests[key]) {
+            const manifestVersion = getManifestVersionForModelClip(origClip);
+            const versionedKey = makeManifestCacheKey(key, manifestVersion);
+            if (!localManifests[versionedKey]) {
               // Store a sanitized manifest without UI input values so that
               // the on-disk manifest JSON remains generic and not
               // user-specific. Per-clip values are stored on the clip
               // itself (see modelInputValues below).
-              localManifests[key] =
+              localManifests[versionedKey] =
                 stripModelInputValuesFromManifest(manifest as ManifestDocument);
             }
           }
@@ -586,6 +624,7 @@ const buildProjectJsonSnapshot = (
         preprocessors = serializedPres;
       }
       manifestRef = getManifestRefForModelClip(origClip);
+      const manifestVersion = getManifestVersionForModelClip(origClip);
 
       // Normalize the clip state we persist and strip large/derived fields
       let clipForJson: any = {
@@ -644,6 +683,7 @@ const buildProjectJsonSnapshot = (
         ...(masks ? { masks } : {}),
         ...(preprocessors ? { preprocessors } : {}),
         ...(manifestRef ? { manifestRef } : {}),
+        ...(manifestRef && manifestVersion ? { manifestVersion } : {}),
       };
 
       clipsForJson.push(jsonClip);
@@ -1294,8 +1334,36 @@ const hydrateStoresFromProjectJson = async (
             manifestRef != null && manifestRef !== ""
               ? String(manifestRef)
               : undefined;
-          const manifestFromDoc =
-            manifestId && manifestsMap ? manifestsMap[manifestId] : undefined;
+          const manifestVersion =
+            typeof (c as any).manifestVersion === "string" &&
+            (c as any).manifestVersion.trim().length > 0
+              ? String((c as any).manifestVersion).trim()
+              : undefined;
+          const manifestCacheKey =
+            manifestId ? makeManifestCacheKey(manifestId, manifestVersion) : "";
+
+          let manifestFromDoc =
+            manifestId && manifestsMap
+              ? (manifestsMap[manifestCacheKey] ?? manifestsMap[manifestId])
+              : undefined;
+
+          // If we don't have an exact local match, try to refresh from the API.
+          // This prevents hydration from using a stale local manifest that is
+          // missing UI inputs, which can otherwise cause persisted input values
+          // to be dropped during re-application.
+          if (!manifestFromDoc && manifestId) {
+            try {
+              const res = await getManifest(manifestId);
+              if (res?.success && res.data) {
+                manifestFromDoc = res.data as ManifestDocument;
+                if (manifestsMap) {
+                  manifestsMap[manifestCacheKey || manifestId] = manifestFromDoc;
+                }
+              }
+            } catch {
+              // ignore; best-effort
+            }
+          }
 
           if (manifestFromDoc) {
             // Clone so that each clip gets its own manifest instance; this

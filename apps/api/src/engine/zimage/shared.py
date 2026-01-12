@@ -88,6 +88,7 @@ class ZImageShared(BaseEngine):
     ) -> List[torch.FloatTensor]:
         device = device or self.device
         dtype = self.component_dtypes["text_encoder"]
+
         if not self.text_encoder:
             safe_emit_progress(progress_callback, 0.10, "Loading text encoder")
             self.load_component_by_type("text_encoder")
