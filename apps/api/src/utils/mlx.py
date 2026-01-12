@@ -1,44 +1,68 @@
-import mlx.core as mx
-import torch
-from typing import Dict, List
-import mlx.nn as nn
-from typing import Any
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
 import numpy as np
+import torch
+
+try:
+    import mlx.core as mx  # type: ignore
+    import mlx.nn as nn  # type: ignore
+except Exception:  # pragma: no cover - MLX is not available on Windows/Linux
+    mx = None  # type: ignore
+    nn = None  # type: ignore
 
 
-def convert_dtype_to_torch(dtype: str | torch.dtype | mx.Dtype) -> torch.dtype:
+def _require_mlx() -> None:
+    if mx is None or nn is None:
+        raise RuntimeError(
+            "MLX is not available on this platform/environment. "
+            "Install/use MLX only on macOS (Apple Silicon)."
+        )
+
+
+def convert_dtype_to_torch(dtype: str | torch.dtype | Any) -> torch.dtype:
     if isinstance(dtype, torch.dtype):
         return dtype
-    elif isinstance(dtype, mx.Dtype):
+    elif mx is not None and isinstance(dtype, mx.Dtype):
         dtype_as_str = str(dtype).replace("mlx.core.", "")
         return getattr(torch, dtype_as_str)
     else:
-        return torch.dtype(dtype)
+        if isinstance(dtype, str):
+            dtype_as_str = dtype.replace("torch.", "")
+            return getattr(torch, dtype_as_str)
+        raise TypeError(f"Unsupported dtype: {type(dtype)}")
 
 
-def convert_dtype_to_mlx(dtype: str | torch.dtype | mx.Dtype) -> mx.Dtype:
-    if isinstance(dtype, mx.Dtype):
+def convert_dtype_to_mlx(dtype: str | torch.dtype | Any):
+    _require_mlx()
+    if isinstance(dtype, mx.Dtype):  # type: ignore[attr-defined]
         return dtype
     elif isinstance(dtype, torch.dtype):
         dtype_as_str = str(dtype).replace("torch.", "")
-        return getattr(mx, dtype_as_str)
+        return getattr(mx, dtype_as_str)  # type: ignore[union-attr]
     else:
-        return mx.Dtype(dtype)
+        if isinstance(dtype, str):
+            dtype_as_str = dtype.replace("mlx.core.", "")
+            return getattr(mx, dtype_as_str)  # type: ignore[union-attr]
+        raise TypeError(f"Unsupported dtype: {type(dtype)}")
 
 
-def to_mlx(t: torch.Tensor) -> mx.array:
+def to_mlx(t: torch.Tensor):
+    _require_mlx()
     torch_dtype = t.dtype
     mx_dtype = convert_dtype_to_mlx(torch_dtype)
-    return mx.array(t.detach().to("cpu", copy=False).numpy()).astype(
-        dtype=mx_dtype, stream=mx.default_device()
+    return mx.array(t.detach().to("cpu", copy=False).numpy()).astype(  # type: ignore[union-attr]
+        dtype=mx_dtype, stream=mx.default_device()  # type: ignore[union-attr]
     )
 
 
-def to_torch(a: mx.array) -> torch.Tensor:
+def to_torch(a) -> torch.Tensor:
+    _require_mlx()
     mx_dtype = a.dtype
     torch_dtype = convert_dtype_to_torch(mx_dtype)
     # get the device of the mlx array
-    default_device = mx.default_device()
+    default_device = mx.default_device()  # type: ignore[union-attr]
     if default_device.type.name == "gpu":
         return torch.from_numpy(np.array(a, copy=False)).to(torch_dtype).to("mps")
     else:
@@ -46,8 +70,9 @@ def to_torch(a: mx.array) -> torch.Tensor:
 
 
 def check_mlx_convolutional_weights(
-    state_dict: Dict[str, mx.array], model: nn.Module
+    state_dict: Dict[str, Any], model: Any
 ) -> bool:
+    _require_mlx()
     # Go through model and find all the conv3d and conv2d layers and check that weights are in the same shape, as mlx has them backwrads compatible
     for name, param in model.named_modules():
         if isinstance(param, nn.Conv3d):
@@ -71,7 +96,8 @@ def check_mlx_convolutional_weights(
 
 def torch_to_mlx(
     state_dict: Dict[str, Any] | List[torch.Tensor] | torch.Tensor,
-) -> Dict[str, Any] | List[mx.array] | mx.array:
+) -> Dict[str, Any] | List[Any] | Any:
+    _require_mlx()
     if isinstance(state_dict, list):
         return [torch_to_mlx(item) for item in state_dict]
     elif isinstance(state_dict, dict):
@@ -84,8 +110,9 @@ def torch_to_mlx(
 
 
 def mlx_to_torch(
-    state_dict: Dict[str, Any] | List[mx.array] | mx.array,
+    state_dict: Dict[str, Any] | List[Any] | Any,
 ) -> Dict[str, Any] | List[torch.Tensor] | torch.Tensor:
+    _require_mlx()
     if isinstance(state_dict, list):
         return [mlx_to_torch(item) for item in state_dict]
     elif isinstance(state_dict, dict):

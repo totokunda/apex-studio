@@ -1265,6 +1265,7 @@ class LoaderMixin(DownloadMixin):
     ) -> np.ndarray:
         """Extract audio from video file."""
         import subprocess
+        from src.utils.ffmpeg import get_ffmpeg_path
 
         # Create temporary file for extracted audio
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
@@ -1273,7 +1274,7 @@ class LoaderMixin(DownloadMixin):
         try:
             # Use ffmpeg to extract audio
             ffmpeg_command = [
-                "ffmpeg",
+                get_ffmpeg_path(),
                 "-y",
                 "-i",
                 video_path,

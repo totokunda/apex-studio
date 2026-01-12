@@ -31,10 +31,142 @@ cd apex-studio
 git lfs pull
 ```
 
+### Windows (local development) — PowerShell
+
+The commands below are **Windows-only** and assume you’re using **PowerShell 7+**.
+
+#### 0) Clone the repo (Git + Git LFS) (Windows)
+
+```powershell
+# Install Git LFS (if you don't already have it)
+git lfs install
+
+# Clone + init submodules
+git clone --recurse-submodules https://github.com/totokunda/apex-studio.git
+cd apex-studio
+
+# Fetch LFS files (recommended after cloning)
+git lfs pull
+```
+
+#### Prerequisites (Windows)
+
+- **Node.js 24.x** (required)
+- **Python 3.12** (required for `apex-engine`)
+- **FFmpeg** (required for development; see **Install FFmpeg** below)
+
+Notes:
+- If `python` isn’t on PATH, try `py` (Python Launcher): `py -V`
+- If venv activation is blocked, run (once) in an elevated PowerShell:
+  `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+
+#### 1) Start the desktop app (Electron) (Windows)
+
+```powershell
+cd apps\app
+npm install
+npm start
+```
+
+#### 2) Install + run the engine (`apex-engine`) (Windows)
+
+From the API workspace, install Python deps and the `apex-engine` CLI.
+
+##### Option A (recommended): use the dev pip installer (venv or current env) (Windows)
+
+```powershell
+cd apps\api
+
+# New virtualenv (recommended)
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# Install deps + apex-engine
+# (pick one: cpu/cuda-sm80-ampere/cuda-sm89-ada/cuda-sm90-hopper/cuda-sm100-blackwell/rocm/mps)
+py scripts\dev\dev_pip_install.py --machine cpu
+```
+
+Then run the engine:
+
+```powershell
+cd apps\api
+py -m src serve
+```
+
+##### Option B: manual pip install (current environment) (Windows)
+
+```powershell
+cd apps\api
+py -m pip install -U pip setuptools wheel
+
+# Install torch (pick one)
+py -m pip install torch torchvision torchaudio
+# py -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
+
+# Install global requirements
+py -m pip install -r requirements.txt
+
+# Install platform requirements (pick one)
+py -m pip install -r requirements\machines\cpu.txt
+
+# Install the CLI entrypoint
+py -m pip install -e . --no-deps
+```
+
+Then run:
+
+```powershell
+cd apps\api
+py -m src serve
+```
+
 ### Prerequisites
 
 - **Node.js 24.x** (required)
-- **Python** (for `apex-engine`)
+- **Python 3.12** (required for `apex-engine`)
+- **FFmpeg** (required for development; see **Install FFmpeg** below)
+
+### Install FFmpeg (required)
+
+FFmpeg is used by the dev workflow for media processing. After installing, verify with `ffmpeg -version`.
+
+#### Windows (PowerShell)
+
+```powershell
+# Recommended (Windows 10/11): winget
+winget install --id Gyan.FFmpeg -e
+
+# Verify
+ffmpeg -version
+```
+
+Alternative package managers:
+- Chocolatey: `choco install ffmpeg -y`
+- Scoop: `scoop install ffmpeg`
+
+#### macOS
+
+```bash
+brew install ffmpeg
+ffmpeg -version
+```
+
+#### Linux
+
+Debian/Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install -y ffmpeg
+ffmpeg -version
+```
+
+Arch:
+
+```bash
+sudo pacman -S --noconfirm ffmpeg
+ffmpeg -version
+```
 
 ### 1) Start the desktop app (Electron)
 
@@ -56,21 +188,18 @@ From the API workspace, install Python deps and the `apex-engine` CLI.
 cd apps/api
 
 # New virtualenv (recommended)
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 
 # Install deps + apex-engine (pick one: mps/cpu/cuda-sm80-ampere/cuda-sm89-ada/cuda-sm90-hopper/cuda-sm100-blackwell/rocm)
-python3 scripts/dev_pip_install.py --machine mps
+python3 scripts/dev/dev_pip_install.py --machine mps
 ```
 
 Then run the engine:
 
 ```bash
 cd apps/api
-apex-engine dev
-
-# Or:
-# python3 -m src serve
+python3 -m src serve
 ```
 
 #### Option B: manual pip install (current environment)

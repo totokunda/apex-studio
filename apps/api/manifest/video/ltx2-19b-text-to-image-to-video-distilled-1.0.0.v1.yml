@@ -212,6 +212,10 @@ spec:
       resource_requirements:
         min_vram_gb: 9
         recommended_vram_gb: 13
+    - path: C:\Users\tosin\Downloads\ltx-2-19b-distilled-Q8_0.gguf
+      variant: GGUF_Q8_Local
+      custom: true
+      file_size: 20407583904
   - type: helper
     label: LTX2 Connectors
     name: connectors
@@ -296,7 +300,6 @@ spec:
       layout:
         flow: column
         rows:
-        - - num_inference_steps
         - - guidance_scale
         - - seed
     - name: chunking
@@ -369,16 +372,6 @@ spec:
         ratio_h: 3
       - name: Custom
         value: custom
-    - id: num_inference_steps
-      label: Inference Steps
-      description: Number of denoising steps
-      type: number+slider
-      value_type: integer
-      panel: sampling
-      default: 50
-      min: 1
-      max: 100
-      step: 1
     - id: height
       label: Height
       description: Explicit height override
