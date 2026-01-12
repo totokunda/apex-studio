@@ -27,7 +27,7 @@ from diffusers.models.attention_processor import Attention
 from diffusers.models.embeddings import Timesteps
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.normalization import RMSNorm
+from torch.nn import RMSNorm
 from src.attention import attention_register
 from src.transformer.base import TRANSFORMERS_REGISTRY
 

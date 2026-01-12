@@ -2,12 +2,15 @@
 import collections.abc
 import functools
 import itertools
+import os
 import subprocess
 import warnings
 from collections import abc
 from importlib import import_module
 from inspect import getfullargspec
 from itertools import repeat
+from pathlib import Path
+from shutil import which
 
 
 # From PyTorch internals
@@ -252,10 +255,20 @@ def _check_py_package(package):
 
 
 def _check_executable(cmd):
-    if subprocess.call(f"which {cmd}", shell=True) != 0:
+    # Support either a command name (resolved via PATH) or an explicit file path.
+    if not cmd:
         return False
-    else:
-        return True
+    try:
+        # If it's a path-like string, prefer direct existence checks.
+        s = str(cmd)
+        seps = [os.sep]
+        if os.altsep:
+            seps.append(os.altsep)
+        if any(sep in s for sep in seps):
+            return Path(s).exists()
+    except Exception:
+        pass
+    return which(str(cmd)) is not None
 
 
 def requires_package(prerequisites):
