@@ -317,8 +317,8 @@ spec:
         - - seed
         - - use_gradient_estimation
         - - ge_gamma
-    - name: chunking
-      label: Chunking
+    - name: chunking_profile
+      label: Chunking Profile
       collapsible: true
       default_open: false
       layout:
@@ -481,8 +481,8 @@ spec:
       label: Chunking Profile
       description: Spliting tensors into smaller chunks to reduce memory usage.
       type: select
-      panel: sampling
-      default: balanced
+      panel: chunking_profile
+      default: light
       options:
       - name: None
         value: none
