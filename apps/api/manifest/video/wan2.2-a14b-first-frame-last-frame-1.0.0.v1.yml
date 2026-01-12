@@ -343,6 +343,14 @@ spec:
         - - low_noise_guidance_scale
         - - seed
         - - boundary_ratio
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
     inputs:
     - id: first_frame
       label: First Frame
@@ -494,7 +502,7 @@ spec:
       label: Chunking Profile
       description: Spliting tensors into smaller chunks to reduce memory usage.
       type: select
-      panel: sampling
+      panel: chunking_profile
       default: light
       options:
       - name: None

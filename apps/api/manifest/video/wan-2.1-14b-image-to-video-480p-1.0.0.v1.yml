@@ -249,6 +249,13 @@ spec:
         - - num_inference_steps
         - - guidance_scale
         - - seed
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
         - - chunking_profile
     inputs:
     - id: image
@@ -369,7 +376,7 @@ spec:
       label: Chunking Profile
       description: Spliting tensors into smaller chunks to reduce memory usage.
       type: select
-      panel: sampling
+      panel: chunking_profile
       default: light
       options:
       - name: None
