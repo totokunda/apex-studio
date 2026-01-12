@@ -98,7 +98,7 @@ export default /** @type import('electron-builder').Configuration */
         arch: ["x64"],
       },
     ],
-    icon: "buildResources/icon.png",
+    icon: "buildResources/icon.ico",
     signDlls: true,
     // Code signing configuration (requires WINDOWS_CERT_FILE environment variable)
     sign: process.env.WINDOWS_CERT_FILE ? "./scripts/sign-windows.js" : undefined,
@@ -113,9 +113,9 @@ export default /** @type import('electron-builder').Configuration */
     createDesktopShortcut: true,
     createStartMenuShortcut: true,
     shortcutName: "Apex Studio",
-    installerIcon: "buildResources/icon.png",
-    uninstallerIcon: "buildResources/icon.png",
-    installerHeaderIcon: "buildResources/icon.png",
+    installerIcon: "buildResources/icon.ico",
+    uninstallerIcon: "buildResources/icon.ico",
+    installerHeaderIcon: "buildResources/icon.ico",
     // Include license
     license: "LICENSE",
     // Custom NSIS script for Python runtime setup

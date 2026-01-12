@@ -8,7 +8,7 @@ import html
 from src.utils.defaults import DEFAULT_CACHE_PATH, DEFAULT_COMPONENTS_PATH
 import os
 from src.mixins.to_mixin import ToMixin
-from src.mixins.cache_mixin import CacheMixin
+from src.mixins.cache_mixin import CacheMixin, sanitize_path_for_filename
 from src.utils.module import find_class_recursive
 import transformers
 import inspect
@@ -53,7 +53,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         if self.enable_cache and self.cache_file is None:
             self.cache_file = os.path.join(
                 DEFAULT_CACHE_PATH,
-                f"text_encoder_{self.model_path.replace('/', '_')}.safetensors",
+                f"text_encoder_{sanitize_path_for_filename(self.model_path)}.safetensors",
             )
         if self.tokenizer_path is not None:
             self.tokenizer_path = self._download(
@@ -236,6 +236,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         }
 
         prompt_hash = self.hash(kwargs)
+
 
         if self.enable_cache:
             cached = self.load_cached(prompt_hash)

@@ -40,9 +40,12 @@ except ImportError:
     flex_attention = None
 
 try:
-    import xformers.ops
-except ImportError:
-    xformers = None
+    # xFormers can raise non-ImportError exceptions at import-time on CPU-only
+    # machines (e.g. AssertionError: Invalid device id). Be defensive.
+    import xformers  # type: ignore
+    import xformers.ops  # type: ignore
+except Exception:
+    xformers = None  # type: ignore
 
 
 try:
@@ -207,6 +210,7 @@ def sdpa(
             )
     else:
         # With mask, let PyTorch choose (may need math kernel for some mask formats)
+
         return F.scaled_dot_product_attention(
             q,
             k,

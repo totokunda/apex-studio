@@ -36,7 +36,7 @@ from diffusers.models.attention import AttentionMixin, AttentionModuleMixin, Fee
 from diffusers.models.cache_utils import CacheMixin
 from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.normalization import RMSNorm
+from torch.nn import RMSNorm
 from src.attention import attention_register
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name

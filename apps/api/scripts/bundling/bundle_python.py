@@ -461,24 +461,37 @@ class PythonBundler:
 
         requirements = []
 
+        # Choose machine-specific requirements entrypoint early so we can apply
+        # correct Windows wheel-stack torch pins (they depend on the chosen entry).
+        machine_entry = self.choose_machine_requirements_entrypoint(gpu_type)
+        self.last_machine_entry = machine_entry
+
         # Add torch with appropriate backend
         torch_index = self.get_torch_index(gpu_type)
         if gpu_type != "cpu" and self.platform_name != "darwin":
             requirements.append(f"--extra-index-url {torch_index}")
 
         # Windows wheel stacks: pin torch to match the wheel ABI expectations.
-        # (FlashAttention wheel: cu126 + torch2.6.0 + cp312; SageAttention wheel: cu128 + torch2.7.1 + cp312)
+        # (FlashAttention wheel: cu126 + torch2.6.0 + cp312; cu128 stacks vary by machine entry.)
         if self.platform_name == "win32" and gpu_type.startswith("cuda"):
             if gpu_type == "cuda128":
-                requirements.extend(["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"])
+                # Blackwell/Hopper: FlashAttention 3 wheels (cu128_torch290) expect Torch 2.9.0.
+                if machine_entry.name in ("cuda-sm90-hopper.txt", "cuda-sm100-blackwell.txt"):
+                    # We use FA2 Windows wheels (cu128+torch2.7.0) + FA3 wheels (cu128_torch270),
+                    # so pin to the matching cu128 torch2.7.x stack.
+                    requirements.extend(
+                        ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
+                    )
+                else:
+                    requirements.extend(
+                        ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
+                    )
             else:
                 requirements.extend(["torch==2.6.0", "torchvision==0.21.0", "torchaudio==2.6.0"])
         else:
             requirements.extend(["torch", "torchvision", "torchaudio"])
 
         # Add machine-specific requirements (expanded entrypoint)
-        machine_entry = self.choose_machine_requirements_entrypoint(gpu_type)
-        self.last_machine_entry = machine_entry
         machine_lines = self._read_requirements_file(machine_entry)
         for line in machine_lines:
             # Skip any torch packages (we add them above, with correct index/pins)

@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Optional
 import numpy as np
 import torch
-from diffusers.models.normalization import RMSNorm
+from torch.nn import RMSNorm
 from einops import rearrange
 from torch import Tensor, nn
 

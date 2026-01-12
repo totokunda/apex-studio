@@ -78,26 +78,75 @@ const getUrlWithoutSearchParams = (path: string): string => {
 };
 
 export const convertUserDataPath = (path: string): string => {
-  const filePath = fileURLToPath(path);
-  return `app://user-data/${filePath}`;
+  // Convert a local file URL/path into a Windows-safe app://user-data URL.
+  // Important: do NOT embed backslashes in the URL; normalize to forward slashes and encode.
+  if (path.startsWith("app://")) return path;
+  const fsPath = (() => {
+    try {
+      // Accept file:// URLs
+      if (path.startsWith("file://")) return fileURLToPath(path);
+    } catch {
+      // ignore
+    }
+    // Accept raw filesystem paths too (best-effort)
+    return path;
+  })();
+  const posix = String(fsPath).replace(/\\/g, "/");
+  const pathPart = posix.startsWith("/") ? posix : `/${posix}`;
+  return `app://user-data${encodeURI(pathPart)}`;
 };
 
 export const convertUserDataPathToLocalPath = (path: string): string => {
-  if (path.startsWith("app://user-data/")) {
-    let pathUrl = new URL(`file://${path.replace("app://user-data/", "")}`);
-    // ensure starts with file://
-    pathUrl.protocol = "file";
-    return pathUrl.toString();
+  // Best-effort conversion from app://user-data/... to file://... for cache-key compatibility.
+  // If the app:// URL encodes an absolute filesystem path (common for media), this will work on Windows too.
+  if (!path.startsWith("app://")) return path;
+  try {
+    const u = new URL(path);
+    const decodedPathname = (() => {
+      try {
+        return decodeURIComponent(u.pathname);
+      } catch {
+        return u.pathname;
+      }
+    })();
+
+    // Windows drive letter paths come through as "/C:/Users/..."
+    const driveMatch = decodedPathname.match(/^\/([a-zA-Z]):\/(.*)$/);
+    if (driveMatch) {
+      const drive = driveMatch[1]!;
+      const rest = driveMatch[2]!.replace(/\//g, "\\");
+      const fsPath = `${drive}:\\${rest}`;
+      return pathToFileURL(fsPath);
+    }
+
+    // UNC paths may come through as "//server/share/..."
+    if (decodedPathname.startsWith("//")) {
+      const rest = decodedPathname.slice(2).replace(/\//g, "\\");
+      const fsPath = `\\\\${rest}`;
+      return pathToFileURL(fsPath);
+    }
+
+    // POSIX absolute paths (mac/linux) - keep as-is.
+    return pathToFileURL(decodedPathname);
+  } catch {
+    return path;
   }
-  return path;
 };
 
 export const convertApexCachePath = (path: string): string => {
   if (path.startsWith("app://apex-cache/")) {
     return path;
   }
-  const filePath = fileURLToPath(path);
-  return `app://apex-cache/${filePath}`;
+  if (path.startsWith("app://")) return path;
+  const fsPath = (() => {
+    try {
+      if (path.startsWith("file://")) return fileURLToPath(path);
+    } catch {}
+    return path;
+  })();
+  const posix = String(fsPath).replace(/\\/g, "/");
+  const pathPart = posix.startsWith("/") ? posix : `/${posix}`;
+  return `app://apex-cache${encodeURI(pathPart)}`;
 };
 
 export const getMediaInfo = async (
@@ -108,6 +157,20 @@ export const getMediaInfo = async (
     useOriginal?: boolean;
   },
 ): Promise<MediaInfo> => {
+  const fsPathToAppUrl = (
+    host: "user-data" | "apex-cache",
+    fsPath: string,
+    folderUuid?: string,
+  ): string => {
+    const posix = String(fsPath).replace(/\\/g, "/");
+    const pathPart = posix.startsWith("/") ? posix : `/${posix}`;
+    const u = new URL(`app://${host}${encodeURI(pathPart)}`);
+    if (folderUuid && host === "apex-cache") {
+      u.searchParams.set("folderUuid", folderUuid);
+    }
+    return u.toString();
+  };
+
   if (options?.useOriginal) {
     try {
       const fsPath = fileURLToPath(path);
@@ -187,12 +250,9 @@ export const getMediaInfo = async (
         url = new URL(path);
       } else {
         fsPathForImage = fileURLToPath(hasHashSuffix ? originalPath : path);
-        url = new URL(`app://${primarySourceDir}/${fsPathForImage}`);
+        url = new URL(fsPathToAppUrl(primarySourceDir, fsPathForImage, folderUuid));
       }
 
-      if (folderUuid && primarySourceDir === "apex-cache") {
-        url.searchParams.set("folderUuid", folderUuid);
-      }
       imageReadUrl = url.toString();
     } catch {}
 
@@ -204,11 +264,8 @@ export const getMediaInfo = async (
       // If reading via primary sourceDir fails (e.g., 404), try other sourceDir as backup
       if (fsPathForImage) {
         const fallbackUrl = new URL(
-          `app://${secondarySourceDir}/${fsPathForImage}`,
+          fsPathToAppUrl(secondarySourceDir, fsPathForImage, folderUuid),
         );
-        if (folderUuid && secondarySourceDir === "apex-cache") {
-          fallbackUrl.searchParams.set("folderUuid", folderUuid);
-        }
         metadata = await readImageMetadataFast(fallbackUrl.toString());
       } else {
         throw e;
@@ -259,17 +316,12 @@ export const getMediaInfo = async (
     primarySourceDir === "user-data" ? "apex-cache" : "user-data";
   try {
     filePath = fileURLToPath(hasHashSuffix ? originalPath : path);
-    const url = new URL(`app://${primarySourceDir}/${filePath}`);
-    if (folderUuid && primarySourceDir === "apex-cache") {
-      url.searchParams.set("folderUuid", folderUuid);
-    }
+    const url = new URL(fsPathToAppUrl(primarySourceDir, filePath, folderUuid));
     input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
   } catch (e) {
     try {
-      const url = new URL(`app://${secondarySourceDir}/${filePath}`);
-      if (folderUuid && secondarySourceDir === "apex-cache") {
-        url.searchParams.set("folderUuid", folderUuid);
-      }
+      if (!filePath) throw e;
+      const url = new URL(fsPathToAppUrl(secondarySourceDir, filePath, folderUuid));
       input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
     } catch (e) {
       input = null;
@@ -323,10 +375,9 @@ export const getMediaInfo = async (
       // Try secondary sourceDir via UrlSource
     try {
       if (!filePath) throw new Error("Missing filePath");
-      const fallbackUrl = new URL(`app://${secondarySourceDir}/${filePath}`);
-      if (folderUuid && secondarySourceDir === "apex-cache") {
-        fallbackUrl.searchParams.set("folderUuid", folderUuid);
-      }
+      const fallbackUrl = new URL(
+        fsPathToAppUrl(secondarySourceDir, filePath, folderUuid),
+      );
       const input2 = new Input({
         formats: ALL_FORMATS,
         source: new UrlSource(fallbackUrl),
@@ -339,11 +390,8 @@ export const getMediaInfo = async (
         if (!filePath) throw new Error("Missing filePath");
         // Try primary app protocol first
         const primaryUrl = new URL(
-          `app://${primarySourceDir}/${filePath}`,
+          fsPathToAppUrl(primarySourceDir, filePath, folderUuid),
         );
-        if (folderUuid && primarySourceDir === "apex-cache") {
-          primaryUrl.searchParams.set("folderUuid", folderUuid);
-        }
         const bufferPrimary = await readFileBuffer(primaryUrl.toString());
         const blobP = new Blob([bufferPrimary as unknown as ArrayBuffer]);
         const blobInputP = new Input({
@@ -356,11 +404,8 @@ export const getMediaInfo = async (
           if (!filePath) throw new Error("Missing filePath");
           // Try secondary app protocol next
           const secondaryUrl = new URL(
-            `app://${secondarySourceDir}/${filePath}`,
+            fsPathToAppUrl(secondarySourceDir, filePath, folderUuid),
           );
-          if (folderUuid && secondarySourceDir === "apex-cache") {
-            secondaryUrl.searchParams.set("folderUuid", folderUuid);
-          }
           const bufferSecondary = await readFileBuffer(secondaryUrl.toString());
           const blobS = new Blob([bufferSecondary as unknown as ArrayBuffer]);
           const blobInputS = new Input({

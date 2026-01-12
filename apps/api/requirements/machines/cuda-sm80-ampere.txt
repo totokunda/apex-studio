@@ -21,7 +21,7 @@ torchvision==0.21.0; sys_platform == "win32" and python_version == "3.12"
 torchaudio==2.6.0; sys_platform == "win32" and python_version == "3.12"
 flash-attn @ https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/flash_attn-2.7.4%2Bcu126torch2.6.0cxx11abiFALSE-cp312-cp312-win_amd64.whl; sys_platform == "win32" and python_version == "3.12"
 
-# Common CUDA perf libs
+# Common CUDA perf libs 
 xformers==0.0.33.post2; sys_platform == "linux"
 transformer_engine==2.10.0; sys_platform == "linux"
 # NVIDIA Apex (NOT the unrelated `apex` PyPI package)
@@ -32,6 +32,5 @@ sageattention==1.0.6; sys_platform == "linux"
 
 # FlashAttention: often easiest from source; this will compile.
 flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git; sys_platform == "linux"
-mlx[cpu]
 onnxruntime-gpu==1.23.2
 

@@ -42,8 +42,15 @@ def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
     subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True)
 
 
-def _uv() -> str | None:
-    return shutil.which("uv")
+def _bootstrap_uv(py: Path, *, cwd: Path | None = None) -> None:
+    """
+    Ensure `uv` is available in the target Python environment.
+
+    On Windows, relying on `shutil.which("uv")` can be brittle depending on PATH
+    and venv activation; installing via pip and invoking via `python -m uv` is
+    reliable across platforms.
+    """
+    _run([str(py), "-m", "pip", "install", "--upgrade", "uv"], cwd=cwd)
 
 
 def _install(
@@ -57,14 +64,18 @@ def _install(
     Install packages using uv (fast) when available, with a pip fallback.
     `args` are pip-style arguments, e.g. ["-r", "requirements.txt"] or ["honcho"].
     """
-    uv = _uv()
-    if uv:
-        cmd = [uv, "pip", "install", "--python", str(py)]
+    # Prefer uv (installed via `_bootstrap_uv`) and invoke it via `python -m uv`
+    # so we don't depend on PATH/venv activation (especially on Windows).
+    try:
+        cmd = [str(py), "-m", "uv", "pip", "install"]
         if use_no_build_isolation:
             cmd.append("--no-build-isolation")
         cmd += args
         _run(cmd, cwd=cwd)
         return
+    except subprocess.CalledProcessError:
+        # Fall back to plain pip if uv isn't available or errors unexpectedly.
+        pass
 
     cmd = [str(py), "-m", "pip", "install"]
     if use_no_build_isolation:
@@ -89,6 +100,10 @@ def _detect_default_torch_backend(machine: str) -> str:
     if sys.platform == "darwin":
         return "pypi"
     if machine.startswith("cuda"):
+        # Hopper/Blackwell entrypoints use cu128 + torch2.9.x wheel stacks
+        # (e.g. FlashAttention 3 wheels).
+        if machine in ("cuda-sm90-hopper", "cuda-sm100-blackwell"):
+            return "cu128"
         return "cu126"
     if machine == "rocm":
         return "rocm"
@@ -169,12 +184,18 @@ def main() -> int:
     if torch_backend == "auto":
         torch_backend = _detect_default_torch_backend(args.machine)
 
-    # On Linux, default to disabling build isolation unless explicitly forced on.
-    # Reason: several sdists/VCS installs in our stack import runtime deps (e.g. numpy/torch)
-    # during metadata/build phases without declaring them as build deps, which breaks with
-    # PEP517 build isolation.
-    auto_no_build_isolation = sys.platform.startswith("linux") and not args.build_isolation
+    # Default to disabling build isolation unless explicitly forced on.
+    # Reason:
+    # - Several sdists/VCS installs in our stack import runtime deps (e.g. numpy/torch)
+    #   during metadata/build phases without declaring them as build deps, which breaks with
+    #   PEP517 build isolation.
+    # - On Windows, some sdists (notably `lmdb`/py-lmdb when a wheel isn't available) expect
+    #   helper modules (e.g. `patch-ng`) to be available at build time.
+    auto_no_build_isolation = (sys.platform.startswith("linux") or sys.platform == "win32") and not args.build_isolation
     use_no_build_isolation = args.no_build_isolation or auto_no_build_isolation
+
+    # 0) Install uv first (per request), then use `uv pip` for everything else.
+    _bootstrap_uv(py, cwd=project_root)
 
     # 1) Tooling
     # Note: some packages in our requirements rely on "legacy" setup steps that
@@ -194,12 +215,13 @@ def main() -> int:
             "psutil",
             "enscons",
             "pytoml",
+            # `lmdb` (py-lmdb) source builds on Windows require `patch-ng` at build time.
+            # Even when it's present in our requirements, pip can attempt to build lmdb before
+            # installing patch-ng, so we ensure it's already available here.
+            "patch-ng",
         ],
         use_no_build_isolation=False,
     )
-
-    # 2) honcho (needed by `apex-engine dev`)
-    _install(py, ["honcho"])
 
     # 3) torch
     if torch_backend == "pypi":
@@ -223,7 +245,7 @@ def main() -> int:
     if args.venv and sys.platform != "win32":
         # Hint only; keep output short and actionable.
         print(f"Activate: source {Path(args.venv) / 'bin' / 'activate'}")
-    print("Run: apex-engine dev   (or: apex-engine start -f Procfile.dev)")
+    print("Run: python3 -m src serve")
     return 0
 
 

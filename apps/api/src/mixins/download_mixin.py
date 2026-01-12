@@ -1692,8 +1692,8 @@ class DownloadMixin:
         ] = None,
         session=None,
         filename: Optional[str] = None,
-        chunk_size: int = 1024 * 1024,  # 1MB
-        adaptive: bool = True,
+        chunk_size: int = 2 * 1024 * 1024,  # 2MB
+        adaptive: bool = False,
         initial_chunk_size: int = 512 * 1024,  # 512KB starting point for probing
         target_chunk_seconds: float = 0.25,  # aim ~250ms per read
         min_chunk_size: int = 64 * 1024,  # 64KB
@@ -1711,6 +1711,22 @@ class DownloadMixin:
         import time
         from dataclasses import dataclass
         from typing import Mapping
+
+        # NOTE: In some environments (corporate proxies / deep packet inspection),
+        # CDN downloads can be extremely slow to deliver the first bytes. A short
+        # read timeout (like 10s) makes signed URLs look "broken" because the
+        # request dies before any body bytes arrive.
+        #
+        # Use separate connect/read timeouts, configurable via env vars.
+        try:
+            connect_timeout = float(os.environ.get("APEX_DOWNLOAD_CONNECT_TIMEOUT", "10"))
+        except Exception:
+            connect_timeout = 10.0
+        try:
+            read_timeout = float(os.environ.get("APEX_DOWNLOAD_READ_TIMEOUT", "300"))
+        except Exception:
+            read_timeout = 300.0
+        request_timeout = (connect_timeout, read_timeout)
 
         parsed_url = urlparse(url)
         relative_path_from_url = parsed_url.path.lstrip("/")
@@ -1966,7 +1982,7 @@ class DownloadMixin:
                 while True:
                     head_resp = requester.head(
                         url,
-                        timeout=10,
+                        timeout=request_timeout,
                         verify=self._requests_verify(),
                         headers=base_headers,
                         allow_redirects=True,
@@ -2046,7 +2062,7 @@ class DownloadMixin:
             while True:
                 response = get_requester.get(
                     url,
-                    timeout=10,
+                    timeout=request_timeout,
                     verify=self._requests_verify(),
                     headers=headers,
                     stream=True,
@@ -2269,7 +2285,7 @@ class DownloadMixin:
         session=None,
         filename: Optional[str] = None,
         chunk_size: int = 1024 * 1024,
-        adaptive: bool = True,
+        adaptive: bool = False,
         initial_chunk_size: int = 512 * 1024,
         target_chunk_seconds: float = 0.25,
         min_chunk_size: int = 64 * 1024,

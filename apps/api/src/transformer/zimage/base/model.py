@@ -23,7 +23,7 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
 from diffusers.models.attention_processor import Attention
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.normalization import RMSNorm
+from torch.nn import RMSNorm
 from diffusers.utils.torch_utils import maybe_allow_in_graph
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from src.attention import attention_register
@@ -94,6 +94,8 @@ class ZSingleStreamAttnProcessor:
         attention_mask: Optional[torch.Tensor] = None,
         freqs_cis: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+
+        dtype = hidden_states.dtype
         query = attn.to_q(hidden_states)
         key = attn.to_k(hidden_states)
         value = attn.to_v(hidden_states)
@@ -122,9 +124,9 @@ class ZSingleStreamAttnProcessor:
             query = apply_rotary_emb(query, freqs_cis)
             key = apply_rotary_emb(key, freqs_cis)
 
-        # Cast to correct dtype
-        dtype = query.dtype
+
         query, key = query.to(dtype), key.to(dtype)
+        value = value.to(dtype)
 
         # From [batch, seq_len] to [batch, 1, 1, seq_len] -> broadcast to [batch, heads, seq_len, seq_len]
         if attention_mask is not None and attention_mask.ndim == 2:
@@ -621,7 +623,16 @@ class ZImageTransformer2DModel(
 
         # Match t_embedder output dtype to x for layerwise casting compatibility
         adaln_input = t.type_as(x)
-        x[torch.cat(x_inner_pad_mask)] = self.x_pad_token
+
+        # `x_pad_token` may be re-wrapped/quantized (e.g. FPScaledParameter). For
+        # masked writes, ensure we write a base Tensor in `x`'s dtype/device.
+        x_pad_token = self.x_pad_token
+        dequant = getattr(x_pad_token, "dequant", None)
+        if callable(dequant):
+            x_pad_token = dequant(dtype=x.dtype).to(device=x.device)
+        else:
+            x_pad_token = x_pad_token.to(device=x.device, dtype=x.dtype)
+        x[torch.cat(x_inner_pad_mask)] = x_pad_token
         x = list(x.split(x_item_seqlens, dim=0))
         x_freqs_cis = list(
             self.rope_embedder(torch.cat(x_pos_ids, dim=0)).split(
@@ -660,7 +671,16 @@ class ZImageTransformer2DModel(
 
         cap_feats = torch.cat(cap_feats, dim=0)
         cap_feats = self.cap_embedder(cap_feats)
-        cap_feats[torch.cat(cap_inner_pad_mask)] = self.cap_pad_token
+        # Same as x_pad_token: ensure dtype/device match on masked assignment.
+        cap_pad_token = self.cap_pad_token
+        dequant = getattr(cap_pad_token, "dequant", None)
+        if callable(dequant):
+            cap_pad_token = dequant(dtype=cap_feats.dtype).to(device=cap_feats.device)
+        else:
+            cap_pad_token = cap_pad_token.to(
+                device=cap_feats.device, dtype=cap_feats.dtype
+            )
+        cap_feats[torch.cat(cap_inner_pad_mask)] = cap_pad_token
         cap_feats = list(cap_feats.split(cap_item_seqlens, dim=0))
         cap_freqs_cis = list(
             self.rope_embedder(torch.cat(cap_pos_ids, dim=0)).split(

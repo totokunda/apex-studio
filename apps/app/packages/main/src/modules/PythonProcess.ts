@@ -17,8 +17,11 @@ import fs from "node:fs";
 import os from "node:os";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import { getSettingsModule } from "./SettingsModule.js";
+
+const require = createRequire(import.meta.url);
 
 // Configuration constants
 const DEFAULT_API_PORT = 8765;
@@ -295,6 +298,50 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       // Fallback to system Python
       return platform === "win32" ? "python" : "python3";
     }
+  }
+
+  private resolveFfmpegCommand(cmd: "ffmpeg" | "ffprobe"): string {
+    const exeName = process.platform === "win32" ? `${cmd}.exe` : cmd;
+
+    // Explicit override (useful for debugging / custom installs)
+    const override =
+      cmd === "ffmpeg"
+        ? process.env.APEX_FFMPEG_PATH || process.env.FFMPEG_PATH
+        : process.env.APEX_FFPROBE_PATH || process.env.FFPROBE_PATH;
+    if (override && fs.existsSync(override)) return override;
+
+    // User-installed via our installer module (~/.apex-studio/ffmpeg)
+    try {
+      const userInstalled = path.join(os.homedir(), ".apex-studio", "ffmpeg", exeName);
+      if (fs.existsSync(userInstalled)) return userInstalled;
+    } catch {
+      // ignore
+    }
+
+    // Packaged build: prefer the bundled binary in resources.
+    try {
+      const bundled = path.join(process.resourcesPath, "ffmpeg", exeName);
+      if (fs.existsSync(bundled)) return bundled;
+    } catch {
+      // ignore
+    }
+
+    // Dev: fall back to ffmpeg-static / ffprobe-static if installed.
+    try {
+      if (cmd === "ffmpeg") {
+        const p = require("ffmpeg-static");
+        if (typeof p === "string" && fs.existsSync(p)) return p;
+      } else {
+        const mod = require("ffprobe-static");
+        const p = typeof mod === "string" ? mod : mod?.path;
+        if (typeof p === "string" && fs.existsSync(p)) return p;
+      }
+    } catch {
+      // ignore
+    }
+
+    // Final fallback: rely on PATH.
+    return cmd;
   }
 
   private getBundledBundleRoot(): string {
@@ -1010,6 +1057,17 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     env.APEX_PORT = String(this.config.port);
     // Ownership: allow the server to self-terminate if the Electron parent dies.
     env.APEX_PARENT_PID = String(process.pid);
+
+    // Export FFmpeg location for the Python backend to use (fallback remains plain `ffmpeg`).
+    // We only export if we can resolve a real on-disk binary path.
+    try {
+      const ffmpegPath = this.resolveFfmpegCommand("ffmpeg");
+      if (ffmpegPath && ffmpegPath !== "ffmpeg" && fs.existsSync(ffmpegPath)) {
+        env.APEX_FFMPEG_PATH = ffmpegPath;
+      }
+    } catch {
+      // ignore
+    }
     
     // Set Python paths for bundled deployment
     if (this.app?.isPackaged) {

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import hashlib
 from threading import local
@@ -24,7 +26,6 @@ from src.utils.module import find_class_recursive
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from src.transformer.base import TRANSFORMERS_REGISTRY as TRANSFORMERS_REGISTRY_TORCH
-from src.mlx.transformer.base import TRANSFORMERS_REGISTRY as TRANSFORMERS_REGISTRY_MLX
 from src.text_encoder.text_encoder import TextEncoder
 from src.vae import get_vae
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
@@ -52,12 +53,15 @@ from accelerate import cpu_offload
 import tempfile
 from src.transformer import _auto_register_transformers
 from src.mixins import LoaderMixin, ToMixin, OffloadMixin, CompileMixin
-from src.mixins.cache_mixin import CacheMixin
+from src.mixins.cache_mixin import CacheMixin, sanitize_path_for_filename
 from glob import glob
 from safetensors import safe_open
 from src.utils.mlx import convert_dtype_to_torch, convert_dtype_to_mlx
-import mlx.core as mx
-import mlx.nn as mx_nn
+
+try:
+    import mlx.nn as mx_nn  # type: ignore
+except Exception:  # pragma: no cover - MLX is not available on Windows/Linux
+    mx_nn = None  # type: ignore
 import numpy as np
 from PIL import Image
 from torchvision import transforms as TF
@@ -78,6 +82,32 @@ except Exception as e:
 _auto_register_transformers()
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+_MLX_TRANSFORMER_REGISTRY = None
+
+
+def _get_mlx_transformer_registry():
+    """
+    Lazily import MLX transformers only when requested.
+
+    This keeps Windows/Linux environments (where MLX isn't available) from failing
+    at import time, while still supporting MLX on macOS/Apple Silicon.
+    """
+    global _MLX_TRANSFORMER_REGISTRY
+    if _MLX_TRANSFORMER_REGISTRY is not None:
+        return _MLX_TRANSFORMER_REGISTRY
+
+    try:
+        from src.mlx.transformer.base import (  # type: ignore
+            TRANSFORMERS_REGISTRY as _REG,
+        )
+    except Exception as e:  # pragma: no cover - platform-dependent
+        raise RuntimeError(
+            "MLX backend requested, but MLX is not available on this platform."
+        ) from e
+
+    _MLX_TRANSFORMER_REGISTRY = _REG
+    return _REG
 
 
 class AutoLoadingHelperDict(dict):
@@ -1031,7 +1061,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         base = component.get("base")
         if base.startswith("mlx."):
-            registry = TRANSFORMERS_REGISTRY_MLX
+            registry = _get_mlx_transformer_registry()
             dtype_converter = convert_dtype_to_mlx
             component["base"] = base.replace("mlx.", "")
         else:
@@ -1054,7 +1084,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
                 self.to_dtype(transformer, self.component_dtypes["transformer"])
 
-            elif isinstance(transformer, mx_nn.Module):
+            elif mx_nn is not None and isinstance(transformer, mx_nn.Module):
                 self.to_mlx_dtype(transformer, self.component_dtypes["transformer"])
 
         transformer = transformer.eval()
@@ -1827,7 +1857,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 or getattr(self, "yaml_path", None)
                 or self.__class__.__name__
             )
-            safe_vae_id = str(vae_id).replace("/", "_")
+            # `vae_id` can be a local path (e.g. "C:\...") on Windows; ensure it's a valid filename.
+            safe_vae_id = sanitize_path_for_filename(str(vae_id))
             cache_file = os.path.join(
                 DEFAULT_CACHE_PATH, f"{component_name}_encode_{safe_vae_id}.safetensors"
             )

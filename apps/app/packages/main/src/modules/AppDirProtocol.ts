@@ -432,9 +432,9 @@ class AppDirProtocol implements AppModule {
       // In remote mode, apex-cache usually refers to a remote cache mirrored locally under `this.cachePath`.
       // However, some callers pass absolute *local* paths (e.g. appData/apex-studio/media/...).
       // If it's a local absolute path under our allowed roots, serve it directly.
-      const candidateAbs = path.isAbsolute(decodedPathname)
-        ? path.normalize(decodedPathname)
-        : null;
+      const candidateAbs =
+        this.coerceWindowsAbsolutePathFromUrlPathname(decodedPathname) ??
+        (path.isAbsolute(decodedPathname) ? path.normalize(decodedPathname) : null);
       if (candidateAbs && app) {
         const allowedLocalBases = [
           ...(this.cachePath ? [this.cachePath] : []),
@@ -507,9 +507,9 @@ class AppDirProtocol implements AppModule {
     } else {
       // URL pathnames always start with "/". Treat them as paths *relative to basePath*,
       // except when the decoded pathname is an absolute filesystem path already under basePath.
-      const candidateAbs = path.isAbsolute(decodedPathname)
-        ? path.normalize(decodedPathname)
-        : null;
+      const candidateAbs =
+        this.coerceWindowsAbsolutePathFromUrlPathname(decodedPathname) ??
+        (path.isAbsolute(decodedPathname) ? path.normalize(decodedPathname) : null);
 
       // If the renderer passed an absolute filesystem path, accept it only if it falls under our allowed roots.
       // Otherwise, treat it as a normal URL path relative to basePath (e.g. "/index.html" -> "index.html").
@@ -579,6 +579,38 @@ class AppDirProtocol implements AppModule {
     } catch {
       return value;
     }
+  }
+
+  /**
+   * On Windows, URL pathnames for drive-letter paths commonly appear as:
+   *   "/C:/Users/..."
+   * or occasionally:
+   *   "C:/Users/..."
+   * UNC paths may appear as:
+   *   "//server/share/..."
+   *
+   * Convert these into real Windows absolute paths (e.g. "C:\\Users\\..." or "\\\\server\\share\\...").
+   */
+  private coerceWindowsAbsolutePathFromUrlPathname(
+    decodedPathname: string,
+  ): string | null {
+    if (process.platform !== "win32") return null;
+    const n = String(decodedPathname || "").replace(/\\/g, "/");
+
+    // Drive letter: "/C:/foo" or "C:/foo"
+    const m = n.match(/^\/?([a-zA-Z]):\/(.*)$/);
+    if (m) {
+      const drive = m[1]!;
+      const rest = m[2] ?? "";
+      return path.win32.normalize(`${drive}:/${rest}`);
+    }
+
+    // UNC: "//server/share/..."
+    if (n.startsWith("//") && n.length > 2) {
+      return path.win32.normalize(`\\\\${n.slice(2)}`);
+    }
+
+    return null;
   }
 
   private remoteRelCandidatesFromPath(decodedPathname: string): string[] {

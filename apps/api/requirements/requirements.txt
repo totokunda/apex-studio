@@ -2,7 +2,10 @@ accelerate==1.8.1
 addict==2.4.0
 albumentations==2.0.8
 anyio==4.9.0
-av==14.4.0
+# NOTE: PyAV wheels are platform/Python specific. On Windows+Py3.12, older pins
+# fall back to a source build which requires a full FFmpeg dev toolchain.
+av==16.1.0; sys_platform == "win32" and python_version == "3.12"
+av==14.4.0; sys_platform != "win32"
 # NOTE: `azure-storage` meta-package is deprecated and no longer installable.
 # The codebase uses `azure.storage.blob.BlobServiceClient`, so we depend on:
 azure-storage-blob>=12.0.0
@@ -25,7 +28,6 @@ iopath==0.1.10
 ipdb==0.13.13
 jsonschema==4.25.1
 librosa==0.11.0
-lmdb==1.4.1
 loguru==0.7.3
 mano==0.6.0
 matplotlib==3.10.8
@@ -55,7 +57,11 @@ pydash==8.0.5
 pyloudnorm==0.1.1
 pynvml==13.0.1
 python-dotenv==1.2.1
-ray==2.40.0
+# NOTE: Ray Windows support is limited; on Windows (Py3.12) we install the
+# prebuilt wheel from Ray's "latest" wheel bucket.
+ray @ https://s3-us-west-2.amazonaws.com/ray-wheels/latest/ray-3.0.0.dev0-cp312-cp312-win_amd64.whl; sys_platform == "win32" and python_version == "3.12"
+ray==2.40.0; sys_platform != "win32"
+
 regex==2024.9.11
 Requests==2.32.5
 rotary_embedding_torch==0.8.9

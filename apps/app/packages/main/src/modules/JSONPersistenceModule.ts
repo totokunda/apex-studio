@@ -192,7 +192,11 @@ export class JSONPersistenceModule implements AppModule {
   }
 
   private getManifestLocalPath(id: string): string {
-    return path.join(this.localManifestDir, `${id}.json`);
+    const safe = (value: string): string =>
+      String(value ?? "")
+        .trim()
+        .replace(/[^a-zA-Z0-9._@-]/g, "_") || "unknown";
+    return path.join(this.localManifestDir, `${safe(id)}.json`);
   }
 
   private getPreprocessorLocalPath(id: string): string {
@@ -470,17 +474,17 @@ export class JSONPersistenceModule implements AppModule {
     const ops: Array<Promise<void>> = [];
 
     if (manifests) {
-      for (const [idRaw, manifest] of Object.entries(manifests)) {
-        const id = String(idRaw || "").trim();
-        if (!id) continue;
-        const filePath = this.getManifestLocalPath(id);
+      for (const [keyRaw, manifest] of Object.entries(manifests)) {
+        const key = String(keyRaw || "").trim();
+        if (!key) continue;
+        const filePath = this.getManifestLocalPath(key);
         ops.push(
           fs
             .writeFile(filePath, JSON.stringify(manifest, null, 2), "utf8")
             .catch((error) => {
               console.error(
                 "JSONPersistenceModule: failed to save local manifest",
-                id,
+                key,
                 error,
               );
             }),
@@ -520,7 +524,7 @@ export class JSONPersistenceModule implements AppModule {
         ? doc.timeline.clips
         : [];
 
-      const manifestIds = new Set<string>();
+      const manifestKeys = new Set<string>();
       const preprocessorIds = new Set<string>();
 
       for (const c of clips) {
@@ -528,7 +532,18 @@ export class JSONPersistenceModule implements AppModule {
         const anyClip: any = c;
         const manifestRef = anyClip.manifestRef;
         if (typeof manifestRef === "string" && manifestRef.length > 0) {
-          manifestIds.add(manifestRef);
+          const vRaw = anyClip.manifestVersion;
+          const v =
+            typeof vRaw === "string" && vRaw.trim().length > 0
+              ? vRaw.trim()
+              : undefined;
+          if (v) {
+            // Prefer a versioned key when possible to keep per-clip manifests
+            // in sync with the version they were saved with.
+            manifestKeys.add(`${manifestRef}@@${v}`);
+          }
+          // Backwards compatibility: also try the unversioned key.
+          manifestKeys.add(manifestRef);
         }
 
         if (Array.isArray(anyClip.preprocessors)) {
@@ -550,7 +565,7 @@ export class JSONPersistenceModule implements AppModule {
         }
       }
 
-      if (manifestIds.size === 0 && preprocessorIds.size === 0) {
+      if (manifestKeys.size === 0 && preprocessorIds.size === 0) {
         return;
       }
 
@@ -559,11 +574,11 @@ export class JSONPersistenceModule implements AppModule {
       const manifests: Record<string, unknown> = {};
       const preprocessors: Record<string, unknown> = {};
 
-      for (const id of manifestIds) {
-        const filePath = this.getManifestLocalPath(id);
+      for (const key of manifestKeys) {
+        const filePath = this.getManifestLocalPath(key);
         try {
           const raw = await fs.readFile(filePath, "utf8");
-          manifests[id] = JSON.parse(raw);
+          manifests[key] = JSON.parse(raw);
         } catch {
           // Missing or invalid manifest file – skip
         }
