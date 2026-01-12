@@ -263,7 +263,33 @@ const SchedulerSection: React.FC<{
 
   const isConfigPathDownloaded = (configPath: string) => {
     // Lazy heuristic to check if the config path is downloaded
-    return configPath.startsWith("/") && isDownloaded;
+    // A path is considered downloaded if it looks like a local file path (not a URL)
+    // and the component is marked as downloaded
+    
+    if (!isDownloaded) {
+      return false;
+    }
+
+    // Exclude URLs (http://, https://, ftp://, etc.)
+    // URLs have :// after the scheme, not just : (which would match Windows drive letters)
+    if (/^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(configPath)) {
+      return false;
+    }
+    
+    // Windows absolute paths (check before Unix paths to avoid false positives):
+    // - Drive letter paths (C:\, D:\, etc.)
+    // - UNC paths (\\server\share)
+    // - Absolute paths starting with \ (relative to current drive root)
+    if (/^[A-Za-z]:[\\/]/.test(configPath) || configPath.startsWith("\\\\") || configPath.startsWith("\\")) {
+      return true;
+    }
+    
+    // Unix absolute paths (starting with /)
+    if (configPath.startsWith("/")) {
+      return true;
+    }
+    
+    return false;
   }
 
   return (

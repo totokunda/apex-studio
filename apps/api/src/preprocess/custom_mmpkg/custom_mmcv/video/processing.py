@@ -3,11 +3,13 @@ import os
 import os.path as osp
 import subprocess
 import tempfile
+import shlex
 
 from src.preprocess.custom_mmpkg.custom_mmcv.utils import requires_executable
+from src.utils.ffmpeg import get_ffmpeg_path
 
 
-@requires_executable("ffmpeg")
+@requires_executable(get_ffmpeg_path())
 def convert_video(in_file, out_file, print_cmd=False, pre_options="", **kwargs):
     """Convert a video with ffmpeg.
 
@@ -27,11 +29,13 @@ def convert_video(in_file, out_file, print_cmd=False, pre_options="", **kwargs):
         pre_options (str): Options appears before "-i <in_file>".
         print_cmd (bool): Whether to print the final ffmpeg command.
     """
+    ffmpeg_exe = get_ffmpeg_path()
+
     options = []
     for k, v in kwargs.items():
         if isinstance(v, bool):
             if v:
-                options.append(f"-{k}")
+                options.extend([f"-{k}"])
         elif k == "log_level":
             assert v in [
                 "quiet",
@@ -44,16 +48,21 @@ def convert_video(in_file, out_file, print_cmd=False, pre_options="", **kwargs):
                 "debug",
                 "trace",
             ]
-            options.append(f"-loglevel {v}")
+            options.extend(["-loglevel", str(v)])
         else:
-            options.append(f"-{k} {v}")
-    cmd = f'ffmpeg -y {pre_options} -i {in_file} {" ".join(options)} ' f"{out_file}"
+            options.extend([f"-{k}", str(v)])
+
+    pre_args = []
+    if pre_options:
+        pre_args = shlex.split(pre_options, posix=(os.name != "nt"))
+
+    cmd = [ffmpeg_exe, "-y", *pre_args, "-i", in_file, *options, out_file]
     if print_cmd:
-        print(cmd)
-    subprocess.call(cmd, shell=True)
+        print(" ".join(cmd))
+    subprocess.call(cmd, shell=False)
 
 
-@requires_executable("ffmpeg")
+@requires_executable(get_ffmpeg_path())
 def resize_video(
     in_file,
     out_file,
@@ -94,7 +103,7 @@ def resize_video(
     convert_video(in_file, out_file, print_cmd, **options)
 
 
-@requires_executable("ffmpeg")
+@requires_executable(get_ffmpeg_path())
 def cut_video(
     in_file,
     out_file,
@@ -131,7 +140,7 @@ def cut_video(
     convert_video(in_file, out_file, print_cmd, **options)
 
 
-@requires_executable("ffmpeg")
+@requires_executable(get_ffmpeg_path())
 def concat_video(
     video_list, out_file, vcodec=None, acodec=None, log_level="info", print_cmd=False
 ):

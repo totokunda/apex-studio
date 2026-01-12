@@ -17,6 +17,7 @@ from transformers import WhisperModel, AutoFeatureExtractor
 import torch.nn.functional as F
 from src.helpers.base import BaseHelper
 from src.utils.defaults import get_components_path
+from src.utils.ffmpeg import get_ffmpeg_path
 from src.types import InputAudio
 
 
@@ -34,7 +35,7 @@ def linear_interpolation_fps(features, input_fps, output_fps, output_len=None):
 def resample_audio(input_audio_file: str, output_audio_file: str, sample_rate: int):
     p = subprocess.Popen(
         [
-            "ffmpeg",
+            get_ffmpeg_path(),
             "-y",
             "-v",
             "error",

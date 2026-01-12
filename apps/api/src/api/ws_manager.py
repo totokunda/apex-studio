@@ -2,10 +2,12 @@
 Websocket manager for handling job status updates
 """
 
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, Any, Callable
 from fastapi.websockets import WebSocket
 import ray
-from collections import defaultdict
+from collections import defaultdict, deque
+import os
+import json
 
 
 class WebSocketManager:
@@ -106,8 +108,107 @@ class RayWebSocketBridge:
     """Ray actor that bridges Ray workers to the websocket manager"""
 
     def __init__(self):
-        self.updates: Dict[str, list] = defaultdict(list)
+        self._max_pending_per_job = int(
+            os.environ.get("RAY_WS_MAX_PENDING_UPDATES_PER_JOB", "500")
+        )
+        self._max_message_chars = int(os.environ.get("RAY_WS_MAX_MESSAGE_CHARS", "4096"))
+        self._max_metadata_chars = int(
+            os.environ.get("RAY_WS_MAX_METADATA_CHARS", "20000")
+        )
+        self._max_items_per_pull = int(
+            os.environ.get("RAY_WS_MAX_UPDATES_PER_PULL", "200")
+        )
+
+        def _new_queue() -> deque:
+            return deque(maxlen=self._max_pending_per_job)
+
+        self._new_queue: Callable[[], deque] = _new_queue
+        self.updates: Dict[str, deque] = defaultdict(self._new_queue)
         print("RayWebSocketBridge initialized")
+
+    def _truncate_str(self, s: str, limit: int) -> str:
+        if not isinstance(s, str):
+            s = str(s)
+        if limit <= 0:
+            return ""
+        if len(s) <= limit:
+            return s
+        return s[: max(0, limit - 12)] + "…(truncated)"
+
+    def _sanitize(self, obj: Any, *, depth: int = 0, max_depth: int = 5) -> Any:
+        """
+        Best-effort conversion to a small JSON-serializable structure.
+
+        This is defensive: Ray uses msgpack internally for some messages and can fail
+        on Windows when deserializing very large buffers (contiguous allocation).
+        """
+        if obj is None or isinstance(obj, (bool, int, float)):
+            return obj
+
+        if isinstance(obj, str):
+            return self._truncate_str(obj, self._max_message_chars)
+
+        if depth >= max_depth:
+            return self._truncate_str(repr(obj), 256)
+
+        if isinstance(obj, dict):
+            out: Dict[str, Any] = {}
+            # Cap dict fanout
+            for i, (k, v) in enumerate(obj.items()):
+                if i >= 200:
+                    out["__truncated__"] = True
+                    break
+                try:
+                    key = k if isinstance(k, str) else str(k)
+                except Exception:
+                    key = "<unprintable_key>"
+                out[key] = self._sanitize(v, depth=depth + 1, max_depth=max_depth)
+            return out
+
+        if isinstance(obj, (list, tuple, set)):
+            out_list = []
+            for i, item in enumerate(obj):
+                if i >= 200:
+                    out_list.append("__truncated__")
+                    break
+                out_list.append(self._sanitize(item, depth=depth + 1, max_depth=max_depth))
+            return out_list
+
+        # Numpy / torch tensors: represent compactly without importing heavy deps.
+        try:
+            if hasattr(obj, "shape") and hasattr(obj, "dtype"):
+                meta = {
+                    "__type__": type(obj).__name__,
+                    "shape": getattr(obj, "shape", None),
+                    "dtype": str(getattr(obj, "dtype", "")),
+                }
+                if hasattr(obj, "device"):
+                    meta["device"] = str(getattr(obj, "device"))
+                return meta
+        except Exception:
+            pass
+
+        # Fallback to small string
+        return self._truncate_str(repr(obj), 512)
+
+    def _shrink_metadata(self, metadata: Any) -> Dict[str, Any]:
+        safe = self._sanitize(metadata)
+        if not isinstance(safe, dict):
+            safe = {"value": safe}
+        # Hard cap by JSON-encoded size (best-effort)
+        try:
+            raw = json.dumps(safe, ensure_ascii=False, default=str)
+            if len(raw) <= self._max_metadata_chars:
+                return safe
+            # If too big, keep only a few common keys and a note
+            keep = {}
+            for k in ("status", "preview_path", "type", "index", "stage", "input_id", "error"):
+                if k in safe:
+                    keep[k] = safe[k]
+            keep["__metadata_truncated__"] = True
+            return keep
+        except Exception:
+            return {"__metadata_unserializable__": True}
 
     def send_update(
         self,
@@ -118,40 +219,91 @@ class RayWebSocketBridge:
     ):
         """Store update to be pulled by main process"""
         metadata = metadata or {}
-        status = metadata.pop("status", "processing")
+        # status should be a small scalar
+        try:
+            status = metadata.pop("status", "processing")
+        except Exception:
+            status = "processing"
+
+        # Sanitize aggressively to avoid huge msgpack payloads.
+        try:
+            safe_message = self._truncate_str(message, self._max_message_chars)
+        except Exception:
+            safe_message = "<unprintable_message>"
+
+        safe_metadata = self._shrink_metadata(metadata)
 
         update = {
             "progress": progress,
-            "message": message,
-            "status": status,
-            "metadata": metadata,
+            "message": safe_message,
+            "status": status if isinstance(status, (str, int, float, bool)) else str(status),
+            "metadata": safe_metadata,
         }
 
-        self.updates[job_id].append(update)
+        q = self.updates[job_id]
+        # Coalesce noisy progress updates (keep latest), but preserve preview/error updates.
+        is_preview = isinstance(safe_metadata, dict) and ("preview_path" in safe_metadata)
+        is_error = isinstance(safe_metadata, dict) and (
+            safe_metadata.get("status") == "error" or "error" in safe_metadata
+        )
+        if q and not is_preview and not is_error and update.get("status") == "processing":
+            try:
+                q[-1] = update
+            except Exception:
+                q.append(update)
+        else:
+            q.append(update)
         return True
 
-    def get_updates(self, job_id: str) -> list:
-        """Get all pending updates for a job"""
-        updates = self.updates.get(job_id, [])
-        self.updates[job_id] = []  # Clear after retrieving
-        return updates
+    def get_updates(self, job_id: str, max_items: Optional[int] = None) -> list:
+        """Get up to max_items pending updates for a job (default capped)."""
+        q = self.updates.get(job_id)
+        if not q:
+            return []
+        limit = self._max_items_per_pull if max_items is None else int(max_items)
+        if limit <= 0:
+            return []
+        out = []
+        for _ in range(min(limit, len(q))):
+            try:
+                out.append(q.popleft())
+            except Exception:
+                break
+        # If queue becomes empty, delete key to keep the job list small.
+        if not q:
+            try:
+                del self.updates[job_id]
+            except Exception:
+                pass
+        return out
 
     def clear_updates(self, job_id: str) -> bool:
         """Clear any pending updates for a job_id (used when restarting a job)."""
         try:
             if job_id in self.updates:
-                self.updates[job_id] = []
+                try:
+                    self.updates[job_id].clear()
+                except Exception:
+                    self.updates[job_id] = self._new_queue()
             return True
         except Exception:
             return False
 
-    def get_all_job_ids(self) -> list:
-        """Get all job IDs that have updates"""
-        return list(self.updates.keys())
+    def get_all_job_ids(self, max_items: int = 5000) -> list:
+        """Get job IDs that have updates (capped)."""
+        try:
+            keys = list(self.updates.keys())
+            return keys[: int(max_items)]
+        except Exception:
+            return []
 
     def has_updates(self, job_id: str) -> bool:
         """Check if there are pending updates"""
-        return len(self.updates.get(job_id, [])) > 0
+        q = self.updates.get(job_id)
+        try:
+            return bool(q) and len(q) > 0
+        except Exception:
+            return False
 
 
 # Global Ray actor for websocket bridge

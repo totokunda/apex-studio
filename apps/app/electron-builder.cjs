@@ -108,7 +108,7 @@ module.exports = {
         arch: ["x64"],
       },
     ],
-    icon: "buildResources/icon.png",
+    icon: "buildResources/icon.ico",
   },
 
   nsis: {
@@ -118,9 +118,9 @@ module.exports = {
     createDesktopShortcut: true,
     createStartMenuShortcut: true,
     shortcutName: "Apex Studio",
-    installerIcon: "buildResources/icon.png",
-    uninstallerIcon: "buildResources/icon.png",
-    installerHeaderIcon: "buildResources/icon.png",
+    installerIcon: "buildResources/icon.ico",
+    uninstallerIcon: "buildResources/icon.ico",
+    installerHeaderIcon: "buildResources/icon.ico",
     // Include license
     license: "LICENSE",
     // Custom NSIS script for Python runtime setup

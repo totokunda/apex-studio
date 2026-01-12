@@ -3,6 +3,7 @@ from typing import Optional, Callable, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from diffusers.models.normalization import RMSNorm
 
 # Optional Transformer Engine (TE) support
 try:  # pragma: no cover - optional dependency
@@ -1112,6 +1113,7 @@ _TYPE_MAP = {
     nn.BatchNorm2d: FPScaledBatchNorm2d,
     nn.BatchNorm3d: FPScaledBatchNorm3d,
     nn.RMSNorm: FPScaledRMSNorm,
+    RMSNorm: FPScaledRMSNorm,
 }
 
 
@@ -1282,10 +1284,10 @@ def patch_fpscaled_model(
                             new_mod.running_mean.copy_(child.running_mean)
                             new_mod.running_var.copy_(child.running_var)
                             new_mod.num_batches_tracked.copy_(child.num_batches_tracked)
-                elif isinstance(child, nn.RMSNorm):
+                elif isinstance(child, nn.RMSNorm) or isinstance(child, RMSNorm):
                     # torch.nn.RMSNorm uses `normalized_shape` (tuple-like), not `.dim`
                     new_mod = cls(  # type: ignore[call-arg]
-                        child.normalized_shape,
+                        child.normalized_shape if isinstance(child, nn.RMSNorm) else child.dim,
                         eps=child.eps,
                         elementwise_affine=child.elementwise_affine,
                         compute_dtype=default_compute_dtype,

@@ -8,7 +8,11 @@ import safetensors
 import glob
 from src.vae import get_vae
 from typing import List, Dict, Any
-from mlx.utils import tree_flatten
+
+try:
+    from mlx.utils import tree_flatten  # type: ignore
+except Exception:  # pragma: no cover - MLX is not available on Windows/Linux
+    tree_flatten = None  # type: ignore
 
 from src.converters.transformer_converters import (
     WanTransformerConverter,
@@ -379,6 +383,10 @@ def convert_transformer(
         model.load_state_dict(state_dict, strict=True, assign=True)
 
     else:
+        if tree_flatten is None:
+            raise RuntimeError(
+                "MLX is not available on this platform/environment (tree_flatten missing)."
+            )
         model_state_dict = tree_flatten(model.parameters(), destination={})
         state_dict = strip_common_prefix(state_dict, model_state_dict)
         model.load_weights(state_dict)
@@ -434,6 +442,10 @@ def get_transformer_keys(model_base: str, config: dict):
     model = get_empty_model(model_class, config)
 
     if using_mlx:
+        if tree_flatten is None:
+            raise RuntimeError(
+                "MLX is not available on this platform/environment (tree_flatten missing)."
+            )
         params = model.parameters()
         flat_params = tree_flatten(params, destination={})
         return flat_params.keys()

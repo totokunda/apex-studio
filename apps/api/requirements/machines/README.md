@@ -39,7 +39,11 @@ build toolchain + a matching CUDA toolkit.
 Windows-specific wheel installs are now included directly in the CUDA entrypoints:
 - `cuda-sm80-ampere.txt`: includes the FlashAttention Windows wheel (cu126/torch2.6.0/cp312)
 - `cuda-sm89-ada-rtx4090.txt`: includes the SageAttention Windows wheel (cu128/torch2.7.1/cp312)
-- `cuda-sm100-blackwell.txt`: includes the SageAttention Windows wheel (cu128/torch2.7.1/cp312)
+- `cuda-sm100-blackwell.txt`: includes the SageAttention Windows wheel (cu128/torch2.9.0+/cp312)
+
+Hopper/Blackwell also use FlashAttention 3 wheels (Linux + Windows) via:
+- `--find-links https://windreamer.github.io/flash-attention3-wheels/cu128_torch270`
+- `--extra-index-url https://download.pytorch.org/whl/cu128`
 
 If you want the repo to handle this automatically, use:
 
