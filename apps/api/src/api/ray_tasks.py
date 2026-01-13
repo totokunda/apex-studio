@@ -1930,7 +1930,7 @@ def run_engine_from_manifest(
             else render_on_step_callback
         )
     
-        if os.environ.get("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
+        if os.environ.get("ENABLE_PERSIST_RUN_CONFIG", "true") == "true":
             _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
 
         # get if the model is video or image

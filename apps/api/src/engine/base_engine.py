@@ -1054,7 +1054,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     def load_transformer(
         self,
         component: Dict[str, Any],
-        load_dtype: torch.dtype | mx.Dtype | None,
+        load_dtype: torch.dtype | None,
         no_weights: bool = False,
         device: str = "cpu",
     ):
@@ -1158,6 +1158,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             maybe_compile = getattr(self, "_maybe_compile_module", None)
             if callable(maybe_compile):
                 model = maybe_compile(model, component)
+        
 
         return transformer
 

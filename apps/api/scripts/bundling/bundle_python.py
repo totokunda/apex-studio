@@ -810,7 +810,7 @@ class PythonBundler:
         the wrong wheel can hard-fail the whole bundle. Instead, we detect the *installed*
         torch version in the venv and install the matching wheel if one exists.
 
-        Release: https://github.com/nunchaku-tech/nunchaku/releases/tag/v1.0.1
+        Release: https://github.com/nunchaku-tech/nunchaku/releases/tag/v1.2.0
         """
 
         # Only CUDA-capable platforms; skip macOS/ROCm/CPU bundles.
@@ -866,7 +866,7 @@ class PythonBundler:
             nunchaku_torch_mm = "2.8"
             print("Torch 2.9 detected; installing Nunchaku torch2.8 wheel (compatible).")
 
-        nunchaku_version = "1.0.1"
+        nunchaku_version = "1.2.0"
 
         # Supported wheel builds in v1.1.0
         supported_linux = {"2.7", "2.8", "2.9", "2.11"}

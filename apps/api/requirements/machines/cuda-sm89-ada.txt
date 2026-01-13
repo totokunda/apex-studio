@@ -21,7 +21,6 @@ flash-attn @ https://huggingface.co/lldacing/flash-attention-windows-wheel/resol
 xformers==0.0.33.post2; sys_platform == "linux"
 transformer_engine==2.10.0; sys_platform == "linux"
 # NVIDIA Apex (NOT the unrelated `apex` PyPI package)
-apex @ git+https://github.com/NVIDIA/apex.git; sys_platform == "linux"
 
 # SageAttention:
 # - RTX 4070-class: SageAttention v1 is supported; install from wheels for speed.

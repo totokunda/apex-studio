@@ -149,7 +149,6 @@ export const ScrubControl: React.FC<ScrubControlProps> = ({
 
   // Reposition scrubber when the visible range or focus frame changes (e.g., zoom in/out)
   useEffect(() => {
-    if (!containerRef.current) return;
     // Keep the scrubber centered over the focusFrame in the new viewport
     const minCenterX = startPadding;
     const maxCenterX = startPadding + stageWidth;
@@ -203,7 +202,9 @@ export const ScrubControl: React.FC<ScrubControlProps> = ({
     setPossibleKeyFocusFrames(Array.from(frames).sort((a, b) => a - b));
   }, [timelineDuration, stageWidth, setPossibleKeyFocusFrames]);
 
-  if (isFullscreen) return null;
+  if (isFullscreen) {
+    return <div ref={containerRef} className="hidden" />;
+  }
 
   return (
     <div

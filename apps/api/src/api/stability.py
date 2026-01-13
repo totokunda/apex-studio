@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 from fastapi import Request
 from starlette.responses import Response
 
+from .log_suppression import is_suppressed_http_path
 
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -160,8 +161,11 @@ def install_stability_middleware(app: Any) -> None:
         nonlocal last_log_ts
         now = time.time()
 
-        key = f"{request.method} {request.url.path}"
-        counts[key] = counts.get(key, 0) + 1
+        # Don't let polling endpoints dominate the periodic request stats log by default.
+        # Access log suppression is handled elsewhere; this only affects request-stats.
+        if not is_suppressed_http_path(request.url.path):
+            key = f"{request.method} {request.url.path}"
+            counts[key] = counts.get(key, 0) + 1
         if now - last_log_ts >= log_every:
             last_log_ts = now
             # log without importing loguru; rely on uvicorn/gunicorn std logging

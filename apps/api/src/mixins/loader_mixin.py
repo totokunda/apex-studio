@@ -339,9 +339,10 @@ class LoaderMixin(DownloadMixin):
                 model.load_state_dict(state_dict, assign=True, strict=False)
                 continue
 
-            from src.utils.safetensors import is_safetensors_file, load_safetensors
+            from src.utils.safetensors import load_safetensors
 
-            is_safetensors = is_safetensors_file(file_path)
+            file_path_str = str(file_path)
+            is_safetensors = file_path_str.lower().endswith(".safetensors")
             if is_safetensors:
                 state_dict = load_safetensors(
                     file_path,
