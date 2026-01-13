@@ -9,6 +9,7 @@ Choose the one matching your hardware.
 - `requirements/mps/requirements.txt`: macOS / Apple Silicon (Metal/MPS)
 - `requirements/rocm/requirements.txt`: AMD ROCm (Linux)
 - `requirements/cuda/*.txt`: NVIDIA CUDA variants
+- `requirements/platform/*.txt`: OS/CPU entrypoints (requested “one file per target” wrappers)
 
 ## CUDA Variants
 
@@ -24,6 +25,12 @@ Choose based on your GPU architecture:
 ## Usage
 
 ```bash
+# OS/CPU wrappers (simple defaults)
+pip install -r requirements/platform/cpu.txt
+pip install -r requirements/platform/mac.txt
+pip install -r requirements/platform/linux.txt
+pip install -r requirements/platform/windows.txt
+
 # Example for CPU
 pip install -r requirements/cpu/requirements.txt
 
@@ -42,8 +49,20 @@ They are layered on top of:
 You can also use the helper script:
 
 ```bash
+python scripts/dev/dev_pip_install.py --machine linux
+python scripts/dev/dev_pip_install.py --machine windows
+python scripts/dev/dev_pip_install.py --machine mac
+python scripts/dev/dev_pip_install.py --machine cpu
+
+# Or pick a specific CUDA arch stack:
 python scripts/dev/dev_pip_install.py --machine cuda-ampere
 ```
+
+### Nunchaku
+
+Nunchaku is **installed by default** when you use `scripts/dev/dev_pip_install.py` on
+supported CUDA platforms (Linux/Windows). This is done via a small selector that chooses
+the correct wheel for your installed torch version.
 
 ## Windows CUDA wheels
 
