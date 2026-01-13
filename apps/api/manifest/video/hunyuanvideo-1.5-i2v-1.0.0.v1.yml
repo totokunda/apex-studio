@@ -40,7 +40,9 @@ spec:
   - flash
   - sage
   - flash3
+  - metal-flash
   - efficient_dot_product_attention
+  
   components:
   - type: scheduler
     label: Scheduler
