@@ -1137,7 +1137,8 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         # When decoding spatially large video latents, the memory requirement is very high. By breaking the video latent
         # frames spatially into smaller tiles and performing multiple forward passes for decoding, and then blending the
         # intermediate tiles together, the memory requirement can be lowered.
-        self.use_tiling = False
+        # Tiling is enabled by default for LTX2 video VAE (can be disabled via `enable_tiling(enabled=False)`).
+        self.use_tiling = True
 
         # When decoding temporally long video latents, the memory requirement is very high. By decoding latent frames
         # at a fixed frame batch size (based on `self.num_latent_frames_batch_sizes`), the memory requirement can be lowered.
@@ -1162,37 +1163,67 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
 
     def enable_tiling(
         self,
+        enabled: bool = True,
         tile_sample_min_height: Optional[int] = None,
         tile_sample_min_width: Optional[int] = None,
         tile_sample_min_num_frames: Optional[int] = None,
-        tile_sample_stride_height: Optional[float] = None,
-        tile_sample_stride_width: Optional[float] = None,
-        tile_sample_stride_num_frames: Optional[float] = None,
+        tile_sample_stride_height: Optional[int] = None,
+        tile_sample_stride_width: Optional[int] = None,
+        tile_sample_stride_num_frames: Optional[int] = None,
+        use_framewise_encoding: Optional[bool] = None,
+        use_framewise_decoding: Optional[bool] = None,
+        num_sample_frames_batch_size: Optional[int] = None,
+        num_latent_frames_batch_size: Optional[int] = None,
     ) -> None:
         r"""
-        Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
-        compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
-        processing larger images.
+        Enable/disable tiled VAE decoding/encoding and configure tiling + framewise behavior.
+
+        When tiling is enabled, the VAE may split the input tensor into overlapping spatial/temporal tiles to compute
+        decoding/encoding in several steps, blending overlaps to avoid seams. This is useful for saving memory and
+        processing larger videos.
 
         Args:
+            enabled (`bool`, defaults to `True`):
+                Enable tiling when `True`, disable when `False`.
             tile_sample_min_height (`int`, *optional*):
                 The minimum height required for a sample to be separated into tiles across the height dimension.
             tile_sample_min_width (`int`, *optional*):
                 The minimum width required for a sample to be separated into tiles across the width dimension.
+            tile_sample_min_num_frames (`int`, *optional*):
+                The minimum number of frames required for temporal tiling to be used.
             tile_sample_stride_height (`int`, *optional*):
                 The minimum amount of overlap between two consecutive vertical tiles. This is to ensure that there are
                 no tiling artifacts produced across the height dimension.
             tile_sample_stride_width (`int`, *optional*):
                 The stride between two consecutive horizontal tiles. This is to ensure that there are no tiling
                 artifacts produced across the width dimension.
+            tile_sample_stride_num_frames (`int`, *optional*):
+                The overlap/stride for temporal tiling.
+            use_framewise_encoding (`bool`, *optional*):
+                If set, forces framewise (temporal tiled) encoding regardless of heuristics.
+            use_framewise_decoding (`bool`, *optional*):
+                If set, forces framewise (temporal tiled) decoding regardless of heuristics.
+            num_sample_frames_batch_size (`int`, *optional*):
+                Hint for how many sample frames to decode per batch (best-effort; may be used by callers).
+            num_latent_frames_batch_size (`int`, *optional*):
+                Hint for how many latent frames to decode per batch (best-effort; may be used by callers).
         """
-        self.use_tiling = True
+        self.use_tiling = bool(enabled)
         self.tile_sample_min_height = tile_sample_min_height or self.tile_sample_min_height
         self.tile_sample_min_width = tile_sample_min_width or self.tile_sample_min_width
         self.tile_sample_min_num_frames = tile_sample_min_num_frames or self.tile_sample_min_num_frames
         self.tile_sample_stride_height = tile_sample_stride_height or self.tile_sample_stride_height
         self.tile_sample_stride_width = tile_sample_stride_width or self.tile_sample_stride_width
         self.tile_sample_stride_num_frames = tile_sample_stride_num_frames or self.tile_sample_stride_num_frames
+
+        if use_framewise_encoding is not None:
+            self.use_framewise_encoding = bool(use_framewise_encoding)
+        if use_framewise_decoding is not None:
+            self.use_framewise_decoding = bool(use_framewise_decoding)
+        if num_sample_frames_batch_size is not None:
+            self.num_sample_frames_batch_size = int(num_sample_frames_batch_size)
+        if num_latent_frames_batch_size is not None:
+            self.num_latent_frames_batch_size = int(num_latent_frames_batch_size)
 
     def _get_cuda_vram_info_bytes(self, device: torch.device) -> Tuple[Optional[int], Optional[int]]:
         """
