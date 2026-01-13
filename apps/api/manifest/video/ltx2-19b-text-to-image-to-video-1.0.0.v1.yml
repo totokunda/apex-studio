@@ -21,7 +21,7 @@ spec:
   model_type: ti2v
   engine_type: torch
   default_duration_secs: 5.0
-  fps: 24
+  fps: 25
   compute_requirements:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
@@ -34,6 +34,7 @@ spec:
   - flash3
   - sage
   - efficient_dot_product_attention
+  - xformers
   loras:
   - source: Lightricks/LTX-2/ltx-2-19b-distilled-lora-384.safetensors
     name: ltx-2-19b-distilled-lora-384
@@ -373,10 +374,10 @@ spec:
       description: Select the resolution of the output video
       panel: size
       type: select
-      default: 960
+      default: 1080
       options:
       - name: Full HD
-        value: 960
+        value: 1080
       - name: HD
         value: 720
       - name: SD

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 
-NUNCHAKU_VERSION = "1.0.1"
+NUNCHAKU_VERSION = "1.2.0"
 NUNCHAKU_RELEASE_TAG = f"v{NUNCHAKU_VERSION}"
 NUNCHAKU_RELEASE_BASE_URL = f"https://github.com/nunchaku-tech/nunchaku/releases/download/{NUNCHAKU_RELEASE_TAG}"
 

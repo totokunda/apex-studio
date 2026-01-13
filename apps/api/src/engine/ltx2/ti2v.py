@@ -491,6 +491,8 @@ class LTX2TI2VEngine(LTX2Shared):
             generator = torch.Generator(device=self.device).manual_seed(seed)
 
         num_frames = self._parse_num_frames(duration, fps)
+
+      
         
         # Image conditioning should be applied in BOTH stages (stage-2 starts from upscaled latents but still
         # replaces latent slices + denoise mask), matching ltx-pipelines distilled behavior.
@@ -539,6 +541,7 @@ class LTX2TI2VEngine(LTX2Shared):
         
         if self.preloaded_loras and "ltx-2-19b-distilled-lora-384" in self.preloaded_loras and not use_distilled_stage_2:
             self.logger.info("Disabling LTX2 19B Distilled LoRA 384 with scale 0.0")
+            self._previous_lora_scale = self.preloaded_loras["ltx-2-19b-distilled-lora-384"].scale
             self.preloaded_loras["ltx-2-19b-distilled-lora-384"].scale = 0.0
 
         # 3. Prepare text embeddings
@@ -796,14 +799,15 @@ class LTX2TI2VEngine(LTX2Shared):
         if not self.transformer:
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
-        
+
+
         if chunking_profile != "none":
             self.transformer.set_chunking_profile(chunking_profile)
         
         if self.preloaded_loras and "ltx-2-19b-distilled-lora-384" in self.preloaded_loras and use_distilled_stage_2:
-            self.logger.info("Applying LTX2 19B Distilled LoRA 384 with scale 1.0")
+            self.logger.info(f"Applying LTX2 19B Distilled LoRA 384 with scale {getattr(self, '_previous_lora_scale', 1.0)}")
             lora = self.preloaded_loras["ltx-2-19b-distilled-lora-384"]
-            lora.scale = 1.0
+            lora.scale = getattr(self, "_previous_lora_scale", 1.0)
             self.apply_loras([(lora.source, lora.scale)], adapter_names=[lora.name])
 
         # Pre-compute video and audio positional ids as they will be the same at each step of the denoising loop

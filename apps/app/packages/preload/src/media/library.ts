@@ -426,50 +426,64 @@ async function listGeneratedMediaPage(
 
     const candidates: Candidate[] = [];
     for (const root of roots) {
-      let engineResultsAbs: string;
+      // IMPORTANT:
+      // - The backend historically writes to: <cache-root>/engine_results/<jobId>/...
+      // - The renderer *may* pass folderUuid to scope generations to a project.
+      // - On some platforms (notably Windows without Developer Mode/admin),
+      //   creating symlinks/junctions under engine_results/<folderUuid>/... may fail,
+      //   which would make generations appear "missing" even though outputs exist.
+      //
+      // To make generations reliably appear, when folderUuid is provided we scan BOTH:
+      //   <root>/engine_results/<folderUuid>  (preferred when present)
+      //   <root>/engine_results              (global fallback)
+      //
+      // Results are deduped by absolute path downstream.
+      const engineResultsDirs = new Set<string>();
       if (typeof folderUuid === "string" && folderUuid.length > 0) {
-        engineResultsAbs = join(root, "engine_results", folderUuid);
-      } else {
-        engineResultsAbs = join(root, "engine_results");
+        engineResultsDirs.add(join(root, "engine_results", folderUuid));
       }
-      if (!fs.existsSync(engineResultsAbs)) continue;
+      engineResultsDirs.add(join(root, "engine_results"));
 
-      let entries: import("node:fs").Dirent[] = [];
-      try {
-        entries = (await fsp.readdir(engineResultsAbs, {
-          withFileTypes: true,
-        })) as unknown as import("node:fs").Dirent[];
-      } catch {
-        entries = [] as any;
-      }
-      if (!entries || entries.length === 0) continue;
+      for (const engineResultsAbs of engineResultsDirs) {
+        if (!fs.existsSync(engineResultsAbs)) continue;
 
-      for (const e of entries) {
-        const entryName = e.name;
-        const entryPath = join(engineResultsAbs, entryName);
-
-        if (!e.isDirectory()) {
-          const ext = getLowercaseExtension(entryName);
-          if (!isSupportedExt(ext)) continue;
-          const stem = entryName.replace(/\.[^.]+$/, "");
-          if (!stem.toLowerCase().startsWith("result")) continue;
-        }
-
-        let dateKeyMs = Date.now();
+        let entries: import("node:fs").Dirent[] = [];
         try {
-          const st = await fsp.lstat(entryPath);
-          dateKeyMs =
-            st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateKeyMs;
+          entries = (await fsp.readdir(engineResultsAbs, {
+            withFileTypes: true,
+          })) as unknown as import("node:fs").Dirent[];
         } catch {
-          // ignore
+          entries = [] as any;
         }
+        if (!entries || entries.length === 0) continue;
 
-        candidates.push({
-          kind: e.isDirectory() ? "dir" : "file",
-          baseName: entryName,
-          absPath: entryPath,
-          dateKeyMs,
-        });
+        for (const e of entries) {
+          const entryName = e.name;
+          const entryPath = join(engineResultsAbs, entryName);
+
+          if (!e.isDirectory()) {
+            const ext = getLowercaseExtension(entryName);
+            if (!isSupportedExt(ext)) continue;
+            const stem = entryName.replace(/\.[^.]+$/, "");
+            if (!stem.toLowerCase().startsWith("result")) continue;
+          }
+
+          let dateKeyMs = Date.now();
+          try {
+            const st = await fsp.lstat(entryPath);
+            dateKeyMs =
+              st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateKeyMs;
+          } catch {
+            // ignore
+          }
+
+          candidates.push({
+            kind: e.isDirectory() ? "dir" : "file",
+            baseName: entryName,
+            absPath: entryPath,
+            dateKeyMs,
+          });
+        }
       }
     }
 
