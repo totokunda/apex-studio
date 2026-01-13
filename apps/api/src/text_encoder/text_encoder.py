@@ -211,7 +211,6 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
 
         batch_size = len(text)
         
-        
 
         kwargs = {
             "text": text,
@@ -313,7 +312,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             inputs["attention_mask"] = mask.to(device=encode_device)
 
         self.model.apply(lambda m: m.register_forward_hook(nan_hook))
-
+        
         result = self.model(
             **inputs,
             output_hidden_states=(

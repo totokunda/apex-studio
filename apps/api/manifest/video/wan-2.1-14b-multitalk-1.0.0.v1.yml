@@ -38,6 +38,7 @@ spec:
   - flash
   - flash3
   - sage
+  - metal-flash
   - efficient_dot_product_attention
   loras:
   - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors
