@@ -303,8 +303,8 @@ spec:
         rows:
         - - guidance_scale
         - - seed
-    - name: chunking
-      label: Chunking
+    - name: chunking_profile
+      label: Chunking Profile
       collapsible: true
       default_open: false
       layout:
@@ -315,11 +315,14 @@ spec:
     - id: image
       label: Image
       description: The image to condition on.
-      type: image
+      type: image_list
       panel: media
-      required: false
       map_h: height
       map_w: width
+      scale_by: resolution
+      min: 0
+      max: 1
+      required: false
     - id: audio
       label: Audio
       description: The audio to condition on.
@@ -418,8 +421,8 @@ spec:
       label: Chunking Profile
       description: Spliting tensors into smaller chunks to reduce memory usage.
       type: select
-      panel: sampling
-      default: balanced
+      panel: chunking_profile
+      default: light
       options:
       - name: None
         value: none
