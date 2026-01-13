@@ -36,12 +36,12 @@ spec:
   - efficient_dot_product_attention
   - xformers
   loras:
-  - source: C:\Users\tosin\apex-diffusion\loras\9e7cd8b70f93ff55a12408eba761da1e71dfbf3195c791ead36b7d0634b4aaea_ltx-2-19b-distilled-lora-384.safetensors
+  - source: Lightricks/LTX-2/ltx-2-19b-distilled-lora-384.safetensors
     name: ltx-2-19b-distilled-lora-384
     label: LTX2 19B Distilled LoRA 384
     verified: true
     scale: 1.0
-    required: false
+    required: true
   components:
   - type: scheduler
     label: Scheduler
