@@ -1,7 +1,0 @@
-# macOS / Apple Silicon (Metal / "MPS" style workflows)
--r ../requirements.txt
--r ../processors.requirements.txt
-
-mlx; sys_platform == "darwin" and platform_machine == "arm64"
-rembg[cpu]
-onnxruntime==1.20.1

@@ -1,0 +1,9 @@
+# AMD ROCm (Linux)
+-r ../requirements.txt
+-r ../processors.requirements.txt
+
+rembg[rocm]
+# Triton for ROCm (PyTorch ROCm stacks typically need a ROCm-specific Triton build)
+triton-rocm; sys_platform == "linux"
+
+

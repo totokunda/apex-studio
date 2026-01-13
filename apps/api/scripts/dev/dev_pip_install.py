@@ -102,7 +102,7 @@ def _detect_default_torch_backend(machine: str) -> str:
     if machine.startswith("cuda"):
         # Hopper/Blackwell entrypoints use cu128 + torch2.9.x wheel stacks
         # (e.g. FlashAttention 3 wheels).
-        if machine in ("cuda-sm90-hopper", "cuda-sm100-blackwell"):
+        if machine in ("cuda-hopper", "cuda-blackwell"):
             return "cu128"
         return "cu126"
     if machine == "rocm":
@@ -114,9 +114,30 @@ def main() -> int:
     # This file lives at scripts/dev/dev_pip_install.py.
     # Project root is apps/api/.
     project_root = Path(__file__).resolve().parent.parent.parent
-    machines_dir = project_root / "requirements" / "machines"
+    requirements_dir = project_root / "requirements"
 
-    machine_choices = sorted(p.stem for p in machines_dir.glob("*.txt"))
+    # Map friendly names to paths
+    machine_map = {
+        "cpu": requirements_dir / "cpu" / "requirements.txt",
+        "mps": requirements_dir / "mps" / "requirements.txt",
+        "rocm": requirements_dir / "rocm" / "requirements.txt",
+    }
+    # Add CUDA entries
+    cuda_dir = requirements_dir / "cuda"
+    if cuda_dir.exists():
+        for p in cuda_dir.glob("*.txt"):
+            # Exclude non-machine files if any (e.g. linux-cuda.txt if it's not a machine entrypoint)
+            # But linux-cuda.txt IS referenced as empty in my check?
+            # I renamed it to linux-cuda.txt in cuda/.
+            # If it's not a full entrypoint, maybe I shouldn't list it.
+            # But earlier files showed it was empty.
+            # I will exclude it if it's small/empty or based on name.
+            if p.name in ["linux-cuda.txt", "windows-cuda.txt"]:
+                continue
+            name = f"cuda-{p.stem}"
+            machine_map[name] = p
+
+    machine_choices = sorted(machine_map.keys())
     default_machine = _detect_default_machine()
 
     parser = argparse.ArgumentParser(
@@ -126,7 +147,7 @@ def main() -> int:
         "--machine",
         default=default_machine,
         choices=machine_choices,
-        help="Machine requirements entrypoint under requirements/machines/ (default: auto).",
+        help="Machine requirements entrypoint (default: auto).",
     )
     parser.add_argument(
         "--venv",
@@ -176,7 +197,7 @@ def main() -> int:
     if not py.exists():
         raise SystemExit(f"Python interpreter not found: {py}")
 
-    req_file = machines_dir / f"{args.machine}.txt"
+    req_file = machine_map[args.machine]
     if not req_file.exists():
         raise SystemExit(f"Machine requirements file not found: {req_file}")
 

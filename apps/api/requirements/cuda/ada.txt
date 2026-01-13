@@ -1,0 +1,32 @@
+# NVIDIA CUDA - Ada Lovelace (sm_89, e.g. RTX 4070 / L4 / L40)
+#
+# Prereq: install a matching PyTorch CUDA wheel first (cu12x), then:
+#   pip install -r requirements/machines/cuda-sm89-ada.txt
+#
+-r ../requirements.txt
+-r ../processors.requirements.txt
+
+rembg[gpu]
+
+triton==3.5.1; sys_platform == "linux"
+triton-windows; sys_platform == "win32"
+
+# Some CUDA source builds (e.g. flash-attn) import psutil during setup.
+psutil; sys_platform == "linux"
+
+# FlashAttention (Windows): install a prebuilt wheel from HF for faster installs.
+# This wheel targets torch2.7.0+cu128 (closest match to our Windows cu128 torch2.7.x stacks).
+flash-attn @ https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/flash_attn-2.7.4.post1%2Bcu128torch2.7.0cxx11abiFALSE-cp312-cp312-win_amd64.whl; sys_platform == "win32" and python_version == "3.12"
+
+xformers==0.0.33.post2; sys_platform == "linux"
+transformer_engine==2.10.0; sys_platform == "linux"
+# NVIDIA Apex (NOT the unrelated `apex` PyPI package)
+
+# SageAttention:
+# - RTX 4070-class: SageAttention v1 is supported; install from wheels for speed.
+# - RTX 4090-class: use `cuda-sm89-ada-rtx4090.txt` to get SageAttention v2.
+sageattention==1.0.6; sys_platform == "linux" or sys_platform == "win32"
+
+# FlashAttention: source build.
+flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git; sys_platform == "linux"
+onnxruntime-gpu==1.23.2

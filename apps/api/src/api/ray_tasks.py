@@ -245,15 +245,21 @@ def _aggressive_ram_cleanup() -> None:
 
 
 def _remove_lora_from_manifest(
-    lora_name: str, manifest_id: Optional[str] = None
+    lora_name: Optional[str], manifest_id: Optional[str] = None
 ) -> bool:
     """
-    Remove any LoRA entries whose source/remote_source (or raw string entry)
-    matches `source` from the given manifest.
+    Remove a LoRA entry from the given manifest.
+
+    `lora_name` is treated as a generic identifier and may match:
+    - a raw string entry in `spec.loras`
+    - a dict entry's `name` / `label`
+    - a dict entry's `source` / `path` / `url` / `remote_source`
 
     Returns True if at least one entry was removed, otherwise False.
     """
     try:
+        if not lora_name:
+            return False
         manifest = get_manifest(manifest_id)
         manifest_path = MANIFEST_BASE_PATH / Path(manifest.get("full_path"))
         doc = _load_manifest_yaml(manifest_path)
@@ -269,15 +275,26 @@ def _remove_lora_from_manifest(
         removed = False
         for entry in loras:
             if isinstance(entry, str):
-                entry_source = entry
-            elif isinstance(entry, dict):
-                entry_source = entry.get("source") or entry.get("remote_source")
-            else:
-                entry_source = None
-
-            if entry_source == lora_name:
-                removed = True
+                if entry == lora_name:
+                    removed = True
+                    continue
+                new_loras.append(entry)
                 continue
+            if isinstance(entry, dict):
+                entry_id_candidates = (
+                    entry.get("name"),
+                    entry.get("label"),
+                    entry.get("source"),
+                    entry.get("path"),
+                    entry.get("url"),
+                    entry.get("remote_source"),
+                )
+                if any(c == lora_name for c in entry_id_candidates if isinstance(c, str)):
+                    removed = True
+                    continue
+                new_loras.append(entry)
+                continue
+            # Unknown entry type; keep it untouched
             new_loras.append(entry)
 
         if not removed:
@@ -394,6 +411,8 @@ def _ensure_lora_registered_in_manifests(
         for entry in loras:
             if isinstance(entry, dict) and (
                 entry.get("source") == source
+                or entry.get("path") == source
+                or entry.get("url") == source
                 or entry.get("remote_source") == source
                 or entry.get("name") == lora_name
             ):
@@ -410,13 +429,8 @@ def _ensure_lora_registered_in_manifests(
             "name": name,
             "label": name,
             "verified": False,
+            "source": source,
         }
-        loader = DownloadMixin()
-        is_downloaded = loader.is_downloaded(source, get_lora_path())
-        if is_downloaded:
-            new_entry["source"] = is_downloaded
-        else:
-            new_entry["remote_source"] = source
 
         loras.append(new_entry)
         spec["loras"] = loras
@@ -447,6 +461,7 @@ def _is_transformer_downloaded_for_manifest(
         components = spec.get("components") or []
         if not isinstance(components, list):
             return None
+        base_dir = get_components_path()
 
         for component in components:
             if not isinstance(component, dict):
@@ -471,34 +486,35 @@ def _is_transformer_downloaded_for_manifest(
                         if isinstance(path_val, str):
                             candidate_paths.append(path_val)
 
-            has_local_model_path = False
-
-            base_dir = get_components_path()
+            local_main: Optional[str] = None
             for p in candidate_paths:
                 local = DownloadMixin.is_downloaded(str(p), base_dir)
                 if local:
-                    # Return a shallow copy so callers can safely mutate model_path
-                    comp_copy: Dict[str, Any] = dict(component)
-                    comp_copy["model_path"] = local
-                    has_local_model_path = True
+                    local_main = local
+                    break
+            if not local_main:
+                continue
 
-        extra_model_paths = component.get("extra_model_paths", [])
-        local_extra_model_paths: List[str] = []
-        if isinstance(extra_model_paths, list):
-            for extra_model_path in extra_model_paths:
-                local = DownloadMixin.is_downloaded(
-                    str(extra_model_path.get("path")), base_dir
-                )
-                if local:
+            comp_copy: Dict[str, Any] = dict(component)
+            comp_copy["model_path"] = local_main
+
+            extra_model_paths = component.get("extra_model_paths") or []
+            if extra_model_paths:
+                if not isinstance(extra_model_paths, list):
+                    return None
+                local_extra_model_paths: List[str] = []
+                for extra in extra_model_paths:
+                    if not isinstance(extra, dict):
+                        return None
+                    p = extra.get("path")
+                    if not isinstance(p, str):
+                        return None
+                    local = DownloadMixin.is_downloaded(str(p), base_dir)
+                    if not local:
+                        return None
                     local_extra_model_paths.append(local)
+                comp_copy["extra_model_paths"] = local_extra_model_paths
 
-        if extra_model_paths:
-            comp_copy["extra_model_paths"] = local_extra_model_paths
-
-        if len(local_extra_model_paths) != len(extra_model_paths):
-            return None
-
-        if has_local_model_path:
             return comp_copy
 
         return None
@@ -511,7 +527,10 @@ def _is_transformer_downloaded_for_manifest(
 
 
 def _mark_lora_verified_in_manifests(
-    source: str, manifest_id: Optional[str] = None, lora_name: Optional[str] = None
+    source: str,
+    manifest_id: Optional[str] = None,
+    lora_name: Optional[str] = None,
+    local_paths: Optional[List[str]] = None,
 ) -> Optional[bool]:
     """
     Update manifest entries for `source` with a `verified` flag.
@@ -534,15 +553,51 @@ def _mark_lora_verified_in_manifests(
         loras = spec.get("loras") or []
         if not isinstance(loras, list):
             return None
+        target_index: Optional[int] = None
+        target_entry: Any = None
+        target_source_in_yaml: Optional[str] = None
 
-        if lora_name:
-            for entry in loras:
-                if (
-                    isinstance(entry, dict)
-                    and entry.get("name") == lora_name
-                    and entry.get("verified")
-                ):
+        def _entry_source_like(e: Any) -> Optional[str]:
+            if isinstance(e, str):
+                return e
+            if isinstance(e, dict):
+                for k in ("source", "path", "url", "remote_source"):
+                    v = e.get(k)
+                    if isinstance(v, str) and v.strip():
+                        return v
+            return None
+
+        def _entry_matches(e: Any) -> bool:
+            nonlocal target_source_in_yaml
+            if isinstance(e, str):
+                if e == source or (lora_name and e == lora_name):
+                    target_source_in_yaml = e
                     return True
+                return False
+            if isinstance(e, dict):
+                if lora_name and (
+                    e.get("name") == lora_name or e.get("label") == lora_name
+                ):
+                    target_source_in_yaml = _entry_source_like(e)
+                    return True
+                src_like = _entry_source_like(e)
+                if isinstance(src_like, str) and src_like == source:
+                    target_source_in_yaml = src_like
+                    return True
+            return False
+
+        for i, entry in enumerate(loras):
+            if _entry_matches(entry):
+                target_index = i
+                target_entry = entry
+                break
+
+        if target_index is None:
+            return None
+
+        # Already verified -> nothing to do
+        if isinstance(target_entry, dict) and bool(target_entry.get("verified")):
+            return True
 
         # Only attempt verification if the manifest's transformer is present locally
         transformer_component = _is_transformer_downloaded_for_manifest(doc)
@@ -564,82 +619,97 @@ def _mark_lora_verified_in_manifests(
                 f"Failed to create engine for manifest during LoRA validation: {e}"
             )
             return None
-        updated = False
-        any_verified = False
-        any_removed = False
-        new_loras: List[Any] = []
-        logger.info(f"Loras to validate: {loras}")
-        for entry in loras:
-            # Determine this entry's source (if any)
-            if isinstance(entry, str):
-                entry_source = entry
-            elif isinstance(entry, dict):
-                entry_source = entry.get("source") or entry.get("remote_source")
+
+        # Build a set of local candidates to validate against (preferred) without
+        # rewriting the manifest entry source/path/url.
+        validation_candidates: List[str] = []
+        if isinstance(local_paths, list):
+            for p in local_paths:
+                if isinstance(p, str) and p and p not in validation_candidates:
+                    validation_candidates.append(p)
+                    try:
+                        parent = str(Path(p).parent)
+                        if parent and parent not in validation_candidates:
+                            validation_candidates.append(parent)
+                    except Exception:
+                        pass
+
+        # Fallback: use whatever the YAML had (may trigger a download, but keeps correctness)
+        if not validation_candidates:
+            if target_source_in_yaml:
+                validation_candidates.append(target_source_in_yaml)
             else:
-                new_loras.append(entry)
-                continue
-            # Validate this LoRA against the transformer
-            is_valid = False
+                validation_candidates.append(source)
+
+        is_valid = False
+        last_err: Optional[str] = None
+        for cand in validation_candidates:
             try:
                 logger.info(
-                    f"Validating LoRA '{entry_source}' against transformer component: {transformer_component}"
+                    f"Validating LoRA candidate '{cand}' against transformer component: {transformer_component}"
                 )
-                is_valid = bool(
-                    engine.validate_lora_path(entry_source, transformer_component)
-                )
+                if engine.validate_lora_path(cand, transformer_component):
+                    is_valid = True
+                    break
             except Exception as ve:
-                logger.error(traceback.format_exc())
-                logger.warning(
-                    f"LoRA validation failed for '{entry_source}' in manifest {manifest_path}: {ve}"
-                )
-                is_valid = False
-            if not is_valid:
-                # Drop invalid LoRAs from this manifest entirely
-                logger.warning(
-                    f"Removing invalid LoRA '{entry_source}' from manifest {manifest_path}"
-                )
-                updated = True
-                any_removed = True
-                # Do not append this entry to new_loras -> effectively remove it
+                last_err = str(ve)
                 continue
-            # Valid LoRA → normalize to dict with verified=True
-            name = _derive_lora_name_from_source(entry_source)
-            if isinstance(entry, str):
-                entry = {
-                    "source": entry_source,
-                    "scale": 1.0,
-                    "name": name,
-                    "label": name,
-                    "verified": True,
-                }
-            elif isinstance(entry, dict):
-                entry = dict(entry)
-                entry.setdefault("name", name)
-                entry.setdefault("label", name)
-                entry["verified"] = True
-                entry["source"] = DownloadMixin.is_downloaded(
-                    entry_source, get_lora_path()
-                ) or entry.get("source")
-            new_loras.append(entry)
-            logger.info(f"New LoRA entry: {entry}")
-            logger.info(f"New LoRA entries: {new_loras}")
-            updated = True
-        if not updated:
-            return None
+
+        # Mutate only the target entry; leave everything else untouched.
+        new_loras = list(loras)
+        if not is_valid:
+            logger.warning(
+                f"LoRA verification failed for '{source}' (name={lora_name}) in manifest {manifest_path}: {last_err}"
+            )
+            # Remove the single target entry
+            try:
+                new_loras.pop(int(target_index))
+            except Exception:
+                pass
+            spec["loras"] = new_loras
+            doc["spec"] = spec
+            _save_manifest_yaml(manifest_path, doc)
+            return False
+
+        # Verified: set verified=True; ensure name/label exist; DO NOT overwrite source/path/url.
+        existing = target_entry
+        derived_name = lora_name or _derive_lora_name_from_source(
+            target_source_in_yaml or source
+        )
+        if isinstance(existing, str):
+            updated_entry: Dict[str, Any] = {
+                "source": existing,
+                "scale": 1.0,
+                "name": derived_name,
+                "label": derived_name,
+                "verified": True,
+            }
+        elif isinstance(existing, dict):
+            updated_entry = dict(existing)
+            updated_entry.setdefault("name", derived_name)
+            updated_entry.setdefault("label", updated_entry.get("name") or derived_name)
+            updated_entry["verified"] = True
+            # Only set a source if the entry had none of the supported identifiers
+            if _entry_source_like(updated_entry) is None:
+                updated_entry["source"] = source
+        else:
+            # Unknown type; replace with a conservative dict entry
+            updated_entry = {
+                "source": target_source_in_yaml or source,
+                "scale": 1.0,
+                "name": derived_name,
+                "label": derived_name,
+                "verified": True,
+            }
+
+        new_loras[int(target_index)] = updated_entry
         spec["loras"] = new_loras
         doc["spec"] = spec
         _save_manifest_yaml(manifest_path, doc)
-        if any_verified:
-            logger.info(
-                f"Updated LoRA '{source}' verification state in manifest {manifest_path.name}"
-            )
-            return True
-        if any_removed:
-            logger.info(
-                f"Removed invalid LoRA '{source}' from manifest {manifest_path.name}"
-            )
-            return False
-        return None
+        logger.info(
+            f"Updated LoRA '{source}' verification state in manifest {manifest_path.name}"
+        )
+        return True
     except Exception as e:
         traceback.print_exc()
         logger.warning(f"Failed to update LoRA verification state for '{source}': {e}")
@@ -834,7 +904,10 @@ def download_unified(
                         f"No LoRA files were found for source '{source}'. "
                         "Ensuring LoRA is not present in manifest."
                     )
-                    _remove_lora_from_manifest(lora_name, manifest_id)
+                    # Best-effort: remove by name first, then by source
+                    removed = _remove_lora_from_manifest(lora_name or source, manifest_id)
+                    if not removed:
+                        _remove_lora_from_manifest(source, manifest_id)
                     send_progress(
                         0.0,
                         f"LoRA download failed for '{source}' (no files found)",
@@ -854,7 +927,7 @@ def download_unified(
                     }
 
                 # 2) Only after a successful download do we register/update the LoRA in the manifest.
-                source = lora_item.local_paths[0]
+                source = lora_item.source
                 try:
                     entry = _ensure_lora_registered_in_manifests(
                         source, manifest_id, lora_name
@@ -896,12 +969,17 @@ def download_unified(
                     pass
 
                 verified = _mark_lora_verified_in_manifests(
-                    source, manifest_id, lora_name
+                    source,
+                    manifest_id,
+                    lora_name,
+                    local_paths=getattr(lora_item, "local_paths", None),
                 )
 
                 # If verification explicitly failed, surface an error and remove the LoRA
                 if verified is False:
-                    _remove_lora_from_manifest(lora_name, manifest_id)
+                    removed = _remove_lora_from_manifest(lora_name or source, manifest_id)
+                    if not removed:
+                        _remove_lora_from_manifest(source, manifest_id)
                     _cleanup_lora_artifacts_if_remote(lora_item)
                     send_progress(
                         0.0,

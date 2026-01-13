@@ -1,8 +1,0 @@
-# CPU-only (no CUDA / no ROCm / no Metal)
--r ../requirements.txt
--r ../processors.requirements.txt
-
-# Prefer CPU backends
-rembg[cpu]
-onnx==1.20.0
-onnxruntime==1.20.1

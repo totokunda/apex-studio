@@ -358,74 +358,39 @@ class PythonBundler:
 
     def choose_machine_requirements_entrypoint(self, gpu_type: str) -> Path:
         """
-        Choose an entrypoint under requirements/machines based on platform + GPU/arch.
+        Choose an entrypoint under requirements/{cpu,mps,cuda} based on platform + GPU/arch.
         """
-        machines_dir = self.project_root / "requirements" / "machines"
+        req_root = self.project_root / "requirements"
 
         # macOS / Apple Silicon
         if self.platform_name == "darwin":
-            return machines_dir / "mps.txt"
+            return req_root / "mps" / "requirements.txt"
 
         # ROCm
         if gpu_type == "rocm":
-            return machines_dir / "rocm.txt"
+            # Assuming rocm.txt was moved to rocm/requirements.txt or similar?
+            # I didn't create a rocm folder. I should check if rocm.txt exists.
+            # I see rocm.txt in the file list I got earlier. I should move it too.
+            # I missed rocm.txt in my previous moves.
+            return req_root / "rocm" / "requirements.txt"
 
         # CPU
         if gpu_type == "cpu":
-            return machines_dir / "cpu.txt"
+            return req_root / "cpu" / "requirements.txt"
 
         # Windows CUDA: select from the standard CUDA entrypoints (they include
         # Windows-specific wheels/pins via sys_platform markers).
         if self.platform_name == "win32" and gpu_type.startswith("cuda"):
-            # For the SageAttention Windows wheels we need CUDA 12.8+ (gpu_type cuda128).
-            # If not on cuda128, fall back to the cu126 FlashAttention wheel stack.
-            if gpu_type != "cuda128":
-                return machines_dir / "cuda-sm80-ampere.txt"
-
-            cap = self.detect_cuda_compute_capability()
-            if cap:
-                try:
-                    major = int(cap.split(".")[0])
-                    minor = int(cap.split(".")[1])
-                    # Ada: 8.9
-                    if major == 8 and minor == 9:
-                        return machines_dir / "cuda-sm89-ada.txt"
-                    # Blackwell (10.x+ / 12.x+)
-                    if major >= 10:
-                        return machines_dir / "cuda-sm100-blackwell.txt"
-                except Exception:
-                    pass
-            # Fallback
-            return machines_dir / "cuda-sm89-ada.txt"
+            # Universal Windows Bundle
+            return req_root / "cuda" / "windows.txt"
 
         # Linux CUDA: pick by compute capability
         if gpu_type.startswith("cuda"):
-            cap = self.detect_cuda_compute_capability()
-            # cap examples: 8.0, 8.6, 8.9, 9.0, 10.0
-            if cap:
-                try:
-                    major = int(cap.split(".")[0])
-                    minor = int(cap.split(".")[1])
-                    # Ampere: 8.0 / 8.6
-                    if major == 8 and minor in (0, 6):
-                        return machines_dir / "cuda-sm80-ampere.txt"
-                    # Ada: 8.9
-                    if major == 8 and minor == 9:
-                        return machines_dir / "cuda-sm89-ada.txt"
-                    # Hopper: 9.0
-                    if major == 9:
-                        return machines_dir / "cuda-sm90-hopper.txt"
-                    # Blackwell: 10.x+
-                    if major >= 10:
-                        return machines_dir / "cuda-sm100-blackwell.txt"
-                except Exception:
-                    pass
-
-            # Fallback if compute capability detection fails: default to Ampere-safe set.
-            return machines_dir / "cuda-sm80-ampere.txt"
+            # Universal Linux Bundle
+            return req_root / "cuda" / "linux.txt"
 
         # Final fallback
-        return machines_dir / "cpu.txt"
+        return req_root / "cpu" / "requirements.txt"
 
     def _read_requirements_file(self, path: Path, visited: Optional[Set[Path]] = None) -> List[str]:
         """
@@ -476,7 +441,7 @@ class PythonBundler:
         if self.platform_name == "win32" and gpu_type.startswith("cuda"):
             if gpu_type == "cuda128":
                 # Blackwell/Hopper: FlashAttention 3 wheels (cu128_torch290) expect Torch 2.9.0.
-                if machine_entry.name in ("cuda-sm90-hopper.txt", "cuda-sm100-blackwell.txt"):
+                if machine_entry.name in ("hopper.txt", "blackwell.txt"):
                     # We use FA2 Windows wheels (cu128+torch2.7.0) + FA3 wheels (cu128_torch270),
                     # so pin to the matching cu128 torch2.7.x stack.
                     requirements.extend(
@@ -717,6 +682,34 @@ class PythonBundler:
             check=True,
         )
 
+        # Install local universal wheels if available (overrides requirements)
+        # We look for wheels in: apps/api/<pkg>/wheelhouse/universal/*.whl
+        local_wheel_dirs = [
+            self.project_root / "flash-attention" / "wheelhouse" / "universal",
+            self.project_root / "SageAttention" / "wheelhouse" / "universal",
+        ]
+        local_wheels = []
+        for wd in local_wheel_dirs:
+            if wd.exists():
+                for whl in wd.glob("*.whl"):
+                    local_wheels.append(whl)
+        
+        if local_wheels:
+            print(f"Installing local universal wheels: {[w.name for w in local_wheels]}")
+            subprocess.run(
+                [
+                    str(uv_path),
+                    "pip",
+                    "install",
+                    "--python",
+                    str(py_path),
+                    "--force-reinstall",
+                    "--no-deps",
+                    *[str(w) for w in local_wheels],
+                ],
+                check=True,
+            )
+
         # Optional: install Nunchaku wheels if the current (platform, python, torch) matches
         # an available prebuilt wheel on GitHub releases.
         self._maybe_install_nunchaku(uv_path=Path(str(uv_path)), py_path=py_path)
@@ -819,7 +812,7 @@ class PythonBundler:
 
         # Skip Nunchaku for SM90/Hopper bundles.
         try:
-            if self.last_machine_entry and "cuda-sm90" in self.last_machine_entry.name:
+            if self.last_machine_entry and "hopper" in self.last_machine_entry.name:
                 return
         except Exception:
             pass
