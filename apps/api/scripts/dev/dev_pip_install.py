@@ -92,21 +92,20 @@ def _venv_python(venv_dir: Path) -> Path:
 
 def _detect_default_machine() -> str:
     if sys.platform == "darwin":
-        return "mps"
+        return "mac"
     return "cpu"
 
 
 def _detect_default_torch_backend(machine: str) -> str:
     if sys.platform == "darwin":
         return "pypi"
-    if machine.startswith("cuda"):
-        # Hopper/Blackwell entrypoints use cu128 + torch2.9.x wheel stacks
-        # (e.g. FlashAttention 3 wheels).
-        if machine in ("cuda-hopper", "cuda-blackwell"):
-            return "cu128"
-        return "cu126"
+    if machine == "windows" or machine == "linux" or machine.startswith("cuda"):
+        # Hopper/Blackwell and Universal entrypoints (windows.txt/linux.txt) use cu128
+        return "cu128"
     if machine == "rocm":
         return "rocm"
+    if machine == "rocm-windows":
+        return "rocm-win-direct"
     return "cpu"
 
 
@@ -119,20 +118,21 @@ def main() -> int:
     # Map friendly names to paths
     machine_map = {
         "cpu": requirements_dir / "cpu" / "requirements.txt",
+        "mac": requirements_dir / "mps" / "requirements.txt",
+        "linux": requirements_dir / "cuda" / "linux.txt",
+        "windows": requirements_dir / "cuda" / "windows.txt",
         "mps": requirements_dir / "mps" / "requirements.txt",
-        "rocm": requirements_dir / "rocm" / "requirements.txt",
+        "rocm": requirements_dir / "rocm" / "linux.txt",
+        "rocm-windows": requirements_dir / "rocm" / "windows.txt",
+        # Allow cuda-linux/cuda-windows explicit selection too
+        "cuda-linux": requirements_dir / "cuda" / "linux.txt",
+        "cuda-windows": requirements_dir / "cuda" / "windows.txt",
     }
-    # Add CUDA entries
+    # Add explicit CUDA entries if they exist (backward compat or specific files)
     cuda_dir = requirements_dir / "cuda"
     if cuda_dir.exists():
         for p in cuda_dir.glob("*.txt"):
-            # Exclude non-machine files if any (e.g. linux-cuda.txt if it's not a machine entrypoint)
-            # But linux-cuda.txt IS referenced as empty in my check?
-            # I renamed it to linux-cuda.txt in cuda/.
-            # If it's not a full entrypoint, maybe I shouldn't list it.
-            # But earlier files showed it was empty.
-            # I will exclude it if it's small/empty or based on name.
-            if p.name in ["linux-cuda.txt", "windows-cuda.txt"]:
+            if p.name in ["linux.txt", "windows.txt"]:
                 continue
             name = f"cuda-{p.stem}"
             machine_map[name] = p
@@ -246,7 +246,16 @@ def main() -> int:
 
     # 3) torch
     if torch_backend == "pypi":
-        _install(py, ["torch", "torchvision", "torchaudio"])
+        if sys.platform == "darwin":
+            _install(py, ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"])
+        else:
+            _install(py, ["torch", "torchvision", "torchaudio"])
+    elif torch_backend == "rocm-win-direct":
+        _install(py, [
+            "torch @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torch-2.7.0a0+git3f903c3-cp312-cp312-win_amd64.whl",
+            "torchvision @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchvision-0.22.0+9eb57cd-cp312-cp312-win_amd64.whl",
+            "torchaudio @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl",
+        ])
     else:
         index = TORCH_INDEX[torch_backend]
         _install(py, ["--index-url", index, "torch", "torchvision", "torchaudio"])
