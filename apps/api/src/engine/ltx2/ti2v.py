@@ -1319,12 +1319,30 @@ class LTX2TI2VEngine(LTX2Shared):
                     if empty_cache_after_step:
                         empty_cache()
         
-        if offload:
-            self._offload("transformer")
+        
 
         if upsample:
             safe_emit_progress(stage1_progress_callback, 0.92, "Upsampling latents (stage-2 prep)")
             upsampler = self.helpers["latent_upsampler"]
+
+            try:
+                self.maybe_offload_transformer_for_upsample(
+                    offload=offload,
+                    device=device,
+                    upsampler=upsampler,
+                    batch_size=batch_size,
+                    num_channels_latents=num_channels_latents,
+                    latent_num_frames=latent_num_frames,
+                    latent_height=latent_height,
+                    latent_width=latent_width,
+                    vae_dtype=self.component_dtypes["vae"],
+                    force=False,
+                    reason="latent upsampling (stage-2 prep)",
+                )
+            except Exception as e:
+                # Never fail generation due to a best-effort memory probe.
+                self.logger.debug(f"Transformer pre-upsampling offload probe failed (ignored): {e}")
+
             self.to_device(upsampler)
             vae_dtype = self.component_dtypes["vae"]
             upsampler.to(dtype=vae_dtype)
@@ -1340,7 +1358,37 @@ class LTX2TI2VEngine(LTX2Shared):
                 self.transformer_temporal_patch_size,
             )
             audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
-            latents = upsample_video(latents, self.video_vae, upsampler)
+            try:
+                latents = upsample_video(latents, self.video_vae, upsampler)
+            except Exception as e:
+                # If we hit an OOM here and the transformer is still loaded, retry once after offloading it.
+                msg = str(e).lower()
+                is_oom = ("out of memory" in msg) or ("cuda" in msg and "memory" in msg)
+                if is_oom and offload and getattr(self, "transformer", None) is not None:
+                    self.logger.warning(
+                        "OOM during latent upsampling; offloading transformer and retrying once."
+                    )
+                    try:
+                        self.maybe_offload_transformer_for_upsample(
+                            offload=offload,
+                            device=device,
+                            upsampler=upsampler,
+                            batch_size=batch_size,
+                            num_channels_latents=num_channels_latents,
+                            latent_num_frames=latent_num_frames,
+                            latent_height=latent_height,
+                            latent_width=latent_width,
+                            vae_dtype=self.component_dtypes["vae"],
+                            force=True,
+                            reason="OOM during latent upsampling (retry)",
+                        )
+                    except Exception:
+                        # If the shared helper fails, fall back to a guaranteed VRAM-freeing discard.
+                        self._offload("transformer", offload_type="discard")
+                        empty_cache()
+                    latents = upsample_video(latents, self.video_vae, upsampler)
+                else:
+                    raise
             del upsampler
             if offload:
                 self._offload("latent_upsampler")
@@ -1386,6 +1434,9 @@ class LTX2TI2VEngine(LTX2Shared):
                 ge_gamma=0.0,
                 progress_callback=stage2_progress_callback,
             )
+        
+        if offload:
+            self._offload("transformer")
 
         if return_latents:
             safe_emit_progress(stage1_progress_callback, 1.0, "Returning latents")

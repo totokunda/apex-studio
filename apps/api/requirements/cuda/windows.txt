@@ -4,23 +4,16 @@
 rembg[gpu]
 triton-windows
 
-# Unified Stack: CUDA 12.8 + Torch 2.7.1 + Python 3.12
-# This allows using the latest FlashAttention 3 wheels (Hopper/Blackwell)
-# while maintaining compatibility with Ada/Ampere via FlashAttention 2 wheels.
-torch==2.7.1; python_version == "3.12"
-torchvision==0.22.1; python_version == "3.12"
-torchaudio==2.7.1; python_version == "3.12"
-
 # SageAttention
-# Prefer local wheel if available (bundler will handle), otherwise fallback to prebuilt
-sageattention @ https://github.com/woct0rdho/SageAttention/releases/download/v2.2.0-windows/sageattention-2.2.0+cu128torch2.7.1-cp312-cp312-win_amd64.whl; python_version == "3.12"
+sageattention @ https://huggingface.co/datasets/totoku/attention/resolve/main/sageattention/universal/sageattention-2.2.0-cp312-cp312-win_amd64.whl
 
 # FlashAttention 2
-# Unified wheel (built against torch 2.7.0 but compatible with 2.7.1)
-flash-attn @ https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/flash_attn-2.7.4.post1%2Bcu128torch2.7.0cxx11abiFALSE-cp312-cp312-win_amd64.whl; python_version == "3.12"
+flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.6/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-win_amd64.whl
 
-# FlashAttention 3 (Optional for non-Hopper, but installed for all)
---find-links https://windreamer.github.io/flash-attention3-wheels/cu128_torch270
-flash_attn_3
+# FlashAttention 3
+flash_attn_3 @ https://huggingface.co/datasets/totoku/attention/resolve/main/flash-attention-3/universal/flash_attn_3-3.0.0b1-cp39-abi3-win_amd64.whl
+
+# Nunchaku
+https://github.com/nunchaku-ai/nunchaku/releases/download/v1.2.0/nunchaku-1.2.0+torch2.9-cp312-cp312-win_amd64.whl
 
 onnxruntime-gpu==1.23.2
