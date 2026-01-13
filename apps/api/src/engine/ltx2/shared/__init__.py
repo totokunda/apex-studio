@@ -3,6 +3,7 @@ from diffusers.video_processor import VideoProcessor
 from typing import Optional, Union, List, Callable
 from PIL import Image
 import torch
+import torch.nn.functional as F
 from diffusers.utils.torch_utils import randn_tensor
 from src.engine.ltx2.shared.audio_processing import LTX2AudioProcessingMixin
 from einops import rearrange
@@ -152,12 +153,9 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
 
         prompt = [p.strip() for p in prompt]
         
-        
-        
         text_encoder_hidden_states, prompt_attention_mask = self.text_encoder.encode(
             prompt,
-            max_sequence_length=max_sequence_length,
-            pad_to_max_length=True,
+            pad_to_max_length=False,
             num_videos_per_prompt=num_videos_per_prompt,
             dtype=dtype,
             add_special_tokens=True,
@@ -171,6 +169,27 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         
         text_encoder_hidden_states = text_encoder_hidden_states.to(device)
         prompt_attention_mask = prompt_attention_mask.to(device)
+
+        # Ensure a fixed sequence length (Gemma uses left padding for chat-style prompts).
+        # - If shorter than `max_sequence_length`, left-pad with zeros.
+        # - If longer than `max_sequence_length`, keep the rightmost tokens (consistent with left padding).
+        target_seq_len = int(max_sequence_length)
+        seq_len = int(text_encoder_hidden_states.shape[1])
+        if seq_len < target_seq_len:
+            pad_len = target_seq_len - seq_len
+            # text_encoder_hidden_states: [B, S, H, L] -> pad S on the left
+            text_encoder_hidden_states = F.pad(
+                text_encoder_hidden_states,
+                (0, 0, 0, 0, pad_len, 0),
+                value=0.0,
+            )
+            # prompt_attention_mask: [B, S] -> pad S on the left
+            prompt_attention_mask = F.pad(prompt_attention_mask, (pad_len, 0), value=0)
+        elif seq_len > target_seq_len:
+            text_encoder_hidden_states = text_encoder_hidden_states[:, -target_seq_len:, ...]
+            prompt_attention_mask = prompt_attention_mask[:, -target_seq_len:]
+    
+    
         sequence_lengths = prompt_attention_mask.sum(dim=-1)
 
         prompt_embeds = self._pack_text_embeds(
