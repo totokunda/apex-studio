@@ -459,6 +459,18 @@ class LTX2TI2VEngine(LTX2Shared):
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         decode_timestep: Union[float, List[float]] = 0.0,
         decode_noise_scale: Optional[Union[float, List[float]]] = None,
+        # --- Video VAE tiling / framewise controls (UI-configurable) ---
+        vae_tiling_enabled: bool = True,
+        vae_use_framewise_encoding: bool = False,
+        vae_use_framewise_decoding: bool = False,
+        vae_num_sample_frames_batch_size: int = 16,
+        vae_num_latent_frames_batch_size: int = 2,
+        vae_tile_sample_min_height: int = 512,
+        vae_tile_sample_min_width: int = 512,
+        vae_tile_sample_min_num_frames: int = 32,
+        vae_tile_sample_stride_height: int = 448,
+        vae_tile_sample_stride_width: int = 448,
+        vae_tile_sample_stride_num_frames: int = 16,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         max_sequence_length: int = 1024,
         offload: bool = True,
@@ -537,6 +549,24 @@ class LTX2TI2VEngine(LTX2Shared):
             batch_size = prompt_embeds.shape[0]
 
         device = self.device
+
+        # Configure VAE tiling/framewise settings for this run.
+        # This is used by BaseEngine.vae_encode/vae_decode via `enable_vae_tiling(...)`.
+        vae_tiling_kwargs: Dict[str, Any] = {
+            "enabled": bool(vae_tiling_enabled),
+            "tile_sample_min_height": int(vae_tile_sample_min_height),
+            "tile_sample_min_width": int(vae_tile_sample_min_width),
+            "tile_sample_min_num_frames": int(vae_tile_sample_min_num_frames),
+            "tile_sample_stride_height": int(vae_tile_sample_stride_height),
+            "tile_sample_stride_width": int(vae_tile_sample_stride_width),
+            "tile_sample_stride_num_frames": int(vae_tile_sample_stride_num_frames),
+            "use_framewise_encoding": bool(vae_use_framewise_encoding),
+            "use_framewise_decoding": bool(vae_use_framewise_decoding),
+            "num_sample_frames_batch_size": int(vae_num_sample_frames_batch_size),
+            "num_latent_frames_batch_size": int(vae_num_latent_frames_batch_size),
+        }
+        # Used by BaseEngine.enable_vae_tiling()
+        self._vae_tiling_runtime_kwargs = vae_tiling_kwargs
         
         if self.preloaded_loras and "ltx-2-19b-distilled-lora-384" in self.preloaded_loras and not use_distilled_stage_2:
             self.logger.info("Disabling LTX2 19B Distilled LoRA 384 with scale 0.0")
@@ -1348,6 +1378,9 @@ class LTX2TI2VEngine(LTX2Shared):
             if not getattr(self, "video_vae", None):
                 self.load_component_by_name("video_vae")
             self.to_device(self.video_vae)
+            # Apply run-configured VAE tiling/framewise settings.
+            if hasattr(self.video_vae, "enable_tiling"):
+                self.video_vae.enable_tiling(**vae_tiling_kwargs)
             latents = self._unpack_latents(
                 latents,
                 latent_num_frames,
@@ -1431,6 +1464,17 @@ class LTX2TI2VEngine(LTX2Shared):
                 noise_scale=noise_scale,
                 use_gradient_estimation=False,
                 ge_gamma=0.0,
+                vae_tiling_enabled=vae_tiling_enabled,
+                vae_use_framewise_encoding=vae_use_framewise_encoding,
+                vae_use_framewise_decoding=vae_use_framewise_decoding,
+                vae_num_sample_frames_batch_size=vae_num_sample_frames_batch_size,
+                vae_num_latent_frames_batch_size=vae_num_latent_frames_batch_size,
+                vae_tile_sample_min_height=vae_tile_sample_min_height,
+                vae_tile_sample_min_width=vae_tile_sample_min_width,
+                vae_tile_sample_min_num_frames=vae_tile_sample_min_num_frames,
+                vae_tile_sample_stride_height=vae_tile_sample_stride_height,
+                vae_tile_sample_stride_width=vae_tile_sample_stride_width,
+                vae_tile_sample_stride_num_frames=vae_tile_sample_stride_num_frames,
                 progress_callback=stage2_progress_callback,
             )
         
@@ -1453,9 +1497,14 @@ class LTX2TI2VEngine(LTX2Shared):
         if not getattr(self, "video_vae", None):
             self.load_component_by_name("video_vae")
         self.to_device(self.video_vae)
-        # enable tiling
-        self.logger.info("Enabling tiling for video VAE")
-        self.video_vae.enable_tiling()
+        # Apply run-configured VAE tiling/framewise settings.
+        if hasattr(self.video_vae, "enable_tiling"):
+            self.video_vae.enable_tiling(**vae_tiling_kwargs)
+        self.logger.info(
+            f"Video VAE tiling={'on' if vae_tiling_enabled else 'off'}, "
+            f"framewise_enc={'on' if vae_use_framewise_encoding else 'auto'}, "
+            f"framewise_dec={'on' if vae_use_framewise_decoding else 'auto'}"
+        )
         
         latents = self.video_vae.denormalize_latents(
             latents
