@@ -38,6 +38,7 @@ spec:
   - flash
   - flash3
   - sage
+  - metal-flash
   - efficient_dot_product_attention
   components:
   - type: scheduler
@@ -288,7 +289,6 @@ spec:
       required: false
       min: 0
       max: 1
-      required: false
     - id: prompt
       label: Prompt
       description: Describe the video you want to generate using the <S> and <E> tags

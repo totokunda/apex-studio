@@ -511,6 +511,8 @@ def _attention_label_description_maps() -> tuple[Dict[str, str], Dict[str, str]]
         "flex-block-attn": "Flex Block Attention",
         "efficient_dot_product_attention": "Efficient Dot Product Attention",
         "block-sparse-attn": "Block Sparse Attention",
+        "metal-flash": "Metal Flash Attention",
+        "metal-flash-varlen": "Metal Flash Attention (VarLen)",
     }
 
     description_map = {
@@ -519,6 +521,8 @@ def _attention_label_description_maps() -> tuple[Dict[str, str], Dict[str, str]]
         "sdpa_streaming": "Streaming softmax SDPA variant for long sequences.",
         "flash": "NVIDIA FlashAttention-2 kernel (fast, memory-efficient).",
         "flash3": "FlashAttention-3 kernel via flash_attn_interface.",
+        "metal-flash": "Metal Flash Attention kernel for MPS.",
+        "metal-flash-varlen": "Variable Length kernel for MPS.",
         "sage": "SageAttention kernel backend.",
         "xformers": "xFormers memory-efficient attention implementation.",
         "flex": "PyTorch Flex Attention (experimental flexible masks).",

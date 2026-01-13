@@ -33,8 +33,10 @@ spec:
   - flash
   - flash3
   - sage
+  - metal-flash
   - efficient_dot_product_attention
   - xformers
+  
   components:
   - type: scheduler
     label: Scheduler
@@ -76,6 +78,8 @@ spec:
     label: LTX2 Text Encoder
     name: text_encoder
     base: Gemma3ForConditionalGeneration
+    gguf_kwargs:
+      key_map: gemma3
     ignore_offloading_modules:
     - lm_head
     - embed_tokens
