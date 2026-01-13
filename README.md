@@ -233,8 +233,14 @@ apex-engine dev
 ### Nunchaku
 If you your machine supports using the Nunchaku models, you can install the Nunchaku models by running the following command:
 ```bash
-python3 scripts/maybe_install_nunchaku.py --install
+python3 scripts/deps/maybe_install_nunchaku.py --install
 ```
+
+#### Windows
+```powershell
+python scripts\deps\maybe_install_nunchaku.py --install 
+```
+
 Which will install the Nunchaku models if your machine supports it.
 
 ### Optional: Rust-accelerated downloader (for max download throughput)

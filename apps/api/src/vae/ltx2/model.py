@@ -58,7 +58,7 @@ class PerChannelRMSNorm(nn.Module):
         """
         channel_dim = channel_dim or self.channel_dim
         # Compute mean of squared values along `dim`, keep dimensions for broadcasting.
-        mean_sq = torch.mean(x**2, dim=self.channel_dim, keepdim=True)
+        mean_sq = torch.mean(x**2, dim=channel_dim, keepdim=True)
         # Normalize by the root-mean-square (RMS).
         rms = torch.sqrt(mean_sq + self.eps)
         return x / rms
@@ -1141,8 +1141,8 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
 
         # When decoding temporally long video latents, the memory requirement is very high. By decoding latent frames
         # at a fixed frame batch size (based on `self.num_latent_frames_batch_sizes`), the memory requirement can be lowered.
-        self.use_framewise_encoding = True
-        self.use_framewise_decoding = True
+        self.use_framewise_encoding = False
+        self.use_framewise_decoding = False
 
         # This can be configured based on the amount of GPU memory available.
         # `16` for sample frames and `2` for latent frames are sensible defaults for consumer GPUs.
@@ -1194,10 +1194,116 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         self.tile_sample_stride_width = tile_sample_stride_width or self.tile_sample_stride_width
         self.tile_sample_stride_num_frames = tile_sample_stride_num_frames or self.tile_sample_stride_num_frames
 
+    def _get_cuda_vram_info_bytes(self, device: torch.device) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Returns (free_bytes, total_bytes) for CUDA devices, otherwise (None, None).
+
+        Note: "available" VRAM is approximated via `torch.cuda.mem_get_info()`.
+        """
+        if device is None:
+            return (None, None)
+        if device.type != "cuda" or not torch.cuda.is_available():
+            return (None, None)
+
+        try:
+            # Torch supports both `mem_get_info()` and `mem_get_info(device)` depending on version.
+            if device.index is None:
+                free, total = torch.cuda.mem_get_info()
+            else:
+                free, total = torch.cuda.mem_get_info(device.index)
+            return int(free), int(total)
+        except Exception:
+            # Conservative fallback: total VRAM only, no free VRAM.
+            try:
+                idx = device.index if device.index is not None else torch.cuda.current_device()
+                total = int(torch.cuda.get_device_properties(idx).total_memory)
+                return (None, total)
+            except Exception:
+                return (None, None)
+
+    def _is_low_vram_device(self, device: torch.device, threshold_gb: float = 16.0) -> bool:
+        _, total = self._get_cuda_vram_info_bytes(device)
+        if total is None:
+            return False
+        return total < int(threshold_gb * 1024**3)
+
+    def _latent_channels(self) -> int:
+        # `latents_mean` is registered as shape (latent_channels,).
+        return int(self.latents_mean.numel())
+
+    def _estimate_latent_shape_from_sample(self, x: torch.Tensor) -> Tuple[int, int, int, int, int]:
+        """
+        Estimate (b, c, f, h, w) for decoded latents (z) produced by the posterior.
+        """
+        b, _, f, h, w = x.shape
+        latent_f = (f - 1) // int(self.temporal_compression_ratio) + 1
+        latent_h = h // int(self.spatial_compression_ratio)
+        latent_w = w // int(self.spatial_compression_ratio)
+        return (b, self._latent_channels(), latent_f, latent_h, latent_w)
+
+    def _num_bytes(self, shape: Tuple[int, ...], dtype: torch.dtype) -> int:
+        # `torch.finfo/torch.iinfo` don't support all dtypes cleanly; use a tiny tensor.
+        return int(torch.empty((), dtype=dtype).element_size()) * int(torch.tensor(shape).prod().item())
+
+    def _should_use_framewise_for_encode(self, x: torch.Tensor) -> bool:
+        # Respect explicit opt-in.
+        if self.use_framewise_encoding:
+            return True
+
+        # Length-based requirement: long videos should be encoded framewise to avoid OOM from one-shot activations.
+        # Uses the same windowing unit as `_temporal_tiled_encode`.
+        if x.shape[2] > int(self.tile_sample_min_num_frames):
+            return True
+
+        free, total = self._get_cuda_vram_info_bytes(x.device)
+        # Hard requirement: for VRAM <16GB, framewise decoding/encoding always.
+        if total is not None and total < 16 * 1024**3:
+            return True
+
+        # If we can't read free VRAM, keep current behavior.
+        if free is None:
+            return False
+
+        # Heuristic: compare estimated latent size to available VRAM.
+        est_latent_shape = self._estimate_latent_shape_from_sample(x)
+        est_latent_bytes = self._num_bytes(est_latent_shape, dtype=x.dtype)
+
+        # Encoding activations can be several multiples of latent size; keep a safety margin.
+        activation_multiplier = 8
+        safety_fraction = 0.80
+        return (est_latent_bytes * activation_multiplier) > int(free * safety_fraction)
+
+    def _should_use_framewise_for_decode(self, z: torch.Tensor) -> bool:
+        # Respect explicit opt-in.
+        if self.use_framewise_decoding:
+            return True
+
+        # Length-based requirement: if the latent is temporally long, never attempt one-shot decode.
+        # This is the main safety valve to avoid OOMs caused by long latent sequences.
+        tile_latent_min_num_frames = int(self.tile_sample_min_num_frames) // int(self.temporal_compression_ratio)
+        if z.shape[2] > tile_latent_min_num_frames:
+            return True
+
+        free, total = self._get_cuda_vram_info_bytes(z.device)
+        # Hard requirement: for VRAM <16GB, framewise decoding always.
+        if total is not None and total < 16 * 1024**3:
+            return True
+
+        if free is None:
+            return False
+
+        # Heuristic: use *actual* latent size (not estimated).
+        latent_bytes = int(z.numel()) * int(z.element_size())
+        activation_multiplier = 12
+        safety_fraction = 0.80
+        return (latent_bytes * activation_multiplier) > int(free * safety_fraction)
+
     def _encode(self, x: torch.Tensor, causal: Optional[bool] = None) -> torch.Tensor:
         batch_size, num_channels, num_frames, height, width = x.shape
 
-        if self.use_framewise_decoding and num_frames > self.tile_sample_min_num_frames:
+        # Auto-decide framewise encoding based on VRAM + estimated latent size.
+        # Also fixes a bug: this was previously checking `use_framewise_decoding`.
+        if self._should_use_framewise_for_encode(x):
             return self._temporal_tiled_encode(x, causal=causal)
 
         if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
@@ -1246,7 +1352,8 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
         tile_latent_min_num_frames = self.tile_sample_min_num_frames // self.temporal_compression_ratio
 
-        if self.use_framewise_decoding and num_frames > tile_latent_min_num_frames:
+        # Auto-decide framewise decoding based on VRAM + latent size.
+        if self._should_use_framewise_for_decode(z):
             return self._temporal_tiled_decode(z, temb, causal=causal, return_dict=return_dict)
 
         if self.use_tiling and (width > tile_latent_min_width or height > tile_latent_min_height):

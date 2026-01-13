@@ -21,6 +21,7 @@ import os
 import threading
 import time
 from .stability import install_stability_middleware
+from .log_suppression import install_http_log_suppression
 
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
@@ -124,6 +125,8 @@ async def lifespan(app: FastAPI):
         pass
     shutdown_ray()
 
+
+install_http_log_suppression()
 
 app = FastAPI(name="Apex Engine", lifespan=lifespan)
 
