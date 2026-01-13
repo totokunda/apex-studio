@@ -498,10 +498,53 @@ async function listGeneratedMediaPage(
     const items: ConvertedMediaItem[] = [];
     const seen = new Set<string>();
 
+    // Key used for stable dedupe + pagination across multiple roots (cache/user-data/remote).
+    // If the same engine output is mirrored under different roots, absPath differs but this
+    // relative engine_results key stays consistent.
+    const generationKeyFromAbsPath = (absPath: string): string => {
+      const normalized = absPath.replace(/\\/g, "/");
+      const marker = "/engine_results/";
+      const idx = normalized.lastIndexOf(marker);
+      if (idx >= 0) return normalized.slice(idx + 1); // "engine_results/..."
+      return normalized;
+    };
+
+    const canonicalizeAbsPath = async (absPath: string): Promise<string> => {
+      // Resolve any symlink in the path (including parent dirs). This helps collapse
+      // symlinked roots and junctions; if not resolvable, fall back to the original.
+      try {
+        return await fsp.realpath(absPath);
+      } catch {
+        return absPath;
+      }
+    };
+
+    type Keyed = { item: ConvertedMediaItem; key: string };
+    const keyed: Keyed[] = [];
+
+    const compareKeyedDesc = (a: Keyed, b: Keyed): number => {
+      if (a.item.dateAddedMs !== b.item.dateAddedMs)
+        return b.item.dateAddedMs - a.item.dateAddedMs;
+      return b.key.localeCompare(a.key);
+    };
+
+    const isAfterCursorKeyed = (it: Keyed, cursor: any): boolean => {
+      if (!cursor) return true;
+      const cursorKey = String(cursor.absPath ?? "");
+      const cursorDate = Number(cursor.dateAddedMs ?? 0);
+      if (!Number.isFinite(cursorDate) || !cursorKey) return true;
+      if (it.item.dateAddedMs !== cursorDate) return it.item.dateAddedMs < cursorDate;
+      // Descending order; "after cursor" means strictly older / smaller tie-break.
+      return it.key < cursorKey;
+    };
+
     const pushItem = (it: ConvertedMediaItem) => {
-      if (seen.has(it.absPath)) return;
-      if (!isAfterCursor(it, cursorObj)) return;
-      seen.add(it.absPath);
+      const key = generationKeyFromAbsPath(it.absPath);
+      if (seen.has(key)) return;
+      const k: Keyed = { item: it, key };
+      if (!isAfterCursorKeyed(k, cursorObj)) return;
+      seen.add(key);
+      keyed.push(k);
       items.push(it);
     };
 
@@ -512,7 +555,8 @@ async function listGeneratedMediaPage(
         const name = c.baseName;
         if (await removeIfBrokenSymlink(c.absPath)) continue;
         const ext = getLowercaseExtension(name);
-        const assetUrl = pathToFileURL(c.absPath).href;
+        const canonicalAbsPath = await canonicalizeAbsPath(c.absPath);
+        const assetUrl = pathToFileURL(canonicalAbsPath).href;
         const type: ConvertedMediaItem["type"] = VIDEO_EXTS.has(ext)
           ? "video"
           : IMAGE_EXTS.has(ext)
@@ -522,7 +566,7 @@ async function listGeneratedMediaPage(
           : "video";
         pushItem({
           name,
-          absPath: c.absPath,
+          absPath: canonicalAbsPath,
           assetUrl,
           dateAddedMs: c.dateKeyMs,
           type,
@@ -556,6 +600,7 @@ async function listGeneratedMediaPage(
 
         const absPath = join(c.absPath, fileName);
         if (await removeIfBrokenSymlink(absPath)) continue;
+        const canonicalAbsPath = await canonicalizeAbsPath(absPath);
         let dateAddedMs = c.dateKeyMs;
         try {
           const st = await fsp.lstat(absPath);
@@ -565,7 +610,7 @@ async function listGeneratedMediaPage(
           // ignore
         }
 
-        const assetUrl = pathToFileURL(absPath).href;
+        const assetUrl = pathToFileURL(canonicalAbsPath).href;
         const type: ConvertedMediaItem["type"] = VIDEO_EXTS.has(ext)
           ? "video"
           : IMAGE_EXTS.has(ext)
@@ -574,11 +619,22 @@ async function listGeneratedMediaPage(
           ? "audio"
           : "video";
         const displayName = `${basename(c.absPath)}/${fileName}`;
-        jobItems.push({ name: displayName, absPath, assetUrl, dateAddedMs, type });
+        jobItems.push({
+          name: displayName,
+          absPath: canonicalAbsPath,
+          assetUrl,
+          dateAddedMs,
+          type,
+        });
       }
 
       if (jobItems.length === 0) continue;
-      jobItems.sort(compareGeneratedDesc);
+      jobItems.sort((a, b) => {
+        if (a.dateAddedMs !== b.dateAddedMs) return b.dateAddedMs - a.dateAddedMs;
+        const ak = generationKeyFromAbsPath(a.absPath);
+        const bk = generationKeyFromAbsPath(b.absPath);
+        return bk.localeCompare(ak);
+      });
 
       for (const it of jobItems) {
         if (items.length >= limit) break;
@@ -589,9 +645,15 @@ async function listGeneratedMediaPage(
     if (items.length === 0) return { items: [], nextCursor: null };
     items.sort(compareGeneratedDesc);
     const sliced = items.slice(0, limit);
+    // Next cursor uses the same stable key so duplicates can't "slip" onto later pages.
     const last = sliced[sliced.length - 1];
     const nextCursor =
-      sliced.length < limit ? null : encodeGeneratedMediaCursor({ dateAddedMs: last.dateAddedMs, absPath: last.absPath });
+      sliced.length < limit
+        ? null
+        : encodeGeneratedMediaCursor({
+            dateAddedMs: last.dateAddedMs,
+            absPath: generationKeyFromAbsPath(last.absPath),
+          });
     return { items: sliced, nextCursor };
   } catch {
     return { items: [], nextCursor: null };

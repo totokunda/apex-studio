@@ -509,7 +509,7 @@ const Launcher: React.FC = () => {
 
 
   const showBlockingCheck =
-    !initialCheckDoneRef.current && (isChecking || backendStarting);
+    !initialCheckDoneRef.current && (isChecking || backendStarting)
 
   if (showBlockingCheck) {
     const title = backendStarting ? "Starting backend" : "Checking installation";
@@ -551,15 +551,15 @@ const Launcher: React.FC = () => {
     };
 
     return (
-      <main className="w-full h-screen flex flex-col bg-black text-center font-poppins relative overflow-hidden">
+      <main className="w-full min-h-screen flex flex-col bg-black text-center font-poppins relative overflow-hidden">
         <div className="pointer-events-none absolute inset-0">
           <div className="absolute -top-24 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-brand-accent-two-shade/15 blur-3xl" />
           <div className="absolute -bottom-32 right-[-120px] h-[520px] w-[520px] rounded-full bg-brand-accent-shade/10 blur-3xl" />
           <div className="absolute inset-0 bg-gradient-to-b from-black via-black to-brand-background-dark/60" />
         </div>
 
-        <div className="relative w-full max-w-[720px] px-6 flex-1 flex flex-col justify-center">
-          <div className="rounded-2xl border border-brand-light/10 bg-brand-background/30 backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_25px_80px_rgba(0,0,0,0.55)] overflow-hidden">
+        <div className="relative w-full max-w-[720px] mx-auto px-6 flex-1 flex flex-col justify-center">
+          <div className="w-full rounded-2xl border border-brand-light/10 bg-brand-background/30 backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_25px_80px_rgba(0,0,0,0.55)] overflow-hidden">
             <div className="px-8 pt-8 pb-6">
               <div className="flex items-start justify-between gap-6">
                 <div className="flex items-center gap-4">

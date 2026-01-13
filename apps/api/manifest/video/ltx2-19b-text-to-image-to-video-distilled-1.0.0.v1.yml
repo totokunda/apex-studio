@@ -35,6 +35,7 @@ spec:
   - sage
   - efficient_dot_product_attention
   - xformers
+  - metal-flash
   components:
   - type: scheduler
     label: Scheduler
@@ -76,6 +77,8 @@ spec:
     label: LTX2 Text Encoder
     name: text_encoder
     base: Gemma3ForConditionalGeneration
+    gguf_kwargs:
+      key_map: gemma3
     ignore_offloading_modules:
     - lm_head
     - embed_tokens
@@ -98,6 +101,10 @@ spec:
       resource_requirements:
         min_vram_gb: 19
         recommended_vram_gb: 26
+    - path: unsloth/gemma-3-12b-it-GGUF/gemma-3-12b-it-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
     config_path: Lightricks/LTX-2/text_encoder/config.json
     tokenizer_class: GemmaTokenizer
     tokenizer_name: Lightricks/LTX-2

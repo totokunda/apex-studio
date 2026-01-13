@@ -140,7 +140,44 @@ QWEN_VL_VISION_SD_MAP = {
     "v.post_ln": "visual.merger.ln_q"
 }
 
-def remap_key(key: str, key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl"] = "t5"):
+GEMMA3_SD_MAP = {
+    "token_embd.": "model.embed_tokens.",
+    "blk.": "model.layers.",
+    "attn_k.": "self_attn.k_proj.",
+    "attn_q.": "self_attn.q_proj.",
+    "attn_v.": "self_attn.v_proj.",
+    "attn_output.": "self_attn.o_proj.",
+    "attn_k_norm.": "self_attn.k_norm.",
+    "attn_q_norm.": "self_attn.q_norm.",
+    "attn_norm.": "input_layernorm.",
+    "ffn_down.": "mlp.down_proj.",
+    "ffn_up.": "mlp.up_proj.",
+    "ffn_gate.": "mlp.gate_proj.",
+    "post_attention_norm.": "post_attention_layernorm.",
+    "post_ffw_norm.": "post_feedforward_layernorm.",
+    "ffn_norm.": "pre_feedforward_layernorm.",
+    "output_norm.": "model.norm.",
+}
+
+GEMMA3_VISION_SD_MAP = {
+    "mm.input_projection.weight": "multi_modal_projector.mm_input_projection_weight",
+    "mm.soft_emb_norm.": "multi_modal_projector.mm_soft_emb_norm.",
+    "v.patch_embd.bias": "vision_tower.vision_model.embeddings.patch_embedding.bias",
+    "v.patch_embd.weight": "vision_tower.vision_model.embeddings.patch_embedding.weight",
+    "v.position_embd.weight": "vision_tower.vision_model.embeddings.position_embedding.weight",
+    "v.post_ln.": "vision_tower.vision_model.post_layernorm.",
+    "v.blk.": "vision_tower.vision_model.encoder.layers.",
+    "ln": "layer_norm",
+    "attn_k": "self_attn.k_proj",
+    "attn_out": "self_attn.out_proj",
+    "attn_q": "self_attn.q_proj",
+    "attn_v": "self_attn.v_proj",
+    "ffn_down": "mlp.fc2",
+    "ffn_up": "mlp.fc1",
+}
+
+
+def remap_key(key: str, key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3"] = "t5"):
 
     if key_map == "t5":
         key_map = T5_SD_MAP
@@ -154,6 +191,8 @@ def remap_key(key: str, key_map: Literal["t5", "llama", "step", "mistral", "qwen
         key_map = MISTRAL_VISION_SD_MAP if key.startswith("v.") else MISTRAL_SD_MAP
     elif key_map == "qwen_vl":
         key_map = QWEN_VL_VISION_SD_MAP if (key.startswith("v.") or key.startswith("mm.")) else QWEN_VL_SD_MAP
+    elif key_map == "gemma3":
+        key_map = GEMMA3_VISION_SD_MAP if (key.startswith("v.") or key.startswith("mm.")) else GEMMA3_SD_MAP
     else:
         raise ValueError(f"Invalid key map: {key_map}")
 

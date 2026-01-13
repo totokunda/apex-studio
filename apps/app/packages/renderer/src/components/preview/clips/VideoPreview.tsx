@@ -42,8 +42,8 @@ const calculateIterateRange = (
       : currentFrame;
     const idealStartFrame =
       Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
-    const actualStartFrame = Math.round(
-      (idealStartFrame / projectFps) * clipFps,
+    const actualStartFrame = Math.floor(
+      (idealStartFrame / projectFps) * clipFps + 1e-4,
     );
     const totalFrames = Math.max(
       0,
@@ -1000,7 +1000,7 @@ const VideoPreview: React.FC<
       : currentFrameForSeek;
     const idealFrame =
       Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
-    const actualFrame = Math.round((idealFrame / projectFps) * clipFps);
+    const actualFrame = Math.floor((idealFrame / projectFps) * clipFps + 1e-4);
     const totalFrames = Math.max(
       0,
       Math.floor((mediaInfo.current.duration || 0) * clipFps),
@@ -1135,6 +1135,12 @@ const VideoPreview: React.FC<
     }
 
     const { timestamp, targetFrame } = info;
+
+    // If we are already displaying the target frame (from playback), avoid re-seeking
+    // which can cause a visible flicker/jump on pause.
+    if (!isAccurateSeekNeededInput && lastRenderedFrameRef.current === targetFrame) {
+      return;
+    }
 
     // Update the mask frame ref immediately before seeking to ensure sync
     decoderMaskFrameRef.current = maskFrameForCurrentFocus;

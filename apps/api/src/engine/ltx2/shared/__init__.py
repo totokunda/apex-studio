@@ -161,6 +161,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             num_videos_per_prompt=num_videos_per_prompt,
             dtype=dtype,
             add_special_tokens=True,
+            clean_text=False,
             pad_with_zero=False,
             use_attention_mask=True,
             output_type="hidden_states_all",
