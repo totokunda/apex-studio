@@ -77,11 +77,35 @@ function coverPathToAppUserDataUrl(
   userDataDir: string,
   version?: string | number,
 ): string | null {
-  const normalizedAbs = String(absPath || "");
-  const base = String(userDataDir || "");
-  if (!normalizedAbs || !base) return null;
-  if (!normalizedAbs.startsWith(base)) return null;
-  const rel = normalizedAbs.slice(base.length);
+  const rawAbs = String(absPath || "");
+  const rawBase = String(userDataDir || "");
+  if (!rawAbs || !rawBase) return null;
+
+  const isWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(rawAbs) || /^[a-zA-Z]:[\\/]/.test(rawBase);
+  const normalizeForUrlPath = (p: string) => p.replace(/\\/g, "/");
+  const stripTrailingSlashes = (p: string) => p.replace(/[\\/]+$/g, "");
+  const normalizeForCompare = (p: string) => {
+    const stripped = stripTrailingSlashes(p);
+    const slashed = normalizeForUrlPath(stripped);
+    // Windows paths are case-insensitive; normalize drive letter and rest to lower for comparison.
+    return isWindowsDrivePath ? slashed.toLowerCase() : slashed;
+  };
+
+  const absForCompare = normalizeForCompare(rawAbs);
+  const baseForCompare = normalizeForCompare(rawBase);
+
+  // Make sure we only accept paths inside the user data directory.
+  if (
+    absForCompare !== baseForCompare &&
+    !absForCompare.startsWith(`${baseForCompare}/`)
+  ) {
+    return null;
+  }
+
+  // Compute relative path using the *normalized slash* version so URL paths are correct on Windows.
+  const absForUrl = normalizeForUrlPath(stripTrailingSlashes(rawAbs));
+  const baseForUrl = normalizeForUrlPath(stripTrailingSlashes(rawBase));
+  const rel = absForUrl.startsWith(baseForUrl) ? absForUrl.slice(baseForUrl.length) : "";
   const pathPart = rel.startsWith("/") ? rel : `/${rel}`;
   const v =
     version != null && String(version).length > 0
