@@ -192,6 +192,169 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
 
         return prompt_embeds, prompt_attention_mask
 
+    # -------------------------------------------------------------------------
+    # Memory / offloading helpers
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def _estimate_module_bytes(module: torch.nn.Module) -> int:
+        """
+        Best-effort estimate of how many bytes a module's parameters + buffers occupy.
+        Used only for heuristics (CPU RAM feasibility checks).
+        """
+        if module is None:
+            return 0
+        total = 0
+        try:
+            for p in module.parameters(recurse=True):
+                if p is None:
+                    continue
+                try:
+                    total += int(p.numel()) * int(p.element_size())
+                except Exception:
+                    pass
+            for b in module.buffers(recurse=True):
+                if b is None:
+                    continue
+                try:
+                    total += int(b.numel()) * int(b.element_size())
+                except Exception:
+                    pass
+        except Exception:
+            return total
+        return total
+
+    @staticmethod
+    def _get_cuda_free_vram_bytes(device: torch.device) -> int | None:
+        try:
+            if not torch.cuda.is_available():
+                return None
+            dev_index = (
+                device.index
+                if getattr(device, "index", None) is not None
+                else torch.cuda.current_device()
+            )
+            free_vram, _total_vram = torch.cuda.mem_get_info(dev_index)
+            return int(free_vram)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _get_available_ram_bytes() -> int | None:
+        try:
+            import psutil
+
+            return int(psutil.virtual_memory().available)
+        except Exception:
+            return None
+
+    def maybe_offload_transformer_for_upsample(
+        self,
+        *,
+        offload: bool,
+        device: torch.device,
+        upsampler: torch.nn.Module,
+        batch_size: int,
+        num_channels_latents: int,
+        latent_num_frames: int,
+        latent_height: int,
+        latent_width: int,
+        vae_dtype: torch.dtype,
+        force: bool = False,
+        reason: str = "latent upsampling",
+        # VRAM headroom heuristic: required_vram = max(min_vram_bytes, vram_multiplier * est_out_latents_bytes)
+        min_vram_bytes: int = 2 * 1024**3,
+        vram_multiplier: float = 16.0,
+        # CPU RAM feasibility check (only used when we'd otherwise discard):
+        cpu_ram_safety_bytes: int = 2 * 1024**3,
+        cpu_ram_multiplier: float = 1.2,
+    ) -> str | None:
+        """
+        During stage-2 prep, the transformer is unused but can occupy significant VRAM.
+        If VRAM headroom is low (or `force=True`), offload the transformer.
+
+        Policy:
+        - Prefer `offload_type="cpu"` (keeps transformer loaded, avoids reload) ONLY if we have
+          enough *available* system RAM to hold its weights with a safety margin.
+        - Otherwise use `offload_type="discard"` (unload/free entirely).
+
+        Returns the chosen offload_type ("cpu"/"discard") when an offload occurs, else None.
+        """
+        if not offload:
+            return None
+        if getattr(self, "transformer", None) is None:
+            return None
+        if getattr(device, "type", None) != "cuda":
+            return None
+
+        # Estimate required VRAM for upsampling.
+        try:
+            spatial_scale = float(
+                getattr(getattr(upsampler, "config", None), "spatial_scale", 2.0) or 2.0
+            )
+        except Exception:
+            spatial_scale = 2.0
+        out_h = int(round(float(latent_height) * spatial_scale))
+        out_w = int(round(float(latent_width) * spatial_scale))
+        elem_size = int(torch.empty((), dtype=vae_dtype).element_size())
+        est_out_latents_bytes = int(
+            batch_size
+            * num_channels_latents
+            * latent_num_frames
+            * out_h
+            * out_w
+            * elem_size
+        )
+        required_vram = int(max(min_vram_bytes, vram_multiplier * est_out_latents_bytes))
+
+        free_vram = self._get_cuda_free_vram_bytes(device)
+        if (not force) and (free_vram is None or free_vram >= required_vram):
+            return None
+
+        # Decide whether we can afford CPU offload (RAM-wise).
+        transformer_obj = getattr(self, "transformer", None)
+        transformer_bytes = (
+            self._estimate_module_bytes(transformer_obj)
+            if transformer_obj is not None
+            else 0
+        )
+        free_ram = self._get_available_ram_bytes()
+
+        need_ram = (
+            int(cpu_ram_safety_bytes + cpu_ram_multiplier * transformer_bytes)
+            if transformer_bytes > 0
+            else None
+        )
+        can_cpu_offload = (
+            (free_ram is not None)
+            and (need_ram is not None)
+            and (free_ram >= need_ram)
+        )
+        offload_type = "cpu" if can_cpu_offload else "discard"
+
+        # Log with best-effort memory figures.
+        try:
+            free_vram_gib = f"{(free_vram or 0)/1024**3:.2f}GiB" if free_vram is not None else "unknown"
+            req_vram_gib = f"{required_vram/1024**3:.2f}GiB"
+            free_ram_gib = f"{free_ram/1024**3:.2f}GiB" if free_ram is not None else "unknown"
+            tr_gib = f"{transformer_bytes/1024**3:.2f}GiB"
+            self.logger.info(
+                f"Offloading transformer for {reason}: offload_type={offload_type} "
+                f"(free_vram={free_vram_gib} required≈{req_vram_gib} free_ram={free_ram_gib} transformer≈{tr_gib})"
+            )
+        except Exception:
+            pass
+
+        # Apply offload and clear caches.
+        self._offload("transformer", offload_type=offload_type)  # type: ignore[arg-type]
+        try:
+            from src.utils.cache import empty_cache
+
+            empty_cache()
+        except Exception:
+            pass
+
+        return offload_type
+
     def encode_prompt(
         self,
         prompt: Union[str, List[str]],

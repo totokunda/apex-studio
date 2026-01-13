@@ -29,9 +29,9 @@
                 "type": "safetensors"
             },
             "transformer": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "GGUF_Q8_0",
+                "precision": "q8_0",
+                "type": "gguf"
             },
             "connectors": {
                 "variant": "default",
@@ -50,21 +50,21 @@
             }
         },
         "auto_memory_management": false,
-        "attention_type": "flash"
+        "attention_type": "sage"
     },
     "inputs": {
-        "prompt": "The camera opens in a calm, sunlit frog yoga studio. Warm morning light washes over the wooden floor as incense smoke drifts lazily in the air. The senior frog instructor sits cross-legged at the center, eyes closed, voice deep and calm. 'We are one with the pond.' All the frogs answer softly: 'Ommm...' 'We are one with the mud.' 'Ommm...' He smiles faintly. 'We are one with the flies.' A quiet pause. The camera slowly pans to the side — one frog twitches, eyes darting. Suddenly — *thwip!* — its tongue snaps out, catching a fly mid-air and pulling it into its mouth. The master exhales slowly, still serene. 'But we do not chase the flies…' Beat. '…not during class.' The guilty frog freezes, then lowers its head in visible shame, folding its hands back into the meditative pose. The other frogs resume their chant: 'Ommm...' Camera holds for a moment on the embarrassed frog, eyes closed too tightly, pretending nothing happened.",
-        "negative_prompt": "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.",
-        "resolution": 1080,
+        "prompt": "A close-up of a cheerful girl puppet with curly auburn yarn hair and wide button eyes, holding a small red umbrella above her head. Rain falls gently around her. She looks upward and begins to sing with joy in English: \"It's raining, it's raining, I love it when its raining.\" Her fabric mouth opening and closing to a melodic tune. Her hands grip the umbrella handle as she sways slightly from side to side in rhythm. The camera holds steady as the rain sparkles against the soft lighting. Her eyes blink occasionally as she sings.",
+        "negative_prompt": "blurry, low quality, still frame, frames, watermark, overlay, titles, has blurbox, has subtitles",
+        "resolution": 720,
         "aspect_ratio": "16:9",
-        "num_inference_steps": 40,
-        "height": 720,
+        "num_inference_steps": 20,
+        "height": 736,
         "width": 1280,
-        "guidance_scale": 4.0,
-        "use_gradient_estimation": false,
-        "seed": 6069,
+        "seed": 2053780556,
+        "guidance_scale": 4,
+        "use_gradient_estimation": true,
         "ge_gamma": 2,
-        "chunking_profile": "balanced",
-        "duration": "30s"
+        "chunking_profile": "none",
+        "duration": "5.208333333333333s"
     }
 }
