@@ -42,6 +42,28 @@ type GenerationMediaType = "video" | "image";
 type SortKey = "name" | "date";
 type SortOrder = "asc" | "desc";
 
+const getGenerationDedupeKey = (it: MediaItem): string => {
+  // Prefer stable filesystem identity when available, otherwise fall back to assetUrl.
+  // As a last resort, use a composite key to avoid rendering duplicates.
+  return (
+    it.absPath ||
+    it.assetUrl ||
+    `${it.type ?? "unknown"}:${it.name ?? "unknown"}:${it.dateAddedMs ?? "0"}`
+  );
+};
+
+const dedupeItems = (items: MediaItem[]): MediaItem[] => {
+  const seen = new Set<string>();
+  const out: MediaItem[] = [];
+  for (const it of items) {
+    const k = getGenerationDedupeKey(it);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(it);
+  }
+  return out;
+};
+
 interface DeleteAlertDialogProps {
   onDelete: () => void;
   open: boolean;
@@ -192,7 +214,8 @@ const GenerationsMenu: React.FC = () => {
 
   const items = useMemo(() => {
     const pages = data?.pages ?? [];
-    return pages.flatMap((p) => p.items ?? []);
+    const merged = pages.flatMap((p) => p.items ?? []);
+    return dedupeItems(merged);
   }, [data]);
 
   // Track panel height to size the ScrollArea dynamically

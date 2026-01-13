@@ -333,9 +333,8 @@ class LoaderMixin(DownloadMixin):
                             gguf.GGMLQuantizationType.F16,
                         }:
                             state_dict[key] = value.to(load_dtype)
-                
-   
-
+                            
+               
                 model.load_state_dict(state_dict, assign=True, strict=False)
                 continue
 
@@ -574,6 +573,7 @@ class LoaderMixin(DownloadMixin):
             #
             # This is intentionally cheap (type checks + dtype inspection) and only
             # runs when weights are loaded.
+ 
        
             if not no_weights:
                 try:
