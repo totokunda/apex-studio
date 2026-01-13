@@ -5,8 +5,7 @@ import numpy as np
 import copy
 from diffusers.utils.torch_utils import randn_tensor
 from src.helpers.ltx2.upsampler import upsample_video
-from src.types import InputImage, InputAudio    
-from einops import rearrange   
+from src.types import InputImage, InputAudio      
 from src.utils.cache import empty_cache
 from src.utils.progress import safe_emit_progress, make_mapped_progress
 
