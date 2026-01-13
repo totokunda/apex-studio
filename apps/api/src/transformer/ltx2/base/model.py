@@ -834,7 +834,7 @@ class LTX2AudioVideoRotaryPosEmbed(nn.Module):
         self.modality = modality
         if self.modality not in ["video", "audio"]:
             raise ValueError(f"Modality {modality} is not supported. Supported modalities are `video` and `audio`.")
-        self.double_precision = double_precision
+        self.double_precision = double_precision if torch.cuda.is_available() else False
 
     def prepare_video_coords(
         self,

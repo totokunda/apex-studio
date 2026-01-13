@@ -31,7 +31,7 @@ class LTX2RotaryPosEmbed1d(nn.Module):
         self.dim = dim
         self.base_seq_len = base_seq_len
         self.theta = theta
-        self.double_precision = double_precision
+        self.double_precision = double_precision if torch.cuda.is_available() else False
         self.rope_type = rope_type
         self.num_attention_heads = num_attention_heads
 
