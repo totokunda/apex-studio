@@ -33,9 +33,10 @@ spec:
   - flash
   - flash3
   - sage
+  - metal-flash
   - efficient_dot_product_attention
   - xformers
-  - metal-flash
+  
   loras:
   - source: Lightricks/LTX-2/ltx-2-19b-distilled-lora-384.safetensors
     name: ltx-2-19b-distilled-lora-384
@@ -108,24 +109,11 @@ spec:
       resource_requirements:
         min_vram_gb: 19
         recommended_vram_gb: 26
-    - path: unsloth/gemma-3-12b-it-GGUF/gemma-3-12b-it-Q8_0.gguf
-      variant: GGUF_Q8_0
-      precision: q8_0
-      type: gguf
     config_path: Lightricks/LTX-2/text_encoder/config.json
     tokenizer_class: GemmaTokenizer
     tokenizer_name: Lightricks/LTX-2
     tokenizer_kwargs:
       subfolder: tokenizer
-  - type: extra_model_path
-    label: Gemma3 Vision Encoder
-    name: vision_encoder
-    component: text_encoder
-    model_path:
-    - path: unsloth/gemma-3-12b-it-GGUF/mmproj-BF16.gguf
-      variant: BF16
-      precision: fp16
-      type: gguf
   - type: transformer
     label: LTX2 Transformer
     name: transformer
