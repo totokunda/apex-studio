@@ -38,6 +38,11 @@ DEFAULT_OFFLOAD_PATH = os.getenv(
     "APEX_OFFLOAD_PATH", str(HOME_DIR / "apex-diffusion" / "offload")
 )
 
+DEFAULT_TORCH_COMPILE_PATH = os.getenv(
+    "APEX_TORCH_COMPILE_PATH", str(HOME_DIR / "apex-diffusion" / "torch_compile")
+)
+
+os.environ["TORCHINDUCTOR_CACHE_DIR"] = DEFAULT_TORCH_COMPILE_PATH
 
 def _load_persisted_config() -> dict:
     try:
@@ -94,6 +99,7 @@ os.makedirs(DEFAULT_POSTPROCESSOR_SAVE_PATH, exist_ok=True)
 os.makedirs(DEFAULT_CACHE_PATH, exist_ok=True)
 os.makedirs(DEFAULT_LORA_SAVE_PATH, exist_ok=True)
 os.makedirs(DEFAULT_OFFLOAD_PATH, exist_ok=True)
+os.makedirs(DEFAULT_TORCH_COMPILE_PATH, exist_ok=True)
 
 os.environ["HF_HOME"] = os.getenv(
     "APEX_HF_HOME", str(HOME_DIR / "apex-diffusion" / "huggingface")

@@ -26,37 +26,20 @@ def get_norm_layer(norm_type: Optional[str]) -> norm_layer_type:
         if norm_type is None:
             return nn.Identity()
 
-        if norm_type == "layer":
+        if norm_type == "layer" or norm_type == "fusedln":
             return nn.LayerNorm(
                 normalized_shape=dim,
                 eps=eps,
                 elementwise_affine=elementwise_affine,
             )
 
-        if norm_type == "rms":
+        if norm_type == "rms" or norm_type == "fusedrms":
             return RMSNorm(
                 dim=dim,
                 eps=eps,
                 elementwise_affine=elementwise_affine,
             )
 
-        if norm_type == "fusedln":
-            from apex.normalization import FusedLayerNorm
-
-            return FusedLayerNorm(
-                normalized_shape=dim,
-                elementwise_affine=elementwise_affine,
-                eps=eps,
-            )
-
-        if norm_type == "fusedrms":
-            from apex.normalization import FusedRMSNorm
-
-            return FusedRMSNorm(
-                normalized_shape=dim,
-                elementwise_affine=elementwise_affine,
-                eps=eps,
-            )
 
         raise NotImplementedError(f"{norm_type} is not supported")
 

@@ -269,12 +269,13 @@ def _write_audio(
         samples = torch.clip(samples, -1.0, 1.0)
         samples = (samples * 32767.0).to(torch.int16)
 
-    frame_in = av.AudioFrame.from_ndarray(
-        samples.contiguous().reshape(1, -1).cpu().numpy(),
-        format="s16",
-        layout="stereo",
-    )
+    # Use planar audio to avoid PyAV packed-shape ambiguity for multi-channel audio.
+    # For format="s16p", PyAV expects ndarray shaped (n_channels, n_samples).
+    samples_np = samples.contiguous().cpu().numpy()  # (n_samples, 2)
+    samples_planar = np.ascontiguousarray(samples_np.T)  # (2, n_samples)
+    frame_in = av.AudioFrame.from_ndarray(samples_planar, format="s16p", layout="stereo")
     frame_in.sample_rate = audio_sample_rate
+    frame_in.time_base = Fraction(1, audio_sample_rate)
 
     _resample_audio(container, audio_stream, frame_in)
 
@@ -308,11 +309,13 @@ def _resample_audio(
 
     audio_next_pts = 0
     for rframe in audio_resampler.resample(frame_in):
-        if rframe.pts is None:
-            rframe.pts = audio_next_pts
+        # Ensure deterministic timestamps so muxing doesn't guess/shift start times.
+        rframe.pts = audio_next_pts
+        rframe.time_base = Fraction(1, target_rate)
         audio_next_pts += rframe.samples
-        rframe.sample_rate = frame_in.sample_rate
-        container.mux(audio_stream.encode(rframe))
+        rframe.sample_rate = target_rate
+        for packet in audio_stream.encode(rframe):
+            container.mux(packet)
 
     # flush audio encoder
     for packet in audio_stream.encode():
@@ -340,10 +343,24 @@ def save_video_ltx2(
     _, height, width, _ = first_chunk.shape
 
     container = av.open(output_path, mode="w")
-    stream = container.add_stream("libx264", rate=int(fps))
+    # Use zerolatency to avoid B-frame reordering that can produce invalid PTS/DTS combos for MP4 muxing.
+    # (Also makes timestamps more stable across environments.)
+    stream = container.add_stream(
+        "libx264",
+        rate=int(fps),
+        options={
+            "preset": "veryfast",
+            "tune": "zerolatency",
+        },
+    )
     stream.width = width
     stream.height = height
     stream.pix_fmt = "yuv420p"
+    try:
+        # Be extra explicit: disable B-frames so DTS/PTS stay monotonic for MP4.
+        stream.codec_context.max_b_frames = 0
+    except Exception:
+        pass
 
     if audio is not None:
         if sample_rate is None:

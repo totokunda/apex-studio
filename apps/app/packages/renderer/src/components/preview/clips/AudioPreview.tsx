@@ -3,7 +3,7 @@ import { useControlsStore } from "@/lib/control";
 import { useInputControlsStore } from "@/lib/inputControl";
 import { MediaInfo, AudioClipProps } from "@/lib/types";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
-import { getAudioIterator } from "@/lib/media/audio";
+import { getAudioIterator, preconfigureAudioWorker, preseekAudioWorker } from "@/lib/media/audio";
 import { WrappedAudioBuffer } from "mediabunny";
 import type { BaseClipApplicator } from "./apply/base";
 import { useClipStore } from "@/lib/clip";
@@ -161,11 +161,32 @@ const AudioPreview: React.FC<
   }>(() => {
     const AudioContext: any =
       (window as any).AudioContext || (window as any).webkitAudioContext;
-    const ctx = new AudioContext();
+    // Use low latency hint for minimal audio delay
+    const ctx = new AudioContext({ latencyHint: "interactive" });
     const gainNode = ctx.createGain();
     gainNode.connect(ctx.destination);
     return { ctx, gainNode };
   }, []);
+
+  // Keep AudioContext warm - resume on any user interaction to avoid cold-start latency
+  useEffect(() => {
+    const warmUp = () => {
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+    };
+    // Resume on common user interactions before they press play
+    window.addEventListener("click", warmUp, { passive: true });
+    window.addEventListener("keydown", warmUp, { passive: true });
+    window.addEventListener("pointerdown", warmUp, { passive: true });
+    // Also try to resume immediately
+    warmUp();
+    return () => {
+      window.removeEventListener("click", warmUp);
+      window.removeEventListener("keydown", warmUp);
+      window.removeEventListener("pointerdown", warmUp);
+    };
+  }, [ctx]);
 
   // Mute/unmute at the output gain so we can prebuffer without audible playback.
   useEffect(() => {
@@ -260,21 +281,46 @@ const AudioPreview: React.FC<
     return playbackTimeAtStartRef.current;
   };
 
-  // Load media info to detect audio track
+  // Load media info to detect audio track and preconfigure worker
   useEffect(() => {
     if (!asset) return;
     const info = getMediaInfoCached(asset.path);
     if (info) {
       mediaInfoRef.current = info;
+      // Preconfigure audio worker early so it's ready when playback starts
+      if (info.audio) {
+        void preconfigureAudioWorker(asset.path, info);
+      }
     }
     let cancelled = false;
     (async () => {
       try {
         const info = await getMediaInfo(asset?.path ?? "");
-        if (!cancelled) mediaInfoRef.current = info;
+        if (!cancelled) {
+          mediaInfoRef.current = info;
+          // Preconfigure audio worker early so it's ready when playback starts
+          if (info?.audio) {
+            void preconfigureAudioWorker(asset.path, info);
+          }
+        }
       } catch {}
     })();
   }, [asset]);
+
+  // Pre-seek audio worker when scrubbing while paused for instant playback start
+  useEffect(() => {
+    if (isPlaying || !asset || !fps || !isInFrame) return;
+    if (!mediaInfoRef.current?.audio) return;
+    
+    // Calculate the media timestamp we would seek to
+    const speedFactor = Math.max(0.1, speed);
+    const mediaStartOffset = mediaInfoRef.current?.startFrame || 0;
+    const mediaFrameIndex = Math.max(0, Math.floor(currentFrame * speedFactor)) + mediaStartOffset;
+    const timestamp = mediaFrameIndex / fps;
+    
+    // Fire off preseek (non-blocking)
+    void preseekAudioWorker(asset.path, timestamp, mediaInfoRef.current);
+  }, [isPlaying, asset, fps, currentFrame, speed, isInFrame]);
 
   useEffect(() => {
     const onPlaying = async (
@@ -487,11 +533,17 @@ const AudioPreview: React.FC<
     ) {
       return;
     }
+    
+    // CRITICAL: Capture the intended start time IMMEDIATELY before any async operations.
+    // This ensures audio sync even if ctx.resume() or getAudioIterator() takes time.
+    const intendedWallTime = performance.now();
+    
     // align starting frame and playback anchor with current UI state
     if (typeof currentFrame === "number" && fps) {
       currentStartFrameRef.current = currentFrame;
       playbackTimeAtStartRef.current = currentFrame / fps;
     }
+    
     // Stop any existing buffers and iterator
     for (const node of audioQueueRef.current) {
       try {
@@ -501,10 +553,10 @@ const AudioPreview: React.FC<
     audioQueueRef.current.clear();
     // @ts-ignore
     iteratorRef.current?.return?.();
-
-    startTimeRef.current = ctx.currentTime;
-    lastResyncTimeRef.current = Date.now();
-
+    
+    // Fire off context resume without blocking - it will be ready by the time we schedule
+    const resumePromise = ctx.state === "suspended" ? ctx.resume() : Promise.resolve();
+    
     // Sample from the correct media frame based on speed
     const speedFactor = Math.max(0.1, speed);
     const mediaStartOffset = mediaInfoRef.current?.startFrame || 0;
@@ -523,20 +575,42 @@ const AudioPreview: React.FC<
       : undefined;
     const asset = getAssetById(assetId);
     if (!asset) return;
-    iteratorRef.current = await getAudioIterator(asset.path, {
-      mediaInfo: mediaInfoRef.current || undefined,
-      fps,
-      startIndex: mediaFrameIndex,
-      endIndex,
-    });
-
-    const soundtouchNode = await ensureSoundtouchNode();
+    
+    // Start iterator and soundtouch setup in parallel
+    const [iteratorResult, soundtouchNode] = await Promise.all([
+      getAudioIterator(asset.path, {
+        mediaInfo: mediaInfoRef.current || undefined,
+        fps,
+        startIndex: mediaFrameIndex,
+        endIndex,
+      }),
+      ensureSoundtouchNode(),
+      resumePromise, // Also wait for resume to complete
+    ]);
+    
+    iteratorRef.current = iteratorResult;
+    
     if (soundtouchNode) {
       configureSoundtouchForSpeed(speed);
     }
 
+    // Now that context is definitely running, calculate the actual start time.
+    // Account for any delay that occurred during async setup by adjusting the anchor.
+    const setupDelayMs = performance.now() - intendedWallTime;
+    const setupDelaySec = setupDelayMs / 1000;
+    
+    // Set startTimeRef to ctx.currentTime, but compensate for setup delay
+    // by pretending playback started (setupDelaySec) ago.
+    startTimeRef.current = ctx.currentTime - setupDelaySec;
+    lastResyncTimeRef.current = Date.now();
+
+    // Calculate audio output latency once for this playback session
+    // This compensates for the delay between scheduling and actual audio output
+    const outputLatency = (ctx.outputLatency || 0) + (ctx.baseLatency || 0);
+
     for await (const buf of iteratorRef.current) {
       if (!buf) continue; // Skip null buffers but keep trying
+
 
       const buffer = buf.buffer || null;
       const duration = buf.duration || 0;
@@ -549,8 +623,10 @@ const AudioPreview: React.FC<
       // Map media timestamp to wall clock according to speed.
       // Timeline seconds advance 1:1 with wall clock; media advances at `speed`.
       const speedVal = Math.max(0.1, speed);
+      // Subtract outputLatency to compensate for audio system delay
+      // This ensures audio reaches the speakers at the same time as video reaches the screen
       let startTimestamp =
-        startTimeRef.current + (timestamp - mediaTimeAtStart) / speedVal;
+        startTimeRef.current + (timestamp - mediaTimeAtStart) / speedVal - outputLatency;
 
       let bufferDurationToPlay = duration;
 
@@ -787,6 +863,7 @@ const AudioPreview: React.FC<
     // @ts-ignore
     iteratorRef.current?.return?.();
     iteratorRef.current = null;
+    console.log("return");
     for (const node of audioQueueRef.current) {
       try {
         node.stop();
@@ -798,6 +875,7 @@ const AudioPreview: React.FC<
   // Cleanup on unmount: let scheduled audio complete for smooth transitions
   useEffect(() => {
     return () => {
+      console.log("unmount");
       // Don't stop audio nodes - let them finish their scheduled playback naturally
       // This prevents gaps when transitioning between adjacent clips
       // The nodes will clean themselves up via their onended handlers
