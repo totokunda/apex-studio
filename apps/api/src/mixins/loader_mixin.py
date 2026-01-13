@@ -729,7 +729,7 @@ class LoaderMixin(DownloadMixin):
             if callable(maybe_compile):
                 model = maybe_compile(model, component)
 
-        return model
+        return model.eval()
 
     def _load_config_file(self, file_path: str | Path):
         try:
