@@ -1,0 +1,21 @@
+-r ../requirements.txt
+-r ../processors.requirements.txt
+
+rembg[gpu]
+triton==3.5.1
+xformers==0.0.33.post2
+transformer_engine==2.10.0
+apex @ git+https://github.com/NVIDIA/apex.git
+
+# SageAttention (Source build covers all archs on Linux if TORCH_CUDA_ARCH_LIST is set)
+sageattention @ git+https://github.com/thu-ml/SageAttention.git
+
+# FlashAttention 2 (Source build)
+flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git
+
+# FlashAttention 3 (Prebuilt wheels - harmless to include even if GPU doesn't support it)
+--extra-index-url https://download.pytorch.org/whl/cu128
+--find-links https://windreamer.github.io/flash-attention3-wheels/cu128_torch270
+flash_attn_3
+
+onnxruntime-gpu==1.23.2

@@ -79,7 +79,17 @@ export function unifiedDownloadWsUpdatesToFiles(
     const filename = asNonEmptyString(meta.filename);
     const label = asNonEmptyString(meta.label);
 
-    const key = filename || label || `file-${i + 1}`;
+    // Prefer stable grouping keys. If the backend doesn't provide filename/label
+    // (common for aggregated progress updates), avoid generating a new synthetic
+    // "file-N" entry per event and instead collapse into a single stable row.
+    const bucketKey =
+      meta.bucket === "component" ||
+      meta.bucket === "lora" ||
+      meta.bucket === "preprocessor"
+        ? (meta.bucket as UnifiedBucket)
+        : undefined;
+
+    const key = filename || label || bucketKey || "download";
     if (!byKey.has(key)) order.push(key);
 
     const prev = byKey.get(key);

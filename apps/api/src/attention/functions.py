@@ -867,6 +867,97 @@ def xformers_attention(
     if xformers is None:
         raise ImportError("xformers is not installed")
 
+    def _is_valid_xformers_attention_bias(bias) -> bool:
+        """
+        xFormers' `memory_efficient_attention` expects `attn_bias` to be an
+        `xformers.ops.fmha.attn_bias.AttentionBias` instance (or None).
+        Some callsites pass non-xFormers masks/biases (e.g. torch.Tensor/bool);
+        those must be ignored to avoid runtime errors.
+        """
+        if bias is None:
+            return True
+        try:
+            fmha = getattr(xformers.ops, "fmha", None)
+            attn_bias_mod = getattr(fmha, "attn_bias", None)
+            AttentionBias = getattr(attn_bias_mod, "AttentionBias", None)
+            return AttentionBias is not None and isinstance(bias, AttentionBias)
+        except Exception:
+            return False
+
+    def _coerce_to_xformers_attention_bias(maybe_bias):
+        """
+        Try to coerce common mask/bias representations into an xFormers AttentionBias.
+
+        - If `maybe_bias` is already an AttentionBias, return it.
+        - If it's a torch.Tensor, try to wrap it as BoolMask / TensorBias if the
+          installed xFormers version supports it.
+        - Otherwise return None (caller should treat as "no bias").
+        """
+        if maybe_bias is None:
+            return None
+        if _is_valid_xformers_attention_bias(maybe_bias):
+            return maybe_bias
+        if not isinstance(maybe_bias, torch.Tensor):
+            return None
+
+        try:
+            fmha = getattr(xformers.ops, "fmha", None)
+            attn_bias_mod = getattr(fmha, "attn_bias", None)
+            if attn_bias_mod is None:
+                return None
+
+            # 1) Bool mask -> BoolMask (preferred when available)
+            bool_mask = maybe_bias
+            if bool_mask.dtype is not torch.bool:
+                # Best-effort: treat any non-zero as "allowed".
+                # (If this isn't appropriate for a caller's mask convention,
+                # conversion will be skipped and we fall back to ignoring it.)
+                try:
+                    bool_mask = bool_mask != 0
+                except Exception:
+                    bool_mask = bool_mask.to(torch.bool)
+
+            BoolMask = getattr(attn_bias_mod, "BoolMask", None)
+            if BoolMask is not None:
+                for ctor in ("from_bool", "from_tensor"):
+                    fn = getattr(BoolMask, ctor, None)
+                    if callable(fn):
+                        try:
+                            bias = fn(bool_mask)
+                            if _is_valid_xformers_attention_bias(bias):
+                                return bias
+                        except Exception:
+                            pass
+                try:
+                    bias = BoolMask(bool_mask)
+                    if _is_valid_xformers_attention_bias(bias):
+                        return bias
+                except Exception:
+                    pass
+
+            # 2) Additive / general tensor bias -> TensorBias (if available)
+            TensorBias = getattr(attn_bias_mod, "TensorBias", None)
+            if TensorBias is not None:
+                for ctor in ("from_tensor",):
+                    fn = getattr(TensorBias, ctor, None)
+                    if callable(fn):
+                        try:
+                            bias = fn(maybe_bias)
+                            if _is_valid_xformers_attention_bias(bias):
+                                return bias
+                        except Exception:
+                            pass
+                try:
+                    bias = TensorBias(maybe_bias)
+                    if _is_valid_xformers_attention_bias(bias):
+                        return bias
+                except Exception:
+                    pass
+        except Exception:
+            return None
+
+        return None
+
     # xformers expects (B, S, H, D) format, so we need to transpose
     q = q.transpose(1, 2)  # (B, H, S, D) -> (B, S, H, D)
     k = k.transpose(1, 2)  # (B, H, S, D) -> (B, S, H, D)
@@ -878,13 +969,20 @@ def xformers_attention(
     else:
         attn_bias = None
 
-    # Apply attention mask if provided
-    if attn_mask is not None:
-        if attn_bias is None:
-            attn_bias = attn_mask
-        else:
-            # Combine causal mask with attention mask
-            attn_bias = attn_bias & attn_mask
+    # Prefer an explicit xFormers attention bias if provided.
+    # Only apply bias objects that are valid for xFormers; ignore everything else.
+    attention_bias = kwargs.get("attention_bias", None)
+    if attention_bias is None:
+        # Common alias used by some callsites.
+        attention_bias = kwargs.get("attn_bias", None)
+    attention_bias = _coerce_to_xformers_attention_bias(attention_bias)
+    if attention_bias is not None:
+        attn_bias = attention_bias if attn_bias is None else (attn_bias & attention_bias)
+
+    # Apply attention mask (try to convert tensor masks into AttentionBias when possible).
+    attn_mask_bias = _coerce_to_xformers_attention_bias(attn_mask)
+    if attn_mask_bias is not None:
+        attn_bias = attn_mask_bias if attn_bias is None else (attn_bias & attn_mask_bias)
 
     output = xformers.ops.memory_efficient_attention(
         q, k, v, attn_bias=attn_bias, p=dropout_p, scale=softmax_scale
