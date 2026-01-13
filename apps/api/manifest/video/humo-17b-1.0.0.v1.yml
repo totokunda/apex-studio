@@ -47,6 +47,7 @@ spec:
   - flash
   - flash3
   - sage
+  - metal-flash
   - efficient_dot_product_attention
   compute_requirements:
     min_cuda_compute_capability: 7.5

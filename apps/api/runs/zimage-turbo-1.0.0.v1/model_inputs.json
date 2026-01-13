@@ -1,0 +1,45 @@
+{
+    "engine_kwargs": {
+        "engine_type": "zimage",
+        "yaml_path": "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/manifest/image/zimage-turbo-1.0.0.v1.yml",
+        "model_type": "t2i",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/Users/tosinkuye/apex-diffusion/components/309fddec5ebc49a8aefab205fe7dff824cca5ac413726b93cdd87b078cd60423_scheduler_config.json",
+                "type": "scheduler",
+                "label": "FlowMatch Euler Discrete Scheduler",
+                "default": "FlowMatchEulerDiscreteScheduler",
+                "description": "The FlowMatch Euler Discrete Scheduler is a scheduler for the ZImage Turbo model."
+            },
+            "vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "metal-flash"
+    },
+    "inputs": {
+        "prompt": "Pinocchio sticking his nose into a woman's ass as she looks shocked. ",
+        "resolution": 1024,
+        "aspect_ratio": "1:1",
+        "height": 1024,
+        "width": 1024,
+        "seed": 2633618248,
+        "num_inference_steps": 9,
+        "duration": "5s"
+    }
+}

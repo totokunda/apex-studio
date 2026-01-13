@@ -354,7 +354,7 @@ def restore_fpscaled_parameters(
     for name, param in model.named_parameters():
         if (
             param.dtype
-            in [torch.float8_e4m3fn, torch.float8_e5m2, torch.float4_e2m1fn_x2]
+            in [torch.float8_e4m3fn, torch.float8_e5m2]
             and ".weight" not in name
             and ".bias" not in name
             and ".scale_weight" not in name
@@ -524,7 +524,7 @@ class FPScaledLayer(nn.Module):
         ):
             return fp8_activation_dequant(weight, scale_weight, target_dtype)
         if (
-            physical_dtype in (torch.float4_e2m1fn_x2, torch.uint8)
+            physical_dtype in (torch.uint8)
             and scale_weight is not None
         ):
             return dequantize_from_fp4(weight, scale_weight, target_dtype)
@@ -1340,7 +1340,6 @@ def _infer_fpscaled_module_names_from_state_dict(state_dict: dict) -> set[str]:
             if dtype in (
                 torch.float8_e4m3fn,
                 torch.float8_e5m2,
-                torch.float4_e2m1fn_x2,
                 torch.uint8,
             ):
                 names.add(k[: -len(".weight")])
