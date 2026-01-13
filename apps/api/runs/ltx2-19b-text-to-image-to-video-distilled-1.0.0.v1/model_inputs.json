@@ -1,7 +1,7 @@
 {
     "engine_kwargs": {
         "engine_type": "ltx2",
-        "yaml_path": "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/manifest/video/ltx2-19b-text-to-image-to-video-distilled-1.0.0.v1.yml",
+        "yaml_path": "manifest/video/ltx2-19b-text-to-image-to-video-distilled-1.0.0.v1.yml",
         "model_type": "ti2v",
         "selected_components": {
             "scheduler": {
@@ -29,16 +29,6 @@
                 "type": "safetensors"
             },
             "transformer": {
-                "variant": "GGUF_Q6_K",
-                "precision": "q6_k",
-                "type": "gguf"
-            },
-            "connectors": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
-            },
-            "vocoder": {
                 "variant": "default",
                 "precision": "fp16",
                 "type": "safetensors"
@@ -50,14 +40,14 @@
             }
         },
         "auto_memory_management": false,
-        "attention_type": "metal-flash"
+        "attention_type": "flash"
     },
     "inputs": {
         "prompt": "A lone man floats gently down a narrow forest stream, drifting on his back as the current slowly carries him forward. Sunlight filters through overhanging trees, creating soft, moving patterns on the water\u2019s surface and across his face. The stream curves naturally, reeds and smooth stones passing by at an unhurried pace. His body moves subtly with the water, calm and weightless, as ripples spread outward from his arms. The atmosphere is quiet and meditative, with a slow, cinematic sense of time, natural motion, and peaceful immersion in nature.",
         "resolution": 1080,
         "aspect_ratio": "1:1",
-        "height": 1088,
-        "width": 1088,
+        "height": 720,
+        "width": 1280,
         "seed": 4186837615,
         "guidance_scale": 1,
         "chunking_profile": "light",

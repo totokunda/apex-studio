@@ -9,7 +9,7 @@ run_info = json.load(open("runs/ltx2-19b-text-to-image-to-video-distilled-1.0.0.
 
 engine = UniversalEngine(
     **run_info["engine_kwargs"]
-    )
+)
 
 inputs = run_info["inputs"]
 
@@ -21,4 +21,4 @@ The chef stops, wipes his brow with a rag, and slides a steaming ceramic bowl ac
 inputs["prompt"] = prompt
 video, audio = engine.run(**inputs)
 
-save_video_ltx2(video, audio, "tests/ltx2-19b-text-to-image-to-video-distilled-1.0.0-720-5.v1")
+save_video_ltx2(video, audio, "tests/ltx2-19b-text-to-image-to-video-distilled-1.0.0-720-5-exp.v1")
