@@ -1153,12 +1153,12 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         # The minimal tile height and width for spatial tiling to be used
         self.tile_sample_min_height = 512
         self.tile_sample_min_width = 512
-        self.tile_sample_min_num_frames = 16
+        self.tile_sample_min_num_frames = 32
 
         # The minimal distance between two spatial tiles
         self.tile_sample_stride_height = 448
         self.tile_sample_stride_width = 448
-        self.tile_sample_stride_num_frames = 8
+        self.tile_sample_stride_num_frames = 16
 
     def enable_tiling(
         self,

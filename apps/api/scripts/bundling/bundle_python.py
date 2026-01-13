@@ -368,11 +368,9 @@ class PythonBundler:
 
         # ROCm
         if gpu_type == "rocm":
-            # Assuming rocm.txt was moved to rocm/requirements.txt or similar?
-            # I didn't create a rocm folder. I should check if rocm.txt exists.
-            # I see rocm.txt in the file list I got earlier. I should move it too.
-            # I missed rocm.txt in my previous moves.
-            return req_root / "rocm" / "requirements.txt"
+            if self.platform_name == "win32":
+                return req_root / "rocm" / "windows.txt"
+            return req_root / "rocm" / "linux.txt"
 
         # CPU
         if gpu_type == "cpu":
@@ -433,26 +431,36 @@ class PythonBundler:
 
         # Add torch with appropriate backend
         torch_index = self.get_torch_index(gpu_type)
-        if gpu_type != "cpu" and self.platform_name != "darwin":
+        if gpu_type == "rocm" and self.platform_name == "win32":
+            # Windows ROCm: Use specific community wheels (TheRock)
+            pass  # We append the direct URLs below
+        elif gpu_type != "cpu" and self.platform_name != "darwin":
             requirements.append(f"--extra-index-url {torch_index}")
 
         # Windows wheel stacks: pin torch to match the wheel ABI expectations.
         # (FlashAttention wheel: cu126 + torch2.6.0 + cp312; cu128 stacks vary by machine entry.)
-        if self.platform_name == "win32" and gpu_type.startswith("cuda"):
-            if gpu_type == "cuda128":
-                # Blackwell/Hopper: FlashAttention 3 wheels (cu128_torch290) expect Torch 2.9.0.
-                if machine_entry.name in ("hopper.txt", "blackwell.txt"):
-                    # We use FA2 Windows wheels (cu128+torch2.7.0) + FA3 wheels (cu128_torch270),
-                    # so pin to the matching cu128 torch2.7.x stack.
+        if self.platform_name == "win32":
+            if gpu_type.startswith("cuda"):
+                if gpu_type == "cuda128":
+                    # Unified Stack: CUDA 12.8 + Torch 2.7.1
+                    # This covers Ampere, Ada, Hopper, Blackwell with FA2/FA3 support.
                     requirements.extend(
                         ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
                     )
                 else:
-                    requirements.extend(
-                        ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
-                    )
+                    requirements.extend(["torch==2.6.0", "torchvision==0.21.0", "torchaudio==2.6.0"])
+            elif gpu_type == "rocm":
+                # ROCm 6.5 Windows (TheRock)
+                requirements.extend([
+                    "torch @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torch-2.7.0a0+git3f903c3-cp312-cp312-win_amd64.whl",
+                    "torchvision @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchvision-0.22.0+9eb57cd-cp312-cp312-win_amd64.whl",
+                    "torchaudio @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl",
+                ])
             else:
-                requirements.extend(["torch==2.6.0", "torchvision==0.21.0", "torchaudio==2.6.0"])
+                requirements.extend(["torch", "torchvision", "torchaudio"])
+        elif self.platform_name == "darwin":
+            # MPS requires Torch 2.7.1+
+            requirements.extend(["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"])
         else:
             requirements.extend(["torch", "torchvision", "torchaudio"])
 
@@ -710,10 +718,6 @@ class PythonBundler:
                 check=True,
             )
 
-        # Optional: install Nunchaku wheels if the current (platform, python, torch) matches
-        # an available prebuilt wheel on GitHub releases.
-        self._maybe_install_nunchaku(uv_path=Path(str(uv_path)), py_path=py_path)
-
         # Install the project itself (so the venv has the `apex-engine` console script),
         # but we still ship `src/` alongside the venv and run `python -m src ...` in production.
         subprocess.run(
@@ -793,126 +797,6 @@ class PythonBundler:
             pass
 
         return removed_files, removed_dirs
-
-    def _maybe_install_nunchaku(self, uv_path: Path, py_path: Path) -> None:
-        """
-        Best-effort install for Nunchaku wheels.
-
-        We *do not* include Nunchaku in the base requirements files because its wheels are
-        built against specific PyTorch major/minor versions (e.g. +torch2.9). Installing
-        the wrong wheel can hard-fail the whole bundle. Instead, we detect the *installed*
-        torch version in the venv and install the matching wheel if one exists.
-
-        Release: https://github.com/nunchaku-tech/nunchaku/releases/tag/v1.2.0
-        """
-
-        # Only CUDA-capable platforms; skip macOS/ROCm/CPU bundles.
-        if self.platform_name not in ("linux", "win32"):
-            return
-
-        # Skip Nunchaku for SM90/Hopper bundles.
-        try:
-            if self.last_machine_entry and "hopper" in self.last_machine_entry.name:
-                return
-        except Exception:
-            pass
-        try:
-            cap = self.detect_cuda_compute_capability()
-            if cap:
-                major = int(cap.split(".")[0])
-                if major == 9:
-                    return
-        except Exception:
-            pass
-
-        # Determine python tag (cp310/cp311/cp312/cp313) and torch major/minor.
-        try:
-            probe = subprocess.run(
-                [
-                    str(py_path),
-                    "-c",
-                    "import sys; "
-                    "import torch; "
-                    "v = (torch.__version__ or '').split('+')[0].strip(); "
-                    "mm = '.'.join(v.split('.')[:2]) if v else ''; "
-                    "print(f'cp{sys.version_info.major}{sys.version_info.minor}'); "
-                    "print(mm)",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except Exception:
-            return
-
-        lines = [ln.strip() for ln in probe.stdout.splitlines() if ln.strip()]
-        if len(lines) < 2:
-            return
-        py_tag = lines[0]  # e.g. cp312
-        torch_mm = lines[1]  # e.g. 2.9
-
-        # NOTE: torch wheel ABI compatibility
-        # We treat torch 2.9 as compatible with the torch 2.8 Nunchaku wheel.
-        # This avoids hard failures when a torch2.9-specific wheel isn't desirable/available.
-        nunchaku_torch_mm = torch_mm
-        if torch_mm == "2.9":
-            nunchaku_torch_mm = "2.8"
-            print("Torch 2.9 detected; installing Nunchaku torch2.8 wheel (compatible).")
-
-        nunchaku_version = "1.2.0"
-
-        # Supported wheel builds in v1.1.0
-        supported_linux = {"2.7", "2.8", "2.9", "2.11"}
-        supported_win = {"2.9", "2.11"}
-
-        if self.platform_name == "linux":
-            if nunchaku_torch_mm not in supported_linux:
-                print(
-                    f"Skipping Nunchaku wheel: no v{nunchaku_version} linux wheel for torch {nunchaku_torch_mm} "
-                    f"(detected torch {torch_mm}, {py_tag})"
-                )
-                return
-            plat_suffix = "linux_x86_64"
-        else:
-            if nunchaku_torch_mm not in supported_win:
-                print(
-                    f"Skipping Nunchaku wheel: no v{nunchaku_version} windows wheel for torch {nunchaku_torch_mm} "
-                    f"(detected torch {torch_mm}, {py_tag})"
-                )
-                return
-            plat_suffix = "win_amd64"
-
-        # Build the exact filename/URL for the matching wheel.
-        # Example asset:
-        #   nunchaku-1.1.0+torch2.8-cp312-cp312-linux_x86_64.whl
-        # Note: the '+' is URL-encoded as %2B in the GitHub release URLs.
-        filename = f"nunchaku-{nunchaku_version}+torch{nunchaku_torch_mm}-{py_tag}-{py_tag}-{plat_suffix}.whl"
-        url = f"https://github.com/nunchaku-tech/nunchaku/releases/download/v{nunchaku_version}/{filename.replace('+', '%2B')}"
-
-        print(f"Attempting Nunchaku install: {filename}")
-        print(f"Nunchaku URL: {url}")
-        # Avoid noisy `uv pip install` 404s: preflight the asset exists.
-        try:
-            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "apex-studio-bundler"})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                status = int(getattr(resp, "status", 200))
-                if status >= 400:
-                    print(f"Skipping Nunchaku wheel: HTTP {status} for {url}")
-                    return
-        except urllib.error.HTTPError as e:
-            print(f"Skipping Nunchaku wheel: HTTP {e.code} for {url}")
-            return
-        except Exception as e:
-            # If we can't check, fall back to attempting install (best effort).
-            print(f"Nunchaku preflight check failed ({type(e).__name__}): {e}; attempting install anyway")
-        try:
-            subprocess.run(
-                [str(uv_path), "pip", "install", "--python", str(py_path), url],
-                check=False,
-            )
-        except Exception:
-            # Best-effort: bundling should not fail because Nunchaku couldn't be installed.
-            return
 
     def _remove_obsolete_typing_backport(self, py_path: Path) -> None:
         """

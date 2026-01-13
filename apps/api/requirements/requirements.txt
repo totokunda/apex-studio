@@ -1,4 +1,4 @@
-accelerate==1.8.1
+accelerate==1.9
 addict==2.4.0
 albumentations==2.0.8
 anyio==4.9.0
