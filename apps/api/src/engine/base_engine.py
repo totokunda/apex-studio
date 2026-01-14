@@ -685,8 +685,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         config.pop("type")
         config.pop("name", None)
         module = config.pop("module", None)
-
         
+
         def get_helper(base: str):
             try:
                 helper_class = helpers.get(base)
@@ -710,6 +710,17 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 )
             except Exception as e:
                 pass
+            
+            helper_class = get_helper(base)
+        
+            # check if helper has the method for from_pretrained
+            if hasattr(helper_class, "from_pretrained"):
+                try:
+                    helper = helper_class.from_pretrained(config.get("model_path", None), trust_remote_code=True)
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    pass
 
         if helper is None:
             if "config_path" in config and module is not None:
