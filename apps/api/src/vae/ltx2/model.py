@@ -58,7 +58,7 @@ class PerChannelRMSNorm(nn.Module):
         """
         channel_dim = channel_dim or self.channel_dim
         # Compute mean of squared values along `dim`, keep dimensions for broadcasting.
-        mean_sq = torch.mean(x**2, dim=self.channel_dim, keepdim=True)
+        mean_sq = torch.mean(x**2, dim=channel_dim, keepdim=True)
         # Normalize by the root-mean-square (RMS).
         rms = torch.sqrt(mean_sq + self.eps)
         return x / rms
@@ -1137,12 +1137,13 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         # When decoding spatially large video latents, the memory requirement is very high. By breaking the video latent
         # frames spatially into smaller tiles and performing multiple forward passes for decoding, and then blending the
         # intermediate tiles together, the memory requirement can be lowered.
-        self.use_tiling = False
+        # Tiling is enabled by default for LTX2 video VAE (can be disabled via `enable_tiling(enabled=False)`).
+        self.use_tiling = True
 
         # When decoding temporally long video latents, the memory requirement is very high. By decoding latent frames
         # at a fixed frame batch size (based on `self.num_latent_frames_batch_sizes`), the memory requirement can be lowered.
-        self.use_framewise_encoding = True
-        self.use_framewise_decoding = True
+        self.use_framewise_encoding = False
+        self.use_framewise_decoding = False
 
         # This can be configured based on the amount of GPU memory available.
         # `16` for sample frames and `2` for latent frames are sensible defaults for consumer GPUs.
@@ -1153,51 +1154,168 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         # The minimal tile height and width for spatial tiling to be used
         self.tile_sample_min_height = 512
         self.tile_sample_min_width = 512
-        self.tile_sample_min_num_frames = 16
+        self.tile_sample_min_num_frames = 32
 
         # The minimal distance between two spatial tiles
         self.tile_sample_stride_height = 448
         self.tile_sample_stride_width = 448
-        self.tile_sample_stride_num_frames = 8
+        self.tile_sample_stride_num_frames = 16
 
     def enable_tiling(
         self,
+        enabled: bool = True,
         tile_sample_min_height: Optional[int] = None,
         tile_sample_min_width: Optional[int] = None,
         tile_sample_min_num_frames: Optional[int] = None,
-        tile_sample_stride_height: Optional[float] = None,
-        tile_sample_stride_width: Optional[float] = None,
-        tile_sample_stride_num_frames: Optional[float] = None,
+        tile_sample_stride_height: Optional[int] = None,
+        tile_sample_stride_width: Optional[int] = None,
+        tile_sample_stride_num_frames: Optional[int] = None,
+        use_framewise_encoding: Optional[bool] = None,
+        use_framewise_decoding: Optional[bool] = None,
+        num_sample_frames_batch_size: Optional[int] = None,
+        num_latent_frames_batch_size: Optional[int] = None,
     ) -> None:
         r"""
-        Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
-        compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
-        processing larger images.
+        Enable/disable tiled VAE decoding/encoding and configure tiling + framewise behavior.
+
+        When tiling is enabled, the VAE may split the input tensor into overlapping spatial/temporal tiles to compute
+        decoding/encoding in several steps, blending overlaps to avoid seams. This is useful for saving memory and
+        processing larger videos.
 
         Args:
+            enabled (`bool`, defaults to `True`):
+                Enable tiling when `True`, disable when `False`.
             tile_sample_min_height (`int`, *optional*):
                 The minimum height required for a sample to be separated into tiles across the height dimension.
             tile_sample_min_width (`int`, *optional*):
                 The minimum width required for a sample to be separated into tiles across the width dimension.
+            tile_sample_min_num_frames (`int`, *optional*):
+                The minimum number of frames required for temporal tiling to be used.
             tile_sample_stride_height (`int`, *optional*):
                 The minimum amount of overlap between two consecutive vertical tiles. This is to ensure that there are
                 no tiling artifacts produced across the height dimension.
             tile_sample_stride_width (`int`, *optional*):
                 The stride between two consecutive horizontal tiles. This is to ensure that there are no tiling
                 artifacts produced across the width dimension.
+            tile_sample_stride_num_frames (`int`, *optional*):
+                The overlap/stride for temporal tiling.
+            use_framewise_encoding (`bool`, *optional*):
+                If set, forces framewise (temporal tiled) encoding regardless of heuristics.
+            use_framewise_decoding (`bool`, *optional*):
+                If set, forces framewise (temporal tiled) decoding regardless of heuristics.
+            num_sample_frames_batch_size (`int`, *optional*):
+                Hint for how many sample frames to decode per batch (best-effort; may be used by callers).
+            num_latent_frames_batch_size (`int`, *optional*):
+                Hint for how many latent frames to decode per batch (best-effort; may be used by callers).
         """
-        self.use_tiling = True
+        self.use_tiling = bool(enabled)
         self.tile_sample_min_height = tile_sample_min_height or self.tile_sample_min_height
         self.tile_sample_min_width = tile_sample_min_width or self.tile_sample_min_width
         self.tile_sample_min_num_frames = tile_sample_min_num_frames or self.tile_sample_min_num_frames
         self.tile_sample_stride_height = tile_sample_stride_height or self.tile_sample_stride_height
         self.tile_sample_stride_width = tile_sample_stride_width or self.tile_sample_stride_width
         self.tile_sample_stride_num_frames = tile_sample_stride_num_frames or self.tile_sample_stride_num_frames
+        
+
+        if use_framewise_encoding is not None:
+            self.use_framewise_encoding = bool(use_framewise_encoding)
+        if use_framewise_decoding is not None:
+            self.use_framewise_decoding = bool(use_framewise_decoding)
+        if num_sample_frames_batch_size is not None:
+            self.num_sample_frames_batch_size = int(num_sample_frames_batch_size)
+        if num_latent_frames_batch_size is not None:
+            self.num_latent_frames_batch_size = int(num_latent_frames_batch_size)
+
+    def _get_cuda_vram_info_bytes(self, device: torch.device) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Returns (free_bytes, total_bytes) for CUDA devices, otherwise (None, None).
+
+        Note: "available" VRAM is approximated via `torch.cuda.mem_get_info()`.
+        """
+        if device is None:
+            return (None, None)
+        if device.type != "cuda" or not torch.cuda.is_available():
+            return (None, None)
+
+        try:
+            # Torch supports both `mem_get_info()` and `mem_get_info(device)` depending on version.
+            if device.index is None:
+                free, total = torch.cuda.mem_get_info()
+            else:
+                free, total = torch.cuda.mem_get_info(device.index)
+            return int(free), int(total)
+        except Exception:
+            # Conservative fallback: total VRAM only, no free VRAM.
+            try:
+                idx = device.index if device.index is not None else torch.cuda.current_device()
+                total = int(torch.cuda.get_device_properties(idx).total_memory)
+                return (None, total)
+            except Exception:
+                return (None, None)
+
+    def _is_low_vram_device(self, device: torch.device, threshold_gb: float = 16.0) -> bool:
+        _, total = self._get_cuda_vram_info_bytes(device)
+        if total is None:
+            return False
+        return total < int(threshold_gb * 1024**3)
+
+    def _latent_channels(self) -> int:
+        # `latents_mean` is registered as shape (latent_channels,).
+        return int(self.latents_mean.numel())
+
+    def _estimate_latent_shape_from_sample(self, x: torch.Tensor) -> Tuple[int, int, int, int, int]:
+        """
+        Estimate (b, c, f, h, w) for decoded latents (z) produced by the posterior.
+        """
+        b, _, f, h, w = x.shape
+        latent_f = (f - 1) // int(self.temporal_compression_ratio) + 1
+        latent_h = h // int(self.spatial_compression_ratio)
+        latent_w = w // int(self.spatial_compression_ratio)
+        return (b, self._latent_channels(), latent_f, latent_h, latent_w)
+
+    def _num_bytes(self, shape: Tuple[int, ...], dtype: torch.dtype) -> int:
+        # `torch.finfo/torch.iinfo` don't support all dtypes cleanly; use a tiny tensor.
+        return int(torch.empty((), dtype=dtype).element_size()) * int(torch.tensor(shape).prod().item())
+
+    def _should_use_framewise_for_encode(self, x: torch.Tensor) -> bool:
+        # Respect explicit opt-in.
+        if self.use_framewise_encoding:
+            return True
+
+        # Length-based requirement: long videos should be encoded framewise to avoid OOM from one-shot activations.
+        # Uses the same windowing unit as `_temporal_tiled_encode`.
+        if x.shape[2] > int(self.tile_sample_min_num_frames):
+            return True
+
+        free, total = self._get_cuda_vram_info_bytes(x.device)
+        # Hard requirement: for VRAM <16GB, framewise decoding/encoding always.
+        if total is not None and total < 16 * 1024**3:
+            return True
+
+        # If we can't read free VRAM, keep current behavior.
+        if free is None:
+            return False
+
+        # Heuristic: compare estimated latent size to available VRAM.
+        est_latent_shape = self._estimate_latent_shape_from_sample(x)
+        est_latent_bytes = self._num_bytes(est_latent_shape, dtype=x.dtype)
+
+        # Encoding activations can be several multiples of latent size; keep a safety margin.
+        activation_multiplier = 8
+        safety_fraction = 0.80
+        return (est_latent_bytes * activation_multiplier) > int(free * safety_fraction)
+
+    def _should_use_framewise_for_decode(self, z: torch.Tensor) -> bool:
+        # Respect explicit opt-in.
+        if self.use_framewise_decoding:
+            return True
 
     def _encode(self, x: torch.Tensor, causal: Optional[bool] = None) -> torch.Tensor:
         batch_size, num_channels, num_frames, height, width = x.shape
 
-        if self.use_framewise_decoding and num_frames > self.tile_sample_min_num_frames:
+        # Auto-decide framewise encoding based on VRAM + estimated latent size.
+        # Also fixes a bug: this was previously checking `use_framewise_decoding`.
+        if self._should_use_framewise_for_encode(x):
             return self._temporal_tiled_encode(x, causal=causal)
 
         if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
@@ -1246,7 +1364,8 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
         tile_latent_min_num_frames = self.tile_sample_min_num_frames // self.temporal_compression_ratio
 
-        if self.use_framewise_decoding and num_frames > tile_latent_min_num_frames:
+        # Auto-decide framewise decoding based on VRAM + latent size.
+        if self._should_use_framewise_for_decode(z):
             return self._temporal_tiled_decode(z, temb, causal=causal, return_dict=return_dict)
 
         if self.use_tiling and (width > tile_latent_min_width or height > tile_latent_min_height):
@@ -1477,27 +1596,75 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         tile_latent_stride_num_frames = self.tile_sample_stride_num_frames // self.temporal_compression_ratio
         blend_num_frames = self.tile_sample_min_num_frames - self.tile_sample_stride_num_frames
 
-        row = []
-        for i in tqdm(range(0, num_frames, tile_latent_stride_num_frames), desc="Temporal tiled decode"):
-            tile = z[:, :, i : i + tile_latent_min_num_frames + 1, :, :]
-            if self.use_tiling and (tile.shape[-1] > tile_latent_min_width or tile.shape[-2] > tile_latent_min_height):
-                decoded = self.tiled_decode(tile, temb, causal=causal, return_dict=True).sample
-            else:
-                decoded = self.decoder(tile, temb, causal=causal)
-            if i > 0:
-                decoded = decoded[:, :, :-1, :, :]
-            row.append(decoded)
+        # MPS is particularly sensitive to peak-memory spikes and fragmentation.
+        # The old implementation materialized *all* decoded tiles in a Python list before blending + concatenation,
+        # which can OOM even when the final output tensor would fit.
+        #
+        # We stream tiles instead: keep only (prev_tile, cur_tile) resident, and write directly into a preallocated
+        # output tensor. This preserves the exact blending behavior (note: `blend_t` mutates `b` in-place).
+        is_mps = z.device.type == "mps"
+        mps_empty_cache = (
+            is_mps and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache") and callable(torch.mps.empty_cache)
+        )
+        mps_sync = is_mps and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize") and callable(torch.mps.synchronize)
 
-        result_row = []
-        for i, tile in enumerate(row):
-            if i > 0:
-                tile = self.blend_t(row[i - 1], tile, blend_num_frames)
-                tile = tile[:, :, : self.tile_sample_stride_num_frames, :, :]
-                result_row.append(tile)
+        # Decode first tile to learn output shape, then preallocate the full output.
+        frame_indices = list(range(0, num_frames, tile_latent_stride_num_frames))
+        if len(frame_indices) == 0:
+            # Degenerate case: no frames.
+            dec = z.new_empty((batch_size, num_channels, 0, height, width))
+        else:
+            i0 = frame_indices[0]
+            tile0 = z[:, :, i0 : i0 + tile_latent_min_num_frames + 1, :, :]
+            if self.use_tiling and (tile0.shape[-1] > tile_latent_min_width or tile0.shape[-2] > tile_latent_min_height):
+                prev_tile = self.tiled_decode(tile0, temb, causal=causal, return_dict=True).sample
             else:
-                result_row.append(tile[:, :, : self.tile_sample_stride_num_frames + 1, :, :])
+                prev_tile = self.decoder(tile0, temb, causal=causal)
 
-        dec = torch.cat(result_row, dim=2)[:, :, :num_sample_frames]
+            out = prev_tile.new_empty((prev_tile.shape[0], prev_tile.shape[1], num_sample_frames, prev_tile.shape[3], prev_tile.shape[4]))
+
+            # First tile contributes stride+1 frames; subsequent tiles contribute stride frames.
+            stride = int(self.tile_sample_stride_num_frames)
+            write_pos = 0
+            first_take = min(stride + 1, prev_tile.shape[2], num_sample_frames)
+            out[:, :, write_pos : write_pos + first_take, :, :] = prev_tile[:, :, :first_take, :, :]
+            write_pos += first_take
+
+            # Best-effort MPS memory hygiene.
+            if mps_sync:
+                torch.mps.synchronize()
+            if mps_empty_cache:
+                torch.mps.empty_cache()
+
+            for i in tqdm(frame_indices[1:], desc="Temporal tiled decode"):
+                tile = z[:, :, i : i + tile_latent_min_num_frames + 1, :, :]
+                if self.use_tiling and (tile.shape[-1] > tile_latent_min_width or tile.shape[-2] > tile_latent_min_height):
+                    cur_tile = self.tiled_decode(tile, temb, causal=causal, return_dict=True).sample
+                else:
+                    cur_tile = self.decoder(tile, temb, causal=causal)
+
+                # Match old behavior: for i>0, drop the last frame before blending to avoid duplication.
+                cur_tile = cur_tile[:, :, :-1, :, :]
+
+                # Blend overlap into the *current* tile (in-place) and emit only the stride prefix.
+                cur_tile = self.blend_t(prev_tile, cur_tile, blend_num_frames)
+                emit = cur_tile[:, :, :stride, :, :]
+
+                if write_pos < num_sample_frames:
+                    take = min(emit.shape[2], num_sample_frames - write_pos)
+                    out[:, :, write_pos : write_pos + take, :, :] = emit[:, :, :take, :, :]
+                    write_pos += take
+
+                # Carry forward the blended tile (matches the in-place semantics of the old implementation).
+                prev_tile = cur_tile
+
+                # Free ASAP on MPS to reduce fragmentation.
+                if mps_sync:
+                    torch.mps.synchronize()
+                if mps_empty_cache:
+                    torch.mps.empty_cache()
+
+            dec = out[:, :, :num_sample_frames]
 
         if not return_dict:
             return (dec,)

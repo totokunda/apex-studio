@@ -31,11 +31,3 @@ git+https://github.com/isarandi/smplfitter.git
 
 fairscale
 pycocotools
-
-# Background removal (extras are selected in machine-specific requirements)
-rembg
-
-#
-# Video decode
-#
-# Use OpenCV (`opencv_python_headless`) from `requirements/requirements.txt`.

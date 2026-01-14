@@ -1,0 +1,21 @@
+-r ../requirements.txt
+-r ../processors.requirements.txt
+
+rembg[gpu]
+triton==3.5.1
+xformers==0.0.33.post2
+transformer_engine==2.10.0
+
+# SageAttention (Source build covers all archs on Linux if TORCH_CUDA_ARCH_LIST is set)
+sageattention @ git+https://github.com/thu-ml/SageAttention.git
+
+# FlashAttention 2 (Source build)
+flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+
+# FlashAttention 3 (Prebuilt wheels - harmless to include even if GPU doesn't support it)
+flash_attn_3 @ https://github.com/windreamer/flash-attention3-wheels/releases/download/2026.01.12-6b9e0bf/flash_attn_3-3.0.0b1%2B20260112.cu128torch291cxx11abitrue.ea8f73-cp39-abi3-linux_x86_64.whl
+
+# Nunchaku
+https://github.com/nunchaku-ai/nunchaku/releases/download/v1.2.0/nunchaku-1.2.0+torch2.9-cp312-cp312-linux_x86_64.whl
+
+onnxruntime-gpu==1.23.2

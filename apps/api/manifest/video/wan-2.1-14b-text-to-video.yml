@@ -45,6 +45,7 @@ spec:
   - flash
   - flash3
   - sage
+  - metal-flash
   fps: 16
   components:
   - type: scheduler

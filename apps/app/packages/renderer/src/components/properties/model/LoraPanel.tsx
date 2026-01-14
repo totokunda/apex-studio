@@ -38,6 +38,7 @@ import {
   refreshManifestPart,
   useManifestQuery,
 } from "@/lib/manifest/queries";
+import { cn } from "@/lib/utils";
 
 interface LoraPanelProps {
   clipId: string;
@@ -60,13 +61,39 @@ const DownloadProgressSection: React.FC<{
   jobUpdates: UnifiedDownloadWsUpdate[];
   onCancel: () => void;
   width: number;
-}> = ({ jobUpdates, onCancel, width }) => {
+  title?: string;
+}> = ({ jobUpdates, onCancel, width, title }) => {
   const files = useMemo(
     () => unifiedDownloadWsUpdatesToFiles(jobUpdates),
     [jobUpdates],
   );
   if (!files.length) return null;
   // (latest update currently unused; keep progress purely file-based)
+
+  const displayFiles = useMemo(() => {
+    // If we collapsed unlabeled backend updates into a single "download" row,
+    // show a more meaningful name in the UI.
+    if (files.length === 1) {
+      const f = files[0] as any;
+      const baseName =
+        (typeof title === "string" && title.trim()) ||
+        (typeof f?.label === "string" && f.label.trim()) ||
+        (typeof f?.filename === "string" && f.filename.trim()) ||
+        "Download";
+
+      const shouldReplace =
+        f?.filename === "download" ||
+        f?.filename === "lora" ||
+        f?.filename === "component" ||
+        f?.filename === "preprocessor" ||
+        /^file-\\d+$/i.test(String(f?.filename || ""));
+
+      if (shouldReplace) {
+        return [{ ...f, filename: baseName }];
+      }
+    }
+    return files;
+  }, [files, title]);
 
 
   return (
@@ -75,7 +102,7 @@ const DownloadProgressSection: React.FC<{
       style={{ width: `${width}px`, maxWidth: `${width}px` }}
     >
       <div className="flex flex-col gap-y-2">
-        {files.map((f: any) => {
+        {displayFiles.map((f: any) => {
           const pct = f.totalBytes
             ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
             : typeof f.progress === "number"
@@ -267,6 +294,7 @@ const LoraDownloadRow: React.FC<{
                 } catch {}
               }}
               width={width}
+              title={label}
             />
           )}
           {!isDownloading && isWaiting && (
@@ -425,7 +453,7 @@ const LoraItem: React.FC<{
                   setIsEditingName(true);
                   setInitialEditingName(label);
                 }}
-                className="shrink-0 p-1 rounded-[4px] border border-transparent hover:border-brand-light/30 hover:bg-brand-background/60 text-brand-light/80 hover:text-brand-light transition-colors"
+                className={cn("shrink-0 p-1 rounded-[4px] border border-transparent hover:border-brand-light/30 hover:bg-brand-background/60 text-brand-light/80 hover:text-brand-light transition-colors", (isObject && (item as any)?.required) ? "hidden" : "")} 
               >
                 <LuPencil className="w-3 h-3" />
               </button>
@@ -444,7 +472,7 @@ const LoraItem: React.FC<{
           </span>
           <button
             type="button"
-            disabled={isDeleting || isSavingName}
+            disabled={isDeleting || isSavingName || (isObject && (item as any)?.required)}
             onClick={async () => {
               const manifestIdSafe =
                 manifestId || (isObject && (item as any)?.metadata?.id) || "";
@@ -459,7 +487,7 @@ const LoraItem: React.FC<{
                 setIsDeleting(false);
               }
             }}
-            className="shrink-0 p-1 rounded-[4px] bg-brand-background border border-brand-light/10 text-brand-light/70 hover:text-brand-light/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className={cn("shrink-0 p-1 rounded-[4px] bg-brand-background border border-brand-light/10 text-brand-light/70 hover:text-brand-light/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors", (isObject && (item as any)?.required) ? "hidden" : "")}
           >
             {isDeleting ? (
               <LuLoader className="w-3 h-3 animate-spin" />
@@ -972,7 +1000,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
   const visibleLoras = useMemo(
     () =>
       loras.filter((lora) =>
-        typeof lora !== "string" ? !lora.required : true,
+        typeof lora !== "string"
       ),
     [loras],
   );
@@ -1303,7 +1331,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
           {hasInstalledLoras && (
             <div className="flex flex-col gap-y-2">
               {loras.map((lora, idx) => {
-                if (typeof lora !== "string" && lora.required) return null;
+                if (typeof lora === "string") return null;
                 if (isLoraDownloading(lora)) return null; 
                 return (
                   <LoraItem

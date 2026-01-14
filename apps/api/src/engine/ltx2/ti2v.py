@@ -5,8 +5,7 @@ import numpy as np
 import copy
 from diffusers.utils.torch_utils import randn_tensor
 from src.helpers.ltx2.upsampler import upsample_video
-from src.types import InputImage, InputAudio    
-from einops import rearrange   
+from src.types import InputImage, InputAudio      
 from src.utils.cache import empty_cache
 from src.utils.progress import safe_emit_progress, make_mapped_progress
 
@@ -460,7 +459,20 @@ class LTX2TI2VEngine(LTX2Shared):
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         decode_timestep: Union[float, List[float]] = 0.0,
         decode_noise_scale: Optional[Union[float, List[float]]] = None,
+        # --- Video VAE tiling / framewise controls (UI-configurable) ---
+        vae_tiling_enabled: bool = True,
+        vae_use_framewise_encoding: bool = False,
+        vae_use_framewise_decoding: bool = False,
+        vae_num_sample_frames_batch_size: int = 16,
+        vae_num_latent_frames_batch_size: int = 2,
+        vae_tile_sample_min_height: int = 512,
+        vae_tile_sample_min_width: int = 512,
+        vae_tile_sample_min_num_frames: int = 32,
+        vae_tile_sample_stride_height: int = 448,
+        vae_tile_sample_stride_width: int = 448,
+        vae_tile_sample_stride_num_frames: int = 16,
         attention_kwargs: Optional[Dict[str, Any]] = None,
+        image_quality_crf: int = 33,
         max_sequence_length: int = 1024,
         offload: bool = True,
         return_latents: bool = False,
@@ -497,7 +509,6 @@ class LTX2TI2VEngine(LTX2Shared):
         height = round(height / self.vae_spatial_compression_ratio) * self.vae_spatial_compression_ratio
         width = round(width / self.vae_spatial_compression_ratio) * self.vae_spatial_compression_ratio
         
-        
         self._guidance_scale = guidance_scale
         self._guidance_rescale = guidance_rescale
         self._attention_kwargs = attention_kwargs
@@ -517,7 +528,9 @@ class LTX2TI2VEngine(LTX2Shared):
             if not isinstance(image, list):
                 image = [image]
             image = [self._load_image(img) for img in image]
+            
             image = [self._aspect_ratio_resize(img, max_area=height * width, mod_value=self.vae_spatial_compression_ratio)[0] for img in image]
+            image = [self.preprocess(img, crf=image_quality_crf) for img in image]
             if not use_distilled_stage_2:
                 width, height = image[0].size
                 
@@ -536,9 +549,28 @@ class LTX2TI2VEngine(LTX2Shared):
             batch_size = prompt_embeds.shape[0]
 
         device = self.device
+
+        # Configure VAE tiling/framewise settings for this run.
+        # This is used by BaseEngine.vae_encode/vae_decode via `enable_vae_tiling(...)`.
+        vae_tiling_kwargs: Dict[str, Any] = {
+            "enabled": bool(vae_tiling_enabled),
+            "tile_sample_min_height": int(vae_tile_sample_min_height),
+            "tile_sample_min_width": int(vae_tile_sample_min_width),
+            "tile_sample_min_num_frames": int(vae_tile_sample_min_num_frames),
+            "tile_sample_stride_height": int(vae_tile_sample_stride_height),
+            "tile_sample_stride_width": int(vae_tile_sample_stride_width),
+            "tile_sample_stride_num_frames": int(vae_tile_sample_stride_num_frames),
+            "use_framewise_encoding": bool(vae_use_framewise_encoding),
+            "use_framewise_decoding": bool(vae_use_framewise_decoding),
+            "num_sample_frames_batch_size": int(vae_num_sample_frames_batch_size),
+            "num_latent_frames_batch_size": int(vae_num_latent_frames_batch_size),
+        }
+        # Used by BaseEngine.enable_vae_tiling()
+        self._vae_tiling_runtime_kwargs = vae_tiling_kwargs
         
         if self.preloaded_loras and "ltx-2-19b-distilled-lora-384" in self.preloaded_loras and not use_distilled_stage_2:
             self.logger.info("Disabling LTX2 19B Distilled LoRA 384 with scale 0.0")
+            self._previous_lora_scale = self.preloaded_loras["ltx-2-19b-distilled-lora-384"].scale
             self.preloaded_loras["ltx-2-19b-distilled-lora-384"].scale = 0.0
 
         # 3. Prepare text embeddings
@@ -581,7 +613,6 @@ class LTX2TI2VEngine(LTX2Shared):
         if offload:
             self._offload("connectors")
             
-
 
         # 4. Prepare latent variables
         safe_emit_progress(stage1_progress_callback, 0.18, "Preparing latents")
@@ -796,14 +827,15 @@ class LTX2TI2VEngine(LTX2Shared):
         if not self.transformer:
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
-        
+
+
         if chunking_profile != "none":
             self.transformer.set_chunking_profile(chunking_profile)
         
         if self.preloaded_loras and "ltx-2-19b-distilled-lora-384" in self.preloaded_loras and use_distilled_stage_2:
-            self.logger.info("Applying LTX2 19B Distilled LoRA 384 with scale 1.0")
+            self.logger.info(f"Applying LTX2 19B Distilled LoRA 384 with scale {getattr(self, '_previous_lora_scale', 1.0)}")
             lora = self.preloaded_loras["ltx-2-19b-distilled-lora-384"]
-            lora.scale = 1.0
+            lora.scale = getattr(self, "_previous_lora_scale", 1.0)
             self.apply_loras([(lora.source, lora.scale)], adapter_names=[lora.name])
 
         # Pre-compute video and audio positional ids as they will be the same at each step of the denoising loop
@@ -1214,8 +1246,6 @@ class LTX2TI2VEngine(LTX2Shared):
                         else:
                             audio_timestep_2b = timestep_2b
                         
-                        
-                 
                         with self.transformer.cache_context("cond_uncond"):
                             noise_pred_video, noise_pred_audio = self.transformer(
                                 hidden_states=latent_model_input,
@@ -1315,18 +1345,39 @@ class LTX2TI2VEngine(LTX2Shared):
                     if empty_cache_after_step:
                         empty_cache()
         
-        if offload:
-            self._offload("transformer")
+        
 
         if upsample:
             safe_emit_progress(stage1_progress_callback, 0.92, "Upsampling latents (stage-2 prep)")
             upsampler = self.helpers["latent_upsampler"]
+
+            try:
+                self.maybe_offload_transformer_for_upsample(
+                    offload=offload,
+                    device=device,
+                    upsampler=upsampler,
+                    batch_size=batch_size,
+                    num_channels_latents=num_channels_latents,
+                    latent_num_frames=latent_num_frames,
+                    latent_height=latent_height,
+                    latent_width=latent_width,
+                    vae_dtype=self.component_dtypes["vae"],
+                    force=False,
+                    reason="latent upsampling (stage-2 prep)",
+                )
+            except Exception as e:
+                # Never fail generation due to a best-effort memory probe.
+                self.logger.debug(f"Transformer pre-upsampling offload probe failed (ignored): {e}")
+
             self.to_device(upsampler)
             vae_dtype = self.component_dtypes["vae"]
             upsampler.to(dtype=vae_dtype)
             if not getattr(self, "video_vae", None):
                 self.load_component_by_name("video_vae")
             self.to_device(self.video_vae)
+            # Apply run-configured VAE tiling/framewise settings.
+            if hasattr(self.video_vae, "enable_tiling"):
+                self.video_vae.enable_tiling(**vae_tiling_kwargs)
             latents = self._unpack_latents(
                 latents,
                 latent_num_frames,
@@ -1336,7 +1387,37 @@ class LTX2TI2VEngine(LTX2Shared):
                 self.transformer_temporal_patch_size,
             )
             audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
-            latents = upsample_video(latents, self.video_vae, upsampler)
+            try:
+                latents = upsample_video(latents, self.video_vae, upsampler)
+            except Exception as e:
+                # If we hit an OOM here and the transformer is still loaded, retry once after offloading it.
+                msg = str(e).lower()
+                is_oom = ("out of memory" in msg) or ("cuda" in msg and "memory" in msg)
+                if is_oom and offload and getattr(self, "transformer", None) is not None:
+                    self.logger.warning(
+                        "OOM during latent upsampling; offloading transformer and retrying once."
+                    )
+                    try:
+                        self.maybe_offload_transformer_for_upsample(
+                            offload=offload,
+                            device=device,
+                            upsampler=upsampler,
+                            batch_size=batch_size,
+                            num_channels_latents=num_channels_latents,
+                            latent_num_frames=latent_num_frames,
+                            latent_height=latent_height,
+                            latent_width=latent_width,
+                            vae_dtype=self.component_dtypes["vae"],
+                            force=True,
+                            reason="OOM during latent upsampling (retry)",
+                        )
+                    except Exception:
+                        # If the shared helper fails, fall back to a guaranteed VRAM-freeing discard.
+                        self._offload("transformer", offload_type="discard")
+                        empty_cache()
+                    latents = upsample_video(latents, self.video_vae, upsampler)
+                else:
+                    raise
             del upsampler
             if offload:
                 self._offload("latent_upsampler")
@@ -1380,8 +1461,22 @@ class LTX2TI2VEngine(LTX2Shared):
                 noise_scale=noise_scale,
                 use_gradient_estimation=False,
                 ge_gamma=0.0,
+                vae_tiling_enabled=vae_tiling_enabled,
+                vae_use_framewise_encoding=vae_use_framewise_encoding,
+                vae_use_framewise_decoding=vae_use_framewise_decoding,
+                vae_num_sample_frames_batch_size=vae_num_sample_frames_batch_size,
+                vae_num_latent_frames_batch_size=vae_num_latent_frames_batch_size,
+                vae_tile_sample_min_height=vae_tile_sample_min_height,
+                vae_tile_sample_min_width=vae_tile_sample_min_width,
+                vae_tile_sample_min_num_frames=vae_tile_sample_min_num_frames,
+                vae_tile_sample_stride_height=vae_tile_sample_stride_height,
+                vae_tile_sample_stride_width=vae_tile_sample_stride_width,
+                vae_tile_sample_stride_num_frames=vae_tile_sample_stride_num_frames,
                 progress_callback=stage2_progress_callback,
             )
+        
+        if offload:
+            self._offload("transformer")
 
         if return_latents:
             safe_emit_progress(stage1_progress_callback, 1.0, "Returning latents")
@@ -1399,9 +1494,14 @@ class LTX2TI2VEngine(LTX2Shared):
         if not getattr(self, "video_vae", None):
             self.load_component_by_name("video_vae")
         self.to_device(self.video_vae)
-        # enable tiling
-        self.logger.info("Enabling tiling for video VAE")
-        self.video_vae.enable_tiling()
+        # Apply run-configured VAE tiling/framewise settings.
+        if hasattr(self.video_vae, "enable_tiling"):
+            self.video_vae.enable_tiling(**vae_tiling_kwargs)
+        self.logger.info(
+            f"Video VAE tiling={'on' if vae_tiling_enabled else 'off'}, "
+            f"framewise_enc={'on' if vae_use_framewise_encoding else 'auto'}, "
+            f"framewise_dec={'on' if vae_use_framewise_decoding else 'auto'}"
+        )
         
         latents = self.video_vae.denormalize_latents(
             latents
