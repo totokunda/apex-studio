@@ -30,7 +30,6 @@ spec:
   - sdpa
   - flash
   - flash3
-  - sage
   - metal-flash
   - efficient_dot_product_attention
   - xformers
@@ -39,7 +38,7 @@ spec:
     scale: 1.0
     name: Flux Krea Realism LoRA
     label: Flux Krea Realism LoRA
-    verified: true
+    verified: false
   components:
   - type: scheduler
     label: Scheduler
