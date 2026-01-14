@@ -381,7 +381,7 @@ class QwenImageAttentionBlock(nn.Module):
         q, k, v = qkv.chunk(3, dim=-1)
 
         # apply attention
-        x = attention_register.call(q, k, v)
+        x = attention_register.call(q, k, v, key="sdpa")
 
         x = (
             x.squeeze(1)

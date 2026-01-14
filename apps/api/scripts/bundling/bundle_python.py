@@ -13,7 +13,6 @@ Usage:
     python scripts/bundle_python.py --platform [darwin|linux|win32] --output ./dist
 """
 
-
 import argparse
 import json
 import os
@@ -23,9 +22,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
-import urllib.error
-import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Optional, Set, List, Tuple
@@ -689,6 +685,40 @@ class PythonBundler:
             ],
             check=True,
         )
+
+        # Optional: Nunchaku (CUDA-only) — install separately and default to --no-deps.
+        # This prevents resolver churn from nunchaku's dependency metadata while still
+        # enabling nunchaku-backed models on supported platforms.
+        try:
+            if self.last_machine_entry and str(self.last_machine_entry).replace("\\", "/").endswith("/requirements/cuda/linux.txt"):
+                subprocess.run(
+                    [
+                        str(py_path),
+                        str(self.project_root / "scripts" / "deps" / "maybe_install_nunchaku.py"),
+                        "--python",
+                        str(py_path),
+                        "--machine-entry-name",
+                        str(self.last_machine_entry.name),
+                        "--install",
+                    ],
+                    check=False,
+                )
+            elif self.last_machine_entry and str(self.last_machine_entry).replace("\\", "/").endswith("/requirements/cuda/windows.txt"):
+                subprocess.run(
+                    [
+                        str(py_path),
+                        str(self.project_root / "scripts" / "deps" / "maybe_install_nunchaku.py"),
+                        "--python",
+                        str(py_path),
+                        "--machine-entry-name",
+                        str(self.last_machine_entry.name),
+                        "--install",
+                    ],
+                    check=False,
+                )
+        except Exception:
+            # Best-effort; do not fail bundling.
+            pass
 
         # Install local universal wheels if available (overrides requirements)
         # We look for wheels in: apps/api/<pkg>/wheelhouse/universal/*.whl
@@ -1635,6 +1665,19 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
 
         # Patch third-party deps inside the venv before we copy it into the shipped bundle.
         self._patch_diffusers_set_adapter_scale(venv_dir)
+        # Patch xformers (if installed) in the venv, by resolving the installed module
+        # path and editing in-place (avoids applying a broad patches directory).
+        if self.platform_name == "win32":
+            py_path = venv_dir / "Scripts" / "python.exe"
+        else:
+            py_path = venv_dir / "bin" / "python"
+        subprocess.run(
+            [
+                str(py_path),
+                str(self.project_root / "scripts" / "updates" / "patch_xformers_flash3.py"),
+            ],
+            check=True,
+        )
 
         # Create a lockfile for update-time dependency syncing.
         # Do this after all installs/patches so the lock reflects the final environment.
