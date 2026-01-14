@@ -29,7 +29,13 @@ import os
 from tqdm import tqdm
 from typing import Dict, Any, Optional
 import sys
-sys.path.append("src/preprocess/dwpose_nlf/nlf")
+import os
+# Add the nlf directory to sys.path using absolute path to ensure imports work regardless of CWD
+current_dir = os.path.dirname(os.path.abspath(__file__))
+nlf_dir = os.path.join(current_dir, "nlf")
+if nlf_dir not in sys.path:
+    sys.path.append(nlf_dir)
+
 import src.preprocess.dwpose_nlf.nlf.pt.backbones.builder as backbone_builder
 import src.preprocess.dwpose_nlf.nlf.pt.models.field as pt_field
 import src.preprocess.dwpose_nlf.nlf.pt.models.nlf_model as pt_nlf_model
