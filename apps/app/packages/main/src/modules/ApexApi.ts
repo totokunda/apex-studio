@@ -85,6 +85,7 @@ export class ApexApi implements AppModule {
     this.backendUrl = settings.getBackendUrl();
     
     settings.on("backend-url-changed", (newUrl: string) => {
+      console.log(`[ApexApi] Backend URL changed to ${newUrl}`);
       this.backendUrl = newUrl;
       this.wsManager?.setBaseUrl(newUrl);
       // Backend locality & cache roots depend on backend URL; reset derived state.
@@ -112,6 +113,11 @@ export class ApexApi implements AppModule {
     // Defer app-dependent initialization until the app is ready,
     // but do not block startup on backend/network probes.
     await this.app.whenReady();
+
+    // Ensure we have the latest settings after app is ready (handles race where settings loaded late)
+    this.backendUrl = settings.getBackendUrl();
+    console.log(`[ApexApi] Initialized with backend URL: ${this.backendUrl}`);
+
     this.wsManager?.setBaseUrl(this.backendUrl);
     void this.#probeBackendLocality();
 
