@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 
-NUNCHAKU_VERSION = "1.2.0"
+NUNCHAKU_VERSION = "1.0.2"
 NUNCHAKU_RELEASE_TAG = f"v{NUNCHAKU_VERSION}"
 NUNCHAKU_RELEASE_BASE_URL = f"https://github.com/nunchaku-tech/nunchaku/releases/download/{NUNCHAKU_RELEASE_TAG}"
 
@@ -232,6 +232,11 @@ def main() -> int:
         help="uv executable path (default: $UV or 'uv')",
     )
     p.add_argument(
+        "--with-deps",
+        action="store_true",
+        help="Install with dependencies (default: --no-deps to avoid perturbing environments).",
+    )
+    p.add_argument(
         "--machine-entry-name",
         default=None,
         help="Optional: machine requirements entry name (e.g. 'cuda-sm90-hopper.txt') to apply SM90 skip rule",
@@ -270,17 +275,33 @@ def main() -> int:
     if not d.allowed or not d.wheel_url:
         return 0
 
-    uv_exe = uv or "uv"
-    if shutil.which(uv_exe) is None and not Path(uv_exe).exists():
-        print(f"Cannot install: uv not found ({uv_exe})", file=sys.stderr)
-        return 2
+    # Default to no-deps (nunchaku is optional and we don't want to risk resolver upgrades/downgrades).
+    env_with_deps = (os.environ.get("APEX_NUNCHAKU_WITH_DEPS", "") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+    use_deps = bool(args.with_deps or env_with_deps)
 
-    print(f"Attempting Nunchaku install: {d.wheel_filename}")
+    print(f"Attempting Nunchaku install: {d.wheel_filename} ({'with-deps' if use_deps else 'no-deps'})")
+
+    # Prefer uv if present (either as an executable or as a module), with a pip fallback.
+    uv_exe = (uv or "").strip()
+    uv_cmd: list[str] | None = None
+    if uv_exe and (shutil.which(uv_exe) is not None or Path(uv_exe).exists()):
+        uv_cmd = [uv_exe, "pip", "install", "--python", str(py_path)]
+    else:
+        uv_cmd = [str(py_path), "-m", "uv", "pip", "install", "--python", str(py_path)]
+
+    if not use_deps:
+        uv_cmd.append("--no-deps")
+    uv_cmd.append(d.wheel_url)
+
     try:
-        subprocess.run(
-            [uv_exe, "pip", "install", "--python", str(py_path), d.wheel_url],
-            check=False,
-        )
+        res = subprocess.run(uv_cmd, check=False)
+        if res.returncode != 0:
+            # Fallback to pip (installed into the target interpreter environment).
+            pip_cmd = [str(py_path), "-m", "pip", "install"]
+            if not use_deps:
+                pip_cmd.append("--no-deps")
+            pip_cmd.append(d.wheel_url)
+            subprocess.run(pip_cmd, check=False)
     except Exception:
         # Best-effort: do not fail.
         return 0

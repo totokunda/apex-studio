@@ -229,6 +229,11 @@ def main() -> int:
             "pip",
             "setuptools",
             "wheel",
+            # Keep packaging in sync with setuptools. Newer setuptools calls
+            # `packaging.utils.canonicalize_version(..., strip_trailing_zero=...)`.
+            # If packaging is too old, installs fail at metadata prep time with:
+            #   TypeError: canonicalize_version() got an unexpected keyword argument 'strip_trailing_zero'
+            "packaging>=24",
             # Pre-install build helpers that some sdists forget to declare.
             # (Example: opendr/opendr-toolkit needs Cython/numpy at build time but doesn't specify them.)
             "Cython>=0.29.36",
@@ -266,6 +271,40 @@ def main() -> int:
         ["-r", str(req_file)],
         cwd=project_root,
         use_no_build_isolation=use_no_build_isolation,
+    )
+
+    # 4a) Optional: install Nunchaku (CUDA-only) without dependencies by default.
+    # This avoids dependency resolver churn (nunchaku is optional, and its deps can conflict
+    # with the rest of the stack). Opt into deps with `--with-deps` on the helper or
+    # `APEX_NUNCHAKU_WITH_DEPS=1`.
+    req_norm = str(req_file).replace("\\", "/")
+    if "/requirements/cuda/" in req_norm and sys.platform in ("linux", "win32"):
+        try:
+            _run(
+                [
+                    str(py),
+                    str(project_root / "scripts" / "deps" / "maybe_install_nunchaku.py"),
+                    "--python",
+                    str(py),
+                    "--machine-entry-name",
+                    str(args.machine),
+                    "--install",
+                ],
+                cwd=project_root,
+            )
+        except subprocess.CalledProcessError:
+            # Best-effort; keep install flow resilient.
+            pass
+
+    # 4b) Patch xformers (if installed) in the active env/venv.
+    # We patch by resolving the installed module path and editing in-place, rather than
+    # applying a whole patches directory (which may include optional/outdated patches).
+    _run(
+        [
+            str(py),
+            str(project_root / "scripts" / "updates" / "patch_xformers_flash3.py"),
+        ],
+        cwd=project_root,
     )
 
     # 5) install apex-engine itself (expose the CLI) without re-resolving deps
