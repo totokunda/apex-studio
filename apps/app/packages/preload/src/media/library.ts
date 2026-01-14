@@ -359,10 +359,29 @@ async function getGenerationRoots(): Promise<string[]> {
     return generationRootsCache.roots;
   }
 
-  // Prefer the cache path from the backend when available, but gracefully
-  // fall back to the local default so generations still show up when the
-  // API server is offline or unreachable.
+  // Get cache path from the persisted settings file (apex-settings.json)
+  // This ensures we respect the configured cache path even if the API server
+  // is remote or unreachable.
   let cachePath: string | null = null;
+  try {
+    const userDataRes = await getUserDataPath();
+    if (userDataRes?.success && userDataRes.data?.user_data) {
+      const userDataDir = userDataRes.data.user_data;
+      const settingsPath = join(userDataDir, "apex-settings.json");
+      if (fs.existsSync(settingsPath)) {
+        const raw = await fsp.readFile(settingsPath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.cachePath === "string" && parsed.cachePath) {
+          cachePath = parsed.cachePath;
+        }
+      }
+    }
+  } catch {
+    // ignore settings read failure
+  }
+
+  // Fallback: check env var or home directory default
+  if (!cachePath) {
     try {
       const envPath = process.env.APEX_CACHE_PATH;
       if (typeof envPath === "string" && envPath.length > 0) {
@@ -376,6 +395,7 @@ async function getGenerationRoots(): Promise<string[]> {
     } catch {
       cachePath = null;
     }
+  }
   
   let userDataDir: string | null = null;
   try {
