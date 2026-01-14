@@ -61,8 +61,12 @@ python scripts/dev/dev_pip_install.py --machine cuda-ampere
 ### Nunchaku
 
 Nunchaku is **installed by default** when you use `scripts/dev/dev_pip_install.py` on
-supported CUDA platforms (Linux/Windows). This is done via a small selector that chooses
-the correct wheel for your installed torch version.
+supported CUDA platforms (Linux/Windows), but it is installed **separately** from the CUDA
+requirements file using `scripts/deps/maybe_install_nunchaku.py`.
+
+By default it uses **`--no-deps`** to avoid dependency resolver churn / upgrades that can
+break other parts of the stack. If you really want deps, set `APEX_NUNCHAKU_WITH_DEPS=1`
+or run the helper with `--with-deps`.
 
 ## Windows CUDA wheels
 

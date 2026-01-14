@@ -109,7 +109,10 @@ apply_with_git() {
 
 apply_with_patch_cmd() {
   local patch_file="$1"
-  local args=(-p1)
+  # Non-interactive + idempotent:
+  # - --batch: never prompt (safe for CI / unattended runs)
+  # - -N: ignore patches already applied / reversed (best-effort idempotency)
+  local args=(--batch -N -p1)
   $REVERSE && args+=(-R)
   if $DRY_RUN; then
     patch --dry-run "${args[@]}" < "$patch_file"
@@ -171,6 +174,25 @@ PYCODE
   echo "$ROOT_DIR"
 }
 
+first_patch_a_path() {
+  local patch_file="$1"
+  local first_line
+  first_line=$(grep -m1 '^diff --git ' "$patch_file" || true)
+  if [[ -z "$first_line" ]]; then
+    echo ""
+    return 0
+  fi
+  local a_path
+  a_path=$(echo "$first_line" | awk '{print $3}')
+  a_path=${a_path#a/}
+  echo "$a_path"
+}
+
+is_python_ident() {
+  local s="$1"
+  [[ "$s" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
+}
+
 apply_in_dir() {
   local base_dir="$1"
   local patch_file="$2"
@@ -203,6 +225,23 @@ for patch_path in "${PATCH_FILES[@]}"; do
   echo "Applying $patch_name ..."
   base_dir=$(determine_base_dir "$patch_path")
   echo " → Base directory resolved to: $base_dir"
+
+  # If this patch looks like it targets a third-party Python package (top-level dir is a
+  # Python identifier), but we couldn't resolve it into site-packages AND the target file
+  # doesn't exist in the repo, skip it gracefully. This keeps CPU/mac installs working
+  # when optional deps (e.g. xformers) aren't installed.
+  a_path=$(first_patch_a_path "$patch_path")
+  top_level="${a_path%%/*}"
+  if [[ -n "$PYTHON_CMD" && "$base_dir" == "$ROOT_DIR" && -n "$a_path" && -n "$top_level" ]]; then
+    if is_python_ident "$top_level" && [[ "$a_path" == "$top_level/"* ]]; then
+      if [[ ! -e "$ROOT_DIR/$a_path" ]] && ! grep -q '^new file mode ' "$patch_path"; then
+        echo " ⚠ Skipping $patch_name (package '$top_level' not importable in python-cmd; target not found)"
+        ((success_count++))
+        continue
+      fi
+    fi
+  fi
+
   if apply_in_dir "$base_dir" "$patch_path"; then
     ((success_count++))
     echo "✔ Applied $patch_name in $base_dir"

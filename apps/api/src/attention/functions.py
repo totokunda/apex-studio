@@ -12,10 +12,16 @@ import numpy as np
 import importlib.util
 import os
 
+_flash3_import_error: Exception | None = None
 try:
+    # NOTE: On some setups, importing `flash_attn_interface` can raise a torch/C++ exception
+    # (not ImportError) due to duplicate TORCH_LIBRARY registrations (e.g. xformers-bundled
+    # FA3 + pip-installed flash_attn_3). Treat any failure as "unavailable" so the server
+    # can still boot and we can fall back to other attention backends.
     from flash_attn_interface import flash_attn_func as flash_attn_func_3
-except ImportError:
+except Exception as e:
     flash_attn_func_3 = None
+    _flash3_import_error = e
 
 try:
     from flash_attn import flash_attn_varlen_func, flash_attn_func
@@ -51,7 +57,6 @@ try:
     import xformers.ops  # type: ignore
 except Exception:
     xformers = None  # type: ignore
-
 
 try:
     from flex_block_attn import flex_block_attn_func
@@ -1025,7 +1030,10 @@ def flash_attention3(
     q, k, v, softmax_scale=None, default_dtype=torch.bfloat16, is_causal=False, **kwargs
 ):
     if flash_attn_func_3 is None:
-        raise ImportError("flash_attn_interface is not installed")
+        msg = "flash3 attention backend is unavailable"
+        if _flash3_import_error is not None:
+            msg += f" (flash_attn_interface import failed: {_flash3_import_error})"
+        raise ImportError(msg)
 
     q = q.contiguous()
     k = k.contiguous()
