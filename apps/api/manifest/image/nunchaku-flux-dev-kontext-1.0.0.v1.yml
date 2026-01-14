@@ -34,7 +34,11 @@ spec:
     - sm_90
   attention_types:
   - sdpa
+  - flash
+  - flash3
+  - sage
   - efficient_dot_product_attention
+  - xformers
   loras: []
   components:
   - type: scheduler

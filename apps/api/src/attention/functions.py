@@ -371,7 +371,17 @@ def metal_flash(
     Bq, Hq, Sq, Dq = q.shape
     Bk, Hk, Sk, Dk = k.shape
     Bv, Hv, Sv, Dv = v.shape
-
+    
+    # Supported head dimensions for Metal Flash SDPA kernel
+    _METAL_FLASH_SUPPORTED_HEAD_DIMS = {32, 64, 72, 80, 96, 128, 256}
+    if Dq not in _METAL_FLASH_SUPPORTED_HEAD_DIMS:
+        warnings.warn(
+            f"metal-flash does not support head_dim={Dq}. "
+            f"Supported dims: {sorted(_METAL_FLASH_SUPPORTED_HEAD_DIMS)}. Falling back to SDPA.",
+            stacklevel=2,
+        )
+        return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
+    
     if not (Dq == Dk == Dv):
         raise ValueError("Head dimensions must match across q/k/v")
     if not (Bk == Bv and Sk == Sv and Hk == Hv):
@@ -401,6 +411,7 @@ def metal_flash(
 
     # MPS stability: sync is opt-in/heuristic (Metal aborts cannot be caught).
     #torch.mps.synchronize()
+    
 
     out_flat = kernel.flash_attn_varlen_func(
         q=q_flat,
@@ -470,6 +481,25 @@ def metal_flash_varlen(
     Tv, Hv, Dv = v.shape
     if not (Tk == Tv and Hk == Hv and Dk == Dv and Dq == Dk):
         raise ValueError("Mismatched k/v shapes or head dims across q/k/v")
+
+    # Supported head dimensions for Metal Flash SDPA kernel
+    _METAL_FLASH_SUPPORTED_HEAD_DIMS = {32, 64, 72, 80, 96, 128, 256}
+    if Dq not in _METAL_FLASH_SUPPORTED_HEAD_DIMS:
+        warnings.warn(
+            f"metal-flash-varlen does not support head_dim={Dq}. "
+            f"Supported dims: {sorted(_METAL_FLASH_SUPPORTED_HEAD_DIMS)}. Falling back to sdpa_varlen.",
+            stacklevel=2,
+        )
+        return sdpa_varlen(
+            q, k, v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_kv=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_kv=max_seqlen_k,
+            is_causal=is_causal,
+            softmax_scale=softmax_scale,
+            **kwargs,
+        )
 
     if (cu_seqlens_q is None) ^ (cu_seqlens_k is None):
         raise ValueError("cu_seqlens_q and cu_seqlens_k must be provided together, or both omitted.")
