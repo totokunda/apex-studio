@@ -53,15 +53,15 @@
         "attention_type": "metal-flash"
     },
     "inputs": {
-        "image": "assets/462a0ab8-d125-4620-8378-a332a8173e68_image_0_3.png",
-        "prompt": "A close-up, professional headshot of a young Black man wearing a dark collared shirt, smiling confidently at first. The background is clean and softly blurred, giving a corporate \u201cprofile photo\u201d look.\n\nThe man holds the smile for a moment\u2026 then his expression suddenly breaks. His eyes widen, his eyebrows lift, and his smile collapses into panic. He leans forward toward the camera, voice cracking with desperation. He raises his hands slightly as if pleading, shoulders tense, breathing fast.\n\nHe suddenly shouts, in a thick Nigerian accent:\n\"Hire me! I am begging you! I need a job desperately! \"\n\nHis face becomes intense and emotional\u2014veins slightly visible, jaw tight, mouth wide as he yells. The camera stays locked on his face as the moment escalates, capturing every detail of the emotional breakdown.\n\nAudio: Clear male voice, thick Nigerian accent, urgent and strained, loud shout with desperation, slight breathiness and panic, studio-quality recording.\n\nStyle: Realistic, cinematic lighting, sharp facial detail, smooth background bokeh, dramatic emotional shift, short intense performance.",
-        "resolution": 720,
-        "aspect_ratio": "1:1",
-        "height": 736,
-        "width": 736,
-        "seed": 1462831121,
+        "image": "assets/ddd4d55b-8082-42b2-b93c-b144915d35c9_image_84.png",
+        "prompt": "The woman sticks her phone into her mouth, and starts to gag and choke on it. ",
+        "resolution": "custom",
+        "aspect_ratio": "custom",
+        "height": 704,
+        "width": 704,
+        "seed": 2820139039,
         "guidance_scale": 1,
-        "chunking_profile": "light",
+        "chunking_profile": "none",
         "vae_tiling_enabled": true,
         "vae_use_framewise_encoding": false,
         "vae_use_framewise_decoding": false,
@@ -73,6 +73,6 @@
         "vae_tile_sample_stride_num_frames": 16,
         "vae_num_sample_frames_batch_size": 16,
         "vae_num_latent_frames_batch_size": 2,
-        "duration": "5s"
+        "duration": "5.041666666666667s"
     }
 }
