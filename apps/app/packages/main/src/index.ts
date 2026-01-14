@@ -30,6 +30,8 @@ export async function initApp(initConfig: AppInitConfig) {
   let moduleRunner = createModuleRunner()
     // Ensure single instance lock before any window creation
     .init(disallowMultipleAppInstance())
+    // Settings must be loaded early (before other modules read them)
+    .init(settingsModule())
     // Register 'app://' protocol before app is ready and before creating the window
     .init(appDirProtocol())
     // Python process management - starts bundled API in production
@@ -43,7 +45,6 @@ export async function initApp(initConfig: AppInitConfig) {
     // Core backend IPC and persistence should be ready before any renderer windows load
     .init(apexApi())
     .init(jsonPersistenceModule())
-    .init(settingsModule())
     .init(
       createWindowManagerModule({
         initConfig,
