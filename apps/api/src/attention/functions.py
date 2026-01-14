@@ -9,6 +9,9 @@ import torch
 from torch.utils.checkpoint import checkpoint
 import math
 import numpy as np 
+import importlib.util
+import os
+
 try:
     from flash_attn_interface import flash_attn_func as flash_attn_func_3
 except ImportError:
@@ -34,8 +37,10 @@ except ImportError:
 
 try:
     from torch.nn.attention.flex_attention import flex_attention
-
-    flex_attention = torch.compile(flex_attention)
+    # IMPORTANT: compiling at import-time can be unstable on some backends (notably MPS).
+    # Keep this opt-in / CUDA-only.
+    if torch.cuda.is_available() and os.environ.get("APEX_COMPILE_FLEX_ATTENTION", "") == "1":
+        flex_attention = torch.compile(flex_attention)
 except ImportError:
     flex_attention = None
 
@@ -54,6 +59,44 @@ except ImportError:
     flex_block_attn_func = None
 
 attention_register = FunctionRegister()
+
+_HAS_KERNELS = importlib.util.find_spec("kernels") is not None
+_HAS_MPS = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+_metal_flash_sdpa = None
+_metal_flash_sdpa_load_error = None
+
+
+
+def _get_metal_flash_sdpa():
+    """
+    Lazy-load the Metal Flash-SDPA kernel bundle.
+
+    We keep this optional: if the `kernels` package (kernel registry/loader) isn't
+    available in the runtime, callers can still use other attention backends.
+    """
+    global _metal_flash_sdpa, _metal_flash_sdpa_load_error
+    if _metal_flash_sdpa is not None:
+        return _metal_flash_sdpa
+    if _metal_flash_sdpa_load_error is not None:
+        return None
+
+    try:
+        from kernels import get_kernel  # type: ignore
+
+        _metal_flash_sdpa = get_kernel("kernels-community/metal-flash-sdpa")
+        return _metal_flash_sdpa
+    except Exception as e:
+        _metal_flash_sdpa_load_error = e
+        _metal_flash_sdpa = None
+        return None
+
+
+def _create_cu_seqlens(seq_lengths, *, device):
+    """Create cumulative sequence lengths tensor (int32) on the target device."""
+    cu = [0]
+    for length in seq_lengths:
+        cu.append(cu[-1] + int(length))
+    return torch.tensor(cu, dtype=torch.int32, device=device)
 
 
 @attention_register("sdpa_streaming")
@@ -88,24 +131,68 @@ def sdpa_streaming(
     kf = k.reshape(BH, S_k, Dq)
     vf = v.reshape(BH, S_k, Dq)
 
-    # Optional: normalize mask to [BH,S_q,S_k]
+    # Optional: normalize mask to additive bias in [BH, S_q, S_k] (0 for keep, -inf for mask).
+    #
+    # IMPORTANT: many callsites use:
+    # - bool masks (True=keep, False=mask), often shaped [B, 1, S, S]
+    # - 0/1 masks (1=keep, 0=mask)
+    # PyTorch SDPA accepts both, but our streaming implementation operates on additive bias.
     am = None
     if attn_mask is not None:
-        if attn_mask.ndim == 2:  # [S_q,S_k]
-            am = attn_mask.to(logits_dtype).expand(BH, S_q, S_k)
-        elif attn_mask.ndim == 4:  # [B,H,S_q,S_k]
-            Bm, Hm, Smq, Smk = attn_mask.shape
-            assert (Bm, Hm, Smq, Smk) == (Bq, Hq, S_q, S_k)
-            am = attn_mask.reshape(BH, S_q, S_k).to(logits_dtype)
-        elif attn_mask.ndim == 3 and attn_mask.shape[0] == Bq:
-            # common case: [B,1,S_q,S_k]
-            Bm, _, Smq, Smk = attn_mask.shape
-            assert (Bm, Smq, Smk) == (Bq, S_q, S_k)
-            am = (
-                attn_mask.repeat_interleave(Hq, dim=0).squeeze(1).to(logits_dtype)
-            )  # [BH,S_q,S_k]
+        m = attn_mask
+
+        # Normalize common shapes to [B, H, S_q, S_k] (broadcast H as needed).
+        if m.ndim == 2:  # [S_q, S_k]
+            m = m.unsqueeze(0).unsqueeze(0)  # [1,1,S_q,S_k]
+        elif m.ndim == 3:
+            # Accept [B, S_q, S_k] or [1, S_q, S_k]
+            m = m.unsqueeze(1)  # [B,1,S_q,S_k]
+        elif m.ndim != 4:
+            raise ValueError(f"Unsupported attn_mask shape: {getattr(m, 'shape', None)}")
+
+        Bm, Hm, Smq, Smk = m.shape
+        if (Smq, Smk) != (S_q, S_k):
+            raise ValueError(
+                f"attn_mask last dims must be (S_q,S_k)=({S_q},{S_k}), got {(Smq, Smk)}"
+            )
+        if Bm not in (1, Bq):
+            raise ValueError(f"attn_mask batch dim must be 1 or {Bq}, got {Bm}")
+        if Bm == 1 and Bq != 1:
+            m = m.expand(Bq, Hm, S_q, S_k)
+            Bm = Bq
+
+        if Hm not in (1, Hq):
+            raise ValueError(f"attn_mask head dim must be 1 or {Hq}, got {Hm}")
+        if Hm == 1 and Hq != 1:
+            m = m.expand(Bq, Hq, S_q, S_k)
+
+        # Convert to additive bias in fp32.
+        if m.dtype == torch.bool:
+            # True = keep, False = mask
+            am4 = torch.where(
+                m,
+                torch.zeros((), device=device, dtype=logits_dtype),
+                torch.full((), float("-inf"), device=device, dtype=logits_dtype),
+            )
         else:
-            raise ValueError(f"Unsupported attn_mask shape: {attn_mask.shape}")
+            mf = m.to(logits_dtype)
+            # Heuristic: if mask looks like 0/1 (or near), treat 0 as mask, 1 as keep.
+            # Otherwise assume caller already provided additive bias (0/-inf or large negative).
+            if mf.numel() > 0:
+                mn = float(mf.min().item())
+                mx = float(mf.max().item())
+            else:
+                mn = mx = 0.0
+            if mn >= 0.0 and mx <= 1.0:
+                am4 = torch.where(
+                    mf > 0.0,
+                    torch.zeros((), device=device, dtype=logits_dtype),
+                    torch.full((), float("-inf"), device=device, dtype=logits_dtype),
+                )
+            else:
+                am4 = mf
+
+        am = am4.reshape(BH, S_q, S_k)
 
     scale = 1.0 / math.sqrt(Dq)
     out = torch.empty_like(qf)  # [BH,S_q,D]
@@ -147,13 +234,33 @@ def sdpa_streaming(
                 scores = scores + am[:, qs:qe, ks:ke]
 
             # Streaming softmax update
+            #
+            # NaN guard: if a row is fully masked, then scores are all -inf and
+            # max(scores) = -inf, so scores - max becomes (-inf - -inf) = NaN.
             m_ij = scores.max(dim=-1).values  # [BH,q_len]
-            p = torch.exp(scores - m_ij.unsqueeze(-1))  # [BH,q_len,k_len]
+            valid = torch.isfinite(m_ij)  # False when fully masked (max = -inf)
+
+            # Safe softmax exponentiation (avoid -inf - -inf).
+            m_ij_safe = torch.where(valid, m_ij, torch.zeros_like(m_ij))
+            p = torch.exp(scores - m_ij_safe.unsqueeze(-1))  # [BH,q_len,k_len]
+            p = torch.where(valid.unsqueeze(-1), p, torch.zeros_like(p))
             l_ij = p.sum(dim=-1)  # [BH,q_len]
 
             m_new = torch.maximum(m_i, m_ij)  # [BH,q_len]
-            alpha = torch.exp(m_i - m_new)  # old scale
-            beta = torch.exp(m_ij - m_new)  # new block scale
+
+            # Safe streaming rescale factors.
+            # If m_new is -inf (both m_i and m_ij were -inf), define alpha=beta=0.
+            m_new_finite = torch.isfinite(m_new)
+            alpha = torch.where(
+                m_new_finite,
+                torch.exp(torch.where(torch.isfinite(m_i), m_i - m_new, torch.full_like(m_i, float("-inf")))),
+                torch.zeros_like(m_i),
+            )
+            beta = torch.where(
+                m_new_finite,
+                torch.exp(torch.where(valid, m_ij - m_new, torch.full_like(m_ij, float("-inf")))),
+                torch.zeros_like(m_ij),
+            )
 
             out_i = out_i * alpha.unsqueeze(-1).to(out_i.dtype) + (
                 p.to(out_i.dtype) @ v_blk
@@ -220,6 +327,191 @@ def sdpa(
             is_causal=is_causal,
             scale=softmax_scale,
         )
+
+
+@attention_register("metal-flash", available=_HAS_KERNELS and _HAS_MPS)
+def metal_flash(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    cu_seqlens_q: torch.Tensor | None = None,
+    cu_seqlens_k: torch.Tensor | None = None,
+    max_seqlen_q: int | None = None,
+    max_seqlen_k: int | None = None,
+    softmax_scale: float | None = None,
+    is_causal: bool = False,
+    **kwargs,
+) -> torch.Tensor:
+    """
+    Metal Flash-SDPA backend (padded inputs).
+
+    Accepts:
+      q: (Bq, Hq, Sq, D)
+      k: (Bk, Hk, Sk, D)
+      v: (Bk, Hk, Sk, D)
+
+    Supports cross-attention (Sq != Sk) and GQA/MQA (Hk may differ from Hq),
+    matching the Metal Flash SDPA API capabilities.
+    """
+    kernel = _get_metal_flash_sdpa()
+    if kernel is None:
+        raise ImportError(
+            "Metal Flash SDPA kernel not available. "
+            "Ensure the `kernels` package is installed and "
+            "`kernels-community/metal-flash-sdpa` is accessible."
+        )
+
+    if q.device.type != "mps":
+        raise ValueError("metal-flash backend requires MPS tensors.")
+
+    if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
+        raise ValueError("metal-flash expects q/k/v with shape (B, H, S, D)")
+
+    Bq, Hq, Sq, Dq = q.shape
+    Bk, Hk, Sk, Dk = k.shape
+    Bv, Hv, Sv, Dv = v.shape
+
+    if not (Dq == Dk == Dv):
+        raise ValueError("Head dimensions must match across q/k/v")
+    if not (Bk == Bv and Sk == Sv and Hk == Hv):
+        raise ValueError("k and v must have the same shape (B, H_kv, S_kv, D)")
+
+    # Build cu_seqlens for *uniform* lengths if omitted (same strategy as the ref tests).
+    if cu_seqlens_q is None:
+        cu_seqlens_q = _create_cu_seqlens([Sq] * Bq, device=q.device)
+    if cu_seqlens_k is None:
+        cu_seqlens_k = _create_cu_seqlens([Sk] * Bk, device=q.device)
+
+    if cu_seqlens_q.dtype != torch.int32 or cu_seqlens_k.dtype != torch.int32:
+        raise TypeError("cu_seqlens_q/cu_seqlens_k must be torch.int32")
+
+    if max_seqlen_q is None:
+        max_seqlen_q = int((cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item())
+    if max_seqlen_k is None:
+        max_seqlen_k = int((cu_seqlens_k[1:] - cu_seqlens_k[:-1]).max().item())
+
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(Dq)
+
+    # Flatten to varlen format expected by the kernel wrapper: (total_tokens, H, D)
+    q_flat = q.permute(0, 2, 1, 3).reshape(Bq * Sq, Hq, Dq)
+    k_flat = k.permute(0, 2, 1, 3).reshape(Bk * Sk, Hk, Dq)
+    v_flat = v.permute(0, 2, 1, 3).reshape(Bk * Sk, Hk, Dq)
+
+    # MPS stability: sync is opt-in/heuristic (Metal aborts cannot be caught).
+    #torch.mps.synchronize()
+
+    out_flat = kernel.flash_attn_varlen_func(
+        q=q_flat,
+        k=k_flat,
+        v=v_flat,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_k=cu_seqlens_k,
+        max_seqlen_q=max_seqlen_q,
+        max_seqlen_k=max_seqlen_k,
+        dropout_p=float(kwargs.get("dropout_p", 0.0) or 0.0),
+        softmax_scale=softmax_scale,
+        causal=is_causal,
+        window_size=kwargs.get("window_size", (-1, -1)),
+        alibi_slopes=kwargs.get("alibi_slopes", None),
+        deterministic=bool(kwargs.get("deterministic", False)),
+        return_attn_probs=bool(kwargs.get("return_attn_probs", False)),
+    )
+    # Some wrappers return tuples (flash-attn3 style)
+    if not torch.is_tensor(out_flat):
+        out_flat = out_flat[0]
+
+    out = out_flat.reshape(Bq, Sq, Hq, Dq).permute(0, 2, 1, 3).contiguous()
+
+    return out
+
+
+@attention_register("metal-flash-varlen", available=_HAS_KERNELS and _HAS_MPS)
+def metal_flash_varlen(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    cu_seqlens_q: torch.Tensor | None = None,
+    cu_seqlens_k: torch.Tensor | None = None,
+    max_seqlen_q: int | None = None,
+    max_seqlen_k: int | None = None,
+    softmax_scale: float | None = None,
+    is_causal: bool = False,
+    **kwargs,
+) -> torch.Tensor:
+    """
+    Metal Flash-SDPA backend (true varlen format).
+
+    Expects packed inputs:
+      q: (Tq, Hq, D)
+      k: (Tk, Hk, D)
+      v: (Tk, Hk, D)
+    plus int32 cu_seqlens_q/cu_seqlens_k of shape (B+1,).
+
+    If cu_seqlens_* are omitted, we treat the packed tensors as a single sequence (B=1).
+    """
+    kernel = _get_metal_flash_sdpa()
+    if kernel is None:
+        raise ImportError(
+            "Metal Flash SDPA kernel not available. "
+            "Ensure the `kernels` package is installed and "
+            "`kernels-community/metal-flash-sdpa` is accessible."
+        )
+
+    if q.device.type != "mps":
+        raise ValueError("metal-flash-varlen backend requires MPS tensors.")
+
+    if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
+        raise ValueError("metal-flash-varlen expects packed inputs with shape (T, H, D)")
+
+    Tq, Hq, Dq = q.shape
+    Tk, Hk, Dk = k.shape
+    Tv, Hv, Dv = v.shape
+    if not (Tk == Tv and Hk == Hv and Dk == Dv and Dq == Dk):
+        raise ValueError("Mismatched k/v shapes or head dims across q/k/v")
+
+    if (cu_seqlens_q is None) ^ (cu_seqlens_k is None):
+        raise ValueError("cu_seqlens_q and cu_seqlens_k must be provided together, or both omitted.")
+    if cu_seqlens_q is None and cu_seqlens_k is None:
+        cu_seqlens_q = torch.tensor([0, int(Tq)], device=q.device, dtype=torch.int32)
+        cu_seqlens_k = torch.tensor([0, int(Tk)], device=q.device, dtype=torch.int32)
+
+    if cu_seqlens_q.dtype != torch.int32 or cu_seqlens_k.dtype != torch.int32:
+        raise TypeError("cu_seqlens_q/cu_seqlens_k must be torch.int32")
+
+    if max_seqlen_q is None:
+        max_seqlen_q = int((cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item())
+    if max_seqlen_k is None:
+        max_seqlen_k = int((cu_seqlens_k[1:] - cu_seqlens_k[:-1]).max().item())
+
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(Dq)
+
+    # MPS stability: optional sync guards. This can reduce performance, so keep it opt-in.
+
+    torch.mps.synchronize()
+
+    out = kernel.flash_attn_varlen_func(
+        q=q.contiguous(),
+        k=k.contiguous(),
+        v=v.contiguous(),
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_k=cu_seqlens_k,
+        max_seqlen_q=max_seqlen_q,
+        max_seqlen_k=max_seqlen_k,
+        dropout_p=float(kwargs.get("dropout_p", 0.0) or 0.0),
+        softmax_scale=softmax_scale,
+        causal=is_causal,
+        window_size=kwargs.get("window_size", (-1, -1)),
+        alibi_slopes=kwargs.get("alibi_slopes", None),
+        deterministic=bool(kwargs.get("deterministic", False)),
+        return_attn_probs=bool(kwargs.get("return_attn_probs", False)),
+    )
+    if not torch.is_tensor(out):
+        out = out[0]
+
+    return out
 
 
 @attention_register("sdpa_varlen")
@@ -867,6 +1159,97 @@ def xformers_attention(
     if xformers is None:
         raise ImportError("xformers is not installed")
 
+    def _is_valid_xformers_attention_bias(bias) -> bool:
+        """
+        xFormers' `memory_efficient_attention` expects `attn_bias` to be an
+        `xformers.ops.fmha.attn_bias.AttentionBias` instance (or None).
+        Some callsites pass non-xFormers masks/biases (e.g. torch.Tensor/bool);
+        those must be ignored to avoid runtime errors.
+        """
+        if bias is None:
+            return True
+        try:
+            fmha = getattr(xformers.ops, "fmha", None)
+            attn_bias_mod = getattr(fmha, "attn_bias", None)
+            AttentionBias = getattr(attn_bias_mod, "AttentionBias", None)
+            return AttentionBias is not None and isinstance(bias, AttentionBias)
+        except Exception:
+            return False
+
+    def _coerce_to_xformers_attention_bias(maybe_bias):
+        """
+        Try to coerce common mask/bias representations into an xFormers AttentionBias.
+
+        - If `maybe_bias` is already an AttentionBias, return it.
+        - If it's a torch.Tensor, try to wrap it as BoolMask / TensorBias if the
+          installed xFormers version supports it.
+        - Otherwise return None (caller should treat as "no bias").
+        """
+        if maybe_bias is None:
+            return None
+        if _is_valid_xformers_attention_bias(maybe_bias):
+            return maybe_bias
+        if not isinstance(maybe_bias, torch.Tensor):
+            return None
+
+        try:
+            fmha = getattr(xformers.ops, "fmha", None)
+            attn_bias_mod = getattr(fmha, "attn_bias", None)
+            if attn_bias_mod is None:
+                return None
+
+            # 1) Bool mask -> BoolMask (preferred when available)
+            bool_mask = maybe_bias
+            if bool_mask.dtype is not torch.bool:
+                # Best-effort: treat any non-zero as "allowed".
+                # (If this isn't appropriate for a caller's mask convention,
+                # conversion will be skipped and we fall back to ignoring it.)
+                try:
+                    bool_mask = bool_mask != 0
+                except Exception:
+                    bool_mask = bool_mask.to(torch.bool)
+
+            BoolMask = getattr(attn_bias_mod, "BoolMask", None)
+            if BoolMask is not None:
+                for ctor in ("from_bool", "from_tensor"):
+                    fn = getattr(BoolMask, ctor, None)
+                    if callable(fn):
+                        try:
+                            bias = fn(bool_mask)
+                            if _is_valid_xformers_attention_bias(bias):
+                                return bias
+                        except Exception:
+                            pass
+                try:
+                    bias = BoolMask(bool_mask)
+                    if _is_valid_xformers_attention_bias(bias):
+                        return bias
+                except Exception:
+                    pass
+
+            # 2) Additive / general tensor bias -> TensorBias (if available)
+            TensorBias = getattr(attn_bias_mod, "TensorBias", None)
+            if TensorBias is not None:
+                for ctor in ("from_tensor",):
+                    fn = getattr(TensorBias, ctor, None)
+                    if callable(fn):
+                        try:
+                            bias = fn(maybe_bias)
+                            if _is_valid_xformers_attention_bias(bias):
+                                return bias
+                        except Exception:
+                            pass
+                try:
+                    bias = TensorBias(maybe_bias)
+                    if _is_valid_xformers_attention_bias(bias):
+                        return bias
+                except Exception:
+                    pass
+        except Exception:
+            return None
+
+        return None
+
     # xformers expects (B, S, H, D) format, so we need to transpose
     q = q.transpose(1, 2)  # (B, H, S, D) -> (B, S, H, D)
     k = k.transpose(1, 2)  # (B, H, S, D) -> (B, S, H, D)
@@ -878,13 +1261,20 @@ def xformers_attention(
     else:
         attn_bias = None
 
-    # Apply attention mask if provided
-    if attn_mask is not None:
-        if attn_bias is None:
-            attn_bias = attn_mask
-        else:
-            # Combine causal mask with attention mask
-            attn_bias = attn_bias & attn_mask
+    # Prefer an explicit xFormers attention bias if provided.
+    # Only apply bias objects that are valid for xFormers; ignore everything else.
+    attention_bias = kwargs.get("attention_bias", None)
+    if attention_bias is None:
+        # Common alias used by some callsites.
+        attention_bias = kwargs.get("attn_bias", None)
+    attention_bias = _coerce_to_xformers_attention_bias(attention_bias)
+    if attention_bias is not None:
+        attn_bias = attention_bias if attn_bias is None else (attn_bias & attention_bias)
+
+    # Apply attention mask (try to convert tensor masks into AttentionBias when possible).
+    attn_mask_bias = _coerce_to_xformers_attention_bias(attn_mask)
+    if attn_mask_bias is not None:
+        attn_bias = attn_mask_bias if attn_bias is None else (attn_bias & attn_mask_bias)
 
     output = xformers.ops.memory_efficient_attention(
         q, k, v, attn_bias=attn_bias, p=dropout_p, scale=softmax_scale

@@ -39,6 +39,7 @@ spec:
   - flash
   - flash3
   - sage
+  - metal-flash               
   - efficient_dot_product_attention
   loras:
   - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors

@@ -1,0 +1,10 @@
+# AMD ROCm (Windows) - Experimental
+# Uses community builds from https://github.com/scottt/rocm-TheRock
+-r ../requirements.txt
+-r ../processors.requirements.txt
+
+# Torch stack is injected by the bundler/installer via direct URLs for this platform.
+# See bundle_python.py / dev_pip_install.py.
+
+rembg[gpu]
+

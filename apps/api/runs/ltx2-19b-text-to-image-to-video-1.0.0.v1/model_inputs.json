@@ -1,0 +1,70 @@
+{
+    "engine_kwargs": {
+        "engine_type": "ltx2",
+        "yaml_path": "C:\\Users\\tosin\\Desktop\\apex-studio\\apps\\api\\manifest\\video\\ltx2-19b-text-to-image-to-video-1.0.0.v1.yml",
+        "model_type": "ti2v",
+        "selected_components": {
+            "scheduler": {
+                "name": "scheduler",
+                "base": "diffusers.schedulers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "C:\\Users\\tosin\\apex-diffusion\\components\\d910989f3c05d70b1b0a1efe0b453210cfbae5eca167c690002de602bf2a9ec4_scheduler_config.json",
+                "type": "scheduler",
+                "label": "FlowMatch Discrete Scheduler",
+                "default": "FlowMatchDiscreteScheduler",
+                "description": "The FlowMatch Discrete Scheduler is a scheduler for the LTX2 19B model."
+            },
+            "video_vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "audio_vae": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "text_encoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "transformer": {
+                "variant": "GGUF_Q8_0",
+                "precision": "q8_0",
+                "type": "gguf"
+            },
+            "connectors": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "vocoder": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            },
+            "latent_upsampler": {
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
+            }
+        },
+        "auto_memory_management": false,
+        "attention_type": "sage"
+    },
+    "inputs": {
+        "prompt": "A close-up of a cheerful girl puppet with curly auburn yarn hair and wide button eyes, holding a small red umbrella above her head. Rain falls gently around her. She looks upward and begins to sing with joy in English: \"It's raining, it's raining, I love it when its raining.\" Her fabric mouth opening and closing to a melodic tune. Her hands grip the umbrella handle as she sways slightly from side to side in rhythm. The camera holds steady as the rain sparkles against the soft lighting. Her eyes blink occasionally as she sings.",
+        "negative_prompt": "blurry, low quality, still frame, frames, watermark, overlay, titles, has blurbox, has subtitles",
+        "resolution": 720,
+        "aspect_ratio": "16:9",
+        "num_inference_steps": 20,
+        "height": 736,
+        "width": 1280,
+        "seed": 2053780556,
+        "guidance_scale": 4,
+        "use_gradient_estimation": true,
+        "ge_gamma": 2,
+        "chunking_profile": "none",
+        "duration": "5.208333333333333s"
+    }
+}
