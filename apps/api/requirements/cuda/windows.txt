@@ -14,6 +14,6 @@ flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/release
 flash_attn_3 @ https://huggingface.co/datasets/totoku/attention/resolve/main/flash-attention-3/universal/flash_attn_3-3.0.0b1-cp39-abi3-win_amd64.whl
 
 # Nunchaku
-https://github.com/nunchaku-ai/nunchaku/releases/download/v1.2.0/nunchaku-1.2.0+torch2.9-cp312-cp312-win_amd64.whl
+# Install separately via `python scripts/deps/maybe_install_nunchaku.py --install` (defaults to --no-deps)
 
 onnxruntime-gpu==1.23.2
