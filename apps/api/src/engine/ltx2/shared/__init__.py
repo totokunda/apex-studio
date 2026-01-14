@@ -7,6 +7,10 @@ import torch.nn.functional as F
 from diffusers.utils.torch_utils import randn_tensor
 from src.engine.ltx2.shared.audio_processing import LTX2AudioProcessingMixin
 from einops import rearrange
+import subprocess
+import numpy as np
+from PIL import Image
+from src.utils.ffmpeg import get_ffmpeg_path
 
 class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     """LTX2 Shared Engine Implementation"""
@@ -265,6 +269,105 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             return int(psutil.virtual_memory().available)
         except Exception:
             return None
+        
+
+    def preprocess(self, img: Image.Image, crf: int = 33, preset: str = "veryfast") -> Image.Image:
+        """
+        Apply a video-codec CRF compression/decompression round-trip to a PIL image.
+
+        - Input:  PIL.Image (any mode)
+        - Output: PIL.Image (RGB)
+        - crf=0 returns original (converted to RGB, cropped to even dims if needed)
+
+        Requires: ffmpeg installed and in PATH.
+        """
+        if crf == 0:
+            return img.convert("RGB")
+
+        # Convert to RGB (codec expects 3 channels)
+        img_rgb = img.convert("RGB")
+
+        # Ensure even dimensions (needed for yuv420p)
+        w, h = img_rgb.size
+        w2 = (w // 2) * 2
+        h2 = (h // 2) * 2
+        if (w2 != w) or (h2 != h):
+            img_rgb = img_rgb.crop((0, 0, w2, h2))
+            w, h = w2, h2
+
+        # PIL -> raw RGB bytes
+        frame = np.array(img_rgb, dtype=np.uint8)  # HWC, uint8, RGB
+        raw_in = frame.tobytes()
+
+        # Encode a 1-frame video using CRF.
+        #
+        # Important: when writing MP4 to stdout (`pipe:1`), the output is non-seekable. A normal MP4
+        # mux requires seeking to write the `moov` atom (and `+faststart` explicitly requires it).
+        # Use a fragmented MP4 so it can be streamed to a pipe.
+        encode_cmd = [
+            get_ffmpeg_path(),
+            "-hide_banner", "-loglevel", "error",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "-s:v", f"{w}x{h}",
+            "-r", "1",
+            "-i", "pipe:0",
+            "-frames:v", "1",
+            "-an",
+            "-c:v", "libx264",
+            "-preset", preset,
+            "-crf", str(crf),
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+            "-f", "mp4",
+            "pipe:1",
+        ]
+
+        enc = subprocess.run(
+            encode_cmd,
+            input=raw_in,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if enc.returncode != 0:
+            raise RuntimeError(
+                "ffmpeg encode failed:\n" + enc.stderr.decode("utf-8", errors="replace")
+            )
+
+        mp4_bytes = enc.stdout
+
+        # Decode back to raw RGB
+        decode_cmd = [
+            get_ffmpeg_path(),
+            "-hide_banner", "-loglevel", "error",
+            "-i", "pipe:0",
+            "-frames:v", "1",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "pipe:1",
+        ]
+
+        dec = subprocess.run(
+            decode_cmd,
+            input=mp4_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if dec.returncode != 0:
+            raise RuntimeError(
+                "ffmpeg decode failed:\n" + dec.stderr.decode("utf-8", errors="replace")
+            )
+
+        raw_out = dec.stdout
+        expected = h * w * 3
+        if len(raw_out) != expected:
+            raise RuntimeError(f"Decoded frame size mismatch: got {len(raw_out)} bytes, expected {expected}")
+
+        out_frame = np.frombuffer(raw_out, dtype=np.uint8).reshape(h, w, 3)
+        return Image.fromarray(out_frame, mode="RGB")
+
 
     def maybe_offload_transformer_for_upsample(
         self,

@@ -502,14 +502,11 @@ class LTX2TI2VEngine(LTX2Shared):
             generator = torch.Generator(device=self.device).manual_seed(seed)
 
         num_frames = self._parse_num_frames(duration, fps)
-
-      
         
         # Image conditioning should be applied in BOTH stages (stage-2 starts from upscaled latents but still
         # replaces latent slices + denoise mask), matching ltx-pipelines distilled behavior.
         height = round(height / self.vae_spatial_compression_ratio) * self.vae_spatial_compression_ratio
         width = round(width / self.vae_spatial_compression_ratio) * self.vae_spatial_compression_ratio
-        
         
         self._guidance_scale = guidance_scale
         self._guidance_rescale = guidance_rescale
@@ -530,7 +527,9 @@ class LTX2TI2VEngine(LTX2Shared):
             if not isinstance(image, list):
                 image = [image]
             image = [self._load_image(img) for img in image]
+            
             image = [self._aspect_ratio_resize(img, max_area=height * width, mod_value=self.vae_spatial_compression_ratio)[0] for img in image]
+            image = [self.preprocess(img) for img in image]
             if not use_distilled_stage_2:
                 width, height = image[0].size
                 
@@ -613,7 +612,6 @@ class LTX2TI2VEngine(LTX2Shared):
         if offload:
             self._offload("connectors")
             
-
 
         # 4. Prepare latent variables
         safe_emit_progress(stage1_progress_callback, 0.18, "Preparing latents")
@@ -1247,8 +1245,6 @@ class LTX2TI2VEngine(LTX2Shared):
                         else:
                             audio_timestep_2b = timestep_2b
                         
-                        
-                 
                         with self.transformer.cache_context("cond_uncond"):
                             noise_pred_video, noise_pred_audio = self.transformer(
                                 hidden_states=latent_model_input,
