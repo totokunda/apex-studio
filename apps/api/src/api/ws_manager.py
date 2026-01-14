@@ -317,8 +317,9 @@ def get_ray_ws_bridge():
         import ray
 
         if not ray.is_initialized():
-            raise RuntimeError(
-                "Ray must be initialized before creating websocket bridge"
-            )
+            # Lazily initialize Ray if not already done (avoids race on first request)
+            from .ray_app import get_ray_app
+
+            get_ray_app()
         _ray_ws_bridge = RayWebSocketBridge.remote()
     return _ray_ws_bridge
