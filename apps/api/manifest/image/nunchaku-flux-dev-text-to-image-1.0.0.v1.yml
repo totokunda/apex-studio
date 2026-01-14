@@ -35,7 +35,6 @@ spec:
   - sdpa
   - flash
   - flash3
-  - sage
   - efficient_dot_product_attention
   - xformers
   components:
