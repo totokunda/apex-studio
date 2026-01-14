@@ -173,7 +173,7 @@ module.exports = {
   publish: [
     {
       provider: "github",
-      owner: process.env.GITHUB_OWNER || "apex-studio",
+      owner: process.env.GITHUB_OWNER || "totokunda",
       repo: process.env.GITHUB_REPO || "apex-studio",
       releaseType: "release",
       publishAutoUpdate: true,
