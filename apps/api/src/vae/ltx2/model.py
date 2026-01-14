@@ -1215,6 +1215,7 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         self.tile_sample_stride_height = tile_sample_stride_height or self.tile_sample_stride_height
         self.tile_sample_stride_width = tile_sample_stride_width or self.tile_sample_stride_width
         self.tile_sample_stride_num_frames = tile_sample_stride_num_frames or self.tile_sample_stride_num_frames
+        
 
         if use_framewise_encoding is not None:
             self.use_framewise_encoding = bool(use_framewise_encoding)
@@ -1308,26 +1309,6 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         # Respect explicit opt-in.
         if self.use_framewise_decoding:
             return True
-
-        # Length-based requirement: if the latent is temporally long, never attempt one-shot decode.
-        # This is the main safety valve to avoid OOMs caused by long latent sequences.
-        tile_latent_min_num_frames = int(self.tile_sample_min_num_frames) // int(self.temporal_compression_ratio)
-        if z.shape[2] > tile_latent_min_num_frames:
-            return True
-
-        free, total = self._get_cuda_vram_info_bytes(z.device)
-        # Hard requirement: for VRAM <16GB, framewise decoding always.
-        if total is not None and total < 16 * 1024**3:
-            return True
-
-        if free is None:
-            return False
-
-        # Heuristic: use *actual* latent size (not estimated).
-        latent_bytes = int(z.numel()) * int(z.element_size())
-        activation_multiplier = 12
-        safety_fraction = 0.80
-        return (latent_bytes * activation_multiplier) > int(free * safety_fraction)
 
     def _encode(self, x: torch.Tensor, causal: Optional[bool] = None) -> torch.Tensor:
         batch_size, num_channels, num_frames, height, width = x.shape
@@ -1615,27 +1596,75 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         tile_latent_stride_num_frames = self.tile_sample_stride_num_frames // self.temporal_compression_ratio
         blend_num_frames = self.tile_sample_min_num_frames - self.tile_sample_stride_num_frames
 
-        row = []
-        for i in tqdm(range(0, num_frames, tile_latent_stride_num_frames), desc="Temporal tiled decode"):
-            tile = z[:, :, i : i + tile_latent_min_num_frames + 1, :, :]
-            if self.use_tiling and (tile.shape[-1] > tile_latent_min_width or tile.shape[-2] > tile_latent_min_height):
-                decoded = self.tiled_decode(tile, temb, causal=causal, return_dict=True).sample
-            else:
-                decoded = self.decoder(tile, temb, causal=causal)
-            if i > 0:
-                decoded = decoded[:, :, :-1, :, :]
-            row.append(decoded)
+        # MPS is particularly sensitive to peak-memory spikes and fragmentation.
+        # The old implementation materialized *all* decoded tiles in a Python list before blending + concatenation,
+        # which can OOM even when the final output tensor would fit.
+        #
+        # We stream tiles instead: keep only (prev_tile, cur_tile) resident, and write directly into a preallocated
+        # output tensor. This preserves the exact blending behavior (note: `blend_t` mutates `b` in-place).
+        is_mps = z.device.type == "mps"
+        mps_empty_cache = (
+            is_mps and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache") and callable(torch.mps.empty_cache)
+        )
+        mps_sync = is_mps and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize") and callable(torch.mps.synchronize)
 
-        result_row = []
-        for i, tile in enumerate(row):
-            if i > 0:
-                tile = self.blend_t(row[i - 1], tile, blend_num_frames)
-                tile = tile[:, :, : self.tile_sample_stride_num_frames, :, :]
-                result_row.append(tile)
+        # Decode first tile to learn output shape, then preallocate the full output.
+        frame_indices = list(range(0, num_frames, tile_latent_stride_num_frames))
+        if len(frame_indices) == 0:
+            # Degenerate case: no frames.
+            dec = z.new_empty((batch_size, num_channels, 0, height, width))
+        else:
+            i0 = frame_indices[0]
+            tile0 = z[:, :, i0 : i0 + tile_latent_min_num_frames + 1, :, :]
+            if self.use_tiling and (tile0.shape[-1] > tile_latent_min_width or tile0.shape[-2] > tile_latent_min_height):
+                prev_tile = self.tiled_decode(tile0, temb, causal=causal, return_dict=True).sample
             else:
-                result_row.append(tile[:, :, : self.tile_sample_stride_num_frames + 1, :, :])
+                prev_tile = self.decoder(tile0, temb, causal=causal)
 
-        dec = torch.cat(result_row, dim=2)[:, :, :num_sample_frames]
+            out = prev_tile.new_empty((prev_tile.shape[0], prev_tile.shape[1], num_sample_frames, prev_tile.shape[3], prev_tile.shape[4]))
+
+            # First tile contributes stride+1 frames; subsequent tiles contribute stride frames.
+            stride = int(self.tile_sample_stride_num_frames)
+            write_pos = 0
+            first_take = min(stride + 1, prev_tile.shape[2], num_sample_frames)
+            out[:, :, write_pos : write_pos + first_take, :, :] = prev_tile[:, :, :first_take, :, :]
+            write_pos += first_take
+
+            # Best-effort MPS memory hygiene.
+            if mps_sync:
+                torch.mps.synchronize()
+            if mps_empty_cache:
+                torch.mps.empty_cache()
+
+            for i in tqdm(frame_indices[1:], desc="Temporal tiled decode"):
+                tile = z[:, :, i : i + tile_latent_min_num_frames + 1, :, :]
+                if self.use_tiling and (tile.shape[-1] > tile_latent_min_width or tile.shape[-2] > tile_latent_min_height):
+                    cur_tile = self.tiled_decode(tile, temb, causal=causal, return_dict=True).sample
+                else:
+                    cur_tile = self.decoder(tile, temb, causal=causal)
+
+                # Match old behavior: for i>0, drop the last frame before blending to avoid duplication.
+                cur_tile = cur_tile[:, :, :-1, :, :]
+
+                # Blend overlap into the *current* tile (in-place) and emit only the stride prefix.
+                cur_tile = self.blend_t(prev_tile, cur_tile, blend_num_frames)
+                emit = cur_tile[:, :, :stride, :, :]
+
+                if write_pos < num_sample_frames:
+                    take = min(emit.shape[2], num_sample_frames - write_pos)
+                    out[:, :, write_pos : write_pos + take, :, :] = emit[:, :, :take, :, :]
+                    write_pos += take
+
+                # Carry forward the blended tile (matches the in-place semantics of the old implementation).
+                prev_tile = cur_tile
+
+                # Free ASAP on MPS to reduce fragmentation.
+                if mps_sync:
+                    torch.mps.synchronize()
+                if mps_empty_cache:
+                    torch.mps.empty_cache()
+
+            dec = out[:, :, :num_sample_frames]
 
         if not return_dict:
             return (dec,)
