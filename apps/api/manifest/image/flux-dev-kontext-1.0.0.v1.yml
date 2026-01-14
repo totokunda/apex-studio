@@ -29,7 +29,12 @@ spec:
     - metal
   attention_types:
   - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal-flash
   - efficient_dot_product_attention
+  - xformers
   components:
   - type: scheduler
     label: Scheduler
