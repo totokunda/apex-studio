@@ -30,7 +30,12 @@ spec:
     - metal
   attention_types:
   - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal-flash
   - efficient_dot_product_attention
+  - xformers
   loras:
   - scale: 1.0
     name: qwen_image_lightning

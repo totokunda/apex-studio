@@ -29,7 +29,12 @@ spec:
     - metal
   attention_types:
   - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal-flash
   - efficient_dot_product_attention
+  - xformers
   loras:
   - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors
     scale: 1.0
