@@ -1,0 +1,60 @@
+diff --git a/xformers/ops/fmha/flash3.py b/xformers/ops/fmha/flash3.py
+--- a/xformers/ops/fmha/flash3.py
++++ b/xformers/ops/fmha/flash3.py
+@@ -106,27 +106,39 @@
+ FLASH3_HAS_DETERMINISTIC_MODE = False
+ _C_flashattention3 = None
+ if importlib.util.find_spec("...flash_attn_3._C", package=__package__):
+-    from ..._cpp_lib import _build_metadata
+-    from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
++    try:
++        from ..._cpp_lib import _build_metadata
++        from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
+ 
+-    if _build_metadata is not None:
+-        FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
+-    FLASH3_HAS_DETERMINISTIC_MODE = True
+-    _C_flashattention3 = torch.ops.flash_attn_3
++        if _build_metadata is not None:
++            FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
++        FLASH3_HAS_DETERMINISTIC_MODE = True
++        _C_flashattention3 = torch.ops.flash_attn_3
++    except Exception:
++        logger.warning(
++            "Failed to import xformers-bundled flash_attn_3; will try pip flash_attn_3 if available",
++            exc_info=True,
++        )
+ 
+-elif importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec(
+-    "flash_attn_3._C"
++if (
++    _C_flashattention3 is None
++    and importlib.util.find_spec("flash_attn_3")
++    and importlib.util.find_spec("flash_attn_3._C")
+ ):
+-    import flash_attn_3._C  # type: ignore[attr-defined]  # noqa: F401
++    try:
++        import flash_attn_3._C  # type: ignore[attr-defined]  # noqa: F401
++
++        incompat_reason = _flash_attention3_incompatible_reason()
++        if incompat_reason is None:
++            _C_flashattention3 = torch.ops.flash_attn_3
++            FLASH_VERSION = "pip_pkg"
++            FLASH3_HAS_PAGED_ATTENTION = True
++            FLASH3_HAS_FLOAT8 = True
++        else:
++            logger.warning(f"Flash-Attention 3 package can't be used: {incompat_reason}")
++    except Exception:
++        logger.warning("Failed to import pip flash_attn_3", exc_info=True)
+ 
+-    incompat_reason = _flash_attention3_incompatible_reason()
+-    if incompat_reason is None:
+-        _C_flashattention3 = torch.ops.flash_attn_3
+-        FLASH_VERSION = "pip_pkg"
+-        FLASH3_HAS_PAGED_ATTENTION = True
+-        FLASH3_HAS_FLOAT8 = True
+-    else:
+-        logger.warning(f"Flash-Attention 3 package can't be used: {incompat_reason}")
+ 
+ 
+ def _heuristic_kvsplit(

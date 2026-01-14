@@ -2,10 +2,7 @@ accelerate==1.9
 addict==2.4.0
 albumentations==2.0.8
 anyio==4.9.0
-# NOTE: PyAV wheels are platform/Python specific. On Windows+Py3.12, older pins
-# fall back to a source build which requires a full FFmpeg dev toolchain.
-av==16.1.0; sys_platform == "win32" and python_version == "3.12"
-av==14.4.0; sys_platform != "win32"
+av==16.1.0
 # NOTE: `azure-storage` meta-package is deprecated and no longer installable.
 # The codebase uses `azure.storage.blob.BlobServiceClient`, so we depend on:
 azure-storage-blob>=12.0.0
