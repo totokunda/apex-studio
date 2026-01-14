@@ -217,14 +217,31 @@ def start(
 
 @app.command(name="serve", hidden=True)
 def internal_serve(
+    host: str | None = typer.Option(
+        None,
+        "--host",
+        help="Host to bind the API to (overrides APEX_HOST).",
+    ),
+    port: int | None = typer.Option(
+        None,
+        "--port",
+        help="Port to bind the API to (overrides APEX_PORT).",
+    ),
+    dual_stack: bool = typer.Option(
+        False,
+        "--dual-stack",
+        help="Enable dual-stack binding (IPv4 + IPv6). Default is IPv4 only.",
+    ),
 ):
     """
     Internal command used by frozen (PyInstaller) builds to start the API without relying on
     `python -m ...` module execution.
     """
-    # Resolve from environment (start() sets these when flags are passed).
-    host = os.getenv("APEX_HOST", "127.0.0.1")
-    port = int(os.getenv("APEX_PORT", "8765"))
+    # Resolve from CLI first, then environment (start() sets these when flags are passed).
+    if host is None:
+        host = os.getenv("APEX_HOST", "127.0.0.1")
+    if port is None:
+        port = int(os.getenv("APEX_PORT", "8765"))
 
     # Mirror key production defaults from `apps/api/gunicorn.conf.py`, but for uvicorn.
     backlog = 2048
@@ -235,20 +252,20 @@ def internal_serve(
     # Note: Uvicorn expects "None" (or CLI flag omitted) to disable.
     max_requests = int(os.getenv("APEX_MAX_REQUESTS", "0") or "0")
 
-    disable_dual_stack = bool(os.getenv("APEX_DISABLE_DUAL_STACK"))
+    # Default to single-stack (IPv4 only) to avoid Ray race conditions with multiple processes.
+    # Enable dual-stack via --dual-stack flag or APEX_DUAL_STACK=1 env var.
+    enable_dual_stack = dual_stack or bool(os.getenv("APEX_DUAL_STACK"))
 
     def _binds_for(host_value: str) -> list[str]:
         if host_value in {"127.0.0.1", "localhost"}:
-            return ["127.0.0.1"] if disable_dual_stack else ["127.0.0.1", "::1"]
+            return ["127.0.0.1", "::1"] if enable_dual_stack else ["127.0.0.1"]
         if host_value in {"0.0.0.0", "::", "[::]"}:
-            return ["0.0.0.0"] if disable_dual_stack else ["0.0.0.0", "::"]
+            return ["0.0.0.0", "::"] if enable_dual_stack else ["0.0.0.0"]
         return [host_value]
 
     binds = _binds_for(host)
-    if disable_dual_stack:
-        print(
-            f"APEX_DISABLE_DUAL_STACK is set; binding single address only: {binds[0]}:{port}"
-        )
+    if enable_dual_stack:
+        print(f"Dual-stack enabled; binding to: {', '.join(f'{b}:{port}' for b in binds)}")
 
     # Worker count + loglevel follow `gunicorn.conf.py` semantics.
     env = os.getenv("ENVIRONMENT")
