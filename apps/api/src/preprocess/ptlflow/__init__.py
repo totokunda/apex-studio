@@ -35,8 +35,8 @@ class PTLFlowDetector(ToMixin, BasePreprocessor):
     @classmethod
     def from_pretrained(
         cls,
-        pretrained_model_or_path: str = "dpflow",
-        ckpt_name: str = "sintel",
+        pretrained_model_or_path: str = "raft",
+        ckpt_name: str = "things",
         **kwargs,
     ):
         """
@@ -104,7 +104,7 @@ class PTLFlowDetector(ToMixin, BasePreprocessor):
                     pass
 
                 # Load the model with checkpoint name (e.g., 'things', 'sintel', 'kitti')
-                model = ptlflow.get_model(model_name, ckpt_path=ckpt_name)
+                model = ptlflow.get_model(model_name, pretrained_ckpt=ckpt_name)
 
                 model.eval()
                 model.to("cpu")  # Explicitly move to CPU
