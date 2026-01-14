@@ -53,13 +53,14 @@
         "attention_type": "metal-flash"
     },
     "inputs": {
-        "image": "assets/ddd4d55b-8082-42b2-b93c-b144915d35c9_image_84.png",
-        "prompt": "The woman sticks her phone into her mouth, and starts to gag and choke on it. ",
-        "resolution": "custom",
+        "image": "assets/dd5c11c2-de84-4eb6-a639-22f8002b727c_image_0.png",
+        "image_quality_crf": 33,
+        "prompt": "The woman smiles then asks \"Does this blanket make me look like a caterpillar? I love caterpillars!\" then laughs. ",
+        "resolution": 480,
         "aspect_ratio": "custom",
-        "height": 704,
-        "width": 704,
-        "seed": 2820139039,
+        "height": 480,
+        "width": 864,
+        "seed": 513419258,
         "guidance_scale": 1,
         "chunking_profile": "none",
         "vae_tiling_enabled": true,
@@ -73,6 +74,6 @@
         "vae_tile_sample_stride_num_frames": 16,
         "vae_num_sample_frames_batch_size": 16,
         "vae_num_latent_frames_batch_size": 2,
-        "duration": "5.041666666666667s"
+        "duration": "5s"
     }
 }
