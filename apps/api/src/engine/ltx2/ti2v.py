@@ -472,6 +472,7 @@ class LTX2TI2VEngine(LTX2Shared):
         vae_tile_sample_stride_width: int = 448,
         vae_tile_sample_stride_num_frames: int = 16,
         attention_kwargs: Optional[Dict[str, Any]] = None,
+        image_quality_crf: int = 33,
         max_sequence_length: int = 1024,
         offload: bool = True,
         return_latents: bool = False,
@@ -529,7 +530,7 @@ class LTX2TI2VEngine(LTX2Shared):
             image = [self._load_image(img) for img in image]
             
             image = [self._aspect_ratio_resize(img, max_area=height * width, mod_value=self.vae_spatial_compression_ratio)[0] for img in image]
-            image = [self.preprocess(img) for img in image]
+            image = [self.preprocess(img, crf=image_quality_crf) for img in image]
             if not use_distilled_stage_2:
                 width, height = image[0].size
                 
