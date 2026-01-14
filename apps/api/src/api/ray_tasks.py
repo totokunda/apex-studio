@@ -1389,6 +1389,7 @@ def run_engine_from_manifest(
     ws_bridge,
     inputs: Dict[str, Any],
     selected_components: Optional[Dict[str, Any]] = None,
+    folder_uuid: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute a manifest YAML with provided inputs and persist result to disk."""
 
@@ -1599,7 +1600,10 @@ def run_engine_from_manifest(
                 prepared_inputs[input_key] = raw_value
 
         # Prepare job directory early (needed for previews)
-        job_dir = Path(DEFAULT_CACHE_PATH) / "engine_results" / (job_id)
+        if folder_uuid:
+            job_dir = Path(DEFAULT_CACHE_PATH) / "engine_results" / folder_uuid / (job_id)
+        else:
+            job_dir = Path(DEFAULT_CACHE_PATH) / "engine_results" / (job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
 
         # Unified saver usable for previews and final outputs

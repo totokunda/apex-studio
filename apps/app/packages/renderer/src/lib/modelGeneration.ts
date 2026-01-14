@@ -9,6 +9,7 @@ import { exportClip, exportSequence } from "@app/export-renderer";
 import type { ManifestComponent } from "@/lib/manifest/api";
 import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
 import { getSchedulerComponentKey } from "@/lib/manifest/componentKey";
+import { useProjectsStore } from "@/lib/projects";
 type MediaItem = {
   type: "image" | "video" | "audio";
   src: string;
@@ -900,12 +901,15 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     const activeJobId = uuidv4();
 
+    const activeProject = useProjectsStore.getState().getActiveProject();
+    const folderUuid = activeProject?.folderUuid;
 
     const res = await runEngine({
       manifest_id: manifestId,
       inputs: engineInputs,
       selected_components: selectedComponentsForEngine,
       job_id: activeJobId,
+      folder_uuid: folderUuid,
     });
     if (res.success) {
       toast.success(

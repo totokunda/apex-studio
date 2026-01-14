@@ -802,6 +802,7 @@ export class ApexApi implements AppModule {
           inputs: Record<string, any>;
           selected_components?: Record<string, any>;
           job_id?: string;
+          folder_uuid?: string;
         },
       ) => {
         const payload = await this.#prepareEngineRunRequest(request);
@@ -1840,12 +1841,14 @@ export class ApexApi implements AppModule {
     inputs: Record<string, any>;
     selected_components?: Record<string, any>;
     job_id?: string;
+    folder_uuid?: string;
   }): Promise<{
     manifest_id?: string;
     yaml_path?: string;
     inputs: Record<string, any>;
     selected_components?: Record<string, any>;
     job_id?: string;
+    folder_uuid?: string;
   }> {
     // Ensure our remote/local detection is up-to-date before deciding whether to
     // auto-upload local paths. (Cached probe; non-fatal if hostname endpoint is missing.)
