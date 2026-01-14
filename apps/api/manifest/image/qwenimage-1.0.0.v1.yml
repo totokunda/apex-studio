@@ -27,7 +27,12 @@ spec:
     - metal
   attention_types:
   - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal-flash
   - efficient_dot_product_attention
+  - xformers
   loras:
   - name: lightning-lora-4-steps
     source: lightx2v/Qwen-Image-Lightning/Qwen-Image-Lightning-4steps-V1.0-bf16.safetensors
