@@ -1,0 +1,19 @@
+-r ../requirements.txt
+-r ../processors.requirements.txt
+
+rembg[gpu]
+triton-windows
+
+# SageAttention
+sageattention @ https://huggingface.co/datasets/totoku/attention/resolve/main/sageattention/universal/sageattention-2.2.0-cp312-cp312-win_amd64.whl
+
+# FlashAttention 2
+flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.6/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-win_amd64.whl
+
+# FlashAttention 3
+flash_attn_3 @ https://huggingface.co/datasets/totoku/attention/resolve/main/flash-attention-3/universal/flash_attn_3-3.0.0b1-cp39-abi3-win_amd64.whl
+
+# Nunchaku
+https://github.com/nunchaku-ai/nunchaku/releases/download/v1.2.0/nunchaku-1.2.0+torch2.9-cp312-cp312-win_amd64.whl
+
+onnxruntime-gpu==1.23.2

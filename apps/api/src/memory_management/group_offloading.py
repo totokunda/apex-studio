@@ -691,6 +691,12 @@ def apply_group_offloading(
 
     stream = None
     streams = None
+    
+    if torch.backends.mps.is_available():
+        use_stream = False
+        record_stream = False
+        logger.warning("MPS is not supported for group offloading. Setting use_stream and record_stream to False.")
+        
 
     if use_stream:
         if torch.cuda.is_available():

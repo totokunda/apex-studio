@@ -3,9 +3,14 @@ from diffusers.video_processor import VideoProcessor
 from typing import Optional, Union, List, Callable
 from PIL import Image
 import torch
+import torch.nn.functional as F
 from diffusers.utils.torch_utils import randn_tensor
 from src.engine.ltx2.shared.audio_processing import LTX2AudioProcessingMixin
 from einops import rearrange
+import subprocess
+import numpy as np
+from PIL import Image
+from src.utils.ffmpeg import get_ffmpeg_path
 
 class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     """LTX2 Shared Engine Implementation"""
@@ -152,15 +157,13 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
 
         prompt = [p.strip() for p in prompt]
         
-        
-        
         text_encoder_hidden_states, prompt_attention_mask = self.text_encoder.encode(
             prompt,
-            max_sequence_length=max_sequence_length,
-            pad_to_max_length=True,
+            pad_to_max_length=False,
             num_videos_per_prompt=num_videos_per_prompt,
             dtype=dtype,
             add_special_tokens=True,
+            clean_text=False,
             pad_with_zero=False,
             use_attention_mask=True,
             output_type="hidden_states_all",
@@ -170,6 +173,27 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         
         text_encoder_hidden_states = text_encoder_hidden_states.to(device)
         prompt_attention_mask = prompt_attention_mask.to(device)
+
+        # Ensure a fixed sequence length (Gemma uses left padding for chat-style prompts).
+        # - If shorter than `max_sequence_length`, left-pad with zeros.
+        # - If longer than `max_sequence_length`, keep the rightmost tokens (consistent with left padding).
+        target_seq_len = int(max_sequence_length)
+        seq_len = int(text_encoder_hidden_states.shape[1])
+        if seq_len < target_seq_len:
+            pad_len = target_seq_len - seq_len
+            # text_encoder_hidden_states: [B, S, H, L] -> pad S on the left
+            text_encoder_hidden_states = F.pad(
+                text_encoder_hidden_states,
+                (0, 0, 0, 0, pad_len, 0),
+                value=0.0,
+            )
+            # prompt_attention_mask: [B, S] -> pad S on the left
+            prompt_attention_mask = F.pad(prompt_attention_mask, (pad_len, 0), value=0)
+        elif seq_len > target_seq_len:
+            text_encoder_hidden_states = text_encoder_hidden_states[:, -target_seq_len:, ...]
+            prompt_attention_mask = prompt_attention_mask[:, -target_seq_len:]
+    
+    
         sequence_lengths = prompt_attention_mask.sum(dim=-1)
 
         prompt_embeds = self._pack_text_embeds(
@@ -190,6 +214,268 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         prompt_attention_mask = prompt_attention_mask.repeat(num_videos_per_prompt, 1)
 
         return prompt_embeds, prompt_attention_mask
+
+    # -------------------------------------------------------------------------
+    # Memory / offloading helpers
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def _estimate_module_bytes(module: torch.nn.Module) -> int:
+        """
+        Best-effort estimate of how many bytes a module's parameters + buffers occupy.
+        Used only for heuristics (CPU RAM feasibility checks).
+        """
+        if module is None:
+            return 0
+        total = 0
+        try:
+            for p in module.parameters(recurse=True):
+                if p is None:
+                    continue
+                try:
+                    total += int(p.numel()) * int(p.element_size())
+                except Exception:
+                    pass
+            for b in module.buffers(recurse=True):
+                if b is None:
+                    continue
+                try:
+                    total += int(b.numel()) * int(b.element_size())
+                except Exception:
+                    pass
+        except Exception:
+            return total
+        return total
+
+    @staticmethod
+    def _get_cuda_free_vram_bytes(device: torch.device) -> int | None:
+        try:
+            if not torch.cuda.is_available():
+                return None
+            dev_index = (
+                device.index
+                if getattr(device, "index", None) is not None
+                else torch.cuda.current_device()
+            )
+            free_vram, _total_vram = torch.cuda.mem_get_info(dev_index)
+            return int(free_vram)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _get_available_ram_bytes() -> int | None:
+        try:
+            import psutil
+
+            return int(psutil.virtual_memory().available)
+        except Exception:
+            return None
+        
+
+    def preprocess(self, img: Image.Image, crf: int = 33, preset: str = "veryfast") -> Image.Image:
+        """
+        Apply a video-codec CRF compression/decompression round-trip to a PIL image.
+
+        - Input:  PIL.Image (any mode)
+        - Output: PIL.Image (RGB)
+        - crf=0 returns original (converted to RGB, cropped to even dims if needed)
+
+        Requires: ffmpeg installed and in PATH.
+        """
+        if crf == 0:
+            return img.convert("RGB")
+
+        # Convert to RGB (codec expects 3 channels)
+        img_rgb = img.convert("RGB")
+
+        # Ensure even dimensions (needed for yuv420p)
+        w, h = img_rgb.size
+        w2 = (w // 2) * 2
+        h2 = (h // 2) * 2
+        if (w2 != w) or (h2 != h):
+            img_rgb = img_rgb.crop((0, 0, w2, h2))
+            w, h = w2, h2
+
+        # PIL -> raw RGB bytes
+        frame = np.array(img_rgb, dtype=np.uint8)  # HWC, uint8, RGB
+        raw_in = frame.tobytes()
+
+        # Encode a 1-frame video using CRF.
+        #
+        # Important: when writing MP4 to stdout (`pipe:1`), the output is non-seekable. A normal MP4
+        # mux requires seeking to write the `moov` atom (and `+faststart` explicitly requires it).
+        # Use a fragmented MP4 so it can be streamed to a pipe.
+        encode_cmd = [
+            get_ffmpeg_path(),
+            "-hide_banner", "-loglevel", "error",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "-s:v", f"{w}x{h}",
+            "-r", "1",
+            "-i", "pipe:0",
+            "-frames:v", "1",
+            "-an",
+            "-c:v", "libx264",
+            "-preset", preset,
+            "-crf", str(crf),
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+            "-f", "mp4",
+            "pipe:1",
+        ]
+
+        enc = subprocess.run(
+            encode_cmd,
+            input=raw_in,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if enc.returncode != 0:
+            raise RuntimeError(
+                "ffmpeg encode failed:\n" + enc.stderr.decode("utf-8", errors="replace")
+            )
+
+        mp4_bytes = enc.stdout
+
+        # Decode back to raw RGB
+        decode_cmd = [
+            get_ffmpeg_path(),
+            "-hide_banner", "-loglevel", "error",
+            "-i", "pipe:0",
+            "-frames:v", "1",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "pipe:1",
+        ]
+
+        dec = subprocess.run(
+            decode_cmd,
+            input=mp4_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if dec.returncode != 0:
+            raise RuntimeError(
+                "ffmpeg decode failed:\n" + dec.stderr.decode("utf-8", errors="replace")
+            )
+
+        raw_out = dec.stdout
+        expected = h * w * 3
+        if len(raw_out) != expected:
+            raise RuntimeError(f"Decoded frame size mismatch: got {len(raw_out)} bytes, expected {expected}")
+
+        out_frame = np.frombuffer(raw_out, dtype=np.uint8).reshape(h, w, 3)
+        return Image.fromarray(out_frame, mode="RGB")
+
+
+    def maybe_offload_transformer_for_upsample(
+        self,
+        *,
+        offload: bool,
+        device: torch.device,
+        upsampler: torch.nn.Module,
+        batch_size: int,
+        num_channels_latents: int,
+        latent_num_frames: int,
+        latent_height: int,
+        latent_width: int,
+        vae_dtype: torch.dtype,
+        force: bool = False,
+        reason: str = "latent upsampling",
+        # VRAM headroom heuristic: required_vram = max(min_vram_bytes, vram_multiplier * est_out_latents_bytes)
+        min_vram_bytes: int = 2 * 1024**3,
+        vram_multiplier: float = 16.0,
+        # CPU RAM feasibility check (only used when we'd otherwise discard):
+        cpu_ram_safety_bytes: int = 2 * 1024**3,
+        cpu_ram_multiplier: float = 1.2,
+    ) -> str | None:
+        """
+        During stage-2 prep, the transformer is unused but can occupy significant VRAM.
+        If VRAM headroom is low (or `force=True`), offload the transformer.
+
+        Policy:
+        - Prefer `offload_type="cpu"` (keeps transformer loaded, avoids reload) ONLY if we have
+          enough *available* system RAM to hold its weights with a safety margin.
+        - Otherwise use `offload_type="discard"` (unload/free entirely).
+
+        Returns the chosen offload_type ("cpu"/"discard") when an offload occurs, else None.
+        """
+        if not offload:
+            return None
+        if getattr(self, "transformer", None) is None:
+            return None
+        if getattr(device, "type", None) != "cuda":
+            return None
+
+        # Estimate required VRAM for upsampling.
+        try:
+            spatial_scale = float(
+                getattr(getattr(upsampler, "config", None), "spatial_scale", 2.0) or 2.0
+            )
+        except Exception:
+            spatial_scale = 2.0
+        out_h = int(round(float(latent_height) * spatial_scale))
+        out_w = int(round(float(latent_width) * spatial_scale))
+        elem_size = int(torch.empty((), dtype=vae_dtype).element_size())
+        est_out_latents_bytes = int(
+            batch_size
+            * num_channels_latents
+            * latent_num_frames
+            * out_h
+            * out_w
+            * elem_size
+        )
+        required_vram = int(max(min_vram_bytes, vram_multiplier * est_out_latents_bytes))
+
+        free_vram = self._get_cuda_free_vram_bytes(device)
+        if (not force) and (free_vram is None or free_vram >= required_vram):
+            return None
+
+        # Decide whether we can afford CPU offload (RAM-wise).
+        transformer_obj = getattr(self, "transformer", None)
+        transformer_bytes = (
+            self._estimate_module_bytes(transformer_obj)
+            if transformer_obj is not None
+            else 0
+        )
+        free_ram = self._get_available_ram_bytes()
+
+        need_ram = (
+            int(cpu_ram_safety_bytes + cpu_ram_multiplier * transformer_bytes)
+            if transformer_bytes > 0
+            else None
+        )
+        can_cpu_offload = (
+            (free_ram is not None)
+            and (need_ram is not None)
+            and (free_ram >= need_ram)
+        )
+        offload_type = "cpu" if can_cpu_offload else "discard"
+
+        # Log with best-effort memory figures.
+        try:
+            free_vram_gib = f"{(free_vram or 0)/1024**3:.2f}GiB" if free_vram is not None else "unknown"
+            req_vram_gib = f"{required_vram/1024**3:.2f}GiB"
+            free_ram_gib = f"{free_ram/1024**3:.2f}GiB" if free_ram is not None else "unknown"
+            tr_gib = f"{transformer_bytes/1024**3:.2f}GiB"
+            self.logger.info(
+                f"Offloading transformer for {reason}: offload_type={offload_type} "
+                f"(free_vram={free_vram_gib} required≈{req_vram_gib} free_ram={free_ram_gib} transformer≈{tr_gib})"
+            )
+        except Exception:
+            pass
+
+        # Apply offload and clear caches.
+        self._offload("transformer", offload_type=offload_type)  # type: ignore[arg-type]
+        try:
+            from src.utils.cache import empty_cache
+
+            empty_cache()
+        except Exception:
+            pass
+
+        return offload_type
 
     def encode_prompt(
         self,

@@ -40,7 +40,7 @@ import {
   generatePosterCanvas,
 } from "@/lib/media/timeline";
 import Draggable from "@/components/dnd/Draggable";
-import { revealMediaItemInFolder } from "@app/preload";
+import { revealPathInFolder } from "@app/preload";
 
 // Module-level thumbnail caches so we don't have to regenerate waveforms/posters
 // every time a sidebar remounts or the user navigates back to a menu.
@@ -395,7 +395,7 @@ const Item: React.FC<ItemProps> = ({
                 <DropdownMenuItem
                   className="py-1 rounded"
                   onClick={() => {
-                    void revealMediaItemInFolder(item.name);
+                    void revealPathInFolder(item.absPath);
                   }}
                 >
                   <TbFolderOpen className="w-3.5 h-3.5" />
@@ -437,7 +437,7 @@ const Item: React.FC<ItemProps> = ({
                   setRenamingItem(null);
                 }
               }}
-              className="h-6 !text-[10.5px] text-brand-light/90 px-2 py-0.5 rounded"
+              className="h-6 text-[10.5px]! text-brand-light/90 px-2 py-0.5 rounded"
             />
           </div>
         ) : (

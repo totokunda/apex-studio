@@ -2,6 +2,7 @@
 -r ../requirements.txt
 -r ../processors.requirements.txt
 
-mlx; sys_platform == "darwin" and platform_machine == "arm64"
+mlx
 rembg[cpu]
 onnxruntime==1.20.1
+kernels

@@ -21,7 +21,7 @@ spec:
   model_type: ti2v
   engine_type: torch
   default_duration_secs: 5.0
-  fps: 24
+  fps: 25
   compute_requirements:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
@@ -33,7 +33,10 @@ spec:
   - flash
   - flash3
   - sage
+  - metal-flash
   - efficient_dot_product_attention
+  - xformers
+  
   components:
   - type: scheduler
     label: Scheduler
@@ -75,6 +78,8 @@ spec:
     label: LTX2 Text Encoder
     name: text_encoder
     base: Gemma3ForConditionalGeneration
+    gguf_kwargs:
+      key_map: gemma3
     ignore_offloading_modules:
     - lm_head
     - embed_tokens
@@ -263,6 +268,18 @@ spec:
       upsample: true
       use_gradient_estimation: false
       ge_gamma: 0.0
+      # Video VAE tiling / framewise controls
+      vae_tiling_enabled: true
+      vae_use_framewise_encoding: false
+      vae_use_framewise_decoding: false
+      vae_num_sample_frames_batch_size: 16
+      vae_num_latent_frames_batch_size: 2
+      vae_tile_sample_min_height: 512
+      vae_tile_sample_min_width: 512
+      vae_tile_sample_min_num_frames: 32
+      vae_tile_sample_stride_height: 448
+      vae_tile_sample_stride_width: 448
+      vae_tile_sample_stride_num_frames: 16
   ui:
     panels:
     - name: media
@@ -274,6 +291,14 @@ spec:
         rows:
         - - image
         - - audio
+    - name: advanced_media
+      label: Advanced Media
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - image_quality_crf
     - name: prompting
       label: Prompting
       collapsible: true
@@ -293,6 +318,7 @@ spec:
         - - aspect_ratio
         - - height
           - width
+
     - name: sampling
       label: Sampling
       collapsible: true
@@ -310,17 +336,33 @@ spec:
         flow: column
         rows:
         - - chunking_profile
+    - name: vae
+      label: VAE / Memory
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - vae_tiling_enabled
+        - - vae_use_framewise_encoding
+        - - vae_use_framewise_decoding
+        - - vae_tile_sample_min_height
+        - - vae_tile_sample_min_width
+        - - vae_tile_sample_min_num_frames
+        - - vae_tile_sample_stride_height
+        - - vae_tile_sample_stride_width
+        - - vae_tile_sample_stride_num_frames
+        - - vae_num_sample_frames_batch_size
+        - - vae_num_latent_frames_batch_size
     inputs:
     - id: image
       label: Image
       description: The image to condition on.
-      type: image_list
+      type: image
       panel: media
       map_h: height
       map_w: width
       scale_by: resolution
-      min: 0
-      max: 1
       required: false
     - id: audio
       label: Audio
@@ -328,6 +370,16 @@ spec:
       type: audio
       panel: media
       required: false
+    - id: image_quality_crf
+      label: Image Quality CRF
+      description: The quality of the image. This can help with motion in the video.
+      type: number+slider
+      value_type: integer
+      panel: advanced_media
+      default: 33
+      min: 0
+      max: 51
+      step: 1
     - id: prompt
       label: Prompt
       description: Describe the video you want to generate.
@@ -340,10 +392,10 @@ spec:
       description: Select the resolution of the output video
       panel: size
       type: select
-      default: 960
+      default: 1080
       options:
       - name: Full HD
-        value: 960
+        value: 1080
       - name: HD
         value: 720
       - name: SD
@@ -431,3 +483,104 @@ spec:
         value: balanced
       - name: Aggressive
         value: aggressive
+    - id: vae_tiling_enabled
+      label: Enable VAE Tiling
+      description: Enable tiled VAE encode/decode (recommended).
+      type: boolean
+      panel: vae
+      default: true
+      required: false
+    - id: vae_use_framewise_encoding
+      label: Force Framewise Encoding
+      description: Force temporal tiled (framewise) encoding; otherwise uses an automatic heuristic.
+      type: boolean
+      panel: vae
+      default: false
+      required: false
+    - id: vae_use_framewise_decoding
+      label: Force Framewise Decoding
+      description: Force temporal tiled (framewise) decoding; otherwise uses an automatic heuristic.
+      type: boolean
+      panel: vae
+      default: false
+      required: false
+    - id: vae_tile_sample_min_height
+      label: VAE Tile Min Height
+      description: Minimum pixel height before spatial tiling is used.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 512
+      min: 256
+      max: 2048
+      step: 32
+    - id: vae_tile_sample_min_width
+      label: VAE Tile Min Width
+      description: Minimum pixel width before spatial tiling is used.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 512
+      min: 256
+      max: 2048
+      step: 32
+    - id: vae_tile_sample_min_num_frames
+      label: VAE Tile Min Frames
+      description: Minimum number of frames before temporal tiling is used.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 32
+      min: 1
+      max: 256
+      step: 1
+    - id: vae_tile_sample_stride_height
+      label: VAE Tile Stride Height
+      description: Spatial tiling stride (controls overlap) in height direction.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 448
+      min: 64
+      max: 2048
+      step: 32
+    - id: vae_tile_sample_stride_width
+      label: VAE Tile Stride Width
+      description: Spatial tiling stride (controls overlap) in width direction.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 448
+      min: 64
+      max: 2048
+      step: 32
+    - id: vae_tile_sample_stride_num_frames
+      label: VAE Tile Stride Frames
+      description: Temporal tiling stride (controls overlap) in frames.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 16
+      min: 1
+      max: 128
+      step: 1
+    - id: vae_num_sample_frames_batch_size
+      label: VAE Sample Frames Batch Size
+      description: Hint for how many sample frames to decode per chunk (best-effort).
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 16
+      min: 1
+      max: 64
+      step: 1
+    - id: vae_num_latent_frames_batch_size
+      label: VAE Latent Frames Batch Size
+      description: Hint for how many latent frames to decode per chunk (best-effort).
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 2
+      min: 1
+      max: 16
+      step: 1

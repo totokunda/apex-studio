@@ -899,11 +899,27 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         return vae
 
     def enable_vae_tiling(self, component_name: str = "vae"):
+        """
+        Enable VAE tiling if the component supports it.
+
+        If the engine sets `self._vae_tiling_runtime_kwargs` (a dict), we will pass those kwargs into the VAE's
+        `enable_tiling(...)` call. This allows per-run configuration (e.g. LTX2 VAE tiling sliders) without changing
+        the generic `vae_encode`/`vae_decode` call sites.
+        """
         self.vae_tiling = True
         if getattr(self, component_name, None) is None:
             return
-        if hasattr(getattr(self, component_name), "enable_tiling"):
-            getattr(self, component_name).enable_tiling()
+        vae_obj = getattr(self, component_name)
+        if hasattr(vae_obj, "enable_tiling"):
+            runtime_kwargs = getattr(self, "_vae_tiling_runtime_kwargs", None)
+            if isinstance(runtime_kwargs, dict) and runtime_kwargs:
+                try:
+                    vae_obj.enable_tiling(**runtime_kwargs)
+                except TypeError:
+                    # Backward compatibility: older VAEs may not accept kwargs.
+                    vae_obj.enable_tiling()
+            else:
+                vae_obj.enable_tiling()
             self.logger.info(f"Enabled tiling for {component_name}")
         else:
             self.logger.warning(f"{component_name} does not support tiling")
@@ -1054,7 +1070,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     def load_transformer(
         self,
         component: Dict[str, Any],
-        load_dtype: torch.dtype | mx.Dtype | None,
+        load_dtype: torch.dtype | None,
         no_weights: bool = False,
         device: str = "cpu",
     ):
@@ -1158,6 +1174,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             maybe_compile = getattr(self, "_maybe_compile_module", None)
             if callable(maybe_compile):
                 model = maybe_compile(model, component)
+        
 
         return transformer
 

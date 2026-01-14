@@ -42,8 +42,8 @@ const calculateIterateRange = (
       : currentFrame;
     const idealStartFrame =
       Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
-    const actualStartFrame = Math.round(
-      (idealStartFrame / projectFps) * clipFps,
+    const actualStartFrame = Math.floor(
+      (idealStartFrame / projectFps) * clipFps + 1e-4,
     );
     const totalFrames = Math.max(
       0,
@@ -494,6 +494,12 @@ const VideoPreview: React.FC<
   useEffect(() => {
     focusFrameRef.current = focusFrame;
   }, [focusFrame]);
+  // Use a ref for isPlaying to avoid triggering seeks when pausing
+  // This prevents the frame from jumping when transitioning from play to pause
+  const isPlayingRef = useRef(isPlaying);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
   // When input playback reaches the end, the store can "rewind" focusFrame back to the
   // range start and immediately resume playing. If `startRendering()` kicked off using
   // the old end-frame before that rewind propagated, the iterator will be out of sync
@@ -994,7 +1000,7 @@ const VideoPreview: React.FC<
       : currentFrameForSeek;
     const idealFrame =
       Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
-    const actualFrame = Math.round((idealFrame / projectFps) * clipFps);
+    const actualFrame = Math.floor((idealFrame / projectFps) * clipFps + 1e-4);
     const totalFrames = Math.max(
       0,
       Math.floor((mediaInfo.current.duration || 0) * clipFps),
@@ -1018,6 +1024,7 @@ const VideoPreview: React.FC<
 
   const renderPosterFallback = useCallback(
     async (opts?: { force?: boolean }) => {
+
       if (!opts?.force && isPlaying) return;
       if (hidden || !isInFrame) return;
       if (!canvasRef.current) return;
@@ -1026,6 +1033,7 @@ const VideoPreview: React.FC<
 
       const info = mediaInfo.current;
       if (!info) return;
+
 
       let { displayWidth: targetW, displayHeight: targetH } =
         displaySizeRef.current;
@@ -1114,8 +1122,10 @@ const VideoPreview: React.FC<
       // NOTE: Do NOT use `useInputControlsStore.getState()` here:
       // it reads the global fallback store (wrong clip scope) and will return false
       // during input playback, causing us to seek every frame.
-      if (isPlaying) return;
-    
+      // Use ref to avoid triggering seeks when pausing - this prevents frame jumping
+      if (isPlayingRef.current) return;
+
+
     const info = getTargetFrameInfo();
 
 
@@ -1125,6 +1135,12 @@ const VideoPreview: React.FC<
     }
 
     const { timestamp, targetFrame } = info;
+
+    // If we are already displaying the target frame (from playback), avoid re-seeking
+    // which can cause a visible flicker/jump on pause.
+    if (!isAccurateSeekNeededInput && lastRenderedFrameRef.current === targetFrame) {
+      return;
+    }
 
     // Update the mask frame ref immediately before seeking to ensure sync
     decoderMaskFrameRef.current = maskFrameForCurrentFocus;
@@ -1155,8 +1171,7 @@ const VideoPreview: React.FC<
     [
       decoderManager,
       getTargetFrameInfo,
-      isPlaying,
-      renderPosterFallback,
+      //renderPosterFallback,
       maskFrameForCurrentFocus,
       isAccurateSeekNeeded,
       selectedAssetId,

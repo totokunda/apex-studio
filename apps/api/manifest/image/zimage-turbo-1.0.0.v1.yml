@@ -29,6 +29,7 @@ spec:
     - metal
   attention_types:
   - sdpa
+  - metal-flash
   - efficient_dot_product_attention
   components:
   - type: scheduler
