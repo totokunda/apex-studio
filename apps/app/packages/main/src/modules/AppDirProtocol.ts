@@ -1,5 +1,6 @@
 import { AppModule } from "../AppModule.js";
 import { ModuleContext } from "../ModuleContext.js";
+import { getSettingsModule } from "./SettingsModule.js";
 import { protocol, ipcMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
@@ -192,6 +193,12 @@ class AppDirProtocol implements AppModule {
 
   async enable({ app }: ModuleContext): Promise<void> {
     await app.whenReady();
+
+    // Subscribe to backend URL updates from SettingsModule
+    const settings = getSettingsModule();
+    settings.on("backend-url-changed", (newUrl: string) => {
+      void this.onBackendUrlChanged(newUrl);
+    });
 
     this.electronApp = app;
     // Resolve renderer dist path once so we can serve it via `app://renderer/...`
@@ -436,10 +443,34 @@ class AppDirProtocol implements AppModule {
         this.coerceWindowsAbsolutePathFromUrlPathname(decodedPathname) ??
         (path.isAbsolute(decodedPathname) ? path.normalize(decodedPathname) : null);
       if (candidateAbs && app) {
+        // Construct broad list of allowed local bases to prevent unnecessary remote fetches
+        // for files that are definitely present locally.
         const allowedLocalBases = [
           ...(this.cachePath ? [this.cachePath] : []),
           ...this.localUserDataBaseCandidates(app),
         ];
+        
+        // Also explicitly allow standard local cache locations even if not currently configured
+        // as the "active" cache (since active cache might be the remote mirror).
+        try {
+          allowedLocalBases.push(path.join(app.getPath("userData"), "apex-cache"));
+          const home = os.homedir();
+          if (home) {
+            allowedLocalBases.push(path.join(home, "apex-diffusion", "cache"));
+          }
+          // Best-effort: read persistent settings for a custom local cache path
+          const settingsPath = path.join(app.getPath("userData"), "apex-settings.json");
+          if (fs.existsSync(settingsPath)) {
+            const raw = fs.readFileSync(settingsPath, "utf-8");
+            const parsed = JSON.parse(raw);
+            if (parsed.cachePath && typeof parsed.cachePath === "string") {
+              allowedLocalBases.push(path.resolve(parsed.cachePath));
+            }
+          }
+        } catch {
+          // ignore
+        }
+
         if (this.isUnderAnyBase(candidateAbs, allowedLocalBases)) {
           filePath = candidateAbs;
         } else {
@@ -778,6 +809,20 @@ class AppDirProtocol implements AppModule {
           this.cachePath = fallback;
         }
       } catch {}
+    }
+  }
+
+  private async onBackendUrlChanged(newUrl: string): Promise<void> {
+    console.log(`[AppDirProtocol] Backend URL changed to ${newUrl}`);
+    this.backendUrl = newUrl;
+    // Reset state that depends on backend
+    this.loopbackAppearsRemote = false;
+    this.remoteCacheBasePath = null;
+
+    // Re-probe environment
+    await this.probeBackendLocality();
+    if (this.electronApp) {
+      await this.fetchCachePath(this.electronApp);
     }
   }
 
