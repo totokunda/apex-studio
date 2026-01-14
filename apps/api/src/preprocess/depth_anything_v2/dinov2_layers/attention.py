@@ -77,7 +77,11 @@ class MemEffAttention(Attention):
 
         q, k, v = unbind(qkv, 2)
 
-        x = memory_efficient_attention(q, k, v, attn_bias=attn_bias)
+        try:
+            x = memory_efficient_attention(q, k, v, attn_bias=attn_bias)
+        except Exception as e:
+            logger.warning(f"xFormers memory_efficient_attention failed: {e}. Falling back to standard attention.")
+            return super().forward(x)
         x = x.reshape([B, N, C])
 
         x = self.proj(x)
