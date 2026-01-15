@@ -91,6 +91,10 @@ async def _start_background_services() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Verify attention backends synchronously at startup
+    from src.attention.functions import verify_attention_backends
+    verify_attention_backends()
+
     _start_parent_watchdog()
     # Startup: initialize Ray and related services in the background (non-blocking)
     startup_task = asyncio.create_task(_start_background_services())

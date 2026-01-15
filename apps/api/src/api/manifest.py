@@ -511,8 +511,8 @@ def _attention_label_description_maps() -> tuple[Dict[str, str], Dict[str, str]]
         "flex-block-attn": "Flex Block Attention",
         "efficient_dot_product_attention": "Efficient Dot Product Attention",
         "block-sparse-attn": "Block Sparse Attention",
-        "metal-flash": "Metal Flash Attention",
-        "metal-flash-varlen": "Metal Flash Attention (VarLen)",
+        "metal_flash": "Metal Flash Attention",
+        "metal_flash-varlen": "Metal Flash Attention (VarLen)",
     }
 
     description_map = {
@@ -521,8 +521,8 @@ def _attention_label_description_maps() -> tuple[Dict[str, str], Dict[str, str]]
         "sdpa_streaming": "Streaming softmax SDPA variant for long sequences.",
         "flash": "NVIDIA FlashAttention-2 kernel (fast, memory-efficient).",
         "flash3": "FlashAttention-3 kernel via flash_attn_interface.",
-        "metal-flash": "Metal Flash Attention kernel for MPS.",
-        "metal-flash-varlen": "Variable Length kernel for MPS.",
+        "metal_flash": "Metal Flash Attention kernel for MPS.",
+        "metal_flash-varlen": "Variable Length kernel for MPS.",
         "sage": "SageAttention kernel backend.",
         "xformers": "xFormers memory-efficient attention implementation.",
         "flex": "PyTorch Flex Attention (experimental flexible masks).",
@@ -545,7 +545,7 @@ def _build_attention_options(
     """
     # Local import to avoid import cycles at startup
     try:
-        from src.attention.functions import attention_register
+        from src.attention.functions import attention_register, verify_attention_backends
     except Exception as e:
         # If attention stack cannot be imported, return an empty list gracefully
         return []
@@ -553,7 +553,7 @@ def _build_attention_options(
     label_map, description_map = _attention_label_description_maps()
 
     # "Installed" or runtime-available attention backends
-    available_keys = set(attention_register.all_available().keys())
+    available_keys = set(verify_attention_backends())
 
     if allowed is not None:
         allowed_set = {a for a in allowed if isinstance(a, str)}
