@@ -1100,117 +1100,62 @@ const hydrateStoresFromProjectJson = async (
   try {
     try {
       // Hydrate the global inputControls store from any persisted inputControls
-      // snapshot in the project JSON. The snapshot is keyed by clipId, then
-      // inputId; we map that back into the internal per-input store shape.
+      // snapshot in the project JSON. The snapshot is keyed by property name
+      // (e.g. selectedRangeByInputId), then by inputId, then by clipId.
       if (doc.inputControls && typeof doc.inputControls === "object") {
         try {
           const snapshot = doc.inputControls;
           globalInputControlsStore.setState((prev: any) => {
             const next = { ...prev };
 
-            const ttByInput: Record<string, Record<string, number>> = {
-              ...(prev.totalTimelineFramesByInputId || {}),
-            };
-            const tdByInput: Record<
-              string,
-              Record<string, [number, number]>
-            > = { ...(prev.timelineDurationByInputId || {}) };
-            const fpsByInput: Record<string, Record<string, number>> = {
-              ...(prev.fpsByInputId || {}),
-            };
-            const ffByInput: Record<string, Record<string, number>> = {
-              ...(prev.focusFrameByInputId || {}),
-            };
-            const faByInput: Record<string, Record<string, number>> = {
-              ...(prev.focusAnchorRatioByInputId || {}),
-            };
-            const selClipByInput: Record<
-              string,
-              Record<string, string | null>
-            > = { ...(prev.selectedInputClipIdByInputId || {}) };
-            const selRangeByInput: Record<
-              string,
-              Record<string, [number, number]>
-            > = { ...(prev.selectedRangeByInputId || {}) };
-
-            for (const [clipId, perInput] of Object.entries(snapshot)) {
-              if (!perInput || typeof perInput !== "object") continue;
-              for (const [inputId, data] of Object.entries(perInput)) {
-                const rec = (data || {}) as {
-                  totalTimelineFrames?: number;
-                  timelineDuration?: [number, number];
-                  fps?: number;
-                  focusFrame?: number;
-                  focusAnchorRatio?: number;
-                  selectedInputClipId?: string | null;
-                  selectedRange?: [number, number];
-                };
-
-                if (rec.totalTimelineFrames != null) {
-                  const byClip = ttByInput[inputId] || {};
-                  byClip[clipId] = Number(rec.totalTimelineFrames) || 0;
-                  ttByInput[inputId] = byClip;
-                }
-
-                if (
-                  rec.timelineDuration &&
-                  Array.isArray(rec.timelineDuration) &&
-                  rec.timelineDuration.length === 2
-                ) {
-                  const byClip = tdByInput[inputId] || {};
-                  byClip[clipId] = [
-                    Number(rec.timelineDuration[0]) || 0,
-                    Number(rec.timelineDuration[1]) || 0,
-                  ];
-                  tdByInput[inputId] = byClip;
-                }
-
-                if (rec.fps != null) {
-                  const byClip = fpsByInput[inputId] || {};
-                  byClip[clipId] = Number(rec.fps) || 0;
-                  fpsByInput[inputId] = byClip;
-                }
-
-                if (rec.focusFrame != null) {
-                  const byClip = ffByInput[inputId] || {};
-                  byClip[clipId] = Number(rec.focusFrame) || 0;
-                  ffByInput[inputId] = byClip;
-                }
-
-                if (rec.focusAnchorRatio != null) {
-                  const byClip = faByInput[inputId] || {};
-                  byClip[clipId] = Number(rec.focusAnchorRatio) || 0;
-                  faByInput[inputId] = byClip;
-                }
-
-                if ("selectedInputClipId" in rec) {
-                  const byClip = selClipByInput[inputId] || {};
-                  byClip[clipId] = rec.selectedInputClipId ?? null;
-                  selClipByInput[inputId] = byClip;
-                }
-
-                if (
-                  rec.selectedRange &&
-                  Array.isArray(rec.selectedRange) &&
-                  rec.selectedRange.length === 2
-                ) {
-                  const byClip = selRangeByInput[inputId] || {};
-                  byClip[clipId] = [
-                    Number(rec.selectedRange[0]) || 0,
-                    Number(rec.selectedRange[1]) || 0,
-                  ];
-                  selRangeByInput[inputId] = byClip;
-                }
+            // Helper to merge nested { [inputId]: { [clipId]: T } } structures
+            const mergeNested = <T,>(
+              existing: Record<string, Record<string, T>> | undefined,
+              incoming: Record<string, Record<string, T>> | undefined,
+            ): Record<string, Record<string, T>> => {
+              const result: Record<string, Record<string, T>> = { ...(existing || {}) };
+              if (!incoming) return result;
+              for (const [inputId, byClip] of Object.entries(incoming)) {
+                if (!byClip || typeof byClip !== "object") continue;
+                result[inputId] = { ...(result[inputId] || {}), ...byClip };
               }
-            }
+              return result;
+            };
 
-            next.totalTimelineFramesByInputId = ttByInput;
-            next.timelineDurationByInputId = tdByInput;
-            next.fpsByInputId = fpsByInput;
-            next.focusFrameByInputId = ffByInput;
-            next.focusAnchorRatioByInputId = faByInput;
-            next.selectedInputClipIdByInputId = selClipByInput;
-            next.selectedRangeByInputId = selRangeByInput;
+            next.totalTimelineFramesByInputId = mergeNested(
+              prev.totalTimelineFramesByInputId,
+              snapshot.totalTimelineFramesByInputId as Record<string, Record<string, number>> | undefined,
+            );
+            next.timelineDurationByInputId = mergeNested(
+              prev.timelineDurationByInputId,
+              snapshot.timelineDurationByInputId as Record<string, Record<string, [number, number]>> | undefined,
+            );
+            next.fpsByInputId = mergeNested(
+              prev.fpsByInputId,
+              snapshot.fpsByInputId as Record<string, Record<string, number>> | undefined,
+            );
+            next.focusFrameByInputId = mergeNested(
+              prev.focusFrameByInputId,
+              snapshot.focusFrameByInputId as Record<string, Record<string, number>> | undefined,
+            );
+            next.focusAnchorRatioByInputId = mergeNested(
+              prev.focusAnchorRatioByInputId,
+              snapshot.focusAnchorRatioByInputId as Record<string, Record<string, number>> | undefined,
+            );
+            next.selectedInputClipIdByInputId = mergeNested(
+              prev.selectedInputClipIdByInputId,
+              snapshot.selectedInputClipIdByInputId as Record<string, Record<string, string | null>> | undefined,
+            );
+            next.selectedRangeByInputId = mergeNested(
+              prev.selectedRangeByInputId,
+              snapshot.selectedRangeByInputId as Record<string, Record<string, [number, number]>> | undefined,
+            );
+            next.zoomLevelByInputId = mergeNested(
+              prev.zoomLevelByInputId,
+              snapshot.zoomLevelByInputId as Record<string, Record<string, ZoomLevel>> | undefined,
+            );
+            // Don't restore isPlayingByInputId - always start paused
+
             return next;
           });
         } catch {

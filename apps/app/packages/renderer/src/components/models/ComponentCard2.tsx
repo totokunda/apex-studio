@@ -695,11 +695,9 @@ const ModelPathItem: React.FC<{
                       await cancelRayJob(jobId);
                     } catch {}
                     try {
-                      console.log("removeJobUpdates", jobId);
                       removeJobUpdates(jobId);
                     } catch {}
                     try {
-                      console.log("removeSourceByJobId", jobId);
                       removeSourceByJobId(jobId);
                     } catch {}
                   }}

@@ -35,6 +35,7 @@ import { remapMaskForMediaDialog } from "@/lib/mask/transformUtils";
 import { ClipTransform, MaskClipProps } from "@/lib/types";
 import { BaseClipApplicator } from "@/components/preview/clips/apply/base";
 import DynamicModelPreview from "@/components/preview/clips/DynamicModelPreview";
+import { cn } from "@/lib/utils";
 
 // 1. EXTRACTED COMPONENT TO HANDLE STABLE OVERRIDES
 const PosterClipItem = React.memo(({
@@ -158,7 +159,8 @@ const PosterClipItem = React.memo(({
     }
     return override;
   }, [clip, rectWidth, rectHeight, isDialogOpen]);
-  
+
+
 
   switch (clip.type) {
     case "video":
@@ -201,6 +203,9 @@ const PosterClipItem = React.memo(({
           rectHeight={rectHeight}
           applicators={applicators}
           assetMode={true}
+          inputMode={true}
+          focusFrameOverride={focusFrame}
+          inputId={inputId}
         />
       );
     case "text":
@@ -212,6 +217,9 @@ const PosterClipItem = React.memo(({
           rectHeight={rectHeight}
           applicators={applicators}
           assetMode={true}
+          inputMode={true}
+          focusFrameOverride={focusFrame}
+          inputId={inputId}
         />
       );
     case "draw":
@@ -223,6 +231,9 @@ const PosterClipItem = React.memo(({
           rectHeight={rectHeight}
           assetMode={true}
           applicators={applicators}
+          inputMode={true}
+          focusFrameOverride={focusFrame}
+          inputId={inputId}
         />
       );
     case "model":
@@ -234,6 +245,9 @@ const PosterClipItem = React.memo(({
           overlap={true}
           rectWidth={rectWidth}
           rectHeight={rectHeight}
+          inputMode={true}
+          focusFrameOverride={focusFrame}
+          inputId={inputId}
         />
       );
     default:
@@ -382,9 +396,11 @@ const TimelineClipPosterPreview: React.FC<{
         const start = g.startFrame ?? 0;
         const nested = ((g as any).children as string[][] | undefined) ?? [];
         const childIdsFlat = nested.flat();
-        const children = childIdsFlat
-          .map((id) => clips.find((c) => c.clipId === id))
-          .filter(Boolean) as AnyClipProps[];
+        const children = (
+          childIdsFlat
+            .map((id) => clips.find((c) => c.clipId === id))
+            .filter(Boolean) as AnyClipProps[]
+        )
         return { kind: "group", id: g.clipId, y, start, children };
       });
 
@@ -490,7 +506,7 @@ const TimelineClipPosterPreview: React.FC<{
 
 
   return (
-    <div className="w-full h-auto flex flex-col items-center justify-start bg-black">
+    <div className={cn("w-full h-auto flex flex-col items-center justify-start ", audioOnly ? "bg-transparent" : "bg-black")}>
       <StageComponent
         key={`${clipOverride?.clipId || clipId || "none"}${audioOnly ? ":audio" : ""}`}
         {...StageProps}
@@ -529,29 +545,75 @@ const TimelineClipPosterPreview: React.FC<{
                   );
                 })}
             {toRender.map((clip) => {
-              if (clip.type !== "video" && clip.type !== "audio") return null;
-              const startFrame = clip.startFrame || 0;
-              const groupStart = clip.groupId
-                ? getClipById(clip.groupId)?.startFrame || 0
-                : 0;
-              const relativeStart = startFrame - groupStart;
-              const hasOverlap =
-                (clip.groupId ? relativeStart : startFrame) > 0 ? true : false;
+              // Render AudioPreview for video, audio, and model clips that may have audio
+              if (clip.type !== "video" && clip.type !== "audio" && clip.type !== "model") return null;
+              
+              // For clips that are children of a group, compute timing relative to group start
+              // This ensures audio plays at the correct time within the group
+              const clipStartFrame = clip.startFrame || 0;
+              const clipEndFrame = clip.endFrame || 0;
+              
+              // Get the ORIGINAL group's startFrame from the clips store (not the normalized input clip)
+              const originalGroup = clip.groupId ? clips.find((c) => c.clipId === clip.groupId) : null;
+              const originalGroupStart = originalGroup?.startFrame || 0;
+              
+              // Convert absolute timeline frames to group-relative frames
+              const relativeStart = clip.groupId ? clipStartFrame - originalGroupStart : clipStartFrame;
+              const relativeEnd = clip.groupId ? clipEndFrame - originalGroupStart : clipEndFrame;
+              const hasOverlap = relativeStart > 0;
 
-         
               const overrideToUse = clipOverride ? clip : undefined;
               return (
                 <AudioPreview
                   key={clip.clipId}
-                  {...{...(clip as any), hidden: false}}
+                  {...{...(clip as any), hidden: false, startFrame: relativeStart, endFrame: relativeEnd}}
                   overrideClip={overrideToUse}
                   overlap={hasOverlap}
                   rectWidth={rectWidth}
                   rectHeight={rectHeight}
                   inputMode={true}
                   inputId={inputId}
+                  preserveInputTiming={clip.groupId ? true : false}
                 />
               );
+            })}
+            {/* Also render audio for group clips by processing their child clips */}
+            {toRender.map((clip) => {
+              if (clip.type !== "group") return null;
+              // Get children of the group that may have audio
+              const nested = ((clip as any).children as string[][] | undefined) ?? [];
+              const childIdsFlat = nested.flat();
+              const childClips = childIdsFlat
+                .map((id) => clips.find((c) => c.clipId === id))
+                .filter((c): c is AnyClipProps => 
+                  !!c && (c.type === "video" || c.type === "audio" || c.type === "model")
+                );
+              
+              // Get the ORIGINAL group's startFrame from clips store, not from the normalized input clip
+              // The clip in toRender may have startFrame=0 (normalized for input mode)
+              // but children in clips store have absolute timeline positions
+              const originalGroup = clips.find((c) => c.clipId === clip.clipId);
+              const originalGroupStart = originalGroup?.startFrame || 0;
+              
+              return childClips.map((childClip) => {
+                // Child clips have absolute timeline frames, convert to group-relative
+                const childStart = (childClip.startFrame || 0) - originalGroupStart;
+                const childEnd = (childClip.endFrame || 0) - originalGroupStart;
+                const hasOverlap = childStart > 0;
+                
+                return (
+                  <AudioPreview
+                    key={`group-audio-${childClip.clipId}`}
+                    {...{...(childClip as any), hidden: false, startFrame: childStart, endFrame: childEnd}}
+                    overlap={hasOverlap}
+                    rectWidth={rectWidth}
+                    rectHeight={rectHeight}
+                    inputMode={true}
+                    inputId={inputId}
+                    preserveInputTiming={true}
+                  />
+                );
+              });
             })}
           </Group>
         </Layer>

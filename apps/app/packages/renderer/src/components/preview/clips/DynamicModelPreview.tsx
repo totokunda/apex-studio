@@ -14,6 +14,9 @@ interface DynamicModelPreviewProps {
   rectHeight: number;
   applicators: BaseClipApplicator[];
   overlap: boolean;
+  inputMode?: boolean;
+  inputId?: string;
+  focusFrameOverride?: number;
 }
 
 const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
@@ -22,6 +25,9 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
   rectHeight,
   applicators,
   overlap,
+  inputMode,
+  inputId,
+  focusFrameOverride
 }) => {
 
   const getAssetById = useClipStore((s) => s.getAssetById);
@@ -61,16 +67,24 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
 
 
 
+
   if (info?.video || (!info && typeGuess === "video" && src)) {
+
     return (
       <VideoPreview
         {...({
           ...(clip as unknown as VideoClipProps),
+          masks: [],
+          preprocessors: [],
         })}
         rectWidth={rectWidth}
         rectHeight={rectHeight}
         applicators={applicators}
         overlap={overlap}
+        inputMode={inputMode}
+        inputId={inputId}
+        focusFrameOverride={focusFrameOverride}
+        hidden={!overlap}
       />
     );
   }
@@ -80,11 +94,16 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
       <ImagePreview
         {...({
           ...(clip as unknown as ImageClipProps),
+          masks: [],
+          preprocessors: [],
         })}
         rectWidth={rectWidth}
         rectHeight={rectHeight}
         applicators={applicators}
         overlap={overlap}
+        inputMode={inputMode}
+        inputId={inputId}
+        focusFrameOverride={focusFrameOverride}
       />
     );
   }

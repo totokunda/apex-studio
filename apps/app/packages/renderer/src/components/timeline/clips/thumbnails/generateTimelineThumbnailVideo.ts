@@ -31,6 +31,7 @@ export const generateTimelineThumbnailVideo = async (
   exactVideoUpdateSeqRef: React.MutableRefObject<number>,
   lastExactRequestKeyRef: React.MutableRefObject<string | null>,
   setForceRerenderCounter: React.Dispatch<React.SetStateAction<number>>,
+  noShift: boolean = false,
 ) => {
   if (clipType !== "video") return;
   let tClipWidth = Math.min(thumbnailClipWidth, maxTimelineWidth);
@@ -64,7 +65,7 @@ export const generateTimelineThumbnailVideo = async (
     numColumnsAlt = numColumns;
     numColumns = tempNumColumns;
   }
-  const timelineShift = currentStartFrame - (currentClip.trimStart ?? 0);
+  const timelineShift = noShift ? 0 : currentStartFrame - (currentClip.trimStart ?? 0);
   const realStartFrame = timelineShift;
   const realEndFrame = currentEndFrame - (currentClip.trimEnd ?? 0);
   let timelineStartFrame = Math.max(timelineDuration[0], realStartFrame);
@@ -166,11 +167,6 @@ export const generateTimelineThumbnailVideo = async (
   const getAssetById = useClipStore.getState().getAssetById;
   const asset = getAssetById(currentClip.assetId);
   if (!asset) return;
-
-  
-
- 
-
   const nearest = getNearestCachedCanvasSamples(
     asset.path,
     frameIndices,
