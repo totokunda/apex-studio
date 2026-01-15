@@ -280,6 +280,10 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
       )}
       onOpenAutoFocus={() => {
         isUserInteractingRef.current = true;
+        // TimelineSearch selection highlighting also uses a global asset-controls store
+        // (see TimelineClip), so we must clear it when opening a new picker to avoid
+        // leaking "Selected" state across different ImageInput slots.
+        clearSelectedAsset();
         setSelectedAssetChangeHandler(assetSelectionHandler);
       }}
       onCloseAutoFocus={() => {
@@ -577,6 +581,13 @@ const ImageInput: React.FC<ImageInputProps> = ({
 
   const emitSelection = React.useCallback(
     (next: ImageSelection) => {
+      // If this input is being cleared, also clear asset-mode selection so an empty
+      // input doesn't keep showing a stale "Selected" state in TimelineSearch.
+      if (!next) {
+        try {
+          useAssetControlsStore.getState().clearSelectedAsset();
+        } catch {}
+      }
       if (onChangeComposite) {
         onChangeComposite({
           selection: next,
