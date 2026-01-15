@@ -12,6 +12,9 @@ sageattention @ https://huggingface.co/datasets/totoku/attention/resolve/main/sa
 # FlashAttention 2 (Source build)
 flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
 
+# FlashAttention Turing
+flash_attn_turing @ https://huggingface.co/datasets/totoku/attention/resolve/main/flash-attention-turing/universal/flash_attn_turing-0.0.1-cp312-cp312-linux_x86_64.whl
+
 # FlashAttention 3 (Prebuilt wheels - harmless to include even if GPU doesn't support it)
 flash_attn_3 @ https://huggingface.co/alexnasa/flash-attn-3/resolve/main/torch29%2Bcu128/flash_attn_3-3.0.0b1-cp39-abi3-linux_x86_64.whl
 

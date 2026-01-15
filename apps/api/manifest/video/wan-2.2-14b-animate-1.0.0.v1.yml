@@ -35,7 +35,7 @@ spec:
   - flash
   - flash3
   - sage
-  - metal-flash
+  - metal_flash
   - efficient_dot_product_attention
   loras:
   - source: Wan-AI/Wan2.2-Animate-14B/relighting_lora/adapter_model.safetensors
