@@ -21,7 +21,6 @@ import { ModelItem } from "./menus/ModelMenu";
 import type { ManifestDocument } from "@/lib/manifest";
 import GlobalContextMenu from "@/components/GlobalContextMenu";
 import { useProjectsStore } from "@/lib/projects";
-import { VideoDecoderManagerProvider } from "@/lib/media/VideoDecoderManagerContext";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/react-query/queryClient";
 import { useContextMenuStore } from "@/lib/context-menu";
@@ -182,7 +181,6 @@ const App: React.FC = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
-    <VideoDecoderManagerProvider>
     <DndContext
       autoScroll={false}
       onDragStart={(event) => {
@@ -342,7 +340,6 @@ const App: React.FC = () => {
         ) : null}
       </DragOverlay>
     </DndContext>
-    </VideoDecoderManagerProvider>
     </QueryClientProvider>
   );
 };

@@ -60,6 +60,15 @@ type BackendSyncedSettings = {
   autoUpdateEnabled: boolean;
 };
 
+type BackendPathSizes = {
+  cachePathBytes: number | null;
+  componentsPathBytes: number | null;
+  configPathBytes: number | null;
+  loraPathBytes: number | null;
+  preprocessorPathBytes: number | null;
+  postprocessorPathBytes: number | null;
+};
+
 type PathsPayload = Pick<
   Settings,
   | "cachePath"
@@ -79,6 +88,8 @@ export class SettingsModule extends EventEmitter implements AppModule {
   private backendUrl: string = DEFAULT_BACKEND_URL;
   private settingsPath: string | null = null;
   private refreshInFlight: Promise<ConfigResponse<BackendSyncedSettings>> | null =
+    null;
+  private verifyInFlight: Promise<ConfigResponse<BackendSyncedSettings>> | null =
     null;
 
   constructor() {
@@ -129,6 +140,22 @@ export class SettingsModule extends EventEmitter implements AppModule {
     } catch {
       // Best-effort: keep user input but still remove trailing slash.
       return trimmed.replace(/\/$/, "");
+    }
+  }
+
+  private normalizeCandidateBackendUrl(
+    url: string,
+  ): { ok: true; url: string } | { ok: false; error: string } {
+    const trimmed = String(url ?? "").trim();
+    if (!trimmed) return { ok: false, error: "Backend URL is required." };
+    try {
+      const u = new URL(trimmed);
+      return { ok: true, url: u.toString().replace(/\/$/, "") };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : "Invalid backend URL.",
+      };
     }
   }
 
@@ -413,6 +440,199 @@ export class SettingsModule extends EventEmitter implements AppModule {
     return await run.finally(() => {
       this.refreshInFlight = null;
     });
+  }
+
+  /**
+   * Verify a candidate backend URL is reachable (via GET /config/hostname) and then
+   * fetch backend-derived settings (paths + toggles) from that URL. This does NOT
+   * persist the candidate URL or overwrite local settings store; it's meant for
+   * "preview/sync" flows in the renderer before the user hits Save.
+   */
+  async verifyBackendUrlAndFetchSettings(
+    candidateUrl: string,
+  ): Promise<ConfigResponse<BackendSyncedSettings>> {
+    if (this.verifyInFlight) return this.verifyInFlight;
+    const urlRes = this.normalizeCandidateBackendUrl(candidateUrl);
+    if (!urlRes.ok) return { success: false, error: urlRes.error };
+
+    const run = (async (): Promise<ConfigResponse<BackendSyncedSettings>> => {
+      const probe = await this.makeConfigRequestAtUrl<any>(
+        urlRes.url,
+        "GET",
+        "/config/hostname",
+        undefined,
+        10_000,
+      );
+      if (!probe.success) {
+        return {
+          success: false,
+          error: probe.error || "Backend verification failed.",
+        };
+      }
+
+      return await this.peekFromBackendUrl(urlRes.url);
+    })();
+
+    this.verifyInFlight = run;
+    return await run.finally(() => {
+      this.verifyInFlight = null;
+    });
+  }
+
+  async fetchBackendPathSizesAtUrl(
+    candidateUrl?: string | null,
+  ): Promise<ConfigResponse<BackendPathSizes>> {
+    const baseUrl = (() => {
+      if (typeof candidateUrl === "string" && candidateUrl.trim()) {
+        const u = this.normalizeCandidateBackendUrl(candidateUrl);
+        if (u.ok) return u.url;
+      }
+      return this.backendUrl;
+    })();
+
+    const res = await this.makeConfigRequestAtUrl<any>(
+      baseUrl,
+      "GET",
+      "/config/path-sizes",
+      undefined,
+      15_000,
+    );
+    if (!res.success || !res.data) {
+      return { success: false, error: res.error || "Failed to fetch path sizes." };
+    }
+
+    const numOrNull = (v: unknown): number | null =>
+      typeof v === "number" && Number.isFinite(v) ? v : null;
+
+    return {
+      success: true,
+      data: {
+        cachePathBytes: numOrNull(res.data.cache_path_bytes),
+        componentsPathBytes: numOrNull(res.data.components_path_bytes),
+        configPathBytes: numOrNull(res.data.config_path_bytes),
+        loraPathBytes: numOrNull(res.data.lora_path_bytes),
+        preprocessorPathBytes: numOrNull(res.data.preprocessor_path_bytes),
+        postprocessorPathBytes: numOrNull(res.data.postprocessor_path_bytes),
+      },
+    };
+  }
+
+  private async peekFromBackendUrl(
+    backendUrl: string,
+  ): Promise<ConfigResponse<BackendSyncedSettings>> {
+    const currentSnapshot = (): BackendSyncedSettings => ({
+      cachePath:
+        (this.store.get("cachePath") as string | null | undefined) ?? null,
+      componentsPath:
+        (this.store.get("componentsPath") as string | null | undefined) ?? null,
+      configPath:
+        (this.store.get("configPath") as string | null | undefined) ?? null,
+      loraPath: (this.store.get("loraPath") as string | null | undefined) ?? null,
+      preprocessorPath:
+        (this.store.get("preprocessorPath") as string | null | undefined) ?? null,
+      postprocessorPath:
+        (this.store.get("postprocessorPath") as string | null | undefined) ?? null,
+      maskModel:
+        (this.store.get("maskModel") as string | null | undefined) ?? null,
+      renderImageSteps: Boolean(this.store.get("renderImageSteps")),
+      renderVideoSteps: Boolean(this.store.get("renderVideoSteps")),
+      useFastDownload: (() => {
+        const v = this.store.get("useFastDownload");
+        return v === undefined ? true : Boolean(v);
+      })(),
+      autoUpdateEnabled: (() => {
+        const v = this.store.get("autoUpdateEnabled");
+        return v === undefined ? true : Boolean(v);
+      })(),
+    });
+
+    let okCount = 0;
+    const next: BackendSyncedSettings = currentSnapshot();
+
+    const setFetched = <K extends keyof BackendSyncedSettings>(
+      key: K,
+      value: BackendSyncedSettings[K],
+    ) => {
+      (next as any)[key] = value;
+    };
+
+    // Paths + mask model
+    const pathKeys: PathKey[] = [
+      "cachePath",
+      "componentsPath",
+      "configPath",
+      "loraPath",
+      "preprocessorPath",
+      "postprocessorPath",
+      "maskModel",
+    ];
+    for (const key of pathKeys) {
+      const cfg = this.getPathConfig(key);
+      if (!cfg) continue;
+      const res = await this.makeConfigRequestAtUrl<any>(
+        backendUrl,
+        "GET",
+        cfg.getEndpoint,
+      );
+      if (res.success && res.data) {
+        const v = res.data[cfg.responseField];
+        if (typeof v === "string") {
+          okCount++;
+          setFetched(key as any, v || null);
+        }
+      }
+    }
+
+    // Booleans
+    const img = await this.makeConfigRequestAtUrl<any>(
+      backendUrl,
+      "GET",
+      "/config/enable-image-render-steps",
+    );
+    if (img.success && img.data && typeof img.data.enabled === "boolean") {
+      okCount++;
+      setFetched("renderImageSteps", Boolean(img.data.enabled));
+    }
+
+    const vid = await this.makeConfigRequestAtUrl<any>(
+      backendUrl,
+      "GET",
+      "/config/enable-video-render-steps",
+    );
+    if (vid.success && vid.data && typeof vid.data.enabled === "boolean") {
+      okCount++;
+      setFetched("renderVideoSteps", Boolean(vid.data.enabled));
+    }
+
+    const fast = await this.makeConfigRequestAtUrl<any>(
+      backendUrl,
+      "GET",
+      "/config/enable-fast-download",
+    );
+    if (fast.success && fast.data && typeof fast.data.enabled === "boolean") {
+      okCount++;
+      setFetched("useFastDownload", Boolean(fast.data.enabled));
+    }
+
+    const au = await this.makeConfigRequestAtUrl<any>(
+      backendUrl,
+      "GET",
+      "/config/auto-update",
+    );
+    if (au.success && au.data && typeof au.data.enabled === "boolean") {
+      okCount++;
+      setFetched("autoUpdateEnabled", Boolean(au.data.enabled));
+    }
+
+    if (okCount === 0) {
+      return {
+        success: false,
+        error:
+          "Failed to sync settings from backend: backend unreachable or missing config endpoints.",
+      };
+    }
+
+    return { success: true, data: next };
   }
 
   private async setCivitaiApiKeyAndUpdateApi(
@@ -856,6 +1076,19 @@ export class SettingsModule extends EventEmitter implements AppModule {
     ipcMain.handle("settings:refresh-from-backend", async () => {
       return await this.refreshFromBackend();
     });
+
+    // Verify a candidate backend URL and fetch backend-derived settings from it
+    ipcMain.handle("settings:verify-backend-url", async (_event, url: string) => {
+      return await this.verifyBackendUrlAndFetchSettings(url);
+    });
+
+    // Fetch backend save-path sizes (in bytes) from the current (or provided) backend URL
+    ipcMain.handle(
+      "settings:get-backend-path-sizes",
+      async (_event, url?: string | null) => {
+        return await this.fetchBackendPathSizesAtUrl(url ?? null);
+      },
+    );
   }
 }
 
