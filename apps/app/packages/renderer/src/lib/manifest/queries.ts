@@ -130,7 +130,6 @@ export const refreshManifest = async (
 
 export const refreshManifestPart = async (manifestId: string | null, part:string, queryClient: QueryClient, invalidateManifest: boolean = false) => {
       if (!manifestId) return;
-      console.log("refreshManifestPart", manifestId, part);
       const response = await getManifestPart(manifestId, part);
       // get the 
       if (!response.success) {

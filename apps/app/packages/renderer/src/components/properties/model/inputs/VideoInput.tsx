@@ -354,6 +354,7 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
       )}
       onOpenAutoFocus={() => {
         isUserInteractingRef.current = true;
+        clearSelectedAsset();
         setSelectedAssetChangeHandler(assetSelectionHandler);
       }}
       onCloseAutoFocus={() => {
@@ -482,6 +483,8 @@ const VideoInput: React.FC<VideoInputProps> = ({
     selectedRangeByInputId,
     setFocusFrame,
     setSelectedRange,
+    clearSelectedRange,
+    clearFocusFrame,
     play,
     pause,
   } = useInputControlsStore();
@@ -491,10 +494,19 @@ const VideoInput: React.FC<VideoInputProps> = ({
 
   const fpsForInput = fpsByInputId[inputId] ?? DEFAULT_FPS;
 
-  const selectedRangeTuple = selectedRangeByInputId[inputId] ?? [0, 1];
+  const selectedRangeTuple = selectedRangeByInputId[inputId] ?? [0, 0];
   const focusFrameForInput = focusFrameByInputId[inputId] ?? 0;
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+
+  // If selection is cleared externally (not via emitSelection), also clear
+  // any persisted per-input selection state.
+  useEffect(() => {
+    if (value) return;
+    pause(inputId);
+    clearSelectedRange(inputId);
+    clearFocusFrame(inputId);
+  }, [value, inputId, pause, clearSelectedRange, clearFocusFrame]);
 
   const { fps } = useControlsStore();
   const playbackStartTimestampRef = useRef<number | null>(null);
@@ -655,6 +667,33 @@ const VideoInput: React.FC<VideoInputProps> = ({
       } else {
         onChange(next);
       }
+
+      // When unselecting, clear any persisted per-input selection state.
+      if (!next) {
+        pause(inputId);
+        clearSelectedRange(inputId);
+        clearFocusFrame(inputId);
+        return;
+      }
+
+      // Reset selected range to [0, clip_length] only when a NEW clip is selected
+      const currentClipId = value?.clipId ?? null;
+      const nextClipId = next?.clipId ?? null;
+      const isNewClip = next && nextClipId !== currentClipId;
+      if (isNewClip) {
+        const clipStart = Math.max(0, Math.round(next.startFrame ?? 0));
+        const clipEnd = Math.max(
+          clipStart + 1,
+          Math.round(next.endFrame ?? clipStart + 1),
+        );
+        let span = clipEnd - clipStart;
+        if (typeof maxDuration === "number" && maxDuration > 0) {
+          span = Math.min(span, Math.max(1, Math.floor(maxDuration)));
+        }
+        setSelectedRange(0, span, inputId);
+        setFocusFrame(0, inputId);
+      }
+
       // Apply mapped height/width if configured on this input
       (async () => {
         try {
@@ -768,6 +807,13 @@ const VideoInput: React.FC<VideoInputProps> = ({
       clipId,
       inputId,
       updateModelInput,
+      maxDuration,
+      setSelectedRange,
+      setFocusFrame,
+      clearSelectedRange,
+      clearFocusFrame,
+      pause,
+      value,
     ],
   );
 
@@ -876,7 +922,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
 
   const rangeSummary = useMemo(() => {
     const start = rangeStartForInput;
-    const endDisplay = Math.max(start, rangeEndForInput - 1);
+    const endDisplay = Math.max(start, rangeEndForInput);
     const spanFrames = Math.max(1, rangeEndForInput - start);
     const threshold = Math.max(1, Math.floor(fpsForInput * 5));
     if (spanFrames < threshold) {
@@ -1085,9 +1131,16 @@ const VideoInput: React.FC<VideoInputProps> = ({
     const cid = String(clip.clipId || "");
     if (!cid.startsWith("media:")) {
       const live = getClipById(cid) as AnyClipProps | undefined;
-      
+      // check if model with assetId is video
+      let newType = live?.type;
+      if (live?.type === "model") {
+        const asset = getAssetById(live?.assetId ?? "");
+        newType = asset?.type;
+      }
+
       setMediaClip({
         ...live,
+        type: newType,
         masks: (value as VideoClipProps).masks ?? [],
       } as AnyClipProps);
       return;
@@ -1132,6 +1185,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
 
   const previewClip = useMemo<AnyClipProps | null>(() => {
     if (!value) return null;
+
     return mediaClip ?? (value as AnyClipProps);
   }, [value, mediaClip]);
 
@@ -1214,16 +1268,19 @@ const VideoInput: React.FC<VideoInputProps> = ({
 
   
 
-  // Reset selected range only when the selected clipId actually changes
+  // Reset selected range only when the selected clipId actually changes AND range is uninitialized
   const lastClipSignatureRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!previewClip) return;
+    if (!previewClip || !previewClip.type) return;
     const clipStart = Math.max(0, Math.round(previewClip.startFrame ?? 0));
     const clipEnd = Math.max(
       clipStart + 1,
       Math.round(previewClip.endFrame ?? clipStart + 1),
     );
-    let span = Math.max(1, clipEnd - clipStart);
+    let span = clipEnd - clipStart;
+    if (span <= 1) {
+      return;
+    }
     if (typeof maxDuration === "number" && maxDuration > 0) {
       span = Math.min(span, Math.max(1, Math.floor(maxDuration)));
     }
@@ -1249,8 +1306,14 @@ const VideoInput: React.FC<VideoInputProps> = ({
     if (sameClipAsBefore) return;
 
     const [curStart, curEnd] = selectedRangeTuple;
-    const isAlreadyDesired = curStart === 0 && curEnd === span;
-    if (!isAlreadyDesired) {
+    
+    // Check if current range is valid and persisted (not uninitialized [0, 0])
+    // If range is valid and within bounds, preserve it (likely restored from persistence)
+    const isUninitialized = curStart === 0 && curEnd === 0;
+    const isValidRange = curEnd > curStart && curStart >= 0 && curEnd <= span;
+    
+    // Only reset to full span if range is uninitialized or invalid for this clip
+    if (isUninitialized || !isValidRange) {
       setSelectedRange(0, span, inputId);
     }
   }, [
@@ -1265,13 +1328,23 @@ const VideoInput: React.FC<VideoInputProps> = ({
 
   // Ensure selectedRange is always valid (min 1 frame, within [clip.start, clip.end])
   useEffect(() => {
-    if (!previewClip) return;
+    if (!previewClip || !previewClip.type) return;
+
     const clipStart = Math.max(0, Math.round(previewClip.startFrame ?? 0));
     const clipEnd = Math.max(
       clipStart + 1,
       Math.round(previewClip.endFrame ?? clipStart + 1),
     );
-    const span = Math.max(1, clipEnd - clipStart);
+    const span = clipEnd - clipStart;
+    if (span < 1) {
+      return;
+    }
+
+    // if selectedRangeTuple is [0, 0], set it to [0, span]
+    if (selectedRangeTuple[0] === 0 && selectedRangeTuple[1] === 0) {
+      setSelectedRange(0, span, inputId);
+      return;
+    }
     let curStart = Math.round(selectedRangeTuple?.[0] ?? 0);
     let curEnd = Math.round(selectedRangeTuple?.[1] ?? curStart + 1);
     let desiredStart = Math.max(0, Math.min(span - 1, curStart));
@@ -1297,31 +1370,6 @@ const VideoInput: React.FC<VideoInputProps> = ({
     maxDuration,
   ]);
 
-  // Default selectedRange to the full duration on first load (store default [0,1])
-  useEffect(() => {
-    if (!previewClip) return;
-    if (!Array.isArray(selectedRangeTuple)) return;
-
-    const clipStart = Math.max(0, Math.round(previewClip.startFrame ?? 0));
-    const clipEnd = Math.max(
-      clipStart + 1,
-      Math.round(previewClip.endFrame ?? clipStart + 1),
-    );
-
-    let span = Math.max(1, clipEnd - clipStart);
-    if (typeof maxDuration === "number" && maxDuration > 0) {
-      span = Math.min(span, Math.max(1, Math.floor(maxDuration)));
-    }
-    
-    setSelectedRange(0, span, inputId);
-  }, [
-    previewClip,
-    selectedRangeTuple?.[0],
-    selectedRangeTuple?.[1],
-    setSelectedRange,
-    inputId,
-    maxDuration,
-  ]);
 
   // Simplified: do not mirror timeline changes by emitting; preview pulls latest from store via mediaClip
 

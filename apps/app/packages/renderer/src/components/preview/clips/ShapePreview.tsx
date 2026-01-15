@@ -24,11 +24,16 @@ import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 //@ts-ignore
 Konva.Filters.Applicator = ApplicatorFilter;
 
+import { useInputControlsStore } from "@/lib/inputControl";
+
 interface ShapePreviewProps extends ShapeClipProps {
   rectWidth: number;
   rectHeight: number;
   applicators: BaseClipApplicator[];
   assetMode?: boolean;
+  focusFrameOverride?: number;
+  inputMode?: boolean;
+  inputId?: string;
 }
 
 const ShapePreview: React.FC<ShapePreviewProps> = ({
@@ -37,6 +42,9 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
   rectWidth,
   rectHeight,
   applicators,
+  focusFrameOverride,
+  inputMode = false,
+  inputId
 }) => {
   // This ref is attached to multiple concrete Konva node types depending on `shapeType`
   // (Rect/Ellipse/Line/Star/RegularPolygon). Use a permissive type to satisfy react-konva.
@@ -50,8 +58,32 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
   const position = useViewportStore((s) => s.position);
   const setClipTransform = useClipStore((s) => s.setClipTransform);
   const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
-  const clip = useClipStore((s) => s.getClipById(clipId));
-  const focusFrame = useControlsStore((s) => s.focusFrame);
+  const clip = useClipStore((s) => s.getClipById(clipId)) as ShapeClipProps;
+  const getClipById = useClipStore((s) => s.getClipById);
+  
+  const groupStart = useMemo(() => {
+    if (!inputMode) return 0;
+    const grpId = (clip)?.groupId as string | undefined;
+    if (!grpId) return 0;
+    try {
+      const groupClip =  getClipById(grpId);
+      return groupClip?.startFrame ?? 0;
+    } catch {
+      return 0;
+    }
+  }, [clip, inputMode]);
+
+  const focusFrameFromControls = useControlsStore((s) => s.focusFrame);
+  const focusFrameFromInputs = useInputControlsStore((s) =>
+    s.getFocusFrame(inputId ?? ""),
+  );
+
+  const focusFrame =
+    typeof focusFrameOverride === "number"
+      ? focusFrameOverride
+      : inputMode
+        ? focusFrameFromInputs
+        : focusFrameFromControls;
 
   const isInFrame = useMemo(() => {
     const f = Number(focusFrame);
@@ -60,8 +92,15 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
     const endRaw = (clip as any)?.endFrame;
     const end =
       typeof endRaw === "number" && Number.isFinite(endRaw) ? endRaw : Infinity;
-    return f >= start && f <= end;
-  }, [focusFrame, (clip as any)?.startFrame, (clip as any)?.endFrame]);
+
+      
+    if (inputMode) {
+      if (!(clip as any)?.groupId) {
+        return true;
+      }
+    }
+    return f >= start - groupStart && f <= end - groupStart;
+  }, [focusFrame, (clip as any)?.startFrame, (clip as any)?.endFrame, inputMode, (clip as any)?.groupId]);
 
   const isSelected = useControlsStore((s) =>
     s.selectedClipIds.includes(clipId),
@@ -70,7 +109,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
   const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
   const clearSelection = useControlsStore((s) => s.clearSelection);
   const isFullscreen = useControlsStore((s) => s.isFullscreen);
-  const getClipById = useClipStore((s) => s.getClipById);
+ 
 
   const applicatorClips = useMemo(() => {
     return applicators.map((a) => getClipById(a.getClip().clipId));
@@ -622,6 +661,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
 
   useEffect(() => {
     if (!isInFrame) return;
+    if (inputMode) return;
     const handleWindowClick = (e: MouseEvent) => {
       if (!isSelected) return;
       const now =
@@ -690,7 +730,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
       fill: fillWithOpacity,
       stroke: strokeWithOpacity,
       strokeWidth,
-      draggable: tool === "pointer" && !isTransforming,
+      draggable: tool === "pointer" && !isTransforming && !inputMode,
       opacity: (clipTransform?.opacity ?? 100) / 100,
       onDragStart: handleDragStart,
       onDragMove: handleDragMove,
@@ -917,7 +957,7 @@ const ShapePreview: React.FC<ShapePreviewProps> = ({
         anchorCornerRadius={8}
         anchorStroke="#E3E3E3"
         anchorStrokeWidth={1}
-        visible={tool === "pointer" && isSelected && !isFullscreen}
+        visible={tool === "pointer" && isSelected && !isFullscreen && !inputMode}
         borderStrokeWidth={2}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
         boundBoxFunc={transformerBoundBoxFunc as any}

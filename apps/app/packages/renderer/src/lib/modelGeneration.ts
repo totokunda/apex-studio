@@ -676,80 +676,155 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         selectedRange?: [number, number];
       };
       if (!value) continue;
+      
+      // Support audio, video, group, and model clips for audio input
+      const supportedAudioTypes = ["audio", "video", "group", "model"];
+      if (!supportedAudioTypes.includes(value.type)) continue;
+      
+      // For audio clips, verify the asset exists
       if (value.type === "audio") {
         const asset = getAssetById(value.assetId);
         const mediaInfo = getMediaInfoCached(asset?.path);
         if (!mediaInfo) continue;
-        const audioClipExport = prepareExportClipsForValue(value as AnyClipProps, {
-          aspectRatio,
-          getClipsForGroup,
-          getAssetById,
-          getClipsByType,
-          getClipPositionScore,
-          timelines,
-        });
-        const { exportClips } = audioClipExport;
-
-        const frameRange = value.selectedRange ? value.selectedRange : [0, 1];
-        value.startFrame = frameRange[0];
-        value.endFrame = frameRange[1];
-
-        const cacheKey =
-          exportClips.length > 0
-            ? buildExportCacheKey({
-                mode: "audio",
-                exportClips,
-                range: { start: frameRange[0], end: frameRange[1] },
-                fps,
-                audioOptions: { format: "mp3" },
-              })
-            : null;
-
-        const cached = cacheKey ? getCachedExportResult(cacheKey) : undefined;
-        let resultPath: string | undefined;
-
-        if (cached && cacheKey) {
-          try {
-            const existsResp = await getPathExists(cached);
-            if (existsResp?.success && existsResp.data?.exists) {
-              resultPath = cached;
-            } else {
-              deleteCachedExportResult(cacheKey);
-            }
-          } catch {
-            // On IPC error, fall back to re-export path
-          }
+      }
+      
+      // For video clips, verify they have an audio track
+      if (value.type === "video") {
+        const asset = getAssetById(value.assetId);
+        if (!asset) continue;
+        const mediaInfo = getMediaInfoCached(asset.path);
+        if (!mediaInfo?.audio) continue;
+      }
+      
+      // For model clips, verify they have video output with audio
+      if (value.type === "model") {
+        const asset = getAssetById((value as any).assetId);
+        if (!asset) continue;
+        const mediaInfo = getMediaInfoCached(asset.path);
+        if (!mediaInfo?.audio) continue;
+      }
+      
+      // For groups, we'll process the children - prepareExportClipsForValue handles this
+      // Groups don't need upfront validation as their children will be validated during export
+      
+      const audioClipExport = prepareExportClipsForValue(value as AnyClipProps, {
+        aspectRatio,
+        getClipsForGroup,
+        getAssetById,
+        getClipsByType,
+        getClipPositionScore,
+        timelines,
+      });
+      const { exportClips } = audioClipExport;
+      
+      // Skip if no export clips are available
+      if (exportClips.length === 0) continue;
+      
+      // Convert clips to audio-type clips for export
+      // Video clips use audioSrc, audio clips use src directly
+      const audioExportClips = exportClips.map((clip: any) => {
+        if (clip.type === "audio") {
+          return clip;
         }
+        // For video clips, use audioSrc as the source
+        if (clip.type === "video" && clip.audioSrc) {
+          return {
+            ...clip,
+            type: "audio",
+            src: clip.audioSrc,
+          };
+        }
+        // For video clips without audioSrc but with src (for direct video files)
+        if (clip.type === "video" && clip.src) {
+          return {
+            ...clip,
+            type: "audio",
+            src: clip.src,
+          };
+        }
+        return clip;
+      }).filter((clip: any) => clip.type === "audio" && clip.src);
+      
+      // Skip if no valid audio clips after conversion
+      if (audioExportClips.length === 0) continue;
 
-        if (!resultPath) {
-          const filePath = await getPreviewPath(`${clipId}_${input.id}`, {
-            ext: "mp3",
-          });
-          const result = await exportClip({
+      const frameRange = value.selectedRange ? value.selectedRange : [0, 1];
+      value.startFrame = frameRange[0];
+      value.endFrame = frameRange[1];
+
+      const cacheKey = buildExportCacheKey({
+        mode: "audio",
+        exportClips: audioExportClips,
+        range: { start: frameRange[0], end: frameRange[1] },
+        fps,
+        audioOptions: { format: "mp3" },
+      });
+
+      const cached = cacheKey ? getCachedExportResult(cacheKey) : undefined;
+      let resultPath: string | undefined;
+
+      if (cached && cacheKey && false) {
+        try {
+          const existsResp = await getPathExists(cached as string);
+          if (existsResp?.success && existsResp.data?.exists) {
+            resultPath = cached;
+          } else {
+            deleteCachedExportResult(cacheKey as string);
+          }
+        } catch {
+          // On IPC error, fall back to re-export path
+        }
+      }
+
+      if (!resultPath) {
+        const filePath = await getPreviewPath(`${clipId}_${input.id}`, {
+          ext: "mp3",
+        });
+
+        let result: string | Blob | Uint8Array | void;
+        
+        if (audioExportClips.length > 1) {
+          // Use exportSequence for multiple clips to mix them together
+          result = await exportSequence({
             mode: "audio",
-            clip: exportClips[0],
+            clips: audioExportClips,
             range: { start: frameRange[0], end: frameRange[1] },
             fps: fps,
             filename: filePath,
+            audioOptions: { format: "mp3" },
           });
-
-          if (typeof result === "string") {
-            resultPath = result;
-          }
+        } else {
+          // Use exportClip for single clip
+          result = await exportClip({
+            mode: "audio",
+            clip: {
+              ...audioExportClips[0],
+              startFrame: 0,
+              endFrame: audioExportClips[0].endFrame - audioExportClips[0].startFrame,
+            },
+            range: { start: frameRange[0], end: frameRange[1] },
+            fps: fps,
+            filename: filePath,
+            audioOptions: { format: "mp3" },
+          });
         }
 
-        if (resultPath) {
-          if (cacheKey) {
-            setCachedExportResult(cacheKey, {
-              mode: "audio",
-              src: resultPath,
-            });
-          }
-          (modelValues as any)[input.id] = {
-            type: input.type,
+        if (typeof result === "string") {
+          resultPath = result;
+        }
+      }
+
+      if (resultPath) {
+        if (cacheKey) {
+          setCachedExportResult(cacheKey, {
+            mode: "audio",
             src: resultPath,
-          };
+          });
         }
+        (modelValues as any)[input.id] = {
+          type: input.type,
+          src: resultPath,
+        };
       }
     } else if (input.type === "random") {
       const value = (modelValues as any)[input.id];
@@ -903,6 +978,8 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     const activeProject = useProjectsStore.getState().getActiveProject();
     const folderUuid = activeProject?.folderUuid;
+
+
 
     const res = await runEngine({
       manifest_id: manifestId,

@@ -409,6 +409,9 @@ const MediaDialogClipItem = React.memo(({
           rectHeight={previewHeight}
           applicators={applicators}
           assetMode={true}
+          inputMode={true}
+          inputId={inputId}
+          focusFrameOverride={focusFrame}
         />
       );
     case "text":
@@ -420,6 +423,9 @@ const MediaDialogClipItem = React.memo(({
           rectHeight={previewHeight}
           applicators={applicators}
           assetMode={true}
+          inputMode={true}
+          inputId={inputId}
+          focusFrameOverride={focusFrame}
         />
       );
     case "draw":
@@ -431,6 +437,9 @@ const MediaDialogClipItem = React.memo(({
           rectHeight={previewHeight}
           assetMode={true}
           applicators={applicators}
+          inputMode={true}
+          inputId={inputId}
+          focusFrameOverride={focusFrame}
         />
       );
     default:
@@ -879,9 +888,13 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
       (clip) => clip.type === "image" || clip.type === "video",
     );
 
+    // Check if this is a group render (any clip has a groupId)
+    // Groups must use editor aspect ratio to match the coordinate system
+    // their children's transforms were defined in
+    const isGroupRender = toRender.some((clip) => clip.groupId);
 
-    // Non-media-only clips/groups use the editor aspect ratio
-    if (!hasMediaClip) {
+    // Groups and non-media-only clips use the editor aspect ratio
+    if (!hasMediaClip || isGroupRender) {
       const ratio =
         editorAspectRatio.height === 0
           ? 0
@@ -901,7 +914,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
     }
 
 
-    // Image / video clips still use the container-driven size
+    // Single image / video clips still use the container-driven size
     return { width: size.width, height: size.height };
   }, [
     isValidClip,
@@ -1288,6 +1301,82 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                 active={isSelectionPlaying}
               />
             </>
+          ) : timelineSelectorProps && timelineSelectorProps.mode === "range" && 
+            toRender.some((clip) => clip.type === "video" || clip.type === "group" || clip.type === "model") ? (
+            /* For video/group/model clips from AudioInput, show ONLY audio visualizer (no video) */
+            <>
+              {/* Render AudioPreview for video, model and audio clips */}
+              {toRender.map((clip) => {
+                if (clip.type !== "video" && clip.type !== "model" && clip.type !== "audio") return null;
+                
+                // For clips that are children of a group, compute timing relative to group start
+                const clipStartFrame = clip.startFrame || 0;
+                const clipEndFrame = clip.endFrame || 0;
+                
+                // Get the ORIGINAL group's startFrame from the clips store
+                const originalGroup = clip.groupId ? clips.find((c) => c.clipId === clip.groupId) : null;
+                const originalGroupStart = originalGroup?.startFrame || 0;
+                
+                // Convert absolute timeline frames to group-relative frames
+                const relativeStart = clip.groupId ? clipStartFrame - originalGroupStart : clipStartFrame;
+                const relativeEnd = clip.groupId ? clipEndFrame - originalGroupStart : clipEndFrame;
+                const hasOverlap = relativeStart > 0;
+                
+                return (
+                  <AudioPreview
+                    key={`audio-${clip.clipId}`}
+                    {...{...(clip as any), hidden: false, startFrame: relativeStart, endFrame: relativeEnd}}
+                    overlap={hasOverlap}
+                    rectWidth={size.width}
+                    rectHeight={size.height}
+                    inputMode={true}
+                    inputId={timelineSelectorProps?.inputId}
+                    preserveInputTiming={true}
+                  />
+                );
+              })}
+              {/* Render AudioPreview for group clips */}
+              {toRender.map((clip) => {
+                if (clip.type !== "group") return null;
+                const nested = ((clip as any).children as string[][] | undefined) ?? [];
+                const childIdsFlat = nested.flat();
+                const childClips = childIdsFlat
+                  .map((id) => clips.find((c) => c.clipId === id))
+                  .filter((c): c is AnyClipProps => 
+                    !!c && (c.type === "video" || c.type === "audio" || c.type === "model")
+                  );
+                
+                // Get the ORIGINAL group's startFrame from clips store
+                const originalGroup = clips.find((c) => c.clipId === clip.clipId);
+                const originalGroupStart = originalGroup?.startFrame || 0;
+                
+                return childClips.map((childClip) => {
+                  // Child clips have absolute timeline frames, convert to group-relative
+                  const childStart = (childClip.startFrame || 0) - originalGroupStart;
+                  const childEnd = (childClip.endFrame || 0) - originalGroupStart;
+                  const hasOverlap = childStart > 0;
+                  
+                  return (
+                    <AudioPreview
+                      key={`group-audio-${childClip.clipId}`}
+                      {...{...(childClip as any), hidden: false, startFrame: childStart, endFrame: childEnd}}
+                      overlap={hasOverlap}
+                      rectWidth={size.width}
+                      rectHeight={size.height}
+                      inputMode={true}
+                      inputId={timelineSelectorProps?.inputId}
+                      preserveInputTiming={true}
+                    />
+                  );
+                });
+              })}
+              <CircularAudioVisualizer
+                inputId={timelineSelectorProps.inputId}
+                width={size.width}
+                height={size.height}
+                active={isSelectionPlaying}
+              />
+            </>
           ) : (
             <div className="relative w-full h-full flex flex-col">
               <div className="flex-1 relative flex items-center justify-center overflow-hidden">
@@ -1328,6 +1417,64 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                             groupCentering={groupCentering}
                           />
                         );
+                      })}
+                      {/* Render AudioPreview for video and model clips that have audio */}
+                      {toRender.map((clip) => {
+                        if (clip.type !== "video" && clip.type !== "model") return null;
+                        const startFrame = clip.startFrame || 0;
+                        const groupStart = clip.groupId
+                          ? getClipById(clip.groupId)?.startFrame || 0
+                          : 0;
+                        const relativeStart = startFrame - groupStart;
+                        const hasOverlap =
+                          (clip.groupId ? relativeStart : startFrame) > 0;
+                        
+                        return (
+                          <AudioPreview
+                            key={`audio-${clip.clipId}`}
+                            {...{...(clip as any), hidden: false}}
+                            overlap={hasOverlap}
+                            rectWidth={previewRect.width || size.width}
+                            rectHeight={previewRect.height || size.height}
+                            inputMode={true}
+                            inputId={timelineSelectorProps?.inputId}
+                          />
+                        );
+                      })}
+                      {/* Render AudioPreview for group clips by processing their child clips */}
+                      {toRender.map((clip) => {
+                        if (clip.type !== "group") return null;
+                        const nested = ((clip as any).children as string[][] | undefined) ?? [];
+                        const childIdsFlat = nested.flat();
+                        const childClips = childIdsFlat
+                          .map((id) => clips.find((c) => c.clipId === id))
+                          .filter((c): c is AnyClipProps => 
+                            !!c && (c.type === "video" || c.type === "audio" || c.type === "model")
+                          );
+                        
+                        // Get the ORIGINAL group's startFrame from clips store, not from the normalized input clip
+                        const originalGroup = clips.find((c) => c.clipId === clip.clipId);
+                        const originalGroupStart = originalGroup?.startFrame || 0;
+                        
+                        return childClips.map((childClip) => {
+                          // Child clips have absolute timeline frames, convert to group-relative
+                          const childStart = (childClip.startFrame || 0) - originalGroupStart;
+                          const childEnd = (childClip.endFrame || 0) - originalGroupStart;
+                          const hasOverlap = childStart > 0;
+                          
+                          return (
+                            <AudioPreview
+                              key={`group-audio-${childClip.clipId}`}
+                              {...{...(childClip as any), hidden: false, startFrame: childStart, endFrame: childEnd}}
+                              overlap={hasOverlap}
+                              rectWidth={previewRect.width || size.width}
+                              rectHeight={previewRect.height || size.height}
+                              inputMode={true}
+                              inputId={timelineSelectorProps?.inputId}
+                              preserveInputTiming={true}
+                            />
+                          );
+                        });
                       })}
                     </Group>
                     <Group y={32} x={16} visible={canCrop}>
