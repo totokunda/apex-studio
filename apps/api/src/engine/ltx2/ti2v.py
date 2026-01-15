@@ -497,7 +497,8 @@ class LTX2TI2VEngine(LTX2Shared):
         else:
             stage1_progress_callback = progress_callback
             stage2_progress_callback = progress_callback
-
+            
+        
         safe_emit_progress(stage1_progress_callback, 0.0, "Starting text-to-image-to-video pipeline")
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
@@ -530,11 +531,11 @@ class LTX2TI2VEngine(LTX2Shared):
             image = [self._load_image(img) for img in image]
             
             image = [self._aspect_ratio_resize(img, max_area=height * width, mod_value=self.vae_spatial_compression_ratio)[0] for img in image]
-            image = [self.preprocess(img, crf=image_quality_crf) for img in image]
+            preprocessed_image = [self.preprocess(img, crf=image_quality_crf) for img in image]
             if not use_distilled_stage_2:
                 width, height = image[0].size
                 
-            condition_images = [self.video_processor.preprocess(img, height=height, width=width) for img in image]
+            condition_images = [self.video_processor.preprocess(img, height=height, width=width) for img in preprocessed_image]
             condition_images = torch.cat(condition_images, dim=0)
         else:
             condition_images = None
@@ -602,12 +603,18 @@ class LTX2TI2VEngine(LTX2Shared):
             
         connectors = self.helpers["connectors"]
         self.to_device(connectors)
+        # dtype of prompt_embeds and prompt_attention_mask should be the same
+        connectors_dtype = connectors.dtype
 
-        additive_attention_mask = (1 - prompt_attention_mask.to(prompt_embeds.dtype)) * -1000000.0
+        additive_attention_mask = (1 - prompt_attention_mask.to(connectors_dtype)) * -1000000.0
         safe_emit_progress(stage1_progress_callback, 0.12, "Running connector(s)")
         connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask = connectors(
-            prompt_embeds, additive_attention_mask, additive_mask=True
+            prompt_embeds.to(connectors_dtype), additive_attention_mask, additive_mask=True
         )
+        # 
+        connector_prompt_embeds = connector_prompt_embeds.to(prompt_embeds.dtype)
+        connector_audio_prompt_embeds = connector_audio_prompt_embeds.to(prompt_embeds.dtype)
+        connector_attention_mask = connector_attention_mask.to(prompt_embeds.dtype)
         
         del connectors
         if offload:
@@ -625,7 +632,6 @@ class LTX2TI2VEngine(LTX2Shared):
         num_channels_latents = transformer_config.in_channels
         
         
-
         clean_latents = None
         freeze_latent_frame_indices: Optional[List[int]] = None
         
@@ -1552,6 +1558,7 @@ class LTX2TI2VEngine(LTX2Shared):
         self.to_device(vocoder)
         
         safe_emit_progress(stage1_progress_callback, 0.98, "Vocoder synthesis")
+        generated_mel_spectrograms = generated_mel_spectrograms.to(vocoder.dtype)
         audio = vocoder(generated_mel_spectrograms)
         
         if offload:
