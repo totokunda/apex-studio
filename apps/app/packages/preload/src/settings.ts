@@ -34,6 +34,15 @@ export type BackendSyncedSettings = {
   autoUpdateEnabled: boolean;
 };
 
+export type BackendPathSizes = {
+  cachePathBytes: number | null;
+  componentsPathBytes: number | null;
+  configPathBytes: number | null;
+  loraPathBytes: number | null;
+  preprocessorPathBytes: number | null;
+  postprocessorPathBytes: number | null;
+};
+
 function getApiPathSetting(): Promise<string | null> {
   return ipcRenderer.invoke("settings:get-api-path");
 }
@@ -175,6 +184,18 @@ function refreshSettingsFromBackend(): Promise<ConfigResponse<BackendSyncedSetti
   return ipcRenderer.invoke("settings:refresh-from-backend");
 }
 
+function verifyBackendUrlAndFetchSettings(
+  url: string,
+): Promise<ConfigResponse<BackendSyncedSettings>> {
+  return ipcRenderer.invoke("settings:verify-backend-url", url);
+}
+
+function getBackendPathSizes(
+  url?: string | null,
+): Promise<ConfigResponse<BackendPathSizes>> {
+  return ipcRenderer.invoke("settings:get-backend-path-sizes", url ?? null);
+}
+
 export {
   getActiveProjectId,
   setActiveProjectId,
@@ -209,4 +230,6 @@ export {
   getAutoUpdateEnabledSetting,
   setAutoUpdateEnabledSetting,
   refreshSettingsFromBackend,
+  verifyBackendUrlAndFetchSettings,
+  getBackendPathSizes,
 };

@@ -1,10 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { LuFolder, LuSettings } from "react-icons/lu";
 import { LuEye, LuEyeOff } from "react-icons/lu";
+import { LuCheck, LuLoader } from "react-icons/lu";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { pickMediaPaths } from "@app/preload";
+import {
+  getBackendIsRemote,
+  getBackendPathSizes,
+  verifyBackendUrlAndFetchSettings,
+} from "@app/preload";
 import {
   Select,
   SelectContent,
@@ -31,6 +37,17 @@ interface SettingsModalProps {
 
 const fieldLabelClass =
   "text-brand-light text-[10.5px] font-medium mb-1 flex flex-col gap-1";
+
+const normalizeUrl = (value: string | null | undefined): string => {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return "";
+  try {
+    const u = new URL(trimmed);
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return trimmed.replace(/\/$/, "");
+  }
+};
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   open,
@@ -91,7 +108,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     String(controlsFps || 24),
   );
   const [defaultClipSeconds, setDefaultClipSeconds] = useState<string>("5");
-   const [backendUrl, setBackendUrlLocal] = useState<string>("");
+  const [backendUrl, setBackendUrlLocal] = useState<string>("");
+  const [backendUrlVerifiedFor, setBackendUrlVerifiedFor] = useState<
+    string | null
+  >(null);
+  const [backendUrlVerifyError, setBackendUrlVerifyError] = useState<
+    string | null
+  >(null);
+  const [isVerifyingBackendUrl, setIsVerifyingBackendUrl] =
+    useState<boolean>(false);
   const [cacheSizeLabel, setCacheSizeLabel] = useState<string | null>(null);
   const [componentsSizeLabel, setComponentsSizeLabel] = useState<string | null>(
     null,
@@ -105,6 +130,92 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [renderVideoSteps, setRenderVideoSteps] = useState<boolean>(false);
   const [useFastDownload, setUseFastDownload] = useState<boolean>(true);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
+  const [isBackendRemote, setIsBackendRemote] = useState<boolean>(false);
+
+  const normalizedBackendUrl = normalizeUrl(backendUrl);
+  const normalizedBackendUrlGlobal = normalizeUrl(backendUrlGlobal);
+  const backendUrlChanged = normalizedBackendUrl !== normalizedBackendUrlGlobal;
+  const backendUrlIsVerified = backendUrlVerifiedFor === normalizedBackendUrl;
+  const backendUrlRequiresVerify = backendUrlChanged && !!normalizedBackendUrl;
+  const saveDisabled =
+    isVerifyingBackendUrl || (backendUrlRequiresVerify && !backendUrlIsVerified);
+
+  const inferRemoteFromUrl = (url: string): boolean => {
+    try {
+      const u = new URL(url);
+      const host = (u.hostname || "").toLowerCase();
+      return !(host === "localhost" || host === "127.0.0.1" || host === "::1");
+    } catch {
+      return false;
+    }
+  };
+
+  const effectiveIsRemote =
+    normalizedBackendUrl && backendUrlChanged
+      ? inferRemoteFromUrl(normalizedBackendUrl)
+      : isBackendRemote;
+
+  const refreshBackendPathSizes = async (url?: string | null) => {
+    try {
+      const res = await getBackendPathSizes(url ?? null);
+      if (!res?.success || !res.data) return;
+      setCacheSizeLabel(formatBytes(res.data.cachePathBytes));
+      setComponentsSizeLabel(formatBytes(res.data.componentsPathBytes));
+      setConfigSizeLabel(formatBytes(res.data.configPathBytes));
+      setLoraSizeLabel(formatBytes(res.data.loraPathBytes));
+      setPreSizeLabel(formatBytes(res.data.preprocessorPathBytes));
+      setPostSizeLabel(formatBytes(res.data.postprocessorPathBytes));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleVerifyBackendUrl = async () => {
+    const candidate = normalizeUrl(backendUrl);
+    if (!candidate) {
+      setBackendUrlVerifyError("Backend URL is required.");
+      setBackendUrlVerifiedFor(null);
+      return;
+    }
+
+    setBackendUrlVerifyError(null);
+    setIsVerifyingBackendUrl(true);
+    try {
+      const res = await verifyBackendUrlAndFetchSettings(candidate);
+      if (!res?.success || !res.data) {
+        setBackendUrlVerifiedFor(null);
+        setBackendUrlVerifyError(res?.error || "Failed to verify backend URL.");
+        return;
+      }
+
+      // Normalize the input and mark it verified
+      setBackendUrlLocal(candidate);
+      setBackendUrlVerifiedFor(candidate);
+
+      // Sync local form fields from backend in realtime (API Config + Save Paths)
+      setCachePath(res.data.cachePath ?? "");
+      setComponentsPath(res.data.componentsPath ?? "");
+      setConfigPath(res.data.configPath ?? "");
+      setLoraPath(res.data.loraPath ?? "");
+      setPreprocessorPath(res.data.preprocessorPath ?? "");
+      setPostprocessorPath(res.data.postprocessorPath ?? "");
+      setMaskModel(res.data.maskModel ?? "sam2_base_plus");
+      setRenderImageSteps(Boolean(res.data.renderImageSteps));
+      setRenderVideoSteps(Boolean(res.data.renderVideoSteps));
+      setUseFastDownload(Boolean(res.data.useFastDownload));
+      setAutoUpdateEnabled(Boolean(res.data.autoUpdateEnabled));
+
+      // Keep size labels fresh after syncing paths (best-effort; uses current backend URL)
+      void refreshBackendPathSizes(null);
+    } catch (e) {
+      setBackendUrlVerifiedFor(null);
+      setBackendUrlVerifyError(
+        e instanceof Error ? e.message : "Failed to verify backend URL.",
+      );
+    } finally {
+      setIsVerifyingBackendUrl(false);
+    }
+  };
 
 
   useEffect(() => {
@@ -125,6 +236,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setHfToken(hfTokenGlobal ?? "");
     setCivitaiApiKey(civitaiApiKeyGlobal ?? "");
     setBackendUrlLocal(backendUrlGlobal ?? "");
+    setBackendUrlVerifiedFor(normalizeUrl(backendUrlGlobal));
+    setBackendUrlVerifyError(null);
     setMaskModel(maskModelGlobal ?? "sam2_base_plus");
     setRenderImageSteps(Boolean(renderImageStepsGlobal));
     setRenderVideoSteps(Boolean(renderVideoStepsGlobal));
@@ -148,6 +261,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     autoUpdateEnabledGlobal,
   ]);
 
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await getBackendIsRemote();
+        const isRemote = !!(
+          res &&
+          res.success &&
+          res.data &&
+          typeof res.data.isRemote === "boolean" &&
+          res.data.isRemote
+        );
+        if (!cancelled) setIsBackendRemote(isRemote);
+        if (!cancelled && isRemote) {
+          void refreshBackendPathSizes(null);
+        }
+      } catch {
+        if (!cancelled) setIsBackendRemote(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, backendUrlGlobal]);
+
+  useEffect(() => {
+    // If the user edits the URL after verifying, require re-verify.
+    const candidate = normalizeUrl(backendUrl);
+    if (!candidate) {
+      setBackendUrlVerifiedFor(null);
+      return;
+    }
+    if (backendUrlVerifiedFor && backendUrlVerifiedFor !== candidate) {
+      setBackendUrlVerifiedFor(null);
+    }
+  }, [backendUrl, backendUrlVerifiedFor]);
+
   const formatBytes = (bytes: number | null | undefined): string | null => {
     if (bytes == null || !Number.isFinite(bytes)) return null;
     const value = Math.max(0, bytes);
@@ -163,8 +315,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const useFolderSizeEffect = (
     pathValue: string,
     setter: (label: string | null) => void,
+    enabled: boolean,
   ) => {
     useEffect(() => {
+      if (!enabled) return;
       const trimmed = (pathValue || "").trim();
       if (!trimmed) {
         setter(null);
@@ -188,15 +342,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         cancelled = true;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pathValue]);
+    }, [pathValue, enabled]);
   };
 
-  useFolderSizeEffect(cachePath, setCacheSizeLabel);
-  useFolderSizeEffect(componentsPath, setComponentsSizeLabel);
-  useFolderSizeEffect(configPath, setConfigSizeLabel);
-  useFolderSizeEffect(loraPath, setLoraSizeLabel);
-  useFolderSizeEffect(preprocessorPath, setPreSizeLabel);
-  useFolderSizeEffect(postprocessorPath, setPostSizeLabel);
+  // Local-only size computation. For remote backends, we fetch sizes from the server.
+  useFolderSizeEffect(cachePath, setCacheSizeLabel, !effectiveIsRemote);
+  useFolderSizeEffect(componentsPath, setComponentsSizeLabel, !effectiveIsRemote);
+  useFolderSizeEffect(configPath, setConfigSizeLabel, !effectiveIsRemote);
+  useFolderSizeEffect(loraPath, setLoraSizeLabel, !effectiveIsRemote);
+  useFolderSizeEffect(preprocessorPath, setPreSizeLabel, !effectiveIsRemote);
+  useFolderSizeEffect(postprocessorPath, setPostSizeLabel, !effectiveIsRemote);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!effectiveIsRemote) return;
+    // Poll backend path sizes while modal is open (remote backends only).
+    const id = setInterval(() => {
+      void refreshBackendPathSizes(null);
+    }, 10_000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, effectiveIsRemote]);
 
   const handlePickDirectory = async (
     title: string,
@@ -416,12 +582,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     Where the Apex Engine HTTP API is running.
                   </span>
                 </label>
-                <Input
-                  value={backendUrl}
-                  onChange={(e) => setBackendUrlLocal(e.target.value)}
-                  placeholder="http://127.0.0.1:8765"
-                  className="h-7.5 text-[11.5px]! rounded-[6px]"
-                />
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={backendUrl}
+                    onChange={(e) => {
+                      setBackendUrlLocal(e.target.value);
+                      setBackendUrlVerifyError(null);
+                    }}
+                    placeholder="http://127.0.0.1:8765"
+                    className="h-7.5 text-[11.5px]! rounded-[6px] flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isVerifyingBackendUrl || !normalizedBackendUrl}
+                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px] flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+                    onClick={() => void handleVerifyBackendUrl()}
+                    title={
+                      backendUrlIsVerified
+                        ? "Verified"
+                        : "Verify the backend URL"
+                    }
+                  >
+                    {isVerifyingBackendUrl ? (
+                      <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
+                    ) : backendUrlIsVerified ? (
+                      <LuCheck className="w-3.5 h-3.5 text-brand-light/70" />
+                    ) : null}
+                    <span>
+                      {isVerifyingBackendUrl
+                        ? "Verifying..."
+                        : backendUrlIsVerified
+                          ? "Verified"
+                          : "Verify"}
+                    </span>
+                  </Button>
+                </div>
+                {backendUrlRequiresVerify && !backendUrlIsVerified && (
+                  <div className="text-[10px] text-brand-light/60 font-normal">
+                    Verify this URL to enable saving.
+                  </div>
+                )}
+                {backendUrlVerifyError && (
+                  <div className="text-[10px] text-red-400 font-normal">
+                    {backendUrlVerifyError}
+                  </div>
+                )}
               </div>
               <div className="flex flex-col gap-1">
                 <label className={fieldLabelClass}>
@@ -563,22 +769,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="/path/to/cache"
                     className="h-7.5 text-[11px]! rounded-[6px] disabled:opacity-100 bg-brand! w-full truncate"
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
-                    onClick={() =>
-                      handlePickDirectory(
-                        "Choose cache folder",
-                        setCachePath,
-                        cachePath,
-                      )
-                    }
-                  >
-                    <LuFolder 
-                      className="w-3.5 h-3.5"
-                    />
-                  </Button>
+                  {!effectiveIsRemote && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
+                      onClick={() =>
+                        handlePickDirectory(
+                          "Choose cache folder",
+                          setCachePath,
+                          cachePath,
+                        )
+                      }
+                    >
+                      <LuFolder className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -600,22 +806,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="/path/to/components"
                     className="h-7.5 text-[11px]! rounded-[6px] disabled:opacity-100 bg-brand! w-full truncate"
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
-                    onClick={() =>
-                      handlePickDirectory(
-                        "Choose components folder",
-                        setComponentsPath,
-                        componentsPath,
-                      )
-                    }
-                  >
-                    <LuFolder 
-                      className="w-3.5 h-3.5"
-                    />
-                  </Button>
+                  {!effectiveIsRemote && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
+                      onClick={() =>
+                        handlePickDirectory(
+                          "Choose components folder",
+                          setComponentsPath,
+                          componentsPath,
+                        )
+                      }
+                    >
+                      <LuFolder className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -637,22 +843,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="/path/to/configs"
                     className="h-7.5 text-[11px]! rounded-[6px] disabled:opacity-100 bg-brand! w-full truncate"
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
-                    onClick={() =>
-                      handlePickDirectory(
-                        "Choose config folder",
-                        setConfigPath,
-                        configPath,
-                      )
-                    }
-                  >
-                    <LuFolder 
-                      className="w-3.5 h-3.5"
-                    />
-                  </Button>
+                  {!effectiveIsRemote && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
+                      onClick={() =>
+                        handlePickDirectory(
+                          "Choose config folder",
+                          setConfigPath,
+                          configPath,
+                        )
+                      }
+                    >
+                      <LuFolder className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -674,22 +880,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="/path/to/lora"
                     className="h-7.5 text-[11px]! rounded-[6px] disabled:opacity-100 bg-brand! w-full truncate"
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
-                    onClick={() =>
-                      handlePickDirectory(
-                        "Choose Lora folder",
-                        setLoraPath,
-                        loraPath,
-                      )
-                    }
-                  >
-                    <LuFolder 
-                      className="w-3.5 h-3.5"
-                    />
-                  </Button>
+                  {!effectiveIsRemote && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
+                      onClick={() =>
+                        handlePickDirectory(
+                          "Choose Lora folder",
+                          setLoraPath,
+                          loraPath,
+                        )
+                      }
+                    >
+                      <LuFolder className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -711,22 +917,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="/path/to/preprocessors"
                     className="h-7.5 text-[11px]! rounded-[6px] disabled:opacity-100 bg-brand! w-full truncate"
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
-                    onClick={() =>
-                      handlePickDirectory(
-                        "Choose preprocessor folder",
-                        setPreprocessorPath,
-                        preprocessorPath,
-                      )
-                    }
-                  >
-                    <LuFolder 
-                      className="w-3.5 h-3.5"
-                    />
-                  </Button>
+                  {!effectiveIsRemote && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
+                      onClick={() =>
+                        handlePickDirectory(
+                          "Choose preprocessor folder",
+                          setPreprocessorPath,
+                          preprocessorPath,
+                        )
+                      }
+                    >
+                      <LuFolder className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -748,22 +954,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="/path/to/postprocessors"
                     className="h-7.5 text-[11px]! rounded-[6px] disabled:opacity-100 bg-brand! w-full truncate"
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
-                    onClick={() =>
-                      handlePickDirectory(
-                        "Choose postprocessor folder",
-                        setPostprocessorPath,
-                        postprocessorPath,
-                      )
-                    }
-                  >
-                    <LuFolder 
-                      className="w-3.5 h-3.5"
-                    />
-                  </Button>
+                  {!effectiveIsRemote && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
+                      onClick={() =>
+                        handlePickDirectory(
+                          "Choose postprocessor folder",
+                          setPostprocessorPath,
+                          postprocessorPath,
+                        )
+                      }
+                    >
+                      <LuFolder className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>
@@ -782,7 +988,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <Button
             type="button"
             className="h-8 px-5 w-full bg-brand-accent hover:bg-brand-accent-two-shade text-brand-light font-poppins text-[11px] font-medium rounded-[6px] border border-brand-accent-two-shade"
-            onClick={() => {
+            disabled={saveDisabled}
+            onClick={async () => {
+              if (saveDisabled) return;
               const fpsNumeric = Number(projectFps);
               if (Number.isFinite(fpsNumeric) && fpsNumeric > 0) {
                 setGlobalFpsWithRescale(fpsNumeric);
@@ -791,6 +999,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               if (Number.isFinite(defaultLen) && defaultLen > 0) {
                 setGlobalDefaultClipLength(defaultLen);
               }
+
+              // If the backend URL changed, persist it first so subsequent config writes
+              // go to the correct server.
+              if (backendUrlChanged) {
+                await setBackendUrlGlobal(backendUrl || null);
+              }
+
               void setCachePathGlobal(cachePath || null);
               void setComponentsPathGlobal(componentsPath || null);
               void setConfigPathGlobal(configPath || null);
@@ -799,7 +1014,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               void setPostprocessorPathGlobal(postprocessorPath || null);
               void setHfTokenGlobal(hfToken || null);
               void setCivitaiApiKeyGlobal(civitaiApiKey || null);
-              void setBackendUrlGlobal(backendUrl || null);
+              if (!backendUrlChanged) {
+                void setBackendUrlGlobal(backendUrl || null);
+              }
               void setMaskModelGlobal(maskModel || null);
               void setRenderImageStepsGlobal(renderImageSteps);
               void setRenderVideoStepsGlobal(renderVideoSteps);

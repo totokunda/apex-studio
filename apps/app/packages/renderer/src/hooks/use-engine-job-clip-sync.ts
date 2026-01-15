@@ -43,11 +43,14 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
 }) {
   const { jobsById, setJobsById, updateClip, addAssetAsync, fps } = params;
   const subscribedRef = React.useRef<Map<string, () => void>>(new Map());
+  const orphanHandledByJobIdRef = React.useRef<Set<string>>(new Set());
+  const orphanHandlingByJobIdRef = React.useRef<Set<string>>(new Set());
 
   // Sync jobs to clip store + manage WS subscriptions for active engine jobs
   React.useEffect(() => {
     const clips = useClipStore.getState().clips;
     const getAssetById = useClipStore.getState().getAssetById;
+    const removeAsset = useClipStore.getState().removeAsset;
     const activeJobs = Object.values(jobsById);
 
     // Keep engine job websockets connected until the result has actually been
@@ -71,11 +74,14 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
           if (!isTerminal) return true;
 
           // Special-case: "complete" still considered active until the clip has
-          // the result applied.
+          // the result applied OR the result has been handled as an orphan.
           if (s === "complete" || s === "completed") {
+            if (orphanHandledByJobIdRef.current.has(j.job_id)) return false;
             const meta = (j.latest?.metadata || {}) as any;
             const previewPath = meta.preview_path;
-            const fileUrl = previewPath ? pathToFileURLString(previewPath) : undefined;
+            const fileUrl = previewPath
+              ? pathToFileURLString(previewPath)
+              : undefined;
             const clip = clips.find(
               (c) => c.type === "model" && (c as ModelClipProps).activeJobId === j.job_id,
             ) as ModelClipProps | undefined;
@@ -193,11 +199,11 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
 
     activeJobs.forEach(async (job: any) => {
       if (!job.job_id) return;
+      if (job.category !== "engine") return;
 
       const clip = clips.find(
         (c) => c.type === "model" && (c as ModelClipProps).activeJobId === job.job_id,
       ) as ModelClipProps | undefined;
-      if (!clip) return;
 
       const status = (job.status || "").toLowerCase();
       let newStatus: "pending" | "running" | "complete" | "failed" | undefined;
@@ -211,6 +217,74 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
       const meta = job.latest?.metadata || {};
       const previewPath = meta.preview_path;
       const fileUrl = previewPath ? pathToFileURLString(previewPath) : undefined;
+
+      // If the originating clip was deleted (or no longer references this job),
+      // we still want the generation result to be "collected" so it appears in
+      // GenerationsMenu (disk scan of engine_results). Importing via addAssetAsync
+      // ensures we attempt to fetch/inspect the result once it exists, then we
+      // immediately drop the asset from the timeline store if nothing references it.
+      if (!clip) {
+        const isComplete = status === "complete" || status === "completed";
+        if (!isComplete) return;
+        if (!fileUrl) return;
+        if (orphanHandledByJobIdRef.current.has(job.job_id)) return;
+        if (orphanHandlingByJobIdRef.current.has(job.job_id)) return;
+
+        orphanHandlingByJobIdRef.current.add(job.job_id);
+        try {
+          const asset = await addAssetAsync({ path: fileUrl }, "apex-cache");
+          const assetId = asset?.id as string | undefined;
+
+          // Trigger a generations refresh (GenerationsMenu reloads from disk).
+          try {
+            window.dispatchEvent(
+              new CustomEvent("generations-menu-reload", {
+                detail: { jobId: job.job_id, orphan: true },
+              }),
+            );
+          } catch {
+            // ignore non-browser
+          }
+
+          // If no clip references this asset, remove it from the in-memory clip store
+          // to avoid accumulating orphan assets.
+          if (assetId) {
+            const currentClips = useClipStore.getState().clips;
+            const isUsedByAnyClip = currentClips.some((c: any) => {
+              if (c?.assetId === assetId) return true;
+              const gens = (c as any)?.generations as any[] | undefined;
+              if (Array.isArray(gens) && gens.some((g) => g?.assetId === assetId))
+                return true;
+              return false;
+            });
+            if (!isUsedByAnyClip) {
+              try {
+                removeAsset(assetId);
+              } catch {}
+            }
+          }
+
+          orphanHandledByJobIdRef.current.add(job.job_id);
+
+          // Now that the result has been collected, we can disconnect this job's WS
+          // immediately (this effect doesn't necessarily rerun on clip-store changes).
+          const cleanup = subscribedRef.current.get(job.job_id);
+          if (cleanup) {
+            try {
+              cleanup();
+            } catch {}
+            subscribedRef.current.delete(job.job_id);
+          }
+        } catch (e) {
+          // If we fail to attach/read the preview asset, keep the websocket alive
+          // (via activeEngineJobIds) so we can retry on subsequent updates.
+          console.warn("Failed to collect orphaned engine generation result", e);
+        } finally {
+          orphanHandlingByJobIdRef.current.delete(job.job_id);
+        }
+
+        return;
+      }
 
       const patch: Partial<ModelClipProps> = {};
       let needsUpdate = false;
