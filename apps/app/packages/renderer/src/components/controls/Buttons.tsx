@@ -240,6 +240,7 @@ const SplitButton = () => {
         // check if clip has running preprocessors
         let runningPreprocessors = false;
         if (clip?.type === "model") return true;
+        if (clip?.type === "group") return true;
         if (
           clip &&
           (clip.type === "video" || clip.type === "image") &&

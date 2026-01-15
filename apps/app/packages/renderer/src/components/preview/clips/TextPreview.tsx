@@ -14,6 +14,7 @@ import { useViewportStore } from "@/lib/viewport";
 import { useClipStore } from "@/lib/clip";
 import { BaseClipApplicator } from "./apply/base";
 import ApplicatorFilter from "./custom/ApplicatorFilter";
+import { useInputControlsStore } from "@/lib/inputControl";
 import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 // (duplicate removed)
 
@@ -46,8 +47,19 @@ const TextPreview: React.FC<
     rectHeight: number;
     applicators: BaseClipApplicator[];
     assetMode?: boolean;
+    focusFrameOverride?: number;
+    inputMode?: boolean;
+    inputId?: string;
   }
-> = ({ clipId, rectWidth, rectHeight, applicators }) => {
+> = ({
+  clipId,
+  rectWidth,
+  rectHeight,
+  applicators,
+  focusFrameOverride,
+  inputMode = false,
+  inputId,
+}) => {
   const textRef = useRef<Konva.Text>(null);
   const backgroundRef = useRef<Konva.Rect>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
@@ -58,7 +70,32 @@ const TextPreview: React.FC<
   const setClipTransform = useClipStore((s) => s.setClipTransform);
   const clipTransform = useClipStore((s) => s.getClipTransform(clipId));
   const clip = useClipStore((s) => s.getClipById(clipId)) as TextClipProps;
-  const focusFrame = useControlsStore((s) => s.focusFrame);
+  const getClipById = useClipStore((s) => s.getClipById);
+
+  const groupStart = useMemo(() => {
+    if (!inputMode) return 0;
+    const grpId = (clip)?.groupId as string | undefined;
+    if (!grpId) return 0;
+    try {
+      const groupClip = getClipById(grpId);
+      return groupClip?.startFrame ?? 0;
+    } catch {
+      return 0;
+    }
+  }, [clip, inputMode]);
+
+  const focusFrameFromControls = useControlsStore((s) => s.focusFrame);
+  const focusFrameFromInputs = useInputControlsStore((s) =>
+    s.getFocusFrame(inputId ?? ""),
+  );
+
+  const focusFrame =
+    typeof focusFrameOverride === "number"
+      ? focusFrameOverride
+      : inputMode
+        ? focusFrameFromInputs
+        : focusFrameFromControls;
+
   const isInFrame = useMemo(() => {
     const f = Number(focusFrame);
     if (!Number.isFinite(f)) return true;
@@ -66,8 +103,13 @@ const TextPreview: React.FC<
     const endRaw = (clip as any)?.endFrame;
     const end =
       typeof endRaw === "number" && Number.isFinite(endRaw) ? endRaw : Infinity;
-    return f >= start && f <= end;
-  }, [focusFrame, (clip as any)?.startFrame, (clip as any)?.endFrame]);
+    if (inputMode) {
+      if (!(clip as any)?.groupId) {
+        return true;
+      }
+    }
+    return f >= start - groupStart && f <= end - groupStart;
+  }, [focusFrame, (clip as any)?.startFrame, (clip as any)?.endFrame, inputMode, (clip as any)?.groupId]);
   const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
   const addClipSelection = useControlsStore((s) => s.addClipSelection);
   const clearSelection = useControlsStore((s) => s.clearSelection);
@@ -1778,6 +1820,7 @@ const TextPreview: React.FC<
 
   useEffect(() => {
     if (!isInFrame) return;
+    if (inputMode) return;
     const handleWindowClick = (e: MouseEvent) => {
       if (!isSelected) return;
 
@@ -2193,7 +2236,7 @@ const TextPreview: React.FC<
         )}
 
         <Text
-          draggable={tool === "pointer" && !isTransforming && !isEditing}
+          draggable={tool === "pointer" && !isTransforming && !isEditing && !inputMode}
           ref={textRef}
           text={
             isEditing
@@ -2458,7 +2501,7 @@ const TextPreview: React.FC<
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
         rotateEnabled={!isEditing}
         boundBoxFunc={transformerBoundBoxFunc as any}
-        visible={tool === "pointer" && isSelected && !isFullscreen}
+        visible={tool === "pointer" && isSelected && !isFullscreen && !inputMode}
         keepRatio={false}
         ref={(node) => {
           transformerRef.current = node;

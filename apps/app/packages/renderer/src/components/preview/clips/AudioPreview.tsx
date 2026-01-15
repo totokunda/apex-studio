@@ -25,6 +25,12 @@ const AudioPreview: React.FC<
      * Used with playback overlap to avoid boundary gaps without double-audio.
      */
     muted?: boolean;
+    /**
+     * If true (and inputMode is true), preserves the clip's startFrame/endFrame
+     * instead of normalizing to 0. Used for group children where timing within
+     * the group must be respected.
+     */
+    preserveInputTiming?: boolean;
   }
 > = (props) => {
 
@@ -45,11 +51,13 @@ const AudioPreview: React.FC<
     inputId,
     disabled = false,
     muted = false,
+    preserveInputTiming = false,
   } = props as {
     inputMode?: boolean;
     inputId?: string;
     disabled?: boolean;
     muted?: boolean;
+    preserveInputTiming?: boolean;
   };
 
   const mediaInfoRef = useRef<MediaInfo | null>(
@@ -70,14 +78,21 @@ const AudioPreview: React.FC<
 
   // In input mode, the AudioPreview expects a clip-local focusFrame (0..span), so we normalize
   // absolute start/end into a 0-based window when needed.
-  const startFrameUsed = useMemo(() => (inputMode ? 0 : startFrame), [inputMode, startFrame]);
+  // However, if preserveInputTiming is true (e.g., for group children), we preserve the actual
+  // startFrame/endFrame so that timing within the group is respected.
+  const startFrameUsed = useMemo(() => {
+    if (inputMode && !preserveInputTiming) return 0;
+    return startFrame;
+  }, [inputMode, startFrame, preserveInputTiming]);
   const endFrameUsed = useMemo(() => {
-    if (!inputMode) return typeof endFrame === "number" ? endFrame : undefined;
+    if (!inputMode || preserveInputTiming) {
+      return typeof endFrame === "number" ? endFrame : undefined;
+    }
     if (typeof endFrame === "number" && typeof startFrame === "number") {
       return Math.max(0, endFrame - startFrame);
     }
     return typeof endFrame === "number" ? endFrame : undefined;
-  }, [endFrame, inputMode, startFrame]);
+  }, [endFrame, inputMode, startFrame, preserveInputTiming]);
 
   const isInFrame = useMemo(() => {
     const f = Number(focusFrame);
@@ -225,6 +240,7 @@ const AudioPreview: React.FC<
     } catch {}
   }, [ctx, inputMode, inputId]);
 
+  // Create the analyser node and announce it (original behavior)
   useEffect(() => {
     if (!ctx || !gainNode) return;
     if (analyserRef.current) {
@@ -246,6 +262,15 @@ const AudioPreview: React.FC<
       announceAnalyser();
     } catch {}
   }, [ctx, gainNode, announceAnalyser]);
+
+  // Re-announce analyser when this clip becomes active (in-frame and playing)
+  // This ensures the visualizer connects to the currently playing clip's analyser
+  useEffect(() => {
+    if (!analyserRef.current) return;
+    if (isInFrame && isPlaying) {
+      announceAnalyser();
+    }
+  }, [isInFrame, isPlaying, announceAnalyser]);
 
   // Cleanup global analyser map entry on unmount
   useEffect(() => {
@@ -863,7 +888,6 @@ const AudioPreview: React.FC<
     // @ts-ignore
     iteratorRef.current?.return?.();
     iteratorRef.current = null;
-    console.log("return");
     for (const node of audioQueueRef.current) {
       try {
         node.stop();
@@ -874,8 +898,8 @@ const AudioPreview: React.FC<
 
   // Cleanup on unmount: let scheduled audio complete for smooth transitions
   useEffect(() => {
+
     return () => {
-      console.log("unmount");
       // Don't stop audio nodes - let them finish their scheduled playback naturally
       // This prevents gaps when transitioning between adjacent clips
       // The nodes will clean themselves up via their onended handlers

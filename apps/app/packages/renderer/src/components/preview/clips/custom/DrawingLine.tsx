@@ -33,6 +33,7 @@ interface DrawingLineProps {
   setLineRef: (lineId: string, ref: Konva.Line | null) => void;
   rectWidth: number;
   rectHeight: number;
+  inputMode?: boolean;
 }
 
 interface Guides {
@@ -92,6 +93,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
   setLineRef,
   rectWidth,
   rectHeight,
+  inputMode = false,
 }) => {
   const toolConfig = getToolConfig(line.tool, line.smoothing);
   const lineOpacity = line.tool === "eraser" ? 1 : line.opacity / 100;
@@ -596,8 +598,8 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
           scaleX={line.transform.scaleX}
           scaleY={line.transform.scaleY}
           rotation={line.transform.rotation}
-          onClick={(e) => handleLineClick(e, line.lineId)}
-          onTap={(e) => handleLineClick(e, line.lineId)}
+          onClick={(e) => !inputMode && handleLineClick(e, line.lineId)}
+          onTap={(e) => !inputMode && handleLineClick(e, line.lineId)}
           onDragEnd={() => handleDragEnd(line.lineId)}
           onTransformEnd={() => handleTransformEnd(line.lineId)}
           lineCap={toolConfig.lineCap}
@@ -619,11 +621,12 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
           rotation={line.transform.rotation}
           offsetX={0}
           offsetY={0}
-          visible={tool === "pointer"}
+          visible={tool === "pointer" && !inputMode}
           draggable={
             tool === "pointer" &&
             selectedLineId === line.lineId &&
-            isLineSelected
+            isLineSelected &&
+            !inputMode
           }
           onDragStart={handleRectDragStart}
           onDragMove={handleRectDrag}
@@ -632,9 +635,9 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
           onTransform={handleRectTransform}
           onTransformEnd={handleRectTransformEnd}
           onClick={(e) => {
-            handleLineClick(e, line.lineId);
+            !inputMode && handleLineClick(e, line.lineId);
           }}
-          onTap={(e) => handleLineClick(e, line.lineId)}
+          onTap={(e) => !inputMode && handleLineClick(e, line.lineId)}
         />
 
         {/* Guide Lines */}
@@ -735,7 +738,10 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         anchorStroke="#E3E3E3"
         anchorStrokeWidth={1}
         visible={
-          tool === "pointer" && selectedLineId === line.lineId && isLineSelected
+          tool === "pointer" &&
+          selectedLineId === line.lineId &&
+          isLineSelected &&
+          !inputMode
         }
         borderStrokeWidth={2}
         rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
