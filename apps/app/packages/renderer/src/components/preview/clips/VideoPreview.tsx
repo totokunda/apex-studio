@@ -239,7 +239,14 @@ const VideoPreview: React.FC<
       typeof endFrameUsed === "number" && Number.isFinite(endFrameUsed)
         ? endFrameUsed
         : Infinity;
+
     
+      if (inputMode) {
+        if (!clip.groupId) {
+          return true;
+        }
+      }
+
     return f >= s && f <= e;
   }, [focusFrame, startFrameUsed, endFrameUsed]);
 
@@ -269,7 +276,6 @@ const VideoPreview: React.FC<
     [clipId, selectedClipIds],
   );
 
-  // const setFocusFrame = useControlsStore((s) => s.setFocusFrame);
   const getAssetById = useClipStore((s) => s.getAssetById);
   const lastSelectedAssetIdRef = useRef<string | null>(null);
   const cachedPreprocessorRangeRef = useRef<{
@@ -1900,6 +1906,7 @@ const VideoPreview: React.FC<
           listening={!hidden}
           draggable={tool === "pointer" && !isTransforming && !inputMode && !hidden}
           ref={imageRef}
+          
           image={imageSource || undefined}
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}

@@ -406,7 +406,7 @@ export function prepareExportClipsForValue(
 
       return newClip;
     });
-    console.log(clips);
+
   }  else {
     offsetStart = value.startFrame ?? 0;
     if (value.type === "video") {

@@ -461,8 +461,9 @@ async function listGeneratedMediaPage(
       const engineResultsDirs = new Set<string>();
       if (typeof folderUuid === "string" && folderUuid.length > 0) {
         engineResultsDirs.add(join(root, "engine_results", folderUuid));
+      } else {
+        engineResultsDirs.add(join(root, "engine_results"));
       }
-      engineResultsDirs.add(join(root, "engine_results"));
 
       for (const engineResultsAbs of engineResultsDirs) {
         if (!fs.existsSync(engineResultsAbs)) continue;

@@ -15,6 +15,7 @@ export const generateTimelineThumbnailAudio = async (
   timelineWidth: number,
   timelinePadding: number,
   groupRef: any,
+  noShift: boolean = false,
 ) => {
   if (clipType !== "audio") return;
   const speed = Math.max(
@@ -24,7 +25,7 @@ export const generateTimelineThumbnailAudio = async (
 
   const width = mediaInfoRef?.stats.audio?.averagePacketRate ?? 1;
   const height = timelineHeight;
-  const timelineShift = currentStartFrame - (currentClip.trimStart ?? 0);
+  const timelineShift = noShift ? 0 : currentStartFrame - (currentClip.trimStart ?? 0);
   const visibleStartFrame = Math.max(currentStartFrame, timelineDuration[0]);
   const visibleEndFrame =
     Math.min(currentEndFrame, timelineDuration[1]) * speed;

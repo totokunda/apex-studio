@@ -506,6 +506,7 @@ export const ModelInputsPanel: React.FC<{
                           inputId={inputId}
                           clipId={clipId}
                           label={input?.label}
+                          key={inputId}
                           description={input?.description}
                           value={selectionVal}
                           panelSize={panelSizeToUse}

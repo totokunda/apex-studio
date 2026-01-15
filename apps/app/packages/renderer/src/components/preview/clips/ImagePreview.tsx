@@ -48,6 +48,8 @@ const ImagePreview: React.FC<
   const mediaInfoRef = useRef<MediaInfo | null>(
     getMediaInfoCached(assetId) || null,
   );
+
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<Konva.Image>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
@@ -115,6 +117,7 @@ const ImagePreview: React.FC<
           ? focusFrameFromInputs
           : focusFrameFromControls;
 
+
   const clipFromStore = useClipStore((s) =>
     s.getClipById(clipId),
   ) as ImageClipProps;
@@ -167,6 +170,12 @@ const ImagePreview: React.FC<
       typeof endFrameUsed === "number" && Number.isFinite(endFrameUsed)
         ? endFrameUsed
         : Infinity;
+    
+        if (inputMode) {
+          if (!clip.groupId) {
+            return true;
+          }
+        }
     return f >= s && f <= e;
   }, [focusFrame, startFrameUsed, endFrameUsed]);
 

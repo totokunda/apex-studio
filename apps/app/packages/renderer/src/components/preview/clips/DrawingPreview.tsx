@@ -10,12 +10,17 @@ import Konva from "konva";
 import DrawingLineComponent from "./custom/DrawingLine";
 import { BaseClipApplicator } from "./apply/base";
 
+import { useInputControlsStore } from "@/lib/inputControl";
+
 interface DrawingPreviewProps extends DrawingClipProps {
   rectWidth: number;
   rectHeight: number;
   assetMode?: boolean;
   tempLinesOverride?: DrawingLine[];
   applicators: BaseClipApplicator[];
+  focusFrameOverride?: number;
+  inputMode?: boolean;
+  inputId?: string;
 }
 
 const DrawingPreview: React.FC<DrawingPreviewProps> = ({
@@ -25,12 +30,40 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
   rectHeight,
   tempLinesOverride,
   applicators,
+  focusFrameOverride,
+  inputMode = false,
+  inputId,
 }) => {
   const { updateClip } = useClipStore();
   const removeClip = useClipStore((s) => s.removeClip);
   const tool = useViewportStore((s) => s.tool);
-  const focusFrame = useControlsStore((s) => s.focusFrame);
+  const focusFrameFromControls = useControlsStore((s) => s.focusFrame);
+  const focusFrameFromInputs = useInputControlsStore((s) =>
+    s.getFocusFrame(inputId ?? ""),
+  );
+
+  const focusFrame =
+    typeof focusFrameOverride === "number"
+      ? focusFrameOverride
+      : inputMode
+        ? focusFrameFromInputs
+        : focusFrameFromControls;
+
   const clipFromStore = useClipStore((s) => s.getClipById(clipId)) as any;
+  const getClipById = useClipStore((s) => s.getClipById);
+
+  const groupStart = React.useMemo(() => {
+    if (!inputMode) return 0;
+    const grpId = (clipFromStore)?.groupId as string | undefined;
+    if (!grpId) return 0;
+    try {
+      const groupClip = getClipById(grpId);
+      return groupClip?.startFrame ?? 0;
+    } catch {
+      return 0;
+    }
+  }, [clipFromStore, inputMode]);
+
   const isInFrame = React.useMemo(() => {
     const f = Number(focusFrame);
     if (!Number.isFinite(f)) return true;
@@ -38,8 +71,13 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
     const endRaw = clipFromStore?.endFrame;
     const end =
       typeof endRaw === "number" && Number.isFinite(endRaw) ? endRaw : Infinity;
-    return f >= start && f <= end;
-  }, [focusFrame, clipFromStore?.startFrame, clipFromStore?.endFrame]);
+    if (inputMode) {
+      if (!clipFromStore?.groupId) {
+        return true;
+      }
+    }
+    return f >= start - groupStart && f <= end - groupStart;
+  }, [focusFrame, clipFromStore?.startFrame, clipFromStore?.endFrame, inputMode, clipFromStore?.groupId]);
   const isSelected = useControlsStore((s) =>
     s.selectedClipIds.includes(clipId),
   );
@@ -158,19 +196,20 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
 
   const handleGroupClick = useCallback(
     (e: KonvaEventObject<any>) => {
-      if (tool !== "pointer") return;
+      if (tool !== "pointer" || inputMode) return;
       // Check if the click target is the group itself (not a child element)
       if (e.target === e.currentTarget) {
         // Deselect the line
         setSelectedLineId(null);
       }
     },
-    [tool, setSelectedLineId],
+    [tool, setSelectedLineId, inputMode],
   );
 
   // Deselect line when clicking outside the drawing clip
   React.useEffect(() => {
     if (!isInFrame) return;
+    if (inputMode) return;
     const handleWindowClick = (e: MouseEvent) => {
       if (!selectedLineId) return;
       // Only this clip (that owns the selected line) should handle deselection
@@ -251,6 +290,7 @@ const DrawingPreview: React.FC<DrawingPreviewProps> = ({
             setLineRef={setLineRef}
             rectWidth={rectWidth}
             rectHeight={rectHeight}
+            inputMode={inputMode}
           />
         );
       })}
