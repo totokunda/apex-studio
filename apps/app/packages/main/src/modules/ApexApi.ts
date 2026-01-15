@@ -157,6 +157,20 @@ export class ApexApi implements AppModule {
       }
     });
 
+    // Preview (non-persisted) backend URL switch, used by Settings Verify.
+    ipcMain.handle("backend:preview-url", async (_event, url: string) => {
+      try {
+        new URL(url);
+        getSettingsModule().previewBackendUrl(url);
+        return { success: true, data: { url } };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Invalid URL format",
+        };
+      }
+    });
+
     // Expose a definitive remote/loopback-tunneled status computed in main
     ipcMain.handle("backend:is-remote", async () => {
       try {
