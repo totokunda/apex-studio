@@ -839,6 +839,17 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
   try {
     const engineInputs: Record<string, any> = {};
+    const coerceToString = (v: any): string => {
+      if (v == null) return "";
+      if (typeof v === "string") return v;
+      if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint")
+        return String(v);
+      try {
+        return JSON.stringify(v);
+      } catch {
+        return String(v);
+      }
+    };
     for (const input of inputs) {
       const raw = (modelValues as any)[input.id];
       const t = String(input.type);
@@ -910,6 +921,11 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         } else if (raw && typeof raw === "object" && (raw as MediaItem).src) {
           engineInputs[input.id] = (raw as MediaItem).src;
         }
+      } else if (t === "text") {
+        // Ensure text inputs are always strings, even if something upstream
+        // accidentally parsed them (e.g. JSON-looking text).
+        const v = (raw as any)?.value ?? raw;
+        engineInputs[input.id] = coerceToString(v);
       } else if (t === "boolean") {
         const v = (raw as any)?.value ?? raw;
         engineInputs[input.id] = String(v).toLowerCase() === "true";
