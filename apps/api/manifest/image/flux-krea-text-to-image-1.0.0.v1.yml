@@ -30,7 +30,7 @@ spec:
   - sdpa
   - flash
   - flash3
-  - metal-flash
+  - metal_flash
   - efficient_dot_product_attention
   - xformers
   loras:

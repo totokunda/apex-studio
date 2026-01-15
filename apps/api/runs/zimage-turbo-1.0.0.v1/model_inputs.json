@@ -1,13 +1,13 @@
 {
     "engine_kwargs": {
         "engine_type": "zimage",
-        "yaml_path": "C:\\Users\\tosin\\Desktop\\apex-studio\\apps\\api\\manifest\\image\\zimage-turbo-1.0.0.v1.yml",
+        "yaml_path": "/home/tosin_coverquick_co/apex-studio/apps/api/manifest/image/zimage-turbo-1.0.0.v1.yml",
         "model_type": "t2i",
         "selected_components": {
             "scheduler": {
                 "name": "scheduler",
                 "base": "diffusers.FlowMatchEulerDiscreteScheduler",
-                "config_path": "C:\\Users\\tosin\\apex-diffusion\\components\\309fddec5ebc49a8aefab205fe7dff824cca5ac413726b93cdd87b078cd60423_scheduler_config.json",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/309fddec5ebc49a8aefab205fe7dff824cca5ac413726b93cdd87b078cd60423_scheduler_config.json",
                 "type": "scheduler",
                 "label": "FlowMatch Euler Discrete Scheduler",
                 "default": "FlowMatchEulerDiscreteScheduler",
@@ -24,8 +24,8 @@
                 "type": "safetensors"
             },
             "transformer": {
-                "variant": "FP8",
-                "precision": "fp8",
+                "variant": "default",
+                "precision": "fp16",
                 "type": "safetensors"
             }
         },
@@ -33,12 +33,12 @@
         "attention_type": "sdpa"
     },
     "inputs": {
-        "prompt": "A close-up of a cheerful girl puppet with curly auburn yarn hair and wide button eyes, holding a small red umbrella above her head. Rain falls gently around her. She looks upward and begins to sing with joy in English: \"It's raining, it's raining, I love it when its raining.\" Her fabric mouth opening and closing to a melodic tune. Her hands grip the umbrella handle as she sways slightly from side to side in rhythm. The camera holds steady as the rain sparkles against the soft lighting. Her eyes blink occasionally as she sings.",
+        "prompt": "Extremely detailed portrait of Michael Jackson at age 50 in 2009, just weeks before his death, pale almost translucent skin, very thin face with high cheekbones, small delicate nose after many surgeries, tired deep-set eyes with dark circles, long straight black hair falling over forehead, wearing a black military-style jacket with silver buttons, soft tragic expression, somber mood, cinematic lighting, photorealistic, 8k, raw emotion",
         "resolution": 1024,
         "aspect_ratio": "1:1",
         "height": 1024,
         "width": 1024,
-        "seed": 2690763289,
+        "seed": 2687313018,
         "num_inference_steps": 9,
         "duration": "5s"
     }
