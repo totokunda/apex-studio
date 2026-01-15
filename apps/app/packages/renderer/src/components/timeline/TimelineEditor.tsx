@@ -338,8 +338,8 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
 
       if (data.type === "model") {
         const clipFrames =
-          (data as ManifestWithType).spec?.default_duration_secs ??
-          controlStore.defaultClipLength * controlStore.fps;
+          ((data as ManifestWithType).spec?.default_duration_secs ??
+          controlStore.defaultClipLength) * controlStore.fps;
         setGhostStartEndFrame(0, clipFrames);
         return;
       }
