@@ -34,8 +34,10 @@ interface InputControlStore {
   setSelectedInputChangeHandler: (handler: ((clipId: string | null) => void) | null, inputId: string, clipId: string) => void;
   setSelectedRange: (startFrame: number, endFrame: number, inputId: string, clipId: string) => void;
   getSelectedRange: (inputId: string, clipId: string) => [number, number];
+  clearSelectedRange: (inputId: string, clipId: string) => void;
   setFocusFrame: (frame: number, inputId: string, clipId: string) => void;
   getFocusFrame: (inputId: string, clipId: string) => number;
+  clearFocusFrame: (inputId: string, clipId: string) => void;
   setFocusAnchorRatio: (ratio: number, inputId: string, clipId: string) => void;
   getFocusAnchorRatio: (inputId: string, clipId: string) => number;
 
@@ -102,8 +104,10 @@ export interface PerClipInputControlsStore {
     inputId: string,
   ) => void;
   getSelectedRange: (inputId: string) => [number, number];
+  clearSelectedRange: (inputId: string) => void;
   setFocusFrame: (frame: number, inputId: string) => void;
   getFocusFrame: (inputId: string) => number;
+  clearFocusFrame: (inputId: string) => void;
   setFocusAnchorRatio: (ratio: number, inputId: string) => void;
   getFocusAnchorRatio: (inputId: string) => number;
 
@@ -237,10 +241,14 @@ function getProjectedStoreForClip(
     
   projected.getSelectedRange = (inputId) =>
     getBase().getSelectedRange(inputId, clipId) ?? [0, 1];
+  projected.clearSelectedRange = (inputId) =>
+    getBase().clearSelectedRange(inputId, clipId);
   projected.setFocusFrame = (frame, inputId) =>
     getBase().setFocusFrame(frame, inputId, clipId);
   projected.getFocusFrame = (inputId) =>
     getBase().getFocusFrame(inputId, clipId) ?? 0;
+  projected.clearFocusFrame = (inputId) =>
+    getBase().clearFocusFrame(inputId, clipId);
   projected.setFocusAnchorRatio = (ratio, inputId) =>
     getBase().setFocusAnchorRatio(ratio, inputId, clipId);
   projected.getFocusAnchorRatio = (inputId) =>
@@ -643,6 +651,18 @@ export const globalInputControlsStore = createStore<InputControlStore>((set, get
           },
         };
       }),
+    clearSelectedRange: (inputId, clipId) =>
+      set((state) => {
+        const byInput = state.selectedRangeByInputId[inputId] || {};
+        const { [clipId]: _removed, ...rest } = byInput;
+        const next = { ...state.selectedRangeByInputId };
+        if (Object.keys(rest).length === 0) {
+          delete next[inputId];
+        } else {
+          next[inputId] = rest;
+        }
+        return { selectedRangeByInputId: next };
+      }),
     getSelectedRange: (inputId, clipId) => {
       const byInput = get().selectedRangeByInputId[inputId];
       const val = byInput && byInput[clipId];
@@ -664,6 +684,18 @@ export const globalInputControlsStore = createStore<InputControlStore>((set, get
             },
           },
         };
+      }),
+    clearFocusFrame: (inputId, clipId) =>
+      set((state) => {
+        const byInput = state.focusFrameByInputId[inputId] || {};
+        const { [clipId]: _removed, ...rest } = byInput;
+        const next = { ...state.focusFrameByInputId };
+        if (Object.keys(rest).length === 0) {
+          delete next[inputId];
+        } else {
+          next[inputId] = rest;
+        }
+        return { focusFrameByInputId: next };
       }),
     getFocusFrame: (inputId, clipId) => {
       const byInput = get().focusFrameByInputId[inputId];

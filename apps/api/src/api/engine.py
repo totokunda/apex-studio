@@ -38,6 +38,7 @@ class RunEngineRequest(BaseModel):
     # Optional: user-selected component choices (e.g., scheduler, transformer, etc.)
     selected_components: Optional[Dict[str, Any]] = None
     job_id: Optional[str] = None
+    folder_uuid: Optional[str] = None
 
 
 class JobResponse(BaseModel):
@@ -101,6 +102,7 @@ def run_engine(request: RunEngineRequest):
             bridge,
             request.inputs,
             request.selected_components or {},
+            request.folder_uuid,
         )
 
         register_job(job_id, ref, "engine", {"manifest_path": manifest_path})

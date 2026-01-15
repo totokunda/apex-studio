@@ -42,23 +42,11 @@ import {
   MdAudiotrack as MdAudiotrackIcon,
 } from "react-icons/md";
 import { LuShapes as LuShapeIcon, LuBox as LuBoxIcon } from "react-icons/lu";
-import {
-  FaRegFileImage as FaRegFileImageIcon,
-  FaRegFileVideo as FaRegFileVideoIcon,
-  FaRegFileAudio as FaRegFileAudioIcon,
-} from "react-icons/fa6";
-import { TbMask as TbMaskIcon } from "react-icons/tb";
-import {
-  RiImageAiLine as RiImageAiLineIcon,
-  RiVideoAiLine as RiVideoAiLineIcon,
-} from "react-icons/ri";
-import { LuImages as LuImagesIcon } from "react-icons/lu";
-import { BiSolidVideos as BiSolidVideosIcon } from "react-icons/bi";
+
 import { useManifestStore } from "@/lib/manifest/store";
 import { MdPhotoFilter as MdFilterIcon } from "react-icons/md";
-import RotatingCube from "@/components/common/RotatingCube";
 import { ManifestDocument } from "@/lib/manifest/api";
-import { TbFileTextSpark } from "react-icons/tb";
+
 import {
   generateTimelineThumbnailAudio,
   generateTimelineThumbnailImage,
@@ -69,6 +57,14 @@ import {
   generateTimelineThumbnailDrawing,
 } from "@/components/timeline/clips/thumbnails";
 import { useInputControlsStore } from "@/lib/inputControl";
+import ModelClip from "@/components/timeline/clips/ModelClip";
+
+const clampNumber = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const RANGE_SCRUBBER_WIDTH_PX = 5;
+const RANGE_SCRUBBER_EDGE_MARGIN_PX = 1; // keep stroke visible when clipped at edges
+const FRAME_SELECTOR_EDGE_MARGIN_PX = 2; // keep stroke visible when clipped at edges
 
 
 const TimelineClip: React.FC<
@@ -197,32 +193,40 @@ const TimelineClip: React.FC<
   );
 
   const visibleStart = timelineDuration[0] ?? 0;
+  const visibleEnd = timelineDuration[1] ?? 0;
+  const isFocusInVisibleWindow = useMemo(() => {
+    const start = visibleStart;
+    const end = visibleEnd;
+    // Visible window is [start, end) in frames
+    return focusFrame >= start && focusFrame <= end;
+  }, [focusFrame, visibleEnd, visibleStart]);
+  const enableEdgeClamping = useMemo(() => {
+    // Only clamp at the *global* edges of the possible range, so when zoomed/scrolled
+    // somewhere mid-clip playback can naturally move the selector offscreen.
+    const atLeftEdge = visibleStart <= 0;
+    const atRightEdge = visibleEnd >= (currentEndFrame - currentStartFrame);
+    return isFocusInVisibleWindow && (atLeftEdge || atRightEdge);
+  }, [currentEndFrame, currentStartFrame, isFocusInVisibleWindow, visibleEnd, visibleStart]);
   const frameToX = useCallback(
     (frame: number) => (frame - visibleStart) * frameWidthSafe,
     [visibleStart, frameWidthSafe],
   );
 
-  const constrainedFocusFrame = useMemo(() => {
-    // Focus frame in store is clip-local; convert to absolute for overlay
-    const absFocus = currentStartFrame + Math.max(0, Math.round(focusFrame));
-    const minF = Math.max(0, currentStartFrame);
-    const maxF = Math.max(minF, currentEndFrame - 1);
-    return Math.max(minF, Math.min(maxF, absFocus));
-  }, [focusFrame, currentStartFrame, currentEndFrame]);
+
 
   const focusXLocal = useMemo(() => {
     // Position the focus frame relative to the currently visible window
-    return frameToX(constrainedFocusFrame);
-  }, [constrainedFocusFrame, frameToX]);
+    return frameToX(focusFrame);
+  }, [frameToX, focusFrame]);
 
   const [rangeStart, rangeEnd] = useMemo<[number, number]>(() => {
     // selectedRange is stored clip-local; convert to absolute for rendering
     const rawStartLocal = Math.round(selectedRange?.[0] ?? 0);
     const rawEndLocal = Math.round(selectedRange?.[1] ?? rawStartLocal + 1);
-    const rawStart = currentStartFrame + rawStartLocal;
-    const rawEnd = currentStartFrame + rawEndLocal;
+    const rawStart = rawStartLocal;
+    const rawEnd = rawEndLocal;
     const clampedStart = Math.max(
-      currentStartFrame,
+      0,
       Math.min(currentEndFrame - 1, rawStart),
     );
     const minEnd = clampedStart + 1;
@@ -263,21 +267,49 @@ const TimelineClip: React.FC<
     [baseRangeEndX, timelineWidth],
   );
 
+  const rangeScrubberBounds = useMemo(() => {
+    const maxTimelineX = Math.max(
+      0,
+      timelineWidth - RANGE_SCRUBBER_WIDTH_PX - RANGE_SCRUBBER_EDGE_MARGIN_PX,
+    );
+    const minX = clampNumber(
+      rangeStartLocal,
+      RANGE_SCRUBBER_EDGE_MARGIN_PX,
+      maxTimelineX,
+    );
+    // keep scrubber fully visible and within the selected range's visual end
+    const maxX = clampNumber(
+      rangeEndLocal - RANGE_SCRUBBER_WIDTH_PX,
+      minX,
+      maxTimelineX,
+    );
+    return { minX, maxX };
+  }, [rangeEndLocal, rangeStartLocal, timelineWidth]);
+
   const rangeWidthPx = useMemo(
     () => Math.max(frameWidthSafe, rangeEndLocal - rangeStartLocal),
     [frameWidthSafe, rangeEndLocal, rangeStartLocal],
   );
-  
-  const maxRangeStart = useMemo(
-    () => Math.max(currentStartFrame, currentEndFrame - effectiveSpanFrames),
-    [currentStartFrame, currentEndFrame, effectiveSpanFrames],
-  );
+
   const rangeHandleWidth = useMemo(() => 3, []);
+
+  const frameSelectorWidthPx = useMemo(
+    () => Math.max(8, frameWidthPx),
+    [frameWidthPx],
+  );
+  const frameSelectorBounds = useMemo(() => {
+    const minX = FRAME_SELECTOR_EDGE_MARGIN_PX;
+    const maxX = Math.max(
+      minX,
+      Math.max(0, clipWidth - frameSelectorWidthPx - FRAME_SELECTOR_EDGE_MARGIN_PX),
+    );
+    return { minX, maxX };
+  }, [clipWidth, frameSelectorWidthPx]);
 
   const commitRange = useCallback(
     (startFrame: number, endFrame: number) => {
       let clampedStart = Math.max(
-        currentStartFrame,
+        0,
         Math.min(currentEndFrame - 1, Math.round(startFrame)),
       );
       const minEnd = clampedStart + 1;
@@ -286,6 +318,7 @@ const TimelineClip: React.FC<
         Math.min(currentEndFrame, Math.round(endFrame)),
       );
 
+     
       if (maxSpanFrames) {
         const maxSpan = maxSpanFrames;
         const span = clampedEnd - clampedStart;
@@ -294,9 +327,9 @@ const TimelineClip: React.FC<
         }
       }
 
-      // Store selection as clip-local
-      const localStart = clampedStart - currentStartFrame;
-      const localEnd = clampedEnd - currentStartFrame;
+      // Store selection exactly as committed (clip-local), after basic clamping.
+      const localStart = clampedStart;
+      const localEnd = clampedEnd;
       const [existingStart, existingEnd] = useInputControlsStore
         .getState()
         .getSelectedRange(inputId ?? "");
@@ -306,28 +339,24 @@ const TimelineClip: React.FC<
         setSelectedRange(localStart, localEnd, inputId ?? "");
       }
 
-      // Ensure focus frame does not jump to range start when moving range.
       // Keep previous focus if it stays inside the new range, otherwise clamp to range edges.
-      const prevAbsFocus =
-        currentStartFrame + Math.max(0, Math.round(focusFrame));
-      let newAbsFocus = prevAbsFocus;
+      const prevFocus = Math.max(0, Math.round(focusFrame));
+      let newFocus = prevFocus;
 
-      if (prevAbsFocus < clampedStart) {
-        newAbsFocus = clampedStart;
-      } else if (prevAbsFocus >= clampedEnd) {
-        newAbsFocus = clampedEnd - 1;
+      if (prevFocus < clampedStart) {
+        newFocus = clampedStart;
+      } else if (prevFocus >= clampedEnd) {
+        newFocus = clampedEnd - 1;
       }
 
-      const newLocalFocus = newAbsFocus - currentStartFrame;
-      setFocusFrame(newLocalFocus, inputId ?? "");
+      setFocusFrame(newFocus, inputId ?? "");
 
       const [winStart, winEnd] = timelineDuration;
       const winSpan = Math.max(1, winEnd - winStart);
-      const anchor = (newLocalFocus - winStart) / winSpan;
+      const anchor = (newFocus - winStart) / winSpan;
       setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId ?? "");
     },
     [
-      currentStartFrame,
       currentEndFrame,
       focusFrame,
       inputId,
@@ -569,12 +598,13 @@ const TimelineClip: React.FC<
         mediaInfoRef.current ?? null,
         imageCanvas,
         timelineHeight,
-        currentStartFrame,
-        currentEndFrame,
+        0,
+        currentEndFrame - currentStartFrame,
         timelineDuration,
         timelineWidth,
         timelinePadding,
         groupRef,
+        true,
       );
     } else if (clipType === "image") {
       generateTimelineThumbnailImage(
@@ -615,6 +645,7 @@ const TimelineClip: React.FC<
         exactVideoUpdateSeqRef,
         lastExactRequestKeyRef,
         setForceRerenderCounter,
+        true,
       );
     } else if (clipType === "shape") {
       generateTimelineThumbnailShape(clipType, imageCanvas, groupRef);
@@ -624,7 +655,7 @@ const TimelineClip: React.FC<
       generateTimelineThumbnailFilter(clipType, imageCanvas, groupRef);
     } else if (clipType === "draw") {
       generateTimelineThumbnailDrawing(clipType, imageCanvas, clipRef);
-    }
+    } 
   }, [
     zoomLevel,
     clipWidth,
@@ -1035,180 +1066,27 @@ const TimelineClip: React.FC<
           ) : (
             <>
               {clipType === "model" ? (
-                <>
-                  <Rect
-                    x={0}
-                    y={0}
-                    width={clipWidth}
-                    height={timelineHeight}
+                <ModelClip
+                    clipWidth={clipWidth}
+                    timelineHeight={timelineHeight}
                     cornerRadius={safeCornerRadius}
-                    fillLinearGradientStartPoint={{ x: 0, y: 0 }}
-                    fillLinearGradientEndPoint={{ x: 0, y: timelineHeight }}
-                    fillLinearGradientColorStops={[
-                      0,
-                      "#6F56C6",
-                      0.08,
-                      "#6A50C0",
-                      0.5,
-                      "#5A40B2",
-                      1,
-                      "#4A329E",
-                    ]}
-                    shadowColor={"#000000"}
-                    shadowBlur={8}
-                    shadowOffsetY={2}
-                    shadowOpacity={0.22}
-                  />
-
-                  {(() => {
-                    const size = Math.max(
-                      10,
-                      Math.min(18, Math.floor(timelineHeight * 0.55)),
-                    );
-                    const cx = Math.floor(size / 2) + 4;
-                    const cy = timelineHeight - 14;
-                    return (
-                      <>
-                        <RotatingCube
-                          baseColors={[
-                            "#ffffff",
-                            "#6247AA",
-                            "#6247AA",
-                            "#6247AA",
-                            "#6247AA",
-                            "#ffffff",
-                          ]}
-                          x={cx}
-                          y={cy}
-                          size={8}
-                          opacity={1}
-                          stroke="#ffffff"
-                          strokeWidth={1}
-                          phaseKey={`${timelineDuration[0]}-${timelineDuration[1]}`}
-                          listening={false}
-                        />
-                        <Text
-                          ref={modelNameRef}
-                          x={size + 7}
-                          y={timelineHeight - 19}
-                          text={
-                            (currentClip as ModelClipProps)?.manifest?.metadata
-                              ?.name ?? ""
-                          }
-                          fontSize={10}
-                          fontFamily="Poppins"
-                          fontStyle="500"
-                          fill="white"
-                          align="left"
-                        />
-                        {(() => {
-                          const counts = modelUiCounts || {};
-                          const ordered: { Icon: any; count: number }[] = [
-                            {
-                              Icon: FaRegFileImageIcon,
-                              count: counts["image"] || 0,
-                            },
-                            {
-                              Icon: FaRegFileVideoIcon,
-                              count: counts["video"] || 0,
-                            },
-                            {
-                              Icon: FaRegFileAudioIcon,
-                              count: counts["audio"] || 0,
-                            },
-                            {
-                              Icon: TbFileTextSpark,
-                              count: counts["text"] || 0,
-                            },
-                            {
-                              Icon: TbMaskIcon,
-                              count:
-                                (counts["image+mask"] || 0) +
-                                (counts["video+mask"] || 0),
-                            },
-                            {
-                              Icon: RiImageAiLineIcon,
-                              count: counts["image+preprocessor"] || 0,
-                            },
-                            {
-                              Icon: RiVideoAiLineIcon,
-                              count: counts["video+preprocessor"] || 0,
-                            },
-                            {
-                              Icon: LuImagesIcon,
-                              count: counts["image_list"] || 0,
-                            },
-                            {
-                              Icon: BiSolidVideosIcon,
-                              count: counts["video_list"] || 0,
-                            },
-                          ].filter((i) => i.count > 0);
-                          if (ordered.length === 0) return null;
-                          const iconSlotWidth = 28;
-                          const totalIconsWidth =
-                            ordered.length * iconSlotWidth;
-                          const rightPadding = 0;
-                          const modelName =
-                            (currentClip as ModelClipProps)?.manifest?.metadata
-                              ?.name ?? "";
-                          if (modelName && modelNameWidth === 0) return null;
-                          // hide counts if there isn't enough space to the right of the model name text
-                          const leftOccupied = size + 7 + modelNameWidth + 6; // cube + gap + text + small gap
-                          const availableRightWidth = Math.max(
-                            0,
-                            clipWidth - leftOccupied,
-                          );
-                          if (availableRightWidth < totalIconsWidth)
-                            return null;
-                          const startX = Math.max(
-                            6,
-                            clipWidth - totalIconsWidth - rightPadding,
-                          );
-                          const startY = timelineHeight - 19;
-                          let curX = startX;
-                          return ordered.map((it, idx) => {
-                            const Ico = it.Icon;
-                            const group = (
-                              <Group key={`mstat-${idx}`}>
-                                <Image
-                                  x={curX}
-                                  y={startY - 1}
-                                  width={12}
-                                  height={12}
-                                  image={(() => {
-                                    const svg = renderToStaticMarkup(
-                                      React.createElement(Ico, {
-                                        size: 11,
-                                        color: "#FFFFFF",
-                                      }),
-                                    );
-                                    const img = new (window as any).Image();
-                                    img.crossOrigin = "anonymous";
-                                    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-                                    return img as any;
-                                  })()}
-                                  opacity={1}
-                                />
-                                <Text
-                                  x={curX + 16}
-                                  y={startY - 1}
-                                  text={`${it.count}`}
-                                  fontSize={11}
-                                  fontStyle="500"
-                                  fontFamily="Poppins"
-                                  fill="rgba(255,255,255,0.82)"
-                                />
-                              </Group>
-                            );
-                            curX += iconSlotWidth;
-                            return group;
-                          });
-                        })()}
-                      </>
-                    );
-                  })()}
-                </>
-              ) : (
+                    currentClip={currentClip as ModelClipProps}
+                    modelUiCounts={modelUiCounts}
+                    modelNameRef={modelNameRef}
+                    modelNameWidth={modelNameWidth}
+                    clipPosition={clipPosition}
+                    resizeSide={resizeSide}
+                    timelineWidth={timelineWidth}
+                    imageWidth={imageWidth}
+                    clipId={clip.clipId}
+                    zoomLevel={zoomLevel}
+                    clipType={clipType as "video" | "image"}
+                    tool={tool as "move" | "resize" | null}
+                    thumbnailClipWidth={thumbnailClipWidth.current}
+                    maxTimelineWidth={timelineWidth}
+                    timelineDuration={timelineDuration}
+              />
+            ) : (
                 <Image
                   x={imageX}
                   y={0}
@@ -1420,16 +1298,12 @@ const TimelineClip: React.FC<
                 Math.min(timelineWidth - rangeWidthPx, e.target.x()),
               );
               const frameOffset = Math.round(rawX / frameWidthSafe);
-              const proposedStart = visibleStart + frameOffset;
-              const clampedStart = Math.max(
-                currentStartFrame,
-                Math.min(maxRangeStart, proposedStart),
-              );
-              const nextStartLocal = frameToX(clampedStart);
+              const proposedStart = frameOffset;
+              const nextStartLocal = frameToX(proposedStart);
               e.target.x(nextStartLocal);
               const span = effectiveSpanFrames;
-              const endFrame = clampedStart + span;
-              updateRangeVisuals(clampedStart, endFrame);
+              const endFrame = proposedStart + span;
+              updateRangeVisuals(proposedStart, endFrame);
             }}
             onDragEnd={(e) => {
               const container = e.target.getStage()?.container();
@@ -1440,17 +1314,13 @@ const TimelineClip: React.FC<
                 Math.min(timelineWidth - rangeWidthPx, e.target.x()),
               );
               const frameOffset = Math.round(rawX / frameWidthSafe);
-              const proposedStart = visibleStart + frameOffset;
-              const clampedStart = Math.max(
-                currentStartFrame,
-                Math.min(maxRangeStart, proposedStart),
-              );
-              const finalLocal = frameToX(clampedStart);
+              const proposedStart = frameOffset;
+              const finalLocal = frameToX(proposedStart);
               e.target.x(finalLocal);
               const span = effectiveSpanFrames;
-              const endFrame = clampedStart + span;
-              updateRangeVisuals(clampedStart, endFrame);
-              commitRange(clampedStart, endFrame);
+              const endFrame = proposedStart + span;
+              updateRangeVisuals(proposedStart, endFrame);
+              commitRange(proposedStart, endFrame);
               isDraggingRangeRef.current = false;
             }}
           />
@@ -1492,9 +1362,9 @@ const TimelineClip: React.FC<
                 Math.min(maxCenter, center),
               );
               const frameOffset = Math.round(boundedCenter / frameWidthSafe);
-              const proposedStart = visibleStart + frameOffset;
+              const proposedStart = frameOffset;
               const clampedStart = Math.max(
-                currentStartFrame,
+                0,
                 Math.min(rangeEnd - 1, proposedStart),
               );
               const nextLocal = frameToX(clampedStart);
@@ -1518,9 +1388,9 @@ const TimelineClip: React.FC<
                 Math.min(maxCenter, center),
               );
               const frameOffset = Math.round(boundedCenter / frameWidthSafe);
-              const proposedStart = visibleStart + frameOffset;
+              const proposedStart = frameOffset;
               const clampedStart = Math.max(
-                currentStartFrame,
+                0,
                 Math.min(rangeEnd - 1, proposedStart),
               );
               const nextLocal = frameToX(clampedStart);
@@ -1620,9 +1490,17 @@ const TimelineClip: React.FC<
           {/* Range scrubber */}
           <Rect
             ref={scrubberRef}
-            x={focusXLocal}
+            x={
+              enableEdgeClamping
+                ? clampNumber(
+                    focusXLocal,
+                    rangeScrubberBounds.minX,
+                    rangeScrubberBounds.maxX,
+                  )
+                : focusXLocal
+            }
             y={0}
-            width={5}
+            width={RANGE_SCRUBBER_WIDTH_PX}
             height={Math.max(1, timelineHeight)}
             cornerRadius={5}
             fill={"rgba(255, 255, 255, 1)"}
@@ -1633,12 +1511,11 @@ const TimelineClip: React.FC<
             shadowOpacity={0.8}
             draggable
             dragBoundFunc={(pos) => {
-              const minX = rangeStartLocal;
-              // Allow selecting the last frame in range
-              const maxFrameIndex = Math.max(0, rangeEnd - 1 - visibleStart);
-              const maxX = Math.max(minX, maxFrameIndex * frameWidthSafe);
-
-              const boundedX = Math.max(minX, Math.min(maxX, pos.x));
+              const boundedX = clampNumber(
+                pos.x,
+                rangeScrubberBounds.minX,
+                rangeScrubberBounds.maxX,
+              );
               return { x: boundedX, y: 0 };
             }}
             onMouseEnter={(e) => {
@@ -1656,22 +1533,23 @@ const TimelineClip: React.FC<
             }}
             onDragMove={(e) => {
               e.target.y(0);
-              const minX = rangeStartLocal;
-              const maxFrameIndex = Math.max(0, rangeEnd - 1 - visibleStart);
-              const maxX = Math.max(minX, maxFrameIndex * frameWidthSafe);
-              const localX = Math.max(minX, Math.min(maxX, e.target.x()));
+              const localX = clampNumber(
+                e.target.x(),
+                rangeScrubberBounds.minX,
+                rangeScrubberBounds.maxX,
+              );
 
               const frameOffset = Math.round(localX / frameWidthSafe);
               const newFocus = Math.max(
-                currentStartFrame,
-                Math.min(currentEndFrame - 1, visibleStart + frameOffset),
+                0,
+                Math.min(currentEndFrame - 1, frameOffset),
               );
 
-              setFocusFrame(newFocus - currentStartFrame, inputId ?? "");
+              setFocusFrame(newFocus, inputId ?? "");
 
               const [winStart, winEnd] = timelineDuration;
               const winSpan = Math.max(1, winEnd - winStart);
-              const newLocalFocus = newFocus - currentStartFrame;
+              const newLocalFocus = newFocus;
               const anchor = (newLocalFocus - winStart) / winSpan;
               setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId ?? "");
             }}
@@ -1707,12 +1585,17 @@ const TimelineClip: React.FC<
         >
           {/* Draggable frame selector overlay */}
           <Rect
-            x={Math.max(
-              0,
-              Math.min(clipWidth - Math.max(12, frameWidthPx), focusXLocal),
-            )}
+            x={
+              enableEdgeClamping
+                ? clampNumber(
+                    focusXLocal,
+                    frameSelectorBounds.minX,
+                    frameSelectorBounds.maxX,
+                  )
+                : focusXLocal
+            }
             y={0}
-            width={Math.max(8, frameWidthPx)}
+            width={frameSelectorWidthPx}
             height={Math.max(1, timelineHeight)}
             fill={"rgba(255, 255, 255, 0.6)"}
             stroke={"rgba(255, 255, 255, 0.9)"}
@@ -1723,13 +1606,10 @@ const TimelineClip: React.FC<
             shadowColor={"#6247AA"}
             shadowOpacity={0.8}
             dragBoundFunc={(pos) => {
-              const rectWidth = Math.max(8, frameWidthPx);
-              const minX = 0;
-              const maxX = Math.max(0, clipWidth - rectWidth);
-              const snapped =
-                Math.round(pos.x / Math.max(1e-6, frameWidthPx)) * frameWidthPx;
+              const step = Math.max(1e-6, frameWidthPx);
+              const snapped = Math.round(pos.x / step) * step;
               return {
-                x: Math.max(minX, Math.min(maxX, snapped)),
+                x: clampNumber(snapped, frameSelectorBounds.minX, frameSelectorBounds.maxX),
                 y: 0,
               };
             }}
@@ -1739,26 +1619,27 @@ const TimelineClip: React.FC<
             }}
             onDragMove={(e) => {
               e.target.y(0);
-              const rectWidth = Math.max(8, frameWidthPx);
-              const localX = Math.max(
-                0,
-                Math.min(clipWidth - rectWidth, e.target.x()),
+              const localX = clampNumber(
+                e.target.x(),
+                frameSelectorBounds.minX,
+                frameSelectorBounds.maxX,
               );
               const frameOffset = Math.round(
                 localX / Math.max(1e-6, frameWidthPx),
               );
               const newFocus =
                 Math.max(
-                  currentStartFrame,
+                  0,
                   Math.min(
                     currentEndFrame - 1,
-                    currentStartFrame + frameOffset,
+                    frameOffset,
                   ),
-                ) + timelineDuration[0];
-              setFocusFrame(newFocus - currentStartFrame, inputId ?? "");
+                ) + timelineDuration[0]
+
+              setFocusFrame(newFocus, inputId ?? "");
               const [winStart, winEnd] = timelineDuration;
               const winSpan = Math.max(1, winEnd - winStart);
-              const newLocalFocus = newFocus - currentStartFrame;
+              const newLocalFocus = newFocus;
               const anchor = (newLocalFocus - winStart) / winSpan;
               setFocusAnchorRatio(Math.max(0, Math.min(1, anchor)), inputId ?? "");
             }}

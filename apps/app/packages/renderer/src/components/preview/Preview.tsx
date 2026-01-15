@@ -385,6 +385,26 @@ const Preview: React.FC<PreviewProps> = () => {
   const filterClips = useCallback(
     (clips: AnyClipProps[], audio: boolean = false) => {
       const filteredClips = clips.filter((clip: AnyClipProps) => {
+        if (clip.groupId) {
+          const clipGroup = clips.find((c) => c.clipId === clip.groupId);
+          // If the clip is in a group, we check the group's timeline state
+          // and ignore the original timeline state.
+          if (clipGroup) {
+            const groupTimeline = timelines.find(
+              (t) => t.timelineId === clipGroup.timelineId,
+            );
+            if (audio) {
+              if (groupTimeline?.muted) {
+                return false;
+              }
+            }
+            if (groupTimeline?.hidden) {
+              return false;
+            }
+            return true;
+          }
+        }
+
         const timeline = timelines.find(
           (t) => t.timelineId === clip.timelineId,
         );
@@ -396,17 +416,7 @@ const Preview: React.FC<PreviewProps> = () => {
         if (timeline?.hidden) {
           return false;
         }
-        if (clip.groupId) {
-          const clipGroup = clips.find(
-            (c) => c.clipId === clip.groupId,
-          );
-          const groupTimeline = timelines.find(
-            (t) => t.timelineId === clipGroup?.timelineId,
-          );
-          if (groupTimeline?.hidden) {
-            return false;
-          }
-        }
+
         return true;
       });
 

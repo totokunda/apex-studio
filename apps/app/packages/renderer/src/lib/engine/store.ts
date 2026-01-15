@@ -388,7 +388,6 @@ export const useLoraJobStore = create<LoraJobStore>()(
 
       job.onUpdate(async (data) => {
         const now = Date.now();
-        console.log(data);
         const existingJob = get().jobs[jobId];
         const normalizedStatus = normalizeStatus(
           (data as any)?.status || existingJob?.status || "running",

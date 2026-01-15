@@ -33,6 +33,7 @@ export interface RunEngineRequest {
   inputs: Record<string, any>;
   selected_components?: Record<string, any>;
   job_id?: string;
+  folder_uuid?: string;
 }
 
 export async function runEngine(
