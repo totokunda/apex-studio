@@ -1,8 +1,13 @@
 import torch
-import torch
+from loguru import logger
 import torch.nn.functional as F
+from typing import List, Optional
+import multiprocessing
+import json
+from pathlib import Path
 
 from src.register import FunctionRegister
+from src.utils.defaults import DEFAULT_CACHE_PATH
 import math
 import warnings
 import torch
@@ -45,7 +50,7 @@ try:
     from torch.nn.attention.flex_attention import flex_attention
     # IMPORTANT: compiling at import-time can be unstable on some backends (notably MPS).
     # Keep this opt-in / CUDA-only.
-    if torch.cuda.is_available() and os.environ.get("APEX_COMPILE_FLEX_ATTENTION", "") == "1":
+    if torch.cuda.is_available():
         flex_attention = torch.compile(flex_attention)
 except ImportError:
     flex_attention = None
@@ -88,7 +93,7 @@ def _get_metal_flash_sdpa():
     try:
         from kernels import get_kernel  # type: ignore
 
-        _metal_flash_sdpa = get_kernel("kernels-community/metal-flash-sdpa")
+        _metal_flash_sdpa = get_kernel("kernels-community/metal_flash-sdpa")
         return _metal_flash_sdpa
     except Exception as e:
         _metal_flash_sdpa_load_error = e
@@ -334,7 +339,7 @@ def sdpa(
         )
 
 
-@attention_register("metal-flash", available=_HAS_KERNELS and _HAS_MPS)
+@attention_register("metal_flash", available=_HAS_KERNELS and _HAS_MPS)
 def metal_flash(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -364,14 +369,14 @@ def metal_flash(
         raise ImportError(
             "Metal Flash SDPA kernel not available. "
             "Ensure the `kernels` package is installed and "
-            "`kernels-community/metal-flash-sdpa` is accessible."
+            "`kernels-community/metal_flash-sdpa` is accessible."
         )
 
     if q.device.type != "mps":
-        raise ValueError("metal-flash backend requires MPS tensors.")
+        raise ValueError("metal_flash backend requires MPS tensors.")
 
     if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
-        raise ValueError("metal-flash expects q/k/v with shape (B, H, S, D)")
+        raise ValueError("metal_flash expects q/k/v with shape (B, H, S, D)")
 
     Bq, Hq, Sq, Dq = q.shape
     Bk, Hk, Sk, Dk = k.shape
@@ -381,7 +386,7 @@ def metal_flash(
     _METAL_FLASH_SUPPORTED_HEAD_DIMS = {32, 64, 72, 80, 96, 128, 256}
     if Dq not in _METAL_FLASH_SUPPORTED_HEAD_DIMS:
         warnings.warn(
-            f"metal-flash does not support head_dim={Dq}. "
+            f"metal_flash does not support head_dim={Dq}. "
             f"Supported dims: {sorted(_METAL_FLASH_SUPPORTED_HEAD_DIMS)}. Falling back to SDPA.",
             stacklevel=2,
         )
@@ -443,7 +448,7 @@ def metal_flash(
     return out
 
 
-@attention_register("metal-flash-varlen", available=_HAS_KERNELS and _HAS_MPS)
+@attention_register("metal_flash_varlen", available=_HAS_KERNELS and _HAS_MPS)
 def metal_flash_varlen(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -472,14 +477,14 @@ def metal_flash_varlen(
         raise ImportError(
             "Metal Flash SDPA kernel not available. "
             "Ensure the `kernels` package is installed and "
-            "`kernels-community/metal-flash-sdpa` is accessible."
+            "`kernels-community/metal_flash-sdpa` is accessible."
         )
 
     if q.device.type != "mps":
-        raise ValueError("metal-flash-varlen backend requires MPS tensors.")
+        raise ValueError("metal_flash-varlen backend requires MPS tensors.")
 
     if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
-        raise ValueError("metal-flash-varlen expects packed inputs with shape (T, H, D)")
+        raise ValueError("metal_flash-varlen expects packed inputs with shape (T, H, D)")
 
     Tq, Hq, Dq = q.shape
     Tk, Hk, Dk = k.shape
@@ -491,16 +496,16 @@ def metal_flash_varlen(
     _METAL_FLASH_SUPPORTED_HEAD_DIMS = {32, 64, 72, 80, 96, 128, 256}
     if Dq not in _METAL_FLASH_SUPPORTED_HEAD_DIMS:
         warnings.warn(
-            f"metal-flash-varlen does not support head_dim={Dq}. "
+            f"metal_flash-varlen does not support head_dim={Dq}. "
             f"Supported dims: {sorted(_METAL_FLASH_SUPPORTED_HEAD_DIMS)}. Falling back to sdpa_varlen.",
             stacklevel=2,
         )
         return sdpa_varlen(
             q, k, v,
             cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_kv=cu_seqlens_k,
+            cu_seqlens_k=cu_seqlens_k,
             max_seqlen_q=max_seqlen_q,
-            max_seqlen_kv=max_seqlen_k,
+            max_seqlen_k=max_seqlen_k,
             is_causal=is_causal,
             softmax_scale=softmax_scale,
             **kwargs,
@@ -555,9 +560,9 @@ def sdpa_varlen(
     k,  # [total_k, n_heads, head_dim]
     v,  # [total_k, n_heads, head_dim]
     cu_seqlens_q=None,  # 1-D (B+1) cumulative -> 0, sq1, sq1+sq2, …
-    cu_seqlens_kv=None,  # 1-D (B+1)
+    cu_seqlens_k=None,  # 1-D (B+1)
     max_seqlen_q: int | None = None,
-    max_seqlen_kv: int | None = None,
+    max_seqlen_k: int | None = None,
     deterministic: bool = False,  # same flag you forwarded to flash-attn
     is_causal: bool = False,  # set True for decoder causal attention
     **kwargs,
@@ -567,20 +572,19 @@ def sdpa_varlen(
     torch.scaled_dot_product_attention instead.
     Returns: packed tensor with shape [total_q, n_heads, head_dim]
 
-    If `max_seqlen_q` / `max_seqlen_kv` are omitted, they are computed from
-    `cu_seqlens_q` / `cu_seqlens_kv`.
+    If `max_seqlen_q` / `max_seqlen_k` are omitted, they are computed from
+    `cu_seqlens_q` / `cu_seqlens_k`.
 
-    If `cu_seqlens_q` / `cu_seqlens_kv` are omitted, this function assumes
+    If `cu_seqlens_q` / `cu_seqlens_k` are omitted, this function assumes
     a single sequence (B=1) and synthesizes cumulative seqlens from
     `q.shape[0]` and `k.shape[0]`.
     """
-    if deterministic:
-        torch.use_deterministic_algorithms(True)
+    # NOTE: We ignore 'deterministic' to avoid setting global PyTorch state.
 
     # Padded path: smoke tests (and some call sites) may call all attention
     # backends with (B, H, S, D) tensors. In that case, just use SDPA directly.
     if q.ndim == 4:
-        if (cu_seqlens_q is not None) or (cu_seqlens_kv is not None):
+        if (cu_seqlens_q is not None) or (cu_seqlens_k is not None):
             raise ValueError(
                 "sdpa_varlen received padded (B, H, S, D) inputs but cu_seqlens_* "
                 "were provided. Omit cu_seqlens_* for padded inputs, or pass packed "
@@ -624,16 +628,16 @@ def sdpa_varlen(
             "or padded inputs with shape (B, H, S, D)."
         )
 
-    if (cu_seqlens_q is None) ^ (cu_seqlens_kv is None):
+    if (cu_seqlens_q is None) ^ (cu_seqlens_k is None):
         raise ValueError(
-            "cu_seqlens_q and cu_seqlens_kv must be provided together, or both omitted."
+            "cu_seqlens_q and cu_seqlens_k must be provided together, or both omitted."
         )
-    if cu_seqlens_q is None and cu_seqlens_kv is None:
+    if cu_seqlens_q is None and cu_seqlens_k is None:
         # Treat packed inputs as a single batch element.
         cu_seqlens_q = torch.tensor(
             [0, int(q.shape[0])], device=q.device, dtype=torch.int32
         )
-        cu_seqlens_kv = torch.tensor(
+        cu_seqlens_k = torch.tensor(
             [0, int(k.shape[0])], device=q.device, dtype=torch.int32
         )
 
@@ -652,19 +656,19 @@ def sdpa_varlen(
 
     # 1. recover individual sequence lengths
     seq_lens_q = (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).tolist()
-    seq_lens_k = (cu_seqlens_kv[1:] - cu_seqlens_kv[:-1]).tolist()
+    seq_lens_k = (cu_seqlens_k[1:] - cu_seqlens_k[:-1]).tolist()
 
     # Allow callers to omit max seq lens (flash-attn varlen API requires them,
     # but they are fully derivable from the cumulative seqlens).
     if max_seqlen_q is None:
         max_seqlen_q = int(max(seq_lens_q)) if len(seq_lens_q) else 0
-    if max_seqlen_kv is None:
-        max_seqlen_kv = int(max(seq_lens_k)) if len(seq_lens_k) else 0
+    if max_seqlen_k is None:
+        max_seqlen_k = int(max(seq_lens_k)) if len(seq_lens_k) else 0
 
     # 2. pad into (B, H, L, D)
     q_pad = q.new_zeros(B, n_heads_q, max_seqlen_q, head_dim)
-    k_pad = k.new_zeros(B, n_heads_k, max_seqlen_kv, head_dim)
-    v_pad = v.new_zeros(B, n_heads_v, max_seqlen_kv, head_dim)
+    k_pad = k.new_zeros(B, n_heads_k, max_seqlen_k, head_dim)
+    v_pad = v.new_zeros(B, n_heads_v, max_seqlen_k, head_dim)
 
     q_splits = torch.split(q, seq_lens_q, dim=0)
     k_splits = torch.split(k, seq_lens_k, dim=0)
@@ -693,34 +697,21 @@ def sdpa_varlen(
 
     for b in range(B):
         # Create minimal mask only for this batch item
-        if seq_lens_q[b] < max_seqlen_q or seq_lens_k[b] < max_seqlen_kv:
-            # Only create mask if we have padding
-            batch_mask = torch.full(
-                (1, 1, seq_lens_q[b], seq_lens_k[b]),
-                0.0,
-                device=q.device,
-                dtype=q.dtype,
-            )
-            batch_out = F.scaled_dot_product_attention(
-                q_pad[b : b + 1, :, : seq_lens_q[b]],
-                k_pad[b : b + 1, :, : seq_lens_k[b]],
-                v_pad[b : b + 1, :, : seq_lens_k[b]],
-                attn_mask=batch_mask,
-                dropout_p=dropout_p,
-                is_causal=is_causal,
-                scale=softmax_scale,
-            )
-        else:
-            # No padding, no mask needed
-            batch_out = F.scaled_dot_product_attention(
-                q_pad[b : b + 1, :, : seq_lens_q[b]],
-                k_pad[b : b + 1, :, : seq_lens_k[b]],
-                v_pad[b : b + 1, :, : seq_lens_k[b]],
-                attn_mask=None,
-                dropout_p=dropout_p,
-                is_causal=is_causal,
-                scale=softmax_scale,
-            )
+        # Since we slice to the exact sequence length, no padding mask is needed.
+        # This avoids conflicts with is_causal=True in SDPA.
+        q_slice = q_pad[b : b + 1, :, : seq_lens_q[b]]
+        k_slice = k_pad[b : b + 1, :, : seq_lens_k[b]]
+        v_slice = v_pad[b : b + 1, :, : seq_lens_k[b]]
+
+        batch_out = F.scaled_dot_product_attention(
+            q_slice,
+            k_slice,
+            v_slice,
+            attn_mask=None,
+            dropout_p=dropout_p,
+            is_causal=is_causal,
+            scale=softmax_scale,
+        )
         out_pad[b, :, : seq_lens_q[b]] = batch_out[0]
 
     # 6. strip padding and repack to (∑Lq, H, D) with original query head count
@@ -1516,3 +1507,151 @@ def efficient_dot_product_attention(query, key, value,
 
 attention_register.set_default("sdpa")
 
+
+_WORKING_ATTENTIONS: Optional[List[str]] = None
+ATTENTION_CACHE_FILE = Path(DEFAULT_CACHE_PATH) / "attention_backends.json"
+
+
+def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
+    """
+    Worker function to verify a single attention backend in a separate process.
+    """
+    try:
+        import torch
+        
+        # Re-resolve the function from the register (which is populated at import time)
+        # Note: We assume this module is imported in the worker process.
+        func = attention_register.get(backend_name)
+        if func is None:
+            queue.put(False)
+            return
+
+        # Determine device and dtype
+        capability = (0, 0)
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            dtype = torch.float16
+            capability = torch.cuda.get_device_capability()
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = torch.device("mps")
+            dtype = torch.float16
+        else:
+            device = torch.device("cpu")
+            dtype = torch.float32
+
+        # Hardware Capability Checks (fail fast in worker)
+        if device.type == "cuda":
+            if "flash3" in backend_name and capability < (9, 0):
+                queue.put(False)
+                return
+            if ("flash" in backend_name or "sage" in backend_name) and capability < (8, 0):
+                queue.put(False)
+                return
+
+        # Toy inputs
+        B, H, S, D = 1, 2, 8, 64
+        q_std = torch.randn(B, H, S, D, device=device, dtype=dtype)
+        k_std = torch.randn(B, H, S, D, device=device, dtype=dtype)
+        v_std = torch.randn(B, H, S, D, device=device, dtype=dtype)
+
+        q_var = torch.randn(B * S, H, D, device=device, dtype=dtype)
+        k_var = torch.randn(B * S, H, D, device=device, dtype=dtype)
+        v_var = torch.randn(B * S, H, D, device=device, dtype=dtype)
+        cu_seqlens = torch.tensor([0, S], device=device, dtype=torch.int32)
+        max_seqlen = S
+
+        # Run verification
+        success = False
+        
+        # 1. Try Standard
+        if "varlen" not in backend_name:
+            try:
+                _ = func(q_std, k_std, v_std)
+                success = True
+            except Exception:
+                pass
+        
+        # 2. Try Varlen
+        if not success:
+            try:
+                _ = func(
+                    q_var, k_var, v_var, 
+                    cu_seqlens_q=cu_seqlens, cu_seqlens_k=cu_seqlens,
+                    max_seqlen_q=max_seqlen, max_seqlen_k=max_seqlen
+                )
+                success = True
+            except Exception as e:
+                logger.debug(f"Backend '{backend_name}' (varlen) failed with: {e}")
+                pass
+
+        queue.put(success)
+
+    except Exception:
+        # Catch-all for any import/runtime errors in the worker
+        queue.put(False)
+
+
+def verify_attention_backends() -> List[str]:
+    """
+    Verify attention backends.
+    1. Check if cached results exist.
+    2. If not, run verification for each backend in a SEPARATE process.
+    3. Save results to cache.
+    """
+    global _WORKING_ATTENTIONS
+    if _WORKING_ATTENTIONS is not None:
+        return _WORKING_ATTENTIONS
+
+    # 1. Try loading from cache
+    if ATTENTION_CACHE_FILE.exists():
+        try:
+            with open(ATTENTION_CACHE_FILE, "r") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    _WORKING_ATTENTIONS = data
+                    logger.info(f"Loaded verified attention backends from cache: {_WORKING_ATTENTIONS}")
+                    return _WORKING_ATTENTIONS
+        except Exception as e:
+            logger.warning(f"Failed to load attention cache: {e}")
+
+    logger.info("Verifying attention backends (running once)...")
+    working = []
+    candidates = attention_register.all_available()
+    
+    # We use 'spawn' to ensure a clean process state if supported/default, 
+    # but strictly rely on the isolation process to catch crashes.
+    ctx = multiprocessing.get_context("spawn")
+
+    for name in candidates.keys():
+        queue = ctx.Queue()
+        p = ctx.Process(target=_verify_backend_worker, args=(name, queue))
+        p.start()
+        
+        # Wait for result with timeout
+        try:
+            # 5 seconds should be plenty for a tiny forward pass
+            result = queue.get(timeout=5)
+            p.join()
+            if result:
+                working.append(name)
+            else:
+                logger.debug(f"Backend '{name}' failed verification.")
+        except Exception:
+            # Timeout or other queue error -> assume failed/crashed
+            logger.warning(f"Backend '{name}' verification timed out or crashed.")
+            if p.is_alive():
+                p.terminate()
+                p.join()
+
+    _WORKING_ATTENTIONS = working
+    
+    # 3. Save to cache
+    try:
+        ATTENTION_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(ATTENTION_CACHE_FILE, "w") as f:
+            json.dump(_WORKING_ATTENTIONS, f)
+        logger.info(f"Verified and cached attention backends: {_WORKING_ATTENTIONS}")
+    except Exception as e:
+        logger.error(f"Failed to save attention cache: {e}")
+
+    return _WORKING_ATTENTIONS
