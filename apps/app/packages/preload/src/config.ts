@@ -11,6 +11,12 @@ async function setBackendUrl(
   return await ipcRenderer.invoke("backend:set-url", url);
 }
 
+async function previewBackendUrl(
+  url: string,
+): Promise<ConfigResponse<{ url: string }>> {
+  return await ipcRenderer.invoke("backend:preview-url", url);
+}
+
 async function getBackendIsRemote(): Promise<
   ConfigResponse<{ isRemote: boolean }>
 > {
@@ -86,6 +92,7 @@ async function getPathExists(
 export {
   getBackendUrl,
   setBackendUrl,
+  previewBackendUrl,
   getBackendIsRemote,
   getFileShouldUpload,
   getFileIsUploaded,
