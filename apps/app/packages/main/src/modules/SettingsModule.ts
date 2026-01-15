@@ -86,6 +86,9 @@ let settingsInstance: SettingsModule | null = null;
 export class SettingsModule extends EventEmitter implements AppModule {
   private store: Store<Settings>;
   private backendUrl: string = DEFAULT_BACKEND_URL;
+  // The last backend URL that has been persisted to disk. This allows a "preview" backend URL
+  // (used during Verify) without losing the ability to later commit the same URL.
+  private persistedBackendUrl: string = DEFAULT_BACKEND_URL;
   private settingsPath: string | null = null;
   private refreshInFlight: Promise<ConfigResponse<BackendSyncedSettings>> | null =
     null;
@@ -103,9 +106,11 @@ export class SettingsModule extends EventEmitter implements AppModule {
 
   enable({ app }: ModuleContext): void {
     this.settingsPath = path.join(app.getPath("userData"), "apex-settings.json");
-    this.backendUrl = this.normalizeBackendUrl(
+    const fromDisk = this.normalizeBackendUrl(
       this.readBackendUrlFromDisk(this.settingsPath),
     );
+    this.persistedBackendUrl = fromDisk;
+    this.backendUrl = fromDisk;
     this.registerHandlers();
   }
 
@@ -121,13 +126,27 @@ export class SettingsModule extends EventEmitter implements AppModule {
 
   async setBackendUrl(url: string): Promise<void> {
     const next = this.normalizeBackendUrl(url);
+    const activeChanged = next !== this.backendUrl;
+    this.backendUrl = next;
+    // Persist even if this backend URL was already "previewed" as the active URL.
+    if (next !== this.persistedBackendUrl) {
+      this.persistedBackendUrl = next;
+      this.saveBackendUrlToDisk();
+    }
+    if (activeChanged) {
+      this.emit("backend-url-changed", next);
+    }
+  }
+
+  /**
+   * Temporarily switch the active backend URL in-memory (emits backend-url-changed),
+   * without persisting it to disk. Intended for the Settings "Verify" flow.
+   */
+  previewBackendUrl(url: string): void {
+    const next = this.normalizeBackendUrl(url);
     if (next === this.backendUrl) return;
     this.backendUrl = next;
-    this.saveBackendUrlToDisk();
     this.emit("backend-url-changed", next);
-    // Keep settings in sync with the selected backend. Fire-and-forget to avoid
-    // blocking the UI; renderer can also explicitly refresh when it needs results.
-    void this.refreshFromBackend().catch(() => undefined);
   }
 
   private normalizeBackendUrl(url: string): string {
@@ -164,7 +183,7 @@ export class SettingsModule extends EventEmitter implements AppModule {
     try {
       // Create simple object matching ApexApi's previous structure
       const settings = {
-        backendUrl: this.backendUrl,
+        backendUrl: this.persistedBackendUrl,
       };
       fs.writeFileSync(
         this.settingsPath,

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { LuFolder, LuSettings } from "react-icons/lu";
 import { LuEye, LuEyeOff } from "react-icons/lu";
 import { LuCheck, LuLoader } from "react-icons/lu";
+import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import { pickMediaPaths } from "@app/preload";
 import {
   getBackendIsRemote,
   getBackendPathSizes,
+  previewBackendUrl,
   verifyBackendUrlAndFetchSettings,
 } from "@app/preload";
 import {
@@ -170,11 +172,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const resetToGlobalSettings = () => {
+    setCachePath(cachePathGlobal ?? "");
+    setComponentsPath(componentsPathGlobal ?? "");
+    setConfigPath(configPathGlobal ?? "");
+    setLoraPath(loraPathGlobal ?? "");
+    setPreprocessorPath(preprocessorPathGlobal ?? "");
+    setPostprocessorPath(postprocessorPathGlobal ?? "");
+    setHfToken(hfTokenGlobal ?? "");
+    setCivitaiApiKey(civitaiApiKeyGlobal ?? "");
+    setBackendUrlLocal(backendUrlGlobal ?? "");
+    setBackendUrlVerifiedFor(normalizeUrl(backendUrlGlobal));
+    setBackendUrlVerifyError(null);
+    setMaskModel(maskModelGlobal ?? "sam2_base_plus");
+    setRenderImageSteps(Boolean(renderImageStepsGlobal));
+    setRenderVideoSteps(Boolean(renderVideoStepsGlobal));
+    setUseFastDownload(Boolean(useFastDownloadGlobal));
+    setAutoUpdateEnabled(Boolean(autoUpdateEnabledGlobal));
+
+    // Refresh size labels for remote backends; local sizes are handled via getFolderSize effect.
+    if (isBackendRemote) {
+      void refreshBackendPathSizes(null);
+    }
+
+    // Also revert the main-process "active" backend URL (preview) so ApexApi/AppDirProtocol return
+    // to the same remote/local mode as the saved settings.
+    const saved = normalizeUrl(backendUrlGlobal);
+    if (saved) {
+      void previewBackendUrl(saved);
+    }
+    // Refresh remote/local flag so the UI (folder buttons + size strategy) matches the active backend.
+    void (async () => {
+      try {
+        const res = await getBackendIsRemote();
+        const isRemote = !!(
+          res &&
+          res.success &&
+          res.data &&
+          typeof res.data.isRemote === "boolean" &&
+          res.data.isRemote
+        );
+        setIsBackendRemote(isRemote);
+      } catch {
+        setIsBackendRemote(false);
+      }
+    })();
+  };
+
   const handleVerifyBackendUrl = async () => {
     const candidate = normalizeUrl(backendUrl);
     if (!candidate) {
-      setBackendUrlVerifyError("Backend URL is required.");
-      setBackendUrlVerifiedFor(null);
+      toast.error("Backend URL is required. Reverting to current settings.");
+      resetToGlobalSettings();
       return;
     }
 
@@ -183,8 +232,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       const res = await verifyBackendUrlAndFetchSettings(candidate);
       if (!res?.success || !res.data) {
-        setBackendUrlVerifiedFor(null);
-        setBackendUrlVerifyError(res?.error || "Failed to verify backend URL.");
+        toast.error(
+          res?.error
+            ? `${res.error} Reverting to current settings.`
+            : "Failed to verify backend URL. Reverting to current settings.",
+        );
+        resetToGlobalSettings();
         return;
       }
 
@@ -205,13 +258,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setUseFastDownload(Boolean(res.data.useFastDownload));
       setAutoUpdateEnabled(Boolean(res.data.autoUpdateEnabled));
 
+      // Switch app runtime (ApexApi/AppDirProtocol) to this backend immediately.
+      // This updates remote/local mode in main based on /config/hostname probing.
+      const previewRes = await previewBackendUrl(candidate);
+      if (!previewRes?.success) {
+        toast.error(
+          previewRes?.error
+            ? `${previewRes.error} Reverting to current settings.`
+            : "Failed to switch backend URL. Reverting to current settings.",
+        );
+        resetToGlobalSettings();
+        return;
+      }
+
       // Keep size labels fresh after syncing paths (best-effort; uses current backend URL)
       void refreshBackendPathSizes(null);
     } catch (e) {
-      setBackendUrlVerifiedFor(null);
-      setBackendUrlVerifyError(
-        e instanceof Error ? e.message : "Failed to verify backend URL.",
+      toast.error(
+        e instanceof Error
+          ? `${e.message} Reverting to current settings.`
+          : "Failed to verify backend URL. Reverting to current settings.",
       );
+      resetToGlobalSettings();
     } finally {
       setIsVerifyingBackendUrl(false);
     }
@@ -824,44 +892,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   )}
                 </div>
               </div>
-
-              <div className="flex flex-row gap-1 items-center justify-between w-full">
-                <label className={fieldLabelClass + " w-1/3"}>
-                  <div className="flex flex-col w-full">
-                    <span>Config Path</span>
-                    {configSizeLabel && (
-                      <span className="text-[10px] text-brand-light/60 font-normal">
-                        {configSizeLabel}
-                      </span>
-                    )}
-                  </div>
-                </label>
-                <div className="flex items-center gap-1.5 w-4/5">
-                  <Input
-                    value={configPath}
-                    onChange={(e) => setConfigPath(e.target.value)}
-                    placeholder="/path/to/configs"
-                    className="h-7.5 text-[11px]! rounded-[6px] disabled:opacity-100 bg-brand! w-full truncate"
-                  />
-                  {!effectiveIsRemote && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
-                      onClick={() =>
-                        handlePickDirectory(
-                          "Choose config folder",
-                          setConfigPath,
-                          configPath,
-                        )
-                      }
-                    >
-                      <LuFolder className="w-3.5 h-3.5" />
-                    </Button>
-                  )}
-                </div>
-              </div>
-
               <div className="flex flex-row gap-1 items-center justify-between w-full">
                 <label className={fieldLabelClass + " w-1/3"}>
                   <div className="flex flex-col w-full">
@@ -981,7 +1011,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             type="button"
             variant="ghost"
             className="h-8 px-4 text-[11px] w-full font-medium bg-brand-light/5 hover:bg-brand-light/10 rounded-[6px] text-brand-light font-poppins"
-            onClick={() => onOpenChange(false)}
+            onClick={() => {
+              // Cancel should revert any previewed backend URL + local form edits.
+              resetToGlobalSettings();
+              onOpenChange(false);
+            }}
           >
             Cancel
           </Button>

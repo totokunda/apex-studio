@@ -16,7 +16,6 @@ import {
   setUseFastDownloadSetting,
   getAutoUpdateEnabledSetting,
   setAutoUpdateEnabledSetting,
-  refreshSettingsFromBackend,
 } from "@app/preload";
 import { getBackendApiUrl, setBackendApiUrl } from "@/lib/config";
 
@@ -196,35 +195,12 @@ export const withSettingsPersistence =
       },
       setBackendUrl: async (value: string | null) => {
         const url = (value ?? "").trim() || null;
-        const prev = (get().backendUrl ?? "").trim() || null;
         set({ backendUrl: url } as Partial<T>);
         if (!url) return;
 
         // Persist in main process
         const res = await setBackendApiUrl(url).catch(() => null);
         if (!res?.success) return;
-
-        // Only force-refresh settings when the backend URL actually changes.
-        if (prev !== url) {
-          const refreshed = await refreshSettingsFromBackend().catch(() => null);
-          if (refreshed?.success && refreshed.data) {
-            set(
-              {
-                cachePath: refreshed.data.cachePath ?? null,
-                componentsPath: refreshed.data.componentsPath ?? null,
-                configPath: refreshed.data.configPath ?? null,
-                loraPath: refreshed.data.loraPath ?? null,
-                preprocessorPath: refreshed.data.preprocessorPath ?? null,
-                postprocessorPath: refreshed.data.postprocessorPath ?? null,
-                maskModel: refreshed.data.maskModel ?? null,
-                renderImageSteps: Boolean(refreshed.data.renderImageSteps),
-                renderVideoSteps: Boolean(refreshed.data.renderVideoSteps),
-                useFastDownload: Boolean(refreshed.data.useFastDownload),
-                autoUpdateEnabled: Boolean(refreshed.data.autoUpdateEnabled),
-              } as Partial<T>,
-            );
-          }
-        }
       },
       setMaskModel: async (value: string | null) => {
         set({ maskModel: value ?? null } as Partial<T>);
