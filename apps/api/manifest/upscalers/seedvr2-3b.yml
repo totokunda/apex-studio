@@ -30,6 +30,7 @@ spec:
     - metal
   attention_types:
   - flash_varlen
+  - metal_flash_varlen
   - sdpa_varlen
   fps: 24
   components:
