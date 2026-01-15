@@ -20,7 +20,8 @@ export const VideoDecoderManagerProvider: React.FC<ProviderProps> = ({ children 
     const managerRef = useRef<VideoDecoderManager | null>(null);
     const { assets, clips } = useClipStore();
     const assetClipSig = assetClipSignature(assets, clips);
-    const activePoject = useProjectsStore((s) => s.getActiveProject());
+    const activeProject = useProjectsStore((s) => s.getActiveProject());
+    const activeFolderUuid = activeProject?.folderUuid;
 
     useEffect(() => {
       for (const clip of clips) {
@@ -35,13 +36,13 @@ export const VideoDecoderManagerProvider: React.FC<ProviderProps> = ({ children 
                 mediaInfo,
                 videoDecoderConfig: decoderConfig,
                 logicalId: decoderId,
-                folderUuid: activePoject?.folderUuid,
+                folderUuid: activeFolderUuid,
               });
             }
           }
         }
       }
-    }, [assetClipSig]);
+    }, [assetClipSig, activeFolderUuid]);
     
 
     if (!managerRef.current) {
@@ -57,10 +58,29 @@ export const VideoDecoderManagerProvider: React.FC<ProviderProps> = ({ children 
 
 export function useVideoDecoderManager(): VideoDecoderManager {
     const ctx = useContext(VideoDecoderManagerContext);
-    if (!ctx) {
-        throw new Error("useVideoDecoderManager must be used within a VideoDecoderManagerProvider");
-    }
-    return ctx;
+    if (ctx) return ctx;
+
+    // Hardening: in case a consumer mounts under a different React root (or a future
+    // entrypoint forgets to mount the provider), avoid crashing the app.
+    // This fallback should be rare; we warn once to keep it visible in dev logs.
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    return getFallbackVideoDecoderManager();
+}
+
+let FALLBACK_MANAGER: VideoDecoderManager | null = null;
+let DID_WARN_FALLBACK = false;
+function getFallbackVideoDecoderManager(): VideoDecoderManager {
+  if (!FALLBACK_MANAGER) {
+    FALLBACK_MANAGER = new VideoDecoderManager();
+  }
+  if (!DID_WARN_FALLBACK) {
+    DID_WARN_FALLBACK = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[VideoDecoderManager] useVideoDecoderManager() was called without a VideoDecoderManagerProvider. Falling back to a singleton manager.",
+    );
+  }
+  return FALLBACK_MANAGER;
 }
 
 

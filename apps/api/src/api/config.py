@@ -90,6 +90,41 @@ class PostprocessorPathResponse(BaseModel):
     postprocessor_path: str
 
 
+class PathSizesResponse(BaseModel):
+    cache_path_bytes: Optional[int] = None
+    components_path_bytes: Optional[int] = None
+    config_path_bytes: Optional[int] = None
+    lora_path_bytes: Optional[int] = None
+    preprocessor_path_bytes: Optional[int] = None
+    postprocessor_path_bytes: Optional[int] = None
+
+
+def _compute_path_size_bytes(path_value: str) -> Optional[int]:
+    """
+    Best-effort recursive size calculation for a directory path on the backend machine.
+    Returns None if the path cannot be accessed.
+    """
+    try:
+        p = Path(str(path_value)).expanduser().resolve()
+        if not p.exists():
+            return 0
+        if p.is_file():
+            return int(p.stat().st_size)
+        total = 0
+        # Do not follow symlinks to avoid surprises/loops.
+        for root, _dirs, files in os.walk(str(p), followlinks=False):
+            for f in files:
+                fp = Path(root) / f
+                try:
+                    total += int(fp.stat().st_size)
+                except Exception:
+                    # Skip unreadable files
+                    continue
+        return int(total)
+    except Exception:
+        return None
+
+
 class HuggingFaceTokenRequest(BaseModel):
     token: str
 
@@ -368,6 +403,23 @@ def set_postprocessor_path_api(request: PostprocessorPathRequest):
         raise HTTPException(
             status_code=400, detail=f"Failed to set postprocessor path: {str(e)}"
         )
+
+
+@router.get("/path-sizes", response_model=PathSizesResponse)
+def get_path_sizes_api():
+    """
+    Get the sizes (bytes) for the configured save-path folders on the backend machine.
+    """
+    return PathSizesResponse(
+        cache_path_bytes=_compute_path_size_bytes(str(get_cache_path_default())),
+        components_path_bytes=_compute_path_size_bytes(
+            str(get_components_path_default())
+        ),
+        config_path_bytes=_compute_path_size_bytes(str(get_config_path())),
+        lora_path_bytes=_compute_path_size_bytes(str(get_lora_path())),
+        preprocessor_path_bytes=_compute_path_size_bytes(str(get_preprocessor_path())),
+        postprocessor_path_bytes=_compute_path_size_bytes(str(get_postprocessor_path())),
+    )
 
 
 @router.get("/enable-image-render-steps", response_model=RenderStepEnabledResponse)

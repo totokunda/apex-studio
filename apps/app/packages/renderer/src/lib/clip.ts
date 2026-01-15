@@ -1742,18 +1742,31 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     if (!ui || !Array.isArray(ui.inputs)) return null;
     const output: Record<string, any> = {};
     ui.inputs.forEach((inp) => {
-      // json unstringify the value if possible
+      const typeStr = String((inp as any)?.type || "");
+      // Only JSON-parse values for input types that intentionally store JSON in `inp.value`.
+      // Critical: do NOT parse for plain `text` inputs, otherwise entering JSON would be
+      // treated as an object and not a literal string.
+      const shouldJsonParseValue = (() => {
+        const t = typeStr.toLowerCase();
+        if (t === "text_list") return true;
+        if (t === "image_list") return true;
+        if (t.startsWith("image")) return true;
+        if (t.startsWith("video")) return true;
+        if (t.startsWith("audio")) return true;
+        return false;
+      })();
+
       let parsedVal: any = inp.value;
-      if (typeof parsedVal === "string") {
+      if (typeof parsedVal === "string" && shouldJsonParseValue) {
         try {
           parsedVal = JSON.parse(parsedVal);
         } catch {
           // ignore
         }
       }
+
       let finalVal: any = parsedVal ?? inp.default;
       // For media-like inputs, attach either selected range (video/audio) or selected frame (image)
-      const typeStr = String((inp as any)?.type || "");
       const isVideoish = typeStr.startsWith("video");
       const isAudioish = typeStr.startsWith("audio");
       const isImageish = typeStr.startsWith("image");
