@@ -361,7 +361,12 @@ const makeManifestCacheKey = (
  */
 const extractModelInputValuesFromManifest = (
   manifest: ManifestDocument | undefined,
-): Record<string, any> | undefined => {
+):
+  | {
+      values: Record<string, any>;
+      typesById: Record<string, string>;
+    }
+  | undefined => {
   try {
     if (!manifest) return undefined;
     const anyManifest: any = manifest as any;
@@ -370,16 +375,18 @@ const extractModelInputValuesFromManifest = (
     if (!ui || !Array.isArray(ui.inputs)) return undefined;
 
     const values: Record<string, any> = {};
+    const typesById: Record<string, string> = {};
     for (const inp of ui.inputs as any[]) {
       if (!inp || typeof inp !== "object") continue;
       const id = typeof inp.id === "string" ? inp.id : undefined;
       if (!id) continue;
+      typesById[id] = String((inp as any)?.type ?? "");
       if (Object.prototype.hasOwnProperty.call(inp, "value")) {
         values[id] = (inp as any).value;
       }
     }
 
-    return Object.keys(values).length > 0 ? values : undefined;
+    return Object.keys(values).length > 0 ? { values, typesById } : undefined;
   } catch {
     return undefined;
   }
@@ -412,6 +419,7 @@ const isClipLikeModelInputValue = (value: any): value is { clipId: string } => {
  */
 const encodeModelInputClipRefsForJson = (
   modelInputValues: Record<string, any> | undefined,
+  inputTypesById: Record<string, string> | undefined,
   allClips: AnyClipProps[],
 ): Record<string, any> | undefined => {
   if (!modelInputValues) return modelInputValues;
@@ -434,8 +442,21 @@ const encodeModelInputClipRefsForJson = (
   let changed = false;
   const out: Record<string, any> = {};
 
-  const encodeValue = (raw: any): any => {
-    // try to json parse the raw value
+  const shouldTryParseForRef = (inputType: unknown, raw: any): boolean => {
+    if (typeof raw !== "string") return false;
+    const s = raw.trim();
+    if (!s || (!s.startsWith("{") && !s.startsWith("["))) return false;
+    const t = String(inputType ?? "").toLowerCase();
+    // Only media-like inputs intentionally store JSON payloads that might contain clipId refs.
+    if (t.startsWith("image")) return true;
+    if (t.startsWith("video")) return true;
+    if (t.startsWith("audio")) return true;
+    if (t === "image_list") return true;
+    return false;
+  };
+
+  const encodeValue = (raw: any, inputType: unknown): any => {
+    if (!shouldTryParseForRef(inputType, raw)) return raw;
     try {
       const parsed = JSON.parse(raw);
       if (isClipLikeModelInputValue(parsed)) {
@@ -448,21 +469,20 @@ const encodeModelInputClipRefsForJson = (
           };
           return ref;
         }
-        else {
-          return parsed;
-        }
       }
     } catch {
       // ignore json parse errors
     }
+    // Preserve the original raw string unless we successfully encoded a ref.
     return raw;
   };
 
   for (const [key, raw] of Object.entries(modelInputValues)) {
+    const inputType = inputTypesById ? inputTypesById[key] : undefined;
     if (Array.isArray(raw)) {
-      out[key] = (raw as any[]).map((item) => encodeValue(item));
+      out[key] = (raw as any[]).map((item) => encodeValue(item, inputType));
     } else {
-      out[key] = encodeValue(raw);
+      out[key] = encodeValue(raw, inputType);
     }
   }
 
@@ -650,11 +670,12 @@ const buildProjectJsonSnapshot = (
       // still allowing full restoration on hydrate.
       if (origClip.type === "model") {
         const model = origClip as ModelClipProps;
-        const manifestValues = extractModelInputValuesFromManifest(
+        const extracted = extractModelInputValuesFromManifest(
           model.manifest,
         );
         const encodedValues = encodeModelInputClipRefsForJson(
-          manifestValues,
+          extracted?.values,
+          extracted?.typesById,
           allClips,
         );
         if (encodedValues && Object.keys(encodedValues).length > 0) {
