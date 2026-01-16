@@ -1875,10 +1875,80 @@ class DownloadMixin:
                 return None
 
         try:
+            def _looks_like_html_file(p: str) -> bool:
+                try:
+                    if not os.path.isfile(p):
+                        return False
+                    with open(p, "rb") as f:
+                        head = f.read(4096)
+                    if not head:
+                        return False
+                    lowered = head.lstrip().lower()
+                    return lowered.startswith(b"<!doctype html") or lowered.startswith(
+                        b"<html"
+                    ) or (b"<html" in lowered[:512] or b"</html" in lowered[:512])
+                except Exception:
+                    return False
+
+            def _looks_like_invalid_safetensors(p: str) -> bool:
+                """
+                If a file claims to be `.safetensors` but doesn't parse as safetensors,
+                treat it as invalid (often an HTML/error response saved to disk).
+                """
+                try:
+                    import json as _json
+                    if not str(p).lower().endswith(".safetensors"):
+                        return False
+                    if not os.path.isfile(p):
+                        return False
+                    size = os.path.getsize(p)
+                    if size < 16:
+                        return True
+                    with open(p, "rb") as f:
+                        header_len_raw = f.read(8)
+                        if len(header_len_raw) != 8:
+                            return True
+                        header_len = int.from_bytes(header_len_raw, "little", signed=False)
+                        # Guardrails: header must fit and be sane.
+                        if header_len <= 1 or header_len > min(10_000_000, size - 8):
+                            return True
+                        header_bytes = f.read(int(header_len))
+                    header = _json.loads(header_bytes.decode("utf-8"))
+                    return not isinstance(header, dict)
+                except Exception:
+                    return True
+
             # If the file already exists, do not re-download
             if os.path.exists(file_path):
-                self.logger.info(f"File {file_path} already exists, skipping download.")
-                return file_path
+                # If the existing file is clearly invalid (empty or HTML error page), delete it
+                # so that retries don't get stuck in a "skip forever" loop.
+                try:
+                    is_empty = os.path.getsize(file_path) == 0
+                except Exception:
+                    is_empty = False
+
+                if is_empty or _looks_like_html_file(file_path) or _looks_like_invalid_safetensors(file_path):
+                    try:
+                        self.logger.warning(
+                            f"Existing file {file_path} looks invalid (empty/HTML); deleting and re-downloading."
+                        )
+                        try:
+                            os.remove(file_path)
+                        except FileNotFoundError:
+                            pass
+                        # Best-effort: remove any partial download state too
+                        try:
+                            if os.path.exists(part_path):
+                                os.remove(part_path)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                else:
+                    self.logger.info(
+                        f"File {file_path} already exists, skipping download."
+                    )
+                    return file_path
 
             # Prepare directory
             os.makedirs(os.path.dirname(file_path), exist_ok=True)

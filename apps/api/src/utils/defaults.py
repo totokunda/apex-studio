@@ -117,12 +117,96 @@ DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 }
 
+_RUNTIME_SECRETS_LAST_MTIME: float | None = None
+
+
+def _compute_config_store_path() -> Path:
+    """
+    Compute the config store path based on the *current* environment.
+    Important for Ray workers: the module-level HOME_DIR/CONFIG_STORE_PATH are fixed at import
+    time, but APEX_HOME_DIR can be set/changed later via the config API.
+    """
+    home_raw = os.getenv("APEX_HOME_DIR")
+    home_dir = Path(home_raw).expanduser() if home_raw else Path.home()
+    return home_dir / "apex-diffusion" / "apex-config.json"
+
+
+def _refresh_runtime_secrets_from_persisted(force: bool = False) -> None:
+    """
+    Ensure runtime env vars (e.g. tokens) are available in the current process.
+
+    This is especially relevant in Ray tasks: the API process may update/persist secrets, but
+    Ray workers are separate processes and won't see updated `os.environ` unless they reload
+    from the persisted config store.
+    """
+    global _RUNTIME_SECRETS_LAST_MTIME
+
+    # If both are already set, no need to hit disk.
+    if os.environ.get("CIVITAI_API_KEY") and os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        return
+
+    p = _compute_config_store_path()
+    if not p.exists():
+        # Fallback to the import-time constant path (in case APEX_HOME_DIR is unset here but
+        # was set when the module loaded).
+        p = Path(CONFIG_STORE_PATH)
+        if not p.exists():
+            return
+
+    try:
+        mtime = p.stat().st_mtime
+    except Exception:
+        mtime = None
+
+    if not force and mtime is not None and _RUNTIME_SECRETS_LAST_MTIME == mtime:
+        return
+
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            if not isinstance(data, dict):
+                return
+
+        civitai_key = data.get("civitai_api_key")
+        if (
+            not os.environ.get("CIVITAI_API_KEY")
+            and isinstance(civitai_key, str)
+            and civitai_key.strip()
+        ):
+            os.environ["CIVITAI_API_KEY"] = civitai_key.strip()
+
+        hf_token = data.get("hf_token")
+        if (
+            not os.environ.get("HUGGING_FACE_HUB_TOKEN")
+            and isinstance(hf_token, str)
+            and hf_token.strip()
+        ):
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token.strip()
+
+        _RUNTIME_SECRETS_LAST_MTIME = mtime
+    except Exception:
+        # Swallow errors; callers will fall back to whatever is already in env.
+        return
+
+
+def refresh_runtime_secrets(force: bool = False) -> None:
+    """
+    Public helper to refresh secrets (HF + CivitAI) from the persisted config store.
+    Useful for Ray tasks that need tokens before any HTTP helper functions are called.
+    """
+    _refresh_runtime_secrets_from_persisted(force=force)
+
+
 def get_default_headers(url: str) -> dict:
+    # In Ray workers, secrets may be persisted by the API process but not present in this
+    # worker's environment. Refresh lazily here since this is a common call site.
+    _refresh_runtime_secrets_from_persisted(force=True)
     parsed_url = urlparse(url)
-    if parsed_url.netloc == "civitai.com":
+    if parsed_url.netloc.endswith("civitai.com"):
+        token = os.environ.get("CIVITAI_API_KEY")
         return {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Authorization": f"Bearer {os.environ.get('CIVITAI_API_KEY')}",
+            **({"Authorization": f"Bearer {token}"} if token else {}),
         }
     return DEFAULT_HEADERS
 

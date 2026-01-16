@@ -35,6 +35,7 @@ import gc
 import ctypes
 import ctypes.util
 import time
+import struct
 
 def _get_warm_pool() -> EngineWarmPool:
     """
@@ -559,8 +560,16 @@ def _cleanup_lora_artifacts_if_remote(lora_item: Any) -> None:
 
         dm = DownloadMixin()
         source_str = str(source)
-        # Treat non-URL sources as user-managed local paths; never delete them here
-        if not dm._is_url(source_str):
+        # Treat some non-URL sources as remote identifiers (AIR URNs, civitai specs).
+        # Otherwise assume it's a user-managed local path and never delete it here.
+        source_lc = source_str.strip().lower()
+        is_remote_identifier = (
+            dm._is_url(source_str)
+            or source_lc.startswith("civitai:")
+            or source_lc.startswith("civitai-file:")
+            or source_lc.startswith("urn:air:")
+        )
+        if not is_remote_identifier:
             return
 
         base_dir = Path(get_lora_path()).resolve()
@@ -604,6 +613,106 @@ def _cleanup_lora_artifacts_if_remote(lora_item: Any) -> None:
                 parent = parent.parent
     except Exception as e:
         logger.warning(f"LoRA cleanup failed: {e}")
+
+
+def _file_looks_like_html(path: str) -> bool:
+    """
+    Detect the common failure mode where a LoRA "download" succeeds but the saved
+    file is actually an HTML error page (auth, rate limit, Cloudflare, etc.).
+    """
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return False
+        # Only need a small sniff (avoid reading the entire file into memory)
+        with p.open("rb") as f:
+            head = f.read(4096)
+        if not head:
+            return False
+        # Heuristic: lots of CivitAI/HTML errors start with these.
+        lowered = head.lstrip().lower()
+        if lowered.startswith(b"<!doctype html") or lowered.startswith(b"<html"):
+            return True
+        # If it's text-like and contains an html tag early, treat as html.
+        if b"<html" in lowered[:512] or b"</html" in lowered[:512]:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _is_valid_safetensors_file(path: str) -> bool:
+    """
+    Best-effort validation for `.safetensors` files.
+    Safetensors format: [u64 header_len LE][header JSON bytes][tensor data...]
+    """
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return False
+        size = p.stat().st_size
+        if size < 16:
+            return False
+        with p.open("rb") as f:
+            header_len_raw = f.read(8)
+            if len(header_len_raw) != 8:
+                return False
+            header_len = struct.unpack("<Q", header_len_raw)[0]
+            # Guardrails: header must fit in file and be a sane size
+            if header_len <= 1 or header_len > min(10_000_000, size - 8):
+                return False
+            header_bytes = f.read(int(header_len))
+        # Header is JSON mapping
+        header = json.loads(header_bytes.decode("utf-8"))
+        return isinstance(header, dict)
+    except Exception:
+        return False
+
+
+def _cleanup_downloaded_lora_paths(local_paths: List[str]) -> None:
+    """
+    Remove downloaded LoRA artifacts by explicit local paths, but only inside our
+    managed LoRA directory.
+    """
+    try:
+        base_dir = Path(get_lora_path()).resolve()
+    except Exception:
+        return
+
+    for path_str in list(local_paths or []):
+        try:
+            p = Path(path_str).resolve()
+        except Exception:
+            continue
+        try:
+            common = os.path.commonpath([str(base_dir), str(p)])
+        except Exception:
+            continue
+        if common != str(base_dir):
+            continue
+        try:
+            if p.is_file():
+                try:
+                    p.unlink()
+                except FileNotFoundError:
+                    pass
+            elif p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+        except Exception:
+            pass
+
+        # Prune empty parents up to base_dir
+        parent = p.parent
+        while True:
+            try:
+                if parent == base_dir:
+                    break
+                if not parent.exists() or any(parent.iterdir()):
+                    break
+                parent.rmdir()
+            except Exception:
+                break
+            parent = parent.parent
 
 
 def _ensure_lora_registered_in_manifests(
@@ -1126,6 +1235,61 @@ def download_unified(
                     prefer_name=lora_name,
                     progress_callback=tracker.update_progress,
                 )
+
+                # Guardrail: sometimes a "successful" download is an HTML error page.
+                # If that happens, delete the downloaded file(s) immediately.
+                try:
+                    local_paths = getattr(lora_item, "local_paths", None)
+                    if isinstance(local_paths, list) and local_paths:
+                        html_like = [p for p in local_paths if isinstance(p, str) and _file_looks_like_html(p)]
+                        invalid_safetensors = [
+                            p
+                            for p in local_paths
+                            if isinstance(p, str)
+                            and str(p).lower().endswith(".safetensors")
+                            and (not _is_valid_safetensors_file(p))
+                        ]
+                        if html_like or invalid_safetensors:
+                            _cleanup_downloaded_lora_paths(
+                                [p for p in local_paths if isinstance(p, str)]
+                            )
+                            # Best-effort: clear any persisted resolution mapping
+                            try:
+                                from src.utils.lora_resolution import delete_lora_resolution
+
+                                delete_lora_resolution(getattr(lora_item, "source", None) or source)
+                            except Exception:
+                                pass
+                            # Ensure manifest doesn't retain an entry (best-effort; should be empty at this point)
+                            removed = _remove_lora_from_manifest(lora_name or source, manifest_id)
+                            if not removed:
+                                _remove_lora_from_manifest(source, manifest_id)
+                            reason = (
+                                "Downloaded file looks like HTML (auth/rate-limit/error page)"
+                                if html_like
+                                else "Downloaded file is not a valid safetensors archive"
+                            )
+                            send_progress(
+                                0.0,
+                                f"LoRA download failed for '{source}' ({reason})",
+                                {
+                                    "status": "error",
+                                    "bucket": norm_type,
+                                    "stage": "lora_download",
+                                    "error": reason,
+                                },
+                            )
+                            return {
+                                "job_id": job_id,
+                                "status": "error",
+                                "type": "lora",
+                                "id": source,
+                                "message": f"LoRA download failed: {reason}. Downloaded artifacts were removed.",
+                            }
+                except Exception:
+                    # Keep the existing flow if our guardrail logic fails for any reason.
+                    pass
+
                 if (
                     not getattr(lora_item, "local_paths", None)
                     or len(lora_item.local_paths) == 0
@@ -1139,6 +1303,13 @@ def download_unified(
                     removed = _remove_lora_from_manifest(lora_name or source, manifest_id)
                     if not removed:
                         _remove_lora_from_manifest(source, manifest_id)
+                    # Best-effort: clear any persisted resolution mapping
+                    try:
+                        from src.utils.lora_resolution import delete_lora_resolution
+
+                        delete_lora_resolution(getattr(lora_item, "source", None) or source)
+                    except Exception:
+                        pass
                     send_progress(
                         0.0,
                         f"LoRA download failed for '{source}' (no files found)",
@@ -1171,6 +1342,14 @@ def download_unified(
                     logger.warning(
                         f"Failed to register LoRA '{source}' in manifest after download: {register_err}"
                     )
+
+                # Persist the source->local_paths mapping for UI resolution (cross-process).
+                try:
+                    from src.utils.lora_resolution import set_lora_resolution
+
+                    set_lora_resolution(source, list(getattr(lora_item, "local_paths", []) or []))
+                except Exception:
+                    pass
                 # Explicitly mark the end of the download phase at 75%
                 try:
                     send_progress(
@@ -1212,6 +1391,13 @@ def download_unified(
                     if not removed:
                         _remove_lora_from_manifest(source, manifest_id)
                     _cleanup_lora_artifacts_if_remote(lora_item)
+                    # Best-effort: clear any persisted resolution mapping
+                    try:
+                        from src.utils.lora_resolution import delete_lora_resolution
+
+                        delete_lora_resolution(source)
+                    except Exception:
+                        pass
                     send_progress(
                         0.0,
                         "LoRA verification failed; removed from manifest",
@@ -1264,6 +1450,13 @@ def download_unified(
                     f"Removing LoRA from manifest. Reason: {maybe_not_lora}"
                 )
                 _remove_lora_from_manifest(source, manifest_id)
+                # Best-effort: clear any persisted resolution mapping
+                try:
+                    from src.utils.lora_resolution import delete_lora_resolution
+
+                    delete_lora_resolution(source)
+                except Exception:
+                    pass
                 send_progress(
                     0.0,
                     f"LoRA download failed for '{source}'",
