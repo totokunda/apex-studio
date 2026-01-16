@@ -20,6 +20,7 @@ export const IMAGE_EXTS = new Set([
   "tiff",
   "ico",
   "webp",
+  "avif",
 ]);
 
 export const AUDIO_EXTS = new Set([
