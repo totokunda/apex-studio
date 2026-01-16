@@ -99,6 +99,12 @@ if (
     return src[:line_start] + replacement + src[blk_end:]
 
 
+def _is_patched(src: str) -> bool:
+    """Check if the file already has the patched logic."""
+    # The patch introduces FLASH3_HAS_PAGED_ATTENTION which is not in upstream.
+    return "FLASH3_HAS_PAGED_ATTENTION = True" in src
+
+
 def main() -> int:
     v = os.environ.get("APEX_PATCH_XFORMERS_FLASH3")
     if v is None:
@@ -114,9 +120,15 @@ def main() -> int:
         return 0
 
     before = p.read_text(encoding="utf-8")
+    
+    if _is_patched(before):
+        print(f"xformers flash3 already patched (verified content): {p}")
+        return 0
+
     after = _patch_contents(before)
     if after == before:
-        print(f"xformers flash3 already patched: {p}")
+        # Should be covered by _is_patched, but just in case
+        print(f"xformers flash3 content matches patch target: {p}")
         return 0
 
     p.write_text(after, encoding="utf-8")

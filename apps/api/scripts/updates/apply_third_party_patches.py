@@ -23,11 +23,13 @@ def _run(script_path: Path) -> None:
 
 
 def main() -> int:
+    print(f"Applying patches using: {sys.executable}")
     project_root = Path(__file__).resolve().parent.parent.parent  # apps/api
     updates_dir = project_root / "scripts" / "updates"
 
     _run(updates_dir / "patch_diffusers_peft.py")
     _run(updates_dir / "patch_xformers_flash3.py")
+    print("Patches applied successfully.")
     return 0
 
 
