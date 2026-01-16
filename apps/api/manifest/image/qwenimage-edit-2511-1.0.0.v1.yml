@@ -36,12 +36,12 @@ spec:
   - efficient_dot_product_attention
   - xformers
   loras:
-  - scale: 0.7
+  - scale: 1.0
     name: qwen_image_lightning
     label: Qwen Image Lightning 4 Steps
     verified: true
     source: lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
-  - scale: 0.7
+  - scale: 0.0
     name: Next Scene
     label: Next Scene
     verified: true

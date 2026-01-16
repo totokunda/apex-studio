@@ -26,15 +26,15 @@
             }
         },
         "auto_memory_management": false,
-        "attention_type": "sdpa"
+        "attention_type": "sage"
     },
     "inputs": {
-        "prompt": "Lionel Messi",
-        "resolution": 1024,
-        "aspect_ratio": "1:1",
-        "height": 1024,
-        "width": 1024,
-        "seed": 4068664613,
+        "prompt": "((asian)),TFZ,a nude beautiful ,large breasts,fit,slim,sexy,muscular thick thigh:1.5,muscular,toned,atheletic,make up,19 yo,slim waist,feet,",
+        "resolution": "custom",
+        "aspect_ratio": "custom",
+        "height": 1216,
+        "width": 832,
+        "seed": 1946367204,
         "num_inference_steps": 9,
         "duration": "5s"
     }
