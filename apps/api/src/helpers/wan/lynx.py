@@ -67,16 +67,24 @@ def flash_attention(query, key, value, q_lens, kv_lens, causal=False):
 
     max_seqlen_q = int(q_lens_tensor.max().item())
     max_seqlen_k = int(kv_lens_tensor.max().item())
+    
+    if attention_register.is_available("flash_varlen"):
+        key = "flash_varlen"
+    elif attention_register.is_available("metal_flash_varlen"):
+        key = "metal_flash_varlen"
+    else:
+        key = "sdpa_varlen"
 
-    out = flash_attn_varlen_func(
+    out = attention_register.call(
         q,
         k,
         v,
-        cu_seqlens_q,
-        cu_seqlens_k,
-        max_seqlen_q,
-        max_seqlen_k,
-        causal=causal,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_k=cu_seqlens_k,
+        max_seqlen_q=max_seqlen_q,
+        max_seqlen_k=max_seqlen_k,
+        is_causal=causal,
+        key=key,
     )
     out = out[0] if not torch.is_tensor(out) else out
     out = out.view(B, T_q, H, D_h).permute(0, 2, 1, 3).contiguous()
@@ -736,6 +744,23 @@ class WanRefAttnProcessor(nn.Module):
         return hidden_states
 
 
+def _logical_tensor_shape(t: torch.Tensor) -> torch.Size:
+    """
+    Return the *logical* shape for a tensor.
+
+    For GGUF-loaded weights we may have a `GGMLTensor` where `.shape` reflects the
+    quantized byte-storage layout, while the original (dequantized) shape is
+    stored on `tensor_shape`.
+    """
+    logical = getattr(t, "tensor_shape", None)
+    if logical is not None:
+        try:
+            return torch.Size(logical)
+        except Exception:
+            pass
+    return t.shape
+
+
 def register_ip_adapter_full(
     model,
     cross_attention_dim=None,
@@ -749,10 +774,25 @@ def register_ip_adapter_full(
     for layer_idx, block in enumerate(model.blocks):
         name = f"blocks.{layer_idx}.attn2.processor"
         layer_name = name.split(".processor")[0]
-        dim = transformer_sd[layer_name + ".to_k.weight"].shape[1]
+
+        # Prefer module metadata (robust to GGUF quantized storage shapes).
+        dim = None
+        inferred_cross_attention_dim = None
+        try:
+            to_k = block.attn2.to_k
+            dim = int(getattr(to_k, "out_features"))
+            inferred_cross_attention_dim = int(getattr(to_k, "in_features"))
+        except Exception:
+            w = transformer_sd[layer_name + ".to_k.weight"]
+            w_shape = _logical_tensor_shape(w)  # (out_features, in_features)
+            dim = int(w_shape[0])
+            inferred_cross_attention_dim = int(w_shape[1])
+
         attn_procs[name] = WanIPAttnProcessor(
             cross_attention_dim=(
-                dim if cross_attention_dim is None else cross_attention_dim
+                inferred_cross_attention_dim
+                if cross_attention_dim is None
+                else cross_attention_dim
             ),
             dim=dim,
             n_registers=n_registers,
@@ -830,7 +870,13 @@ def register_ref_adapter(model, init_method="zero", dtype=torch.float32):
     for layer_idx, block in enumerate(model.blocks):
         name = f"blocks.{layer_idx}.attn1.processor"
         layer_name = name.split(".processor")[0]
-        dim = transformer_sd[layer_name + ".to_k.weight"].shape[0]
+        # Prefer module metadata (robust to GGUF quantized storage shapes).
+        try:
+            to_k = block.attn1.to_k
+            dim = int(getattr(to_k, "out_features"))
+        except Exception:
+            w = transformer_sd[layer_name + ".to_k.weight"]
+            dim = int(_logical_tensor_shape(w)[0])  # (out_features, in_features)
         attn_procs[name] = WanRefAttnProcessor(dim=dim, bias=True)
         if init_method == "zero":
             torch.nn.init.zeros_(attn_procs[name].to_k_ref.weight)
@@ -1016,14 +1062,13 @@ class WanLynxHelper(BaseHelper):
 
     def encode_reference_buffer(
         self,
-        vae,
-        text_encoder,
-        transformer,
+        engine,
         face_image: Image.Image,
         device: torch.device,
         dtype: torch.dtype,
         drop: bool = False,
         generator: Optional[torch.Generator] = None,
+        offload: bool = True,
     ):
         if not self.ref_loaded:
             return None
@@ -1032,25 +1077,42 @@ class WanLynxHelper(BaseHelper):
         batch_ref_image = torch.tensor(ref_array, device=device, dtype=dtype)
         batch_ref_image = batch_ref_image / 255.0 * 2 - 1
         batch_ref_image = batch_ref_image.permute(2, 0, 1).unsqueeze(0).unsqueeze(2)
+        # offload transformer to cpu 
+        if offload:
+            engine._offload("transformer", offload_type="cpu")
 
         if drop:
             batch_ref_image = batch_ref_image * 0
-
-        vae_feat = vae.encode(batch_ref_image).latent_dist.sample(generator=generator)
-        mean, std = self.cal_mean_and_std(vae, device, dtype)
-        vae_feat = (vae_feat - mean) * std
+        if not engine.vae:
+            engine.load_component_by_type("vae")
+        engine.to_device(engine.vae)
+        vae_feat = engine.vae_encode(batch_ref_image, offload=offload, sample_mode="sample", sample_generator=generator)
         vae_feat_list = [vae_feat]
+        
+        if offload:
+            engine._offload("vae")
 
         ref_prompt_list = ["image of a face"]
-        ref_text_embeds = text_encoder.encode(
+        if not engine.text_encoder:
+            engine.load_component_by_type("text_encoder")
+            
+        engine.to_device(engine.text_encoder)
+        ref_text_embeds = engine.text_encoder.encode(
             ref_prompt_list,
             device=device,
             num_videos_per_prompt=1,
             max_sequence_length=512,
         ).to(device=device, dtype=dtype)
         ref_text_embeds_list = [ref_text_embeds]
+        if offload:
+            engine._offload("text_encoder")
+            
+        
+        if not engine.transformer:
+            engine.load_component_by_type("transformer")
+        engine.to_device(engine.transformer)
 
-        ref_buffer = transformer(
+        ref_buffer = engine.transformer(
             hidden_states=vae_feat_list,
             timestep=torch.LongTensor([0]).to(device),
             encoder_hidden_states=ref_text_embeds_list,

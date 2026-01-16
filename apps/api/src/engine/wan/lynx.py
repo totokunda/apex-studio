@@ -234,10 +234,10 @@ class LynxEngine(WanShared):
                 if seed is not None
                 else None
             )
+            
+
             ref_buffer = helper.encode_reference_buffer(
-                self.vae,
-                self.text_encoder,
-                self.transformer,
+                self,
                 aligned_face,
                 device=self.device,
                 dtype=transformer_dtype,
@@ -245,9 +245,7 @@ class LynxEngine(WanShared):
                 generator=ref_gen,
             )
             ref_buffer_uncond = helper.encode_reference_buffer(
-                self.vae,
-                self.text_encoder,
-                self.transformer,
+                self,
                 aligned_face,
                 device=self.device,
                 dtype=transformer_dtype,

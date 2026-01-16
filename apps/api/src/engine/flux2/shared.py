@@ -48,7 +48,7 @@ class Flux2Shared(BaseEngine):
         max_sequence_length: int = 512,
         text_encoder_out_layers: Tuple[int] = (10, 20, 30),
     ):
-        device = device or self._execution_device
+        device = device or self.device
 
         if prompt is None:
             prompt = ""

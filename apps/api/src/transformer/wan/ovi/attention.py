@@ -1,6 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import torch
-
+from src.attention.functions import attention_register
 try:
     import flash_attn_interface
 
@@ -94,7 +94,7 @@ if FLASH_ATTN_3_AVAILABLE or FLASH_ATTN_2_AVAILABLE:
             
      
         # apply attention
-        if (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
+        if (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE and attention_register.is_available("flash3"):
             # Note: dropout_p, window_size are not supported in FA3 now.
             x = flash_attn_interface.flash_attn_varlen_func(
                 q=q,

@@ -12,6 +12,7 @@ def fetch_and_save_tokenizer_from_config(
     config: Dict[str, Any] | None = None,
     tokenizer_class: str | None = None,
     tokenizer_name: str | None = None,
+    hf_token: str | None = None,
     **tokenizer_kwargs: Any,
 ) -> AutoTokenizer:
     """
@@ -26,8 +27,10 @@ def fetch_and_save_tokenizer_from_config(
             Local path to the JSON config (e.g. text_encoder_config.json).
         revision (str):
             Which Git revision/branch/tag to search on the Hub.
-        use_auth_token (bool or str):
-            OAuth token for private repos, or False for public.
+        hf_token (str | None):
+            Hugging Face token used for gated/private repos. If omitted, will also
+            check (in order): `tokenizer_kwargs["hf_token"]`, `config["hf_token"]`,
+            env `HUGGING_FACE_HUB_TOKEN`, then env `HF_TOKEN`.
         **tokenizer_kwargs:
             Forwarded into AutoTokenizer.from_pretrained (e.g. use_fast=True).
 
@@ -47,15 +50,51 @@ def fetch_and_save_tokenizer_from_config(
 
     if _name_or_path is not None:
         tokenizer_kwargs["from_tiktoken"] = False
+
+        # Include Hugging Face token if available for gated/private repos.
+        # transformers>=4.38 prefers `token=...`, older versions use `use_auth_token=...`.
+        token = (
+            hf_token
+            or tokenizer_kwargs.pop("hf_token", None)
+            or loaded_config.get("hf_token", None)
+            or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+            or os.environ.get("HF_TOKEN")
+        )
+        if isinstance(token, str):
+            token = token.strip()
+        if not token:
+            token = None
+
         if tokenizer_class is not None:
             tokenizer_class = find_class_recursive(transformers, tokenizer_class)
         else:
             tokenizer_class = AutoTokenizer
+
+        def _load_tokenizer_with_fallbacks(_tokenizer_cls, name_or_path: str):
+            # If caller already supplied auth kwargs, respect them.
+            if tokenizer_kwargs.get("token") is not None or tokenizer_kwargs.get(
+                "use_auth_token"
+            ) is not None:
+                return _tokenizer_cls.from_pretrained(name_or_path, **tokenizer_kwargs)
+
+            if token is None:
+                return _tokenizer_cls.from_pretrained(name_or_path, **tokenizer_kwargs)
+
+            # Try modern arg first; fall back for older transformers.
+            try:
+                return _tokenizer_cls.from_pretrained(
+                    name_or_path, token=token, **tokenizer_kwargs
+                )
+            except TypeError:
+                return _tokenizer_cls.from_pretrained(
+                    name_or_path, use_auth_token=token, **tokenizer_kwargs
+                )
+
         try:
-            tokenizer = tokenizer_class.from_pretrained(_name_or_path, **tokenizer_kwargs)
+            tokenizer = _load_tokenizer_with_fallbacks(tokenizer_class, _name_or_path)
         except Exception as e:
             tokenizer_class = AutoTokenizer
-            tokenizer = tokenizer_class.from_pretrained(_name_or_path, **tokenizer_kwargs)
+            tokenizer = _load_tokenizer_with_fallbacks(tokenizer_class, _name_or_path)
         save_dir = Path(model_path).parent
         os.makedirs(save_dir, exist_ok=True)
         tokenizer.save_pretrained(save_dir)

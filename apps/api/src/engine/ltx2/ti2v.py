@@ -433,6 +433,9 @@ class LTX2TI2VEngine(LTX2Shared):
         self,
         audio: InputAudio | List[InputAudio] = None,
         image: InputImage | List[InputImage] = None,
+        # Optional "last frame" conditioning image. If provided, it is appended to the conditioning list and
+        # automatically placed at the end of the video (final frame) unless an explicit index is supplied.
+        last_image: Optional[InputImage] = None,
         prompt: Union[str, List[str]] = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         height: int = 512,
@@ -479,6 +482,7 @@ class LTX2TI2VEngine(LTX2Shared):
         upsample: bool = True,
         image_strengths: Optional[Union[float, List[float]]] = None,
         image_pixel_frame_indices: Optional[Union[int, List[int]]] = None,
+        last_image_strength: Optional[float] = None,
         use_gradient_estimation: bool = False,
         ge_gamma: float = 2.0,
         empty_cache_after_step: bool = True,
@@ -523,12 +527,91 @@ class LTX2TI2VEngine(LTX2Shared):
             width = target_width // 2
             
         
+        # --- Image conditioning inputs ---
+        # Support an optional `last_image` which is appended as an additional conditioning at the end.
+        input_images: List[InputImage] = []
         if image is not None:
+            input_images.extend(image if isinstance(image, list) else [image])
+        if last_image is not None:
+            input_images.append(last_image)
+
+        # Normalize per-conditioning frame indices / strengths *after* we know num_frames.
+        # We keep the repo's existing "latent-vs-pixel index" heuristic:
+        # - if max index < latent_num_frames => interpret as latent indices
+        # - else                            => interpret as pixel indices
+        effective_image_strengths: Optional[Union[float, List[float]]] = image_strengths
+        effective_image_pixel_frame_indices: Optional[Union[int, List[int]]] = image_pixel_frame_indices
+        if last_image is not None:
+            latent_num_frames_for_idx = (num_frames - 1) // int(self.vae_temporal_compression_ratio) + 1
+
+            def _infer_index_space_end(
+                idxs: Optional[Union[int, List[int]]],
+            ) -> int:
+                if idxs is None:
+                    # Default to pixel-space "final frame". This is safe since default indices for other images are 0.
+                    return int(num_frames - 1)
+                if isinstance(idxs, int):
+                    return (
+                        int(latent_num_frames_for_idx - 1)
+                        if int(idxs) < int(latent_num_frames_for_idx)
+                        else int(num_frames - 1)
+                    )
+                # list
+                max_idx = max(int(i) for i in idxs) if len(idxs) > 0 else 0
+                return (
+                    int(latent_num_frames_for_idx - 1)
+                    if int(max_idx) < int(latent_num_frames_for_idx)
+                    else int(num_frames - 1)
+                )
+
+            last_idx = _infer_index_space_end(image_pixel_frame_indices)
+
+            # Frame indices
+            base_count = max(len(input_images) - 1, 0)
+            if image_pixel_frame_indices is None:
+                effective_image_pixel_frame_indices = ([0] * base_count) + [last_idx]
+            elif isinstance(image_pixel_frame_indices, int):
+                effective_image_pixel_frame_indices = ([int(image_pixel_frame_indices)] * base_count) + [last_idx]
+            else:
+                # If caller already provided indices for all images including last_image, keep length but force last to end.
+                if len(image_pixel_frame_indices) == len(input_images):
+                    effective_image_pixel_frame_indices = list(image_pixel_frame_indices)
+                    effective_image_pixel_frame_indices[-1] = last_idx
+                elif len(image_pixel_frame_indices) == base_count:
+                    effective_image_pixel_frame_indices = list(image_pixel_frame_indices) + [last_idx]
+                else:
+                    raise ValueError(
+                        f"Provided `image_pixel_frame_indices` has length {len(image_pixel_frame_indices)}, but expected "
+                        f"{base_count} (for `image` only) or {len(input_images)} (including `last_image`)."
+                    )
+
+            # Strengths
+            if last_image_strength is None:
+                # Default to a fully-conditioned last frame.
+                last_s = 1.0
+            else:
+                last_s = float(last_image_strength)
+
+            if image_strengths is None:
+                effective_image_strengths = ([1.0] * base_count) + [last_s]
+            elif isinstance(image_strengths, (int, float)):
+                effective_image_strengths = ([float(image_strengths)] * base_count) + [last_s]
+            else:
+                if len(image_strengths) == len(input_images):
+                    effective_image_strengths = list(image_strengths)
+                    effective_image_strengths[-1] = last_s
+                elif len(image_strengths) == base_count:
+                    effective_image_strengths = list(image_strengths) + [last_s]
+                else:
+                    raise ValueError(
+                        f"Provided `image_strengths` has length {len(image_strengths)}, but expected "
+                        f"{base_count} (for `image` only) or {len(input_images)} (including `last_image`)."
+                    )
+
+        if len(input_images) > 0:
             safe_emit_progress(stage1_progress_callback, 0.03, "Loading and preprocessing conditioning image(s)")
             # Multiple images are treated as multiple conditionings for a *single* latent sequence (not batch items).
-            if not isinstance(image, list):
-                image = [image]
-            image = [self._load_image(img) for img in image]
+            image = [self._load_image(img) for img in input_images]
             
             image = [self._aspect_ratio_resize(img, max_area=height * width, mod_value=self.vae_spatial_compression_ratio)[0] for img in image]
             preprocessed_image = [self.preprocess(img, crf=image_quality_crf) for img in image]
@@ -640,7 +723,10 @@ class LTX2TI2VEngine(LTX2Shared):
         # - latents are provided with conditioning info (stage 2 refinement case - use upsampled latents as conditioning)
         use_image_conditioning = (
             condition_images is not None
-            or (latents is not None and (image_strengths is not None or image_pixel_frame_indices is not None))
+            or (
+                latents is not None
+                and (effective_image_strengths is not None or effective_image_pixel_frame_indices is not None)
+            )
         )
         
         if use_image_conditioning:
@@ -656,8 +742,8 @@ class LTX2TI2VEngine(LTX2Shared):
                 device=device,
                 generator=generator,
                 latents=latents,
-                strengths=image_strengths,
-                pixel_frame_indices=image_pixel_frame_indices,
+                strengths=effective_image_strengths,
+                pixel_frame_indices=effective_image_pixel_frame_indices,
                 offload=offload,
             )
             
@@ -673,29 +759,29 @@ class LTX2TI2VEngine(LTX2Shared):
                 # Determine num_conds from condition_images if available, otherwise from strengths/indices
                 if condition_images is not None:
                     num_conds = int(condition_images.shape[0])
-                elif isinstance(image_strengths, list):
-                    num_conds = len(image_strengths)
-                elif isinstance(image_pixel_frame_indices, list):
-                    num_conds = len(image_pixel_frame_indices)
+                elif isinstance(effective_image_strengths, list):
+                    num_conds = len(effective_image_strengths)
+                elif isinstance(effective_image_pixel_frame_indices, list):
+                    num_conds = len(effective_image_pixel_frame_indices)
                 else:
                     num_conds = 1
-                if image_strengths is None:
+                if effective_image_strengths is None:
                     strengths_list = [1.0] * num_conds
-                elif isinstance(image_strengths, (int, float)):
-                    strengths_list = [float(image_strengths)] * num_conds
+                elif isinstance(effective_image_strengths, (int, float)):
+                    strengths_list = [float(effective_image_strengths)] * num_conds
                 else:
-                    strengths_list = [float(s) for s in image_strengths]
+                    strengths_list = [float(s) for s in effective_image_strengths]
                     if len(strengths_list) != num_conds:
                         raise ValueError(
                             f"`image_strengths` length {len(strengths_list)} must match number of conditioned images {num_conds}."
                         )
 
-                if image_pixel_frame_indices is None:
+                if effective_image_pixel_frame_indices is None:
                     idx_list = [0] * num_conds
-                elif isinstance(image_pixel_frame_indices, int):
-                    idx_list = [int(image_pixel_frame_indices)] * num_conds
+                elif isinstance(effective_image_pixel_frame_indices, int):
+                    idx_list = [int(effective_image_pixel_frame_indices)] * num_conds
                 else:
-                    idx_list = [int(i) for i in image_pixel_frame_indices]
+                    idx_list = [int(i) for i in effective_image_pixel_frame_indices]
                     if len(idx_list) != num_conds:
                         raise ValueError(
                             f"`image_pixel_frame_indices` length {len(idx_list)} must match number of conditioned images {num_conds}."
@@ -1459,8 +1545,8 @@ class LTX2TI2VEngine(LTX2Shared):
                 return_latents=return_latents,
                 upsample=False,
                 seed=seed,
-                image_strengths=image_strengths,
-                image_pixel_frame_indices=image_pixel_frame_indices,
+                image_strengths=effective_image_strengths,
+                image_pixel_frame_indices=effective_image_pixel_frame_indices,
                 guidance_scale=1.0,
                 guidance_rescale=0.0,
                 use_distilled_stage_2=True,

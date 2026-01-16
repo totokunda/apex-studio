@@ -226,6 +226,15 @@ class OviEngine(WanShared):
             progress_callback, 0.0, "Starting Ovi video+audio generation pipeline"
         )
         
+        if image is not None:
+            safe_emit_progress(progress_callback, 0.01, "Loading input image")
+            image = self._load_image(image)
+            image, height, width = self._aspect_ratio_resize(
+                image,
+                max_area=height * width,
+                mod_value=64,
+            )
+        
 
         specs = self._get_model_specs()
         if seed is None:
@@ -242,9 +251,7 @@ class OviEngine(WanShared):
         else:
             target_area = specs["video_area"]
         text_formatter = specs["formatter"]
-        if image is not None:
-            safe_emit_progress(progress_callback, 0.01, "Loading input image")
-            image = self._load_image(image)
+        
 
         logging.info(
             f"Video latent length: {video_latent_length}, Audio latent length: {audio_latent_length}"
@@ -253,8 +260,7 @@ class OviEngine(WanShared):
 
         safe_emit_progress(progress_callback, 0.02, "Loaded Ovi model specs")
 
-        if image is not None:
-            image = self._load_image(image)
+    
 
         device = self.device
         target_dtype = torch.bfloat16  # Ovi uses bfloat16 by default
@@ -340,23 +346,24 @@ class OviEngine(WanShared):
         video_latent_h, video_latent_w = 0, 0
 
         if self._is_i2v:
-            if not self.vae:
+            if not getattr(self, "transformer_vae", None):
                 safe_emit_progress(progress_callback, 0.23, "Loading VAE (video)")
-                self.load_component_by_type("vae")
+                self.load_component_by_name("transformer_vae")
                 safe_emit_progress(progress_callback, 0.24, "VAE loaded")
             safe_emit_progress(progress_callback, 0.25, "Moving VAE to device")
-            self.to_device(self.vae)
+            self.to_device(self.transformer_vae)
 
             safe_emit_progress(progress_callback, 0.26, "Preprocessing first frame")
 
             first_frame = self.preprocess_image_tensor(
                 image, device, target_dtype, resize_total_area=target_area
             )
+            self._tensor_to_frame(first_frame)[0].save("first_frame_0.png")
 
             # Add temporal dim: (1, 3, 1, H, W)
             input_tensor = first_frame.unsqueeze(2)
             safe_emit_progress(progress_callback, 0.29, "Encoding first frame (VAE)")
-            latents_images = self.vae_encode(input_tensor, dtype=target_dtype)
+            latents_images = self.vae_encode(input_tensor, dtype=target_dtype, component_name="transformer_vae")
             latents_images = latents_images.squeeze(0)  # (C, T, H, W)
             self.latents_images = latents_images
 
@@ -367,7 +374,7 @@ class OviEngine(WanShared):
 
             if offload:
                 safe_emit_progress(progress_callback, 0.31, "Offloading VAE (video)")
-                self._offload("vae")
+                self._offload("transformer_vae")
             safe_emit_progress(
                 progress_callback, 0.32, "Encoded first frame into video latents"
             )

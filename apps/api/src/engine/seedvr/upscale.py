@@ -1302,3 +1302,6 @@ class SeedVRUpscaleEngine(BaseEngine):
             return [output_frames[0] if output_frames else None]
         else:
             return [output_frames]
+
+    def _render_step(self, latents: torch.Tensor, render_on_step_callback: Callable, timestep: Optional[torch.Tensor] = None, image: Optional[bool] = False):
+        self.logger.warning("Rendering step not supported for SeedVR upscale")

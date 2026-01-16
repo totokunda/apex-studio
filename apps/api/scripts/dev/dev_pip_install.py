@@ -296,13 +296,13 @@ def main() -> int:
             # Best-effort; keep install flow resilient.
             pass
 
-    # 4b) Patch xformers (if installed) in the active env/venv.
-    # We patch by resolving the installed module path and editing in-place, rather than
+    # 4b) Patch third-party deps in the active env/venv (diffusers + xformers).
+    # We patch by resolving the installed module paths and editing in-place, rather than
     # applying a whole patches directory (which may include optional/outdated patches).
     _run(
         [
             str(py),
-            str(project_root / "scripts" / "updates" / "patch_xformers_flash3.py"),
+            str(project_root / "scripts" / "updates" / "apply_third_party_patches.py"),
         ],
         cwd=project_root,
     )
