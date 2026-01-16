@@ -4,6 +4,9 @@ import torch.nn.functional as F
 from typing import List, Optional
 import multiprocessing
 import json
+import sys
+import time
+import subprocess
 from pathlib import Path
 from src.register import FunctionRegister
 from src.utils.defaults import DEFAULT_CACHE_PATH
@@ -1686,6 +1689,244 @@ attention_register.set_default("sdpa")
 _WORKING_ATTENTIONS: Optional[List[str]] = None
 ATTENTION_CACHE_FILE = Path(DEFAULT_CACHE_PATH) / "attention_backends.json"
 
+# Backends that are built-in / critical fallbacks and must never be disabled/uninstalled.
+_NON_REMOVABLE_BACKENDS = {
+    "sdpa",
+    "sdpa_varlen",
+    "sdpa_streaming",
+    "efficient_dot_product_attention",
+}
+
+
+def _env_truthy(name: str, default: str = "") -> bool:
+    v = os.getenv(name, default)
+    if v is None:
+        return False
+    return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _attention_env_fingerprint() -> dict:
+    """
+    A minimal fingerprint so we can avoid using a stale cache when the runtime changes.
+    """
+    try:
+        torch_version = getattr(torch, "__version__", None)
+    except Exception:
+        torch_version = None
+
+    cuda_available = False
+    cuda_cap = None
+    try:
+        cuda_available = bool(torch.cuda.is_available())
+        if cuda_available:
+            cap = torch.cuda.get_device_capability()
+            cuda_cap = [int(cap[0]), int(cap[1])]
+    except Exception:
+        cuda_available = False
+        cuda_cap = None
+
+    mps_available = False
+    try:
+        mps_available = bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
+    except Exception:
+        mps_available = False
+
+    return {
+        "torch_version": torch_version,
+        "cuda_available": cuda_available,
+        "cuda_capability": cuda_cap,
+        "mps_available": mps_available,
+    }
+
+
+def _load_attention_cache() -> dict | None:
+    """
+    Cache format (v1):
+      {
+        "version": 1,
+        "fingerprint": {...},
+        "working": [...],
+        "failed": [...],
+        "timestamp": 123.45
+      }
+
+    Legacy cache format:
+      [ "sdpa", "xformers", ... ]
+    """
+    if not ATTENTION_CACHE_FILE.exists():
+        return None
+    try:
+        with open(ATTENTION_CACHE_FILE, "r") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load attention cache: {e}")
+        return None
+
+    # Legacy list cache: consider stale; force re-verify so we can compute failed + fingerprint.
+    if isinstance(data, list):
+        logger.info("Found legacy attention backend cache format; re-verifying backends.")
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    fp = data.get("fingerprint")
+    if not isinstance(fp, dict):
+        return None
+
+    if fp != _attention_env_fingerprint():
+        logger.info("Attention backend cache fingerprint mismatch; re-verifying backends.")
+        return None
+
+    working = data.get("working")
+    if not isinstance(working, list) or not all(isinstance(x, str) for x in working):
+        return None
+
+    failed = data.get("failed", [])
+    if not isinstance(failed, list) or not all(isinstance(x, str) for x in failed):
+        failed = []
+
+    return {"working": working, "failed": failed, "version": data.get("version", 1)}
+
+
+def _save_attention_cache(*, working: list[str], failed: list[str]) -> None:
+    try:
+        ATTENTION_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "fingerprint": _attention_env_fingerprint(),
+            "working": list(working),
+            "failed": list(failed),
+            "timestamp": time.time(),
+        }
+        with open(ATTENTION_CACHE_FILE, "w") as f:
+            json.dump(payload, f)
+    except Exception as e:
+        logger.error(f"Failed to save attention cache: {e}")
+
+
+def _apply_verified_backends_to_registry(*, working: list[str], failed: list[str]) -> None:
+    """
+    Make failed backends impossible to select at runtime by marking them unavailable.
+    """
+    failed_set = set(failed)
+    for name in list(attention_register.all_available().keys()):
+        if name in _NON_REMOVABLE_BACKENDS:
+            continue
+        if name in failed_set:
+            try:
+                attention_register.set_availability(name, False)
+            except Exception:
+                # Defensive: registry might not contain it (shouldn't happen).
+                pass
+
+
+def _backend_related_modules(backend_name: str) -> set[str]:
+    """
+    Best-effort mapping from backend name -> top-level import(s) that provide it.
+    Used only for optional auto-uninstall.
+    """
+    name = backend_name
+    if name == "xformers":
+        return {"xformers"}
+    if name == "flash":
+        # `key="flash"` can use either flash-attn (Ampere+) or the Turing-only kernel (SM 7.5).
+        return {"flash_attn", "flash_attn_turing"}
+    if name in {"flash_padded", "flash_varlen"}:
+        return {"flash_attn"}
+    if name == "flash3":
+        # Provided by flash_attn_3 wheels (exports `flash_attn_interface`).
+        return {"flash_attn_interface"}
+    if name == "sage":
+        return {"sageattention"}
+    if name == "flex-block-attn":
+        return {"flex_block_attn"}
+    if name == "xla_flash":
+        return {"torch_xla"}
+    if name == "metal_flash" or name == "metal_flash_varlen":
+        return {"kernels"}
+    return set()
+
+
+def _distributions_for_modules(mod_names: set[str]) -> set[str]:
+    """
+    Resolve Python distributions providing the given top-level modules.
+    """
+    if not mod_names:
+        return set()
+    try:
+        from importlib import metadata as importlib_metadata  # py3.8+
+    except Exception:
+        return set()
+
+    try:
+        pkg_map = importlib_metadata.packages_distributions()
+    except Exception:
+        return set()
+
+    dists: set[str] = set()
+    for mod in mod_names:
+        for dist in pkg_map.get(mod, []) or []:
+            if isinstance(dist, str) and dist:
+                dists.add(dist)
+    return dists
+
+
+def _pip_uninstall(distributions: set[str]) -> None:
+    """
+    Best-effort `pip uninstall -y ...` using the current interpreter.
+    This is opt-in and may fail in read-only / containerized environments.
+    """
+    if not distributions:
+        return
+    # Guardrails: never uninstall torch itself.
+    distributions = {d for d in distributions if d.lower() not in {"torch", "pytorch"}}
+    if not distributions:
+        return
+
+    cmd = [sys.executable, "-m", "pip", "uninstall", "-y", *sorted(distributions)]
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        if proc.returncode == 0:
+            logger.warning(f"Auto-uninstalled failing attention backend packages: {sorted(distributions)}")
+        else:
+            logger.warning(
+                "Attempted to auto-uninstall failing attention backend packages but pip returned "
+                f"{proc.returncode}. stderr: {proc.stderr.strip()[:500]}"
+            )
+    except Exception as e:
+        logger.warning(f"Failed to run pip uninstall for attention backend cleanup: {e}")
+
+
+def _maybe_remove_failed_backends_from_machine(failed: list[str]) -> None:
+    """
+    If enabled, uninstall distributions that provide failing attention backend modules.
+    Controlled by env var: APEX_AUTO_UNINSTALL_FAILED_ATTENTION_BACKENDS=1
+    """
+    if not failed:
+        return
+    if not _env_truthy("APEX_AUTO_UNINSTALL_FAILED_ATTENTION_BACKENDS", "0"):
+        return
+
+    # Only attempt uninstall for non-removable backends.
+    targets = [b for b in failed if b not in _NON_REMOVABLE_BACKENDS]
+    if not targets:
+        return
+
+    modules: set[str] = set()
+    for b in targets:
+        modules |= _backend_related_modules(b)
+
+    dists = _distributions_for_modules(modules)
+    if not dists:
+        logger.warning(
+            "Auto-uninstall requested, but could not resolve distributions for failing attention backends. "
+            f"failed={targets}, modules={sorted(modules)}"
+        )
+        return
+
+    _pip_uninstall(dists)
+
 
 def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
     """
@@ -1789,16 +2030,15 @@ def verify_attention_backends() -> List[str]:
         return _WORKING_ATTENTIONS
 
     # 1. Try loading from cache
-    if ATTENTION_CACHE_FILE.exists():
-        try:
-            with open(ATTENTION_CACHE_FILE, "r") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    _WORKING_ATTENTIONS = data
-                    logger.info(f"Loaded verified attention backends from cache: {_WORKING_ATTENTIONS}")
-                    return _WORKING_ATTENTIONS
-        except Exception as e:
-            logger.warning(f"Failed to load attention cache: {e}")
+    cache = _load_attention_cache()
+    if cache is not None:
+        working = cache["working"]
+        failed = cache.get("failed", [])
+        _WORKING_ATTENTIONS = working
+        _apply_verified_backends_to_registry(working=working, failed=failed)
+        logger.info(f"Loaded verified attention backends from cache: {_WORKING_ATTENTIONS}")
+        _maybe_remove_failed_backends_from_machine(failed)
+        return _WORKING_ATTENTIONS
 
     logger.info("Verifying attention backends (running once)...")
     working = []
@@ -1829,15 +2069,18 @@ def verify_attention_backends() -> List[str]:
                 p.terminate()
                 p.join()
 
+    failed = [name for name in candidates.keys() if name not in set(working)]
+
     _WORKING_ATTENTIONS = working
-    
+
+    # Disable failed backends for the current runtime (prevents accidental selection).
+    _apply_verified_backends_to_registry(working=working, failed=failed)
+
     # 3. Save to cache
-    try:
-        ATTENTION_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(ATTENTION_CACHE_FILE, "w") as f:
-            json.dump(_WORKING_ATTENTIONS, f)
-        logger.info(f"Verified and cached attention backends: {_WORKING_ATTENTIONS}")
-    except Exception as e:
-        logger.error(f"Failed to save attention cache: {e}")
+    _save_attention_cache(working=_WORKING_ATTENTIONS, failed=failed)
+    logger.info(f"Verified and cached attention backends: {_WORKING_ATTENTIONS}")
+
+    # 4. Optional: uninstall failing backend packages from this environment.
+    _maybe_remove_failed_backends_from_machine(failed)
 
     return _WORKING_ATTENTIONS
