@@ -331,22 +331,13 @@ class WanSelfAttention(nn.Module):
         """
         q, k, v = self.qkv_fn(x)
 
-        if attention_register.is_available("flash"):
-            x = flash_attention(
-                q=rope_apply(q, grid_sizes, freqs),
-                k=rope_apply(k, grid_sizes, freqs),
-                v=v,
-                k_lens=seq_lens,
-                window_size=self.window_size,
-            )
-        else:
-            x = attention_register.call(
-                q=rope_apply(q, grid_sizes, freqs).transpose(1, 2),
-                k=rope_apply(k, grid_sizes, freqs).transpose(1, 2),
-                v=v.transpose(1, 2),
-                k_lens=seq_lens,
-                window_size=self.window_size,
-            ).transpose(1, 2)
+        x = attention_register.call(
+            q=rope_apply(q, grid_sizes, freqs).transpose(1, 2),
+            k=rope_apply(k, grid_sizes, freqs).transpose(1, 2),
+            v=v.transpose(1, 2),
+            k_lens=seq_lens,
+            window_size=self.window_size,
+        ).transpose(1, 2)
 
         # output
         x = x.flatten(2)
@@ -375,15 +366,12 @@ class WanT2VCrossAttention(WanSelfAttention):
         q, k, v = self.qkv_fn(x, context)
 
         # compute attention
-        if attention_register.is_available("flash"):
-            x = flash_attention(q, k, v, k_lens=context_lens)
-        else:
-            x = attention_register.call(
+        x = attention_register.call(
                 q=q.transpose(1, 2),
                 k=k.transpose(1, 2),
                 v=v.transpose(1, 2),
                 k_lens=context_lens,
-            ).transpose(1, 2)
+        ).transpose(1, 2)
 
         # output
         x = x.flatten(2)
@@ -435,20 +423,14 @@ class WanI2VCrossAttention(WanSelfAttention):
 
         # [B, L, H/P, C/H]
         # k_img: [B, L, H, C/H]
-        if attention_register.is_available("flash"):
-            img_x = flash_attention(q, k_img, v_img, k_lens=None)
-        else:
-            img_x = attention_register.call(
+        img_x = attention_register.call(
                 q=q.transpose(1, 2),
                 k=k_img.transpose(1, 2),
                 v=v_img.transpose(1, 2),
                 k_lens=None,
             ).transpose(1, 2)
         # compute attention
-        if attention_register.is_available("flash"):
-            x = flash_attention(q, k, v, k_lens=context_lens)
-        else:
-            x = attention_register.call(
+        x = attention_register.call(
                 q=q.transpose(1, 2),
                 k=k.transpose(1, 2),
                 v=v.transpose(1, 2),
@@ -629,10 +611,7 @@ class WanAttentionBlock(nn.Module):
                 )
                 k_img = v_img = None
 
-            if attention_register.is_available("flash"):
-                attn_out = flash_attention(q=q, k=k, v=v, k_lens=context_lens)
-            else:
-                attn_out = attention_register.call(
+            attn_out = attention_register.call(
                     q=q.transpose(1, 2),
                     k=k.transpose(1, 2),
                     v=v.transpose(1, 2),
@@ -640,10 +619,7 @@ class WanAttentionBlock(nn.Module):
                 ).transpose(1, 2)
 
             if k_img is not None:
-                if attention_register.is_available("flash"):
-                    img_attn = flash_attention(q=q, k=k_img, v=v_img, k_lens=None)
-                else:
-                    img_attn = attention_register.call(
+                img_attn = attention_register.call(
                         q=q.transpose(1, 2),
                         k=k_img.transpose(1, 2),
                         v=v_img.transpose(1, 2),
@@ -661,12 +637,7 @@ class WanAttentionBlock(nn.Module):
             q_rope = rope_apply(q, grid_sizes, freqs)
             k_target_rope = rope_apply(k_target, target_grid_sizes, target_freqs)
 
-            if attention_register.is_available("flash"):
-                target_attn = flash_attention(
-                    q=q_rope, k=k_target_rope, v=v_target, k_lens=target_seq_lens
-                )
-            else:
-                target_attn = attention_register.call(
+            target_attn = attention_register.call(
                     q=q_rope.transpose(1, 2),
                     k=k_target_rope.transpose(1, 2),
                     v=v_target.transpose(1, 2),

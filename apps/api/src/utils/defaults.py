@@ -2,7 +2,7 @@
 import os
 import json
 from pathlib import Path
-
+from urllib.parse import urlparse
 HOME_DIR = Path(os.getenv("APEX_HOME_DIR", Path.home()))
 
 CONFIG_STORE_PATH = HOME_DIR / "apex-diffusion" / "apex-config.json"
@@ -117,6 +117,14 @@ DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 }
 
+def get_default_headers(url: str) -> dict:
+    parsed_url = urlparse(url)
+    if parsed_url.netloc == "civitai.com":
+        return {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Authorization": f"Bearer {os.environ.get('CIVITAI_API_KEY')}",
+        }
+    return DEFAULT_HEADERS
 
 def set_torch_device(device) -> None:
     global DEFAULT_DEVICE

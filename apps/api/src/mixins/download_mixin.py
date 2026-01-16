@@ -2,7 +2,7 @@ import os
 from typing import Iterator, Optional, Callable
 from urllib.parse import urlparse, parse_qs
 from tenacity import retry, stop_after_attempt, wait_exponential
-from src.utils.defaults import DEFAULT_HEADERS
+from src.utils.defaults import DEFAULT_HEADERS, get_default_headers
 from logging import Logger
 from loguru import logger
 import hashlib
@@ -1731,7 +1731,8 @@ class DownloadMixin:
         parsed_url = urlparse(url)
         relative_path_from_url = parsed_url.path.lstrip("/")
         # Build base headers (may be extended for specific providers like CivitAI)
-        base_headers = dict(DEFAULT_HEADERS)
+        base_headers = dict(get_default_headers(url))
+
 
         # Compute deterministic destination
         if dest_path:

@@ -40,13 +40,13 @@ spec:
   - efficient_dot_product_attention
   loras:
   - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors
-    scale: 0.0
+    scale: 1.0
     name: lightx2v_lora
     label: Lightx2v LoRA
     component: transformer
     verified: true
   - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Phantom_Wan_14B_FusionX_LoRA.safetensors
-    scale: 1.0
+    scale: 0.0
     name: fusionx_lora
     label: FusionX LoRA
     component: transformer

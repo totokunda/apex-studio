@@ -40,13 +40,13 @@ spec:
   - metal_flash
   - efficient_dot_product_attention
   loras:
-  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors
+  - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/high_noise_model.safetensors
     scale: 1.0
     verified: true
     name: high_noise_lightning_lora
     label: High Noise Lightning LoRA
     component: high_noise_transformer
-  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors
+  - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/low_noise_model.safetensors
     scale: 1.0
     verified: true
     name: low_noise_lightning_lora
@@ -109,8 +109,6 @@ spec:
     label: High Noise Transformer
     name: high_noise_transformer
     base: wan.fun_vace
-    extra_kwargs:
-      load_from_config: true
     model_path:
     - path: alibaba-pai/Wan2.2-VACE-Fun-A14B/high_noise_model
       variant: default
@@ -128,14 +126,14 @@ spec:
       resource_requirements:
         min_vram_gb: 19
         recommended_vram_gb: 26
-    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q6_K.gguf
+    - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 15
+      file_size: 14522587040
       resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/HighNoise/Wan2.2-VACE-Fun-A14B-high-noise-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
@@ -201,12 +199,11 @@ spec:
         min_vram_gb: 9
         recommended_vram_gb: 13
     config_path: alibaba-pai/Wan2.2-VACE-Fun-A14B/high_noise_model/config.json
+  
   - type: transformer
     label: Low Noise Transformer
     name: low_noise_transformer
     base: wan.fun_vace
-    extra_kwargs:
-      load_from_config: true
     model_path:
     - path: alibaba-pai/Wan2.2-VACE-Fun-A14B/low_noise_model
       variant: default
