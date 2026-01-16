@@ -5,15 +5,22 @@ Patch xformers' FA3 integration to avoid import-time crashes due to import order
 We patch the installed file in-place by locating:
   xformers/ops/fmha/flash3.py
 
+The patch is equivalent to `patches/xformers-ops-fmha-flash3.patch` (kept for auditability).
+
 The patched logic:
   - Prefer xformers-bundled flash_attn_3 extension if present
   - If that import fails at runtime, fall back to pip-installed flash_attn_3
   - Never raise at import time; log and continue with _C_flashattention3=None
+
+Toggles:
+  - Set APEX_PATCH_XFORMERS_FLASH3=0 to disable.
+  - Bundle compatibility: APEX_BUNDLE_PATCH_XFORMERS_FLASH3=0 also disables.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -43,14 +50,28 @@ def _patch_contents(src: str) -> str:
     if blk_end < 0:
         raise RuntimeError("Could not locate end of flash_attn_3 resolution block")
 
-    # Already patched? Re-patch only if our current policy marker is present.
-    # (We intentionally overwrite older variants to enforce consistent behavior.)
     replacement = '''_C_flashattention3 = None
 
-# Apex patch: avoid loading two different FlashAttention-3 implementations in one process.
-# If pip flash_attn_3 is installed, ALWAYS prefer it and do not import xformers-bundled FA3.
-# This prevents PyTorch from erroring on duplicate TORCH_LIBRARY registrations.
-if importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec("flash_attn_3._C"):
+if importlib.util.find_spec("...flash_attn_3._C", package=__package__):
+    try:
+        from ..._cpp_lib import _build_metadata
+        from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
+
+        if _build_metadata is not None:
+            FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
+        FLASH3_HAS_DETERMINISTIC_MODE = True
+        _C_flashattention3 = torch.ops.flash_attn_3
+    except Exception:
+        logger.warning(
+            "Failed to import xformers-bundled flash_attn_3; will try pip flash_attn_3 if available",
+            exc_info=True,
+        )
+
+if (
+    _C_flashattention3 is None
+    and importlib.util.find_spec("flash_attn_3")
+    and importlib.util.find_spec("flash_attn_3._C")
+):
     try:
         import flash_attn_3._C  # type: ignore[attr-defined]  # noqa: F401
 
@@ -64,19 +85,6 @@ if importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec("flash_
             logger.warning(f"Flash-Attention 3 package can't be used: {incompat_reason}")
     except Exception:
         logger.warning("Failed to import pip flash_attn_3", exc_info=True)
-
-# Fallback: only use xformers-bundled FA3 when pip flash_attn_3 isn't available.
-if _C_flashattention3 is None and importlib.util.find_spec("...flash_attn_3._C", package=__package__):
-    try:
-        from ..._cpp_lib import _build_metadata
-        from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
-
-        if _build_metadata is not None:
-            FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
-        FLASH3_HAS_DETERMINISTIC_MODE = True
-        _C_flashattention3 = torch.ops.flash_attn_3
-    except Exception:
-        logger.warning("Failed to import xformers-bundled flash_attn_3", exc_info=True)
 '''
 
     # splice: keep everything before the assignment line, then our replacement, then the rest
@@ -92,6 +100,13 @@ if _C_flashattention3 is None and importlib.util.find_spec("...flash_attn_3._C",
 
 
 def main() -> int:
+    v = os.environ.get("APEX_PATCH_XFORMERS_FLASH3")
+    if v is None:
+        v = os.environ.get("APEX_BUNDLE_PATCH_XFORMERS_FLASH3", "1")
+    if str(v).strip().lower() in ("0", "false", "no", "off"):
+        print("Skipping xformers flash3 patch (APEX_PATCH_XFORMERS_FLASH3=0)")
+        return 0
+
     p = _find_flash3_path()
     if p is None:
         # xformers not installed (optional dependency)

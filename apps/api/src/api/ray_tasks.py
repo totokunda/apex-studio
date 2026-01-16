@@ -1581,7 +1581,7 @@ def run_engine_from_manifest(
         for input_key, raw_value in inputs.items():
             if input_key in preprocessor_map:
                 media_path, apply_flag = _coerce_media_input(raw_value)
-                if media_path:
+                if media_path and isinstance(raw_value, dict):
                     prepared_inputs[input_key] = media_path
                     should_apply = apply_flag if isinstance(apply_flag, bool) else True
                     preprocessor_kwargs = raw_value.get("preprocessor_kwargs", {})
@@ -1908,6 +1908,12 @@ def run_engine_from_manifest(
 
         # Render-on-step callback that writes previews
         step_counter = {"i": 0}
+        # Optional: limit how many *preview* saves we do per run (final result always saves).
+        # Useful for test-suite runs to avoid saving a frame on every denoising step.
+        try:
+            _max_preview_saves = int(os.environ.get("APEX_RENDER_STEP_MAX_SAVES", "0") or "0")
+        except Exception:
+            _max_preview_saves = 0
 
         def render_on_step_callback(
             frames,
@@ -1917,6 +1923,9 @@ def run_engine_from_manifest(
             try:
                 idx = step_counter["i"]
                 step_counter["i"] = idx + 1
+                # Enforce preview-save limit (do not block final outputs).
+                if not is_result and _max_preview_saves > 0 and idx >= _max_preview_saves:
+                    return None, None
                 # Persist preview to cache and notify over websocket with metadata only
                 result_path, media_type = save_output(
                     frames,
@@ -1956,6 +1965,9 @@ def run_engine_from_manifest(
         ):
             idx = step_counter["i"]
             step_counter["i"] = idx + 1
+            # Enforce preview-save limit (do not block final outputs).
+            if not is_result and _max_preview_saves > 0 and idx >= _max_preview_saves:
+                return None, None
             logger.info(
                 f"Saving audio video output at step {idx} with output object {output_obj[0].shape} and {output_obj[1].shape}"
             )

@@ -485,6 +485,8 @@ class SkyReelsTransformerConverter(WanTransformerConverter):
         )
 
 
+
+
 class WanMultiTalkTransformerConverter(TransformerConverter):
     def __init__(self):
         super().__init__()
@@ -1775,6 +1777,16 @@ class FluxTransformerConverter(TransformerConverter):
 
         # Use the shared conversion pipeline (pre-special → rename → post-special).
         return super().convert(state_dict)
+
+
+class Chroma1HDTransformerConverter(FluxTransformerConverter):
+    def __init__(self):
+        super().__init__()
+        self.rename_dict.update({
+            ".in_layer": ".linear_1",
+            ".out_layer": ".linear_2",
+            "norms.*.scale": "norms.*.weight",
+        })
 
 
 class NoOpTransformerConverter(TransformerConverter):

@@ -1,79 +1,60 @@
 {
     "engine_kwargs": {
         "engine_type": "ltx2",
-        "yaml_path": "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/manifest/video/ltx2-19b-text-to-image-to-video-distilled-1.0.0.v1.yml",
+        "yaml_path": "/home/tosin_coverquick_co/apex-studio/apps/api/manifest/video/ltx2-19b-text-to-image-to-video-distilled-1.0.0.v1.yml",
         "model_type": "ti2v",
         "selected_components": {
-            "scheduler": {
-                "name": "scheduler",
-                "base": "diffusers.schedulers.FlowMatchEulerDiscreteScheduler",
-                "config_path": "/Users/tosinkuye/apex-diffusion/components/d910989f3c05d70b1b0a1efe0b453210cfbae5eca167c690002de602bf2a9ec4_scheduler_config.json",
-                "type": "scheduler",
-                "label": "FlowMatch Discrete Scheduler",
-                "default": "FlowMatchDiscreteScheduler",
-                "description": "The FlowMatch Discrete Scheduler is a scheduler for the LTX2 19B model."
-            },
             "video_vae": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "audio_vae": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "text_encoder": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "FP8"
             },
             "transformer": {
-                "variant": "GGUF_Q6_K",
-                "precision": "q6_k",
-                "type": "gguf"
+                "variant": "GGUF_Q3_K_S"
             },
             "connectors": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "vocoder": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "latent_upsampler": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             }
         },
-        "auto_memory_management": false,
-        "attention_type": "metal-flash"
+        "auto_memory_management": false
     },
     "inputs": {
-        "image": "assets/dd5c11c2-de84-4eb6-a639-22f8002b727c_image_0.png",
-        "image_quality_crf": 33,
-        "prompt": "The woman smiles then asks \"Does this blanket make me look like a caterpillar? I love caterpillars!\" then laughs. ",
-        "resolution": 480,
-        "aspect_ratio": "custom",
-        "height": 480,
-        "width": 864,
-        "seed": 513419258,
-        "guidance_scale": 1,
-        "chunking_profile": "none",
+        "use_distilled_stage_1": true,
+        "guidance_scale": 1.0,
+        "guidance_rescale": 0.0,
+        "upsample": true,
+        "use_gradient_estimation": false,
+        "ge_gamma": 0.0,
         "vae_tiling_enabled": true,
         "vae_use_framewise_encoding": false,
         "vae_use_framewise_decoding": false,
+        "vae_num_sample_frames_batch_size": 16,
+        "vae_num_latent_frames_batch_size": 2,
         "vae_tile_sample_min_height": 512,
         "vae_tile_sample_min_width": 512,
         "vae_tile_sample_min_num_frames": 32,
         "vae_tile_sample_stride_height": 448,
         "vae_tile_sample_stride_width": 448,
         "vae_tile_sample_stride_num_frames": 16,
-        "vae_num_sample_frames_batch_size": 16,
-        "vae_num_latent_frames_batch_size": 2,
+        "image_quality_crf": 33,
+        "prompt": "A man wearing a toupee is staring and scowling towards the camera in an office building as he shakes his head and says how you are a bastard.",
+        "audio": "assets/audio1.wav",
+        "resolution": 1080,
+        "aspect_ratio": "1:1",
+        "height": 480,
+        "width": 832,
+        "seed": 42,
+        "chunking_profile": "light",
         "duration": "5s"
     }
 }
