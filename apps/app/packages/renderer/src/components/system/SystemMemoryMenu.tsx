@@ -9,6 +9,7 @@ import { fetchSystemMemory, SystemMemoryResponse } from "@/lib/system/api";
 import { LuGauge, LuInfo, LuLoader } from "react-icons/lu";
 import { useQuery } from "@tanstack/react-query";
 
+
 const POLL_MS = 2000;
 const SYSTEM_MEMORY_QUERY_KEY = ["systemMemory"] as const;
 

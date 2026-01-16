@@ -1,8 +1,10 @@
 from fastapi import APIRouter
 import psutil
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 from functools import partial
 import anyio
+from fastapi import HTTPException
+from pydantic import BaseModel
 
 # Reuse helpers to detect device type and query GPU memory info
 from .ray_resources import (
@@ -16,6 +18,10 @@ import re
 
 
 router = APIRouter(prefix="/system", tags=["system"])
+try:
+    from src.engine.registry import UniversalEngine
+except Exception:
+    UniversalEngine = None  # type: ignore
 
 
 async def _run_blocking(func, *args, **kwargs):
@@ -79,6 +85,40 @@ def _collect_gpu_memory_info() -> Optional[Dict[str, Any]]:
 @router.get("/memory")
 async def get_system_memory() -> Dict[str, Any]:
     return await _run_blocking(_get_system_memory_sync)
+
+
+class FreeMemoryRequest(BaseModel):
+    active: Optional[str] = None
+    target: Literal["cpu", "disk"] = "disk"
+
+@router.post("/free-memory")
+async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
+    """
+    Best-effort free GPU memory by offloading tracked modules.
+
+    Query params:
+      - active: comma-separated component names to keep resident (e.g. "transformer,vae")
+      - target: "cpu" or "disk" offload destination (default: disk)
+    """
+    if UniversalEngine is None:
+        raise HTTPException(status_code=500, detail="Engine registry unavailable")
+
+    active_set = set()
+    if request.active:
+        active_set = {p.strip() for p in request.active.split(",") if p.strip()}
+
+    try:
+        # Use a lightweight engine instance to access the global manager API.
+        eng = UniversalEngine(yaml_path=None, should_download=False)  # type: ignore
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to init engine: {e}")
+
+    result = {}
+    try:
+        result = eng.engine.free_unused_modules(active=active_set, target=request.target)  # type: ignore
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to free memory: {e}")
+    return {"offloaded": result, "target": request.target}
 
 
 def _get_system_memory_sync() -> Dict[str, Any]:
