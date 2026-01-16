@@ -19,6 +19,7 @@ import yaml
 import numpy as np
 import json
 from src.utils.cache import empty_cache
+from src.utils.warm_pool import EngineWarmPool, stable_hash_dict
 from src.api.preprocessor_registry import get_preprocessor_info
 from src.engine.registry import UniversalEngine
 from src.mixins.download_mixin import DownloadMixin
@@ -32,6 +33,18 @@ import gc
 import ctypes
 import ctypes.util
 import time
+
+def _get_warm_pool() -> EngineWarmPool:
+    """
+    Lazily create the warm pool inside the Ray worker process.
+
+    Important: Ray pickles remote functions (including module globals) when submitting
+    from the driver. A module-level EngineWarmPool instance contains an RLock which
+    is not picklable. This accessor avoids creating the pool until after deserialization.
+    """
+    if not hasattr(_get_warm_pool, "_pool"):
+        _get_warm_pool._pool = EngineWarmPool.from_env()  # type: ignore[attr-defined]
+    return _get_warm_pool._pool  # type: ignore[attr-defined]
 
 
 def _persist_run_config(
@@ -207,7 +220,7 @@ def _save_manifest_yaml(yaml_path: Path, doc: Dict[str, Any]) -> None:
         logger.error(f"Failed to write updated manifest YAML {yaml_path}: {e}")
 
 
-def _aggressive_ram_cleanup() -> None:
+def _aggressive_ram_cleanup(*, clear_torch_cache: bool = True) -> None:
     """
     Best-effort cleanup to reduce *resident* CPU memory in long-lived Ray workers.
 
@@ -221,17 +234,18 @@ def _aggressive_ram_cleanup() -> None:
         gc.collect()
     except Exception:
         pass
-    try:
-        empty_cache()
-    except Exception:
-        pass
-    # Extra CUDA cleanup (beyond empty_cache) when available
-    try:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
-    except Exception:
-        pass
+    if clear_torch_cache:
+        try:
+            empty_cache()
+        except Exception:
+            pass
+        # Extra CUDA cleanup (beyond empty_cache) when available
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+        except Exception:
+            pass
     # Best-effort: return heap pages to OS (Linux/glibc)
     try:
         libc_path = ctypes.util.find_library("c")
@@ -309,6 +323,183 @@ def _remove_lora_from_manifest(
         traceback.print_exc()
         logger.warning(f"Failed to remove LoRA '{lora_name}' from manifest: {e}")
         return False
+
+
+def _engine_pool_key(
+    *,
+    manifest_path: str,
+    engine_type: Any,
+    model_type: Any,
+    selected_components: Dict[str, Any],
+    engine_kwargs: Dict[str, Any],
+    attention_type: Any,
+    auto_memory_management: Any,
+) -> str:
+    # Include a manifest fingerprint so edits (e.g. changing LoRAs) don't reuse a stale engine.
+    try:
+        st = os.stat(manifest_path)
+        manifest_fingerprint = {"mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))}
+    except Exception:
+        manifest_fingerprint = None
+    payload = {
+        "manifest_path": str(manifest_path),
+        "manifest_fingerprint": manifest_fingerprint,
+        "engine_type": str(engine_type),
+        "model_type": str(model_type),
+        "selected_components": selected_components or {},
+        "engine_kwargs": engine_kwargs or {},
+        "attention_type": str(attention_type) if attention_type is not None else None,
+        "auto_memory_management": bool(auto_memory_management),
+    }
+    h = stable_hash_dict(payload)
+    return f"{payload['engine_type']}/{payload['model_type']}:{h}"
+
+
+@ray.remote
+def warmup_engine_from_manifest(
+    manifest_path: str,
+    selected_components: Optional[Dict[str, Any]] = None,
+    *,
+    mode: str = "engine",
+) -> Dict[str, Any]:
+    """
+    Best-effort warmup that won't interfere with a running engine.
+
+    - mode="disk": warm OS page cache for weight files only (bounded via env).
+    - mode="engine": instantiate engine into the warm pool (no inference).
+    - mode="both": do both.
+    """
+    t0 = time.time()
+    selected_components = selected_components or {}
+    mode_lc = str(mode or "engine").strip().lower()
+
+    try:
+        from src.utils.yaml import load_yaml as load_manifest_yaml
+        from src.manifest.loader import validate_and_normalize
+        from src.mixins.loader_mixin import LoaderMixin
+        from glob import glob
+
+        raw = load_manifest_yaml(manifest_path)
+        config = validate_and_normalize(raw)
+        engine_type = config.get("engine") or (config.get("spec") or {}).get("engine")
+        model_type = config.get("type") or (config.get("spec") or {}).get("model_type")
+        if isinstance(model_type, list):
+            model_type = model_type[0] if model_type else None
+
+        attention_type = None
+        if isinstance(selected_components, dict):
+            attention_type = selected_components.get("attention", {}).get("name", None)
+            # mirror run path: don't let attention selection pollute other selections
+            selected_components = dict(selected_components)
+            selected_components.pop("attention", None)
+
+        engine_kwargs = (config.get("engine_kwargs", {}) or {})
+        auto_mm = os.environ.get("AUTO_MEMORY_MANAGEMENT", False)
+
+        pool_key = _engine_pool_key(
+            manifest_path=manifest_path,
+            engine_type=engine_type,
+            model_type=model_type,
+            selected_components=selected_components or {},
+            engine_kwargs=engine_kwargs,
+            attention_type=attention_type,
+            auto_memory_management=auto_mm,
+        )
+
+        warmed_disk = False
+        warmed_engine = False
+
+        if mode_lc in {"disk", "both"}:
+            default_max_bytes = 256 * 1024 * 1024
+            max_bytes = default_max_bytes
+            try:
+                max_bytes_env = os.environ.get("APEX_DISK_PREWARM_MAX_BYTES")
+                if max_bytes_env is not None and str(max_bytes_env).strip() != "":
+                    v = int(str(max_bytes_env).strip())
+                    if v > 0:
+                        max_bytes = v
+                    else:
+                        max_bytes = None
+            except Exception:
+                max_bytes = default_max_bytes
+
+            tmp = LoaderMixin()
+            exts_default = ["safetensors", "bin", "pt", "ckpt", "gguf", "pth"]
+            for comp in (config.get("components") or []):
+                extensions = comp.get("extensions", exts_default) or exts_default
+                if "gguf" not in [str(x).lstrip(".").lower() for x in extensions]:
+                    extensions = list(extensions) + ["gguf"]
+
+                def _iter_weight_files(path: Any) -> List[str]:
+                    if not path:
+                        return []
+                    if isinstance(path, dict):
+                        path = path.get("path") or path.get("model_path") or path.get(
+                            "file"
+                        )
+                    if not path:
+                        return []
+                    path_str = os.fspath(path)
+                    if os.path.isdir(path_str):
+                        files: List[str] = []
+                        for ext in extensions:
+                            ext = str(ext).lstrip(".")
+                            files.extend(glob(os.path.join(path_str, f"*.{ext}")))
+                        return files
+                    path_lower = path_str.lower()
+                    for ext in extensions:
+                        ext = str(ext).lstrip(".").lower()
+                        if path_lower.endswith(f".{ext}"):
+                            return [path_str]
+                    return []
+
+                for fp in _iter_weight_files(comp.get("model_path")):
+                    tmp._prewarm_model(fp, max_bytes=max_bytes)
+                extra = comp.get("extra_model_paths") or []
+                if isinstance(extra, str):
+                    extra = [extra]
+                for p in extra:
+                    for fp in _iter_weight_files(p):
+                        tmp._prewarm_model(fp, max_bytes=max_bytes)
+            warmed_disk = True
+
+        if mode_lc in {"engine", "both"}:
+
+            def _factory():
+                kwargs = {
+                    "engine_type": engine_type,
+                    "yaml_path": manifest_path,
+                    "model_type": model_type,
+                    "selected_components": selected_components or {},
+                    "auto_memory_management": auto_mm,
+                    **engine_kwargs,
+                }
+                if attention_type:
+                    kwargs["attention_type"] = attention_type
+                return UniversalEngine(**kwargs)
+
+            eng, pooled = _get_warm_pool().acquire(pool_key, _factory, allow_pool=True)
+            if pooled:
+                _get_warm_pool().release(pool_key)
+                warmed_engine = True
+            else:
+                try:
+                    if hasattr(eng, "offload_engine"):
+                        eng.offload_engine()
+                except Exception:
+                    pass
+
+        return {
+            "status": "ok",
+            "mode": mode_lc,
+            "pool_key": pool_key,
+            "warmed_disk": warmed_disk,
+            "warmed_engine": warmed_engine,
+            "pool": _get_warm_pool().stats(),
+            "duration_s": time.time() - t0,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e), "duration_s": time.time() - t0}
 
 
 def _cleanup_lora_artifacts_if_remote(lora_item: Any) -> None:
@@ -1382,7 +1573,7 @@ def run_preprocessor(
     )
 
 
-@ray.remote(max_calls=1)
+@ray.remote
 def run_engine_from_manifest(
     manifest_path: str,
     job_id: str,
@@ -1407,6 +1598,8 @@ def run_engine_from_manifest(
 
     # Track large objects so we can explicitly drop references in a finally block
     engine = None
+    engine_pool_key = None
+    engine_pooled = False
     raw = None
     config = None
     prepared_inputs: Dict[str, Any] = {}
@@ -1479,7 +1672,20 @@ def run_engine_from_manifest(
         if attention_type:
             input_kwargs["attention_type"] = attention_type
 
-        engine = UniversalEngine(**input_kwargs)
+        engine_pool_key = _engine_pool_key(
+            manifest_path=manifest_path,
+            engine_type=engine_type,
+            model_type=model_type,
+            selected_components=selected_components or {},
+            engine_kwargs=(config.get("engine_kwargs", {}) or {}),
+            attention_type=attention_type,
+            auto_memory_management=os.environ.get("AUTO_MEMORY_MANAGEMENT", False),
+        )
+
+        def _factory():
+            return UniversalEngine(**input_kwargs)
+
+        engine, engine_pooled = _get_warm_pool().acquire(engine_pool_key, _factory, allow_pool=True)
 
         # Compute FPS once so we don't capture the full engine/config inside callbacks.
         fps_for_video: int = 16
@@ -2074,13 +2280,18 @@ def run_engine_from_manifest(
         except Exception:
             pass
 
-        # Offload and aggressively drop references after saving output.
-        try:
-            engine.offload_engine()
-        except Exception as e:
-            logger.warning(f"Failed to offload engine: {e}")
-
-        _aggressive_ram_cleanup()
+        # Post-warm: keep engine warm after a successful run when pooled.
+        if engine_pooled and engine_pool_key:
+            try:
+                _get_warm_pool().release(engine_pool_key)
+            except Exception:
+                pass
+        else:
+            # Legacy behavior when not pooled: offload and clear caches.
+            try:
+                engine.offload_engine()
+            except Exception as e:
+                logger.warning(f"Failed to offload engine: {e}")
         send_progress(1.0, "Complete", {"status": "complete"})
         return {"status": "complete", "result_path": result_path, "type": media_type}
 
@@ -2093,13 +2304,15 @@ def run_engine_from_manifest(
             pass
         return {"job_id": job_id, "status": "error", "error": str(e), "traceback": tb}
     finally:
-        # Ensure we aggressively release references and clear CUDA/MPS caches
+        # Ensure we aggressively release references.
+        # If the engine is pooled, do NOT clear torch caches (keeps it warm).
+        # If not pooled, do best-effort offload + cache clearing.
         try:
-            try:
-                if engine is not None:
+            if (not engine_pooled) and engine is not None:
+                try:
                     engine.offload_engine()
-            except Exception:
-                pass
+                except Exception:
+                    pass
             engine = None
             raw = None
             config = None
@@ -2108,7 +2321,7 @@ def run_engine_from_manifest(
             output = None
         except Exception as cleanup_err:
             logger.warning(f"run_engine_from_manifest cleanup failed: {cleanup_err}")
-        _aggressive_ram_cleanup()
+        _aggressive_ram_cleanup(clear_torch_cache=not bool(engine_pooled))
 
 
 @ray.remote

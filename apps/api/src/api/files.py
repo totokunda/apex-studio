@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Optional
 import mimetypes
@@ -8,6 +8,14 @@ import hashlib
 from src.utils.defaults import get_cache_path, get_components_path
 
 router = APIRouter(prefix="/files", tags=["files"])
+
+# Larger chunks reduce Python/ASGI overhead and usually improve throughput for large downloads.
+# Keep this reasonably sized to avoid memory spikes under heavy concurrency.
+DOWNLOAD_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB
+
+class TunedFileResponse(FileResponse):
+    # Starlette's default is typically 64KiB; larger chunks often improve throughput on remote clients.
+    chunk_size = DOWNLOAD_CHUNK_SIZE
 
 
 def _base_for_scope(scope: str) -> Path:
@@ -72,66 +80,21 @@ def _is_valid_sha256_hex(s: str) -> bool:
 
 
 @router.get("")
-def get_file(request: Request, scope: str, path: str):
+def get_file(_request: Request, scope: str, path: str):
     base = _base_for_scope(scope)
     target = _safe_join(base, path)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Not found")
 
-    size = target.stat().st_size
     content_type, _ = mimetypes.guess_type(str(target))
     if not content_type:
         content_type = "application/octet-stream"
 
-    range_header: Optional[str] = request.headers.get("range")
-
-    def iter_range(start: int, end: int):
-        with open(target, "rb") as f:
-            f.seek(start)
-            remaining = end - start + 1
-            chunk = 1024 * 1024
-            while remaining > 0:
-                data = f.read(min(chunk, remaining))
-                if not data:
-                    break
-                remaining -= len(data)
-                yield data
-
-    if range_header:
-        try:
-            units, rng = range_header.split("=")
-            if units.strip().lower() != "bytes":
-                raise ValueError("Unsupported range unit")
-            start_s, end_s = (rng.split("-") + [""])[:2]
-            start = int(start_s) if start_s else 0
-            end = int(end_s) if end_s else size - 1
-            if start < 0 or end < start or end >= size:
-                raise ValueError("Invalid range")
-        except Exception:
-            # Return full content if we can't parse the header
-            start, end = 0, size - 1
-            range_header = None
-
-        if range_header:
-            return StreamingResponse(
-                iter_range(start, end),
-                status_code=206,
-                media_type=content_type,
-                headers={
-                    "Content-Length": str(end - start + 1),
-                    "Content-Range": f"bytes {start}-{end}/{size}",
-                    "Accept-Ranges": "bytes",
-                },
-            )
-
-    # Fallback / full content
-    return StreamingResponse(
-        open(target, "rb"),
+    # Let Starlette handle efficient file streaming + Range/HEAD support.
+    return TunedFileResponse(
+        path=target,
         media_type=content_type,
-        headers={
-            "Content-Length": str(size),
-            "Accept-Ranges": "bytes",
-        },
+        headers={"Accept-Ranges": "bytes"},
     )
 
 
