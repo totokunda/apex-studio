@@ -1,7 +1,7 @@
 {
     "engine_kwargs": {
         "engine_type": "ltx2",
-        "yaml_path": "/home/tosin_coverquick_co/apex-studio/apps/api/manifest/video/ltx2-19b-text-to-image-to-video-distilled-1.0.0.v1.yml",
+        "yaml_path": "C:\\Users\\tosin\\Desktop\\apex-studio\\apps\\api\\manifest\\video\\ltx2-19b-text-to-image-to-video-distilled-1.0.0.v1.yml",
         "model_type": "ti2v",
         "selected_components": {
             "video_vae": {
