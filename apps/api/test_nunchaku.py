@@ -1,9 +1,10 @@
+
 from __future__ import annotations
 
-from .common import SmokeContext, log, fail
+log = print
+fail = lambda x: print(x)
 
-
-def run(ctx: SmokeContext) -> None:
+def run() -> None:
     log("[smoke] nunchaku fused_gelu_mlp")
     try:
         import torch  # type: ignore
@@ -86,3 +87,5 @@ def run(ctx: SmokeContext) -> None:
     log("[smoke] nunchaku fused_gelu_mlp ok")
 
 
+if __name__ == "__main__":
+    run()
