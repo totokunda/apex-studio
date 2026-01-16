@@ -98,7 +98,7 @@ spec:
         min_vram_gb: 22
         recommended_vram_gb: 30
       file_size: 23805041775
-    - path: https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q4_1.gguf
+    - path: YarvixPA/FLUX.1-Fill-dev-GGUF/flux1-fill-dev-Q4_1.gguf
       variant: GGUF_Q4_1
       precision: q4_1
       type: gguf
@@ -106,7 +106,7 @@ spec:
         min_vram_gb: 8
         recommended_vram_gb: 12
       file_size: 7549560096
-    - path: https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q6_K.gguf
+    - path: YarvixPA/FLUX.1-Fill-dev-GGUF/flux1-fill-dev-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
@@ -114,7 +114,7 @@ spec:
         min_vram_gb: 10
         recommended_vram_gb: 14
       file_size: 9860932896
-    - path: https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q8_0.gguf
+    - path: YarvixPA/FLUX.1-Fill-dev-GGUF/flux1-fill-dev-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
