@@ -26,6 +26,24 @@
                 "variant": "default"
             }
         },
+<<<<<<< HEAD
+        "auto_memory_management": false,
+        "attention_type": "sage"
+    },
+    "inputs": {
+        "image": "assets/2ae5fdcb97519879676ed96d62f31298aa7ef01946a9c9a083f7027ff002dfff.png",
+        "image_quality_crf": 33,
+        "prompt": "Spongebob and patrick start laughing hysterically. ",
+        "negative_prompt": "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.",
+        "resolution": "720",
+        "aspect_ratio": "custom",
+        "num_inference_steps": 20,
+        "height": 736,
+        "width": 736,
+        "seed": 2397960395,
+        "guidance_scale": 4,
+        "chunking_profile": "light",
+=======
         "auto_memory_management": false
     },
     "inputs": {
@@ -36,6 +54,7 @@
         "num_inference_steps": 20,
         "use_gradient_estimation": false,
         "ge_gamma": 0.0,
+>>>>>>> 3fe30c187f8e5fd356cdfd2db1b22292502bd03e
         "vae_tiling_enabled": true,
         "vae_use_framewise_encoding": false,
         "vae_use_framewise_decoding": false,
@@ -47,6 +66,10 @@
         "vae_tile_sample_stride_height": 448,
         "vae_tile_sample_stride_width": 448,
         "vae_tile_sample_stride_num_frames": 16,
+<<<<<<< HEAD
+        "vae_num_sample_frames_batch_size": 16,
+        "vae_num_latent_frames_batch_size": 2,
+=======
         "image_quality_crf": 33,
         "prompt": "Vintage 16mm film look: roller skaters glide along a sunlit boardwalk at sunset, warm lens flares, gentle handheld camera, natural motion blur, ocean breeze moves hair and clothing, cinematic and stable.",
         "negative_prompt": "blurry, low quality, jitter, flicker, artifacts",
@@ -56,6 +79,7 @@
         "width": 832,
         "seed": 42,
         "chunking_profile": "light",
+>>>>>>> 3fe30c187f8e5fd356cdfd2db1b22292502bd03e
         "duration": "5s"
     }
 }
