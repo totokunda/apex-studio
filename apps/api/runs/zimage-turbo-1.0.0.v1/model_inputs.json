@@ -4,25 +4,38 @@
         "yaml_path": "C:\\Users\\tosin\\Desktop\\apex-studio\\apps\\api\\manifest\\image\\zimage-turbo-1.0.0.v1.yml",
         "model_type": "t2i",
         "selected_components": {
+            "scheduler": {
+                "name": "FlowMatchEulerDiscreteScheduler",
+                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
+                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/309fddec5ebc49a8aefab205fe7dff824cca5ac413726b93cdd87b078cd60423_scheduler_config.json"
+            },
             "vae": {
-                "variant": "default"
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
             },
             "text_encoder": {
-                "variant": "default"
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
             },
             "transformer": {
-                "variant": "GGUF_Q4_K_S"
+                "variant": "default",
+                "precision": "fp16",
+                "type": "safetensors"
             }
         },
-        "auto_memory_management": false
+        "auto_memory_management": false,
+        "attention_type": "sdpa"
     },
     "inputs": {
-        "prompt": "A serene lake surrounded by pine trees at sunrise, ultra realistic.",
+        "prompt": "Lionel Messi",
         "resolution": 1024,
         "aspect_ratio": "1:1",
-        "height": 2048,
-        "width": 2048,
-        "seed": 42,
-        "num_inference_steps": 9
+        "height": 1024,
+        "width": 1024,
+        "seed": 4068664613,
+        "num_inference_steps": 9,
+        "duration": "5s"
     }
 }
