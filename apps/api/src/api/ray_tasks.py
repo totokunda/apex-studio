@@ -1917,9 +1917,7 @@ def run_engine_from_manifest(
         )
 
         def _factory():
-            return UniversalEngine(**input_kwargs, memory_management={
-                "transformer": MemoryConfig.for_block_level()
-            })
+            return UniversalEngine(**input_kwargs)
 
         engine, engine_pooled = _get_warm_pool().acquire(engine_pool_key, _factory, allow_pool=True)
 
