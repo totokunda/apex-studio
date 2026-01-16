@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import ray
 import traceback
 from loguru import logger
+from src.memory_management import MemoryConfig
 from src.preprocess.aux_cache import AuxillaryCache
 import importlib
 import hashlib
@@ -1916,7 +1917,9 @@ def run_engine_from_manifest(
         )
 
         def _factory():
-            return UniversalEngine(**input_kwargs)
+            return UniversalEngine(**input_kwargs, memory_management={
+                "transformer": MemoryConfig.for_block_level()
+            })
 
         engine, engine_pooled = _get_warm_pool().acquire(engine_pool_key, _factory, allow_pool=True)
 
