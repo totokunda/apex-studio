@@ -22,6 +22,7 @@ from src.utils.defaults import (
     set_postprocessor_path,
     get_config_store_path,
 )
+from src.utils.config_store import config_store_lock, read_json_dict, write_json_dict_atomic
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -561,25 +562,14 @@ def _update_persisted_config(**updates: Any) -> None:
     """
     Persist config-related values (paths, hf_token, etc.) so they survive backend restarts.
     """
-    config_store_path = get_config_store_path()
+    config_store_path = Path(get_config_store_path())
     try:
-        data = {}
-        if config_store_path.exists():
-            try:
-                with config_store_path.open("r", encoding="utf-8") as f:
-                    existing = json.load(f)
-                    if isinstance(existing, dict):
-                        data = existing
-            except Exception:
-                data = {}
-
-        for key, value in updates.items():
-            if value is not None:
-                data[key] = value
-
-        config_store_path.parent.mkdir(parents=True, exist_ok=True)
-        with config_store_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        with config_store_lock(config_store_path):
+            data = read_json_dict(config_store_path)
+            for key, value in updates.items():
+                if value is not None:
+                    data[key] = value
+            write_json_dict_atomic(config_store_path, data, indent=2)
     except Exception as e:
         # Silently ignore persistence errors; API behavior should not depend on disk writes.
         # For debugging, you may want to log this error.
@@ -604,13 +594,10 @@ class AutoUpdateConfigRequest(BaseModel):
 
 
 def _read_persisted_config_raw() -> dict:
-    p = Path(get_config_store_path())
     try:
-        if p.exists():
-            with p.open("r", encoding="utf-8") as f:
-                d = json.load(f)
-                if isinstance(d, dict):
-                    return d
+        p = Path(get_config_store_path())
+        with config_store_lock(p):
+            return read_json_dict(p)
     except Exception:
         pass
     return {}

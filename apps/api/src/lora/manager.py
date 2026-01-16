@@ -39,6 +39,29 @@ class LoraItem:
     component: Optional[str] = None
 
 
+@dataclass
+class AirUrn:
+    """
+    Minimal parser target for AIR URNs (Artificial Intelligence Resource).
+
+    Spec (as proposed by CivitAI):
+      urn:air:{ecosystem}:{type}:{source}:{id}@{version?}:{layer?}.?{format?}
+
+    Notes:
+    - Some examples omit {ecosystem} (e.g. urn:air:model:huggingface:org/repo)
+    - We parse conservatively and ignore unknown optional fields we don't use.
+    """
+
+    raw: str
+    ecosystem: Optional[str]
+    resource_type: str
+    source: str
+    rid: str
+    version: Optional[str] = None
+    layer: Optional[str] = None
+    format: Optional[str] = None
+
+
 class LoraManager(DownloadMixin):
     def __init__(self, save_dir: str = DEFAULT_LORA_SAVE_PATH) -> None:
         self.save_dir = save_dir
@@ -48,6 +71,81 @@ class LoraManager(DownloadMixin):
 
     def _hash(self, text: str) -> str:
         return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+    @staticmethod
+    def _parse_air_urn(text: str) -> Optional[AirUrn]:
+        """
+        Parse CivitAI-style AIR URNs.
+
+        Examples:
+          urn:air:sdxl:lora:civitai:328553@368189
+          urn:air:model:huggingface:stabilityai/sdxl-vae
+        """
+        if not isinstance(text, str) or not text.startswith("urn:air:"):
+            return None
+
+        rest = text[len("urn:air:") :]
+        # Split by ':' first; id portion may contain '/' (HF) but should not contain ':'
+        parts = rest.split(":")
+        if len(parts) < 3:
+            raise ValueError(f"Invalid AIR URN (too few segments): {text}")
+
+        known_resource_types = {"model", "lora", "embedding", "hypernet"}
+
+        # Two common variants seen in the wild:
+        #   1) With ecosystem: urn:air:{ecosystem}:{type}:{source}:{id}...
+        #   2) Without ecosystem: urn:air:{type}:{source}:{id}...
+        #
+        # Ecosystems are open-ended (e.g. "zimageturbo"), so detect the variant by
+        # checking whether the *next* segment is a known resource type.
+        if len(parts) >= 4 and parts[1].lower() in known_resource_types:
+            ecosystem = parts[0]
+            resource_type = parts[1]
+            source = parts[2]
+            remainder = ":".join(parts[3:])
+        else:
+            ecosystem = None
+            resource_type = parts[0]
+            source = parts[1]
+            remainder = ":".join(parts[2:])
+
+        # Drop query params if present
+        remainder = remainder.split("?", 1)[0]
+
+        # Parse optional ".format"
+        urn_format: Optional[str] = None
+        if "." in remainder:
+            before, maybe_fmt = remainder.rsplit(".", 1)
+            # Only treat as format if it looks like an identifier
+            if maybe_fmt and re.match(r"^[A-Za-z0-9_]+$", maybe_fmt):
+                urn_format = maybe_fmt
+                remainder = before
+
+        # Parse optional ":layer"
+        layer: Optional[str] = None
+        if ":" in remainder:
+            remainder, layer = remainder.split(":", 1)
+
+        # Parse optional "@version"
+        rid = remainder
+        version: Optional[str] = None
+        if "@" in remainder:
+            rid, version = remainder.split("@", 1)
+
+        rid = rid.strip()
+        if not rid:
+            raise ValueError(f"Invalid AIR URN (empty id): {text}")
+
+        return AirUrn(
+            raw=text,
+            ecosystem=ecosystem,
+            resource_type=str(resource_type).strip().lower(),
+            source=str(source).strip().lower(),
+            rid=rid,
+            version=version.strip() if isinstance(version, str) and version.strip() else None,
+            layer=layer.strip() if isinstance(layer, str) and layer.strip() else None,
+            format=urn_format.strip().lower() if isinstance(urn_format, str) and urn_format.strip() else None,
+        )
 
     def resolve(
         self,
@@ -68,6 +166,66 @@ class LoraManager(DownloadMixin):
         if source in self._cache:
             return self._cache[source]
 
+        # AIR URNs (e.g. urn:air:sdxl:lora:civitai:328553@368189)
+        if isinstance(source, str) and source.startswith("urn:air:"):
+            urn = self._parse_air_urn(source)
+            if urn is None:
+                raise ValueError(f"Invalid AIR URN: {source}")
+
+            if urn.source == "civitai":
+                # This manager is for LoRA weights. Be permissive but warn on mismatched types.
+                if urn.resource_type not in ("lora", "embedding", "hypernet", "model"):
+                    raise ValueError(
+                        f"AIR URN resource type '{urn.resource_type}' is not supported by LoraManager: {source}"
+                    )
+                civitai_spec = (
+                    f"civitai:{urn.rid}@{urn.version}"
+                    if urn.version
+                    else f"civitai:{urn.rid}"
+                )
+                local_path = self._download_from_civitai_spec(
+                    civitai_spec,
+                    progress_callback=progress_callback,
+                    preferred_format=urn.format,
+                )
+                paths = self._collect_lora_files(local_path)
+                # If we downloaded a single file but it doesn't look like a LoRA file,
+                # it's commonly an HTML/error page. Delete it so retries don't get stuck
+                # skipping a bad cached artifact.
+                try:
+                    if not paths and os.path.isfile(local_path) and not self._is_lora_file(local_path):
+                        try:
+                            os.remove(local_path)
+                        except FileNotFoundError:
+                            pass
+                except Exception:
+                    pass
+                item = LoraItem(
+                    source=source,
+                    local_paths=paths,
+                    name=prefer_name or self._infer_name(source, local_path),
+                )
+                self._cache[source] = item
+                return item
+
+            if urn.source in ("huggingface", "hf"):
+                # Best-effort: treat {id} as a normal HF repo/file path for DownloadMixin.
+                local_path = self._download(
+                    urn.rid,
+                    self.save_dir,
+                    progress_callback=progress_callback,
+                )
+                paths = self._collect_lora_files(local_path)
+                item = LoraItem(
+                    source=source,
+                    local_paths=paths,
+                    name=prefer_name or self._infer_name(source, local_path),
+                )
+                self._cache[source] = item
+                return item
+
+            raise ValueError(f"Unsupported AIR URN source '{urn.source}': {source}")
+
         # Local path – nothing to download, so no progress_callback needed
         if os.path.exists(source):
             paths = self._collect_lora_files(source)
@@ -82,7 +240,7 @@ class LoraManager(DownloadMixin):
         # CivitAI integration: support plain download links and model/file ids
         if self._is_civitai(source):
             # Model-id style spec, delegate to helper with progress
-            if source.startswith("civitai:"):
+            if source.startswith("civitai:") or source.startswith("civitai-file:"):
                 local_path = self._download_from_civitai_spec(
                     source,
                     progress_callback=progress_callback,
@@ -95,6 +253,14 @@ class LoraManager(DownloadMixin):
                     progress_callback=progress_callback,
                 )
             paths = self._collect_lora_files(local_path)
+            try:
+                if not paths and os.path.isfile(local_path) and not self._is_lora_file(local_path):
+                    try:
+                        os.remove(local_path)
+                    except FileNotFoundError:
+                        pass
+            except Exception:
+                pass
             item = LoraItem(
                 source=source,
                 local_paths=paths,
@@ -110,6 +276,14 @@ class LoraManager(DownloadMixin):
             progress_callback=progress_callback,
         )
         paths = self._collect_lora_files(local_path)
+        try:
+            if not paths and os.path.isfile(local_path) and not self._is_lora_file(local_path):
+                try:
+                    os.remove(local_path)
+                except FileNotFoundError:
+                    pass
+        except Exception:
+            pass
         item = LoraItem(
             source=source,
             local_paths=paths,
@@ -123,7 +297,11 @@ class LoraManager(DownloadMixin):
         return bool(re.match(r"^[\w\-]+/[\w\-]+/.+\.[A-Za-z0-9]+$", text))
 
     def _is_civitai(self, url: str) -> bool:
-        return "civitai.com" in url or url.startswith("civitai:")
+        return (
+            "civitai.com" in url
+            or url.startswith("civitai:")
+            or url.startswith("civitai-file:")
+        )
 
     def _infer_name(self, source: str, local_path: str) -> str:
         if os.path.isdir(local_path):
@@ -416,10 +594,12 @@ class LoraManager(DownloadMixin):
         progress_callback: Optional[
             Callable[[int, Optional[int], Optional[str]], None]
         ] = None,
+        preferred_format: Optional[str] = None,
     ) -> str:
         """
         Support strings like:
           - "civitai:MODEL_ID" -> fetch model metadata, pick first LoRA SafeTensor file
+          - "civitai:MODEL_ID@VERSION_ID" -> fetch model metadata, download that specific version id
           - "civitai-file:FILE_ID" -> download that specific file id
         Returns a local path (file) to the downloaded artifact.
         """
@@ -430,16 +610,31 @@ class LoraManager(DownloadMixin):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
+        def _normalize_preferred_format(fmt: Optional[str]) -> Optional[str]:
+            if not fmt:
+                return None
+            fmt = str(fmt).strip().lower()
+            # Allow common synonyms
+            if fmt in ("safetensor", "safetensors"):
+                return "safetensors"
+            if fmt in ("pt", "pth", "pickle", "pickletensor"):
+                return "pt"
+            if fmt in ("bin",):
+                return "bin"
+            # Fallback: if it's already an extension-like token, keep it
+            return fmt
+
         def download_file_id(
-            file_id: Union[int, str], format: Optional[str] = None
+            file_id: Union[int, str], fmt: Optional[str] = None
         ) -> str:
             url = f"https://civitai.com/api/download/models/{file_id}"
             url_params = {}
-            if format is not None and format == "safetensors" or format == "pt":
+            fmt = _normalize_preferred_format(fmt)
+            if fmt in ("safetensors", "pt"):
                 url_params["type"] = "Model"
                 url_params["format"] = (
                     "SafeTensor"
-                    if format == "safetensors" or format == "safetensor"
+                    if fmt == "safetensors"
                     else "PickleTensor"
                 )
             api_key = os.getenv("CIVITAI_API_KEY", None)
@@ -451,42 +646,95 @@ class LoraManager(DownloadMixin):
                 url,
                 self.save_dir,
                 progress_callback=progress_callback,
-                filename=f"{file_id}.{format}" if format else None,
+                filename=f"{file_id}.{fmt}" if fmt else None,
+                # Make caching deterministic even if `token` rotates
+                stable_id=f"civitai:{file_id}:{fmt or ''}",
             )
             return local_path
 
         if spec.startswith("civitai-file:"):
-            file_id = spec.split(":", 1)[1]
-            return download_file_id(file_id, format)
+            rest = spec.split(":", 1)[1].strip()
+            file_fmt = preferred_format
+            if "." in rest:
+                rest, ext = rest.rsplit(".", 1)
+                if ext:
+                    file_fmt = ext
+            file_id = rest
+            return download_file_id(file_id, file_fmt)
 
-        # civitai:MODEL_ID
-        model_id = spec.split(":", 1)[1]
+        # civitai:MODEL_ID[@VERSION_ID]
+        model_id = spec.split(":", 1)[1].strip()
+        version_id: Optional[str] = None
+        if "@" in model_id:
+            model_id, version_id = model_id.split("@", 1)
+            model_id = model_id.strip()
+            version_id = version_id.strip() if version_id and version_id.strip() else None
+
         meta_url = f"https://civitai.com/api/v1/models/{model_id}"
         # Metadata fetch is typically small; no need to wire byte-level progress here.
         resp = requests.get(meta_url, headers=headers, timeout=20)
         resp.raise_for_status()
         data = resp.json()
-        # Find a file that looks like a LoRA in SafeTensor format
-        format = None
-        for version in data.get("modelVersions", []):
-            file_id = version.get("id")
-            for f in version.get("files", []):
-                fname = f.get("name") or ""
-                format = f.get("metadata", {}).get("format", "").lower()
-                format = self._format_to_extension(format)
-                if (
-                    fname.lower().endswith((".safetensors", ".pt", ".bin"))
-                    and file_id is not None
-                ):
-                    return download_file_id(file_id, format)
 
-        raise RuntimeError(f"No downloadable files found for CivitAI model {model_id}")
+        def _pick_version(data: Dict[str, Any], wanted_version_id: Optional[str]):
+            versions = data.get("modelVersions", []) or []
+            if wanted_version_id:
+                for v in versions:
+                    if str(v.get("id")) == str(wanted_version_id):
+                        return v
+                raise RuntimeError(
+                    f"CivitAI model {model_id} has no version id {wanted_version_id}"
+                )
+            return versions[0] if versions else None
+
+        version = _pick_version(data, version_id)
+        if not version:
+            raise RuntimeError(f"No model versions found for CivitAI model {model_id}")
+
+        version_download_id = version.get("id")
+        if version_download_id is None:
+            raise RuntimeError(
+                f"Invalid CivitAI metadata for model {model_id}: missing version id"
+            )
+
+        # Choose best file format for this version.
+        # If `preferred_format` is provided, try to match it; otherwise prefer safetensors.
+        wanted_fmt = _normalize_preferred_format(preferred_format)
+        fallback_order = ["safetensors", "pt", "bin"]
+
+        def _file_ext(name: str) -> Optional[str]:
+            name = (name or "").lower()
+            for ext in ("safetensors", "pt", "pth", "bin", "ckpt"):
+                if name.endswith(f".{ext}"):
+                    return "pt" if ext in ("pt", "pth") else ext
+            return None
+
+        files = version.get("files", []) or []
+        available_exts: List[str] = []
+        for f in files:
+            fname = f.get("name") or ""
+            meta_fmt = (f.get("metadata", {}) or {}).get("format", "")
+            meta_fmt = self._format_to_extension(str(meta_fmt).lower()) if meta_fmt else None
+            ext = meta_fmt or _file_ext(fname)
+            if ext:
+                available_exts.append(ext)
+
+        chosen_fmt: Optional[str] = None
+        if wanted_fmt and wanted_fmt in set(available_exts):
+            chosen_fmt = wanted_fmt
+        else:
+            for ext in fallback_order:
+                if ext in set(available_exts):
+                    chosen_fmt = ext
+                    break
+
+        return download_file_id(version_download_id, chosen_fmt)
 
     def load_file(self, local_path: str) -> Dict[str, torch.Tensor]:
         if local_path.endswith(".safetensors"):
             return load_file(local_path)
         else:
-            torch.load(local_path)
+            return torch.load(local_path)
 
     def _strip_adapter_name_from_keys(
         self, state_dict: Dict[str, torch.Tensor]

@@ -13,35 +13,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 from src.utils.defaults import get_cache_path, get_config_store_path, DEFAULT_HEADERS
+from src.utils.config_store import config_store_lock, read_json_dict, write_json_dict_atomic
 
 
 def _now_iso() -> str:
     # ISO-ish without timezone for simple human readability.
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-
-def _read_json_file(path: Path) -> dict:
-    try:
-        if path.exists():
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-    except Exception:
-        pass
-    return {}
-
-
-def _write_json_file(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    os.replace(str(tmp), str(path))
-
-
 def read_persisted_config() -> dict:
-    return _read_json_file(Path(get_config_store_path()))
+    p = Path(get_config_store_path())
+    try:
+        with config_store_lock(p):
+            return read_json_dict(p)
+    except Exception:
+        return {}
 
 
 def update_persisted_config(**updates: Any) -> None:
@@ -50,11 +35,12 @@ def update_persisted_config(**updates: Any) -> None:
     """
     try:
         p = Path(get_config_store_path())
-        data = _read_json_file(p)
-        for k, v in updates.items():
-            if v is not None:
-                data[k] = v
-        _write_json_file(p, data)
+        with config_store_lock(p):
+            data = read_json_dict(p)
+            for k, v in updates.items():
+                if v is not None:
+                    data[k] = v
+            write_json_dict_atomic(p, data, indent=2)
     except Exception as e:
         # Avoid hard failure; log for debugging.
         print(f"Warning: failed to persist auto-update settings: {e}")
