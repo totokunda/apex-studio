@@ -234,7 +234,7 @@ def internal_serve(
     ),
 ):
     """
-    Internal command used by frozen (PyInstaller) builds to start the API without relying on
+    Internal command used by frozen builds to start the API without relying on
     `python -m ...` module execution.
     """
     # Resolve from CLI first, then environment (start() sets these when flags are passed).
