@@ -5,12 +5,9 @@ Patch xformers' FA3 integration to avoid import-time crashes due to import order
 We patch the installed file in-place by locating:
   xformers/ops/fmha/flash3.py
 
-The patch is equivalent to `patches/xformers-ops-fmha-flash3.patch` (kept for auditability).
-
-The patched logic:
-  - Prefer xformers-bundled flash_attn_3 extension if present
-  - If that import fails at runtime, fall back to pip-installed flash_attn_3
-  - Never raise at import time; log and continue with _C_flashattention3=None
+The patched logic (simple block swap):
+  - Prefer pip-installed flash_attn_3 first (avoids TORCH_LIBRARY namespace double-registration)
+  - Fall back to xformers-bundled flash_attn_3 extension if pip package is unavailable/unusable
 
 Toggles:
   - Set APEX_PATCH_XFORMERS_FLASH3=0 to disable.
@@ -33,76 +30,79 @@ def _find_flash3_path() -> Path | None:
 
 
 def _patch_contents(src: str) -> str:
-    # Replace the entire "how do we locate FA3" block between:
-    #   _C_flashattention3 = None
-    # and:
-    #   def _heuristic_kvsplit
-    #
-    # This is more robust than keying off one exact if/elif ordering because
-    # xformers has changed this block across versions.
-    start_needle = "_C_flashattention3 = None"
-    end_needle = "\n\n\ndef _heuristic_kvsplit"
-
-    blk_start = src.find(start_needle)
-    if blk_start < 0:
-        raise RuntimeError("Could not locate _C_flashattention3 assignment")
-    blk_end = src.find(end_needle, blk_start)
-    if blk_end < 0:
-        raise RuntimeError("Could not locate end of flash_attn_3 resolution block")
-
-    replacement = '''_C_flashattention3 = None
-
+    # Blocked, deterministic patch: replace the exact upstream block (as observed in our env)
+    # with the desired ordering.
+    old_block = '''FLASH3_HAS_PAGED_ATTENTION = True
+FLASH3_HAS_FLOAT8 = False
+FLASH3_HAS_DETERMINISTIC_MODE = False
+_C_flashattention3 = None
 if importlib.util.find_spec("...flash_attn_3._C", package=__package__):
-    try:
-        from ..._cpp_lib import _build_metadata
-        from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
+    from ..._cpp_lib import _build_metadata
+    from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
 
-        if _build_metadata is not None:
-            FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
-        FLASH3_HAS_DETERMINISTIC_MODE = True
-        _C_flashattention3 = torch.ops.flash_attn_3
-    except Exception:
-        logger.warning(
-            "Failed to import xformers-bundled flash_attn_3; will try pip flash_attn_3 if available",
-            exc_info=True,
-        )
+    if _build_metadata is not None:
+        FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
+    FLASH3_HAS_DETERMINISTIC_MODE = True
+    _C_flashattention3 = torch.ops.flash_attn_3
 
-if (
-    _C_flashattention3 is None
-    and importlib.util.find_spec("flash_attn_3")
-    and importlib.util.find_spec("flash_attn_3._C")
+elif importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec(
+    "flash_attn_3._C"
 ):
-    try:
-        import flash_attn_3._C  # type: ignore[attr-defined]  # noqa: F401
+    import flash_attn_3._C  # type: ignore[attr-defined]  # noqa: F401
 
-        incompat_reason = _flash_attention3_incompatible_reason()
-        if incompat_reason is None:
-            _C_flashattention3 = torch.ops.flash_attn_3
-            FLASH_VERSION = "pip_pkg"
-            FLASH3_HAS_PAGED_ATTENTION = True
-            FLASH3_HAS_FLOAT8 = True
-        else:
-            logger.warning(f"Flash-Attention 3 package can't be used: {incompat_reason}")
-    except Exception:
-        logger.warning("Failed to import pip flash_attn_3", exc_info=True)
+    incompat_reason = _flash_attention3_incompatible_reason()
+    if incompat_reason is None:
+        _C_flashattention3 = torch.ops.flash_attn_3
+        FLASH_VERSION = "pip_pkg"
+        FLASH3_HAS_PAGED_ATTENTION = True
+        FLASH3_HAS_FLOAT8 = True
+    else:
+        logger.warning(f"Flash-Attention 3 package can't be used: {incompat_reason}")
 '''
 
-    # splice: keep everything before the assignment line, then our replacement, then the rest
-    # starting at def _heuristic_kvsplit.
-    # Move blk_start to the beginning of the line containing the assignment to preserve formatting.
-    line_start = src.rfind("\n", 0, blk_start)
-    if line_start < 0:
-        line_start = 0
-    else:
-        line_start += 1
+    new_block = '''FLASH3_HAS_PAGED_ATTENTION = True
+FLASH3_HAS_FLOAT8 = False
+FLASH3_HAS_DETERMINISTIC_MODE = False
+_C_flashattention3 = None
+if importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec(
+    "flash_attn_3._C"
+):
+    import flash_attn_3._C  # type: ignore[attr-defined]  # noqa: F401
 
-    return src[:line_start] + replacement + src[blk_end:]
+    incompat_reason = _flash_attention3_incompatible_reason()
+    if incompat_reason is None:
+        _C_flashattention3 = torch.ops.flash_attn_3
+        FLASH_VERSION = "pip_pkg"
+        FLASH3_HAS_PAGED_ATTENTION = True
+        FLASH3_HAS_FLOAT8 = True
+    else:
+        logger.warning(f"Flash-Attention 3 package can't be used: {incompat_reason}")
+
+elif importlib.util.find_spec("...flash_attn_3._C", package=__package__):
+    from ..._cpp_lib import _build_metadata
+    from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
+
+    if _build_metadata is not None:
+        FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
+    FLASH3_HAS_DETERMINISTIC_MODE = True
+    _C_flashattention3 = torch.ops.flash_attn_3
+'''
+
+    if old_block not in src:
+        raise RuntimeError(
+            "Could not locate expected upstream FA3 block in xformers/ops/fmha/flash3.py; "
+            "xformers may have changed the code. Please update patch_xformers_flash3.py accordingly."
+        )
+    return src.replace(old_block, new_block, 1)
 
 
 def _is_patched(src: str) -> bool:
     """Check if the file already has the patched logic."""
-    # The patch introduces FLASH3_HAS_PAGED_ATTENTION which is not in upstream.
-    return "FLASH3_HAS_PAGED_ATTENTION = True" in src
+    pip_if = 'if importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec('
+    bundled_elif = 'elif importlib.util.find_spec("...flash_attn_3._C", package=__package__):'
+    if pip_if not in src or bundled_elif not in src:
+        return False
+    return src.find(pip_if) < src.find(bundled_elif)
 
 
 def main() -> int:
