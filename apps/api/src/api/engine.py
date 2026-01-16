@@ -41,6 +41,17 @@ class RunEngineRequest(BaseModel):
     folder_uuid: Optional[str] = None
 
 
+class WarmupEngineRequest(BaseModel):
+    # Identify the manifest to warm. One of these must be provided.
+    manifest_id: Optional[str] = None
+    yaml_path: Optional[str] = None
+    # Optional: user-selected component choices (e.g., scheduler, transformer, etc.)
+    selected_components: Optional[Dict[str, Any]] = None
+    # "disk" | "engine" | "both"
+    mode: Optional[str] = "engine"
+    job_id: Optional[str] = None
+
+
 class JobResponse(BaseModel):
     job_id: str
     status: str
@@ -112,6 +123,49 @@ def run_engine(request: RunEngineRequest):
         return JobResponse(job_id=job_id, status="queued", message="Engine job created")
     except Exception as e:
         logger.error(f"Failed to submit engine run: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to submit: {e}")
+
+
+@router.post("/warmup", response_model=JobResponse)
+def warmup_engine(request: WarmupEngineRequest):
+    """
+    Best-effort warmup for a manifest.
+
+    - mode="disk": warm OS page cache for weight files (no inference).
+    - mode="engine": instantiate engine into the per-worker warm pool.
+    - mode="both": do both.
+    """
+    try:
+        manifest_path = _resolve_manifest_path(request.manifest_id, request.yaml_path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    mode = (request.mode or "engine").strip().lower()
+    job_id = request.job_id or str(uuid.uuid4())
+
+    # Choose scheduling resources.
+    # - Disk-only warmup doesn't need a GPU.
+    # - Engine warmup must target a GPU worker to be useful.
+    if mode == "disk":
+        resources = get_ray_resources(device_index=None, device_type="cpu", load_profile="light")
+    else:
+        device_index, device_type = get_best_gpu()
+        resources = get_ray_resources(device_index, device_type, load_profile="light")
+
+    try:
+        from .ray_tasks import warmup_engine_from_manifest  # lazy import
+
+        ref = warmup_engine_from_manifest.options(**resources).remote(
+            manifest_path,
+            request.selected_components or {},
+            mode=mode,
+        )
+        register_job(job_id, ref, "engine_warmup", {"manifest_path": manifest_path, "mode": mode})
+        return JobResponse(job_id=job_id, status="queued", message=f"Warmup queued (mode={mode})")
+    except Exception as e:
+        logger.error(f"Failed to submit engine warmup: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to submit: {e}")
 
 

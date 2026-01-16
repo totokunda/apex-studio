@@ -287,6 +287,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         self.yaml_path = yaml_path
         self.device = device or get_torch_device()
         self._helpers = AutoLoadingHelperDict(self)
+        # IMPORTANT: these are declared as class attributes for typing convenience,
+        # but must be per-instance to avoid cross-engine contamination (e.g. LoRAs
+        # leaking into a different engine / transformer).
+        self.loaded_loras = {}
+        self.preloaded_loras = {}
+        self.sub_engines = {}
         # Keep a copy of the original initialization kwargs so that
         # `post_init` can access them after all subclasses have finished
         # their own initialization.
@@ -2552,6 +2558,113 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         self.config["components"] = new_components_cfg
 
+        # -----------------------
+        # Disk prewarm (page cache)
+        # -----------------------
+        # Best-effort: warm OS page cache for weight files to reduce cold-start latency.
+        # This is intentionally bounded and optionally backgrounded so it doesn't cost
+        # more wall time than just running the engine.
+        def _env_bool(name: str, default: bool) -> bool:
+            raw = os.environ.get(name)
+            if raw is None:
+                return default
+            return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        enable_disk_prewarm = _env_bool("APEX_DISK_PREWARM_ENABLED", True)
+        background_disk_prewarm = _env_bool("APEX_DISK_PREWARM_BACKGROUND", True)
+        # Default: keep prewarm bounded so it doesn't steal time/bandwidth.
+        # Set APEX_DISK_PREWARM_MAX_BYTES="" (or unset) to use the default.
+        # Set it to a positive integer to override. Set <=0 to disable the cap (full file).
+        default_max_bytes = 256 * 1024 * 1024
+        max_bytes = default_max_bytes
+        try:
+            mb = os.environ.get("APEX_DISK_PREWARM_MAX_BYTES")
+            if mb is not None and str(mb).strip() != "":
+                v = int(str(mb).strip())
+                if v > 0:
+                    max_bytes = v
+                else:
+                    # <=0 means "no cap" (touch full file)
+                    max_bytes = None
+        except Exception:
+            max_bytes = default_max_bytes
+
+        if enable_disk_prewarm:
+            # Collect file paths first so we can optionally prewarm in a background thread.
+            prewarm_files: List[str] = []
+            for component in new_components_cfg:
+                # Mirror LoaderMixin's weight discovery logic:
+                # - If a path is a directory: prewarm all matching `*.{ext}` weight files inside it
+                # - Extensions are taken from component["extensions"] with sane defaults
+                extensions = component.get(
+                    "extensions", ["safetensors", "bin", "pt", "ckpt", "gguf", "pth"]
+                )
+                if "gguf" not in extensions:
+                    extensions = list(extensions) + ["gguf"]
+
+                def _iter_weight_files(path: Any) -> List[str]:
+                    if not path:
+                        return []
+                    if isinstance(path, dict):
+                        path = (
+                            path.get("path")
+                            or path.get("model_path")
+                            or path.get("file")
+                        )
+                    if not path:
+                        return []
+
+                    path_str = os.fspath(path)
+                    if os.path.isdir(path_str):
+                        files: List[str] = []
+                        for ext in extensions:
+                            ext = str(ext).lstrip(".")
+                            files.extend(glob(os.path.join(path_str, f"*.{ext}")))
+                        return files
+
+                    path_lower = path_str.lower()
+                    for ext in extensions:
+                        ext = str(ext).lstrip(".").lower()
+                        if path_lower.endswith(f".{ext}"):
+                            return [path_str]
+                    return []
+
+                model_path = component.get("model_path")
+                prewarm_files.extend(_iter_weight_files(model_path))
+
+                extra_model_paths = component.get("extra_model_paths") or []
+                if isinstance(extra_model_paths, str):
+                    extra_model_paths = [extra_model_paths]
+                for extra_model_path in extra_model_paths:
+                    prewarm_files.extend(_iter_weight_files(extra_model_path))
+
+            # De-dupe while preserving order
+            seen = set()
+            prewarm_files = [p for p in prewarm_files if not (p in seen or seen.add(p))]
+
+            def _do_prewarm(files: List[str]) -> None:
+                for fp in files:
+                    try:
+                        self._prewarm_model(fp, max_bytes=max_bytes)
+                    except Exception:
+                        pass
+
+            if background_disk_prewarm:
+                try:
+                    import threading
+
+                    t = threading.Thread(
+                        target=_do_prewarm,
+                        args=(prewarm_files,),
+                        name="apex-disk-prewarm",
+                        daemon=True,
+                    )
+                    t.start()
+                except Exception:
+                    _do_prewarm(prewarm_files)
+            else:
+                _do_prewarm(prewarm_files)
+
     def _get_latents(
         self,
         height: int,
@@ -2834,9 +2947,14 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             if comp is None:
                 continue
             try:
-                # Best-effort tensor offload (works for nn.Module / MLX Module).
-                # Some components may not be modules; we still detach them below.
-                self._offload(comp)
+                # Discard-by-name first: avoids moving huge weights into CPU RAM.
+                self._offload(attr_name, offload_type="discard")
+            except Exception:
+                # Fallback: attempt CPU offload for non-standard components.
+                try:
+                    self._offload(comp, offload_type="cpu")
+                except Exception:
+                    pass
             except Exception:
                 pass
             try:
