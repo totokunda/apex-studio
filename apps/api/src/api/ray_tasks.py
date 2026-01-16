@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import ray
 import traceback
 from loguru import logger
+from src.memory_management import MemoryConfig
 from src.preprocess.aux_cache import AuxillaryCache
 import importlib
 import hashlib
