@@ -333,4 +333,9 @@ spec:
       min: 1.0
       max: 15.0
       step: 0.5
-  loras: []
+  loras:
+  - scale: 1.0
+    name: Camera Angles
+    label: Camera Angles
+    verified: true
+    source: https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/resolve/main/qwen-image-edit-2511-multiple-angles-lora.safetensors

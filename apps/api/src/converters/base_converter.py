@@ -10,6 +10,112 @@ class BaseConverter:
         self.pre_special_keys_map = {}
 
     @staticmethod
+    def _iter_lora_stripped_variants(key: str) -> Iterable[str]:
+        """
+        Yield match variants for LoRA-shaped keys.
+
+        Many LoRA state dicts use intermediate module names like `lora_A` / `lora_B`
+        (PEFT) or `lora_up` / `lora_down` (base/Kohya). When comparing against
+        `model_keys` from a *base* model, these segments are not present, so we
+        produce variants with the LoRA segment removed:
+
+          - `...to_q.lora_A.weight`   -> `...to_q.weight`
+          - `...to_q.lora_down.weight` -> `...to_q.weight`
+        """
+        if not key:
+            return
+        yield key
+
+        # Case-insensitive handling for common LoRA segment spellings.
+        # We only remove the segment when it appears as its own dotted token.
+        patterns = (
+            ".lora_A.",
+            ".lora_B.",
+            ".lora_up.",
+            ".lora_down.",
+            ".Lora_A.",
+            ".Lora_B.",
+            ".Lora_up.",
+            ".Lora_down.",
+        )
+        for p in patterns:
+            if p in key:
+                yield key.replace(p, ".", 1)
+
+    @staticmethod
+    def _matches_any_model_prefix(candidate: str, model_key_set: set) -> bool:
+        """
+        Return True if `candidate` matches `model_keys` either exactly OR as a
+        parameter key that lives under a module key in `model_keys`.
+
+        This supports callers that pass module names (e.g. from `named_modules()`)
+        instead of full parameter keys (from `state_dict().keys()`).
+        """
+        if candidate in model_key_set:
+            return True
+        if "." not in candidate:
+            return False
+        parts = candidate.split(".")
+        # Check progressively longer dotted prefixes: "a", "a.b", "a.b.c", ...
+        prefix = parts[0]
+        if prefix in model_key_set:
+            return True
+        for i in range(1, len(parts)):
+            prefix = f"{prefix}.{parts[i]}"
+            if prefix in model_key_set:
+                return True
+        return False
+
+    @classmethod
+    def _model_key_overlap_score(cls, keys: Iterable[str], model_keys: List[str]) -> int:
+        """
+        Count how many keys appear to correspond to `model_keys`, allowing:
+        - exact matches
+        - module-prefix matches
+        - LoRA-segment-stripped matches (lora_A/B, lora_up/down)
+        """
+        if not keys or not model_keys:
+            return 0
+        model_set = set(model_keys)
+        score = 0
+        for k in keys:
+            matched = False
+            for v in cls._iter_lora_stripped_variants(k):
+                if cls._matches_any_model_prefix(v, model_set):
+                    matched = True
+                    break
+            if matched:
+                score += 1
+        return score
+
+    @staticmethod
+    def _common_prefix_token_candidates(keys: List[str], max_tokens: int = 8) -> List[str]:
+        """
+        Generate dotted-prefix candidates from the unanimous common token prefix of `keys`.
+
+        Example:
+          keys start with `base_model.model.blocks...` -> candidates include
+          `base_model.` and `base_model.model.`
+        """
+        if not keys:
+            return []
+        split = [k.split(".") for k in keys if k]
+        if not split:
+            return []
+        # Compute the unanimous common token prefix length.
+        first = split[0]
+        common_len = 0
+        for i in range(min(len(first), max_tokens)):
+            tok = first[i]
+            if not tok:
+                break
+            if all(len(s) > i and s[i] == tok for s in split[1:]):
+                common_len += 1
+            else:
+                break
+        return [".".join(first[:i]) + "." for i in range(1, common_len + 1)]
+
+    @staticmethod
     def _strip_prefixes_for_overlap(
         keys: List[str], reference_set: set, candidate_prefixes: Iterable[str]
     ) -> List[str]:
@@ -361,19 +467,92 @@ class BaseConverter:
             update_state_dict_(state_dict, old_key, new_key)
         return True
 
-    def _strip_known_prefixes_inplace(self, state_dict: Dict[str, Any]) -> None:
+    def _strip_known_prefixes_inplace(
+        self, state_dict: Dict[str, Any], model_keys: List[str] = None
+    ) -> None:
         """
         Strip common wrapper prefixes (only when unanimous and helpful).
 
         This is intentionally conservative: we only strip when it increases the
         likelihood that this converter's rename/special rules will match.
         """
-        # Prefer longer compound prefixes first, then single-token wrappers.
+        if not state_dict:
+            return
+
+        keys = list(state_dict.keys())
+        if not keys:
+            return
+
+        # If `model_keys` are available, use them as the ground truth to pick the
+        # best unanimous strip prefix (including partial prefixes like `base_model.`).
+        if model_keys:
+            # Seed with common wrappers but also add token-derived candidates so we can
+            # strip only part of a compound wrapper (e.g. `base_model.` but keep `model.`).
+            base_candidates = (
+                "model.diffusion_model.",
+                "diffusion_model.model.",
+                "model.",
+                "diffusion_model.",
+                "module.",
+                "unet.",
+                "base_model.model.",
+                "base_model.",
+            )
+
+            changed = True
+            while changed:
+                changed = False
+                keys = list(state_dict.keys())
+                if not keys:
+                    return
+
+                current_score = self._model_key_overlap_score(keys, model_keys)
+
+                token_candidates = self._common_prefix_token_candidates(keys)
+                candidate_prefixes = []
+                seen = set()
+                for p in list(base_candidates) + token_candidates:
+                    if not p or p in seen:
+                        continue
+                    seen.add(p)
+                    candidate_prefixes.append(p)
+
+                best_prefix = None
+                best_score = current_score
+
+                for p in candidate_prefixes:
+                    if not all(k.startswith(p) for k in keys):
+                        continue
+                    stripped = [k[len(p) :] for k in keys]
+                    if any(not k for k in stripped):
+                        continue
+                    if len(set(stripped)) != len(stripped):
+                        continue
+                    s = self._model_key_overlap_score(stripped, model_keys)
+                    if s > best_score:
+                        best_score = s
+                        best_prefix = p
+                    elif s == best_score and best_prefix is not None:
+                        # Tie-break: prefer *less* stripping to avoid overstripping.
+                        if len(p) < len(best_prefix):
+                            best_prefix = p
+
+                if best_prefix and best_score > current_score:
+                    for old_key in list(state_dict.keys()):
+                        update_state_dict_(state_dict, old_key, old_key[len(best_prefix) :])
+                    changed = True
+            # If we successfully used model_keys, stop here.
+            if self._model_key_overlap_score(list(state_dict.keys()), model_keys) > 0:
+                return
+
+        # Legacy behaviour (no model_keys or model_keys not helpful): prefer longer
+        # compound prefixes first, then single-token wrappers.
         candidate_prefixes = (
             "model.diffusion_model.",
             "diffusion_model.model.",
             "diffusion_model.",
             "unet.",
+            "base_model.model.",
         )
 
         changed = True
@@ -389,7 +568,7 @@ class BaseConverter:
         # Some checkpoints are stored under a wrapper prefix (e.g. "model." or
         # "diffusion_model."). If *every* key has the prefix and stripping it makes
         # our conversion rules match better, strip it before any conversion passes.
-        self._strip_known_prefixes_inplace(state_dict)
+        self._strip_known_prefixes_inplace(state_dict, model_keys=model_keys)
         # If this looks like a checkpoint that already matches the target key layout,
         # exit early to keep conversion idempotent.
 

@@ -28,6 +28,7 @@ from src.converters.transformer_converters import (
     HunyuanAvatarTransformerConverter,
     MagiTransformerConverter,
     FluxTransformerConverter,
+    Chroma1HDTransformerConverter,
     WanAnimateTransformerConverter,
     NoOpTransformerConverter,
     LoraTransformerConverter,
@@ -115,6 +116,8 @@ def get_transformer_converter(model_base: str):
         return ZImageTransformerConverter()
     elif model_base == "ltx2.base":
         return LTX2TransformerConverter()
+    elif model_base == "chroma.base":
+        return Chroma1HDTransformerConverter()
     else:
         return NoOpTransformerConverter()
 
@@ -156,11 +159,12 @@ def get_transformer_converter_by_model_name(model_name: str):
         return ZImageTransformerConverter()
     elif "Flux2" in model_name:
         return Flux2TransformerConverter()
-    elif "Flux" in model_name or "Chroma" in model_name:
+    elif "Flux" in model_name:
         return FluxTransformerConverter()
+    elif "Chroma" in model_name:
+        return Chroma1HDTransformerConverter()
     elif "lora" in model_name:
         return LoraTransformerConverter()
-    
     return NoOpConverter()
 
 

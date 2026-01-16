@@ -543,7 +543,8 @@ class HuMoEngine(WanShared):
         # HuMo has two variants: ~1.7B params and ~17B params.
         # Use a threshold safely between them so this is True only for the 1.7B model.
         num_params = self.get_num_weights()
-        small_model = num_params < 10_000_000_000
+        small_model = self.transformer.config.dim < 5120
+        
         safe_emit_progress(
             progress_callback,
             0.46,
