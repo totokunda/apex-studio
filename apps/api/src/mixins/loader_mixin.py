@@ -96,6 +96,7 @@ IMAGE_EXTS = [
     "tiff",
     "ico",
     "webp",
+    "avif",
 ]
 VIDEO_EXTS = [
     "mp4",

@@ -161,7 +161,7 @@ class SeedVRUpscaleEngine(BaseEngine):
 
     def _is_image_file(self, filename: str) -> bool:
         """Check if filename is an image."""
-        image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+        image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".avif"}
         return os.path.splitext(filename.lower())[1] in image_exts
 
     def _prepare_video_tensor(
