@@ -25,6 +25,7 @@ from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
 from src.types import InputImage, InputVideo, InputAudio
 import types
 import numpy as np
+import mmap
 
 class _LazyModule(types.ModuleType):
     """
@@ -111,9 +112,79 @@ VIDEO_EXTS = [
     "m4v",
 ]
 
-
 class LoaderMixin(DownloadMixin):
     logger: Logger = logger
+    
+    def _prewarm_model(
+        self,
+        filepath: str | os.PathLike[str],
+        *,
+        max_bytes: int | None = None,
+        chunk_size: int = 8 * 1024 * 1024,
+    ) -> None:
+        """
+        Best-effort: warm the OS page cache for `filepath` to reduce cold-start latency.
+
+        Important: avoid `mmap.read()` / `mm[:]` for large weights, since that creates a
+        Python `bytes` copy of the whole file (huge RAM spike). Instead we touch one
+        byte per memory page to fault pages into the cache with minimal Python memory.
+        """
+
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be > 0")
+        if max_bytes is not None and max_bytes <= 0:
+            raise ValueError("max_bytes must be > 0 when provided")
+
+        try:
+            file_size = os.path.getsize(filepath)
+        except OSError as e:
+            if hasattr(self, "logger") and self.logger:
+                self.logger.warning(f"Prewarm skipped (stat failed) for {filepath}: {e}")
+            return
+
+        if file_size <= 0:
+            return
+
+        target_size = min(file_size, max_bytes) if max_bytes is not None else file_size
+
+        try:
+            with open(filepath, "rb") as f:
+                # Prefer mmap + page-touching (minimal Python memory).
+                try:
+                    with mmap.mmap(f.fileno(), length=target_size, access=mmap.ACCESS_READ) as mm:
+                        # Hint the kernel, if supported (Linux/macOS).
+                        if hasattr(mm, "madvise"):
+                            try:
+                                if hasattr(mmap, "MADV_WILLNEED"):
+                                    mm.madvise(mmap.MADV_WILLNEED)
+                                if hasattr(mmap, "MADV_SEQUENTIAL"):
+                                    mm.madvise(mmap.MADV_SEQUENTIAL)
+                            except Exception:
+                                # Advisory only; ignore failures.
+                                pass
+
+                        page = getattr(mmap, "PAGESIZE", 4096) or 4096
+                        for i in range(0, target_size, page):
+                            _ = mm[i]  # Touch one byte per page.
+                        _ = mm[target_size - 1]  # Ensure we touch the tail page too.
+                    return
+                except (OSError, ValueError, BufferError) as e:
+                    # Fall back to streaming reads if mmap isn't possible.
+                    if hasattr(self, "logger") and self.logger:
+                        self.logger.debug(f"mmap prewarm failed for {filepath}; falling back to streaming: {e}")
+
+                # Streaming fallback: read through the file (bounded by `target_size`).
+                remaining = target_size
+                while remaining > 0:
+                    to_read = min(chunk_size, remaining)
+                    data = f.read(to_read)
+                    if not data:
+                        break
+                    remaining -= len(data)
+        except Exception as e:
+            if hasattr(self, "logger") and self.logger:
+                self.logger.warning(f"Prewarm failed for {filepath}: {e}")
+            return
 
     def fetch_config(
         self,
