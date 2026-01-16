@@ -311,7 +311,14 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             mask = (mask_indices <= seq_lengths.unsqueeze(1)).long()
             inputs["attention_mask"] = mask.to(device=encode_device)
 
-        self.model.apply(lambda m: m.register_forward_hook(nan_hook))
+        # Avoid registering duplicate hooks across repeated encode() calls.
+        # Forward hooks accumulate on modules and can create unnecessary overhead.
+        if not getattr(self, "_nan_hook_registered", False):
+            try:
+                self.model.apply(lambda m: m.register_forward_hook(nan_hook))
+                setattr(self, "_nan_hook_registered", True)
+            except Exception:
+                pass
         
         result = self.model(
             **inputs,
