@@ -263,7 +263,7 @@ class HunyuanVideo15Shared(BaseEngine):
 
         image_tensor = self.video_processor.preprocess(image, height=height, width=width)
         image_tensor = image_tensor.unsqueeze(2)
-        image_latents = self.vae_encode(image_tensor, offload=True, sample_mode="mode")
+        image_latents = self.vae_encode(image_tensor, offload=False, sample_mode="mode")
         return image_latents
 
     def _get_image_embeds(
