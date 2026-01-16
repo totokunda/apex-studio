@@ -46,25 +46,24 @@
             }
         },
         "auto_memory_management": false,
-        "attention_type": "flash"
+        "attention_type": "sage"
     },
     "inputs": {
-        "image": "assets/9aea0c548bd808788fd9a66ff47a349aa5bb076a6161f63fcc1c3d2c416d917f.png",
-        "last_image": "assets/b1c31cb3f5f7a7b85260f9a96e753907115e56766fd29cb4a8c64c71d193cfbb.png",
+        "image": "assets/dad7a8818206a09b4291e6febc93296c99db3e586b6979d9c85e9d0af7a078cf.png",
         "image_quality_crf": 33,
-        "prompt": "The camera slowly pans out ot show the dog with the toy drop from its mouth. ",
+        "prompt": "The man takes a photo of his dog as he barks and moves around. ",
         "negative_prompt": "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.",
         "resolution": "custom",
         "aspect_ratio": "custom",
         "num_inference_steps": 20,
-        "height": 768,
-        "width": 768,
-        "seed": 2540736903,
+        "height": 1024,
+        "width": 1024,
+        "seed": 2798107315,
         "guidance_scale": 4,
         "chunking_profile": "light",
         "vae_tiling_enabled": true,
         "vae_use_framewise_encoding": false,
-        "vae_use_framewise_decoding": false,
+        "vae_use_framewise_decoding": true,
         "vae_tile_sample_min_height": 512,
         "vae_tile_sample_min_width": 512,
         "vae_tile_sample_min_num_frames": 32,
@@ -73,6 +72,6 @@
         "vae_tile_sample_stride_num_frames": 16,
         "vae_num_sample_frames_batch_size": 16,
         "vae_num_latent_frames_batch_size": 2,
-        "duration": "5.083333333333333s"
+        "duration": "20.083333333333332s"
     }
 }

@@ -425,8 +425,60 @@ class DwposeNlfDetector(DwposeDetector):
         return pose, score, new_det_result 
     
     def detect_poses(self, input_image: np.ndarray):
-        candidate, subset, det_result = self.dw_pose_estimation(input_image.copy(), return_keypoints_scores=True)
-        return self._get_multi_result_from_est(candidate, subset, det_result, input_image.shape[0], input_image.shape[1])
+        """
+        Run DWPose and return (pose_dict, score_dict, det_bboxes).
+
+        Important: DWPose can legitimately return "no detections" for a frame. In that case,
+        we must return an **empty** pose/score result rather than raising downstream due to
+        missing/empty tensors.
+        """
+        H, W = input_image.shape[:2]
+
+        def _empty():
+            empty_pose = {
+                "bodies": {
+                    "candidate": np.zeros((0, 24, 2), dtype=np.float32),
+                    "subset": np.zeros((0, 24), dtype=np.float32),
+                },
+                "hands": np.zeros((0, 21, 2), dtype=np.float32),  # (2*n,21,2) when n>0
+                "faces": np.zeros((0, 68, 2), dtype=np.float32),
+            }
+            empty_score = {
+                "body_score": np.zeros((0, 24), dtype=np.float32),
+                "hand_score": np.zeros((0, 21), dtype=np.float32),  # (2*n,21) when n>0
+                "face_score": np.zeros((0, 68), dtype=np.float32),
+            }
+            return empty_pose, empty_score, []
+
+        try:
+            candidate, score_result, det_result = self.dw_pose_estimation(
+                input_image.copy(), return_keypoints_scores=True
+            )
+        except Exception:
+            # Treat any model-side "no detection"/shape oddities as an empty result; callers
+            # should skip rendering/inference for this frame.
+            return _empty()
+
+        if candidate is None or score_result is None:
+            return _empty()
+
+        candidate = np.asarray(candidate)
+        score_result = np.asarray(score_result)
+        if det_result is None:
+            det_result = []
+
+        # Expected shapes:
+        # - candidate: (N, K, 2) with K covering body+face+hands
+        # - score_result: (N, K) matching candidate K
+        if candidate.ndim != 3 or candidate.shape[0] == 0:
+            return _empty()
+        if score_result.ndim != 2 or score_result.shape[0] != candidate.shape[0]:
+            return _empty()
+        # Need at least indices up through hands (92:113) to be present.
+        if candidate.shape[1] < 113 or score_result.shape[1] < 113:
+            return _empty()
+
+        return self._get_multi_result_from_est(candidate, score_result, det_result, H, W)
     
 
     def _intrinsic_matrix_from_field_of_view(self, imshape, fov_degrees:float =55):   # nlf default fov_degrees 55
@@ -455,8 +507,19 @@ class DwposeNlfDetector(DwposeDetector):
         # Prefer explicit `background=` argument; fall back to kwargs only if caller didn't pass it.
         bg_arg = background if background is not None else kwargs.get("background", None)
         bg_mode, bg_color = _parse_background(bg_arg, kwargs.get("background_color", None))
-        input_image, _ = resize_image_with_pad(input_image, detect_resolution, upscale_method, skip_hwc3=True)
+        input_image, remove_pad_in = resize_image_with_pad(
+            input_image, detect_resolution, upscale_method, skip_hwc3=True
+        )
         poses, score, det_result = self.process_dwpose(input_image)
+        # No poses/bboxes detected: skip this frame (i.e., don't run NLF/render); just return
+        # the background that the caller requested.
+        if det_result is None or len(det_result) == 0:
+            if bg_mode == "source":
+                return Image.fromarray(_to_rgb_uint8(remove_pad_in(input_image)))
+            H0, W0 = remove_pad_in(input_image).shape[:2]
+            blank = np.zeros((H0, W0, 3), dtype=np.uint8)
+            blank[:, :] = np.array(bg_color, dtype=np.uint8).reshape(1, 1, 3)
+            return Image.fromarray(blank)
         nlf_poses = self.process_nlf(input_image, det_result)
         target_H, target_W = input_image.shape[:2]
         ori_camera_pose = self._intrinsic_matrix_from_field_of_view([target_H, target_W])

@@ -29,12 +29,12 @@
         "attention_type": "sdpa"
     },
     "inputs": {
-        "prompt": "A dog witha chew toy in its mouth.",
+        "prompt": "The camera slowly pans out ot show the dog with the toy drop from its mouth. ",
         "resolution": 1024,
         "aspect_ratio": "1:1",
         "height": 1024,
         "width": 1024,
-        "seed": 2062130297,
+        "seed": 1840381231,
         "num_inference_steps": 9,
         "duration": "5s"
     }
