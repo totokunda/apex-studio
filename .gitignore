@@ -214,3 +214,4 @@ test_model_qwen.py
 test_model.py
 apps/api/runs
 apps/api/ptlflow_logs
+apps/api/apex-test-suite
