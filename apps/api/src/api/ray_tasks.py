@@ -10,7 +10,9 @@ import traceback
 from loguru import logger
 from src.preprocess.aux_cache import AuxillaryCache
 import importlib
+import hashlib
 import os
+import re
 import shutil
 from src.utils.save_audio_video import save_video_ovi, save_video_ltx2
 import torch
@@ -32,6 +34,44 @@ import gc
 import ctypes
 import ctypes.util
 import time
+
+
+_WIN_INVALID_PATH_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
+
+
+def _safe_fs_component(value: Any, *, fallback: str = "job", max_len: int = 120) -> str:
+    """
+    Convert an arbitrary value into a filesystem-safe *single path component*.
+
+    Motivation:
+    - Windows forbids characters like ":" in directory names. The test-suite uses job_ids like
+      "test_suite:<name>", which would otherwise crash when we mkdir under DEFAULT_CACHE_PATH.
+    """
+    try:
+        s = str(value) if value is not None else ""
+    except Exception:
+        s = ""
+    s = s.strip()
+    if not s:
+        return fallback
+
+    # Windows filename hardening: replace invalid characters and strip trailing dots/spaces.
+    if os.name == "nt":
+        s = _WIN_INVALID_PATH_CHARS_RE.sub("_", s)
+        s = s.rstrip(" .")
+
+    # Collapse underscores and trim.
+    s = re.sub(r"_+", "_", s).strip("_")
+    if not s:
+        return fallback
+
+    # Keep path segments reasonably short to reduce MAX_PATH issues on Windows.
+    # If we truncate, keep uniqueness by appending a stable hash suffix.
+    if len(s) > max_len:
+        digest = hashlib.sha1(s.encode("utf-8", errors="ignore")).hexdigest()[:10]
+        s = f"{s[: max_len - 11]}_{digest}"
+
+    return s
 
 
 def _persist_run_config(
@@ -1600,10 +1640,12 @@ def run_engine_from_manifest(
                 prepared_inputs[input_key] = raw_value
 
         # Prepare job directory early (needed for previews)
+        safe_job_id = _safe_fs_component(job_id, fallback="job")
         if folder_uuid:
-            job_dir = Path(DEFAULT_CACHE_PATH) / "engine_results" / folder_uuid / (job_id)
+            safe_folder_uuid = _safe_fs_component(folder_uuid, fallback="folder")
+            job_dir = Path(DEFAULT_CACHE_PATH) / "engine_results" / safe_folder_uuid / safe_job_id
         else:
-            job_dir = Path(DEFAULT_CACHE_PATH) / "engine_results" / (job_id)
+            job_dir = Path(DEFAULT_CACHE_PATH) / "engine_results" / safe_job_id
         job_dir.mkdir(parents=True, exist_ok=True)
 
         # Unified saver usable for previews and final outputs
@@ -2175,7 +2217,9 @@ def run_frame_interpolation(
         import subprocess
         import shutil
 
-        job_dir = Path(DEFAULT_CACHE_PATH) / "postprocessor_results" / job_id
+        job_dir = Path(DEFAULT_CACHE_PATH) / "postprocessor_results" / _safe_fs_component(
+            job_id, fallback="job"
+        )
         job_dir.mkdir(parents=True, exist_ok=True)
 
         video_only_path = str(job_dir / "result_video.mp4")

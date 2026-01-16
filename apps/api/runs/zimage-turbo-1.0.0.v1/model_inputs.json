@@ -1,7 +1,7 @@
 {
     "engine_kwargs": {
         "engine_type": "zimage",
-        "yaml_path": "/home/tosin_coverquick_co/apex-studio/apps/api/manifest/image/zimage-turbo-1.0.0.v1.yml",
+        "yaml_path": "C:\\Users\\tosin\\Desktop\\apex-studio\\apps\\api\\manifest\\image\\zimage-turbo-1.0.0.v1.yml",
         "model_type": "t2i",
         "selected_components": {
             "vae": {
