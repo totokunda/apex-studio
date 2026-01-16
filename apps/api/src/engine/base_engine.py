@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import hashlib
 from threading import local
-from typing import List, Dict, Any, Optional, Literal, Union
+from typing import Iterable, List, Dict, Any, Optional, Literal, Union, Set
 from typing import TYPE_CHECKING, overload
 from diffusers.utils.dummy_pt_objects import SchedulerMixin
 import torch
@@ -37,7 +37,7 @@ from src.utils.cache import empty_cache
 from logging import Logger
 from src.scheduler import SchedulerInterface
 from typing import Callable
-from src.memory_management import MemoryConfig
+from src.memory_management import MemoryConfig, get_global_weight_manager
 import torch.nn as nn
 import importlib
 from diffusers.utils.torch_utils import randn_tensor
@@ -70,6 +70,7 @@ from src.lora import LoraManager, LoraItem
 from src.helpers.helpers import helpers
 from src.utils.torch_patches import patch_torch_linalg_solve_for_cusolver
 from src.memory_management import apply_group_offloading
+from src.memory_management import get_global_weight_manager
 import types
 try:
     torch.backends.cuda.preferred_linalg_library()
@@ -248,6 +249,603 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     auto_apply_loras: bool = True
     auto_memory_management: bool = True
 
+    # -------------------------
+    # VRAM pressure management
+    # -------------------------
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            return float(str(raw).strip())
+        except Exception:
+            return default
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            return int(str(raw).strip())
+        except Exception:
+            return default
+
+    @staticmethod
+    def _estimate_module_bytes(module: Any) -> int:
+        """
+        Best-effort estimate of a torch.nn.Module's parameters + buffers (bytes).
+        Heuristic only; safe to use for offload decisions.
+        """
+        try:
+            import torch
+
+            if module is None or not isinstance(module, torch.nn.Module):
+                return 0
+            total = 0
+            for p in module.parameters(recurse=True):
+                if p is None:
+                    continue
+                try:
+                    total += int(p.numel()) * int(p.element_size())
+                except Exception:
+                    pass
+            for b in module.buffers(recurse=True):
+                if b is None:
+                    continue
+                try:
+                    total += int(b.numel()) * int(b.element_size())
+                except Exception:
+                    pass
+            return int(total)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _available_ram_bytes() -> int | None:
+        try:
+            import psutil  # type: ignore
+
+            return int(psutil.virtual_memory().available)
+        except Exception:
+            return None
+
+    def _cuda_free_fraction(self) -> float | None:
+        try:
+            import torch
+
+            dev = getattr(self, "device", None)
+            if dev is None or getattr(dev, "type", None) != "cuda":
+                return None
+            if not torch.cuda.is_available():
+                return None
+            dev_index = (
+                dev.index
+                if getattr(dev, "index", None) is not None
+                else torch.cuda.current_device()
+            )
+            free, total = torch.cuda.mem_get_info(dev_index)
+            if total <= 0:
+                return None
+            return float(free) / float(total)
+        except Exception:
+            return None
+
+    def _relieve_vram_pressure(
+        self,
+        *,
+        reason: str = "",
+        keep: set[str] | None = None,
+        min_free_vram_fraction: float | None = None,
+    ) -> bool:
+        """
+        Proactively offload/discard engine components when VRAM is tight.
+
+        This is intentionally conservative: it only runs when we are already under
+        pressure, and it stops as soon as VRAM headroom is restored.
+
+        Env knobs:
+        - APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION (default: 0.06)
+        - APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES (default: 2147483648 = 2GiB)
+        - APEX_VRAM_PRESSURE_CPU_MULTIPLIER (default: 1.25)
+        - APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES (default: 34359738368 = 32GiB)
+        """
+        try:
+            import torch
+
+            dev = getattr(self, "device", None)
+            if dev is None or getattr(dev, "type", None) != "cuda":
+                return False
+            if not torch.cuda.is_available():
+                return False
+
+            keep = set(keep or set())
+            min_free = (
+                float(min_free_vram_fraction)
+                if min_free_vram_fraction is not None
+                else self._env_float("APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION", 0.06)
+            )
+
+            wm = self._get_weight_manager()
+            if wm is not None:
+                try:
+                    active_ids = self._memory_ids_for_names(keep)
+                    freed = wm.evict_for_vram(
+                        reason=reason or "relieve_vram_pressure",
+                        active=active_ids,
+                        target_free_fraction=min_free,
+                    )
+                    free_frac = self._cuda_free_fraction()
+                    if freed and (free_frac is None or free_frac >= min_free):
+                        return True
+                except Exception:
+                    pass
+
+            free_frac = self._cuda_free_fraction()
+            if free_frac is None or free_frac >= min_free:
+                return False
+
+            # Always clear CUDA allocator caches first; this is cheap and can help
+            # with fragmentation before we move/discard whole modules.
+            try:
+                from src.utils.cache import empty_cache
+
+                empty_cache()
+            except Exception:
+                pass
+
+            free_frac = self._cuda_free_fraction()
+            if free_frac is None or free_frac >= min_free:
+                return True
+
+            cpu_safety = self._env_int(
+                "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3
+            )
+            cpu_mult = self._env_float("APEX_VRAM_PRESSURE_CPU_MULTIPLIER", 1.25)
+            max_cpu_bytes = self._env_int(
+                "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES", 32 * 1024**3
+            )
+
+            free_ram = self._available_ram_bytes()
+
+            # Build candidate list from known components + helpers, excluding `keep`.
+            candidates: list[tuple[str, Any, int]] = []
+            for attr in ("transformer", "vae", "text_encoder", "scheduler"):
+                if attr in keep:
+                    continue
+                obj = getattr(self, attr, None)
+                if obj is None:
+                    continue
+                size = self._estimate_module_bytes(obj)
+                candidates.append((attr, obj, size))
+
+            # Also consider any explicitly named components in the config (for engines
+            # that store transformer variants by name).
+            try:
+                for comp in self.config.get("components", []) or []:
+                    if not isinstance(comp, dict):
+                        continue
+                    name = comp.get("name")
+                    ctype = comp.get("type")
+                    for key in (name, ctype):
+                        if not isinstance(key, str) or not key:
+                            continue
+                        if key in keep:
+                            continue
+                        obj = getattr(self, key, None)
+                        if obj is None:
+                            continue
+                        size = self._estimate_module_bytes(obj)
+                        candidates.append((key, obj, size))
+            except Exception:
+                pass
+
+            # Helpers can be large (e.g. vision encoders); consider them too.
+            try:
+                for k, v in (getattr(self, "_helpers", {}) or {}).items():
+                    if not isinstance(k, str) or not k:
+                        continue
+                    if k in keep:
+                        continue
+                    if v is None:
+                        continue
+                    size = self._estimate_module_bytes(v)
+                    candidates.append((k, v, size))
+            except Exception:
+                pass
+
+            # De-dupe by key, keep the largest estimate.
+            dedup: dict[str, tuple[Any, int]] = {}
+            for key, obj, size in candidates:
+                prev = dedup.get(key)
+                if prev is None or int(size) > int(prev[1]):
+                    dedup[key] = (obj, int(size))
+            candidates = [(k, v[0], v[1]) for k, v in dedup.items()]
+
+            # Sort biggest-first so we reclaim headroom quickly.
+            candidates.sort(key=lambda x: int(x[2]), reverse=True)
+
+            def choose_offload_type(size_bytes: int) -> str:
+                # Prefer CPU offload only if:
+                # - module isn't absurdly large (cap), and
+                # - we have enough *available* RAM for a safe copy.
+                if size_bytes <= 0:
+                    return "discard"
+                if size_bytes > max_cpu_bytes:
+                    return "discard"
+                if free_ram is None:
+                    return "discard"
+                need = int(cpu_safety + cpu_mult * float(size_bytes))
+                return "cpu" if free_ram >= need else "discard"
+
+            self.logger.warning(
+                f"VRAM pressure detected (free_frac={free_frac:.4f} < {min_free:.4f}). "
+                f"Relieving pressure via offload/discard. reason={reason!r}"
+            )
+
+            changed = False
+            for key, _obj, size in candidates:
+                free_frac = self._cuda_free_fraction()
+                if free_frac is None or free_frac >= min_free:
+                    break
+
+                offload_type = choose_offload_type(int(size))
+                try:
+                    self._offload(key, offload_type=offload_type)  # type: ignore[arg-type]
+                    changed = True
+                except Exception:
+                    # Best-effort; keep going.
+                    pass
+
+            # Final cache clear to make allocator state deterministic.
+            try:
+                from src.utils.cache import empty_cache
+
+                empty_cache()
+            except Exception:
+                pass
+
+            return changed
+        except Exception:
+            return False
+
+    def _get_weight_manager(self):
+        if getattr(self, "_weight_manager", None) is None:
+            try:
+                self._weight_manager = get_global_weight_manager()
+            except Exception:
+                self._weight_manager = None
+        return self._weight_manager
+
+    def memory_env_config(self) -> Dict[str, Any]:
+        """
+        Return a snapshot of memory-management related environment knobs and their
+        effective values (with defaults applied when unset). This can be exposed via
+        API to introspect/tune behavior without digging through code.
+        """
+        def _float(name: str, default: float) -> float:
+            try:
+                raw = os.environ.get(name, None)
+                if raw is None or str(raw).strip() == "":
+                    return default
+                return float(raw)
+            except Exception:
+                return default
+
+        def _int(name: str, default: int) -> int:
+            try:
+                raw = os.environ.get(name, None)
+                if raw is None or str(raw).strip() == "":
+                    return default
+                return int(float(raw))
+            except Exception:
+                return default
+
+        def _str(name: str, default: str) -> str:
+            val = os.environ.get(name)
+            return default if val is None or val == "" else val
+
+        return {
+            # Offload/pressure
+            "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION": _float("APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.10),
+            "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION": _float("APEX_OFFLOAD_MIN_FREE_RAM_FRACTION", 0.08),
+            "APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION": _float("APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION", 0.06),
+            "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES": _int("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3),
+            "APEX_VRAM_PRESSURE_CPU_MULTIPLIER": _float("APEX_VRAM_PRESSURE_CPU_MULTIPLIER", 1.25),
+            "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES": _int("APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES", 32 * 1024**3),
+            # Decode guards
+            "APEX_VAE_DECODE_FORCE_FLUSH": _str("APEX_VAE_DECODE_FORCE_FLUSH", "1"),
+            "APEX_VAE_DECODE_FLUSH_TARGET": _str("APEX_VAE_DECODE_FLUSH_TARGET", "cpu"),
+            "APEX_VAE_DECODE_MIN_FREE_BYTES": _int("APEX_VAE_DECODE_MIN_FREE_BYTES", 0),
+            "APEX_VAE_DECODE_MIN_FREE_FRAC": _float("APEX_VAE_DECODE_MIN_FREE_FRAC", 0.12),
+            "APEX_VAE_DECODE_SAFETY_MULT": _float("APEX_VAE_DECODE_SAFETY_MULT", 8.0),
+            "APEX_VAE_DECODE_TARGET_FREE_FRACTION": _float("APEX_VAE_DECODE_TARGET_FREE_FRACTION", 0.30),
+            # Preforward
+            "APEX_PREFWD_ENABLE": _str("APEX_PREFWD_ENABLE", "1"),
+            "APEX_PREFWD_FLUSH_TARGET": _str("APEX_PREFWD_FLUSH_TARGET", "cpu"),
+            "APEX_PREFWD_MIN_FREE_BYTES": _int("APEX_PREFWD_MIN_FREE_BYTES", 0),
+            "APEX_PREFWD_MIN_FREE_FRAC": _float("APEX_PREFWD_MIN_FREE_FRAC", 0.50),
+            # Weight manager defaults
+            "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12),
+            "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10),
+            "APEX_DISABLE_WARM_WEIGHTS": _str("APEX_DISABLE_WARM_WEIGHTS", ""),
+            "APEX_FORCE_DISK_ONLY": _str("APEX_FORCE_DISK_ONLY", ""),
+        }
+
+    def free_unused_modules(
+        self,
+        *,
+        active: Optional[Iterable[str]] = None,
+        target: Literal["cpu", "disk"] = "disk",
+    ) -> Dict[str, str]:
+        """
+        Offload all tracked *modules* except those listed in `active`.
+
+        Parameters
+        ----------
+        active: iterable of component names to keep resident (e.g. {"transformer"})
+        target: "cpu" or "disk" offload destination for others (default: "disk")
+
+        Returns
+        -------
+        Dict[str, str]: mapping of module_id -> resulting location for offloaded modules.
+        """
+        wm = self._get_weight_manager()
+        if wm is None:
+            return {}
+        try:
+            wm.refresh_all_locations()
+        except Exception:
+            pass
+        active = set(active or [])
+        active_ids = self._memory_ids_for_names(active)
+        offloaded = wm.offload_gpu_except(
+            active_ids,
+            target=target if target in {"cpu", "disk"} else "cpu",
+            reason="free_unused_parameters",
+        )
+        return {k: str(v) for k, v in offloaded.items()}
+
+    # Backward-friendly alias
+    def free_unused_parameters(
+        self,
+        *,
+        active: Optional[Iterable[str]] = None,
+        target: Literal["cpu", "disk"] = "disk",
+    ) -> Dict[str, str]:
+        return self.free_unused_modules(active=active, target=target)
+
+    def _install_preforward_hook(
+        self, module: torch.nn.Module | None, name: str
+    ) -> None:
+        """
+        Attach a lightweight pre-forward hook to offload cold modules before the
+        current module runs. This mitigates OOMs when keeping other components warm.
+        """
+        if module is None or not isinstance(module, torch.nn.Module):
+            return
+
+        try:
+            enable = str(os.environ.get("APEX_PREFWD_ENABLE", "1")).lower()
+            if enable in {"0", "false", "no"}:
+                return
+        except Exception:
+            return
+
+        if getattr(module, "_apex_prefwd_hook", None) is not None:
+            return
+
+        def _hook(mod, _inputs):
+            try:
+                wm = self._get_weight_manager()
+                if wm is None:
+                    return
+                module_id = self._component_memory_ids.get(name)
+                if module_id is None:
+                    try:
+                        self._register_tracked_module(mod, name, {name})
+                        module_id = self._component_memory_ids.get(name)
+                    except Exception:
+                        module_id = None
+                if wm is not None:
+                    try:
+                        wm.refresh_all_locations()
+                        if module_id:
+                            wm.refresh(module_id)
+                    except Exception:
+                        pass
+
+                # Skip if we already have sufficient free VRAM and nothing changed.
+                try:
+                    import torch
+
+                    free_ok = False
+                    if torch.cuda.is_available():
+                        free, total = torch.cuda.mem_get_info()
+                        min_bytes = int(
+                            os.environ.get("APEX_PREFWD_MIN_FREE_BYTES", "0") or "0"
+                        )
+                        min_frac = float(
+                            os.environ.get("APEX_PREFWD_MIN_FREE_FRAC", "0.50")
+                            or "0.50"
+                        )
+                        free_ok = free >= min_bytes and (
+                            total > 0 and (free / float(total)) >= min_frac
+                        )
+                    if free_ok and getattr(mod, "_apex_prefwd_last_free_ok", False):
+                        return
+                    if free_ok:
+                        setattr(mod, "_apex_prefwd_last_free_ok", True)
+                        return
+                except Exception:
+                    pass
+
+                active = {module_id} if module_id else set()
+                target = str(os.environ.get("APEX_PREFWD_FLUSH_TARGET", "cpu")).lower()
+                if target not in {"cpu", "disk"}:
+                    target = "cpu"
+                wm.offload_gpu_except(
+                    active,
+                    target=target,
+                    reason=f"prefwd:{name}",
+                )
+                setattr(mod, "_apex_prefwd_last_free_ok", False)
+            except Exception as e:
+                return
+
+        try:
+            handle = module.register_forward_pre_hook(_hook, with_kwargs=False)
+            module._apex_prefwd_hook = handle
+        except Exception as e:
+            print(e, "e")
+            pass
+
+    def _register_tracked_module(
+        self, module: Any, name: str, tags: Optional[Set[str]] = None
+    ) -> None:
+        wm = self._get_weight_manager()
+        if wm is None or module is None:
+            return
+        try:
+            module_id = f"{self._engine_id}:{name}"
+            wm.register_module(
+                module,
+                module_id,
+                owner=self._engine_label,
+                tags=tags or {name},
+            )
+            self._component_memory_ids[name] = module_id
+        except Exception:
+            pass
+
+    def _refresh_tracked_module(self, module: Any, name: str) -> None:
+        wm = self._get_weight_manager()
+        if wm is None or module is None:
+            return
+        try:
+            module_id = self._component_memory_ids.get(name)
+            if module_id:
+                wm.refresh(module_id)
+            else:
+                self._register_tracked_module(module, name)
+        except Exception:
+            pass
+
+    def _memory_ids_for_names(self, names: Iterable[str]) -> Set[str]:
+        ids: Set[str] = set()
+        for n in names:
+            mid = self._component_memory_ids.get(n)
+            if mid:
+                ids.add(mid)
+        return ids
+
+    def _flush_for_decode(self, component_name: str, *, required_bytes: int | None) -> None:
+        """
+        Aggressively offload non-VAE modules prior to decode to guarantee headroom.
+
+        Controlled by:
+        - APEX_VAE_DECODE_FORCE_FLUSH (default: true)
+        - APEX_VAE_DECODE_FLUSH_TARGET ("cpu" or "disk", default: cpu)
+        """
+        try:
+            enable = str(os.environ.get("APEX_VAE_DECODE_FORCE_FLUSH", "1")).lower()
+            if enable in {"0", "false", "no"}:
+                return
+        except Exception:
+            return
+
+        target = str(os.environ.get("APEX_VAE_DECODE_FLUSH_TARGET", "cpu")).lower()
+        if target not in {"cpu", "disk"}:
+            target = "cpu"
+
+        # If we already have enough headroom, skip flushing.
+        try:
+            import torch
+
+            if torch.cuda.is_available() and getattr(self, "device", None) is not None:
+                dev = getattr(self.device, "index", None) or torch.cuda.current_device()
+                free_bytes, total_bytes = torch.cuda.mem_get_info(dev)
+                min_free_bytes_env = int(os.environ.get("APEX_VAE_DECODE_MIN_FREE_BYTES", "0") or "0")
+                min_free_frac = float(os.environ.get("APEX_VAE_DECODE_MIN_FREE_FRAC", "0.12") or "0.12")
+                need = max(int(required_bytes or 0), min_free_bytes_env)
+                if free_bytes >= need and (total_bytes > 0 and (free_bytes / float(total_bytes)) >= min_free_frac):
+                    return
+        except Exception:
+            pass
+
+        names: Set[str] = set()
+        # Known heavy components
+        for attr in ("transformer", "text_encoder", "scheduler"):
+            if getattr(self, attr, None) is not None:
+                names.add(attr)
+
+        # Any helpers currently loaded
+        try:
+            names.update(getattr(self, "_helpers", {}).keys())
+        except Exception:
+            pass
+
+        # Exclude the active VAE component
+        names.discard(component_name)
+        names.discard("vae")
+
+        wm = self._get_weight_manager()
+        for name in list(names):
+            try:
+                if wm is not None:
+                    mid = getattr(self, "_component_memory_ids", {}).get(name)
+                    if mid:
+                        wm.offload_module(mid, target=target, reason="vae_decode_flush")
+                        continue
+                # Fallback to legacy path
+                self._offload(name, offload_type="cpu" if target == "cpu" else "discard")
+            except Exception:
+                continue
+
+        try:
+            # Make sure allocator releases freed blocks promptly.
+            from src.utils.cache import empty_cache
+
+            empty_cache()
+        except Exception:
+            pass
+
+    def _pre_decode_vram_guard(
+        self, component_name: str, latents: torch.Tensor, *, request_bytes: int | None
+    ) -> None:
+        """
+        Ensure enough headroom for VAE decode by pre-evicting cold modules.
+        """
+        wm = self._get_weight_manager()
+        if wm is None:
+            return
+        try:
+            safety_mult = self._env_float("APEX_VAE_DECODE_SAFETY_MULT", 8.0)
+        except Exception:
+            safety_mult = 8.0
+        try:
+            target_frac = self._env_float("APEX_VAE_DECODE_TARGET_FREE_FRACTION", 0.30)
+        except Exception:
+            target_frac = 0.30
+
+        if request_bytes is None:
+            try:
+                request_bytes = int(latents.numel() * latents.element_size() * safety_mult)
+            except Exception:
+                request_bytes = None
+
+        try:
+            active = self._memory_ids_for_names({component_name})
+            wm.evict_for_vram(
+                reason="vae_decode_pre",
+                active=active,
+                target_free_fraction=target_frac,
+                request_bytes=request_bytes,
+            )
+        except Exception:
+            pass
+
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
@@ -286,7 +884,14 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     ):
         self.yaml_path = yaml_path
         self.device = device or get_torch_device()
+        self._engine_id = kwargs.get(
+            "engine_id", f"{self.__class__.__name__}-{id(self)}"
+        )
+        self._engine_label = kwargs.get("engine_label", os.path.basename(yaml_path))
+        self._component_memory_ids: Dict[str, str] = {}
+        self._weight_manager = None
         self._helpers = AutoLoadingHelperDict(self)
+        self._decode_peak_bytes: Dict[str, int] = {}
         # IMPORTANT: these are declared as class attributes for typing convenience,
         # but must be per-instance to avoid cross-engine contamination (e.g. LoRAs
         # leaking into a different engine / transformer).
@@ -299,6 +904,13 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         self._init_kwargs = dict(kwargs)
         self._init_logger()
         self.config = self._load_yaml(yaml_path)
+        self._decode_peak_bytes: Dict[str, int] = {}
+        try:
+            meta_id = self.config.get("metadata", {}).get("id")
+            if meta_id:
+                self._engine_label = str(meta_id)
+        except Exception:
+            pass
 
         # Validate compute requirements if specified in config
         self._validate_compute_requirements()
@@ -661,6 +1273,28 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         else:
             device = "cpu"
         component_module = None
+
+        # Proactively relieve VRAM pressure before loading heavyweight components.
+        # This complements lazy-load guards (e.g. text encoders) and prevents the
+        # "can't load weights because previous run kept everything resident" failure mode.
+        try:
+            if (
+                (not no_weights)
+                and getattr(self, "auto_memory_management", True)
+                and device == "cuda"
+                and component_type in {"transformer", "vae", "helper"}
+            ):
+                keep = {
+                    str(component.get("name") or component_type or ""),
+                    str(component_type or ""),
+                }
+                keep = {k for k in keep if k}
+                self._relieve_vram_pressure(
+                    reason=f"load_component:{component_type}", keep=keep
+                )
+        except Exception:
+            pass
+
         if component_type == "scheduler":
             scheduler = self.load_scheduler(component)
             component_module = scheduler
@@ -681,6 +1315,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             component_module = helper
         else:
             raise ValueError(f"Component type {component_type} not supported")
+        try:
+            name = component.get("name") or component_type
+            self._register_tracked_module(component_module, name, {component_type})
+            self._install_preforward_hook(component_module, name)
+        except Exception:
+            pass
         empty_cache()
         return component_module
 
@@ -776,7 +1416,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             helper._resolve_memory_config_for_component =  types.MethodType(
                     lambda self, x: mm_config, helper
                 )
-            
+
+        try:
+            self._register_tracked_module(helper, helper_name, {"helper"})
+        except Exception:
+            pass
+
         return helper
 
     def load_helper_by_type(self, helper_type: str):
@@ -1026,6 +1671,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     def load_text_encoder(
         self, component: Dict[str, Any], no_weights: bool = False, device: str = "cpu"
     ):
+        component_name = component.get("name") or "text_encoder"
         component["load_dtype"] = self.component_load_dtypes.get("text_encoder", None)
         component["dtype"] = self.component_dtypes.get("text_encoder", None)
         text_encoder = TextEncoder(component, no_weights, device=device)
@@ -1041,6 +1687,21 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             )
 
             def _patched_load_model(no_weights: bool = False, *args, **kwargs):
+                # Proactively relieve VRAM pressure before materializing weights.
+                # Text encoders are often lazily loaded during prompt encoding, which
+                # can occur after the transformer has already filled VRAM.
+                if (
+                    (not no_weights)
+                    and getattr(self, "auto_memory_management", True)
+                    and device == "cuda"
+                ):
+                    try:
+                        self._relieve_vram_pressure(
+                            reason="text_encoder.load_model",
+                            keep={component.get("name") or "text_encoder", "text_encoder"},
+                        )
+                    except Exception:
+                        pass
                 model = original_load_model(
                     no_weights=no_weights, to_device=False, *args, **kwargs
                 )
@@ -1074,9 +1735,45 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
                 self._maybe_compile_module(text_encoder.model, component)
                 self.to_device(text_encoder)
+                try:
+                    self._refresh_tracked_module(
+                        text_encoder, component.get("name") or "text_encoder"
+                    )
+                except Exception:
+                    pass
                 return text_encoder.model
 
             text_encoder.load_model = _patched_load_model  # type: ignore
+        else:
+            # Even without explicit group-offloading, we still want a VRAM-pressure
+            # guard because TextEncoder weights are loaded lazily on first encode().
+            original_load_model = text_encoder.load_model
+
+            def _guarded_load_model(*args, **kwargs):
+                try:
+                    nw = bool(kwargs.get("no_weights", False))
+                except Exception:
+                    nw = False
+                if (
+                    (not nw)
+                    and getattr(self, "auto_memory_management", True)
+                    and device == "cuda"
+                ):
+                    try:
+                        self._relieve_vram_pressure(
+                            reason="text_encoder.load_model",
+                            keep={component_name, "text_encoder"},
+                        )
+                    except Exception:
+                        pass
+                model = original_load_model(*args, **kwargs)
+                try:
+                    self._refresh_tracked_module(text_encoder, component_name)
+                except Exception:
+                    pass
+                return model
+
+            text_encoder.load_model = _guarded_load_model  # type: ignore
 
         if no_weights:
             model = text_encoder.load_model(no_weights=True)
@@ -1840,6 +2537,42 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         if getattr(self, component_name, None) is None:
             self.load_component_by_type(component_name)
         self.to_device(getattr(self, component_name))
+        # VAE decode can be a peak-activation operation (multi-GiB). Ensure we have
+        # sufficient headroom by offloading other components proactively.
+        peak_hint = self._decode_peak_bytes.get(component_name, 0)
+        est_bytes = None
+        try:
+            # base estimate from latents + multiplier
+            est_bytes = int(latents.numel() * latents.element_size() * self._env_float("APEX_VAE_DECODE_SAFETY_MULT", 8.0))
+        except Exception:
+            est_bytes = None
+        if peak_hint and (est_bytes is None or peak_hint > est_bytes):
+            est_bytes = peak_hint
+
+        try:
+            self._flush_for_decode(component_name, required_bytes=est_bytes)
+        except Exception:
+            pass
+        try:
+            self._pre_decode_vram_guard(component_name, latents, request_bytes=est_bytes)
+        except Exception:
+            pass
+        try:
+            if (
+                getattr(self, "auto_memory_management", True)
+                and getattr(self, "device", None) is not None
+                and getattr(self.device, "type", None) == "cuda"
+            ):
+                min_free = self._env_float(
+                    "APEX_VRAM_DECODE_MIN_FREE_VRAM_FRACTION", 0.18
+                )
+                self._relieve_vram_pressure(
+                    reason=f"vae_decode:{component_name}",
+                    keep={component_name},
+                    min_free_vram_fraction=min_free,
+                )
+        except Exception:
+            pass
         if denormalize_latents:
             denormalized_latents = (
                 getattr(self, component_name)
@@ -1851,9 +2584,58 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         self.enable_vae_tiling(component_name=component_name)
 
-        video = getattr(self, component_name).decode(
-            denormalized_latents, return_dict=False
-        )[0]
+        # Track peak decode VRAM to refine future headroom estimates.
+        record_peak = False
+        pre_reserved = 0
+        dev_index = None
+        try:
+            import torch
+
+            if torch.cuda.is_available() and getattr(self.device, "type", "") == "cuda":
+                dev_index = getattr(self.device, "index", None) or torch.cuda.current_device()
+                torch.cuda.reset_peak_memory_stats(dev_index)
+                pre_reserved = torch.cuda.memory_reserved(dev_index)
+                record_peak = True
+        except Exception:
+            record_peak = False
+
+        # Decode can still OOM due to allocator fragmentation/activations.
+        # Retry once after a more aggressive offload+cache clear, instead of failing.
+        video = None
+        try:
+            video = getattr(self, component_name).decode(
+                denormalized_latents, return_dict=False
+            )[0]
+        except torch.OutOfMemoryError:
+            try:
+                if (
+                    getattr(self, "auto_memory_management", True)
+                    and getattr(self, "device", None) is not None
+                    and getattr(self.device, "type", None) == "cuda"
+                ):
+                    min_free = self._env_float(
+                        "APEX_VRAM_DECODE_RETRY_MIN_FREE_VRAM_FRACTION", 0.25
+                    )
+                    self._relieve_vram_pressure(
+                        reason=f"vae_decode_retry:{component_name}",
+                        keep={component_name},
+                        min_free_vram_fraction=min_free,
+                    )
+            except Exception:
+                pass
+            video = getattr(self, component_name).decode(
+                denormalized_latents, return_dict=False
+            )[0]
+        finally:
+            if record_peak:
+                try:
+                    torch.cuda.synchronize(dev_index)
+                    peak_reserved = torch.cuda.max_memory_reserved(dev_index)
+                    peak_bytes = max(0, int(peak_reserved - pre_reserved))
+                    prev = self._decode_peak_bytes.get(component_name, 0)
+                    self._decode_peak_bytes[component_name] = max(prev, peak_bytes)
+                except Exception:
+                    pass
         if offload:
             self._offload(component_name, offload_type=offload_type)
         return video.to(dtype=dtype)
@@ -2225,6 +3007,23 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             self._init_lora_manager(DEFAULT_LORA_SAVE_PATH)
         if self.lora_manager is None:
             raise RuntimeError("LoraManager is not available")
+
+        # Applying LoRAs can allocate additional adapter weights/buffers on GPU.
+        # In pooled mode, previous components may still be resident; ensure we
+        # have headroom or proactively offload/discard other components.
+        try:
+            if (
+                getattr(self, "auto_memory_management", True)
+                and getattr(self, "device", None) is not None
+                and getattr(self.device, "type", None) == "cuda"
+            ):
+                keep = {model_name_or_type}
+                # Also keep the canonical transformer attribute when applicable.
+                if model_name_or_type != "transformer" and getattr(self, "transformer", None) is model:
+                    keep.add("transformer")
+                self._relieve_vram_pressure(reason="apply_loras", keep=keep)
+        except Exception:
+            pass
 
         resolved = self.lora_manager.load_into(
             model, loras, adapter_names=adapter_names, scales=scales

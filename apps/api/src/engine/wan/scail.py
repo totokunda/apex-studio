@@ -100,7 +100,7 @@ class WanSCAILEngine(WanShared):
         pose_video = self._load_video(
             pose_video,
             fps=fps,
-            num_frames=num_frames if use_video_duration else None,
+            num_frames=None if use_video_duration else num_frames,
         )
         if use_video_duration:
             num_frames = len(pose_video)

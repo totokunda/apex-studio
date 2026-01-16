@@ -341,10 +341,27 @@ class ToMixin:
             extras = getattr(self, "helpers", {}).values()
             components = (*defaults, *extras)
 
+        manager = None
+        try:
+            from src.memory_management import get_global_weight_manager
+
+            manager = get_global_weight_manager()
+        except Exception:
+            manager = None
+
         # Move each to device
         for comp in components:
             if not hasattr(comp, "to"):
                 continue
+
+            ensured = False
+            if manager is not None:
+                try:
+                    ensured = manager.ensure_on_device(
+                        comp, device=device, reason="to_device"
+                    )
+                except Exception:
+                    ensured = False
 
             # For torch modules that contain any group-offloaded submodules, we need
             # finer-grained control: we move only the non-offloaded parts while
@@ -360,8 +377,8 @@ class ToMixin:
                 except Exception:
                     # If detection fails for any reason, fall back to the default behavior.
                     pass
-
-            comp.to(device)
+            if not ensured:
+                comp.to(device)
 
         # Free up any unused CUDA memory
         try:
