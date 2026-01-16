@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 import socket
 
 from src.utils.defaults import (
@@ -158,6 +158,33 @@ class RenderStepEnabledRequest(BaseModel):
 
 class RenderStepEnabledResponse(BaseModel):
     enabled: bool
+
+
+class MemorySettingsRequest(BaseModel):
+    APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION: Optional[float] = None
+    APEX_OFFLOAD_MIN_FREE_RAM_FRACTION: Optional[float] = None
+    APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION: Optional[float] = None
+    APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES: Optional[int] = None
+    APEX_VRAM_PRESSURE_CPU_MULTIPLIER: Optional[float] = None
+    APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES: Optional[int] = None
+    APEX_VAE_DECODE_FORCE_FLUSH: Optional[str] = None
+    APEX_VAE_DECODE_FLUSH_TARGET: Optional[str] = None
+    APEX_VAE_DECODE_MIN_FREE_BYTES: Optional[int] = None
+    APEX_VAE_DECODE_MIN_FREE_FRAC: Optional[float] = None
+    APEX_VAE_DECODE_SAFETY_MULT: Optional[float] = None
+    APEX_VAE_DECODE_TARGET_FREE_FRACTION: Optional[float] = None
+    APEX_PREFWD_ENABLE: Optional[str] = None
+    APEX_PREFWD_FLUSH_TARGET: Optional[str] = None
+    APEX_PREFWD_MIN_FREE_BYTES: Optional[int] = None
+    APEX_PREFWD_MIN_FREE_FRAC: Optional[float] = None
+    APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION: Optional[float] = None
+    APEX_WEIGHT_TARGET_FREE_RAM_FRACTION: Optional[float] = None
+    APEX_DISABLE_WARM_WEIGHTS: Optional[str] = None
+    APEX_FORCE_DISK_ONLY: Optional[str] = None
+
+
+class MemorySettingsResponse(BaseModel):
+    settings: Dict[str, Any]
 
 
 def _get_env_bool(name: str, default: bool) -> bool:
@@ -664,8 +691,73 @@ def get_auto_update_config_api():
         repo_owner=repo_owner,
         repo_name=repo_name,
         include_prerelease=include_prerelease,
-        status=status,
-    )
+            status=status,
+        )
+
+
+def _memory_env_defaults() -> dict:
+    def _float(name: str, default: float) -> float:
+        try:
+            raw = os.environ.get(name, None)
+            if raw is None or str(raw).strip() == "":
+                return default
+            return float(raw)
+        except Exception:
+            return default
+
+    def _int(name: str, default: int) -> int:
+        try:
+            raw = os.environ.get(name, None)
+            if raw is None or str(raw).strip() == "":
+                return default
+            return int(float(raw))
+        except Exception:
+            return default
+
+    def _str(name: str, default: str) -> str:
+        val = os.environ.get(name)
+        return default if val is None or val == "" else val
+
+    return {
+        "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION": _float("APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.10),
+        "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION": _float("APEX_OFFLOAD_MIN_FREE_RAM_FRACTION", 0.08),
+        "APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION": _float("APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION", 0.06),
+        "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES": _int("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3),
+        "APEX_VRAM_PRESSURE_CPU_MULTIPLIER": _float("APEX_VRAM_PRESSURE_CPU_MULTIPLIER", 1.25),
+        "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES": _int("APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES", 32 * 1024**3),
+        "APEX_VAE_DECODE_FORCE_FLUSH": _str("APEX_VAE_DECODE_FORCE_FLUSH", "1"),
+        "APEX_VAE_DECODE_FLUSH_TARGET": _str("APEX_VAE_DECODE_FLUSH_TARGET", "cpu"),
+        "APEX_VAE_DECODE_MIN_FREE_BYTES": _int("APEX_VAE_DECODE_MIN_FREE_BYTES", 0),
+        "APEX_VAE_DECODE_MIN_FREE_FRAC": _float("APEX_VAE_DECODE_MIN_FREE_FRAC", 0.12),
+        "APEX_VAE_DECODE_SAFETY_MULT": _float("APEX_VAE_DECODE_SAFETY_MULT", 8.0),
+        "APEX_VAE_DECODE_TARGET_FREE_FRACTION": _float("APEX_VAE_DECODE_TARGET_FREE_FRACTION", 0.30),
+        "APEX_PREFWD_ENABLE": _str("APEX_PREFWD_ENABLE", "1"),
+        "APEX_PREFWD_FLUSH_TARGET": _str("APEX_PREFWD_FLUSH_TARGET", "cpu"),
+        "APEX_PREFWD_MIN_FREE_BYTES": _int("APEX_PREFWD_MIN_FREE_BYTES", 0),
+        "APEX_PREFWD_MIN_FREE_FRAC": _float("APEX_PREFWD_MIN_FREE_FRAC", 0.50),
+        "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12),
+        "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10),
+        "APEX_DISABLE_WARM_WEIGHTS": _str("APEX_DISABLE_WARM_WEIGHTS", ""),
+        "APEX_FORCE_DISK_ONLY": _str("APEX_FORCE_DISK_ONLY", ""),
+    }
+
+
+@router.get("/memory", response_model=MemorySettingsResponse)
+def get_memory_settings():
+    """Get effective memory management settings (env + defaults)."""
+    return MemorySettingsResponse(settings=_memory_env_defaults())
+
+
+@router.post("/memory", response_model=MemorySettingsResponse)
+def set_memory_settings(request: MemorySettingsRequest):
+    """Update memory management settings via environment variables."""
+    updates = request.dict(exclude_none=True)
+    for k, v in updates.items():
+        try:
+            os.environ[k] = str(v)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to set {k}: {e}")
+    return MemorySettingsResponse(settings=_memory_env_defaults())
 
 
 @router.post("/auto-update", response_model=AutoUpdateConfigResponse)
