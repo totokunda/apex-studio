@@ -5,7 +5,6 @@ from typing import List, Optional
 import multiprocessing
 import json
 from pathlib import Path
-
 from src.register import FunctionRegister
 from src.utils.defaults import DEFAULT_CACHE_PATH
 import math
@@ -1567,6 +1566,10 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
         if "varlen" not in backend_name:
             try:
                 _ = func(q_std, k_std, v_std)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                if torch.backends.mps.is_available():
+                    torch.mps.synchronize()
                 success = True
             except Exception:
                 pass
@@ -1579,6 +1582,10 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
                     cu_seqlens_q=cu_seqlens, cu_seqlens_k=cu_seqlens,
                     max_seqlen_q=max_seqlen, max_seqlen_k=max_seqlen
                 )
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                if torch.backends.mps.is_available():
+                    torch.mps.synchronize()
                 success = True
             except Exception as e:
                 logger.debug(f"Backend '{backend_name}' (varlen) failed with: {e}")

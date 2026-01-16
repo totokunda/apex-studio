@@ -4,80 +4,58 @@
         "yaml_path": "/home/tosin_coverquick_co/apex-studio/apps/api/manifest/video/ltx2-19b-text-to-image-to-video-1.0.0.v1.yml",
         "model_type": "ti2v",
         "selected_components": {
-            "scheduler": {
-                "name": "scheduler",
-                "base": "diffusers.schedulers.FlowMatchEulerDiscreteScheduler",
-                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/d910989f3c05d70b1b0a1efe0b453210cfbae5eca167c690002de602bf2a9ec4_scheduler_config.json",
-                "type": "scheduler",
-                "label": "FlowMatch Discrete Scheduler",
-                "default": "FlowMatchDiscreteScheduler",
-                "description": "The FlowMatch Discrete Scheduler is a scheduler for the LTX2 19B model."
-            },
             "video_vae": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "audio_vae": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "text_encoder": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "FP8"
             },
             "transformer": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "GGUF_Q3_K_S"
             },
             "connectors": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "vocoder": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "latent_upsampler": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             }
         },
-        "auto_memory_management": false,
-        "attention_type": "sdpa"
+        "auto_memory_management": false
     },
     "inputs": {
-        "image": "assets/7a9e7348318506b4386b7299bea6cc67e3ebf3e302196e6074efd10c62e1ada4.png",
-        "image_quality_crf": 33,
-        "prompt": "The man is seated in dim, warm lamplight that barely reaches his eyes.  \nVery slowly \u2014 almost in slow motion \u2014 his head tilts upward until his gaze finds the lens.\n\nHis eyes lock on with predatory focus: pupils slightly dilated, unblinking, the whites stark against the low light.\n\nA faint, lopsided smile begins to crawl across his mouth \u2014 the kind that starts polite but never quite arrives at friendly.\n\nHe leans forward inch by deliberate inch, closing the distance between himself and the viewer.\n\nSoft, almost tender voice, barely above a whisper:\n\n\u201cWanna come to my Neverland Ranch\u2026?\u201d\n\nHe holds the silence.  \nThe smile keeps growing \u2014 wider, tighter, wrong \u2014 teeth now fully visible while the eyes remain cold and fixed.\n\nNo blink.  \nNo mercy in the stare.\n\nThe grin stretches into something grotesque and intimate at the same time, like he's sharing a secret only the two of you understand.\n\nHe stays frozen in that exact position \u2014 too long, far too long \u2014 letting the discomfort curdle in the viewer's chest before anything else happens.",
-        "negative_prompt": "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.",
-        "resolution": "custom",
-        "aspect_ratio": "custom",
+        "use_distilled_stage_1": false,
+        "guidance_scale": 4.0,
+        "guidance_rescale": 0.0,
+        "upsample": true,
         "num_inference_steps": 20,
-        "height": 1024,
-        "width": 1024,
-        "seed": 2808559006,
-        "guidance_scale": 4,
         "use_gradient_estimation": false,
-        "ge_gamma": 2,
-        "chunking_profile": "light",
+        "ge_gamma": 0.0,
         "vae_tiling_enabled": true,
         "vae_use_framewise_encoding": false,
         "vae_use_framewise_decoding": false,
+        "vae_num_sample_frames_batch_size": 16,
+        "vae_num_latent_frames_batch_size": 2,
         "vae_tile_sample_min_height": 512,
         "vae_tile_sample_min_width": 512,
         "vae_tile_sample_min_num_frames": 32,
         "vae_tile_sample_stride_height": 448,
         "vae_tile_sample_stride_width": 448,
         "vae_tile_sample_stride_num_frames": 16,
-        "vae_num_sample_frames_batch_size": 16,
-        "vae_num_latent_frames_batch_size": 2,
-        "duration": "5.166666666666667s"
+        "image_quality_crf": 33,
+        "prompt": "Vintage 16mm film look: roller skaters glide along a sunlit boardwalk at sunset, warm lens flares, gentle handheld camera, natural motion blur, ocean breeze moves hair and clothing, cinematic and stable.",
+        "negative_prompt": "blurry, low quality, jitter, flicker, artifacts",
+        "resolution": 1080,
+        "aspect_ratio": "1:1",
+        "height": 480,
+        "width": 832,
+        "seed": 42,
+        "chunking_profile": "light",
+        "duration": "5s"
     }
 }

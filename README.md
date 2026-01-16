@@ -11,7 +11,7 @@
 ## 🚀Quick Start
 
 - Packaged application
-- Available for MacOS and Windows machines
+- Build targets: macOS, Windows, and Linux (x64). Check [GitHub Releases](https://github.com/totokunda/apex-studio/releases) for what’s published.
 
 ## Run locally (development)
 
@@ -31,100 +31,17 @@ cd apex-studio
 git lfs pull
 ```
 
-### Windows (local development) — PowerShell
-
-The commands below are **Windows-only** and assume you’re using **PowerShell 7+**.
-
-#### 0) Clone the repo (Git + Git LFS) (Windows)
-
-```powershell
-# Install Git LFS (if you don't already have it)
-git lfs install
-
-# Clone + init submodules
-git clone --recurse-submodules https://github.com/totokunda/apex-studio.git
-cd apex-studio
-
-# Fetch LFS files (recommended after cloning)
-git lfs pull
-```
-
-#### Prerequisites (Windows)
-
-- **Node.js 24.x** (required)
-- **Python 3.12** (required for `apex-engine`)
-- **FFmpeg** (required for development; see **Install FFmpeg** below)
-
-Notes:
-- If `python` isn’t on PATH, try `py` (Python Launcher): `py -V`
-- If venv activation is blocked, run (once) in an elevated PowerShell:
-  `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
-
-#### 1) Start the desktop app (Electron) (Windows)
-
-```powershell
-cd apps\app
-npm install
-npm start
-```
-
-#### 2) Install + run the engine (`apex-engine`) (Windows)
-
-From the API workspace, install Python deps and the `apex-engine` CLI.
-
-##### Option A (recommended): use the dev pip installer (venv or current env) (Windows)
-
-```powershell
-cd apps\api
-
-# New virtualenv (recommended)
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-# Install deps + apex-engine
-# (pick one: cpu/cuda-sm80-ampere/cuda-sm89-ada/cuda-sm90-hopper/cuda-sm100-blackwell/rocm/mps)
-py scripts\dev\dev_pip_install.py --machine cpu
-```
-
-Then run the engine:
-
-```powershell
-cd apps\api
-py -m src serve
-```
-
-##### Option B: manual pip install (current environment) (Windows)
-
-```powershell
-cd apps\api
-py -m pip install -U pip setuptools wheel
-
-# Install torch (pick one)
-py -m pip install torch torchvision torchaudio
-# py -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
-
-# Install global requirements
-py -m pip install -r requirements.txt
-
-# Install platform requirements (pick one)
-py -m pip install -r requirements\machines\cpu.txt
-
-# Install the CLI entrypoint
-py -m pip install -e . --no-deps
-```
-
-Then run:
-
-```powershell
-cd apps\api
-py -m src serve
-```
-
 ### Prerequisites
 
-- **Node.js 24.x** (required)
-- **Python 3.12** (required for `apex-engine`)
-- **FFmpeg** (required for development; see **Install FFmpeg** below)
+- **Node.js 24.x** (required; see `apps/app/package.json` → `engines.node`)
+- **Python 3.12** (recommended/tested for `apex-engine`; required for CUDA builds)
+- **FFmpeg** (required for media processing; see **Install FFmpeg** below)
+
+Notes:
+- **Windows**: use **PowerShell 7+**. If `python` isn’t on PATH, try `py -V` (Python Launcher).
+  If venv activation is blocked, run (once) in an elevated PowerShell:
+  `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+- **Linux**: ensure `python3.12` + `python3.12-venv` are installed (or use your distro equivalents).
 
 ### Install FFmpeg (required)
 
@@ -172,37 +89,83 @@ ffmpeg -version
 
 From the app workspace:
 
+macOS / Linux:
+
 ```bash
 cd apps/app
 npm i
 npm start
 ```
 
+Windows (PowerShell):
+
+```powershell
+cd apps\app
+npm install
+npm start
+```
+
 ### 2) Install + run the engine (`apex-engine`)
 
-From the API workspace, install Python deps and the `apex-engine` CLI.
+From the API workspace (`apps/api`), install Python deps and the `apex-engine` CLI.
 
 #### Option A (recommended): use the dev pip installer (venv or current env)
 
+This path installs Torch, installs the correct requirements set for your machine, applies Apex-maintained third-party patches, and installs `apex-engine` as a CLI.
+
+macOS (Apple Silicon / MPS):
+
 ```bash
 cd apps/api
-
-# New virtualenv (recommended)
 python3.12 -m venv .venv
 source .venv/bin/activate
-
-# Install deps + apex-engine (pick one: mps/cpu/cuda-sm80-ampere/cuda-sm89-ada/cuda-sm90-hopper/cuda-sm100-blackwell/rocm)
-python3 scripts/dev/dev_pip_install.py --machine mps
+python3 scripts/dev/dev_pip_install.py --machine mac
 ```
+
+Linux:
+
+```bash
+cd apps/api
+python3.12 -m venv .venv
+source .venv/bin/activate
+# pick one:
+python3 scripts/dev/dev_pip_install.py --machine cpu
+# python3 scripts/dev/dev_pip_install.py --machine linux   # NVIDIA CUDA on Linux
+# python3 scripts/dev/dev_pip_install.py --machine rocm    # AMD ROCm on Linux
+```
+
+Windows (PowerShell):
+
+```powershell
+cd apps\api
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+# pick one:
+py scripts\dev\dev_pip_install.py --machine cpu
+# py scripts\dev\dev_pip_install.py --machine windows  # NVIDIA CUDA on Windows
+```
+
+Note: **Option A** applies Apex-maintained third-party patches (diffusers + xformers) automatically.
 
 Then run the engine:
 
 ```bash
 cd apps/api
-python3 -m src serve
+apex-engine start --procfile Procfile.dev
 ```
 
+By default the API binds to `http://127.0.0.1:8765`.
+
+Overrides:
+- `apex-engine start --procfile Procfile.dev --host 0.0.0.0 --port 8765`
+- Environment variables: `APEX_HOST`, `APEX_PORT`
+
+Stop the engine:
+- `apex-engine stop` (or `apex-engine stop --force`)
+
 #### Option B: manual pip install (current environment)
+
+This is mainly useful for debugging/bisects. If you just want to get running, use **Option A**.
 
 ```bash
 cd apps/api
@@ -212,36 +175,56 @@ python3 -m pip install -U pip setuptools wheel
 python3 -m pip install torch torchvision torchaudio
 # python3 -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
 
-# Install global requirements
-python3 -m pip install -r requirements.txt
-
-# Install platform requirements (pick one)
-python3 -m pip install -r requirements/machines/mps.txt
-# python3 -m pip install -r requirements/machines/cpu.txt
+# Install a requirements set (pick one)
+python3 -m pip install -r requirements/cpu/requirements.txt
+# python3 -m pip install -r requirements/mps/requirements.txt          # macOS / MPS
+# python3 -m pip install -r requirements/cuda/linux.txt                # Linux / CUDA
+# python3 -m pip install -r requirements/cuda/windows.txt              # Windows / CUDA
+# python3 -m pip install -r requirements/rocm/linux.txt                # Linux / ROCm
+# python3 -m pip install -r requirements/rocm/windows.txt              # Windows / ROCm (experimental)
 
 # Install the CLI entrypoint
 python3 -m pip install -e . --no-deps
 ```
 
+Apply Apex-maintained third-party patches (recommended):
+
+```bash
+cd apps/api
+python3 scripts/updates/apply_third_party_patches.py
+```
+
+This patches:
+- `xformers` FA3 import resilience (see `apps/api/patches/xformers-ops-fmha-flash3.patch`)
+- `diffusers` PEFT adapter-scale mapping strictness
+
+Disable (for debugging/bisects):
+- `APEX_PATCH_DIFFUSERS_PEFT=0`
+- `APEX_PATCH_XFORMERS_FLASH3=0`
+
 Then run:
 
 ```bash
 cd apps/api
-apex-engine dev
+apex-engine start --procfile Procfile.dev
 ```
 
 ### Nunchaku
-If you your machine supports using the Nunchaku models, you can install the Nunchaku models by running the following command:
+Optional CUDA-only acceleration wheels for some models. The installer probes the *current Python environment* (and installed Torch version) and installs a matching wheel if one exists.
+
+From `apps/api` (with your venv activated), run:
 ```bash
 python3 scripts/deps/maybe_install_nunchaku.py --install
 ```
 
 #### Windows
 ```powershell
-python scripts\deps\maybe_install_nunchaku.py --install 
+py scripts\deps\maybe_install_nunchaku.py --install
 ```
 
-Which will install the Nunchaku models if your machine supports it.
+Notes:
+- By default this installs with `--no-deps` to avoid dependency resolver churn.
+- To allow deps installs, pass `--with-deps` or set `APEX_NUNCHAKU_WITH_DEPS=1`.
 
 ### Optional: Rust-accelerated downloader (for max download throughput)
 
@@ -286,6 +269,8 @@ Rust parallel range-download tuning (hf_transfer-style, signature unchanged; all
 
 ### Models
 
+The canonical list of shipped manifests lives under `apps/api/manifest/` (this README links to the current set).
+
 - **Image Models**
   - [Chroma HD Text To Image](apps/api/manifest/image/chroma-hd-text-to-image-1.0.0.v1.yml)
   - [Flux Dev Fill](apps/api/manifest/image/flux-dev-fill-1.0.0.v1.yml)
@@ -294,6 +279,8 @@ Rust parallel range-download tuning (hf_transfer-style, signature unchanged; all
   - [Flux Krea Text To Image](apps/api/manifest/image/flux-krea-text-to-image-1.0.0.v1.yml)
   - [Flux2 Dev Text To Image Edit](apps/api/manifest/image/flux2-dev-text-to-image-edit-1.0.0.v1.yml)
   - [Flux2 Dev Text To Image Edit Turbo](apps/api/manifest/image/flux2-dev-text-to-image-edit-turbo-1.0.0.v1.yml)
+  - [Flux2 Klein 4B Text To Image Edit](apps/api/manifest/image/flux2-klein-4b-text-to-image-edit-1.0.0.v1.yml)
+  - [Flux2 Klein 9B Text To Image Edit](apps/api/manifest/image/flux2-klein-9b-text-to-image-edit-1.0.0.v1.yml)
   - [Nunchaku Flux Dev Kontext](apps/api/manifest/image/nunchaku-flux-dev-kontext-1.0.0.v1.yml)
   - [Nunchaku Flux Dev Text To Image](apps/api/manifest/image/nunchaku-flux-dev-text-to-image-1.0.0.v1.yml)
   - [Nunchaku Flux Krea Text To Image](apps/api/manifest/image/nunchaku-flux-krea-text-to-image-1.0.0.v1.yml)
@@ -301,6 +288,7 @@ Rust parallel range-download tuning (hf_transfer-style, signature unchanged; all
   - [Nunchaku QwenImage Edit Lightning 8 Steps](apps/api/manifest/image/nunchaku-qwenimage-edit-lightning-8steps-1.0.0.v1.yml)
   - [Nunchaku QwenImage Lightning 8 Steps](apps/api/manifest/image/nunchaku-qwenimage-lightning-8steps-1.0.0.v1.yml)
   - [QwenImage](apps/api/manifest/image/qwenimage-1.0.0.v1.yml)
+  - [QwenImage 2512](apps/api/manifest/image/qwenimage-2512-1.0.0.v1.yml)
   - [QwenImage Edit](apps/api/manifest/image/qwenimage-edit-1.0.0.v1.yml)
   - [QwenImage Edit 2509](apps/api/manifest/image/qwenimage-edit-2509-1.0.0.v1.yml)
   - [QwenImage Edit 2511](apps/api/manifest/image/qwenimage-edit-2511-1.0.0.v1.yml)
@@ -342,6 +330,9 @@ Rust parallel range-download tuning (hf_transfer-style, signature unchanged; all
   - [FlashVSR 1.1 Tiny](apps/api/manifest/upscalers/flashvsr-1.1-tiny.yml)
   - [SeedVR2 3B](apps/api/manifest/upscalers/seedvr2-3b.yml)
   - [SeedVR2 7B](apps/api/manifest/upscalers/seedvr2-7b.yml)
+
+- **Preprocessors**
+  - See `apps/api/manifest/preprocessor/` for the built-in preprocessing model manifests (canny/depth/pose/segmentation/etc).
 
 
 

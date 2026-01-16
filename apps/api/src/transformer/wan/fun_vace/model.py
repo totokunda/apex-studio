@@ -264,6 +264,7 @@ class FunVACETransformer3DModel(WanTransformer3DModel):
         clip_fea=None,
         y=None,
         cond_flag=True,
+        attention_kwargs=None,
         **kwargs
     ):
         r"""

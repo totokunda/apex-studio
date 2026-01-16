@@ -39,13 +39,13 @@ spec:
   - metal_flash
   - efficient_dot_product_attention
   loras:
-  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors
+  - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/high_noise_model.safetensors
     scale: 1.0
     verified: true
     name: high_noise_lightning_lora
     label: High Noise Lightning LoRA
     component: high_noise_transformer
-  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors
+  - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/low_noise_model.safetensors
     scale: 1.0
     verified: true
     name: low_noise_lightning_lora

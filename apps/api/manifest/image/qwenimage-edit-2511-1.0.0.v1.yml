@@ -260,7 +260,7 @@ spec:
         recommended_vram_gb: 9
   defaults:
     run:
-      num_inference_steps: 40
+      num_inference_steps: 4
       return_latents: false
       guidance_scale: 1.0
       text_encoder_kwargs:
@@ -423,7 +423,7 @@ spec:
       value_type: float
       panel: sampling
       required: false
-      default: 4.0
+      default: 1.0
       min: 1.0
       max: 15.0
       step: 0.5

@@ -157,7 +157,7 @@ spec:
   defaults:
     run:
       num_inference_steps: 1
-      guidance_scale: 1
+      cfg_scale: 1
       cond_noise_scale: 0.1
       return_latents: false
       timesteps_as_indices: true

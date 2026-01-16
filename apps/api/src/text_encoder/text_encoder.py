@@ -25,7 +25,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         self,
         config: Dict[str, Any],
         no_weights: bool = True,
-        enable_cache: bool = True,
+        enable_cache: bool = False,
         cache_file: str = None,
         max_cache_size: int = 1000,
         device: torch.device | None = None,

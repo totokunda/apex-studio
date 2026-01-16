@@ -182,14 +182,14 @@ spec:
     sample_rate: 16000
     fps: 25
     model_path:
-    - path: openai/whisper-large-v3
+    - path: totoku/whisper-large-v3
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 24701695487
+      file_size: 3091543112
       resource_requirements:
-        min_vram_gb: 23
-        recommended_vram_gb: 31
+        min_vram_gb: 7
+        recommended_vram_gb: 11
   defaults:
     run:
       num_inference_steps: 50
