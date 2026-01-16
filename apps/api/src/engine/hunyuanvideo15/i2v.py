@@ -81,6 +81,7 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         duration: int | str = 121,
         fps: int = 24,
         num_inference_steps: int = 50,
+        chunking_profile: str = "none",
         sigmas: List[float] = None,
         num_videos_per_prompt: Optional[int] = 1,
         seed: int = None,
@@ -100,6 +101,8 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         return_latents: bool = False,
         guidance_scale: float = 1.0,
         guidance_rescale: float = 0.0,
+        # --- Video VAE tiling / framewise controls (UI-configurable) ---
+        use_light_vae: bool = False,
         **kwargs,
     ):
         
@@ -111,6 +114,14 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         image = self.video_processor.resize(image, height=height, width=width, resize_mode="crop")
         device = self.device
         
+        self._get_image_latents(
+            image=image,
+            height=height,
+            width=width,
+            device=device,
+        )
+        
+        self.load_component_by_type("vae")
         if seed is not None:
             generator = torch.Generator(device=device).manual_seed(seed)
 
@@ -137,7 +148,7 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
             device=device,
             dtype=transformer_dtype,
         )
-
+        
         # 4. Encode input prompt
         safe_emit_progress(progress_callback, 0.10, "Encoding prompt")
         prompt_embeds, prompt_embeds_mask, prompt_embeds_2, prompt_embeds_mask_2 = self.encode_prompt(
@@ -219,6 +230,8 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
             self.load_component_by_name("transformer")
         
         self.to_device(self.transformer)
+        if chunking_profile != "none" and hasattr(self.transformer, "set_chunking_profile"):
+            self.transformer.set_chunking_profile(chunking_profile)
 
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.50, 0.90)
         safe_emit_progress(
@@ -334,6 +347,11 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
             safe_emit_progress(progress_callback, 1.0, "Returning latents")
             return latents
         else:
+            if not self.vae:
+                self.load_component_by_type("vae")
+            self.vae.enable_tiling(use_light_vae=use_light_vae)
+            self.to_device(self.vae)
+            safe_emit_progress(progress_callback, 0.95, "Decoding latents to video with light VAE")
             safe_emit_progress(progress_callback, 0.95, "Decoding latents to video")
             video = self.vae_decode(latents, offload=offload)
             postprocessed_video = self._tensor_to_frames(video)

@@ -71,6 +71,8 @@ spec:
         min_vram_gb: 14
         recommended_vram_gb: 19
       file_size: 5042561442
+    config:
+      light_vae_path: lightx2v/Autoencoders/lighttaehy1_5.safetensors
   - type: transformer
     label: HunyuanVideo Transformer
     base: hunyuanvideo15.base
@@ -235,6 +237,7 @@ spec:
       resolution: 480p
       guidance_scale: 1.0
       attention_kwargs: {}
+      chunking_profile: light
   ui:
     panels:
     - name: prompting
@@ -267,6 +270,14 @@ spec:
         - - guidance_scale
         - - guidance_rescale
         - - seed
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
     inputs:
     - id: prompt
       label: Prompt
@@ -371,3 +382,18 @@ spec:
       min: 256
       max: 8192
       step: 16
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Split tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive

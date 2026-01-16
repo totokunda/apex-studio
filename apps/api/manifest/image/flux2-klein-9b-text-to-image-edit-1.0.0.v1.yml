@@ -59,6 +59,11 @@ spec:
     name: text_encoder
     label: Flux2 Text Encoder
     base: Qwen3ForCausalLM
+    ignore_offloading_modules:
+    - lm_head
+    - embed_tokens
+    block_modules:
+    - model
     config_path: black-forest-labs/FLUX.2-klein-9B/text_encoder/config.json
     model_path:
     - path: black-forest-labs/FLUX.2-klein-9B/text_encoder
