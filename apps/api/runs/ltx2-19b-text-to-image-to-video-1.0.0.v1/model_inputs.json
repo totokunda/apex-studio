@@ -1,54 +1,32 @@
 {
     "engine_kwargs": {
         "engine_type": "ltx2",
-        "yaml_path": "/home/tosin_coverquick_co/apex-studio/apps/api/manifest/video/ltx2-19b-text-to-image-to-video-1.0.0.v1.yml",
+        "yaml_path": "C:\\Users\\tosin\\Desktop\\apex-studio\\apps\\api\\manifest\\video\\ltx2-19b-text-to-image-to-video-1.0.0.v1.yml",
         "model_type": "ti2v",
         "selected_components": {
-            "scheduler": {
-                "name": "scheduler",
-                "base": "diffusers.schedulers.FlowMatchEulerDiscreteScheduler",
-                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/d910989f3c05d70b1b0a1efe0b453210cfbae5eca167c690002de602bf2a9ec4_scheduler_config.json",
-                "type": "scheduler",
-                "label": "FlowMatch Discrete Scheduler",
-                "default": "FlowMatchDiscreteScheduler",
-                "description": "The FlowMatch Discrete Scheduler is a scheduler for the LTX2 19B model."
-            },
             "video_vae": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "audio_vae": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "text_encoder": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "FP8"
             },
             "transformer": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "GGUF_Q3_K_S"
             },
             "connectors": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "vocoder": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "latent_upsampler": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             }
         },
+<<<<<<< HEAD
         "auto_memory_management": false,
         "attention_type": "sage"
     },
@@ -65,17 +43,43 @@
         "seed": 2397960395,
         "guidance_scale": 4,
         "chunking_profile": "light",
+=======
+        "auto_memory_management": false
+    },
+    "inputs": {
+        "use_distilled_stage_1": false,
+        "guidance_scale": 4.0,
+        "guidance_rescale": 0.0,
+        "upsample": true,
+        "num_inference_steps": 20,
+        "use_gradient_estimation": false,
+        "ge_gamma": 0.0,
+>>>>>>> 3fe30c187f8e5fd356cdfd2db1b22292502bd03e
         "vae_tiling_enabled": true,
         "vae_use_framewise_encoding": false,
         "vae_use_framewise_decoding": false,
+        "vae_num_sample_frames_batch_size": 16,
+        "vae_num_latent_frames_batch_size": 2,
         "vae_tile_sample_min_height": 512,
         "vae_tile_sample_min_width": 512,
         "vae_tile_sample_min_num_frames": 32,
         "vae_tile_sample_stride_height": 448,
         "vae_tile_sample_stride_width": 448,
         "vae_tile_sample_stride_num_frames": 16,
+<<<<<<< HEAD
         "vae_num_sample_frames_batch_size": 16,
         "vae_num_latent_frames_batch_size": 2,
+=======
+        "image_quality_crf": 33,
+        "prompt": "Vintage 16mm film look: roller skaters glide along a sunlit boardwalk at sunset, warm lens flares, gentle handheld camera, natural motion blur, ocean breeze moves hair and clothing, cinematic and stable.",
+        "negative_prompt": "blurry, low quality, jitter, flicker, artifacts",
+        "resolution": 1080,
+        "aspect_ratio": "1:1",
+        "height": 480,
+        "width": 832,
+        "seed": 42,
+        "chunking_profile": "light",
+>>>>>>> 3fe30c187f8e5fd356cdfd2db1b22292502bd03e
         "duration": "5s"
     }
 }

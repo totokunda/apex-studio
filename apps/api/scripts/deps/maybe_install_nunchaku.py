@@ -28,6 +28,17 @@ NUNCHAKU_VERSION = "1.0.2"
 NUNCHAKU_RELEASE_TAG = f"v{NUNCHAKU_VERSION}"
 NUNCHAKU_RELEASE_BASE_URL = f"https://github.com/nunchaku-tech/nunchaku/releases/download/{NUNCHAKU_RELEASE_TAG}"
 
+# Windows: pin to a known-good wheel URL (Blackwell/Win support has been finicky across upstream releases).
+# This is intentionally specific to avoid installing an incompatible wheel into a mismatched env.
+WIN_PINNED_NUNCHAKU_VERSION = "1.2.0"
+WIN_PINNED_WHEEL_PY_TAG = "cp312"
+WIN_PINNED_WHEEL_TORCH_MM = "2.9"
+WIN_PINNED_WHEEL_FILENAME = f"nunchaku-{WIN_PINNED_NUNCHAKU_VERSION}+torch{WIN_PINNED_WHEEL_TORCH_MM}-{WIN_PINNED_WHEEL_PY_TAG}-{WIN_PINNED_WHEEL_PY_TAG}-win_amd64.whl"
+WIN_PINNED_WHEEL_URL = (
+    "https://huggingface.co/datasets/totoku/attention/resolve/main/"
+    "nunchaku/nunchaku-1.2.0%2Btorch2.9-cp312-cp312-win_amd64.whl"
+)
+
 
 SUPPORTED_LINUX_TORCH_MM = {"2.7", "2.8", "2.9", "2.11"}
 SUPPORTED_WIN_TORCH_MM = {"2.9", "2.11"}
@@ -170,6 +181,37 @@ def decide_nunchaku_install(
             compute_capability=cap,
             python_tag=py_tag,
             torch_mm=torch_mm,
+        )
+
+    # Windows: prefer the pinned wheel URL (when compatible).
+    if platform_name == "win32":
+        if py_tag == WIN_PINNED_WHEEL_PY_TAG and torch_mm == WIN_PINNED_WHEEL_TORCH_MM:
+            return Decision(
+                allowed=True,
+                reason="ok (pinned windows wheel)",
+                platform_name=platform_name,
+                python=str(py_path),
+                uv=None,
+                compute_capability=cap,
+                python_tag=py_tag,
+                torch_mm=torch_mm,
+                nunchaku_version=WIN_PINNED_NUNCHAKU_VERSION,
+                wheel_filename=WIN_PINNED_WHEEL_FILENAME,
+                wheel_url=WIN_PINNED_WHEEL_URL,
+            )
+        return Decision(
+            allowed=False,
+            reason=(
+                "windows nunchaku wheel is pinned; expected "
+                f"{WIN_PINNED_WHEEL_FILENAME} but found torch {torch_mm} ({py_tag})"
+            ),
+            platform_name=platform_name,
+            python=str(py_path),
+            uv=None,
+            compute_capability=cap,
+            python_tag=py_tag,
+            torch_mm=torch_mm,
+            nunchaku_version=WIN_PINNED_NUNCHAKU_VERSION,
         )
 
 
