@@ -26,6 +26,7 @@ export const IMAGE_EXTS = [
   "tiff",
   "ico",
   "webp",
+  "avif",
 ];
 export const AUDIO_EXTS = [
   "mp3",

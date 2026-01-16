@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Preprocessor } from "@/lib/preprocessor/api";
 import type { AnyClipProps } from "@/lib/types";
 import { PreprocessorItem } from "@/components/menus/PreprocessorMenu";
@@ -12,6 +12,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { LuChevronDown, LuInfo } from "react-icons/lu";
+import { useQuery } from "@tanstack/react-query";
+import { fetchRayJobs, type RayJobStatus } from "@/lib/jobs/api";
+import {
+  connectUnifiedDownloadWebSocket,
+  disconnectUnifiedDownloadWebSocket,
+  onUnifiedDownloadError,
+  onUnifiedDownloadStatus,
+  onUnifiedDownloadUpdate,
+} from "@/lib/download/api";
+import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
 
 interface PreprocessorPropertiesProps {
   preprocDetailId: string | null;
@@ -37,6 +47,20 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
   onAdd,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>("__all__");
+  const subscribedRef = useRef<Map<string, () => void>>(new Map());
+
+  const { data: polledJobs = [] } = useQuery<RayJobStatus[]>({
+    queryKey: ["rayJobs"],
+    queryFn: fetchRayJobs,
+    placeholderData: (prev) => prev ?? [],
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: 4000,
+    refetchIntervalInBackground: true,
+  });
+
+  const sourceToJobId = useDownloadJobIdStore((s) => s.sourceToJobId);
+  const addJobUpdate = useDownloadJobIdStore((s) => s.addJobUpdate);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -53,6 +77,80 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
       (p) => p.category === selectedCategory,
     );
   }, [compatiblePreprocessors, selectedCategory]);
+
+  const relevantDownloadJobIds = useMemo(() => {
+    const visible = new Set(filteredList.map((p) => p.id));
+    const ids: string[] = [];
+    for (const [source, jobId] of Object.entries(sourceToJobId || {})) {
+      if (!jobId) continue;
+      if (!visible.has(source)) continue;
+      ids.push(jobId);
+    }
+    return Array.from(new Set(ids));
+  }, [filteredList, sourceToJobId]);
+
+  // Ensure unified-download websocket updates are wired into the in-memory job store
+  // while this panel is open. Without this, download completion may not be observed
+  // until a detail page forces a refetch.
+  useEffect(() => {
+    const activeJobIds = new Set(relevantDownloadJobIds);
+
+    // Connect to new jobs
+    activeJobIds.forEach((jobId) => {
+      if (subscribedRef.current.has(jobId)) return;
+      const setup = async () => {
+        try {
+          await connectUnifiedDownloadWebSocket(jobId);
+          const unsubUpdate = onUnifiedDownloadUpdate(jobId, (data) => {
+            addJobUpdate(jobId, data);
+          });
+          const unsubStatus = onUnifiedDownloadStatus(jobId, (data) => {
+            // PreprocessorItem primarily looks at `jobUpdates[*].status`,
+            // so mirror status events into the updates stream.
+            addJobUpdate(jobId, { status: data?.status } as any);
+          });
+          const unsubError = onUnifiedDownloadError(jobId, (data) => {
+            addJobUpdate(jobId, { status: "error", error: data?.error } as any);
+          });
+
+          const cleanup = () => {
+            try {
+              unsubUpdate();
+              unsubStatus();
+              unsubError();
+            } catch {}
+            disconnectUnifiedDownloadWebSocket(jobId).catch(() => {});
+          };
+
+          subscribedRef.current.set(jobId, cleanup);
+        } catch {
+          // Best-effort: if WS cannot connect, polling can still drive completion.
+        }
+      };
+      setup();
+    });
+
+    // Cleanup finished jobs
+    for (const [jobId, cleanup] of subscribedRef.current.entries()) {
+      if (!activeJobIds.has(jobId)) {
+        try {
+          cleanup();
+        } catch {}
+        subscribedRef.current.delete(jobId);
+      }
+    }
+  }, [relevantDownloadJobIds, addJobUpdate]);
+
+  useEffect(() => {
+    return () => {
+      for (const cleanup of subscribedRef.current.values()) {
+        try {
+          cleanup();
+        } catch {}
+      }
+      subscribedRef.current.clear();
+    };
+  }, []);
 
   return (
     <>
@@ -84,7 +182,7 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
                     {selectedCategory === "__all__"
                       ? "All categories"
                       : selectedCategory}
-                    <LuChevronDown className="!w-3.5 !h-3.5" />
+                    <LuChevronDown className="w-3.5! h-3.5!" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
@@ -128,6 +226,7 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
                     preprocessor={p}
                     onMoreInfo={(id) => setPreprocDetailId(id)}
                     onAdd={onAdd}
+                    polledJobs={polledJobs}
                     addDisabled={(() => {
                       if (
                         !clip ||
