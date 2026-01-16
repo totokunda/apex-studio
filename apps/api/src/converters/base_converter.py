@@ -624,7 +624,7 @@ class BaseConverter:
         # Some checkpoints are stored under a wrapper prefix (e.g. "model." or
         # "diffusion_model."). If *every* key has the prefix and stripping it makes
         # our conversion rules match better, strip it before any conversion passes.
-        self._strip_known_prefixes_inplace(state_dict, model_keys=model_keys)
+        
         # If this looks like a checkpoint that already matches the target key layout,
         # exit early to keep conversion idempotent.
 
@@ -652,5 +652,6 @@ class BaseConverter:
                 handler_fn_inplace(key, state_dict)
                 
         
+        self._strip_known_prefixes_inplace(state_dict, model_keys=model_keys)
 
         return state_dict
