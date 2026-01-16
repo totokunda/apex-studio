@@ -348,8 +348,14 @@ def _container_context(container: object, *, self_obj=None) -> list[str]:
 class OffloadMixin(base_object):
     """
     Add to any class that owns a torch.nn.Module (e.g. your Trainer or Model
-    wrapper).  Call `self._offload(self.model)` when you are finished with a
-    module and want to give the accelerator memory back.
+    wrapper).
+
+    Recommended usage in Apex engines is to offload by **component name**:
+        `self._offload("transformer")`
+    because that allows safe "discard" semantics (dropping references on the engine).
+
+    If you pass a module object directly, only `"cpu"` offload is supported; `"discard"`
+    requires a string name so the engine can sever references.
 
     Example
     -------
@@ -359,19 +365,22 @@ class OffloadMixin(base_object):
             self.model = model
 
         def teardown(self):
-            self._offload(self.model)   # <- frees VRAM / MRAM
+            # Explicitly choose a behavior for module objects.
+            self._offload(self.model, offload_type="cpu")
     """
 
     def _offload(
         self: "BaseEngine",
         module: torch.nn.Module | str | None,
         *,
-        offload_type: Literal["cpu", "discard"] = "discard",
+        offload_type: Literal["cpu", "discard"] | None = None,
     ) -> None:
         """
-        Move every weight/buffer to CPU **and** clear CUDA/MPS/CPU caches.
-        Optionally (default) also delete the module's parameters and buffers so it no
-        longer occupies CPU or accelerator memory.
+        Pressure-aware offload helper.
+
+        - If `offload_type` is explicitly set ("cpu" / "discard"), we do it immediately.
+        - If `offload_type` is None (default), we keep the module warm and only offload
+          when we're under RAM/VRAM pressure.
 
         Parameters
         ----------
@@ -390,7 +399,62 @@ class OffloadMixin(base_object):
         #         self._null_module_refs(module)
         #     return
 
+        import os
         import torch
+
+        def _env_float(name: str, default: float) -> float:
+            raw = os.environ.get(name)
+            if raw is None:
+                return default
+            try:
+                return float(str(raw).strip())
+            except Exception:
+                return default
+
+        def _cpu_free_fraction() -> float | None:
+            try:
+                import psutil  # type: ignore
+
+                vm = psutil.virtual_memory()
+                if vm.total <= 0:
+                    return None
+                return float(vm.available) / float(vm.total)
+            except Exception:
+                return None
+
+        def _cuda_free_fraction() -> float | None:
+            try:
+                if not torch.cuda.is_available():
+                    return None
+                free, total = torch.cuda.mem_get_info()
+                if total <= 0:
+                    return None
+                return float(free) / float(total)
+            except Exception:
+                return None
+
+        # Default policy: keep warm until pressure, then offload safely.
+        if offload_type is None:
+            min_free_vram = _env_float("APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.10)
+            min_free_ram = _env_float("APEX_OFFLOAD_MIN_FREE_RAM_FRACTION", 0.08)
+
+            vram_free = _cuda_free_fraction()
+            ram_free = _cpu_free_fraction()
+
+            under_vram = vram_free is not None and vram_free < min_free_vram
+            under_ram = ram_free is not None and ram_free < min_free_ram
+
+            # If neither is under pressure, keep everything as-is (warm).
+            if not under_vram and not under_ram:
+                return
+
+            # Under pressure: choose the least risky action.
+            # - Prefer offload-to-CPU only when RAM headroom is healthy.
+            # - Otherwise discard to avoid CPU OOM.
+            if under_vram and (ram_free is None or ram_free >= (min_free_ram + 0.05)):
+                offload_type = "cpu"
+            else:
+                offload_type = "discard"
 
         # Keep no_grad behavior without importing torch at module import time.
         with torch.no_grad():
