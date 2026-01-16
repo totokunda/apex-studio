@@ -1,7 +1,7 @@
 {
     "engine_kwargs": {
         "engine_type": "zimage",
-        "yaml_path": "C:\\Users\\tosin\\Desktop\\apex-studio\\apps\\api\\manifest\\image\\zimage-turbo-1.0.0.v1.yml",
+        "yaml_path": "/home/tosin_coverquick_co/apex-studio/apps/api/manifest/image/zimage-turbo-1.0.0.v1.yml",
         "model_type": "t2i",
         "selected_components": {
             "scheduler": {
@@ -26,15 +26,15 @@
             }
         },
         "auto_memory_management": false,
-        "attention_type": "sage"
+        "attention_type": "sdpa"
     },
     "inputs": {
-        "prompt": "((asian)),TFZ,a nude beautiful ,large breasts,fit,slim,sexy,muscular thick thigh:1.5,muscular,toned,atheletic,make up,19 yo,slim waist,feet,",
-        "resolution": "custom",
-        "aspect_ratio": "custom",
-        "height": 1216,
-        "width": 832,
-        "seed": 1946367204,
+        "prompt": "A dog witha chew toy in its mouth.",
+        "resolution": 1024,
+        "aspect_ratio": "1:1",
+        "height": 1024,
+        "width": 1024,
+        "seed": 2062130297,
         "num_inference_steps": 9,
         "duration": "5s"
     }
