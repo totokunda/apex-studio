@@ -335,7 +335,7 @@ class LoaderMixin(DownloadMixin):
                         }:
                             state_dict[key] = value.to(load_dtype)
                             
-               
+         
                 model.load_state_dict(state_dict, assign=True, strict=False)
                 continue
 
@@ -424,6 +424,8 @@ class LoaderMixin(DownloadMixin):
                 )
                 patched_for_fpscaled = True
             if hasattr(model, "load_state_dict"):
+                
+                
 
                 model.load_state_dict(
                     state_dict, strict=False, assign=True
