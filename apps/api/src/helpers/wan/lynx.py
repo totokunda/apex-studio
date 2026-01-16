@@ -44,8 +44,6 @@ def masked_mean(x: torch.Tensor, dim: int, mask: torch.Tensor) -> torch.Tensor:
 
 
 def flash_attention(query, key, value, q_lens, kv_lens, causal=False):
-    if flash_attn_varlen_func is None:
-        raise RuntimeError("flash attention backend is not available")
 
     B, H, T_q, D_h = query.shape
     T_k = key.shape[2]
