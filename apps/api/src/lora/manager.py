@@ -456,10 +456,21 @@ class LoraManager(DownloadMixin):
         # verify the state dict is correct or convert it to the correct format
 
         resolved: List[LoraItem] = []
-        final_names: List[str] = []
-        final_scales: List[float] = []
+        # Name->scale mapping (dedupes repeated adapters while preserving insertion order).
+        final_by_name: Dict[str, float] = {}
         loaded_resolved: List[LoraItem] = []
         model_keys = list(model.state_dict().keys())
+
+        # Track already-present adapters so we don't re-load (double-apply) LoRAs
+        # onto the same module instance across repeated runs.
+        existing_adapters: set[str] = set()
+        try:
+            pc = getattr(model, "peft_config", None)
+            if isinstance(pc, dict):
+                existing_adapters = set(str(k) for k in pc.keys())
+        except Exception:
+            existing_adapters = set()
+
         for idx, entry in enumerate(loras):
             scale: float = 1.0
             if isinstance(entry, tuple):
@@ -495,9 +506,18 @@ class LoraManager(DownloadMixin):
                 )
                 if item.scale == 0.0:
                     continue
-                final_names.append(adapter_name)
-                final_scales.append(item.scale)
                 # diffusers supports str or dict mapping for multiple files; we load one-by-one if multiple
+                adapter_name = self._clean_adapter_name(adapter_name)
+                final_by_name[adapter_name] = float(item.scale)
+
+                # Idempotency: if adapter already exists on the model, do not reload
+                # or reinject modules. We still re-activate below to apply new scales.
+                if adapter_name in existing_adapters:
+                    logger.info(
+                        f"LoRA adapter {adapter_name} already present on model; skipping reload."
+                    )
+                    continue
+                existing_adapters.add(adapter_name)
 
                 for local_path in item.local_paths:
                     class_name = model.__class__.__name__
@@ -524,7 +544,6 @@ class LoraManager(DownloadMixin):
                     keys = list(local_path_state_dict.keys())
                     prefix = self._get_prefix_key(keys)
                     # ensure adapter name is not too long and does not have . or / in it if so remove it
-                    adapter_name = self._clean_adapter_name(adapter_name)
 
                     metadata = self._build_lora_config_metadata_from_state_dict(
                         local_path_state_dict
@@ -542,10 +561,17 @@ class LoraManager(DownloadMixin):
                         metadata=metadata,
                     )
                     logger.info(f"Loaded LoRA {adapter_name} from {local_path}")
+                    try:
+                        del local_path_state_dict
+                    except Exception:
+                        pass
 
             # Activate all adapters with their weights in one call
             try:
-                model.set_adapters(final_names, weights=final_scales)
+                final_names = list(final_by_name.keys())
+                final_scales = [final_by_name[n] for n in final_names]
+                if final_names:
+                    model.set_adapters(final_names, weights=final_scales)
                 loaded_resolved.extend(resolved)
             except Exception as e:
                 # print the full stack trace

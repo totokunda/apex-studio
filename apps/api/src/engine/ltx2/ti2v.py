@@ -1585,6 +1585,25 @@ class LTX2TI2VEngine(LTX2Shared):
         
         if not getattr(self, "video_vae", None):
             self.load_component_by_name("video_vae")
+        # VAE decode is often the peak VRAM moment (large conv3d activations).
+        # Ensure headroom by offloading other resident components *before* moving
+        # the VAE to GPU and before starting decode.
+        try:
+            if (
+                getattr(self, "auto_memory_management", True)
+                and getattr(self, "device", None) is not None
+                and getattr(self.device, "type", None) == "cuda"
+            ):
+                min_free = self._env_float(
+                    "APEX_VRAM_DECODE_MIN_FREE_VRAM_FRACTION", 0.18
+                )
+                self._relieve_vram_pressure(
+                    reason="ltx2.video_vae.decode(pre)",
+                    keep={"video_vae"},
+                    min_free_vram_fraction=min_free,
+                )
+        except Exception:
+            pass
         self.to_device(self.video_vae)
         # Apply run-configured VAE tiling/framewise settings.
         if hasattr(self.video_vae, "enable_tiling"):
@@ -1616,7 +1635,28 @@ class LTX2TI2VEngine(LTX2Shared):
             latents = (1 - decode_noise_scale) * latents + decode_noise_scale * noise
         latents = latents.to(self.video_vae.dtype)
         safe_emit_progress(stage1_progress_callback, 0.94, "Decoding video latents")
-        video = self.video_vae.decode(latents, timestep, return_dict=False)[0]
+        # Decode can still OOM due to activations/fragmentation; retry once after
+        # a more aggressive pressure relief instead of failing the run.
+        try:
+            video = self.video_vae.decode(latents, timestep, return_dict=False)[0]
+        except torch.OutOfMemoryError:
+            try:
+                if (
+                    getattr(self, "auto_memory_management", True)
+                    and getattr(self, "device", None) is not None
+                    and getattr(self.device, "type", None) == "cuda"
+                ):
+                    min_free = self._env_float(
+                        "APEX_VRAM_DECODE_RETRY_MIN_FREE_VRAM_FRACTION", 0.25
+                    )
+                    self._relieve_vram_pressure(
+                        reason="ltx2.video_vae.decode(retry)",
+                        keep={"video_vae"},
+                        min_free_vram_fraction=min_free,
+                    )
+            except Exception:
+                pass
+            video = self.video_vae.decode(latents, timestep, return_dict=False)[0]
 
         if offload:
             self._offload("video_vae")
@@ -1624,6 +1664,24 @@ class LTX2TI2VEngine(LTX2Shared):
         if not getattr(self, "audio_vae", None):
             self.load_component_by_name("audio_vae")
             
+        # Audio decode/vocoder can also spike VRAM. Ensure headroom before moving
+        # these modules to GPU.
+        try:
+            if (
+                getattr(self, "auto_memory_management", True)
+                and getattr(self, "device", None) is not None
+                and getattr(self.device, "type", None) == "cuda"
+            ):
+                min_free = self._env_float(
+                    "APEX_VRAM_DECODE_MIN_FREE_VRAM_FRACTION", 0.18
+                )
+                self._relieve_vram_pressure(
+                    reason="ltx2.audio_vae.decode(pre)",
+                    keep={"audio_vae"},
+                    min_free_vram_fraction=min_free,
+                )
+        except Exception:
+            pass
         self.to_device(self.audio_vae)
         audio_latents = audio_latents.to(self.audio_vae.dtype)
         audio_latents = self.audio_vae.denormalize_latents(
@@ -1634,18 +1692,76 @@ class LTX2TI2VEngine(LTX2Shared):
         # enable tiling
         
         safe_emit_progress(stage1_progress_callback, 0.96, "Decoding audio latents")
-        generated_mel_spectrograms = self.audio_vae.decode(audio_latents, return_dict=False)[0]
+        try:
+            generated_mel_spectrograms = self.audio_vae.decode(
+                audio_latents, return_dict=False
+            )[0]
+        except torch.OutOfMemoryError:
+            try:
+                if (
+                    getattr(self, "auto_memory_management", True)
+                    and getattr(self, "device", None) is not None
+                    and getattr(self.device, "type", None) == "cuda"
+                ):
+                    min_free = self._env_float(
+                        "APEX_VRAM_DECODE_RETRY_MIN_FREE_VRAM_FRACTION", 0.25
+                    )
+                    self._relieve_vram_pressure(
+                        reason="ltx2.audio_vae.decode(retry)",
+                        keep={"audio_vae"},
+                        min_free_vram_fraction=min_free,
+                    )
+            except Exception:
+                pass
+            generated_mel_spectrograms = self.audio_vae.decode(
+                audio_latents, return_dict=False
+            )[0]
         
         if offload:
             self._offload("audio_vae")
             
         # load vocoder
         vocoder = self.helpers["vocoder"]
+        try:
+            if (
+                getattr(self, "auto_memory_management", True)
+                and getattr(self, "device", None) is not None
+                and getattr(self.device, "type", None) == "cuda"
+            ):
+                min_free = self._env_float(
+                    "APEX_VRAM_DECODE_MIN_FREE_VRAM_FRACTION", 0.18
+                )
+                self._relieve_vram_pressure(
+                    reason="ltx2.vocoder(pre)",
+                    keep={"vocoder"},
+                    min_free_vram_fraction=min_free,
+                )
+        except Exception:
+            pass
         self.to_device(vocoder)
         
         safe_emit_progress(stage1_progress_callback, 0.98, "Vocoder synthesis")
         generated_mel_spectrograms = generated_mel_spectrograms.to(vocoder.dtype)
-        audio = vocoder(generated_mel_spectrograms)
+        try:
+            audio = vocoder(generated_mel_spectrograms)
+        except torch.OutOfMemoryError:
+            try:
+                if (
+                    getattr(self, "auto_memory_management", True)
+                    and getattr(self, "device", None) is not None
+                    and getattr(self.device, "type", None) == "cuda"
+                ):
+                    min_free = self._env_float(
+                        "APEX_VRAM_DECODE_RETRY_MIN_FREE_VRAM_FRACTION", 0.25
+                    )
+                    self._relieve_vram_pressure(
+                        reason="ltx2.vocoder(retry)",
+                        keep={"vocoder"},
+                        min_free_vram_fraction=min_free,
+                    )
+            except Exception:
+                pass
+            audio = vocoder(generated_mel_spectrograms)
         
         if offload:
             self._offload("vocoder")
