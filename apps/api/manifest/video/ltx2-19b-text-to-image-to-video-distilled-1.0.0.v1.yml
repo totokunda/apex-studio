@@ -216,13 +216,6 @@ spec:
       resource_requirements:
         min_vram_gb: 9
         recommended_vram_gb: 13
-    - path: C:\Users\tosin\Downloads\ltx-2-19b-distilled-Q8_0.gguf
-      variant: GGUF_Q8_Local
-      custom: true
-      file_size: 20407583904
-      resource_requirements:
-        min_vram_gb: 20
-        recommended_vram_gb: 27
   - type: helper
     label: LTX2 Connectors
     name: connectors
