@@ -78,7 +78,7 @@ spec:
     base: flux2.base
     config_path: black-forest-labs/FLUX.2-klein-base-4b/transformer/config.json
     model_path:
-    - path: black-forest-labs/FLUX.2-klein-base-4b
+    - path: black-forest-labs/FLUX.2-klein-base-4b/transformer
       variant: default
       precision: fp16
       type: safetensors
@@ -86,7 +86,7 @@ spec:
       resource_requirements:
         min_vram_gb: 22
         recommended_vram_gb: 30
-    - path: black-forest-labs/FLUX.2-klein-4B
+    - path: black-forest-labs/FLUX.2-klein-4B/transformer
       variant: DISTILLED
       precision: fp16
       type: safetensors
