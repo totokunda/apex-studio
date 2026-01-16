@@ -24,7 +24,7 @@ spec:
   fps: 24
   loras:
   - source: Comfy-Org/HunyuanVideo_1.5_repackaged/split_files/loras/hunyuanvideo1.5_t2v_480p_lightx2v_4step_lora_rank_32_bf16.safetensors
-    scale: 0.0
+    scale: 1.0
     name: lightx2v_lora
     label: Lightx2v LoRA
     component: transformer
@@ -72,6 +72,8 @@ spec:
         min_vram_gb: 14
         recommended_vram_gb: 19
       file_size: 5042561442
+    config:
+      light_vae_path: lightx2v/Autoencoders/lighttaehy1_5.safetensors
   - type: transformer
     label: HunyuanVideo Transformer
     base: hunyuanvideo15.base
@@ -318,6 +320,7 @@ spec:
       enable_cache: false
       guidance_scale: 1.0
       attention_kwargs: {}
+      chunking_profile: light
   ui:
     panels:
     - name: image
@@ -358,6 +361,14 @@ spec:
         - - guidance_scale
         - - guidance_rescale
         - - seed
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
     inputs:
     - id: prompt
       label: Prompt
@@ -480,3 +491,18 @@ spec:
       min: 256
       max: 8192
       step: 16
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Split tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive

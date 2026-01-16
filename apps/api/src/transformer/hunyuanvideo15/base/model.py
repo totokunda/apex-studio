@@ -43,15 +43,19 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 def _apply_rotary_emb_chunked(
     x: torch.Tensor,
     freqs_cis: tuple,
-    chunk_size: int = 8192,
+    chunk_size: Optional[int] = 8192,
     sequence_dim: int = 1,
 ) -> torch.Tensor:
     """Apply rotary embeddings in chunks to reduce peak memory usage."""
     cos, sin = freqs_cis
     seq_len = x.shape[sequence_dim]
     
+    # Treat None (or non-positive) as "no chunking"
+    if chunk_size is not None and chunk_size <= 0:
+        chunk_size = None
+
     # Small sequences don't need chunking
-    if seq_len <= chunk_size:
+    if chunk_size is None or seq_len <= chunk_size:
         if sequence_dim == 1:
             cos_exp = cos[None, :, None, :]
             sin_exp = sin[None, :, None, :]
@@ -93,12 +97,37 @@ def _apply_rotary_emb_chunked(
     return output
 
 
+def _chunked_feed_forward(
+    ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: Optional[int]
+) -> torch.Tensor:
+    """
+    Chunked feed-forward to reduce peak activation memory.
+
+    Does NOT require `hidden_states.shape[chunk_dim]` to be divisible by `chunk_size`.
+    """
+    if chunk_size is None:
+        return ff(hidden_states)
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    dim_len = hidden_states.shape[chunk_dim]
+    if dim_len <= chunk_size:
+        return ff(hidden_states)
+
+    outputs = []
+    for start in range(0, dim_len, chunk_size):
+        end = min(start + chunk_size, dim_len)
+        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
+        outputs.append(ff(hs_chunk))
+    return torch.cat(outputs, dim=chunk_dim)
+
+
 class HunyuanVideo15AttnProcessor2_0:
     _attention_backend = None
     _parallel_config = None
     _rope_chunk_size = 8192  # Configurable chunk size for RoPE
 
-    def __init__(self, rope_chunk_size: int = 8192):
+    def __init__(self, rope_chunk_size: Optional[int] = 8192):
         if not hasattr(F, "scaled_dot_product_attention"):
             raise ImportError(
                 "HunyuanVideo15AttnProcessor2_0 requires PyTorch 2.0. To use it, please upgrade PyTorch to 2.0."
@@ -291,6 +320,14 @@ class HunyuanVideo15IndividualTokenRefinerBlock(nn.Module):
 
         self.norm_out = HunyuanVideo15AdaNorm(hidden_size, 2 * hidden_size)
 
+        # Chunked FFN (disabled by default). Chunk along dim=1 for [B, seq, C].
+        self._ff_chunk_size: Optional[int] = None
+        self._ff_chunk_dim: int = 1
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        self._ff_chunk_size = chunk_size
+        self._ff_chunk_dim = dim
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -308,7 +345,11 @@ class HunyuanVideo15IndividualTokenRefinerBlock(nn.Module):
         gate_msa, gate_mlp = self.norm_out(temb)
         hidden_states = hidden_states + attn_output * gate_msa
 
-        ff_output = self.ff(self.norm2(hidden_states))
+        normed = self.norm2(hidden_states)
+        if self._ff_chunk_size is not None:
+            ff_output = _chunked_feed_forward(self.ff, normed, self._ff_chunk_dim, self._ff_chunk_size)
+        else:
+            ff_output = self.ff(normed)
         hidden_states = hidden_states + ff_output * gate_mlp
 
         return hidden_states
@@ -370,6 +411,11 @@ class HunyuanVideo15IndividualTokenRefiner(nn.Module):
 
         return hidden_states
 
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        for block in self.refiner_blocks:
+            if hasattr(block, "set_chunk_feed_forward"):
+                block.set_chunk_feed_forward(chunk_size, dim=dim)
+
 
 class HunyuanVideo15TokenRefiner(nn.Module):
     def __init__(
@@ -418,6 +464,10 @@ class HunyuanVideo15TokenRefiner(nn.Module):
         hidden_states = self.token_refiner(hidden_states, temb, attention_mask)
 
         return hidden_states
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        if hasattr(self.token_refiner, "set_chunk_feed_forward"):
+            self.token_refiner.set_chunk_feed_forward(chunk_size, dim=dim)
 
 
 class HunyuanVideo15RotaryPosEmbed(nn.Module):
@@ -525,6 +575,20 @@ class HunyuanVideo15TransformerBlock(nn.Module):
         self.norm2_context = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.ff_context = FeedForward(hidden_size, mult=mlp_ratio, activation_fn="gelu-approximate")
 
+        # Chunked FFN (disabled by default). Chunk along dim=1 for [B, seq, C].
+        self._ff_chunk_size: Optional[int] = None
+        self._ff_chunk_dim: int = 1
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        self._ff_chunk_size = chunk_size
+        self._ff_chunk_dim = dim
+
+    def set_rope_chunk_size(self, rope_chunk_size: Optional[int]) -> None:
+        # The attention processor stores the RoPE chunk size.
+        proc = getattr(self.attn, "processor", None)
+        if proc is not None and hasattr(proc, "_rope_chunk_size"):
+            proc._rope_chunk_size = rope_chunk_size
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -560,8 +624,14 @@ class HunyuanVideo15TransformerBlock(nn.Module):
         norm_encoder_hidden_states = norm_encoder_hidden_states * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
 
         # 4. Feed-forward
-        ff_output = self.ff(norm_hidden_states)
-        context_ff_output = self.ff_context(norm_encoder_hidden_states)
+        if self._ff_chunk_size is not None:
+            ff_output = _chunked_feed_forward(self.ff, norm_hidden_states, self._ff_chunk_dim, self._ff_chunk_size)
+            context_ff_output = _chunked_feed_forward(
+                self.ff_context, norm_encoder_hidden_states, self._ff_chunk_dim, self._ff_chunk_size
+            )
+        else:
+            ff_output = self.ff(norm_hidden_states)
+            context_ff_output = self.ff_context(norm_encoder_hidden_states)
 
         hidden_states = hidden_states + gate_mlp.unsqueeze(1) * ff_output
         encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
@@ -621,6 +691,34 @@ class HunyuanVideo15Transformer3DModel(
         "HunyuanVideo15TokenRefiner",
     ]
 
+    _CHUNKING_PROFILES: Dict[str, Dict[str, Optional[int]]] = {
+        # No chunking.
+        "none": {
+            "ffn_chunk_size": None,
+            "rope_chunk_size": None,
+            "refiner_ffn_chunk_size": None,
+        },
+        # Light chunking: only kicks in for long sequences.
+        "light": {
+            "ffn_chunk_size": 2048,
+            # Match historical default RoPE chunking to avoid regressions.
+            "rope_chunk_size": 8192,
+            "refiner_ffn_chunk_size": 2048,
+        },
+        # Balanced memory saver.
+        "balanced": {
+            "ffn_chunk_size": 512,
+            "rope_chunk_size": 4096,
+            "refiner_ffn_chunk_size": 512,
+        },
+        # Aggressive memory saver.
+        "aggressive": {
+            "ffn_chunk_size": 256,
+            "rope_chunk_size": 2048,
+            "refiner_ffn_chunk_size": 256,
+        },
+    }
+
     @register_to_config
     def __init__(
         self,
@@ -643,6 +741,12 @@ class HunyuanVideo15Transformer3DModel(
         target_size: int = 640,  # did not name sample_size since it is in pixel spaces
         task_type: str = "i2v",
         use_meanflow: bool = False,
+        # Chunking profile controls memory-reducing chunking across RoPE + FFN (and refiner FFN).
+        chunking_profile: str = "none",
+        # Overrides (optional): allow forcing sizes regardless of profile.
+        ffn_chunk_size: Optional[int] = None,
+        ffn_chunk_dim: int = 1,
+        rope_chunk_size: Optional[int] = None,
     ) -> None:
         super().__init__()
 
@@ -681,6 +785,61 @@ class HunyuanVideo15Transformer3DModel(
         self.proj_out = nn.Linear(inner_dim, patch_size_t * patch_size * patch_size * out_channels)
 
         self.gradient_checkpointing = False
+
+        # Default: no chunking unless enabled explicitly.
+        self._chunking_profile_name: str = "none"
+        self._rope_chunk_size_default: Optional[int] = None
+
+        # Apply profile first, then apply explicit overrides.
+        self.set_chunking_profile(chunking_profile)
+        if ffn_chunk_size is not None:
+            self.set_chunk_feed_forward(ffn_chunk_size, dim=ffn_chunk_dim)
+            # Keep refiner aligned with main FFN override by default.
+            self.set_refiner_chunk_feed_forward(ffn_chunk_size, dim=ffn_chunk_dim)
+        if rope_chunk_size is not None:
+            self.set_rope_chunk_size(rope_chunk_size)
+
+    def list_chunking_profiles(self) -> Tuple[str, ...]:
+        """Return available chunking profile names."""
+        return tuple(self._CHUNKING_PROFILES.keys())
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        """Enable/disable chunked FFN across all main transformer blocks."""
+        for block in self.transformer_blocks:
+            if hasattr(block, "set_chunk_feed_forward"):
+                block.set_chunk_feed_forward(chunk_size, dim=dim)
+
+    def set_refiner_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        """Enable/disable chunked FFN inside the text token refiner."""
+        if hasattr(self.context_embedder, "set_chunk_feed_forward"):
+            self.context_embedder.set_chunk_feed_forward(chunk_size, dim=dim)
+
+    def set_rope_chunk_size(self, rope_chunk_size: Optional[int]) -> None:
+        """Set RoPE application chunk size for all attention processors."""
+        self._rope_chunk_size_default = rope_chunk_size
+        for block in self.transformer_blocks:
+            if hasattr(block, "set_rope_chunk_size"):
+                block.set_rope_chunk_size(rope_chunk_size)
+
+    def set_chunking_profile(self, profile_name: str) -> None:
+        """
+        Apply a predefined chunking profile across the whole model.
+
+        Controls:
+        - RoPE application chunk size inside attention processors
+        - FFN chunking inside each main transformer block
+        - FFN chunking inside the text token refiner
+        """
+        if profile_name not in self._CHUNKING_PROFILES:
+            raise ValueError(
+                f"Unknown chunking profile '{profile_name}'. Available: {sorted(self._CHUNKING_PROFILES.keys())}"
+            )
+        p = self._CHUNKING_PROFILES[profile_name]
+        self._chunking_profile_name = profile_name
+
+        self.set_rope_chunk_size(p.get("rope_chunk_size", None))
+        self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
+        self.set_refiner_chunk_feed_forward(p.get("refiner_ffn_chunk_size", None), dim=1)
 
     def forward(
         self,
