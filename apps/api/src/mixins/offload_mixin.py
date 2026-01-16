@@ -373,7 +373,7 @@ class OffloadMixin(base_object):
         self: "BaseEngine",
         module: torch.nn.Module | str | None,
         *,
-        offload_type: Literal["cpu", "discard"] | None = None,
+        offload_type: Literal["cpu", "discard"] | None = "discard"
     ) -> None:
         """
         Pressure-aware offload helper.
