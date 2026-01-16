@@ -27,6 +27,15 @@ except Exception as e:
     flash_attn_func_3 = None
     _flash3_import_error = e
 
+_flash_turing_import_error: Exception | None = None
+try:
+    # Turing-only FlashAttention kernel (SM 7.5).
+    # Very fragile: import may fail for non-Turing environments or if wheel not installed.
+    from flash_attn_turing import fwd as flash_attn_turing_fwd  # type: ignore
+except Exception as e:
+    flash_attn_turing_fwd = None
+    _flash_turing_import_error = e
+
 try:
     from flash_attn import flash_attn_varlen_func, flash_attn_func
 except ImportError:
@@ -106,6 +115,44 @@ def _create_cu_seqlens(seq_lengths, *, device):
     for length in seq_lengths:
         cu.append(cu[-1] + int(length))
     return torch.tensor(cu, dtype=torch.int32, device=device)
+
+
+def _cuda_capability(device: torch.device | None = None) -> tuple[int, int]:
+    """
+    Return CUDA compute capability (major, minor) for the given device.
+    Returns (0, 0) when CUDA is unavailable.
+    """
+    if not torch.cuda.is_available():
+        return (0, 0)
+    dev = device if device is not None else torch.device("cuda")
+    try:
+        return torch.cuda.get_device_capability(dev)
+    except Exception:
+        # Defensive: in some misconfigured runtimes, get_device_capability can raise.
+        return (0, 0)
+
+
+def _is_turing_cuda(device: torch.device | None = None) -> bool:
+    # NVIDIA Turing GPUs are SM 7.5 (e.g. T4, RTX 20-series).
+    return _cuda_capability(device) == (7, 5)
+
+
+def _can_use_flash_turing(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
+    # Must be CUDA tensors on the same device
+    if not (q.is_cuda and k.is_cuda and v.is_cuda):
+        return False
+    if q.device != k.device or q.device != v.device:
+        return False
+    # Must be Turing (SM 7.5)
+    if not _is_turing_cuda(q.device):
+        return False
+    # Head dim constraint (<= 128)
+    if q.shape[-1] > 128:
+        return False
+    # Kernel must be importable
+    if flash_attn_turing_fwd is None:
+        return False
+    return True
 
 
 @attention_register("sdpa_streaming")
@@ -309,7 +356,9 @@ def sdpa(
 ):
     # When no mask, force efficient backends (flash or mem_efficient)
     # The math kernel materializes full S×S attention matrix causing VRAM spikes
-    if attn_mask is None and q.is_cuda:
+    # check if can use flash based on capability
+    capability = _cuda_capability(q.device)
+    if attn_mask is None and q.is_cuda and capability >= (8, 0):
         with torch.backends.cuda.sdp_kernel(
             enable_flash=True, 
             enable_math=False, 
@@ -814,6 +863,95 @@ def flash_attention_padded(
     return out.permute(0, 2, 1, 3).to(q.dtype)
 
 
+def flash_attention_turing(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    cu_seqlens_q=None,
+    cu_seqlens_k=None,
+    max_seqlen_q=None,
+    max_seqlen_k=None,
+    softmax_scale: float | None = None,
+    default_dtype: torch.dtype = torch.float16,
+    is_causal: bool = False,
+    **kwargs,
+) -> torch.Tensor:
+    """
+    FlashAttention (Turing-only, SM 7.5) wrapper around:
+
+        from flash_attn_turing import fwd
+        out = fwd(q, k, v, is_causal)[0]
+
+    Notes / constraints (fragile):
+    - CUDA Turing only (compute capability == 7.5)
+    - head_dim <= 128
+    - fp16 only (inputs are cast to torch.float16)
+    - expects NHD layout: q/k/v shaped (B, S, H, D)
+    - does NOT support varlen inputs (cu_seqlens_*). Those fall back to SDPA varlen.
+    """
+    # Varlen path is not supported by this kernel; fall back.
+    if cu_seqlens_q is not None or cu_seqlens_k is not None:
+        return sdpa_varlen(
+            q,
+            k,
+            v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            is_causal=is_causal,
+            **kwargs,
+        )
+
+    if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
+        raise ValueError("flash_attention_turing expects q/k/v with shape (B, H, S, D)")
+
+    Bq, Hq, Sq, Dq = q.shape
+    Bk, Hk, Sk, Dk = k.shape
+    Bv, Hv, Sv, Dv = v.shape
+    if not (Bq == Bk == Bv and Hq == Hk == Hv and Sk == Sv and Dq == Dk == Dv):
+        raise ValueError("Mismatched q/k/v shapes for flash_attention_turing")
+
+    # Hard constraints
+    if Dq > 128:
+        return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
+    if not _can_use_flash_turing(q, k, v):
+        return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
+
+    # flash_attn_turing uses the implicit default scale (1/sqrt(D)) – if caller
+    # provides a different scale, fall back to SDPA for correctness.
+    if softmax_scale is not None:
+        ref = 1.0 / math.sqrt(Dq)
+        if abs(float(softmax_scale) - float(ref)) > 1e-6:
+            return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
+
+    start_dtype = q.dtype
+
+    # Enforce fp16 inputs (required by kernel)
+    q16 = q.to(torch.float16).contiguous()
+    k16 = k.to(torch.float16).contiguous()
+    v16 = v.to(torch.float16).contiguous()
+
+    # Convert from (B, H, S, D) -> (B, S, H, D) expected by flash_attn_turing
+    q_in = q16.transpose(1, 2)
+    k_in = k16.transpose(1, 2)
+    v_in = v16.transpose(1, 2)
+
+    try:
+        out = flash_attn_turing_fwd(q_in, k_in, v_in, bool(is_causal))  # type: ignore[misc]
+        # The kernel returns a tuple; first element is the output.
+        if not torch.is_tensor(out):
+            out = out[0]
+        
+    except Exception:
+        # Kernel is fragile; fall back safely.
+        return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
+
+    # Back to (B, H, S, D) and preserve caller dtype
+    out_bhsd = out.transpose(1, 2).contiguous()
+    return out_bhsd.to(start_dtype)
+
+
 @attention_register("flash_varlen", available=flash_attn_varlen_func is not None)
 def flash_attention_varlen(
     q: torch.Tensor,
@@ -974,7 +1112,10 @@ def flash_attention_varlen(
     return out
 
 
-@attention_register("flash", available=flash_attn_func is not None)
+@attention_register(
+    "flash",
+    available=(flash_attn_func is not None or (flash_attn_turing_fwd is not None and _is_turing_cuda())),
+)
 def flash_attention(
     q,
     k,
@@ -988,8 +1129,31 @@ def flash_attention(
     is_causal=False,
     **kwargs,
 ):
+    # Turing-only path (SM 7.5): use flash_attn_turing when possible.
+    # This keeps the convention of `key="flash"` working on Turing GPUs.
+    if _is_turing_cuda(q.device):
+        if _can_use_flash_turing(q, k, v):
+            return flash_attention_turing(
+                q,
+                k,
+                v,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                softmax_scale=softmax_scale,
+                default_dtype=torch.float16,
+                is_causal=is_causal,
+                **kwargs,
+            )
+        else:
+            return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
 
+    # Non-Turing / unsupported shapes -> existing flash-attn2 paths when installed.
     if cu_seqlens_q is None or cu_seqlens_k is None:
+        if flash_attn_func is None:
+            # Fall back gracefully when flash-attn2 is unavailable.
+            return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
         return flash_attention_padded(
             q,
             k,
@@ -1000,6 +1164,18 @@ def flash_attention(
             **kwargs,
         )
     else:
+        if flash_attn_varlen_func is None:
+            return sdpa_varlen(
+                q,
+                k,
+                v,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                is_causal=is_causal,
+                **kwargs,
+            )
         return flash_attention_varlen(
             q,
             k,
@@ -1543,7 +1719,10 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
             if "flash3" in backend_name and capability < (9, 0):
                 queue.put(False)
                 return
-            if ("flash" in backend_name or "sage" in backend_name) and capability < (8, 0):
+            # Allow `key="flash"` on Turing if the turing kernel is available.
+            if backend_name == "flash" and capability == (7, 5) and flash_attn_turing_fwd is not None:
+                pass
+            elif ("flash" in backend_name or "sage" in backend_name) and capability < (8, 0):
                 queue.put(False)
                 return
 
