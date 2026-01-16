@@ -50,20 +50,19 @@
             }
         },
         "auto_memory_management": false,
-        "attention_type": "sdpa"
+        "attention_type": "sage"
     },
     "inputs": {
-        "image": "assets/1e53b15d39128641fbb9d8d1ee6b06d9949393d73f76b4b99db3955903106a02.png",
-        "last_image": "assets/dd9a522454b68ed182cc23b5bf4dec0430ad25c4ad730e7a20aaec1bc2d1315d.png",
+        "image": "assets/2ae5fdcb97519879676ed96d62f31298aa7ef01946a9c9a083f7027ff002dfff.png",
         "image_quality_crf": 33,
-        "prompt": "The man wearing glasses starts begging for mercy saying \"Please! Please don't hit me, I am begging you! I am just a small man!\" Before the ogre smiles and smashes him in the face.  The man starts to crawl towards the center of the ring, before the ogre winds up his fist and hits in him the jaw. ",
+        "prompt": "Spongebob and patrick start laughing hysterically. ",
         "negative_prompt": "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.",
-        "resolution": "custom",
+        "resolution": "720",
         "aspect_ratio": "custom",
         "num_inference_steps": 20,
-        "height": 768,
-        "width": 1360,
-        "seed": 117378484,
+        "height": 736,
+        "width": 736,
+        "seed": 2397960395,
         "guidance_scale": 4,
         "chunking_profile": "light",
         "vae_tiling_enabled": true,
@@ -77,6 +76,6 @@
         "vae_tile_sample_stride_num_frames": 16,
         "vae_num_sample_frames_batch_size": 16,
         "vae_num_latent_frames_batch_size": 2,
-        "duration": "10s"
+        "duration": "5s"
     }
 }

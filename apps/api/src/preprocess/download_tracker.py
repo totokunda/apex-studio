@@ -35,6 +35,8 @@ class DownloadProgressTracker:
         """
         # Throttle updates
         current_time = time.time()
+        if not current or not total:
+            return
         if current_time - self.last_update < self.update_interval and current < total:
             return
 

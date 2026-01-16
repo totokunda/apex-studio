@@ -191,37 +191,69 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
     content["spec"]["attention_types_detail"] = attention_options
 
     # Enrich LoRA entries
+    #
+    # Important: keep the manifest YAML `spec.loras[*].source` as the user-provided
+    # identifier (URN/spec/url). For UI convenience we expose the resolved local
+    # downloaded file path(s) via `source` (backwards-compat) and `local_paths`,
+    # while preserving the original identifier in `remote_source`.
     all_loras_downloaded = True
     for lora_index, lora in enumerate(content.get("spec", {}).get("loras", [])):
         if isinstance(lora, str):
-            is_downloaded = DownloadMixin.is_downloaded(lora, get_lora_path())
-            lora_basename = os.path.basename(lora)
-            lora_name = lora_basename.split(".")[0]
-            out_lora = {
-                "label": lora_name,
-                "name": lora_name,
-                "scale": 1.0,
-            }
-            if is_downloaded is not None:
+            remote_source = lora
+            try:
+                from src.utils.lora_resolution import resolve_lora_local_paths
+
+                local_paths = resolve_lora_local_paths(remote_source)
+            except Exception:
+                local_paths = []
+
+            # Name/label best-effort (avoid showing entire URN in UI)
+            lora_basename = os.path.basename(remote_source)
+            lora_name = lora_basename.split(".")[0] if "." in lora_basename else lora_basename
+            try:
+                if remote_source.startswith("urn:air:") or remote_source.startswith("civitai:") or remote_source.startswith("civitai-file:"):
+                    tail = remote_source.rsplit(":", 1)[-1]
+                    tail = tail.split("@", 1)[0]
+                    tail = tail.split(".", 1)[0]
+                    if tail:
+                        lora_name = tail
+            except Exception:
+                pass
+
+            out_lora = {"label": lora_name, "name": lora_name, "scale": 1.0, "remote_source": remote_source}
+            if local_paths:
                 out_lora["is_downloaded"] = True
-                out_lora["source"] = is_downloaded
+                out_lora["source"] = local_paths[0]
+                out_lora["local_paths"] = local_paths
             else:
                 out_lora["is_downloaded"] = False
-                out_lora["source"] = lora
+                out_lora["source"] = remote_source
+                out_lora["local_paths"] = []
                 all_loras_downloaded = False
             content["spec"]["loras"][lora_index] = out_lora
         elif isinstance(lora, dict):
-            is_downloaded = DownloadMixin.is_downloaded(
-                lora.get("source"), get_lora_path()
-            )
-            if is_downloaded is not None:
-                lora["is_downloaded"] = True
-                lora["source"] = is_downloaded
+            out_lora = dict(lora)
+            # If previous enrichments ran, `source` may already be a local path. Prefer `remote_source` if present.
+            remote_source = out_lora.get("remote_source") or out_lora.get("source") or out_lora.get("path") or out_lora.get("url") or out_lora.get("remote")
+            remote_source = remote_source if isinstance(remote_source, str) else ""
+            try:
+                from src.utils.lora_resolution import resolve_lora_local_paths
+
+                local_paths = resolve_lora_local_paths(remote_source) if remote_source else []
+            except Exception:
+                local_paths = []
+
+            out_lora["remote_source"] = remote_source or out_lora.get("remote_source") or out_lora.get("source")
+            if local_paths:
+                out_lora["is_downloaded"] = True
+                out_lora["source"] = local_paths[0]
+                out_lora["local_paths"] = local_paths
             else:
-                lora["is_downloaded"] = False
-                lora["source"] = lora.get("source")
+                out_lora["is_downloaded"] = False
+                out_lora["source"] = remote_source or out_lora.get("source")
+                out_lora["local_paths"] = []
                 all_loras_downloaded = False
-            content["spec"]["loras"][lora_index] = lora
+            content["spec"]["loras"][lora_index] = out_lora
 
     # Enrich components entries
     for component_index, component in enumerate(
