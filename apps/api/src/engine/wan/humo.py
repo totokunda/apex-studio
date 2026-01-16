@@ -440,11 +440,13 @@ class HuMoEngine(WanShared):
             safe_emit_progress(
                 progress_callback, 0.10, "No audio provided; using zeros"
             )
+        
 
         if offload and audio_processor is not None:
-            self._offload("audio_processor")
+            del audio_processor
+            self._offload("wan.humo_audio_processor")
             safe_emit_progress(progress_callback, 0.11, "Audio processor offloaded")
-
+            
         if use_audio_length:
             frame_num = audio_length
         else:
@@ -499,6 +501,7 @@ class HuMoEngine(WanShared):
             0.19,
             f"Encoding prompts (CFG: {'on' if use_cfg_guidance else 'off'})",
         )
+
 
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,
