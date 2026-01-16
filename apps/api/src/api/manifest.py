@@ -509,10 +509,15 @@ def _attention_label_description_maps() -> tuple[Dict[str, str], Dict[str, str]]
         "flex": "Flex Attention",
         "xla_flash": "XLA Flash Attention",
         "flex-block-attn": "Flex Block Attention",
+        # Some stacks use "efficient_sdpa" naming; others register this as
+        # "efficient_dot_product_attention". We support both labels.
+        "efficient_sdpa": "Efficient SDPA",
         "efficient_dot_product_attention": "Efficient Dot Product Attention",
         "block-sparse-attn": "Block Sparse Attention",
         "metal_flash": "Metal Flash Attention",
         "metal_flash-varlen": "Metal Flash Attention (VarLen)",
+        # The attention registry uses an underscore variant; support it too.
+        "metal_flash_varlen": "Metal Flash Attention (VarLen)",
     }
 
     description_map = {
@@ -523,16 +528,62 @@ def _attention_label_description_maps() -> tuple[Dict[str, str], Dict[str, str]]
         "flash3": "FlashAttention-3 kernel via flash_attn_interface.",
         "metal_flash": "Metal Flash Attention kernel for MPS.",
         "metal_flash-varlen": "Variable Length kernel for MPS.",
+        "metal_flash_varlen": "Variable Length kernel for MPS.",
         "sage": "SageAttention kernel backend.",
         "xformers": "xFormers memory-efficient attention implementation.",
         "flex": "PyTorch Flex Attention (experimental flexible masks).",
         "xla_flash": "XLA/TPU Flash Attention kernel.",
         "flex-block-attn": "Flex Block Attention kernel.",
-        "efficient_dot_product_attention": "Efficient Dot Product Attention kernel.",
+        # Slowest fallbacks (kept last in the UI by default)
+        "efficient_sdpa": "Fallback 'efficient SDPA' attention implementation (slowest).",
+        "efficient_dot_product_attention": "Efficient Dot Product Attention kernel (slowest).",
         "block-sparse-attn": "Block Sparse Attention kernel.",
     }
 
     return label_map, description_map
+
+
+def _attention_backend_sort_key(name: str) -> tuple[int, str]:
+    """
+    Sort attention backends from fastest to slowest for UI display.
+
+    Notes:
+    - This is a heuristic ordering for a better default UX; actual performance
+      depends on hardware, shapes, and installed kernels.
+    - We intentionally force the "efficient" SDPA fallback(s) to the end.
+    """
+    # Heuristic fastest -> slowest.
+    # Keep this list small and opinionated; unknown backends fall after known
+    # ones, but before the explicit slowest fallbacks.
+    fastest_to_slowest = [
+        # Modern fused kernels
+        "flash3",
+        "flash",
+        "sage",
+        # Platform-specific fused kernels
+        "metal_flash",
+        "metal_flash_varlen",
+        "metal_flash-varlen",
+        "xla_flash",
+        # Built-in / portable paths
+        "sdpa_varlen",
+        "sdpa_streaming",
+        "sdpa",
+        "xformers",
+        "flex",
+        "flex-block-attn",
+        "block-sparse-attn",
+    ]
+
+    # Explicit slowest fallbacks: always last (regardless of any unknowns).
+    slowest_fallbacks = {"efficient_sdpa", "efficient_dot_product_attention"}
+
+    if name in slowest_fallbacks:
+        return (9_000, name)
+
+    rank_map = {k: i for i, k in enumerate(fastest_to_slowest)}
+    rank = rank_map.get(name, 5_000)
+    return (rank, name)
 
 
 def _build_attention_options(
@@ -557,11 +608,14 @@ def _build_attention_options(
 
     if allowed is not None:
         allowed_set = {a for a in allowed if isinstance(a, str)}
-        final_keys = sorted(available_keys.intersection(allowed_set))
+        keys = list(available_keys.intersection(allowed_set))
     else:
         # If the manifest does not specify support/attention types, expose all
         # available implementations.
-        final_keys = sorted(available_keys)
+        keys = list(available_keys)
+
+    # Default ordering: fastest -> slowest for a better UX.
+    final_keys = sorted(keys, key=_attention_backend_sort_key)
 
     results: List[Dict[str, str]] = []
     for key in final_keys:

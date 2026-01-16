@@ -163,7 +163,6 @@ class LoraConverter(BaseConverter):
         return state_dict
 
     def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
-        self._strip_known_prefixes_inplace(state_dict, model_keys=model_keys)
         state_dict_type = self._get_state_dict_type(state_dict)
         if state_dict_type == StateDictType.KOHYA_SS:
             convert_kohya_to_peft_state_dict(state_dict)

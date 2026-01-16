@@ -467,6 +467,55 @@ class BaseConverter:
             update_state_dict_(state_dict, old_key, new_key)
         return True
 
+    def _strip_prefix_inplace_if_better_with_model_keys(
+        self, state_dict: Dict[str, Any], prefix: str, model_keys: List[str]
+    ) -> bool:
+        """
+        Strip `prefix` from keys that start with it (even if not unanimous), but only
+        when doing so *strictly increases* overlap with `model_keys`.
+
+        This is a safe extension of `_strip_prefix_inplace_if_better` for cases where
+        a checkpoint mixes wrapped and unwrapped keys (common for LoRA exports that
+        partially include `diffusion_model.` / `model.`).
+        """
+        if not state_dict or not prefix or not model_keys:
+            return False
+
+        keys = list(state_dict.keys())
+        if not keys:
+            return False
+
+        prefixed = [k for k in keys if k.startswith(prefix)]
+        if not prefixed:
+            return False
+
+        current_score = self._model_key_overlap_score(keys, model_keys)
+
+        # Build hypothetical key list and guard against collisions/empties.
+        new_keys = []
+        for k in keys:
+            if k.startswith(prefix):
+                nk = k[len(prefix) :]
+                if not nk:
+                    return False
+                new_keys.append(nk)
+            else:
+                new_keys.append(k)
+
+        # Collision guard: would stripping create duplicate keys?
+        if len(set(new_keys)) != len(new_keys):
+            return False
+
+        new_score = self._model_key_overlap_score(new_keys, model_keys)
+        if new_score <= current_score:
+            return False
+
+        # Apply in-place for the affected subset only.
+        for old_key in list(state_dict.keys()):
+            if old_key.startswith(prefix):
+                update_state_dict_(state_dict, old_key, old_key[len(prefix) :])
+        return True
+
     def _strip_known_prefixes_inplace(
         self, state_dict: Dict[str, Any], model_keys: List[str] = None
     ) -> None:
@@ -521,9 +570,12 @@ class BaseConverter:
                 best_score = current_score
 
                 for p in candidate_prefixes:
-                    if not all(k.startswith(p) for k in keys):
+                    # Consider both unanimous and *subset* stripping when model_keys are
+                    # available. Subset stripping is common for LoRA exports where only
+                    # some tensors are wrapped with e.g. `diffusion_model.`.
+                    if not any(k.startswith(p) for k in keys):
                         continue
-                    stripped = [k[len(p) :] for k in keys]
+                    stripped = [k[len(p) :] if k.startswith(p) else k for k in keys]
                     if any(not k for k in stripped):
                         continue
                     if len(set(stripped)) != len(stripped):
@@ -538,8 +590,12 @@ class BaseConverter:
                             best_prefix = p
 
                 if best_prefix and best_score > current_score:
+                    # Apply only to keys that actually have the prefix.
                     for old_key in list(state_dict.keys()):
-                        update_state_dict_(state_dict, old_key, old_key[len(best_prefix) :])
+                        if old_key.startswith(best_prefix):
+                            update_state_dict_(
+                                state_dict, old_key, old_key[len(best_prefix) :]
+                            )
                     changed = True
             # If we successfully used model_keys, stop here.
             if self._model_key_overlap_score(list(state_dict.keys()), model_keys) > 0:

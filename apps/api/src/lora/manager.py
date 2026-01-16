@@ -391,7 +391,9 @@ class LoraManager(DownloadMixin):
  
         if converter is not None:
             converter.convert(state_dict, model_keys)
-
+        
+        lora_converter._strip_known_prefixes_inplace(state_dict, model_keys=model_keys)
+        
         return state_dict
 
     def _format_to_extension(self, format: str) -> str:
