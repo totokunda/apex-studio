@@ -4,42 +4,25 @@
         "yaml_path": "/home/tosin_coverquick_co/apex-studio/apps/api/manifest/image/zimage-turbo-1.0.0.v1.yml",
         "model_type": "t2i",
         "selected_components": {
-            "scheduler": {
-                "name": "scheduler",
-                "base": "diffusers.FlowMatchEulerDiscreteScheduler",
-                "config_path": "/home/tosin_coverquick_co/apex-diffusion/components/309fddec5ebc49a8aefab205fe7dff824cca5ac413726b93cdd87b078cd60423_scheduler_config.json",
-                "type": "scheduler",
-                "label": "FlowMatch Euler Discrete Scheduler",
-                "default": "FlowMatchEulerDiscreteScheduler",
-                "description": "The FlowMatch Euler Discrete Scheduler is a scheduler for the ZImage Turbo model."
-            },
             "vae": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "text_encoder": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "default"
             },
             "transformer": {
-                "variant": "default",
-                "precision": "fp16",
-                "type": "safetensors"
+                "variant": "GGUF_Q4_K_S"
             }
         },
-        "auto_memory_management": false,
-        "attention_type": "sdpa"
+        "auto_memory_management": false
     },
     "inputs": {
-        "prompt": "Extremely detailed portrait of Michael Jackson at age 50 in 2009, just weeks before his death, pale almost translucent skin, very thin face with high cheekbones, small delicate nose after many surgeries, tired deep-set eyes with dark circles, long straight black hair falling over forehead, wearing a black military-style jacket with silver buttons, soft tragic expression, somber mood, cinematic lighting, photorealistic, 8k, raw emotion",
+        "prompt": "A serene lake surrounded by pine trees at sunrise, ultra realistic.",
         "resolution": 1024,
         "aspect_ratio": "1:1",
-        "height": 1024,
-        "width": 1024,
-        "seed": 2687313018,
-        "num_inference_steps": 9,
-        "duration": "5s"
+        "height": 2048,
+        "width": 2048,
+        "seed": 42,
+        "num_inference_steps": 9
     }
 }

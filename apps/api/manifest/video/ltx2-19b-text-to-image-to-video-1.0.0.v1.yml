@@ -41,7 +41,7 @@ spec:
     name: ltx-2-19b-distilled-lora-384
     label: LTX2 19B Distilled LoRA 384
     verified: true
-    scale: 0.8
+    scale: 1.0
     required: true
   components:
   - type: scheduler
@@ -292,6 +292,7 @@ spec:
         flow: column
         rows:
         - - image
+        - - last_image
         - - audio
     - name: advanced_media
       label: Advanced Media
@@ -368,6 +369,14 @@ spec:
     - id: image
       label: Image
       description: The image to condition on.
+      type: image
+      panel: media
+      required: false
+      map_h: height
+      map_w: width
+    - id: last_image
+      label: Last Image
+      description: Optional second image to condition the final frame.
       type: image
       panel: media
       required: false

@@ -163,19 +163,19 @@ class LoraConverter(BaseConverter):
         return state_dict
 
     def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
-        state_dict = strip_common_prefix(state_dict, model_keys=model_keys)
+        self._strip_known_prefixes_inplace(state_dict, model_keys=model_keys)
         state_dict_type = self._get_state_dict_type(state_dict)
         if state_dict_type == StateDictType.KOHYA_SS:
             convert_kohya_to_peft_state_dict(state_dict)
         elif state_dict_type == StateDictType.DIFFUSERS_OLD:
             self.rename_dict = DIFFUSERS_OLD_TO_PEFT
-            super().convert(state_dict)
+            super().convert(state_dict, model_keys=model_keys)
         elif state_dict_type == StateDictType.DIFFUSERS:
             self.rename_dict = DIFFUSERS_TO_PEFT
-            super().convert(state_dict)
+            super().convert(state_dict, model_keys=model_keys)
         elif state_dict_type == StateDictType.BASE:
             self.rename_dict = BASE_TO_PEFT
-            super().convert(state_dict)
+            super().convert(state_dict, model_keys=model_keys)
         elif state_dict_type == StateDictType.PEFT:
             pass
         state_dict = self.scale_alpha(state_dict)

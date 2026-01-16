@@ -857,8 +857,11 @@ class PythonBundler:
         This ensures our shipped bundle matches the expected upstream behavior.
         """
         # Allow disabling in emergencies (e.g. while bisecting build issues).
-        if os.environ.get("APEX_BUNDLE_PATCH_DIFFUSERS_PEFT", "1") == "0":
-            print("Skipping diffusers peft.py patch (APEX_BUNDLE_PATCH_DIFFUSERS_PEFT=0)")
+        v = os.environ.get("APEX_PATCH_DIFFUSERS_PEFT")
+        if v is None:
+            v = os.environ.get("APEX_BUNDLE_PATCH_DIFFUSERS_PEFT", "1")
+        if str(v).strip().lower() in ("0", "false", "no", "off"):
+            print("Skipping diffusers peft.py patch (APEX_PATCH_DIFFUSERS_PEFT=0)")
             return
 
         if self.platform_name == "win32":
@@ -866,50 +869,11 @@ class PythonBundler:
         else:
             py_path = venv_dir / "bin" / "python"
 
-        # Resolve the installed diffusers path inside the venv.
-        probe = subprocess.run(
-            [
-                str(py_path),
-                "-c",
-                "import diffusers; from pathlib import Path; "
-                "base = Path(diffusers.__file__).resolve().parent; "
-                "print(str(base / 'loaders' / 'peft.py'))",
-            ],
+        # Run the shared patcher in the target venv so bundling and dev installs stay consistent.
+        subprocess.run(
+            [str(py_path), str(self.project_root / "scripts" / "updates" / "patch_diffusers_peft.py")],
             check=True,
-            capture_output=True,
-            text=True,
         )
-        peft_path = Path(probe.stdout.strip())
-        if not peft_path.exists():
-            raise RuntimeError(f"diffusers peft.py not found at expected path: {peft_path}")
-
-        src = peft_path.read_text(encoding="utf-8")
-
-        # Match the try/except block exactly (indentation-aware).
-        pattern = re.compile(
-            r"(?m)^(?P<indent>[ \t]*)try:\n"
-            r"(?P=indent)[ \t]*scale_expansion_fn = _SET_ADAPTER_SCALE_FN_MAPPING\[self\.__class__\.__name__\]\n"
-            r"(?P=indent)[ \t]*except KeyError:\n"
-            r"(?P=indent)[ \t]*scale_expansion_fn = lambda model, weights: weights[ \t]*$"
-        )
-
-        def _repl(m: re.Match) -> str:
-            indent = m.group("indent")
-            return f"{indent}scale_expansion_fn = _SET_ADAPTER_SCALE_FN_MAPPING[self.__class__.__name__]"
-
-        patched, n = pattern.subn(_repl, src, count=1)
-        if n != 1:
-            # If the file already has the desired one-liner, treat as success/idempotent.
-            if "_SET_ADAPTER_SCALE_FN_MAPPING[self.__class__.__name__]" in src and "except KeyError" not in src:
-                print(f"diffusers peft.py already patched: {peft_path}")
-                return
-            raise RuntimeError(
-                "Failed to apply diffusers peft.py patch (pattern not found). "
-                f"File: {peft_path}"
-            )
-
-        peft_path.write_text(patched, encoding="utf-8")
-        print(f"Patched diffusers peft.py: {peft_path}")
 
     def _build_and_install_rust_wheels(self, uv_path: Path, py_path: Path) -> None:
         rust_project = self.project_root / "rust" / "apex_download_rs"

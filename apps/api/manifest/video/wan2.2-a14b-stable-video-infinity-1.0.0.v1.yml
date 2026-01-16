@@ -38,13 +38,20 @@ spec:
   - metal_flash
   - efficient_dot_product_attention
   loras:
-  - source: lightx2v/Wan2.2-Lightning/Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors
-    scale: 0.0
+  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors
+    scale: 1.0
     verified: true
     name: high_noise_lightning_lora
     label: High Noise Lightning LoRA
     component: high_noise_transformer
-    required: false
+    required: true
+  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors
+    scale: 0.5
+    verified: true
+    name: low_noise_lightning_lora
+    label: Low Noise Lightning LoRA
+    component: low_noise_transformer
+    required: true
   - source: vita-video-gen/svi-model/version-2.0/SVI_Wan2.2-I2V-A14B_high_noise_lora_v2.0_pro.safetensors
     scale: 1.0
     verified: true
@@ -59,13 +66,6 @@ spec:
     label: Low Noise SVI LoRA
     component: low_noise_transformer
     required: true
-  - source: lightx2v/Wan2.2-Lightning/Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/low_noise_model.safetensors
-    scale: 0.0
-    verified: true
-    name: low_noise_lightning_lora
-    label: Low Noise Lightning LoRA
-    component: low_noise_transformer
-    required: false
   components:
   - type: scheduler
     label: Scheduler
@@ -130,31 +130,23 @@ spec:
     base: wan.base
     config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/transformer/config.json
     model_path:
-    - path: Kijai/WanVideo_comfy/Wan2_2-I2V-A14B-HIGH_bf16.safetensors
-      variant: BF16
-      precision: bf16
+    - path: cbensimon/Wan2.2-I2V-A14B-bf16-Diffusers/transformer
+      variant: default
+      precision: fp16
       type: safetensors
-      file_size: 28579400736
+      file_size: 28636379825
       resource_requirements:
         min_vram_gb: 26
         recommended_vram_gb: 35
-    - path: Kijai/WanVideo_comfy_fp8_scaled/I2V/Wan2_2-I2V-A14B-HIGH_fp8_e4m3fn_scaled_KJ.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/smooth-mix-wan-2.2-14b/high_noise/high_noise_model.safetensors
+      variant: SMOOTH_MIX
+      precision: fp16
       type: safetensors
-      file_size: 15002999858
+      file_size: 14293784648
       resource_requirements:
-        min_vram_gb: 18
-        recommended_vram_gb: 24
-    - path: FX-FeiHou/wan2.2-Remix/NSFW/Wan2.2_Remix_NSFW_i2v_14b_high_lighting_v2.0.safetensors
-      variant: FP8_REMIX
-      precision: fp8
-      type: safetensors
-      file_size: 15002999858
-      resource_requirements:
-        min_vram_gb: 18
-        recommended_vram_gb: 24
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q8_0.gguf
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
@@ -162,7 +154,7 @@ spec:
       resource_requirements:
         min_vram_gb: 17
         recommended_vram_gb: 23
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
@@ -170,7 +162,7 @@ spec:
       resource_requirements:
         min_vram_gb: 12
         recommended_vram_gb: 16
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q5_K_M.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
@@ -178,7 +170,7 @@ spec:
       resource_requirements:
         min_vram_gb: 10
         recommended_vram_gb: 14
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q5_K_S.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
@@ -186,7 +178,7 @@ spec:
       resource_requirements:
         min_vram_gb: 10
         recommended_vram_gb: 14
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
@@ -194,7 +186,7 @@ spec:
       resource_requirements:
         min_vram_gb: 9
         recommended_vram_gb: 13
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q4_K_S.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
@@ -202,7 +194,15 @@ spec:
       resource_requirements:
         min_vram_gb: 8
         recommended_vram_gb: 12
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q3_K_M.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 8558096896
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
@@ -210,7 +210,7 @@ spec:
       resource_requirements:
         min_vram_gb: 8
         recommended_vram_gb: 12
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q3_K_S.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
@@ -218,7 +218,7 @@ spec:
       resource_requirements:
         min_vram_gb: 8
         recommended_vram_gb: 12
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q2_K.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
@@ -232,31 +232,23 @@ spec:
     base: wan.base
     config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/transformer_2/config.json
     model_path:
-    - path: Kijai/WanVideo_comfy/Wan2_2-I2V-A14B-LOW_bf16.safetensors
-      variant: BF16
-      precision: bf16
+    - path: cbensimon/Wan2.2-I2V-A14B-bf16-Diffusers/transformer_2
+      variant: default
+      precision: fp16
       type: safetensors
-      file_size: 28579400728
+      file_size: 28636379825
       resource_requirements:
         min_vram_gb: 26
         recommended_vram_gb: 35
-    - path: Kijai/WanVideo_comfy_fp8_scaled/I2V/Wan2_2-I2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/smooth-mix-wan-2.2-14b/high_noise/high_noise_model.safetensors
+      variant: SMOOTH_MIX
+      precision: fp16
       type: safetensors
-      file_size: 15002999858
+      file_size: 14293784648
       resource_requirements:
-        min_vram_gb: 18
-        recommended_vram_gb: 24
-    - path: FX-FeiHou/wan2.2-Remix/NSFW/Wan2.2_Remix_NSFW_i2v_14b_low_lighting_v2.0.safetensors
-      variant: FP8_REMIX
-      precision: fp8
-      type: safetensors
-      file_size: 15002999858
-      resource_requirements:
-        min_vram_gb: 18
-        recommended_vram_gb: 24
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q8_0.gguf
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
@@ -264,7 +256,7 @@ spec:
       resource_requirements:
         min_vram_gb: 17
         recommended_vram_gb: 23
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
@@ -272,7 +264,7 @@ spec:
       resource_requirements:
         min_vram_gb: 12
         recommended_vram_gb: 16
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q5_K_M.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
@@ -280,7 +272,7 @@ spec:
       resource_requirements:
         min_vram_gb: 10
         recommended_vram_gb: 14
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q5_K_S.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_k_s
       type: gguf
@@ -288,7 +280,7 @@ spec:
       resource_requirements:
         min_vram_gb: 10
         recommended_vram_gb: 14
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
@@ -296,7 +288,7 @@ spec:
       resource_requirements:
         min_vram_gb: 9
         recommended_vram_gb: 13
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q4_K_S.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
@@ -304,7 +296,15 @@ spec:
       resource_requirements:
         min_vram_gb: 8
         recommended_vram_gb: 12
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q3_K_M.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 8558096896
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
@@ -312,7 +312,7 @@ spec:
       resource_requirements:
         min_vram_gb: 8
         recommended_vram_gb: 12
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q3_K_S.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
@@ -320,7 +320,7 @@ spec:
       resource_requirements:
         min_vram_gb: 8
         recommended_vram_gb: 12
-    - path: QuantStack/Wan2.2-I2V-A14B-GGUF/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q2_K.gguf
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
@@ -333,7 +333,9 @@ spec:
       num_inference_steps: 6
       guidance_scale: 1.0
       num_seconds_per_segment: 5.0
-      num_motion_latent: 4
+      num_motion_latent: 1
+      num_motion_frame: 4
+      num_overlap_frames: 5
       return_latents: false
       timesteps_as_indices: true
       boundary_ratio: 0.875
