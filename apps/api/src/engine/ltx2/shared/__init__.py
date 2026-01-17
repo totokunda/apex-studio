@@ -195,7 +195,10 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     
     
         sequence_lengths = prompt_attention_mask.sum(dim=-1)
+<<<<<<< Updated upstream
         
+=======
+>>>>>>> Stashed changes
         prompt_embeds = self._pack_text_embeds(
             text_encoder_hidden_states,
             sequence_lengths,

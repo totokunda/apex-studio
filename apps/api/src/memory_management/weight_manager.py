@@ -96,7 +96,7 @@ class GlobalWeightManager:
         self.target_free_ram_fraction = self._env_float(
             "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10
         )
-
+        
         self._gpu_stats_provider = gpu_stats_provider or self._default_gpu_stats
         self._ram_stats_provider = ram_stats_provider or self._default_ram_stats
 
@@ -518,6 +518,14 @@ class GlobalWeightManager:
                     offloaded[rec.module_id] = loc
             except Exception:
                 continue
+        try:
+            if str(os.environ.get("APEX_MEM_DEBUG", "")).lower() in {"1", "true", "yes"}:
+                print(
+                    f"[weight_manager] offload_gpu_except reason={reason} target={target} "
+                    f"active={active} offloaded={list(offloaded.keys())}"
+                )
+        except Exception:
+            pass
         # After offloading, clear caches to free allocator reservations.
         try:
             import torch
