@@ -600,6 +600,44 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             pass
         active = set(active or [])
         active_ids = self._memory_ids_for_names(active)
+
+        # In force-disk-only mode, treat "disk" as pure discard for this engine instance:
+        # drop references (helpers/components) so the only way to use them again is re-loading.
+        # This avoids writing any on-disk state and prevents meta/empty-tensor rehydration issues.
+        try:
+            if target == "disk" and getattr(wm, "force_disk_only", False):
+                out: Dict[str, str] = {}
+                # Known component attributes
+                for name in ("transformer", "vae", "text_encoder", "scheduler"):
+                    if name in active:
+                        continue
+                    if getattr(self, name, None) is None:
+                        continue
+                    try:
+                        self._offload(name, offload_type="discard")
+                        mid = self._component_memory_ids.get(name) or name
+                        out[str(mid)] = "disk"
+                    except Exception:
+                        pass
+
+                # Helpers (best-effort): discard any currently loaded helper keys not in active.
+                try:
+                    for k in list(getattr(self, "_helpers", {}) or {}):
+                        if not isinstance(k, str) or not k or k in active:
+                            continue
+                        try:
+                            self._offload(k, offload_type="discard")
+                            mid = self._component_memory_ids.get(k) or k
+                            out[str(mid)] = "disk"
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                return out
+        except Exception:
+            pass
+
         offloaded = wm.offload_gpu_except(
             active_ids,
             target=target if target in {"cpu", "disk"} else "cpu",
@@ -740,7 +778,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 ids.add(mid)
         return ids
 
-    def _flush_for_decode(self, component_name: str, *, required_bytes: int | None) -> None:
+    def _flush_for_decode(
+        self, component_name: str, *, required_bytes: int | None = None
+    ) -> None:
         """
         Aggressively offload non-VAE modules prior to decode to guarantee headroom.
 
@@ -812,7 +852,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             pass
 
     def _pre_decode_vram_guard(
-        self, component_name: str, latents: torch.Tensor, *, request_bytes: int | None
+        self,
+        component_name: str,
+        latents: torch.Tensor,
+        *,
+        request_bytes: int | None = None,
     ) -> None:
         """
         Ensure enough headroom for VAE decode by pre-evicting cold modules.
@@ -2535,7 +2579,13 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         offload_type: Literal["cpu", "discard"] = "cpu",
     ):
         if getattr(self, component_name, None) is None:
-            self.load_component_by_type(component_name)
+            # `component_name` can be either a canonical type ("vae") or a named
+            # component (e.g. "video_vae" / "audio_vae"). Prefer loading by name
+            # when possible, then fall back to the legacy type-based loader.
+            try:
+                self.load_component_by_name(component_name)
+            except Exception:
+                self.load_component_by_type(component_name)
         self.to_device(getattr(self, component_name))
         # VAE decode can be a peak-activation operation (multi-GiB). Ensure we have
         # sufficient headroom by offloading other components proactively.
@@ -2581,8 +2631,40 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             )
         else:
             denormalized_latents = latents
+            try:
+                target_dtype = getattr(getattr(self, component_name), "dtype", None)
+                target_device = getattr(self, "device", None)
+                if target_device is not None:
+                    if target_dtype is not None:
+                        denormalized_latents = denormalized_latents.to(
+                            device=target_device, dtype=target_dtype
+                        )
+                    else:
+                        denormalized_latents = denormalized_latents.to(
+                            device=target_device
+                        )
+            except Exception:
+                pass
 
         self.enable_vae_tiling(component_name=component_name)
+
+        vae_obj = getattr(self, component_name)
+
+        def _decode_with_optional_timestep(
+            x: torch.Tensor, t: Optional[torch.Tensor]
+        ) -> torch.Tensor:
+            decode = getattr(vae_obj, "decode", None)
+            if decode is None:
+                raise AttributeError(
+                    f"{component_name} has no attribute 'decode' ({type(vae_obj)})"
+                )
+            if t is None:
+                return decode(x, return_dict=False)[0]
+            # Some VAEs accept `decode(latents, timestep, ...)` for timestep conditioning.
+            try:
+                return decode(x, t, return_dict=False)[0]
+            except TypeError:
+                return decode(x, timestep=t, return_dict=False)[0]
 
         # Track peak decode VRAM to refine future headroom estimates.
         record_peak = False
@@ -2603,9 +2685,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         # Retry once after a more aggressive offload+cache clear, instead of failing.
         video = None
         try:
-            video = getattr(self, component_name).decode(
-                denormalized_latents, return_dict=False
-            )[0]
+            video = _decode_with_optional_timestep(denormalized_latents, timestep)
         except torch.OutOfMemoryError:
             try:
                 if (
@@ -2623,9 +2703,48 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     )
             except Exception:
                 pass
-            video = getattr(self, component_name).decode(
-                denormalized_latents, return_dict=False
-            )[0]
+            try:
+                video = _decode_with_optional_timestep(denormalized_latents, timestep)
+            except torch.OutOfMemoryError:
+                # Last resort: fall back to CPU decode to avoid hard failure.
+                allow_cpu = str(
+                    os.environ.get("APEX_VAE_DECODE_CPU_FALLBACK", "1")
+                ).lower() not in {"0", "false", "no"}
+                if not allow_cpu:
+                    raise
+                try:
+                    # Evict as much as possible first (helps avoid thrashing when moving
+                    # the VAE and latents off GPU).
+                    try:
+                        wm = self._get_weight_manager()
+                        if wm is not None:
+                            wm.offload_gpu_except(set(), target="cpu", reason="vae_decode_cpu_fallback")
+                    except Exception:
+                        pass
+                    try:
+                        import torch as _torch
+
+                        if _torch.cuda.is_available():
+                            _torch.cuda.empty_cache()
+                            _torch.cuda.ipc_collect()
+                    except Exception:
+                        pass
+
+                    vae_obj.to("cpu")
+                    x_cpu = denormalized_latents.detach()
+                    if x_cpu.device.type != "cpu":
+                        x_cpu = x_cpu.to("cpu")
+                    if x_cpu.dtype not in {torch.float32, torch.bfloat16}:
+                        x_cpu = x_cpu.to(dtype=torch.float32)
+
+                    t_cpu = timestep
+                    if t_cpu is not None and getattr(t_cpu, "device", None) is not None:
+                        if t_cpu.device.type != "cpu":
+                            t_cpu = t_cpu.to("cpu")
+
+                    video = _decode_with_optional_timestep(x_cpu, t_cpu)
+                except Exception:
+                    raise
         finally:
             if record_peak:
                 try:
@@ -2654,7 +2773,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         offload_type: Literal["cpu", "discard"] = "discard",
     ):
         if getattr(self, component_name, None) is None:
-            self.load_component_by_type("vae")
+            try:
+                self.load_component_by_name(component_name)
+            except Exception:
+                # Legacy fallback: most engines expose a single VAE at `self.vae`.
+                self.load_component_by_type("vae")
         self.to_device(getattr(self, component_name))
 
         # --- VAE encode cache (small, disk-backed) ---

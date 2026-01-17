@@ -314,6 +314,7 @@ class LTX2TextConnectors(ModelMixin, ConfigMixin):
             attention_mask = (attention_mask - 1).reshape(attention_mask.shape[0], 1, -1, attention_mask.shape[-1])
             attention_mask = attention_mask.to(text_dtype) * torch.finfo(text_dtype).max
 
+        
         text_encoder_hidden_states = self.text_proj_in(text_encoder_hidden_states)
 
         video_text_embedding, new_attn_mask = self.video_connector(text_encoder_hidden_states, attention_mask)
