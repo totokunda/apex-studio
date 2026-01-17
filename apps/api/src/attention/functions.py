@@ -2013,7 +2013,10 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
 
         queue.put(success)
 
-    except Exception:
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()   
         # Catch-all for any import/runtime errors in the worker
         queue.put(False)
 
@@ -2048,15 +2051,22 @@ def verify_attention_backends() -> List[str]:
     # but strictly rely on the isolation process to catch crashes.
     ctx = multiprocessing.get_context("spawn")
 
-    for name in candidates.keys():
+    # On Windows with spawn context, each subprocess must re-initialize PyTorch + CUDA.
+    # CUDA initialization alone can take 10-20+ seconds on Windows, so we use a generous
+    # timeout for the first backend (covers CUDA init overhead) and shorter for subsequent
+    # ones (CUDA driver caching may help, but still need buffer for torch imports).
+    first_backend_timeout = 15  # seconds - covers CUDA initialization
+    subsequent_timeout = 10      # seconds - still generous for torch imports
+    
+    for idx, name in enumerate(candidates.keys()):
         queue = ctx.Queue()
         p = ctx.Process(target=_verify_backend_worker, args=(name, queue))
         p.start()
         
-        # Wait for result with timeout
+        # Wait for result with timeout - first backend gets extra time for CUDA init
+        timeout = first_backend_timeout if idx == 0 else subsequent_timeout
         try:
-            # 5 seconds should be plenty for a tiny forward pass
-            result = queue.get(timeout=5)
+            result = queue.get(timeout=timeout)
             p.join()
             if result:
                 working.append(name)
