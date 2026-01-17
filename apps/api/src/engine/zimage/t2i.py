@@ -122,8 +122,8 @@ class ZImageT2IEngine(ZImageShared):
         if offload:
             self._offload("text_encoder")
             safe_emit_progress(progress_callback, 0.20, "Text encoder offloaded")
-
-
+            
+        
         if not self.transformer:
             safe_emit_progress(progress_callback, 0.21, "Loading transformer")
             self.load_component_by_type("transformer")
@@ -147,6 +147,9 @@ class ZImageT2IEngine(ZImageShared):
             generator,
             latents,
         )
+        
+       
+        
         safe_emit_progress(progress_callback, 0.32, "Initialized latent noise")
 
         # Repeat prompt_embeds for num_images_per_prompt
@@ -204,6 +207,8 @@ class ZImageT2IEngine(ZImageShared):
         
         # get the model dtype
         model_dtype = self.transformer.dtype
+        
+
 
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):

@@ -280,7 +280,6 @@ class LoaderMixin(DownloadMixin):
         else:
             converter = NoOpConverter()
             
-        
         if os.path.isdir(model_path) and not config_path:
             # look for a config.json file
             config_path = os.path.join(model_path, "config.json")
@@ -361,11 +360,102 @@ class LoaderMixin(DownloadMixin):
             files_to_load.extend(extra_model_paths)
         # Track whether we've already patched this model for FP-scaled weights
 
+        # If we are materializing state_dict tensors directly onto CUDA, proactively
+        # evict cold GPU modules via the global weight manager so we don't OOM mid-load.
+        load_device_is_cuda = False
+        if engine_type == "torch":
+            try:
+                if isinstance(load_device, str):
+                    load_device_is_cuda = str(load_device).startswith("cuda")
+                else:
+                    load_device_is_cuda = getattr(load_device, "type", None) == "cuda"
+            except Exception:
+                load_device_is_cuda = False
+
+        wm = None
+        target_free = None
+        vram_mult = None
+        vram_extra = None
+        if engine_type == "torch" and load_device_is_cuda:
+            try:
+                if hasattr(torch, "cuda") and torch.cuda.is_available():
+                    from src.memory_management import get_global_weight_manager
+
+                    wm = get_global_weight_manager()
+
+                    def _env_float(name: str, default: float) -> float:
+                        raw = os.environ.get(name)
+                        if raw is None or str(raw).strip() == "":
+                            return default
+                        try:
+                            return float(str(raw).strip())
+                        except Exception:
+                            return default
+
+                    def _env_int(name: str, default: int) -> int:
+                        raw = os.environ.get(name)
+                        if raw is None or str(raw).strip() == "":
+                            return default
+                        try:
+                            return int(float(str(raw).strip()))
+                        except Exception:
+                            return default
+
+                    target_free = _env_float(
+                        "APEX_LOAD_MODEL_TARGET_FREE_FRACTION", 0.10
+                    )
+                    vram_mult = _env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20)
+                    vram_extra = _env_int(
+                        "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
+                    )
+
+                    try:
+                        wm.refresh_all_locations()
+                    except Exception:
+                        pass
+
+                    try:
+                        total_file_bytes = 0
+                        for fp in files_to_load:
+                            try:
+                                total_file_bytes += int(os.path.getsize(str(fp)))
+                            except Exception:
+                                continue
+                        if total_file_bytes > 0:
+                            req = max(
+                                0, int(total_file_bytes * float(vram_mult)) + int(vram_extra)
+                            )
+                            wm.evict_for_vram(
+                                reason="load_model_pre",
+                                active=None,
+                                target_free_fraction=float(target_free),
+                                request_bytes=req,
+                            )
+                    except Exception:
+                        pass
+            except Exception:
+                wm = None
+
         patched_for_fpscaled = False
         gguf_kwargs = component.get("gguf_kwargs", {})
         for file_path in tqdm(
             files_to_load, desc="Loading weights", total=len(files_to_load)
         ):
+            if wm is not None and load_device_is_cuda:
+                try:
+                    fp_size = int(os.path.getsize(str(file_path)))
+                    if fp_size > 0 and vram_mult is not None and vram_extra is not None:
+                        req = max(0, int(fp_size * float(vram_mult)) + int(vram_extra))
+                        wm.evict_for_vram(
+                            reason="load_model_chunk",
+                            active=None,
+                            target_free_fraction=(
+                                float(target_free) if target_free is not None else None
+                            ),
+                            request_bytes=req,
+                        )
+                except Exception:
+                    pass
             if str(file_path).endswith(".gguf"):
                 # GGUF follows the same "files_to_load" pathway as other weight files.
                 if hasattr(self, "engine_type") and self.engine_type == "mlx":
@@ -408,6 +498,15 @@ class LoaderMixin(DownloadMixin):
                             
          
                 model.load_state_dict(state_dict, assign=True, strict=False)
+                try:
+                    del state_dict
+                except Exception:
+                    pass
+                if load_device_is_cuda:
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
                 continue
 
             from src.utils.safetensors import load_safetensors
@@ -507,6 +606,15 @@ class LoaderMixin(DownloadMixin):
                 raise ValueError(
                     f"Model {model} does not have a load_state_dict or load_weights method"
                 )
+            try:
+                del state_dict
+            except Exception:
+                pass
+            if load_device_is_cuda:
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
 
         if getattr(self, "engine_type", "torch") == "torch":
             has_meta_params = False

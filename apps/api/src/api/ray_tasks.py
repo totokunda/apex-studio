@@ -1922,13 +1922,22 @@ def run_engine_from_manifest(
             model_type = model_type[0] if model_type else None
 
         attention_type = selected_components.pop("attention", {}).get("name", None)
+        
+        def _bool_env(name: str, default: bool = True) -> bool:
+            try:
+                v = os.environ.get(name)
+                if v is None:
+                    return default
+                return str(v).strip().lower() not in ("0", "false", "no", "off")
+            except Exception:
+                return default
 
         input_kwargs = {
             "engine_type": engine_type,
             "yaml_path": manifest_path,
             "model_type": model_type,
             "selected_components": selected_components,
-            "auto_memory_management": True,
+            "auto_memory_management": _bool_env("AUTO_MEMORY_MANAGEMENT", False),
             **(config.get("engine_kwargs", {}) or {}),
         }
 
@@ -1942,8 +1951,9 @@ def run_engine_from_manifest(
             selected_components=selected_components or {},
             engine_kwargs=(config.get("engine_kwargs", {}) or {}),
             attention_type=attention_type,
-            auto_memory_management=os.environ.get("AUTO_MEMORY_MANAGEMENT", False),
+            auto_memory_management=_bool_env("AUTO_MEMORY_MANAGEMENT", False),
         )
+        
 
         def _factory():
             return UniversalEngine(**input_kwargs)
