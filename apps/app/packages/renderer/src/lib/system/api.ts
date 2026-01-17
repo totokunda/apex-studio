@@ -1,4 +1,4 @@
-import { getSystemMemory } from "@app/preload";
+import { freeSystemMemory as freeSystemMemoryIpc, getSystemMemory } from "@app/preload";
 
 export type MemoryBreakdown = {
   total: number;
@@ -33,4 +33,12 @@ export async function fetchSystemMemory(): Promise<SystemMemoryResponse | null> 
   const res = await getSystemMemory();
   if (!res.success) return null;
   return res.data as SystemMemoryResponse;
+}
+
+export async function freeSystemMemory(): Promise<any> {
+  const res = await freeSystemMemoryIpc();
+  if (!res.success) {
+    throw new Error(res.error || "Failed to free memory");
+  }
+  return res.data;
 }

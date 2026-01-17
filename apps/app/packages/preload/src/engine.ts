@@ -45,6 +45,20 @@ async function runEngine(request: {
   return await ipcRenderer.invoke("engine:run", payload);
 }
 
+async function warmupEngine(request: {
+  manifest_id?: string;
+  yaml_path?: string;
+  selected_components?: Record<string, any>;
+  mode?: "disk" | "engine" | "both" | string;
+  job_id?: string;
+}): Promise<ConfigResponse<{ job_id: string; status: string; message?: string }>> {
+  const payload = {
+    ...request,
+    selected_components: normalizeInputsForIpc(request.selected_components || {}),
+  };
+  return await ipcRenderer.invoke("engine:warmup", payload);
+}
+
 async function getEngineStatus(
   jobId: string,
 ): Promise<ConfigResponse<any>> {
@@ -61,6 +75,6 @@ async function cancelEngine(jobId: string): Promise<ConfigResponse<any>> {
   return await ipcRenderer.invoke("engine:cancel", jobId);
 }
 
-export { runEngine, getEngineStatus, getEngineResult, cancelEngine };
+export { runEngine, warmupEngine, getEngineStatus, getEngineResult, cancelEngine };
 
 

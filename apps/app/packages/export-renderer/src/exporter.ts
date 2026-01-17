@@ -17,6 +17,7 @@ import {
   exportCacheGet,
   exportCachePut,
   exportCacheMaterialize,
+  exportVideoTranscodeWithFfmpeg,
 } from "@app/preload";
 import type { WrappedCanvas } from "mediabunny";
 import {
@@ -355,6 +356,62 @@ const getSrcFrameWindow = (
   }
 };
 
+const hasAnyVisualEffects = (c: ExportVideoClip): boolean => {
+  const any =
+    Number(c.brightness || 0) !== 0 ||
+    Number(c.contrast || 0) !== 0 ||
+    Number(c.hue || 0) !== 0 ||
+    Number(c.saturation || 0) !== 0 ||
+    Number(c.blur || 0) !== 0 ||
+    Number(c.noise || 0) !== 0 ||
+    Number(c.sharpness || 0) !== 0 ||
+    Number(c.vignette || 0) !== 0;
+  return !!any;
+};
+
+const canUseFfmpegFastPathForVideoClip = (
+  clip: ExportVideoClip,
+): boolean => {
+  // Conservative: only allow pure video transforms that do not require canvas compositing.
+  if (!clip || clip.type !== "video") return false;
+  if (clip.normalizedTransform) return false;
+  if (hasAnyVisualEffects(clip)) return false;
+  if (Array.isArray(clip.masks) && clip.masks.length > 0) return false;
+  if (Array.isArray(clip.applicators) && clip.applicators.length > 0) return false;
+  if (Array.isArray(clip.preprocessors) && clip.preprocessors.length > 0) return false;
+
+  const t = (clip.transform || {}) as TransformLike;
+  // Only support simple geometry (crop + implicit resize). Anything needing pad/overlay/rotate is deferred.
+  const rot = Number(t.rotation || 0);
+  const sx = t.scaleX === undefined ? 1 : Number(t.scaleX);
+  const sy = t.scaleY === undefined ? 1 : Number(t.scaleY);
+  const x = Number(t.x || 0);
+  const y = Number(t.y || 0);
+  const opacity = t.opacity === undefined ? 100 : Number(t.opacity);
+
+  if (!Number.isFinite(rot) || rot !== 0) return false;
+  if (!Number.isFinite(sx) || sx !== 1) return false;
+  if (!Number.isFinite(sy) || sy !== 1) return false;
+  if (!Number.isFinite(x) || x !== 0) return false;
+  if (!Number.isFinite(y) || y !== 0) return false;
+  if (!Number.isFinite(opacity) || opacity !== 100) return false;
+  if (t.cornerRadius !== undefined && Number(t.cornerRadius) !== 0) return false;
+
+  // Crop (normalized) is supported; validate ranges lightly.
+  if ((t as any).crop) {
+    const c = (t as any).crop as any;
+    const ok =
+      c &&
+      Number.isFinite(Number(c.x)) &&
+      Number.isFinite(Number(c.y)) &&
+      Number.isFinite(Number(c.width)) &&
+      Number.isFinite(Number(c.height));
+    if (!ok) return false;
+  }
+
+  return true;
+};
+
 const resolveVideoSourceForFrame = (
   c: ExportVideoClip,
   projectFrame: number,
@@ -488,6 +545,90 @@ export async function exportSequence(
         return out;
       }
     }
+  }
+
+  // Fast path: if this export is a single, effect-free video clip, do it directly in ffmpeg.
+  if (
+    mode === "video" &&
+    clips.length === 1 &&
+    clips[0]?.type === "video" &&
+    canUseFfmpegFastPathForVideoClip(clips[0] as ExportVideoClip) &&
+    !opts.backgroundColor
+  ) {
+    checkCancelled();
+    const c = clips[0] as ExportVideoClip;
+    const speed = (() => {
+      const s = Number(c?.speed ?? 1);
+      return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
+    })();
+    const { srcStartFrame } = getSrcFrameWindow(c.src);
+    const trimStartFrames = Math.max(0, Number(c?.trimStart) || 0);
+    const clipStartFrame = Number(c?.startFrame) || 0;
+
+    const localStart = Math.max(0, startFrame - clipStartFrame);
+    const localDurationFrames = Math.max(1, endFrame - startFrame);
+
+    const srcStartFrames =
+      trimStartFrames + srcStartFrame + Math.floor(localStart * speed);
+    const srcDurationFrames = Math.floor(localDurationFrames * speed);
+    const srcStartSec = srcStartFrames / Math.max(1, fps);
+    const srcDurationSec = Math.max(1, srcDurationFrames) / Math.max(1, fps);
+
+    const crop = (c.transform as any)?.crop as
+      | { x?: number; y?: number; width?: number; height?: number }
+      | undefined;
+
+    const audioSrc =
+      typeof (c as any).audioSrc === "string" && (c as any).audioSrc
+        ? String((c as any).audioSrc)
+        : undefined;
+
+    const outPath = await exportVideoTranscodeWithFfmpeg({
+      videoSrc: c.src,
+      audioSrc: includeAudio ? audioSrc : undefined,
+      includeAudio,
+      // Preserve previous exportSequence behavior: only include video audio when an explicit audioSrc exists.
+      allowEmbeddedAudio: !!audioSrc,
+      outAbs: filename ?? "output.mp4",
+      fps,
+      srcStartSec,
+      srcDurationSec,
+      speed,
+      crop: crop
+        ? {
+            x: Number(crop.x || 0),
+            y: Number(crop.y || 0),
+            width: Number(crop.width || 1),
+            height: Number(crop.height || 1),
+          }
+        : undefined,
+      width: (encoderOptions as any)?.resolution?.width ?? w,
+      height: (encoderOptions as any)?.resolution?.height ?? h,
+      format: (encoderOptions as any)?.format,
+      codec: (encoderOptions as any)?.codec,
+      preset: (encoderOptions as any)?.preset,
+      crf: (encoderOptions as any)?.crf,
+      bitrate: (encoderOptions as any)?.bitrate,
+      alpha: (encoderOptions as any)?.alpha,
+    });
+
+    checkCancelled();
+    if (onProgress) {
+      onProgress({ currentFrame: totalFrames, totalFrames, ratio: 1 });
+    }
+    if (canUsePersistentCache && exportHash && typeof outPath === "string") {
+      try {
+        await exportCachePut(exportHash, outPath, {
+          ext: inferredExt || undefined,
+        });
+      } catch {}
+    }
+    if (!cancelToken?.cancelled) {
+      try {
+        opts.onDone?.();
+      } catch {}
+    }
+    return outPath;
   }
 
   const renderer = new KonvaExportRenderer({
@@ -1053,6 +1194,7 @@ export async function exportClip(
   const w = Math.max(1, (inferredWidth || 1920) * cropWidthRatio);
   const h = Math.max(1, (inferredHeight || 1080) * cropHeightRatio);
 
+
   const canUsePersistentCache =
     (mode === "video" || mode === "audio") &&
     typeof filename === "string" &&
@@ -1113,6 +1255,92 @@ export async function exportClip(
         return out;
       }
     }
+  }
+
+  // Fast path: single video clip export that requires no canvas compositing.
+  console.log("mode", mode);
+  console.log("workingClip.type", workingClip.type);
+  console.log("canUseFfmpegFastPathForVideoClip(workingClip as ExportVideoClip)", canUseFfmpegFastPathForVideoClip(workingClip as ExportVideoClip));
+  console.log("opts.backgroundColor", opts.backgroundColor);
+  if (
+    mode === "video" &&
+    workingClip.type === "video" &&
+    canUseFfmpegFastPathForVideoClip(workingClip as ExportVideoClip) &&
+    (!opts.backgroundColor || opts.backgroundColor === "#000000")
+  ) {
+    checkCancelled();
+    const c = workingClip as ExportVideoClip;
+    const speed = (() => {
+      const s = Number((c as any)?.speed ?? 1);
+      return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
+    })();
+    const { srcStartFrame } = getSrcFrameWindow(c.src);
+    const trimStartFrames = Math.max(0, Number((c as any)?.trimStart) || 0);
+
+    const localStart = Math.max(0, startFrame);
+    const localDurationFrames = Math.max(1, endFrame - startFrame);
+
+    const srcStartFrames =
+      trimStartFrames + srcStartFrame + Math.floor(localStart * speed);
+    const srcDurationFrames = Math.floor(localDurationFrames * speed);
+    const srcStartSec = srcStartFrames / Math.max(1, fps);
+    const srcDurationSec = Math.max(1, srcDurationFrames) / Math.max(1, fps);
+
+    const crop = (c.transform as any)?.crop as
+      | { x?: number; y?: number; width?: number; height?: number }
+      | undefined;
+
+    const audioSrc =
+      typeof (c as any).audioSrc === "string" && (c as any).audioSrc
+        ? String((c as any).audioSrc)
+        : undefined;
+
+    const outPath = await exportVideoTranscodeWithFfmpeg({
+      videoSrc: c.src,
+      audioSrc: includeAudio ? (audioSrc || undefined) : undefined,
+      includeAudio,
+      // For exportClip, allow embedded audio by default (matches previous behavior where we derived audio from the same src).
+      allowEmbeddedAudio: true,
+      outAbs: filename ?? "output.mp4",
+      fps,
+      srcStartSec,
+      srcDurationSec,
+      speed,
+      crop: crop
+        ? {
+            x: Number(crop.x || 0),
+            y: Number(crop.y || 0),
+            width: Number(crop.width || 1),
+            height: Number(crop.height || 1),
+          }
+        : undefined,
+      width: (encoderOptions as any)?.resolution?.width ?? w,
+      height: (encoderOptions as any)?.resolution?.height ?? h,
+      format: (encoderOptions as any)?.format,
+      codec: (encoderOptions as any)?.codec,
+      preset: (encoderOptions as any)?.preset,
+      crf: (encoderOptions as any)?.crf,
+      bitrate: (encoderOptions as any)?.bitrate,
+      alpha: (encoderOptions as any)?.alpha,
+    });
+
+    checkCancelled();
+    if (onProgress) {
+      onProgress({ currentFrame: totalFrames, totalFrames, ratio: 1 });
+    }
+    if (canUsePersistentCache && exportHash && typeof outPath === "string") {
+      try {
+        await exportCachePut(exportHash, outPath, {
+          ext: inferredExt || undefined,
+        });
+      } catch {}
+    }
+    if (!cancelToken?.cancelled) {
+      try {
+        opts.onDone?.();
+      } catch {}
+    }
+    return outPath;
   }
 
   // Prepare applicators using shared hald clut

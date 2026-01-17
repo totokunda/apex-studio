@@ -288,6 +288,350 @@ function buildAtempoChain(rate: number): string[] {
   return parts;
 }
 
+export type ExportVideoTranscodeOptions = {
+  videoSrc: string;
+  /**
+   * Optional separate audio source. If omitted, we attempt to use audio from the video source.
+   * Supports `file://...`, `app://...`, or absolute paths.
+   */
+  audioSrc?: string;
+  /**
+   * Whether to include audio at all.
+   * - If false, the output will be silent.
+   */
+  includeAudio?: boolean;
+  /**
+   * If true and `audioSrc` is not provided, attempt to use embedded audio from the video source.
+   * If false, we will NOT include embedded audio (even if present).
+   */
+  allowEmbeddedAudio?: boolean;
+  outAbs: string; // absolute path preferred
+  fps: number; // output fps (timeline/export fps)
+  /**
+   * Source-time trim expressed in seconds BEFORE speed is applied.
+   * This should already include any timeline trim offsets (trimStart/srcStartFrame + rangeStart*speed).
+   */
+  srcStartSec: number;
+  /**
+   * Source-time duration in seconds BEFORE speed is applied.
+   * For timeline duration D and speed S, this is typically D*S.
+   */
+  srcDurationSec: number;
+  /**
+   * Playback speed multiplier. 2 => 2x faster, 0.5 => half speed.
+   */
+  speed?: number;
+  /**
+   * Optional normalized crop in [0,1] space (relative to input frame).
+   */
+  crop?: { x: number; y: number; width: number; height: number };
+  /**
+   * Target output size. If omitted, ffmpeg will keep the (cropped) source size.
+   */
+  width?: number;
+  height?: number;
+  format?: "mp4" | "mov" | "mkv" | "webm";
+  codec?: "h264" | "hevc" | "prores" | "vp9" | "av1";
+  preset?:
+    | "ultrafast"
+    | "superfast"
+    | "veryfast"
+    | "faster"
+    | "fast"
+    | "medium"
+    | "slow"
+    | "slower"
+    | "veryslow";
+  crf?: number;
+  bitrate?: string;
+  alpha?: boolean;
+};
+
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function safeFixed(n: number, digits: number): string {
+  const x = Number.isFinite(n) ? n : 0;
+  return x.toFixed(digits);
+}
+
+async function exportVideoTranscodeWithFfmpeg(
+  options: ExportVideoTranscodeOptions,
+): Promise<string> {
+  const fps = Math.max(1, Math.trunc(Number(options.fps) || 24));
+  const speedRaw = Number(options.speed ?? 1);
+  const speed =
+    Number.isFinite(speedRaw) && speedRaw > 0
+      ? Math.min(5, Math.max(0.1, speedRaw))
+      : 1;
+  const srcStartSec = Math.max(0, Number(options.srcStartSec || 0));
+  const srcDurationSec = Math.max(0.001, Number(options.srcDurationSec || 0));
+
+  const videoPath = await resolveFfmpegInputPath(options.videoSrc);
+  const audioPath = options.audioSrc
+    ? await resolveFfmpegInputPath(options.audioSrc)
+    : undefined;
+
+  if (videoPath === options.outAbs || audioPath === options.outAbs) {
+    throw new Error(
+      "Export failed: source path is the same as the output path. Please export to a different file than the source media.",
+    );
+  }
+
+  // Determine container/codec defaults
+  const outAbs = options.outAbs;
+  const format = (options.format ||
+    (outAbs.split(".").pop() as any) ||
+    "mp4") as NonNullable<ExportVideoTranscodeOptions["format"]>;
+  const codec = (options.codec ||
+    (format === "webm" ? "vp9" : "h264")) as NonNullable<
+    ExportVideoTranscodeOptions["codec"]
+  >;
+  const preset = options.preset || "medium";
+  const wantsAlpha = !!options.alpha;
+
+  // Mirror constraints from exportVideoOpen
+  if (wantsAlpha) {
+    if (codec === "h264" || codec === "hevc") {
+      throw new Error(
+        'Alpha transparency is not supported with H.264/HEVC. Use codec "prores" (format mov) or "vp9" (format webm/mkv), or "av1" (format webm/mkv).',
+      );
+    }
+    if (codec === "prores" && format !== "mov") {
+      throw new Error('ProRes with alpha requires format "mov".');
+    }
+    if (codec === "vp9" && !(format === "webm" || format === "mkv")) {
+      throw new Error('VP9 with alpha requires format "webm" or "mkv".');
+    }
+    if (codec === "av1" && (format === "mp4" || format === "mov")) {
+      throw new Error(
+        'AV1 with alpha is recommended in "webm" or "mkv" containers, not mp4/mov.',
+      );
+    }
+  }
+
+  const args: string[] = ["-y"];
+
+  // Inputs
+  args.push("-i", videoPath);
+  const audioInputIndex = audioPath ? 1 : 0;
+  if (audioPath) args.push("-i", audioPath);
+
+  // Build video filterchain
+  const vfParts: string[] = [];
+  vfParts.push(
+    `trim=start=${safeFixed(srcStartSec, 6)}:duration=${safeFixed(srcDurationSec, 6)}`,
+  );
+  vfParts.push("setpts=PTS-STARTPTS");
+  if (speed !== 1) {
+    // speed up: reduce PTS; slow down: increase PTS
+    vfParts.push(`setpts=PTS/${safeFixed(speed, 6)}`);
+  }
+
+  // Crop (normalized)
+  if (options.crop) {
+    const cx = clamp01(options.crop.x);
+    const cy = clamp01(options.crop.y);
+    const cw = Math.max(0, clamp01(options.crop.width));
+    const ch = Math.max(0, clamp01(options.crop.height));
+    if (cw > 0 && ch > 0) {
+      vfParts.push(
+        `crop=iw*${safeFixed(cw, 6)}:ih*${safeFixed(ch, 6)}:iw*${safeFixed(cx, 6)}:ih*${safeFixed(cy, 6)}`,
+      );
+    }
+  }
+
+  // Scale (if requested)
+  const targetW = options.width ? Math.max(1, Math.trunc(options.width)) : 0;
+  const targetH = options.height ? Math.max(1, Math.trunc(options.height)) : 0;
+  if (targetW > 0 && targetH > 0) {
+    // Ensure even dimensions for chroma 4:2:0 codecs
+    const isChroma420 = codec !== "prores";
+    const finalW = isChroma420 ? targetW & ~1 : targetW;
+    const finalH = isChroma420 ? targetH & ~1 : targetH;
+    vfParts.push(`scale=${finalW}:${finalH}:flags=lanczos`);
+  }
+
+  // Output fps
+  vfParts.push(`fps=${fps}`);
+
+  const filterParts: string[] = [];
+  filterParts.push(`[0:v]${vfParts.join(",")}[vout]`);
+
+  // Audio: optional; if present apply trim + atempo chain to match speed
+  const includeAudio = options.includeAudio !== false;
+  const allowEmbeddedAudio = options.allowEmbeddedAudio !== false;
+  const hasAudio = includeAudio
+    ? await (async () => {
+        if (audioPath) return true;
+        if (!allowEmbeddedAudio) return false;
+        return await hasAudioStreamStrict(videoPath);
+      })()
+    : false;
+
+  if (hasAudio) {
+    const afParts: string[] = [];
+    afParts.push(
+      `atrim=start=${safeFixed(srcStartSec, 6)}:duration=${safeFixed(srcDurationSec, 6)}`,
+    );
+    afParts.push("asetpts=PTS-STARTPTS");
+    if (speed !== 1) {
+      const chain = buildAtempoChain(speed);
+      for (const r of chain) afParts.push(`atempo=${r}`);
+    }
+    filterParts.push(`[${audioInputIndex}:a]${afParts.join(",")}[aout]`);
+  }
+
+  args.push("-filter_complex", filterParts.join(";"));
+  args.push("-map", "[vout]");
+  if (hasAudio) args.push("-map", "[aout]");
+  else args.push("-an");
+
+  // Video encoding settings (mirror exportVideoOpen)
+  switch (codec) {
+    case "h264":
+      if (wantsAlpha) {
+        throw new Error(
+          'Alpha transparency is not supported with H.264. Use codec "prores" with format "mov" or codec "vp9" with format "webm".',
+        );
+      }
+      args.push("-c:v", "libx264", "-preset", preset);
+      if (typeof options.crf === "number") {
+        args.push(
+          "-crf",
+          String(Math.max(0, Math.min(51, Math.trunc(options.crf)))),
+        );
+        args.push("-pix_fmt", "yuv420p");
+      } else if (options.bitrate) {
+        args.push(
+          "-b:v",
+          options.bitrate,
+          "-maxrate",
+          options.bitrate,
+          "-bufsize",
+          options.bitrate,
+        );
+        args.push("-pix_fmt", "yuv420p");
+      } else {
+        args.push("-crf", "18", "-pix_fmt", "yuv420p");
+      }
+      break;
+    case "hevc":
+      if (wantsAlpha) {
+        throw new Error(
+          'Alpha transparency is not reliably supported with HEVC. Use codec "prores" with format "mov" or codec "vp9" with format "webm".',
+        );
+      }
+      args.push("-c:v", "libx265", "-preset", preset);
+      if (format === "mp4" || format === "mov") {
+        args.push("-tag:v", "hvc1");
+      }
+      if (typeof options.crf === "number") {
+        args.push(
+          "-crf",
+          String(Math.max(0, Math.min(51, Math.trunc(options.crf)))),
+        );
+        args.push("-pix_fmt", "yuv420p");
+      } else if (options.bitrate) {
+        args.push("-b:v", options.bitrate);
+        args.push("-pix_fmt", "yuv420p");
+      } else {
+        args.push("-crf", "20", "-pix_fmt", "yuv420p");
+      }
+      break;
+    case "prores":
+      if (wantsAlpha) {
+        args.push("-c:v", "prores_ks", "-profile:v", "4");
+        args.push("-pix_fmt", "yuva444p10le");
+        if (options.bitrate) args.push("-b:v", options.bitrate);
+      } else {
+        args.push("-c:v", "prores_ks", "-profile:v", "3");
+        if (options.bitrate) args.push("-b:v", options.bitrate);
+        args.push("-pix_fmt", "yuv422p10le");
+      }
+      break;
+    case "vp9":
+      args.push("-c:v", "libvpx-vp9", "-row-mt", "1");
+      if (typeof options.crf === "number") {
+        args.push(
+          "-crf",
+          String(Math.max(0, Math.min(63, Math.trunc(options.crf)))),
+        );
+        args.push("-b:v", "0");
+      } else if (options.bitrate) {
+        args.push("-b:v", options.bitrate);
+      } else {
+        args.push("-crf", "32", "-b:v", "0");
+      }
+      args.push("-pix_fmt", wantsAlpha ? "yuva420p" : "yuv420p");
+      break;
+    case "av1":
+      args.push("-c:v", "libaom-av1", "-cpu-used", "6");
+      if (typeof options.crf === "number") {
+        args.push(
+          "-crf",
+          String(Math.max(0, Math.min(63, Math.trunc(options.crf)))),
+        );
+        args.push("-b:v", "0");
+      } else if (options.bitrate) {
+        args.push("-b:v", options.bitrate);
+      } else {
+        args.push("-crf", "28", "-b:v", "0");
+      }
+      args.push("-pix_fmt", wantsAlpha ? "yuva420p" : "yuv420p");
+      break;
+  }
+
+  if (format === "mp4" || format === "mov") {
+    args.push("-movflags", "+faststart");
+  }
+
+  // Audio encoding
+  if (hasAudio) {
+    if (format === "webm" || format === "mkv") {
+      args.push("-c:a", "libopus", "-b:a", "128k", "-ar", "48000");
+    } else {
+      args.push("-c:a", "aac", "-b:a", "192k", "-ar", "48000");
+    }
+  }
+
+  const container = (() => {
+    switch (format) {
+      case "mp4":
+        return "mp4";
+      case "mov":
+        return "mov";
+      case "webm":
+        return "webm";
+      case "mkv":
+        return "matroska";
+      default:
+        return undefined;
+    }
+  })();
+  if (container) args.push("-f", container);
+
+  args.push(outAbs);
+
+  await new Promise<void>((resolve, reject) => {
+    const ff = spawn(resolveFfmpegCommand("ffmpeg"), args);
+    let stderr = "";
+    ff.stderr.setEncoding("utf8");
+    ff.stderr.on("data", (d) => {
+      stderr += String(d);
+    });
+    ff.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg failed (${code}): ${stderr}`));
+    });
+    ff.on("error", (err) => reject(err));
+  });
+
+  return outAbs;
+}
+
 // Detect whether a media file has at least one audio stream using ffprobe.
 // If ffprobe is unavailable or returns an unexpected error, we conservatively
 // assume audio is present so behavior degrades to the previous implementation.
@@ -331,6 +675,51 @@ async function hasAudioStream(path: string): Promise<boolean> {
       });
     } catch {
       resolve(true);
+    }
+  });
+}
+
+// Strict audio detection for transcode: if ffprobe fails, assume NO audio.
+// This avoids failing the whole export for video-only sources when ffprobe
+// is unavailable or errors.
+async function hasAudioStreamStrict(path: string): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    try {
+      const ff = spawn(resolveFfmpegCommand("ffprobe"), [
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "csv=p=0",
+        path,
+      ]);
+      let stdout = "";
+      let stderr = "";
+      ff.stdout.setEncoding("utf8");
+      ff.stderr.setEncoding("utf8");
+      ff.stdout.on("data", (d) => {
+        stdout += String(d);
+      });
+      ff.stderr.on("data", (d) => {
+        stderr += String(d);
+      });
+      ff.on("close", (code) => {
+        if (stderr.includes("matches no streams")) {
+          resolve(false);
+          return;
+        }
+        if (code === 0 && stdout.trim().length > 0) {
+          resolve(true);
+          return;
+        }
+        resolve(false);
+      });
+      ff.on("error", () => resolve(false));
+    } catch {
+      resolve(false);
     }
   });
 }
@@ -1111,6 +1500,7 @@ export {
   savePreviewAudio,
   exportAudioMp3FromWav,
   renderAudioMixWithFfmpeg,
+  exportVideoTranscodeWithFfmpeg,
   exportVideoOpen,
   exportVideoAppend,
   exportVideoClose,

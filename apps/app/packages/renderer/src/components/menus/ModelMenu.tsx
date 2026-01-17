@@ -555,6 +555,10 @@ const ModelMenu: React.FC = () => {
   const scrollCacheRef = useRef<Map<string, number>>(new Map());
   const {selectedManifestId} = useManifestStore();
   const queryClient = useQueryClient();
+  // Keep showing the last successfully rendered data while queries refetch/error,
+  // to avoid the menu ever flashing "nothing" after it has rendered once.
+  const lastGoodManifestsRef = useRef<ManifestDocument[] | null>(null);
+  const lastGoodModelTypesRef = useRef<ModelTypeInfo[] | null>(null);
 
   const manifestsQuery = useQuery<ManifestDocument[]>({
     queryKey: ["manifest"],
@@ -562,9 +566,10 @@ const ModelMenu: React.FC = () => {
     initialData: () =>
       queryClient.getQueryData<ManifestDocument[]>(["manifest"]),
     placeholderData: (prev) => prev,
-    retry: false,
+    retry: true,
     refetchOnWindowFocus: false,
-    staleTime: 30000,
+    staleTime: Infinity,
+    
   });
   
   const modelTypesQuery = useQuery<ModelTypeInfo[]>({
@@ -580,6 +585,18 @@ const ModelMenu: React.FC = () => {
   const manifestsData = manifestsQuery.data;
   const modelTypesData = modelTypesQuery.data;
 
+  useEffect(() => {
+    if (Array.isArray(manifestsData) && manifestsData.length > 0) {
+      lastGoodManifestsRef.current = manifestsData;
+    }
+  }, [manifestsData]);
+
+  useEffect(() => {
+    if (Array.isArray(modelTypesData) && modelTypesData.length > 0) {
+      lastGoodModelTypesRef.current = modelTypesData;
+    }
+  }, [modelTypesData]);
+
   const backendUnavailable = manifestsQuery.isError;
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -589,17 +606,36 @@ const ModelMenu: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const DOWNLOADED_CATEGORY = "Downloaded";
 
+  const stableModelTypes: ModelTypeInfo[] = useMemo(() => {
+    if (Array.isArray(modelTypesData) && modelTypesData.length > 0) return modelTypesData;
+    if ((modelTypesQuery.isFetching || modelTypesQuery.isError) && lastGoodModelTypesRef.current) {
+      return lastGoodModelTypesRef.current;
+    }
+    return modelTypesData ?? lastGoodModelTypesRef.current ?? [];
+  }, [modelTypesData, modelTypesQuery.isFetching, modelTypesQuery.isError]);
+
   // Map from category key -> human-friendly label (backend /manifest/categories).
   const manifestCategoryKeyToLabel = useMemo(() => {
     const map = new Map<string, string>();
-    (modelTypesData || []).forEach((t) => map.set(t.key, t.label));
+    stableModelTypes.forEach((t) => map.set(t.key, t.label));
     return map;
-  }, [modelTypesData]);
+  }, [stableModelTypes]);
 
-  const manifests: ManifestDocument[] = useMemo(
-    () => manifestsData ?? [],
-    [manifestsData],
-  );
+  const manifests: ManifestDocument[] = useMemo(() => {
+    if (Array.isArray(manifestsData) && manifestsData.length > 0) return manifestsData;
+    if (
+      (manifestsQuery.isFetching ||
+        manifestsQuery.isError) &&
+      lastGoodManifestsRef.current
+    ) {
+      return lastGoodManifestsRef.current;
+    }
+    return manifestsData ?? lastGoodManifestsRef.current ?? [];
+  }, [
+    manifestsData,
+    manifestsQuery.isFetching,
+    manifestsQuery.isError,
+  ]);
 
   const filteredManifests = useMemo(() => {
     if (!searchQuery.trim()) return manifests;
