@@ -332,7 +332,6 @@ export const getMediaInfo = async (
   async function gatherInfo(inp: Input, quickLoad = true) {
     const videoTrack = await inp.getPrimaryVideoTrack();
     const audioTrack = await inp.getPrimaryAudioTrack();
-
     // For quick load, only scan first ~100 packets for fast frame rate estimate
     // For full load (when clip is on timeline), scan all packets for accuracy
     const targetPacketCount = quickLoad ? 100 : Infinity;

@@ -700,8 +700,9 @@ const TimelineClip: React.FC<
       }
 
       // Update ghost overlay with validated position while dragging
-      const addToPadding = timelineDuration[0] === 0 ? timelinePadding : 0;
-      const rectLeft = Math.round(e.target.x() - addToPadding);
+      // Convert the dragged group's stage X into "inner timeline" X (0..timelineWidth)
+      // so all snapping/ghost math is independent of the left gutter/padding.
+      const rectLeft = Math.round(e.target.x() - halfStroke - timelinePadding);
       const [visibleStartFrame, visibleEndFrame] = timelineDuration;
       const clipLen = Math.max(1, currentEndFrame - currentStartFrame);
       const ghostWidthPx = getClipWidth(0, clipLen, timelineWidth, [

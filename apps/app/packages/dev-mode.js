@@ -2,6 +2,7 @@ import { build, createServer } from "vite";
 import path from "path";
 import { spawn } from "node:child_process";
 import electron from "electron";
+import fs from "node:fs";
 
 /**
  * This script is designed to run multiple packages of your application in a special development mode.
@@ -64,12 +65,54 @@ const packagesToStart = [
   "packages/export-renderer",
 ];
 
+async function waitForFile(absPath, options) {
+  const timeoutMs =
+    typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+      ? Math.max(0, options.timeoutMs)
+      : 20_000;
+  const pollMs =
+    typeof options?.pollMs === "number" && Number.isFinite(options.pollMs)
+      ? Math.max(10, options.pollMs)
+      : 50;
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (fs.existsSync(absPath)) return;
+    } catch {}
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  throw new Error(`Timed out waiting for build artifact: ${absPath}`);
+}
+
 for (const pkg of packagesToStart) {
   await build({
     mode,
     root: path.resolve(pkg),
     plugins: [rendererWatchServerProvider],
   });
+
+  // Ensure the required build outputs exist before launching Electron.
+  // Some packages enable Vite/Rollup watch mode in development, and `build()`
+  // may return before the initial write completes.
+  if (pkg === "packages/preload") {
+    await waitForFile(
+      path.resolve("packages/preload/dist/exposed.mjs"),
+      { timeoutMs: 30_000 },
+    );
+    await waitForFile(
+      path.resolve("packages/preload/dist/_virtual_browser.mjs"),
+      { timeoutMs: 30_000 },
+    );
+  } else if (pkg === "packages/main") {
+    await waitForFile(path.resolve("packages/main/dist/index.js"), {
+      timeoutMs: 30_000,
+    });
+  } else if (pkg === "packages/export-renderer") {
+    await waitForFile(path.resolve("packages/export-renderer/dist/index.js"), {
+      timeoutMs: 30_000,
+    });
+  }
 }
 
 /**

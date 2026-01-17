@@ -107,14 +107,6 @@ function compareGeneratedDesc(
   return b.absPath.localeCompare(a.absPath);
 }
 
-function isAfterCursor(
-  item: Pick<ConvertedMediaItem, "dateAddedMs" | "absPath">,
-  cursor: GeneratedMediaCursor | null,
-): boolean {
-  if (!cursor) return true;
-  // We paginate in descending order; "after cursor" means strictly older.
-  return compareGeneratedDesc(item, cursor) > 0;
-}
 
 async function removeIfBrokenSymlink(absPath: string): Promise<boolean> {
   try {
@@ -543,11 +535,7 @@ async function listGeneratedMediaPage(
     type Keyed = { item: ConvertedMediaItem; key: string };
     const keyed: Keyed[] = [];
 
-    const compareKeyedDesc = (a: Keyed, b: Keyed): number => {
-      if (a.item.dateAddedMs !== b.item.dateAddedMs)
-        return b.item.dateAddedMs - a.item.dateAddedMs;
-      return b.key.localeCompare(a.key);
-    };
+
 
     const isAfterCursorKeyed = (it: Keyed, cursor: any): boolean => {
       if (!cursor) return true;
