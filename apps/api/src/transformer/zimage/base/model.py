@@ -131,6 +131,8 @@ class ZSingleStreamAttnProcessor:
         # From [batch, seq_len] to [batch, 1, 1, seq_len] -> broadcast to [batch, heads, seq_len, seq_len]
         if attention_mask is not None and attention_mask.ndim == 2:
             attention_mask = attention_mask[:, None, None, :]
+            
+        
 
         # Compute joint attention
         hidden_states = attention_register.call(
@@ -602,6 +604,7 @@ class ZImageTransformer2DModel(
         device = x[0].device
         t = t * self.t_scale
         t = self.t_embedder(t)
+        
 
         (
             x,
@@ -641,7 +644,7 @@ class ZImageTransformer2DModel(
         )
 
         x = pad_sequence(x, batch_first=True, padding_value=0.0)
-        
+
         x_freqs_cis = pad_sequence(x_freqs_cis, batch_first=True, padding_value=0.0)
         # Clarify the length matches to satisfy Dynamo due to "Symbolic Shape Inference" to avoid compilation errors
         x_freqs_cis = x_freqs_cis[:, : x.shape[1]]

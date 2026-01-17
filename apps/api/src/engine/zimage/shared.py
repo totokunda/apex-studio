@@ -160,9 +160,10 @@ class ZImageShared(BaseEngine):
         shape = (batch_size, num_channels_latents, height, width)
 
         if latents is None:
-            latents = randn_tensor(
-                shape, generator=generator, device=device, dtype=dtype
+            latents = torch.randn(
+                shape, generator=torch.Generator(device="cpu").manual_seed(generator.initial_seed()), device="cpu", dtype=dtype
             )
+            latents = latents.to(device)
         else:
             if latents.shape != shape:
                 raise ValueError(
