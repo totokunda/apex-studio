@@ -696,9 +696,12 @@ def get_auto_update_config_api():
 
 
 def _memory_env_defaults() -> dict:
+    persisted = _read_persisted_config_raw()
     def _float(name: str, default: float) -> float:
         try:
-            raw = os.environ.get(name, None)
+            raw = persisted.get(name, None)
+            if raw is None:
+                raw = os.environ.get(name, None)
             if raw is None or str(raw).strip() == "":
                 return default
             return float(raw)
@@ -707,7 +710,9 @@ def _memory_env_defaults() -> dict:
 
     def _int(name: str, default: int) -> int:
         try:
-            raw = os.environ.get(name, None)
+            raw = persisted.get(name, None)
+            if raw is None:
+                raw = os.environ.get(name, None)
             if raw is None or str(raw).strip() == "":
                 return default
             return int(float(raw))
@@ -715,8 +720,10 @@ def _memory_env_defaults() -> dict:
             return default
 
     def _str(name: str, default: str) -> str:
-        val = os.environ.get(name)
-        return default if val is None or val == "" else val
+        val = persisted.get(name)
+        if val is None:
+            val = os.environ.get(name)
+        return default if val is None or val == "" else str(val)
 
     return {
         "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION": _float("APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.90),
@@ -751,12 +758,36 @@ def get_memory_settings():
 @router.post("/memory", response_model=MemorySettingsResponse)
 def set_memory_settings(request: MemorySettingsRequest):
     """Update memory management settings via environment variables."""
-    updates = request.dict(exclude_none=True)
-    for k, v in updates.items():
+    updates = request.dict(exclude_none=False)
+    try:
+        # Load existing persisted config so we can add/remove keys.
+        store_path = Path(get_config_store_path())
+        persisted = _read_persisted_config_raw()
+
+        for k, v in updates.items():
+            # Treat None/empty string as a request to remove the override.
+            if v is None or (isinstance(v, str) and v.strip() == ""):
+                os.environ.pop(k, None)
+                if k in persisted:
+                    persisted.pop(k, None)
+                continue
+            try:
+                os.environ[k] = str(v)
+                persisted[k] = v
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to set {k}: {e}")
+
+        # Persist the merged dict.
         try:
-            os.environ[k] = str(v)
+            with config_store_lock(store_path):
+                write_json_dict_atomic(store_path, persisted, indent=2)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to set {k}: {e}")
+            # Do not fail the API if persistence fails; log/return best-effort.
+            print(f"Warning: failed to persist memory settings: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return MemorySettingsResponse(settings=_memory_env_defaults())
 
 
