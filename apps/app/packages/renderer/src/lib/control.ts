@@ -331,6 +331,6 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
   setSelectedMaskId: (maskId) => set({ selectedMaskId: maskId }),
   possibleKeyFocusFrames: [],
   setPossibleKeyFocusFrames: (frames) => set({ possibleKeyFocusFrames: frames }),
-  isAccurateSeekNeeded: false,
+  isAccurateSeekNeeded: true,
   setIsAccurateSeekNeeded: (needed) => set({ isAccurateSeekNeeded: needed }),
 }));

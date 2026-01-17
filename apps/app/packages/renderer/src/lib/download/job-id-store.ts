@@ -8,6 +8,14 @@ interface DownloadJobIdStore {
   addSourceToJobId: (source: string | string[], jobId: string) => void;
   removeSourceToJobId: (source: string) => void;
   removeSourceByJobId: (jobId: string) => void;
+  /**
+   * Escape hatch to clear any local/persisted tracking for a download job/source.
+   * Does NOT cancel the backend job; it only resets client-side state so the UI can't get stuck.
+   */
+  clearDownloadTracking: (params: {
+    jobId?: string | null;
+    source?: string | null;
+  }) => void;
   jobUpdates: Record<string, UnifiedDownloadWsUpdate[]>;
   addJobUpdate: (jobId: string, update: UnifiedDownloadWsUpdate) => void;
   removeJobUpdates: (jobId: string) => void;
@@ -61,6 +69,46 @@ export const useDownloadJobIdStore = create<DownloadJobIdStore>()(
           for (const k of keysToDelete) delete next[k];
           return { sourceToJobId: next };
         });
+      },
+
+      clearDownloadTracking: ({
+        jobId,
+        source,
+      }: {
+        jobId?: string | null;
+        source?: string | null;
+      }) => {
+        const resolvedJobId =
+          jobId || (source ? get().sourceToJobId[source] : undefined);
+
+        // Clear persisted mappings (source<->job)
+        if (source) {
+          try {
+            get().removeSourceToJobId(source);
+          } catch {}
+        }
+        if (resolvedJobId) {
+          try {
+            get().removeSourceByJobId(resolvedJobId);
+          } catch {}
+        }
+
+        // Clear in-memory WS updates so `isDownloading` can't get stuck.
+        if (resolvedJobId) {
+          try {
+            get().removeJobUpdates(resolvedJobId);
+          } catch {}
+        }
+
+        // Clear persisted "refresh payload" so we don't keep trying to recover-refresh.
+        if (resolvedJobId) {
+          try {
+            get().removeJobIdToParts(resolvedJobId);
+          } catch {}
+          try {
+            get().removeJobIdToManifestId(resolvedJobId);
+          } catch {}
+        }
       },
 
       addJobUpdate: (jobId: string, update: UnifiedDownloadWsUpdate) =>

@@ -35,7 +35,7 @@ import { getSchedulerComponentKey } from "@/lib/manifest/componentKey";
 import { usePreprocessorsListQuery } from "@/lib/preprocessor/queries";
 import type { Preprocessor } from '@/lib/preprocessor/api';
 import { validatePreprocessorFrames } from '@/lib/preprocessorHelpers';
-import { runEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/lib/engine/api';
+import { runEngine, warmupEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/lib/engine/api';
 import { ManifestComponent } from '@/lib/manifest/api';
 import ModelComponentsProperties from '../properties/model/ModelComponentsProperties'
 import OffloadProperties from '../properties/OffloadProperties'
@@ -49,6 +49,9 @@ import { useManifestQuery } from '@/lib/manifest/queries'
 interface PropertiesPanelProps {
     panelSize: number;
 }
+
+// Best-effort: only warm each manifest once per app session to avoid spamming the API.
+const warmedDiskManifests = new Set<string>();
 
 const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const {selectedClipIds, selectedMaskId} = useControlsStore();
@@ -646,6 +649,45 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     !!clip &&
     (((clip as ModelClipProps | undefined)?.modelStatus === 'running') ||
       ((clip as ModelClipProps | undefined)?.modelStatus === 'pending'));
+
+  // Warm disk cache for the model weights when the user lingers on the same model clip.
+  useEffect(() => {
+    if (!hasModel) return;
+    if (!clipId) return;
+    if (!manifestId) return;
+    if (!isModelDownloaded) return;
+    if (isModelRunning) return;
+    if (warmedDiskManifests.has(manifestId)) return;
+
+    const delayMs = 3000;
+    const timer = window.setTimeout(() => {
+      // Re-check the clip is still selected and refers to the same manifest.
+      const latestClip = clipId ? getClipById(clipId) : null;
+      const latestManifestId =
+        (latestClip as ModelClipProps | undefined)?.manifest?.metadata?.id || null;
+      if (!latestClip) return;
+      if (latestManifestId !== manifestId) return;
+      if (warmedDiskManifests.has(manifestId)) return;
+
+      warmedDiskManifests.add(manifestId);
+      const selected_components =
+        (latestClip as ModelClipProps | undefined)?.selectedComponents || {};
+
+      void warmupEngine({
+        manifest_id: manifestId,
+        selected_components,
+        mode: "disk",
+      })
+        .then((res) => {
+          if (!res?.success) warmedDiskManifests.delete(manifestId);
+        })
+        .catch(() => {
+          warmedDiskManifests.delete(manifestId);
+        });
+    }, delayMs);
+
+    return () => window.clearTimeout(timer);
+  }, [hasModel, clipId, manifestId, isModelDownloaded, isModelRunning, getClipById]);
 
   const handleStopGeneration = useCallback(async () => {
     const targetJobId = (clip as ModelClipProps)?.activeJobId;

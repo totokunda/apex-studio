@@ -48,6 +48,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { refreshManifestPart } from "@/lib/manifest/queries";
 import { toast } from "sonner";
 
+const STARTUP_TIMEOUT_MS = 15_000;
 
 const getComponentTypeLabel = (type: string): string => {
   const labels: Record<string, string> = {
@@ -332,6 +333,7 @@ const SchedulerConfigPathItem: React.FC<{
     getJobUpdates,
     removeJobUpdates,
     removeSourceToJobId,
+    clearDownloadTracking,
     addJobIdToParts,
     addJobIdToManifestId,
   } = useDownloadJobIdStore();
@@ -352,6 +354,17 @@ const SchedulerConfigPathItem: React.FC<{
       setStartDownloading(false);
     }
   }, [isDownloading, jobId]);
+
+  // If we never receive WS updates for this job, revert to idle so the UI can't get stuck.
+  useEffect(() => {
+    if (!jobId) return;
+    if (!startDownloading) return;
+    if ((jobUpdates?.length ?? 0) > 0) return;
+    const t = window.setTimeout(() => {
+      setStartDownloading(false);
+    }, STARTUP_TIMEOUT_MS);
+    return () => window.clearTimeout(t);
+  }, [jobId, jobUpdates?.length, startDownloading]);
 
   const { mutate: startDownload } = useStartUnifiedDownloadMutation({
     onSuccess(data, variables) {
@@ -403,11 +416,15 @@ const SchedulerConfigPathItem: React.FC<{
             </div>
           )}
           {!isDownloaded && (
-            <div className="flex items-center justify-between gap-x-2 mt-2">
+            <div className="flex flex-col gap-y-2 mt-2">
               {isDownloading ? (
                 <DownloadProgressSection
                   jobUpdates={jobUpdates ?? []}
                   width={width}
+                  onReset={() => {
+                    setStartDownloading(false);
+                    clearDownloadTracking({ jobId, source: configPath });
+                  }}
                   onCancel={async () => {
                     if (!jobId) return;
                     try {
@@ -423,22 +440,40 @@ const SchedulerConfigPathItem: React.FC<{
                 />
               ) :
               (
-            <button
-              onClick={async () => {
-                setStartDownloading(true);
-                await startDownload({
-                  item_type: "component",
-                  source: configPath,
-                })
-              }}
-              disabled={startDownloading || isDownloading}
-              className="w-full text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light  hover:bg-brand/70 border border-brand-light/10 rounded-[6px] bg-brand px-3 py-2 transition-all"
-            > 
-          {startDownloading ? <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" /> : <LuDownload className="w-3.5 h-3.5" />}
-          <span>
-            {startDownloading ? "Downloading..." : "Download Config"}
-            </span>
-          </button>
+                <>
+                  <button
+                    onClick={async () => {
+                      setStartDownloading(true);
+                      await startDownload({
+                        item_type: "component",
+                        source: configPath,
+                      });
+                    }}
+                    disabled={startDownloading || isDownloading}
+                    className="w-full text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light  hover:bg-brand/70 border border-brand-light/10 rounded-[6px] bg-brand px-3 py-2 transition-all"
+                  >
+                    {startDownloading ? (
+                      <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
+                    ) : (
+                      <LuDownload className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {startDownloading ? "Downloading..." : "Download Config"}
+                    </span>
+                  </button>
+                  {startDownloading && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStartDownloading(false);
+                        clearDownloadTracking({ jobId, source: configPath });
+                      }}
+                      className="w-full text-[10px] text-brand-light/80 hover:text-brand-light font-medium bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded-[6px] px-2 py-2 transition-all"
+                    >
+                      Reset download state
+                    </button>
+                  )}
+                </>
             )}
             </div>
           )}
@@ -532,6 +567,7 @@ const ModelPathItem: React.FC<{
     getJobUpdates,
     removeJobUpdates,
     removeSourceByJobId,
+    clearDownloadTracking,
     addJobIdToParts,
     addJobIdToManifestId,
   } = useDownloadJobIdStore();
@@ -547,7 +583,7 @@ const ModelPathItem: React.FC<{
   
   const jobId = getSourceToJobId(path.path);
   const jobUpdates = getJobUpdates(jobId);
-  const isDownloading = (jobUpdates?.length ?? 0) > 0
+  const isDownloading = (jobUpdates?.length ?? 0) > 0;
   const ref = useRef<HTMLDivElement>(null);
   const width = ref.current?.clientWidth ?? 0;
   const [startDownloading, setStartDownloading] = useState(false);
@@ -559,8 +595,19 @@ const ModelPathItem: React.FC<{
     // Refresh the manifest query when job ids are cleared.
     const eventJobId = event.detail.jobId;
     if (!eventJobId || eventJobId !== jobId) return;
-    
-  }, [queryClient, manifestId, jobId, removeJobUpdates, removeSourceByJobId]);
+    setStartDownloading(false);
+    clearDownloadTracking({ jobId: eventJobId, source: path.path });
+    try {
+      await Promise.all([
+        refreshManifestPart(
+          manifestId,
+          `spec.components.${componentIndex}`,
+          queryClient,
+        ),
+        refreshManifestPart(manifestId, `downloaded`, queryClient, true),
+      ]);
+    } catch {}
+  }, [clearDownloadTracking, componentIndex, jobId, manifestId, path.path, queryClient]);
 
   useEffect(() => {
     window.addEventListener("clear-job-id", onClearJobId as EventListener);
@@ -581,6 +628,17 @@ const ModelPathItem: React.FC<{
       setStartDownloading(true);
     }
   }, []);
+
+  // If we never receive WS updates for this job, revert to idle so the UI can't get stuck.
+  useEffect(() => {
+    if (!jobId) return;
+    if (!startDownloading) return;
+    if ((jobUpdates?.length ?? 0) > 0) return;
+    const t = window.setTimeout(() => {
+      setStartDownloading(false);
+    }, STARTUP_TIMEOUT_MS);
+    return () => window.clearTimeout(t);
+  }, [jobId, jobUpdates?.length, startDownloading]);
 
   return (
     <div className="w-full bg-brand-background rounded-md p-3" ref={ref}>
@@ -689,6 +747,10 @@ const ModelPathItem: React.FC<{
                 <DownloadProgressSection
                   jobUpdates={jobUpdates ?? []}
                   width={width}
+                  onReset={() => {
+                    setStartDownloading(false);
+                    clearDownloadTracking({ jobId, source: path.path });
+                  }}
                   onCancel={async () => {
                     if (!jobId) return;
                     try {
@@ -703,20 +765,43 @@ const ModelPathItem: React.FC<{
                   }}
                 />
               ) : (
-                <button
-                  onClick={async () => {
-                    setStartDownloading(true);
-                    await startDownload({
-                      item_type: "component",
-                      source: path.path,
-                    });
-                  }}
-                  disabled={startDownloading || isDownloading}
-                  className={cn("w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all", startDownloading ? "opacity-60 cursor-default hover:bg-brand" : "")}
-                >
-                  {startDownloading ? <LuLoader className="w-3 h-3 text-brand-light/70 animate-spin" /> : <LuDownload className="w-3 h-3 text-brand-light/70" />}
-                  <span>{startDownloading ? "Downloading..." : "Download Model"}</span>
-                </button>
+                <div className="w-full">
+                  <button
+                    onClick={async () => {
+                      setStartDownloading(true);
+                      await startDownload({
+                        item_type: "component",
+                        source: path.path,
+                      });
+                    }}
+                    disabled={startDownloading || isDownloading}
+                    className={cn(
+                      "w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all",
+                      startDownloading ? "opacity-60 cursor-default hover:bg-brand" : "",
+                    )}
+                  >
+                    {startDownloading ? (
+                      <LuLoader className="w-3 h-3 text-brand-light/70 animate-spin" />
+                    ) : (
+                      <LuDownload className="w-3 h-3 text-brand-light/70" />
+                    )}
+                    <span>
+                      {startDownloading ? "Downloading..." : "Download Model"}
+                    </span>
+                  </button>
+                  {startDownloading && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStartDownloading(false);
+                        clearDownloadTracking({ jobId, source: path.path });
+                      }}
+                      className="w-full mt-2 text-[10px] text-brand-light/80 hover:text-brand-light font-medium bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded-[6px] px-2 py-2 transition-all"
+                    >
+                      Reset download state
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -727,8 +812,9 @@ const ModelPathItem: React.FC<{
 const DownloadProgressSection: React.FC<{
   jobUpdates: UnifiedDownloadWsUpdate[];
   onCancel: () => void;
+  onReset?: () => void;
   width: number;
-}> = ({ jobUpdates, onCancel, width }) => {
+}> = ({ jobUpdates, onCancel, onReset, width }) => {
   if (!jobUpdates.length) return null;
   const [isCancelling] = useState(false);
 
@@ -797,16 +883,17 @@ const DownloadProgressSection: React.FC<{
           </div>
         ))}
       </div>
-      <div className="flex flex-col items-center justify-between mt-2 w-full">
+      <div className="flex items-center gap-x-2 mt-2 w-full">
         <button
           onClick={onCancel}
           className={cn(
-            "text-[10px] text-brand-light/90 w-full flex items-center justify-center gap-x-1.5 mt-2 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2",
+            "text-[10px] text-brand-light/90 w-full flex items-center justify-center gap-x-1.5 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2",
           )}
         >
           {isCancelling ? <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" /> : <LuX className="w-3.5 h-3.5 text-brand-light/70" />}
           <span>{isCancelling ? "Cancelling..." : "Cancel"}</span>
         </button>
+        
       </div>
     </div>
   );
@@ -869,6 +956,7 @@ const LoraSection: React.FC<{
     getJobUpdates,
     removeJobUpdates,
     removeSourceByJobId,
+    clearDownloadTracking,
     addJobIdToParts,
     addJobIdToManifestId,
   } = useDownloadJobIdStore();
@@ -881,7 +969,7 @@ const LoraSection: React.FC<{
   });
   const jobId = getSourceToJobId(path as string);
   const jobUpdates = getJobUpdates(jobId);
-  const isDownloading = (jobUpdates?.length ?? 0) > 0
+  const isDownloading = (jobUpdates?.length ?? 0) > 0;
   const ref = useRef<HTMLDivElement>(null);
   const width = ref.current?.clientWidth ?? 0;
 
@@ -897,6 +985,17 @@ const LoraSection: React.FC<{
       setStartDownloading(true);
     }
   }, []);
+
+  // If we never receive WS updates for this job, revert to idle so the UI can't get stuck.
+  useEffect(() => {
+    if (!jobId) return;
+    if (!startDownloading) return;
+    if ((jobUpdates?.length ?? 0) > 0) return;
+    const t = window.setTimeout(() => {
+      setStartDownloading(false);
+    }, STARTUP_TIMEOUT_MS);
+    return () => window.clearTimeout(t);
+  }, [jobId, jobUpdates?.length, startDownloading]);
 
 
   return (
@@ -960,6 +1059,10 @@ const LoraSection: React.FC<{
           <DownloadProgressSection
             jobUpdates={jobUpdates ?? []}
             width={width}
+            onReset={() => {
+              setStartDownloading(false);
+              clearDownloadTracking({ jobId, source: path as string });
+            }}
             onCancel={async () => {
               if (!jobId) return;
               try {
@@ -974,30 +1077,44 @@ const LoraSection: React.FC<{
             }}
           />
         ) : (
-          <button
-            disabled={!path || startDownloading || isDownloading}
-            onClick={async () => {
-              if (!path) return;
-              setStartDownloading(true);
-              await startDownload({
-                item_type: "lora",
-                source: path as string,
-                manifest_id: manifestId,
-                lora_name: lora.name,
-              });
-            }}
-            className={cn(
-              "w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all disabled:opacity-60 disabled:cursor-not-allowed",
-              startDownloading ? "opacity-60 cursor-default hover:bg-brand" : "",
+          <div className="w-full">
+            <button
+              disabled={!path || startDownloading || isDownloading}
+              onClick={async () => {
+                if (!path) return;
+                setStartDownloading(true);
+                await startDownload({
+                  item_type: "lora",
+                  source: path as string,
+                  manifest_id: manifestId,
+                  lora_name: lora.name,
+                });
+              }}
+              className={cn(
+                "w-full mt-3 text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-md px-3 py-2 transition-all disabled:opacity-60 disabled:cursor-not-allowed",
+                startDownloading ? "opacity-60 cursor-default hover:bg-brand" : "",
+              )}
+            >
+              {startDownloading ? (
+                <LuLoader className="w-3 h-3 text-brand-light/70 animate-spin" />
+              ) : (
+                <LuDownload className="w-3 h-3 text-brand-light/70" />
+              )}
+              <span>{startDownloading ? "Downloading..." : "Download Lora"}</span>
+            </button>
+            {startDownloading && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStartDownloading(false);
+                  clearDownloadTracking({ jobId, source: path as string });
+                }}
+                className="w-full mt-2 text-[10px] text-brand-light/80 hover:text-brand-light font-medium bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded-[6px] px-2 py-2 transition-all"
+              >
+                Reset download state
+              </button>
             )}
-          >
-            {startDownloading ? (
-              <LuLoader className="w-3 h-3 text-brand-light/70 animate-spin" />
-            ) : (
-              <LuDownload className="w-3 h-3 text-brand-light/70" />
-            )}
-            <span>{startDownloading ? "Downloading..." : "Download Lora"}</span>
-          </button>
+          </div>
         )}
       </div>
     )}

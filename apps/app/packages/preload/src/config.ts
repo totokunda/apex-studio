@@ -1,6 +1,8 @@
 import { ipcRenderer } from "electron";
 import type { ConfigResponse } from "./types.js";
 
+type MemorySettingsResponse = { settings: Record<string, any> };
+
 async function getBackendUrl(): Promise<ConfigResponse<{ url: string }>> {
   return await ipcRenderer.invoke("backend:get-url");
 }
@@ -77,6 +79,20 @@ async function getSystemMemory(): Promise<ConfigResponse<any>> {
   return await ipcRenderer.invoke("system:memory");
 }
 
+async function freeSystemMemory(): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke("system:free-memory");
+}
+
+async function getMemorySettings(): Promise<ConfigResponse<MemorySettingsResponse>> {
+  return await ipcRenderer.invoke("config:get-memory-settings");
+}
+
+async function setMemorySettings(
+  payload: Record<string, any>,
+): Promise<ConfigResponse<MemorySettingsResponse>> {
+  return await ipcRenderer.invoke("config:set-memory-settings", payload);
+}
+
 async function getFolderSize(
   inputPath: string,
 ): Promise<ConfigResponse<{ size_bytes: number }>> {
@@ -104,6 +120,9 @@ export {
   getCachePath,
   setCachePath,
   getSystemMemory,
+  freeSystemMemory,
+  getMemorySettings,
+  setMemorySettings,
   getFolderSize,
   getPathExists,
 };

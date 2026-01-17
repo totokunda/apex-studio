@@ -518,6 +518,17 @@ const VideoPreview: React.FC<
   const fps = useInputScopedControls ? fpsFromInputs : fpsFromControls;
   const currentStartFrameRef = useRef<number>(0);
   const lastRenderedFrameRef = useRef<number>(-1);
+  const lastDrawnFocusFrameRef = useRef<number | null>(null);
+  const skipDrawRef = useRef(false);
+  const suppressSeekFramesRef = useRef(false);
+  const resumeGateFrameRef = useRef<number | null>(null);
+  const pendingSeekTargetRef = useRef<{ frame: number; strict: boolean } | null>(
+    null,
+  );
+  const fpsRef = useRef(fps);
+  useEffect(() => {
+    fpsRef.current = fps;
+  }, [fps]);
 
 
   // Update refs when values change
@@ -752,6 +763,9 @@ const VideoPreview: React.FC<
     lastRenderedFrameRef.current = -1;
     lastPosterKeyRef.current = null;
     originalFrameRef.current = null;
+    lastDrawnFocusFrameRef.current = null;
+    resumeGateFrameRef.current = null;
+    pendingSeekTargetRef.current = null;
     processingCanvasRef.current = null;
     // @ts-ignore
     iteratorRef.current?.return?.();
@@ -885,9 +899,56 @@ const VideoPreview: React.FC<
   );
 
   const drawWrappedCanvas = useCallback(
-    (wc: { canvas: HTMLCanvasElement | OffscreenCanvas | VideoFrame; timestamp: number; duration: number }, maskFrame?: number) => {
+    (
+      wc: {
+        canvas: HTMLCanvasElement | OffscreenCanvas | VideoFrame;
+        timestamp: number;
+        duration: number;
+      },
+      maskFrame?: number,
+      opts?: { recordFrame?: boolean },
+    ) => {
       let canvas = canvasRef.current;
       if (!canvas) return;
+
+      if (isPlayingRef.current && suppressSeekFramesRef.current) {
+        skipDrawRef.current = false;
+        return;
+      }
+
+      if (isPlayingRef.current && skipDrawRef.current) {
+        skipDrawRef.current = false;
+        return;
+      }
+
+      const info = mediaInfo.current;
+      const clipFps =
+        info?.stats.video?.averagePacketRate || fpsRef.current || DEFAULT_FPS;
+      const frameIdx =
+        Number.isFinite(clipFps) && clipFps > 0
+          ? Math.floor(wc.timestamp * clipFps + 1e-4)
+          : null;
+      const pendingSeek = pendingSeekTargetRef.current;
+      if (
+        !isPlayingRef.current &&
+        pendingSeek &&
+        pendingSeek.strict &&
+        frameIdx !== null &&
+        Math.abs(frameIdx - pendingSeek.frame) > 2
+      ) {
+        return;
+      }
+      const resumeGate = resumeGateFrameRef.current;
+      if (
+        isPlayingRef.current &&
+        typeof resumeGate === "number" &&
+        frameIdx !== null &&
+        frameIdx < resumeGate
+      ) {
+        return;
+      }
+
+      skipDrawRef.current = false;
 
       // If the active source asset changes (assetId/selectedAssetId switch) and the
       // aspect-fit size is different, ensure we resize our backing canvas before drawing.
@@ -981,6 +1042,26 @@ const VideoPreview: React.FC<
       // Always draw the final processed result back to display canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
+      if (opts?.recordFrame !== false) {
+        if (frameIdx !== null) {
+          lastRenderedFrameRef.current = frameIdx;
+          if (
+            typeof resumeGate === "number" &&
+            frameIdx >= resumeGate
+          ) {
+            resumeGateFrameRef.current = null;
+          }
+        }
+        if (
+          pendingSeek &&
+          pendingSeek.strict &&
+          frameIdx !== null &&
+          Math.abs(frameIdx - pendingSeek.frame) <= 2
+        ) {
+          pendingSeekTargetRef.current = null;
+        }
+        lastDrawnFocusFrameRef.current = focusFrameRef.current;
+      }
       imageRef.current?.getLayer()?.batchDraw?.();
     },
     [ensureProcessingCanvas],
@@ -1096,6 +1177,7 @@ const VideoPreview: React.FC<
 
       const maskFrame = maskFrameForCurrentFocus;
       decoderMaskFrameRef.current = maskFrame;
+      pendingSeekTargetRef.current = null;
       drawWrappedCanvas(
         {
           canvas: fallbackCanvas,
@@ -1103,6 +1185,7 @@ const VideoPreview: React.FC<
           duration: 0,
         },
         maskFrame,
+        { recordFrame: false },
       );
     },
     [
@@ -1129,6 +1212,7 @@ const VideoPreview: React.FC<
       // it reads the global fallback store (wrong clip scope) and will return false
       // during input playback, causing us to seek every frame.
       // Use ref to avoid triggering seeks when pausing - this prevents frame jumping
+      if (isPlaying) return;
       if (isPlayingRef.current) return;
 
 
@@ -1140,7 +1224,20 @@ const VideoPreview: React.FC<
       return;
     }
 
+    const focusFrameValue = focusFrameRef.current;
+    if (
+      !isAccurateSeekNeededInput &&
+      originalFrameRef.current &&
+      lastDrawnFocusFrameRef.current === focusFrameValue
+    ) {
+      return;
+    }
+
     const { timestamp, targetFrame } = info;
+    pendingSeekTargetRef.current = {
+      frame: targetFrame,
+      strict: isAccurateSeekNeededInput,
+    };
 
     // If we are already displaying the target frame (from playback), avoid re-seeking
     // which can cause a visible flicker/jump on pause.
@@ -1152,7 +1249,7 @@ const VideoPreview: React.FC<
     decoderMaskFrameRef.current = maskFrameForCurrentFocus;
 
     // Cancel any ongoing paused seek operations (do not interfere with live decode token)
-    const myToken = ++drawTokenRef.current;
+    drawTokenRef.current++;
     if (isAccurateSeekNeeded) {
       isAccurateSeekNeededInput = true;
     }
@@ -1166,11 +1263,9 @@ const VideoPreview: React.FC<
       await decoderManager.seek(logicalId, timestamp, isAccurateSeekNeededInput);
       activeDecoderAssetIdRef.current = logicalId;
 
-      if (myToken === drawTokenRef.current) {
-         lastRenderedFrameRef.current = targetFrame;
-      }
     } catch (e) {
       console.warn("[video] seek failed", e);
+      pendingSeekTargetRef.current = null;
       void renderPosterFallback({ force: true });
     }
     },
@@ -1180,6 +1275,7 @@ const VideoPreview: React.FC<
       //renderPosterFallback,
       maskFrameForCurrentFocus,
       isAccurateSeekNeeded,
+      isPlaying,
       selectedAssetId,
       makeDecoderId,
       isInFrame
@@ -1313,7 +1409,18 @@ const VideoPreview: React.FC<
     );
 
     currentStartFrameRef.current = startIdx;
-    lastRenderedFrameRef.current = startIdx - 1;
+    const lastFrame = lastRenderedFrameRef.current;
+    if (
+      Number.isFinite(lastFrame) &&
+      lastFrame >= 0 &&
+      Math.abs(lastFrame - startIdx) <= 1
+    ) {
+      resumeGateFrameRef.current = lastFrame;
+    } else {
+      resumeGateFrameRef.current = null;
+    }
+    skipDrawRef.current = false;
+    pendingSeekTargetRef.current = null;
 
     const myToken = ++drawTokenRef.current;
     // @ts-ignore
@@ -1336,8 +1443,12 @@ const VideoPreview: React.FC<
       // the underlying decoder/worker may not automatically rewind for a backwards range.
       if (!checkCancel()) return;
       try {
+        suppressSeekFramesRef.current = true;
         await decoderManager.seek(logicalId, startTime, true);
       } catch {}
+      finally {
+        suppressSeekFramesRef.current = false;
+      }
       if (!checkCancel()) return;
 
       await decoderManager.iterate(
@@ -1350,6 +1461,17 @@ const VideoPreview: React.FC<
           let sampleIdx = Number.isFinite(ts)
             ? Math.floor(ts * clipFps + 1e-4)
             : lastRenderedFrameRef.current + 1;
+          skipDrawRef.current = false;
+          const resumeGate = resumeGateFrameRef.current;
+          if (
+            !offscreenFast &&
+            typeof resumeGate === "number" &&
+            Number.isFinite(resumeGate) &&
+            sampleIdx < resumeGate
+          ) {
+            skipDrawRef.current = true;
+            return;
+          }
 
           const isUsingPreprocessorSrc = selectedAssetId !== assetId;
           const computeLocalFocusMedia = () => {
@@ -1388,7 +1510,7 @@ const VideoPreview: React.FC<
             // Skip stale frames that are behind the timeline by more than 1 frame
             let localFocus = computeLocalFocusMedia();
             if (sampleIdx < localFocus - 1) {
-              lastRenderedFrameRef.current = sampleIdx;
+              skipDrawRef.current = true;
               return;
             }
             // If we're ahead of the timeline, wait until the timeline catches up (sync to rAF)
@@ -1423,7 +1545,6 @@ const VideoPreview: React.FC<
             maskFrame = Math.max(0, Math.floor(local * speedFactor));
           }
           decoderMaskFrameRef.current = maskFrame;
-          lastRenderedFrameRef.current = sampleIdx;
         },
         checkCancel
       );
@@ -1456,6 +1577,10 @@ const VideoPreview: React.FC<
       void startRendering();
     }
     return () => {
+      skipDrawRef.current = false;
+      suppressSeekFramesRef.current = false;
+      resumeGateFrameRef.current = null;
+      pendingSeekTargetRef.current = null;
       drawTokenRef.current++;
       // @ts-ignore
       iteratorRef.current?.return?.();
@@ -1479,6 +1604,7 @@ const VideoPreview: React.FC<
   // Restart iteration if focusFrame jumps backwards during playback (e.g. replay from end).
   useEffect(() => {
     if (!isPlaying) {
+      resumeGateFrameRef.current = null;
       prevFocusFrameWhilePlayingRef.current = focusFrame;
       return;
     }
@@ -1639,6 +1765,9 @@ const VideoPreview: React.FC<
     lastRenderedFrameRef.current = -1;
     lastPosterKeyRef.current = null;
     originalFrameRef.current = null;
+    lastDrawnFocusFrameRef.current = null;
+    resumeGateFrameRef.current = null;
+    pendingSeekTargetRef.current = null;
     // @ts-ignore
     iteratorRef.current?.return?.();
     iteratorRef.current = null;

@@ -1,5 +1,6 @@
 import {
   runEngine as runEnginePreload,
+  warmupEngine as warmupEnginePreload,
   getEngineStatus as getEngineStatusPreload,
   getEngineResult as getEngineResultPreload,
   cancelEngine as cancelEnginePreload,
@@ -36,10 +37,24 @@ export interface RunEngineRequest {
   folder_uuid?: string;
 }
 
+export interface WarmupEngineRequest {
+  manifest_id?: string;
+  yaml_path?: string;
+  selected_components?: Record<string, any>;
+  mode?: "disk" | "engine" | "both" | string;
+  job_id?: string;
+}
+
 export async function runEngine(
   request: RunEngineRequest,
 ): Promise<ConfigResponse<JobResponse>> {
   return await runEnginePreload(request);
+}
+
+export async function warmupEngine(
+  request: WarmupEngineRequest,
+): Promise<ConfigResponse<JobResponse>> {
+  return await warmupEnginePreload(request);
 }
 
 export async function getEngineStatus(
