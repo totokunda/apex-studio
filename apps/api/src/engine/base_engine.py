@@ -558,6 +558,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES": _int("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3),
             "APEX_VRAM_PRESSURE_CPU_MULTIPLIER": _float("APEX_VRAM_PRESSURE_CPU_MULTIPLIER", 1.25),
             "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES": _int("APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES", 32 * 1024**3),
+            # Load-model guards (GPU state_dict materialization)
+            "APEX_LOAD_MODEL_TARGET_FREE_FRACTION": _float("APEX_LOAD_MODEL_TARGET_FREE_FRACTION", 0.10),
+            "APEX_LOAD_MODEL_VRAM_MULT": _float("APEX_LOAD_MODEL_VRAM_MULT", 1.20),
+            "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES": _int("APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2),
             # Decode guards
             "APEX_VAE_DECODE_FORCE_FLUSH": _str("APEX_VAE_DECODE_FORCE_FLUSH", "1"),
             "APEX_VAE_DECODE_FLUSH_TARGET": _str("APEX_VAE_DECODE_FLUSH_TARGET", "cpu"),
@@ -675,7 +679,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         except Exception:
             return
 
-        if getattr(module, "_apex_prefwd_hook", None) is not None:
+        has_pre = getattr(module, "_apex_prefwd_hook", None) is not None
+        has_post = getattr(module, "_apex_postfwd_hook", None) is not None
+        if has_pre and has_post:
             return
 
         def _hook(mod, _inputs):
@@ -690,6 +696,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                         module_id = self._component_memory_ids.get(name)
                     except Exception:
                         module_id = None
+                if module_id:
+                    try:
+                        wm.push_active(module_id)
+                    except Exception:
+                        pass
                 if wm is not None:
                     try:
                         wm.refresh_all_locations()
@@ -745,9 +756,37 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             except Exception as e:
                 return
 
+        def _post_hook(mod, _inputs, _outputs):
+            try:
+                wm = self._get_weight_manager()
+                if wm is None:
+                    return
+                module_id = self._component_memory_ids.get(name)
+                if module_id:
+                    try:
+                        wm.pop_active(module_id)
+                    except Exception:
+                        pass
+            except Exception:
+                return
+
         try:
-            handle = module.register_forward_pre_hook(_hook, with_kwargs=False)
-            module._apex_prefwd_hook = handle
+            if not has_pre:
+                handle = module.register_forward_pre_hook(_hook, with_kwargs=False)
+                module._apex_prefwd_hook = handle
+        except Exception as e:
+            print(e, "e")
+            pass
+
+        try:
+            if not has_post:
+                try:
+                    handle = module.register_forward_hook(
+                        _post_hook, with_kwargs=False, always_call=True
+                    )
+                except TypeError:
+                    handle = module.register_forward_hook(_post_hook, with_kwargs=False)
+                module._apex_postfwd_hook = handle
         except Exception as e:
             print(e, "e")
             pass
@@ -1057,6 +1096,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         self._memory_management_map = self._normalize_memory_management(
             memory_spec, allow_auto=allow_auto
         )
+        print("memory_management_map", self._memory_management_map, memory_spec, allow_auto)
 
     def _init_logger(self):
         self.logger = logger
@@ -2592,17 +2632,29 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         offload_type: Literal["cpu", "discard"] = "cpu",
     ):
         if getattr(self, component_name, None) is None:
-            # `component_name` can be either a canonical type ("vae") or a named
-            # component (e.g. "video_vae" / "audio_vae"). Prefer loading by name
-            # when possible, then fall back to the legacy type-based loader.
+            # NOTE: `load_component_by_name(...)` returns None when a name is not found;
+            # it does not raise. Provide an explicit fallback to the generic VAE type.
             try:
-                self.load_component_by_name(component_name)
+                self.load_component_by_name(component_name, component_type="vae")
             except Exception:
-                self.load_component_by_type(component_name)
-        self.to_device(getattr(self, component_name))
+                self.load_component_by_type("vae")
+
+        used_component_name = component_name
+        vae_obj = getattr(self, component_name, None)
+        if vae_obj is None and component_name != "vae":
+            vae_obj = getattr(self, "vae", None)
+            if vae_obj is not None:
+                used_component_name = "vae"
+        if vae_obj is None:
+            raise RuntimeError(
+                f"VAE component '{component_name}' is None after load; "
+                "check the manifest component name and any load errors above."
+            )
+
+        self.to_device(vae_obj)
         # VAE decode can be a peak-activation operation (multi-GiB). Ensure we have
         # sufficient headroom by offloading other components proactively.
-        peak_hint = self._decode_peak_bytes.get(component_name, 0)
+        peak_hint = self._decode_peak_bytes.get(used_component_name, 0)
         est_bytes = None
         try:
             # base estimate from latents + multiplier
@@ -2613,11 +2665,13 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             est_bytes = peak_hint
 
         try:
-            self._flush_for_decode(component_name, required_bytes=est_bytes)
+            self._flush_for_decode(used_component_name, required_bytes=est_bytes)
         except Exception:
             pass
         try:
-            self._pre_decode_vram_guard(component_name, latents, request_bytes=est_bytes)
+            self._pre_decode_vram_guard(
+                used_component_name, latents, request_bytes=est_bytes
+            )
         except Exception:
             pass
         try:
@@ -2630,22 +2684,23 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     "APEX_VRAM_DECODE_MIN_FREE_VRAM_FRACTION", 0.18
                 )
                 self._relieve_vram_pressure(
-                    reason=f"vae_decode:{component_name}",
-                    keep={component_name},
+                    reason=f"vae_decode:{used_component_name}",
+                    keep={used_component_name},
                     min_free_vram_fraction=min_free,
                 )
         except Exception:
             pass
         if denormalize_latents:
             denormalized_latents = (
-                getattr(self, component_name)
-                .denormalize_latents(latents)
-                .to(dtype=getattr(self, component_name).dtype, device=self.device)
+                vae_obj.denormalize_latents(latents).to(
+                    dtype=getattr(vae_obj, "dtype", None) or latents.dtype,
+                    device=self.device,
+                )
             )
         else:
             denormalized_latents = latents
             try:
-                target_dtype = getattr(getattr(self, component_name), "dtype", None)
+                target_dtype = getattr(vae_obj, "dtype", None)
                 target_device = getattr(self, "device", None)
                 if target_device is not None:
                     if target_dtype is not None:
@@ -2659,9 +2714,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             except Exception:
                 pass
 
-        self.enable_vae_tiling(component_name=component_name)
-
-        vae_obj = getattr(self, component_name)
+        self.enable_vae_tiling(component_name=used_component_name)
 
         def _decode_with_optional_timestep(
             x: torch.Tensor, t: Optional[torch.Tensor]
@@ -2710,8 +2763,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                         "APEX_VRAM_DECODE_RETRY_MIN_FREE_VRAM_FRACTION", 0.25
                     )
                     self._relieve_vram_pressure(
-                        reason=f"vae_decode_retry:{component_name}",
-                        keep={component_name},
+                        reason=f"vae_decode_retry:{used_component_name}",
+                        keep={used_component_name},
                         min_free_vram_fraction=min_free,
                     )
             except Exception:
@@ -2764,12 +2817,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     torch.cuda.synchronize(dev_index)
                     peak_reserved = torch.cuda.max_memory_reserved(dev_index)
                     peak_bytes = max(0, int(peak_reserved - pre_reserved))
-                    prev = self._decode_peak_bytes.get(component_name, 0)
-                    self._decode_peak_bytes[component_name] = max(prev, peak_bytes)
+                    prev = self._decode_peak_bytes.get(used_component_name, 0)
+                    self._decode_peak_bytes[used_component_name] = max(prev, peak_bytes)
                 except Exception:
                     pass
         if offload:
-            self._offload(component_name, offload_type=offload_type)
+            self._offload(used_component_name, offload_type=offload_type)
         return video.to(dtype=dtype)
 
     @torch.no_grad()
@@ -2787,11 +2840,24 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     ):
         if getattr(self, component_name, None) is None:
             try:
-                self.load_component_by_name(component_name)
+                self.load_component_by_name(component_name, component_type="vae")
             except Exception:
                 # Legacy fallback: most engines expose a single VAE at `self.vae`.
                 self.load_component_by_type("vae")
-        self.to_device(getattr(self, component_name))
+
+        used_component_name = component_name
+        vae = getattr(self, component_name, None)
+        if vae is None and component_name != "vae":
+            vae = getattr(self, "vae", None)
+            if vae is not None:
+                used_component_name = "vae"
+        if vae is None:
+            raise RuntimeError(
+                f"VAE component '{component_name}' is None after load; "
+                "check the manifest component name and any load errors above."
+            )
+
+        self.to_device(vae)
 
         # --- VAE encode cache (small, disk-backed) ---
         # Cache is keyed by the *cast-to-VAE-dtype* input bytes + relevant encode args.
@@ -2801,18 +2867,19 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         enable_vae_cache = getattr(self, "enable_cache", True) and sample_mode != "sample"
         cache_file = None
         prompt_hash = None
+        vae_dtype = self.component_dtypes.get("vae")
         if enable_vae_cache:
-            vae_obj = getattr(self, component_name)
             vae_id = (
-                getattr(getattr(vae_obj, "config", None), "_name_or_path", None)
-                or getattr(vae_obj, "_name_or_path", None)
+                getattr(getattr(vae, "config", None), "_name_or_path", None)
+                or getattr(vae, "_name_or_path", None)
                 or getattr(self, "yaml_path", None)
                 or self.__class__.__name__
             )
             # `vae_id` can be a local path (e.g. "C:\...") on Windows; ensure it's a valid filename.
             safe_vae_id = sanitize_path_for_filename(str(vae_id))
             cache_file = os.path.join(
-                DEFAULT_CACHE_PATH, f"{component_name}_encode_{safe_vae_id}.safetensors"
+                DEFAULT_CACHE_PATH,
+                f"{used_component_name}_encode_{safe_vae_id}.safetensors",
             )
 
             def _hash_tensor_content_cpu(t: torch.Tensor) -> str:
@@ -2824,7 +2891,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 t_u8 = t_cpu.view(torch.uint8)
                 return hashlib.sha256(t_u8.numpy()).hexdigest()
 
-            vae_dtype = getattr(vae_obj, "dtype", None)
+            vae_dtype = getattr(vae, "dtype", None)
             video_for_hash = video
             if vae_dtype is not None and video_for_hash.dtype != vae_dtype:
                 video_for_hash = video_for_hash.to(dtype=vae_dtype)
@@ -2849,14 +2916,16 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             if cached is not None and len(cached) >= 1:
                 latents = cached[0].to(device=self.device)
                 if offload:
-                    self._offload(component_name, offload_type=offload_type)
+                    self._offload(used_component_name, offload_type=offload_type)
                 return latents.to(dtype=dtype)
 
-        video = video.to(dtype=getattr(self, component_name).dtype, device=self.device)
+        video = video.to(dtype=vae_dtype, device=self.device)
         
-        self.enable_vae_tiling(component_name=component_name)
+        self.enable_vae_tiling(component_name=used_component_name)
+        
+        
 
-        latents = getattr(self, component_name).encode(video, return_dict=False)[0]
+        latents = vae.encode(video, return_dict=False)[0]
         if sample_mode == "sample":
             latents = latents.sample(generator=sample_generator)
         elif sample_mode == "mode":
@@ -2865,18 +2934,18 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             raise ValueError(f"Invalid sample mode: {sample_mode}")
 
         if not normalize_latents_dtype:
-            normalize_latents_dtype = getattr(self, component_name).dtype
+            normalize_latents_dtype = vae.dtype
 
         if normalize_latents:
             latents = latents.to(dtype=normalize_latents_dtype)
-            latents = getattr(self, component_name).normalize_latents(latents)
+            latents = vae.normalize_latents(latents)
 
         if enable_vae_cache and cache_file is not None and prompt_hash is not None:
             # Keep cache tiny; latents can be large.
             self.cache(prompt_hash, latents, cache_file=cache_file, max_cache_size=10)
 
         if offload:
-            self._offload(component_name, offload_type=offload_type)
+            self._offload(used_component_name, offload_type=offload_type)
 
         return latents.to(dtype=dtype)
 
@@ -2931,7 +3000,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         normalized: Dict[str, MemoryConfig] = {}
 
         if spec:
-
             def to_config(v: Union[str, MemoryConfig, Dict[str, Any]]) -> MemoryConfig:
                 if isinstance(v, MemoryConfig):
                     return v
