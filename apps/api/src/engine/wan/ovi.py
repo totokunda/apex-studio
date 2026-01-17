@@ -358,7 +358,6 @@ class OviEngine(WanShared):
             first_frame = self.preprocess_image_tensor(
                 image, device, target_dtype, resize_total_area=target_area
             )
-            self._tensor_to_frame(first_frame)[0].save("first_frame_0.png")
 
             # Add temporal dim: (1, 3, 1, H, W)
             input_tensor = first_frame.unsqueeze(2)
