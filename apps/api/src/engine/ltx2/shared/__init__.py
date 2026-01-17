@@ -195,7 +195,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     
     
         sequence_lengths = prompt_attention_mask.sum(dim=-1)
-
+        
         prompt_embeds = self._pack_text_embeds(
             text_encoder_hidden_states,
             sequence_lengths,
@@ -203,6 +203,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             padding_side=self.text_encoder.tokenizer.padding_side,
             scale_factor=scale_factor,
         )
+
         prompt_embeds = prompt_embeds.to(dtype=dtype)
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
@@ -563,7 +564,8 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             )
             
         if offload:
-            self._offload("text_encoder")
+            # Keep VRAM headroom for connectors/transformer; text encoder can be reloaded on demand.
+            self._offload("text_encoder", offload_type="cpu")
 
         return prompt_embeds, prompt_attention_mask, negative_prompt_embeds, negative_prompt_attention_mask
     
@@ -755,7 +757,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             ]
             latents = (1 - decode_noise_scale) * latents + decode_noise_scale * noise
         video = self.video_vae.decode(latents, timestep, return_dict=False)[0]
-        self._offload("video_vae")
+        self._offload("video_vae", offload_type="cpu")
         
         if not getattr(self, "audio_vae", None):
             self.load_component_by_name("audio_vae")
@@ -772,7 +774,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
         # enable tiling
         generated_mel_spectrograms = self.audio_vae.decode(audio_latents, return_dict=False)[0]
-        self._offload("audio_vae")
+        self._offload("audio_vae", offload_type="cpu")
             
         # load vocoder
         vocoder = self.helpers["vocoder"]
@@ -780,7 +782,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
 
         audio = vocoder(generated_mel_spectrograms)
 
-        self._offload("vocoder")
+        self._offload("vocoder", offload_type="cpu")
         
         video = self._convert_to_uint8(video).cpu()
         audio = audio.squeeze(0).cpu().float()
