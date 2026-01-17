@@ -134,6 +134,8 @@ def test_preforward_hook_calls_evict(monkeypatch):
 
     # Stub torch.cuda signals
     monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setenv("APEX_PREFWD_MIN_FREE_FRAC", "0.50")
+    monkeypatch.setenv("APEX_PREFWD_MIN_FREE_BYTES", "0")
     state = {"mem": (100, 1000)}
 
     def _mem_get_info(dev=None):

@@ -518,6 +518,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 self._weight_manager = None
         return self._weight_manager
 
+    @staticmethod
+    def _mem_debug_enabled() -> bool:
+        return str(os.environ.get("APEX_MEM_DEBUG", "")).lower() in {"1", "true", "yes"}
+
     def memory_env_config(self) -> Dict[str, Any]:
         """
         Return a snapshot of memory-management related environment knobs and their
@@ -695,10 +699,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                         pass
 
                 # Skip if we already have sufficient free VRAM and nothing changed.
+                free_ok = False
                 try:
                     import torch
 
-                    free_ok = False
+                    free = total = None
                     if torch.cuda.is_available():
                         free, total = torch.cuda.mem_get_info()
                         min_bytes = int(
@@ -711,6 +716,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                         free_ok = free >= min_bytes and (
                             total > 0 and (free / float(total)) >= min_frac
                         )
+                    if self._mem_debug_enabled():
+                        self.logger.info(
+                            f"[prefwd] name={name} free={free} total={total} "
+                            f"min_bytes={min_bytes} min_frac={min_frac} free_ok={free_ok} "
+                            f"target={os.environ.get('APEX_PREFWD_FLUSH_TARGET', 'cpu')}"
+                        )
                     if free_ok and getattr(mod, "_apex_prefwd_last_free_ok", False):
                         return
                     if free_ok:
@@ -718,6 +729,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                         return
                 except Exception:
                     pass
+                if free_ok:
+                    return
 
                 active = {module_id} if module_id else set()
                 target = str(os.environ.get("APEX_PREFWD_FLUSH_TARGET", "cpu")).lower()
