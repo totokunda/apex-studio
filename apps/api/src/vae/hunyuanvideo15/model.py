@@ -15,6 +15,7 @@
 from typing import Optional, Tuple, Union
 
 import numpy as np
+from src.utils.defaults import get_components_path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,8 +28,21 @@ from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.autoencoders.vae import AutoencoderMixin, DecoderOutput, DiagonalGaussianDistribution
 from src.attention.functions import attention_register
+from src.vae.tae.model import TAEHV
+from src.mixins.download_mixin import DownloadMixin
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
+
+def _module_has_any_meta_param(module: nn.Module) -> bool:
+    """Return True if any parameter on `module` currently lives on the meta device."""
+    for p in module.parameters(recurse=True):
+        try:
+            if getattr(p, "device", None) is not None and p.device.type == "meta":
+                return True
+        except Exception:
+            continue
+    return False
 
 
 class HunyuanVideo15CausalConv3d(nn.Module):
@@ -648,6 +662,7 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         downsample_match_channel: bool = True,
         upsample_match_channel: bool = True,
         scaling_factor: float = 1.03682,
+        light_vae_path: str = None,
     ) -> None:
         super().__init__()
 
@@ -682,6 +697,7 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         # frames spatially into smaller tiles and performing multiple forward passes for decoding, and then blending the
         # intermediate tiles together, the memory requirement can be lowered.
         self.use_tiling = False
+        self.use_light_vae = False
 
         # The minimal tile height and width for spatial tiling to be used
         self.tile_sample_min_height = 128
@@ -691,6 +707,46 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         self.tile_latent_min_height = self.tile_sample_min_height // spatial_compression_ratio
         self.tile_latent_min_width = self.tile_sample_min_width // spatial_compression_ratio
         self.tile_overlap_factor = 0.25
+        
+        # NOTE: this module is often constructed under `accelerate.init_empty_weights()`
+        # (see `LoaderMixin`). In that mode, *all* Parameters are created on the meta
+        # device. We must not download/load additional weights inside `__init__`, or
+        # we can end up with meta parameters that never get materialized by the loader.
+        #
+        # So we keep the light VAE path in config but lazily construct/load it only
+        # when the caller explicitly enables `use_light_vae`.
+        self.light_vae_path = light_vae_path
+        self.light_vae = None
+        if light_vae_path is not None and not _module_has_any_meta_param(self):
+            self._ensure_light_vae_loaded(scaling_factor=scaling_factor)
+
+    def _ensure_light_vae_loaded(self, scaling_factor: float | None = None) -> None:
+        if self.light_vae is not None:
+            return
+        if not self.light_vae_path:
+            raise ValueError(
+                "Light VAE requested but `light_vae_path` is not set in the VAE config."
+            )
+        self.light_vae = AutoencoderKLHunyuanVideo15Light(
+            taehv_checkpoint_path=self.light_vae_path,
+            scaling_factor=float(
+                scaling_factor
+                if scaling_factor is not None
+                else getattr(getattr(self, "config", None), "scaling_factor", 1.03682)
+            ),
+        )
+        # make dtype the same as the main VAE
+        self.light_vae = self.light_vae.to(dtype=self.dtype)
+        # Best-effort: keep the light VAE on the same device/dtype as the main VAE.
+        # This avoids runtime device mismatch if `enable_tiling(use_light_vae=True)`
+        # is called after the main VAE has already been moved (e.g., via engine `to_device`).
+        try:
+            p = next(self.parameters())
+            if p.device.type != "meta":
+                self.light_vae = self.light_vae.to(device=p.device, dtype=p.dtype)
+        except Exception:
+            # If we cannot infer a parent device/dtype (e.g. no params), leave it as-is.
+            pass
 
     def enable_tiling(
         self,
@@ -699,6 +755,7 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         tile_latent_min_height: Optional[int] = None,
         tile_latent_min_width: Optional[int] = None,
         tile_overlap_factor: Optional[float] = None,
+        use_light_vae: bool = False,
     ) -> None:
         r"""
         Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
@@ -715,13 +772,19 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
             tile_latent_min_width (`int`, *optional*):
                 The minimum width required for a latent to be separated into tiles across the width dimension.
         """
+    
         self.use_tiling = True
         self.tile_sample_min_height = tile_sample_min_height or self.tile_sample_min_height
         self.tile_sample_min_width = tile_sample_min_width or self.tile_sample_min_width
         self.tile_latent_min_height = tile_latent_min_height or self.tile_latent_min_height
         self.tile_latent_min_width = tile_latent_min_width or self.tile_latent_min_width
         self.tile_overlap_factor = tile_overlap_factor or self.tile_overlap_factor
-
+        
+        if self.light_vae is None:
+            self.use_light_vae = use_light_vae
+            if self.use_light_vae:
+                self._ensure_light_vae_loaded()
+        
     def _encode(self, x: torch.Tensor) -> torch.Tensor:
         _, _, _, height, width = x.shape
 
@@ -784,6 +847,9 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
                 If return_dict is True, a [`~models.vae.DecoderOutput`] is returned, otherwise a plain `tuple` is
                 returned.
         """
+        if self.use_light_vae:
+            self._ensure_light_vae_loaded()
+            return self.light_vae.decode(z, parallel=False, show_progress_bar=True, skip_trim=False)
         if self.use_slicing and z.shape[0] > 1:
             decoded_slices = [self._decode(z_slice) for z_slice in z.split(1)]
             decoded = torch.cat(decoded_slices)
@@ -958,3 +1024,71 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         else:
             latents = latents * self.config.scaling_factor
         return latents
+
+
+class AutoencoderKLHunyuanVideo15Light(nn.Module):
+    
+    def __init__(
+        self,
+        scaling_factor: float = 1.03682,
+        taehv_checkpoint_path: Optional[str] = None,
+        taehv_model_type: str = "hy15",
+        taehv_latent_channels: int = 32,
+        taehv_patch_size: int = 2,
+        load_on_init: bool = True,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.scaling_factor = scaling_factor
+        self.taehv_checkpoint_path = taehv_checkpoint_path
+
+        # IMPORTANT: do not pass a checkpoint_path into TAEHV here.
+        # TAEHV's constructor loads weights via `load_state_dict` without `assign=True`,
+        # which will fail when this module is created under `accelerate.init_empty_weights()`
+        # (meta parameters).
+        self.taehv = TAEHV(
+            checkpoint_path=None,
+            model_type=taehv_model_type,
+            latent_channels=taehv_latent_channels,
+            patch_size=taehv_patch_size,
+        )
+
+        if (
+            load_on_init
+            and self.taehv_checkpoint_path is not None
+            and not _module_has_any_meta_param(self)
+        ):
+            self.load_taehv_weights(self.taehv_checkpoint_path)
+
+    @property
+    def dtype(self) -> torch.dtype:
+        # Diffusers models expose `.dtype`; match that behavior for callers.
+        try:
+            return next(self.parameters()).dtype
+        except Exception:
+            return torch.float32
+
+    def load_taehv_weights(self, taehv_checkpoint_path: str) -> None:
+        download_mixin = DownloadMixin()
+        checkpoint_path = download_mixin.download(taehv_checkpoint_path, get_components_path())
+
+        ckpt_str = str(checkpoint_path)
+        if ckpt_str.lower().endswith(".pth"):
+            state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        elif ckpt_str.lower().endswith(".safetensors"):
+            from safetensors.torch import load_file
+
+            state_dict = load_file(checkpoint_path, device="cpu")
+        else:
+            raise ValueError(
+                f"Unsupported checkpoint format for light VAE: {checkpoint_path}. "
+                "Supported formats: .pth, .safetensors"
+            )
+
+        state_dict = self.taehv.patch_tgrow_layers(state_dict)
+        self.taehv.load_state_dict(state_dict, strict=True)
+
+    def decode(self, latents, parallel=False, show_progress_bar=True, skip_trim=False):
+        latents = latents / self.scaling_factor
+        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel, show_progress_bar).transpose(1, 2).unsqueeze(0)
+    

@@ -373,7 +373,7 @@ class OffloadMixin(base_object):
         self: "BaseEngine",
         module: torch.nn.Module | str | None,
         *,
-        offload_type: Literal["cpu", "discard"] | None = None,
+        offload_type: Literal["cpu", "discard"] | None = None
     ) -> None:
         """
         Pressure-aware offload helper.
@@ -461,6 +461,17 @@ class OffloadMixin(base_object):
             if not module:
                 return
 
+            manager = None
+            try:
+                from src.memory_management import get_global_weight_manager
+
+                manager = get_global_weight_manager()
+            except Exception:
+                manager = None
+
+            module_obj = None
+            module_id = None
+
             if isinstance(module, str):
                 # IMPORTANT:
                 # Keep a local reference for the duration of this function, but ensure we
@@ -473,10 +484,46 @@ class OffloadMixin(base_object):
                         module_obj = self._helpers[module]
                     else:
                         return
-                
+                try:
+                    if manager is not None:
+                        module_id = getattr(self, "_component_memory_ids", {}).get(
+                            module
+                        )
+                        register_fn = getattr(self, "_register_tracked_module", None)
+                        if module_id is None and callable(register_fn):
+                            register_fn(module_obj, module)
+                            module_id = getattr(self, "_component_memory_ids", {}).get(
+                                module
+                            )
+                        if module_id:
+                            manager.refresh(module_id)
+                except Exception:
+                    module_id = None
+
                 if offload_type == "cpu":
-                    module_obj.to("cpu")
+                    if manager is not None and module_id:
+                        manager.offload_module(
+                            module_id, target="cpu", reason="offload_cpu"
+                        )
+                    else:
+                        module_obj.to("cpu")
                 elif offload_type == "discard":
+                    if manager is not None and module_id:
+                        try:
+                            # Force-disk-only mode: "disk" semantics are pure discard.
+                            # Do NOT serialize weights; drop tracking so the only way
+                            # to access again is to reload from the original source.
+                            if getattr(manager, "force_disk_only", False):
+                                manager.forget(module_id)
+                            else:
+                                manager.offload_module(
+                                    module_id,
+                                    target="disk",
+                                    drop_cpu=True,
+                                    reason="offload_discard",
+                                )
+                        except Exception:
+                            pass
                     component = self.get_component_by_name(module)
                     if component:
                         module_type_obj = getattr(self, component.get("type"), None)
@@ -500,8 +547,28 @@ class OffloadMixin(base_object):
                     self.logger.info(f"Setting {module} to None")
                     setattr(self, module, None)
             else:
+                module_obj = module
+                try:
+                    if manager is not None:
+                        module_id = getattr(module_obj, "_apex_mem_id", None)
+                        register_fn = getattr(self, "_register_tracked_module", None)
+                        if module_id is None and callable(register_fn):
+                            register_fn(
+                                module_obj, getattr(module_obj, "__class__", type("X", (), {})).__name__
+                            )
+                            module_id = getattr(module_obj, "_apex_mem_id", None)
+                        if module_id:
+                            manager.refresh(module_id)
+                except Exception:
+                    module_id = None
+
                 if offload_type == "cpu":
-                    module.to("cpu")
+                    if manager is not None and module_id:
+                        manager.offload_module(
+                            module_id, target="cpu", reason="offload_cpu"
+                        )
+                    else:
+                        module.to("cpu")
                 elif offload_type == "discard":
                     raise ValueError(
                         f"Invalid offload type: {offload_type} for module."

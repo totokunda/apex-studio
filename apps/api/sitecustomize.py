@@ -14,6 +14,10 @@ import importlib.abc
 import importlib.machinery
 from typing import Any
 
+# Mitigate CUDA allocator fragmentation across long-lived processes.
+# Keep user overrides intact.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 
 def _patch_torch_cuda_queries(torch_mod: Any) -> None:
     """

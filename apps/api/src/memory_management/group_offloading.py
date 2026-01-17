@@ -401,18 +401,28 @@ class GroupOffloadingHook(ModelHook):
             if should_onload_next_group:
                 self.next_group.onload_()
 
+            # If streams are used for async onloading, ensure the *current* stream waits
+            # for any in-flight Host->Device transfers to complete before executing this
+            # module's forward. Otherwise, partially-loaded weights can be consumed,
+            # leading to incorrect / "garbage" outputs.
+            #
+            # Important: use `wait_stream` (device-side dependency) rather than
+            # `synchronize()` (host-side barrier) to preserve overlap where possible.
             has_streams = self.group.stream is not None or len(self.group.streams) > 0
-            should_synchronize = (
-                not self.group.onload_self and has_streams and not should_onload_next_group
-            )
-            if should_synchronize:
-                # If this group didn't onload itself, it means it was asynchronously onloaded by the
-                # previous group. We need to synchronize the side stream(s) to ensure parameters
-                # are completely loaded to proceed with forward pass. Without this, uninitialized
-                # weights will be used in the computation, leading to incorrect results
-                # Also, we should only do this synchronization if we don't already do it from the sync call in
-                # self.next_group.onload_, hence the `not should_onload_next_group` check.
-                self.group.synchronize_streams()
+            if has_streams:
+                try:
+                    current_stream = self.group._torch_accelerator_module.current_stream()
+                    if self.group.stream is not None:
+                        current_stream.wait_stream(self.group.stream)
+                    for s in self.group.streams:
+                        current_stream.wait_stream(s)
+                except Exception:
+                    # Defensive fallback: if stream waiting is unavailable, fall back
+                    # to a full synchronization for correctness.
+                    try:
+                        self.group.synchronize_streams()
+                    except Exception:
+                        pass
 
         args = send_to_device(args, self.group.onload_device, non_blocking=self.group.non_blocking)
 

@@ -1,8 +1,10 @@
 from fastapi import APIRouter
 import psutil
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 from functools import partial
 import anyio
+from fastapi import HTTPException
+from pydantic import BaseModel
 
 # Reuse helpers to detect device type and query GPU memory info
 from .ray_resources import (
@@ -79,6 +81,59 @@ def _collect_gpu_memory_info() -> Optional[Dict[str, Any]]:
 @router.get("/memory")
 async def get_system_memory() -> Dict[str, Any]:
     return await _run_blocking(_get_system_memory_sync)
+
+
+class FreeMemoryRequest(BaseModel):
+    active: Optional[str] = None
+    target: Literal["cpu", "disk"] = "disk"
+
+@router.post("/free-memory")
+async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
+    """
+    Best-effort free GPU memory by offloading tracked modules.
+
+    Query params:
+      - active: comma-separated component names to keep resident (e.g. "transformer,vae")
+      - target: "cpu" or "disk" offload destination (default: disk)
+    """
+    active_set = set()
+    if request.active:
+        active_set = {p.strip() for p in request.active.split(",") if p.strip()}
+
+    try:
+        # Run the free operation in the Ray worker process that holds the warm pool.
+        # This avoids creating a new engine (which requires a yaml_path).
+        from .ray_app import get_ray_app  # lazy import (avoid ray.init at import-time)
+        from .ray_resources import get_best_gpu, get_ray_resources
+        from .ray_tasks import free_unused_modules_in_warm_pool
+
+        ray = get_ray_app()
+        device_index, device_type = get_best_gpu()
+        resources = get_ray_resources(device_index, device_type, load_profile="light")
+        ref = free_unused_modules_in_warm_pool.options(**resources).remote(
+            active=sorted(active_set), target=request.target
+        )
+        worker_result = await _run_blocking(ray.get, ref)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to free memory: {e}")
+
+    # Backward-friendly: keep `offloaded` as a flat module_id -> location mapping.
+    # Also include per-engine details for debugging.
+    aggregated: Dict[str, Any] = {}
+    by_engine = (worker_result or {}).get("offloaded", {}) if isinstance(worker_result, dict) else {}
+    if isinstance(by_engine, dict):
+        for _key, mapping in by_engine.items():
+            if isinstance(mapping, dict):
+                aggregated.update(mapping)
+
+    return {
+        "offloaded": aggregated,
+        "by_engine": by_engine,
+        "errors": (worker_result or {}).get("errors", {}) if isinstance(worker_result, dict) else {},
+        "skipped_in_use": (worker_result or {}).get("skipped_in_use", []) if isinstance(worker_result, dict) else [],
+        "pool": (worker_result or {}).get("pool", {}) if isinstance(worker_result, dict) else {},
+        "target": request.target,
+    }
 
 
 def _get_system_memory_sync() -> Dict[str, Any]:

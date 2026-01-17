@@ -84,7 +84,8 @@ spec:
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
-    offloading_module: encoder
+    block_modules: 
+    - encoder
     model_path:
     - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
       variant: default

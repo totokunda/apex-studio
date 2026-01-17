@@ -322,8 +322,30 @@ class ToMixin:
         vae, text_encoder, transformer, scheduler, and self.helpers.values().
         """
         import torch
+        import os
 
         _ensure_group_offloading_helpers()
+
+        def _estimate_module_bytes(mod: torch.nn.Module) -> int:
+            total = 0
+            try:
+                for p in mod.parameters(recurse=True):
+                    if p is None:
+                        continue
+                    try:
+                        total += int(p.numel()) * int(p.element_size())
+                    except Exception:
+                        pass
+                for b in mod.buffers(recurse=True):
+                    if b is None:
+                        continue
+                    try:
+                        total += int(b.numel()) * int(b.element_size())
+                    except Exception:
+                        pass
+            except Exception:
+                return 0
+            return int(total)
 
         # Determine target device
         if device is None:
@@ -341,6 +363,70 @@ class ToMixin:
             extras = getattr(self, "helpers", {}).values()
             components = (*defaults, *extras)
 
+        manager = None
+        try:
+            from src.memory_management import get_global_weight_manager
+
+            manager = get_global_weight_manager()
+        except Exception:
+            manager = None
+
+        def _pre_evict_for_to_device(mod: torch.nn.Module) -> None:
+            """
+            Best-effort VRAM guard before moving a large module to GPU.
+
+            This is intentionally conservative and only runs on CUDA targets. It uses
+            the global weight manager (when available) to evict older GPU-resident
+            modules so `.to(cuda)` doesn't OOM part-way through, leaving a mixed-device
+            module behind.
+            """
+            if manager is None or getattr(device, "type", None) != "cuda":
+                return
+            try:
+                target_free = float(
+                    os.environ.get("APEX_TO_DEVICE_TARGET_FREE_FRACTION", "0.10")
+                    or "0.10"
+                )
+            except Exception:
+                target_free = 0.10
+            try:
+                mult = float(os.environ.get("APEX_TO_DEVICE_VRAM_MULT", "1.20") or "1.20")
+            except Exception:
+                mult = 1.20
+            try:
+                extra = int(
+                    os.environ.get(
+                        "APEX_TO_DEVICE_VRAM_EXTRA_BYTES", str(512 * 1024**2)
+                    )
+                    or str(512 * 1024**2)
+                )
+            except Exception:
+                extra = 512 * 1024**2
+
+            module_id = getattr(mod, "_apex_mem_id", None)
+            est = None
+            if isinstance(module_id, str):
+                try:
+                    rec = getattr(manager, "_modules", {}).get(module_id)
+                    if rec is not None:
+                        est = int(getattr(rec, "total_bytes", 0) or 0)
+                except Exception:
+                    est = None
+            if est is None:
+                est = _estimate_module_bytes(mod)
+
+            request_bytes = max(0, int(est * mult) + int(extra))
+            try:
+                active = {module_id} if isinstance(module_id, str) else None
+                manager.evict_for_vram(
+                    reason="to_device_pre",
+                    active=active,
+                    target_free_fraction=target_free,
+                    request_bytes=request_bytes if request_bytes > 0 else None,
+                )
+            except Exception:
+                pass
+
         # Move each to device
         for comp in components:
             if not hasattr(comp, "to"):
@@ -349,19 +435,112 @@ class ToMixin:
             # For torch modules that contain any group-offloaded submodules, we need
             # finer-grained control: we move only the non-offloaded parts while
             # leaving group-offloaded subtrees alone so their hooks can manage them.
-            if (
-                isinstance(comp, torch.nn.Module)
-                and _hf_is_group_offload_enabled is not None
-            ):
+            try:
+                if (
+                    isinstance(comp, torch.nn.Module)
+                    and _hf_is_group_offload_enabled is not None
+                ):
+                    try:
+                        if _hf_is_group_offload_enabled(comp):
+                            # IMPORTANT: do not fully "rehydrate" group-offloaded modules onto GPU.
+                            # Our global weight manager's `ensure_on_device(..., device=cuda)`
+                            # calls `module.to(cuda)`, which eagerly moves *all* parameters and
+                            # buffers to VRAM and defeats group offloading (you'll see multi-GB
+                            # usage before the first block executes).
+                            #
+                            # If the module was evicted to disk, we still want to rehydrate it
+                            # back into CPU memory so group offloading can function. Passing
+                            # `device=None` restores from disk->CPU but avoids a full GPU move.
+                            if manager is not None:
+                                try:
+                                    manager.ensure_on_device(
+                                        comp,
+                                        device=None,
+                                        reason="to_device(group_offload)",
+                                    )
+                                except Exception:
+                                    pass
+                            _move_module_to_device_excluding_group_offload(comp, device)
+                            continue
+                    except Exception:
+                        # If detection fails for any reason, fall back to the default behavior.
+                        pass
+
+                # For non-group-offloaded modules, proactively evict to make room.
+                if isinstance(comp, torch.nn.Module):
+                    _pre_evict_for_to_device(comp)
+
+                ensured = False
+                if manager is not None:
+                    try:
+                        ensured = manager.ensure_on_device(
+                            comp, device=device, reason="to_device"
+                        )
+                    except torch.OutOfMemoryError:
+                        ensured = False
+                    except Exception:
+                        ensured = False
+                if not ensured:
+                    comp.to(device)
+
+            except torch.OutOfMemoryError:
+                # Try to recover from OOM by evicting everything else and retrying once.
                 try:
-                    if _hf_is_group_offload_enabled(comp):
-                        _move_module_to_device_excluding_group_offload(comp, device)
-                        continue
+                    # Avoid leaving modules in a mixed CPU/GPU state.
+                    if hasattr(comp, "to"):
+                        comp.to("cpu")
                 except Exception:
-                    # If detection fails for any reason, fall back to the default behavior.
                     pass
 
-            comp.to(device)
+                try:
+                    if manager is not None and getattr(device, "type", None) == "cuda":
+                        module_id = getattr(comp, "_apex_mem_id", None)
+                        active = {module_id} if isinstance(module_id, str) else set()
+                        target = str(
+                            os.environ.get("APEX_TO_DEVICE_OOM_FLUSH_TARGET", "cpu")
+                        ).lower()
+                        if target not in {"cpu", "disk"}:
+                            target = "cpu"
+                        manager.offload_gpu_except(
+                            active, target=target, reason="to_device_oom"
+                        )
+                except Exception:
+                    pass
+
+                try:
+                    from src.utils.cache import empty_cache
+
+                    empty_cache()
+                except Exception:
+                    try:
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            torch.cuda.ipc_collect()
+                    except Exception:
+                        pass
+
+                try:
+                    ensured = False
+                    if manager is not None:
+                        try:
+                            ensured = manager.ensure_on_device(
+                                comp, device=device, reason="to_device_retry"
+                            )
+                        except Exception:
+                            ensured = False
+                    if not ensured:
+                        comp.to(device)
+                except torch.OutOfMemoryError:
+                    allow_cpu = str(
+                        os.environ.get("APEX_TO_DEVICE_CPU_FALLBACK", "1")
+                    ).lower() not in {"0", "false", "no"}
+                    if allow_cpu:
+                        try:
+                            comp.to("cpu")
+                        except Exception:
+                            pass
+                        continue
+                    raise
 
         # Free up any unused CUDA memory
         try:

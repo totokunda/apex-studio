@@ -25,7 +25,13 @@ from src.utils.warm_pool import EngineWarmPool, stable_hash_dict
 from src.api.preprocessor_registry import get_preprocessor_info
 from src.engine.registry import UniversalEngine
 from src.mixins.download_mixin import DownloadMixin
-from src.utils.defaults import get_components_path, get_lora_path, get_preprocessor_path
+from src.utils.defaults import (
+    get_components_path,
+    get_lora_path,
+    get_preprocessor_path,
+    get_config_store_path,
+)
+from src.utils.config_store import read_json_dict
 from diffusers.utils import export_to_video
 from src.lora.manager import LoraManager
 from src.api.manifest import get_manifest, MANIFEST_BASE_PATH
@@ -36,6 +42,47 @@ import ctypes
 import ctypes.util
 import time
 import struct
+
+_MEM_ENV_KEYS = [
+    "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION",
+    "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION",
+    "APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION",
+    "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES",
+    "APEX_VRAM_PRESSURE_CPU_MULTIPLIER",
+    "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES",
+    "APEX_VAE_DECODE_FORCE_FLUSH",
+    "APEX_VAE_DECODE_FLUSH_TARGET",
+    "APEX_VAE_DECODE_MIN_FREE_BYTES",
+    "APEX_VAE_DECODE_MIN_FREE_FRAC",
+    "APEX_VAE_DECODE_SAFETY_MULT",
+    "APEX_VAE_DECODE_TARGET_FREE_FRACTION",
+    "APEX_PREFWD_ENABLE",
+    "APEX_PREFWD_FLUSH_TARGET",
+    "APEX_PREFWD_MIN_FREE_BYTES",
+    "APEX_PREFWD_MIN_FREE_FRAC",
+    "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION",
+    "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION",
+    "APEX_DISABLE_WARM_WEIGHTS",
+    "APEX_FORCE_DISK_ONLY",
+]
+
+
+def _apply_memory_env_from_store() -> None:
+    """Sync persisted memory settings into the worker env before creating engines."""
+    try:
+        path = Path(get_config_store_path())
+        if not path.exists():
+            return
+        data = read_json_dict(path)
+        for k in _MEM_ENV_KEYS:
+            if k in data and data[k] is not None:
+                os.environ[k] = str(data[k])
+        if str(os.environ.get("APEX_MEM_DEBUG", "")).lower() in {"1", "true", "yes"}:
+            applied = {k: os.environ.get(k) for k in _MEM_ENV_KEYS if os.environ.get(k) is not None}
+            print(f"[ray_tasks] applied memory env from store: {applied}")
+    except Exception:
+        # Best-effort only.
+        return
 
 def _get_warm_pool() -> EngineWarmPool:
     """
@@ -48,6 +95,102 @@ def _get_warm_pool() -> EngineWarmPool:
     if not hasattr(_get_warm_pool, "_pool"):
         _get_warm_pool._pool = EngineWarmPool.from_env()  # type: ignore[attr-defined]
     return _get_warm_pool._pool  # type: ignore[attr-defined]
+
+
+@ray.remote(num_cpus=0.1)
+def free_unused_modules_in_warm_pool(
+    *,
+    active: Optional[List[str]] = None,
+    target: str = "disk",
+    include_in_use: bool = False,
+) -> Dict[str, Any]:
+    """
+    Best-effort free GPU memory by offloading tracked modules on warm-pooled engines.
+
+    Important:
+    - The warm pool is **per-Ray-worker-process**. This function must be scheduled onto
+      the same worker (typically via the same GPU resource selection) to see the pool.
+    - To avoid interfering with running jobs, we skip `in_use` engines by default.
+    """
+    pool = _get_warm_pool()
+    active_set = {str(x).strip() for x in (active or []) if str(x).strip()}
+    target_lc = str(target or "disk").strip().lower()
+    if target_lc not in {"cpu", "disk"}:
+        target_lc = "disk"
+
+    reserved_keys: List[str] = []
+    skipped_in_use: List[str] = []
+
+    # Reserve eligible engines under lock so other tasks won't acquire them while we offload.
+    try:
+        with pool._lock:  # type: ignore[attr-defined]
+            for key, ent in list(pool._entries.items()):  # type: ignore[attr-defined]
+                if getattr(ent, "in_use", 0) > 0 and not include_in_use:
+                    skipped_in_use.append(str(key))
+                    continue
+                try:
+                    ent.in_use = int(getattr(ent, "in_use", 0)) + 1
+                except Exception:
+                    ent.in_use = 1
+                reserved_keys.append(str(key))
+    except Exception as e:
+        return {"status": "error", "error": f"Failed to reserve warm pool entries: {e}"}
+
+    results: Dict[str, Any] = {
+        "status": "ok",
+        "target": target_lc,
+        "active": sorted(active_set),
+        "reserved": reserved_keys,
+        "skipped_in_use": skipped_in_use,
+        "offloaded": {},
+        "errors": {},
+        "pool": {},
+    }
+
+    try:
+        results["pool"] = pool.stats()
+    except Exception:
+        results["pool"] = {}
+
+    # Perform offload outside lock.
+    for key in reserved_keys:
+        try:
+            with pool._lock:  # type: ignore[attr-defined]
+                ent = pool._entries.get(key)  # type: ignore[attr-defined]
+                eng = getattr(ent, "engine", None) if ent is not None else None
+            if eng is None:
+                results["errors"][key] = "Missing engine for pool entry"
+                continue
+            base = getattr(eng, "engine", eng)
+            if hasattr(base, "free_unused_modules"):
+                off = base.free_unused_modules(active=active_set, target=target_lc)
+            elif hasattr(base, "free_unused_parameters"):
+                off = base.free_unused_parameters(active=active_set, target=target_lc)
+            else:
+                results["errors"][key] = "Engine does not support free_unused_modules"
+                continue
+            results["offloaded"][key] = off
+        except Exception as e:
+            results["errors"][key] = str(e)
+        finally:
+            # Release reservation
+            try:
+                with pool._lock:  # type: ignore[attr-defined]
+                    ent = pool._entries.get(key)  # type: ignore[attr-defined]
+                    if ent is not None:
+                        ent.in_use = max(0, int(getattr(ent, "in_use", 0)) - 1)
+                        try:
+                            ent.last_used_ts = pool._now()  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                        try:
+                            pool._evict_locked()  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    return results
 
 
 _WIN_INVALID_PATH_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
@@ -396,6 +539,21 @@ def _engine_pool_key(
     return f"{payload['engine_type']}/{payload['model_type']}:{h}"
 
 
+def _warm_weights_disabled() -> bool:
+    """
+    When enabled, we should not keep engines/weights warm between runs.
+    This disables use of the warm pool and forces aggressive cleanup.
+    """
+    for key in ("APEX_DISABLE_WARM_WEIGHTS", "APEX_FORCE_DISK_ONLY"):
+        try:
+            val = os.environ.get(key)
+            if val is not None and str(val).strip().lower() in {"1", "true", "yes", "on"}:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 @ray.remote
 def warmup_engine_from_manifest(
     manifest_path: str,
@@ -410,6 +568,7 @@ def warmup_engine_from_manifest(
     - mode="engine": instantiate engine into the warm pool (no inference).
     - mode="both": do both.
     """
+    _apply_memory_env_from_store()
     t0 = time.time()
     selected_components = selected_components or {}
     mode_lc = str(mode or "engine").strip().lower()
@@ -505,6 +664,18 @@ def warmup_engine_from_manifest(
             warmed_disk = True
 
         if mode_lc in {"engine", "both"}:
+            if _warm_weights_disabled():
+                # Do not warm engines into the pool when warm weights are disabled.
+                return {
+                    "status": "ok",
+                    "mode": mode_lc,
+                    "pool_key": pool_key,
+                    "warmed_disk": warmed_disk,
+                    "warmed_engine": False,
+                    "pool": _get_warm_pool().stats(),
+                    "duration_s": time.time() - t0,
+                    "note": "Warm weights disabled; skipped engine warm pool.",
+                }
 
             def _factory():
                 kwargs = {
@@ -519,7 +690,9 @@ def warmup_engine_from_manifest(
                     kwargs["attention_type"] = attention_type
                 return UniversalEngine(**kwargs)
 
-            eng, pooled = _get_warm_pool().acquire(pool_key, _factory, allow_pool=True)
+            eng, pooled = _get_warm_pool().acquire(
+                pool_key, _factory, allow_pool=not _warm_weights_disabled()
+            )
             if pooled:
                 _get_warm_pool().release(pool_key)
                 warmed_engine = True
@@ -1816,6 +1989,7 @@ def run_engine_from_manifest(
     folder_uuid: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute a manifest YAML with provided inputs and persist result to disk."""
+    _apply_memory_env_from_store()
 
     def send_progress(
         progress: float | None, message: str, metadata: Optional[Dict] = None
@@ -1898,7 +2072,7 @@ def run_engine_from_manifest(
             "yaml_path": manifest_path,
             "model_type": model_type,
             "selected_components": selected_components,
-            "auto_memory_management": os.environ.get("AUTO_MEMORY_MANAGEMENT", False),
+            "auto_memory_management": True,
             **(config.get("engine_kwargs", {}) or {}),
         }
 
@@ -1918,7 +2092,9 @@ def run_engine_from_manifest(
         def _factory():
             return UniversalEngine(**input_kwargs)
 
-        engine, engine_pooled = _get_warm_pool().acquire(engine_pool_key, _factory, allow_pool=True)
+        engine, engine_pooled = _get_warm_pool().acquire(
+            engine_pool_key, _factory, allow_pool=not _warm_weights_disabled()
+        )
 
         # Compute FPS once so we don't capture the full engine/config inside callbacks.
         fps_for_video: int = 16
@@ -2516,7 +2692,7 @@ def run_engine_from_manifest(
             pass
 
         # Post-warm: keep engine warm after a successful run when pooled.
-        if engine_pooled and engine_pool_key:
+        if engine_pooled and engine_pool_key and not _warm_weights_disabled():
             try:
                 _get_warm_pool().release(engine_pool_key)
             except Exception:
@@ -2543,7 +2719,7 @@ def run_engine_from_manifest(
         # If the engine is pooled, do NOT clear torch caches (keeps it warm).
         # If not pooled, do best-effort offload + cache clearing.
         try:
-            if (not engine_pooled) and engine is not None:
+            if (not engine_pooled or _warm_weights_disabled()) and engine is not None:
                 try:
                     engine.offload_engine()
                 except Exception:
@@ -2556,7 +2732,9 @@ def run_engine_from_manifest(
             output = None
         except Exception as cleanup_err:
             logger.warning(f"run_engine_from_manifest cleanup failed: {cleanup_err}")
-        _aggressive_ram_cleanup(clear_torch_cache=not bool(engine_pooled))
+        _aggressive_ram_cleanup(
+            clear_torch_cache=(not bool(engine_pooled)) or _warm_weights_disabled()
+        )
 
 
 @ray.remote

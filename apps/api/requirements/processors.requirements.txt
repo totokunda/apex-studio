@@ -9,7 +9,7 @@
 
 # Vision / segmentation / detection
 facexlib==0.3.0
-insightface==0.7.3 
+insightface @ https://raw.githubusercontent.com/cobanov/insightface_windows/d97fe110e1e5653f9814033291524147f2111d0f/whls/insightface-0.7.3-cp312-cp312-win_amd64.whl ; sys_platform == "win32"
 mediapipe==0.10.21
 mmengine==0.10.7
 ptlflow
