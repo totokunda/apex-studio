@@ -39,8 +39,10 @@ const GhostTimeline: React.FC<TimelineProps> = ({
   }, [currentClip?.type]);
 
   const gapBoundaryPadding = useMemo(() => {
-    return timelineDuration[0] === 0 ? timelinePadding : 0;
-  }, [currentClip?.type]);
+    // Ghost positions are stored in "inner timeline" coordinates; always add the
+    // left gutter/padding at render time so the overlay matches clips + ruler.
+    return timelinePadding;
+  }, [timelinePadding]);
 
   const computedGuideLines = useMemo(() => {
     if (!ghostInStage || ghostTimelineId !== timelineId) return null;
