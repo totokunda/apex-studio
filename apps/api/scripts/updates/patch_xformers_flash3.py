@@ -91,16 +91,40 @@ elif importlib.util.find_spec("...flash_attn_3._C", package=__package__):
     _C_flashattention3 = torch.ops.flash_attn_3
 '''
 
-    # splice: keep everything before the assignment line, then our replacement, then the rest
-    # starting at def _heuristic_kvsplit.
-    # Move blk_start to the beginning of the line containing the assignment to preserve formatting.
-    line_start = src.rfind("\n", 0, blk_start)
-    if line_start < 0:
-        line_start = 0
-    else:
-        line_start += 1
+    new_block = '''FLASH3_HAS_PAGED_ATTENTION = True
+FLASH3_HAS_FLOAT8 = False
+FLASH3_HAS_DETERMINISTIC_MODE = False
+_C_flashattention3 = None
+if importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec(
+    "flash_attn_3._C"
+):
+    import flash_attn_3._C  # type: ignore[attr-defined]  # noqa: F401
 
-    return src[:line_start] + replacement + src[blk_end:]
+    incompat_reason = _flash_attention3_incompatible_reason()
+    if incompat_reason is None:
+        _C_flashattention3 = torch.ops.flash_attn_3
+        FLASH_VERSION = "pip_pkg"
+        FLASH3_HAS_PAGED_ATTENTION = True
+        FLASH3_HAS_FLOAT8 = True
+    else:
+        logger.warning(f"Flash-Attention 3 package can't be used: {incompat_reason}")
+
+elif importlib.util.find_spec("...flash_attn_3._C", package=__package__):
+    from ..._cpp_lib import _build_metadata
+    from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
+
+    if _build_metadata is not None:
+        FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
+    FLASH3_HAS_DETERMINISTIC_MODE = True
+    _C_flashattention3 = torch.ops.flash_attn_3
+'''
+
+    if old_block not in src:
+        raise RuntimeError(
+            "Could not locate expected upstream FA3 block in xformers/ops/fmha/flash3.py; "
+            "xformers may have changed the code. Please update patch_xformers_flash3.py accordingly."
+        )
+    return src.replace(old_block, new_block, 1)
 
 
 def _has_desired_windows_block(src: str) -> bool:

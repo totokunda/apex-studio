@@ -419,7 +419,9 @@ class LTX2TI2VEngine(LTX2Shared):
             denoise_mask_tokens[:, start:end] = 1.0 - strengths_t[k]
 
         if offload:
-            self._offload("audio_vae")
+            # Audio VAE weights are large; keep them on CPU between uses to
+            # preserve VRAM headroom for the transformer and video VAE.
+            self._offload("audio_vae", offload_type="cpu")
 
         noise_tokens = randn_tensor(tokens_shape, generator=generator, device=device, dtype=dtype)
         scaled_mask_tokens = denoise_mask_tokens * float(noise_scale)
@@ -658,6 +660,7 @@ class LTX2TI2VEngine(LTX2Shared):
             self.preloaded_loras["ltx-2-19b-distilled-lora-384"].scale = 0.0
 
         # 3. Prepare text embeddings
+
         safe_emit_progress(stage1_progress_callback, 0.08, "Encoding prompt")
         (
             prompt_embeds,
@@ -701,7 +704,9 @@ class LTX2TI2VEngine(LTX2Shared):
         
         del connectors
         if offload:
-            self._offload("connectors")
+            # Connectors are ~3GB; always offload when requested to prevent
+            # them from staying resident across stage boundaries.
+            self._offload("connectors", offload_type="cpu")
             
 
         # 4. Prepare latent variables
@@ -1443,24 +1448,6 @@ class LTX2TI2VEngine(LTX2Shared):
             safe_emit_progress(stage1_progress_callback, 0.92, "Upsampling latents (stage-2 prep)")
             upsampler = self.helpers["latent_upsampler"]
 
-            try:
-                self.maybe_offload_transformer_for_upsample(
-                    offload=offload,
-                    device=device,
-                    upsampler=upsampler,
-                    batch_size=batch_size,
-                    num_channels_latents=num_channels_latents,
-                    latent_num_frames=latent_num_frames,
-                    latent_height=latent_height,
-                    latent_width=latent_width,
-                    vae_dtype=self.component_dtypes["vae"],
-                    force=False,
-                    reason="latent upsampling (stage-2 prep)",
-                )
-            except Exception as e:
-                # Never fail generation due to a best-effort memory probe.
-                self.logger.debug(f"Transformer pre-upsampling offload probe failed (ignored): {e}")
-
             self.to_device(upsampler)
             vae_dtype = self.component_dtypes["vae"]
             upsampler.to(dtype=vae_dtype)
@@ -1490,21 +1477,9 @@ class LTX2TI2VEngine(LTX2Shared):
                         "OOM during latent upsampling; offloading transformer and retrying once."
                     )
                     try:
-                        self.maybe_offload_transformer_for_upsample(
-                            offload=offload,
-                            device=device,
-                            upsampler=upsampler,
-                            batch_size=batch_size,
-                            num_channels_latents=num_channels_latents,
-                            latent_num_frames=latent_num_frames,
-                            latent_height=latent_height,
-                            latent_width=latent_width,
-                            vae_dtype=self.component_dtypes["vae"],
-                            force=True,
-                            reason="OOM during latent upsampling (retry)",
-                        )
+                        self.free_unused_modules(active={"video_vae", "latent_upsampler"}, target="disk")
                     except Exception:
-                        # If the shared helper fails, fall back to a guaranteed VRAM-freeing discard.
+                        # If freeing fails, fall back to a guaranteed VRAM-freeing discard.
                         self._offload("transformer", offload_type="discard")
                         empty_cache()
                     latents = upsample_video(latents, self.video_vae, upsampler)
@@ -1512,9 +1487,21 @@ class LTX2TI2VEngine(LTX2Shared):
                     raise
             del upsampler
             if offload:
-                self._offload("latent_upsampler")
+                self._offload("latent_upsampler", offload_type="cpu")
             if offload:
-                self._offload("video_vae")
+                self._offload("video_vae", offload_type="cpu")
+            # Stage-2 will re-run prompt encoding and connectors. Ensure we don't
+            # carry the transformer/text-encoder VRAM footprint across the recursion.
+            if offload:
+                try:
+                    self._offload("transformer", offload_type="cpu")
+                except Exception:
+                    pass
+                try:
+                    self._offload("text_encoder", offload_type="cpu")
+                except Exception:
+                    pass
+                empty_cache()
             
             
             # call run function again with the upsampled latents
@@ -1568,7 +1555,8 @@ class LTX2TI2VEngine(LTX2Shared):
             )
         
         if offload:
-            self._offload("transformer")
+            # Transformer is the largest VRAM resident; make offload explicit.
+            self._offload("transformer", offload_type="cpu")
 
         if return_latents:
             safe_emit_progress(stage1_progress_callback, 1.0, "Returning latents")
@@ -1585,6 +1573,9 @@ class LTX2TI2VEngine(LTX2Shared):
         
         if not getattr(self, "video_vae", None):
             self.load_component_by_name("video_vae")
+        # VAE decode is often the peak VRAM moment (large conv3d activations).
+        # Ensure headroom by offloading other resident components *before* moving
+        # the VAE to GPU and before starting decode.
         self.to_device(self.video_vae)
         # Apply run-configured VAE tiling/framewise settings.
         if hasattr(self.video_vae, "enable_tiling"):
@@ -1616,14 +1607,22 @@ class LTX2TI2VEngine(LTX2Shared):
             latents = (1 - decode_noise_scale) * latents + decode_noise_scale * noise
         latents = latents.to(self.video_vae.dtype)
         safe_emit_progress(stage1_progress_callback, 0.94, "Decoding video latents")
-        video = self.video_vae.decode(latents, timestep, return_dict=False)[0]
-
-        if offload:
-            self._offload("video_vae")
+        # Use BaseEngine.vae_decode for robust retry + CPU fallback under VRAM pressure.
+        video = self.vae_decode(
+            latents,
+            offload=offload,
+            component_name="video_vae",
+            denormalize_latents=False,
+            timestep=timestep,
+            offload_type="cpu",
+        )
             
         if not getattr(self, "audio_vae", None):
             self.load_component_by_name("audio_vae")
             
+        # Audio decode/vocoder can also spike VRAM. Ensure headroom before moving
+        # these modules to GPU.
+        
         self.to_device(self.audio_vae)
         audio_latents = audio_latents.to(self.audio_vae.dtype)
         audio_latents = self.audio_vae.denormalize_latents(
@@ -1634,21 +1633,59 @@ class LTX2TI2VEngine(LTX2Shared):
         # enable tiling
         
         safe_emit_progress(stage1_progress_callback, 0.96, "Decoding audio latents")
-        generated_mel_spectrograms = self.audio_vae.decode(audio_latents, return_dict=False)[0]
-        
-        if offload:
-            self._offload("audio_vae")
+        generated_mel_spectrograms = self.vae_decode(
+            audio_latents,
+            offload=offload,
+            component_name="audio_vae",
+            denormalize_latents=False,
+            offload_type="cpu",
+        )
             
         # load vocoder
         vocoder = self.helpers["vocoder"]
+        try:
+            if (
+                getattr(self, "auto_memory_management", True)
+                and getattr(self, "device", None) is not None
+                and getattr(self.device, "type", None) == "cuda"
+            ):
+                min_free = self._env_float(
+                    "APEX_VRAM_DECODE_MIN_FREE_VRAM_FRACTION", 0.18
+                )
+                self._relieve_vram_pressure(
+                    reason="ltx2.vocoder(pre)",
+                    keep={"vocoder"},
+                    min_free_vram_fraction=min_free,
+                )
+        except Exception:
+            pass
         self.to_device(vocoder)
         
         safe_emit_progress(stage1_progress_callback, 0.98, "Vocoder synthesis")
         generated_mel_spectrograms = generated_mel_spectrograms.to(vocoder.dtype)
-        audio = vocoder(generated_mel_spectrograms)
+        try:
+            audio = vocoder(generated_mel_spectrograms)
+        except torch.OutOfMemoryError:
+            try:
+                if (
+                    getattr(self, "auto_memory_management", True)
+                    and getattr(self, "device", None) is not None
+                    and getattr(self.device, "type", None) == "cuda"
+                ):
+                    min_free = self._env_float(
+                        "APEX_VRAM_DECODE_RETRY_MIN_FREE_VRAM_FRACTION", 0.25
+                    )
+                    self._relieve_vram_pressure(
+                        reason="ltx2.vocoder(retry)",
+                        keep={"vocoder"},
+                        min_free_vram_fraction=min_free,
+                    )
+            except Exception:
+                pass
+            audio = vocoder(generated_mel_spectrograms)
         
         if offload:
-            self._offload("vocoder")
+            self._offload("vocoder", offload_type="cpu")
 
         video = self._convert_to_uint8(video).cpu()
         audio = audio.squeeze(0).cpu().float()
