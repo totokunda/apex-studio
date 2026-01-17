@@ -209,7 +209,6 @@ class ZImageT2IEngine(ZImageShared):
         model_dtype = self.transformer.dtype
         
 
-
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
@@ -255,6 +254,8 @@ class ZImageT2IEngine(ZImageShared):
                     prompt_embeds_model_input,
                     return_dict=False,
                 )[0]
+                
+           
 
                 if apply_cfg:
                     # Perform CFG
