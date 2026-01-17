@@ -606,6 +606,7 @@ class ZImageTransformer2DModel(
         t = self.t_embedder(t)
         
 
+
         (
             x,
             cap_feats,
@@ -615,6 +616,7 @@ class ZImageTransformer2DModel(
             x_inner_pad_mask,
             cap_inner_pad_mask,
         ) = self.patchify_and_embed(x, cap_feats, patch_size, f_patch_size)
+
 
         # x embed & refine
         x_item_seqlens = [len(_) for _ in x]
