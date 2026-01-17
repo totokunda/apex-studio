@@ -5,9 +5,12 @@ Patch xformers' FA3 integration to avoid import-time crashes due to import order
 We patch the installed file in-place by locating:
   xformers/ops/fmha/flash3.py
 
-The patched logic (simple block swap):
-  - Prefer pip-installed flash_attn_3 first (avoids TORCH_LIBRARY namespace double-registration)
-  - Fall back to xformers-bundled flash_attn_3 extension if pip package is unavailable/unusable
+The patch is equivalent to `patches/xformers-ops-fmha-flash3.patch` (kept for auditability).
+
+The patched logic:
+  - On Windows, prefer pip-installed flash_attn_3 (if compatible) to avoid crashes
+    caused by import ordering / extension resolution differences.
+  - Fall back to xformers-bundled flash_attn_3 extension if present.
 
 Toggles:
   - Set APEX_PATCH_XFORMERS_FLASH3=0 to disable.
@@ -23,29 +26,48 @@ from pathlib import Path
 
 
 def _find_flash3_path() -> Path | None:
-    spec = importlib.util.find_spec("xformers.ops.fmha.flash3")
+    try:
+        spec = importlib.util.find_spec("xformers.ops.fmha.flash3")
+    except ModuleNotFoundError:
+        return None
     if spec is None or spec.origin is None:
         return None
     return Path(spec.origin).resolve()
 
 
 def _patch_contents(src: str) -> str:
-    # Blocked, deterministic patch: replace the exact upstream block (as observed in our env)
-    # with the desired ordering.
-    old_block = '''FLASH3_HAS_PAGED_ATTENTION = True
+    # Replace the entire "how do we locate FA3" block between:
+    #   FLASH3_HAS_* flags / _C_flashattention3 = None
+    # and:
+    #   def _heuristic_kvsplit
+    #
+    # This is more robust than keying off one exact if/elif ordering because
+    # xformers has changed this block across versions.
+    end_needle = "\n\n\ndef _heuristic_kvsplit"
+
+    blk_start = -1
+    for start_needle in (
+        "FLASH3_HAS_PAGED_ATTENTION",
+        "FLASH3_HAS_FLOAT8",
+        "FLASH3_HAS_DETERMINISTIC_MODE",
+        "_C_flashattention3 = None",
+    ):
+        blk_start = src.find(start_needle)
+        if blk_start >= 0:
+            break
+    if blk_start < 0:
+        raise RuntimeError("Could not locate flash_attn_3 resolution block start")
+    blk_end = src.find(end_needle, blk_start)
+    if blk_end < 0:
+        raise RuntimeError("Could not locate end of flash_attn_3 resolution block")
+
+    # Keep this in sync with the desired Windows behavior.
+    # NOTE: This intentionally prefers pip-installed flash_attn_3 first.
+    replacement = '''FLASH3_HAS_PAGED_ATTENTION = True
 FLASH3_HAS_FLOAT8 = False
 FLASH3_HAS_DETERMINISTIC_MODE = False
 _C_flashattention3 = None
-if importlib.util.find_spec("...flash_attn_3._C", package=__package__):
-    from ..._cpp_lib import _build_metadata
-    from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
-
-    if _build_metadata is not None:
-        FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
-    FLASH3_HAS_DETERMINISTIC_MODE = True
-    _C_flashattention3 = torch.ops.flash_attn_3
-
-elif importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec(
+if importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec(
     "flash_attn_3._C"
 ):
     import flash_attn_3._C  # type: ignore[attr-defined]  # noqa: F401
@@ -58,6 +80,15 @@ elif importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec(
         FLASH3_HAS_FLOAT8 = True
     else:
         logger.warning(f"Flash-Attention 3 package can't be used: {incompat_reason}")
+
+elif importlib.util.find_spec("...flash_attn_3._C", package=__package__):
+    from ..._cpp_lib import _build_metadata
+    from ...flash_attn_3 import _C  # type: ignore[attr-defined]  # noqa: F401
+
+    if _build_metadata is not None:
+        FLASH_VERSION = _build_metadata.flash_version.lstrip("v")
+    FLASH3_HAS_DETERMINISTIC_MODE = True
+    _C_flashattention3 = torch.ops.flash_attn_3
 '''
 
     new_block = '''FLASH3_HAS_PAGED_ATTENTION = True
@@ -96,13 +127,18 @@ elif importlib.util.find_spec("...flash_attn_3._C", package=__package__):
     return src.replace(old_block, new_block, 1)
 
 
-def _is_patched(src: str) -> bool:
-    """Check if the file already has the patched logic."""
-    pip_if = 'if importlib.util.find_spec("flash_attn_3") and importlib.util.find_spec('
-    bundled_elif = 'elif importlib.util.find_spec("...flash_attn_3._C", package=__package__):'
-    if pip_if not in src or bundled_elif not in src:
-        return False
-    return src.find(pip_if) < src.find(bundled_elif)
+def _has_desired_windows_block(src: str) -> bool:
+    """True if the FA3 resolution block matches our expected Windows ordering."""
+    pip_idx = src.find('find_spec("flash_attn_3")')
+    in_tree_idx = src.find('elif importlib.util.find_spec("...flash_attn_3._C", package=__package__)')
+    return (
+        pip_idx >= 0
+        and in_tree_idx >= 0
+        and pip_idx < in_tree_idx
+        and "FLASH3_HAS_FLOAT8 = False" in src
+        and "FLASH3_HAS_DETERMINISTIC_MODE = False" in src
+        and 'FLASH_VERSION = "pip_pkg"' in src
+    )
 
 
 def main() -> int:
@@ -113,6 +149,11 @@ def main() -> int:
         print("Skipping xformers flash3 patch (APEX_PATCH_XFORMERS_FLASH3=0)")
         return 0
 
+    # This patch is currently only needed/validated on Windows.
+    if os.name != "nt":
+        print("Non-Windows platform detected; skipping xformers flash3 patch")
+        return 0
+
     p = _find_flash3_path()
     if p is None:
         # xformers not installed (optional dependency)
@@ -121,14 +162,13 @@ def main() -> int:
 
     before = p.read_text(encoding="utf-8")
     
-    if _is_patched(before):
-        print(f"xformers flash3 already patched (verified content): {p}")
+    if _has_desired_windows_block(before):
+        print(f"xformers flash3 already patched for Windows (verified content): {p}")
         return 0
 
     after = _patch_contents(before)
     if after == before:
-        # Should be covered by _is_patched, but just in case
-        print(f"xformers flash3 content matches patch target: {p}")
+        print(f"xformers flash3 content already matches patch target: {p}")
         return 0
 
     p.write_text(after, encoding="utf-8")
