@@ -1238,7 +1238,7 @@ const AudioInput: React.FC<AudioInputProps> = ({
             onClose={() => setIsDialogOpen(false)}
             onConfirm={handleDialogConfirm}
             clipOverride={mediaClip}
-            timelineSelectorProps={{ mode: "range", inputId }}
+            timelineSelectorProps={{ mode: "range", inputId, audioOnly: true }}
             focusFrame={focusFrameForInput}
             setFocusFrame={(frame) => setInputFocusFrame(frame, inputId)}
             canCrop={false}

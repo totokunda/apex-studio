@@ -50,6 +50,11 @@ import { BaseClipApplicator } from "@/components/preview/clips/apply/base";
 interface PartialTimelineSelectorProps {
   mode: "frame" | "range";
   inputId: string;
+  /**
+   * When true, the dialog should render an audio-only preview UI (e.g. for AudioInput
+   * selecting a video/group/model just for its audio track). VideoInput should NOT set this.
+   */
+  audioOnly?: boolean;
 }
 
 interface MediaDialogProps {
@@ -1302,6 +1307,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
               />
             </>
           ) : timelineSelectorProps && timelineSelectorProps.mode === "range" && 
+            timelineSelectorProps.audioOnly &&
             toRender.some((clip) => clip.type === "video" || clip.type === "group" || clip.type === "model") ? (
             /* For video/group/model clips from AudioInput, show ONLY audio visualizer (no video) */
             <>

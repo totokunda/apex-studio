@@ -74,6 +74,9 @@ class AppDirProtocol implements AppModule {
   private inflightRemoteReprobe: Promise<boolean> | null = null;
   private lastRemoteReprobeAtMs: number = 0;
   private rendererDistPath: string | null = null;
+  // To avoid buffering unbounded data in memory, only "tee" small remote responses
+  // into the on-disk cache. Larger assets are cached via a detached background fetch.
+  private readonly MAX_TEE_CACHE_BYTES = 32 * 1024 * 1024; // 32MB
 
   private backendUrlIsLoopbackHost(): boolean {
     try {
@@ -304,13 +307,53 @@ class AppDirProtocol implements AppModule {
           ? rawFolderUuid
           : undefined;
 
-      let basePath: string | null = null;
-      if (u.hostname === "user-data") {
-        basePath = app.getPath("userData");
-      } else if (u.hostname === "apex-cache") {
-        basePath = this.cachePath;
+      // For apex-cache, avoid blocking the request on a full "download to disk then read back" cycle.
+      // If the file is missing locally, stream it from the backend immediately and cache in the background.
+      if (u.hostname === "apex-cache") {
+        const candidate = this.resolveAppUrlToCandidatePath(u);
+        if (!candidate) {
+          return new Response(null, { status: 404, headers: baseCors });
+        }
+
+        const st = await fs.promises.stat(candidate.filePath).catch(() => null);
+        if (st && st.isFile() && st.size > 0) {
+          // Best-effort symlink maintenance; never block serving on this.
+          if (candidate.relPath) {
+            void this.ensureProjectSymlinkForCache(
+              candidate.relPath,
+              candidate.filePath,
+              folderUuid,
+            );
+          }
+          return await this.serveLocalFile(request, candidate.filePath, baseCors);
+        }
+
+        // If we're not in remote-mode yet, try probing and switching.
+        if (!this.loopbackAppearsRemote) {
+          const decodedPathname = this.safeDecodeURIComponent(u.pathname);
+          const candidates = this.remoteRelCandidatesFromPath(decodedPathname);
+          if (candidates.length > 0) {
+            await this.maybeReprobeRemoteAndSwitch(candidates).catch(() => false);
+          }
+        }
+
+        if (!this.loopbackAppearsRemote) {
+          // No local file and not in remote-mode -> 404
+          return new Response(null, { status: 404, headers: baseCors });
+        }
+
+        // Re-resolve now that remote-mode/cachePath may have changed.
+        const candidateAfterSwitch = this.resolveAppUrlToCandidatePath(u);
+        if (!candidateAfterSwitch) {
+          return new Response(null, { status: 404, headers: baseCors });
+        }
+        return await this.proxyRemoteApexCache(
+          request,
+          candidateAfterSwitch,
+          baseCors,
+          folderUuid,
+        );
       }
- 
 
       const filePath = await this.resolveAppUrlToFilePathWithRemoteFallback(u);
       if (!filePath) {
@@ -322,60 +365,28 @@ class AppDirProtocol implements AppModule {
         return new Response(null, { status: 404, headers: baseCors });
       }
 
-      let stat: fs.Stats;
-      try {
-        stat = fs.statSync(filePath);
-      } catch (e) {
-        console.warn(
-          `[AppDirProtocol] stat failed for ${request.url} -> ${filePath}`,
-          e,
-        );
-        return new Response(null, { status: 404, headers: baseCors });
-      }
-      const fileSize = stat.size;
-      const contentType = mime.getType(filePath) || "application/octet-stream";
+      return await this.serveLocalFile(request, filePath, baseCors);
+    });
+  }
 
-      // Fast-path for HEAD: only return headers, never open a read stream.
-      if (request.method === "HEAD") {
-        return new Response(null, {
-          status: 200,
-          headers: {
-            "Content-Type": contentType,
-            "Content-Length": fileSize.toString(),
-            "Accept-Ranges": "bytes",
-            ...baseCors,
-          },
-        });
-      }
+  private async serveLocalFile(
+    request: Request,
+    filePath: string,
+    baseCors: Record<string, string>,
+  ): Promise<Response> {
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(filePath);
+    } catch (e) {
+      console.warn(`[AppDirProtocol] stat failed for ${request.url} -> ${filePath}`, e);
+      return new Response(null, { status: 404, headers: baseCors });
+    }
+    const fileSize = stat.size;
+    const contentType = mime.getType(filePath) || "application/octet-stream";
 
-      // Handle Range requests
-      const rangeHeader = request.headers.get("range");
-      if (rangeHeader) {
-        const parts = rangeHeader.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-        const chunkSize = end - start + 1;
-
-        const nodeStream = fs.createReadStream(filePath, { start, end });
-        const webStream = nodeStreamToWebStream(nodeStream);
-
-        return new Response(webStream, {
-          status: 206,
-          headers: {
-            "Content-Type": contentType,
-            "Content-Length": chunkSize.toString(),
-            "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-            "Accept-Ranges": "bytes",
-            ...baseCors,
-          },
-        });
-      }
-
-      // Full content response
-      const nodeStream = fs.createReadStream(filePath);
-      const webStream = nodeStreamToWebStream(nodeStream);
-
-      return new Response(webStream, {
+    // Fast-path for HEAD: only return headers, never open a read stream.
+    if (request.method === "HEAD") {
+      return new Response(null, {
         status: 200,
         headers: {
           "Content-Type": contentType,
@@ -384,7 +395,380 @@ class AppDirProtocol implements AppModule {
           ...baseCors,
         },
       });
+    }
+
+    // Handle Range requests
+    const rangeHeader = request.headers.get("range");
+    if (rangeHeader) {
+      const parts = rangeHeader.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
+
+      const nodeStream = fs.createReadStream(filePath, { start, end });
+      const webStream = nodeStreamToWebStream(nodeStream);
+
+      return new Response(webStream, {
+        status: 206,
+        headers: {
+          "Content-Type": contentType,
+          "Content-Length": chunkSize.toString(),
+          "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+          "Accept-Ranges": "bytes",
+          ...baseCors,
+        },
+      });
+    }
+
+    // Full content response
+    const nodeStream = fs.createReadStream(filePath);
+    const webStream = nodeStreamToWebStream(nodeStream);
+
+    return new Response(webStream, {
+      status: 200,
+      headers: {
+        "Content-Type": contentType,
+        "Content-Length": fileSize.toString(),
+        "Accept-Ranges": "bytes",
+        ...baseCors,
+      },
     });
+  }
+
+  private resolveAppUrlToCandidatePath(
+    u: URL,
+  ): { filePath: string; relPath?: string } | null {
+    const app = this.electronApp;
+    let basePath: string | null = null;
+
+    if (u.hostname === "user-data") {
+      basePath = app ? app.getPath("userData") : null;
+    } else if (u.hostname === "apex-cache") {
+      basePath = this.cachePath;
+    } else if (u.hostname === "renderer") {
+      basePath = this.rendererDistPath;
+    }
+    const decodedPathname = this.safeDecodeURIComponent(u.pathname);
+    if (!basePath) {
+      // Even if we don't have a local cache base yet (e.g. during startup), we can still
+      // compute a remote relPath for apex-cache so we can proxy/stream from the backend.
+      if (u.hostname === "apex-cache") {
+        const rel = this.loopbackAppearsRemote
+          ? this.remoteRelFromNormalized(this.stripLeadingSlashes(decodedPathname))
+          : this.stripLeadingSlashes(decodedPathname);
+        if (!rel) return null;
+        return { filePath: "", relPath: rel };
+      }
+      return null;
+    }
+
+    // In remote-mode, some callers pass absolute local paths. Allow them when under our roots.
+    if (u.hostname === "apex-cache" && this.loopbackAppearsRemote) {
+      const candidateAbs =
+        this.coerceWindowsAbsolutePathFromUrlPathname(decodedPathname) ??
+        (path.isAbsolute(decodedPathname) ? path.normalize(decodedPathname) : null);
+
+      if (candidateAbs && app) {
+        const allowedLocalBases = [
+          ...(this.cachePath ? [this.cachePath] : []),
+          ...this.localUserDataBaseCandidates(app),
+        ];
+        try {
+          allowedLocalBases.push(path.join(app.getPath("userData"), "apex-cache"));
+          const home = os.homedir();
+          if (home) allowedLocalBases.push(path.join(home, "apex-diffusion", "cache"));
+        } catch {
+          // ignore
+        }
+        if (this.isUnderAnyBase(candidateAbs, allowedLocalBases)) {
+          return { filePath: candidateAbs };
+        }
+      }
+
+      // Otherwise, treat as a rel path to be mirrored under cachePath.
+      const rel = this.remoteRelFromNormalized(
+        this.stripLeadingSlashes(decodedPathname),
+      );
+      const localPath = this.resolveUnderBase(basePath, rel);
+      if (!localPath) return null;
+      return { filePath: localPath, relPath: rel };
+    }
+
+    // Non-remote mode: treat URL pathnames as relative to basePath, except when an absolute filesystem path
+    // is already under our allowed roots.
+    const candidateAbs =
+      this.coerceWindowsAbsolutePathFromUrlPathname(decodedPathname) ??
+      (path.isAbsolute(decodedPathname) ? path.normalize(decodedPathname) : null);
+
+    let filePath: string;
+    if (candidateAbs) {
+      const allowedBases: string[] = [];
+      allowedBases.push(basePath);
+      if (u.hostname === "apex-cache" && this.cachePath) allowedBases.push(this.cachePath);
+      if (app) allowedBases.push(...this.localUserDataBaseCandidates(app));
+
+      if (this.isUnderAnyBase(candidateAbs, allowedBases)) {
+        filePath = candidateAbs;
+      } else {
+        const rel = this.stripLeadingSlashes(decodedPathname);
+        const resolved = this.resolveUnderBase(basePath, rel);
+        if (!resolved) return null;
+        filePath = resolved;
+      }
+    } else {
+      const rel = this.stripLeadingSlashes(decodedPathname);
+      const resolved = this.resolveUnderBase(basePath, rel);
+      if (!resolved) return null;
+      filePath = resolved;
+    }
+
+    if (u.hostname !== "apex-cache" || !this.cachePath) {
+      return { filePath };
+    }
+
+    // If this is under the cache base, return a relPath for best-effort symlink/caching.
+    try {
+      const cacheBase = this.cachePath;
+      if (cacheBase && filePath.startsWith(cacheBase)) {
+        const relFromCache = path.relative(cacheBase, filePath).replace(/\\/g, "/");
+        return { filePath, relPath: relFromCache };
+      }
+    } catch {
+      // ignore
+    }
+    return { filePath };
+  }
+
+  private async proxyRemoteApexCache(
+    request: Request,
+    candidate: { filePath: string; relPath?: string },
+    baseCors: Record<string, string>,
+    folderUuid?: string,
+  ): Promise<Response> {
+    const rel = candidate.relPath;
+    const rangeHeader = request.headers.get("range");
+    const isRange = Boolean(rangeHeader);
+    const isHead = request.method === "HEAD";
+
+    // If we can't compute a rel path, we can't hit the backend file endpoint.
+    if (!rel) {
+      return new Response(null, { status: 404, headers: baseCors });
+    }
+
+    // If a remote fetch is already caching this rel, don't start another cache write.
+    const alreadyCaching = this.inflightDownloads.has(rel);
+
+    const url = `${this.backendUrl}/files?scope=apex-cache&path=${encodeURIComponent(rel)}`;
+    const init: RequestInit = { method: "GET" };
+    if (isHead) {
+      // Many file endpoints don't implement HEAD well; a 1-byte range fetch is a reliable alternative.
+      init.headers = { Range: "bytes=0-0" };
+    } else if (rangeHeader) {
+      init.headers = { Range: rangeHeader };
+    }
+
+    // Best-effort: if backend is momentarily lagging behind, retry a few times.
+    let resp: Response | null = null;
+    const maxAttempts = 6;
+    const baseDelayMs = 80;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        resp = await this.fetchBackendWithTimeout(url, init, "files(apex-cache)");
+        if (resp.ok && resp.body) break;
+      } catch {
+        // ignore, will retry below
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, baseDelayMs * Math.pow(1.5, attempt)));
+    }
+
+    if (!resp || !resp.ok) {
+      return new Response(null, { status: 404, headers: baseCors });
+    }
+
+    // IMPORTANT:
+    // In remote-mode, `candidate.filePath` may not exist yet (we're proxying precisely because it's missing).
+    // Creating a project symlink before the target exists produces a broken symlink, and the preload-side
+    // generations scanner will delete broken symlinks (making results "disappear").
+    //
+    // So: only create/refresh the project symlink AFTER the local file has been persisted.
+    const scheduleSymlinkAfterLocalExists = () => {
+      if (candidate.filePath && path.isAbsolute(candidate.filePath)) {
+        void this.ensureProjectSymlinkForCache(rel, candidate.filePath, folderUuid).catch(
+          () => {},
+        );
+      }
+    };
+
+    const headers: Record<string, string> = { ...baseCors };
+    const ct =
+      resp.headers.get("content-type") ||
+      mime.getType(candidate.filePath) ||
+      "application/octet-stream";
+    headers["Content-Type"] = ct;
+
+    const cl = resp.headers.get("content-length");
+    if (cl) headers["Content-Length"] = cl;
+    const cr = resp.headers.get("content-range");
+    if (cr) headers["Content-Range"] = cr;
+    headers["Accept-Ranges"] = resp.headers.get("accept-ranges") || "bytes";
+
+    // HEAD responses have no body.
+    if (isHead) {
+      // Even for HEAD, kick off a best-effort background cache so the asset can appear
+      // in disk-based generations listings.
+      if (
+        !alreadyCaching &&
+        candidate.filePath &&
+        path.isAbsolute(candidate.filePath)
+      ) {
+        void this.ensureLocalFromRemote(rel, candidate.filePath)
+          .then((ok) => {
+            if (ok) scheduleSymlinkAfterLocalExists();
+          })
+          .catch(() => {});
+      }
+      // If we did a 1-byte range fetch, rewrite Content-Length to be the full size (when available).
+      const contentRange = resp.headers.get("content-range");
+      if (contentRange) {
+        const m = contentRange.match(/\/(\d+)\s*$/);
+        if (m && m[1]) headers["Content-Length"] = m[1];
+        delete headers["Content-Range"];
+      }
+      return new Response(null, { status: 200, headers });
+    }
+    if (!resp.body) {
+      return new Response(null, { status: 404, headers: baseCors });
+    }
+
+    // For smoothness: return the remote stream immediately.
+    // Cache best-effort: either tee small responses, or fall back to a detached background fetch.
+    const canAttemptCache =
+      !alreadyCaching &&
+      !isRange &&
+      request.method === "GET" &&
+      resp.status === 200 &&
+      Boolean(this.cachePath) &&
+      Boolean(candidate.filePath) &&
+      path.isAbsolute(candidate.filePath);
+
+    const contentLength = Number(resp.headers.get("content-length") || NaN);
+    const canTeeCache =
+      canAttemptCache &&
+      Number.isFinite(contentLength) &&
+      contentLength > 0 &&
+      contentLength <= this.MAX_TEE_CACHE_BYTES;
+
+    if (canTeeCache) {
+      const [clientStream, diskStream] = (resp.body as ReadableStream<Uint8Array>).tee();
+      void this.cacheWebStreamToLocal(rel, candidate.filePath, diskStream)
+        .then((ok) => {
+          if (ok) scheduleSymlinkAfterLocalExists();
+        })
+        .catch(() => {});
+      return new Response(clientStream, { status: resp.status, headers });
+    }
+
+    // Avoid buffering huge streams in memory; do a detached fetch+write instead.
+    //
+    // Also: Range-based streaming (common for video) previously *never* triggered a full cache write,
+    // so the asset would play but never land on disk (and thus never appear in Generations).
+    // We always best-effort cache the full file in the background when proxying a missing asset.
+    const shouldBackgroundCache =
+      !alreadyCaching &&
+      Boolean(candidate.filePath) &&
+      path.isAbsolute(candidate.filePath) &&
+      (request.method === "GET" || request.method === "HEAD");
+    if (shouldBackgroundCache) {
+      void this.ensureLocalFromRemote(rel, candidate.filePath)
+        .then((ok) => {
+          if (ok) scheduleSymlinkAfterLocalExists();
+        })
+        .catch(() => {});
+    }
+
+    return new Response(resp.body, { status: resp.status, headers });
+  }
+
+  private async cacheWebStreamToLocal(
+    relPath: string,
+    localPath: string,
+    webStream: ReadableStream<Uint8Array>,
+  ): Promise<boolean> {
+    const existing = this.inflightDownloads.get(relPath);
+    if (existing) return await existing;
+
+    const p = (async (): Promise<boolean> => {
+      await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
+      const tmp = `${localPath}.part-${Date.now()}`;
+      const out = fs.createWriteStream(tmp);
+      try {
+        const nodeReadable = (Readable as any).fromWeb
+          ? (Readable as any).fromWeb(webStream)
+          : null;
+        if (!nodeReadable) {
+          // Shouldn't happen on supported Node/Electron, but keep a safe fallback.
+          const reader = webStream.getReader();
+          const chunks: Uint8Array[] = [];
+          let total = 0;
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            // eslint-disable-next-line no-await-in-loop
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              chunks.push(value);
+              total += value.byteLength;
+            }
+          }
+          const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)), total);
+          await fs.promises.writeFile(tmp, buf);
+        } else {
+          await new Promise<void>((resolve, reject) => {
+            nodeReadable.pipe(out);
+            out.on("finish", resolve);
+            out.on("error", reject);
+          });
+        }
+
+        // Atomic-ish publish: rename tmp into place.
+        try {
+          await fs.promises.rename(tmp, localPath);
+        } catch {
+          try {
+            const st = await fs.promises.stat(localPath).catch(() => null as any);
+            if (st && st.isFile() && st.size > 0) {
+              try {
+                await fs.promises.unlink(tmp);
+              } catch {}
+              return true;
+            }
+            try {
+              await fs.promises.unlink(localPath);
+            } catch {}
+            await fs.promises.rename(tmp, localPath);
+          } catch {
+            try {
+              await fs.promises.unlink(tmp);
+            } catch {}
+            return false;
+          }
+        }
+        return true;
+      } finally {
+        try {
+          out.close();
+        } catch {}
+      }
+    })();
+
+    this.inflightDownloads.set(relPath, p);
+    try {
+      return await p;
+    } finally {
+      this.inflightDownloads.delete(relPath);
+    }
   }
 
   private async resolveAppUrlToFilePathWithRemoteFallback(
@@ -970,7 +1354,7 @@ class AppDirProtocol implements AppModule {
         // Retry a few times to handle race where backend publishes file moments later
         let resp: Response | null = null;
         const maxAttempts = 6;
-        const baseDelayMs = 80;
+        const baseDelayMs = 80;       
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           try {
             resp = await this.fetchBackendWithTimeout(
@@ -1010,7 +1394,7 @@ class AppDirProtocol implements AppModule {
           } else {
             await new Promise<void>((resolve, reject) => {
               nodeReadable.pipe(out);
-              out.on("finish", () => resolve());
+              out.on("finish", resolve);
               out.on("error", reject);
             });
           }

@@ -828,6 +828,28 @@ export class ApexApi implements AppModule {
       },
     );
 
+    // Best-effort warmup for a manifest (disk/engine/both)
+    ipcMain.handle(
+      "engine:warmup",
+      async (
+        _event,
+        request: {
+          manifest_id?: string;
+          yaml_path?: string;
+          selected_components?: Record<string, any>;
+          mode?: string;
+          job_id?: string;
+        },
+      ) => {
+        const payload = await this.#prepareEngineWarmupRequest(request);
+        return this.makeRequest<{
+          job_id: string;
+          status: string;
+          message?: string;
+        }>("POST", "/engine/warmup", payload);
+      },
+    );
+
     // Cancel engine job
     ipcMain.handle("engine:cancel", async (_event, jobId: string) => {
       return this.makeRequest<{
@@ -1204,6 +1226,14 @@ export class ApexApi implements AppModule {
     // System memory usage
     ipcMain.handle("system:memory", async () => {
       return this.makeRequest<any>("GET", "/system/memory");
+    });
+
+    // Request backend to free/reclaim memory (best-effort)
+    ipcMain.handle("system:free-memory", async () => {
+      // This endpoint is action-oriented; prefer POST.
+      return this.makeRequest<any>("POST", "/system/free-memory", {
+        target: "disk"
+      });
     });
 
     // Reveal a file or folder in the OS file manager
@@ -1875,6 +1905,32 @@ export class ApexApi implements AppModule {
       transformed[k] = await this.#transformValueForUpload(v);
     }
     return { ...request, inputs: transformed };
+  }
+
+  async #prepareEngineWarmupRequest(request: {
+    manifest_id?: string;
+    yaml_path?: string;
+    selected_components?: Record<string, any>;
+    mode?: string;
+    job_id?: string;
+  }): Promise<{
+    manifest_id?: string;
+    yaml_path?: string;
+    selected_components?: Record<string, any>;
+    mode?: string;
+    job_id?: string;
+  }> {
+    // Ensure our remote/local detection is up-to-date before deciding whether to
+    // auto-upload local paths. (Cached probe; non-fatal if hostname endpoint is missing.)
+    try {
+      await this.#probeBackendLocality();
+    } catch {}
+    if (!this.#isRemoteBackend()) return request;
+    const transformed: Record<string, any> = {};
+    for (const [k, v] of Object.entries(request.selected_components || {})) {
+      transformed[k] = await this.#transformValueForUpload(v);
+    }
+    return { ...request, selected_components: transformed };
   }
 
   async #transformValueForUpload(value: any): Promise<any> {

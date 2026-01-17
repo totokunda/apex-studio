@@ -4,10 +4,18 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 import SemiGauge from "@/components/ui/semi-gauge";
-import { fetchSystemMemory, SystemMemoryResponse } from "@/lib/system/api";
+import {
+  fetchSystemMemory,
+  freeSystemMemory,
+  SystemMemoryResponse,
+} from "@/lib/system/api";
 import { LuGauge, LuInfo, LuLoader } from "react-icons/lu";
-import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { MdMemory } from "react-icons/md";
+
 
 
 const POLL_MS = 2000;
@@ -15,6 +23,7 @@ const SYSTEM_MEMORY_QUERY_KEY = ["systemMemory"] as const;
 
 const SystemMemoryMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
+  const queryClient = useQueryClient();
   const { data, isLoading } = useQuery<SystemMemoryResponse | null>({
     queryKey: SYSTEM_MEMORY_QUERY_KEY,
     queryFn: fetchSystemMemory,
@@ -23,6 +32,27 @@ const SystemMemoryMenu: React.FC = () => {
     refetchOnWindowFocus: false,
     refetchInterval: POLL_MS,
     refetchIntervalInBackground: true,
+  });
+
+  const freeMemMutation = useMutation({
+    mutationFn: freeSystemMemory,
+    onMutate: () => {
+      const loadingId = toast.loading("Freeing memory…", {
+        position: "bottom-right",
+      });
+      return { loadingId };
+    },
+    onSuccess: async (_data, _vars, ctx) => {
+      if (ctx?.loadingId) toast.dismiss(ctx.loadingId);
+      toast.success("Memory cleanup requested.", { position: "bottom-right" });
+      await queryClient.invalidateQueries({ queryKey: SYSTEM_MEMORY_QUERY_KEY });
+    },
+    onError: (err: any, _vars, ctx) => {
+      if (ctx?.loadingId) toast.dismiss(ctx.loadingId);
+      toast.error(err?.message || "Failed to free memory", {
+        position: "bottom-right",
+      });
+    },
   });
 
   const fmt = (bytes?: number) => {
@@ -168,6 +198,21 @@ const SystemMemoryMenu: React.FC = () => {
                 </div>
               </div>
             ) : null}
+
+            <div className="mt-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                className="w-full bg-brand-light/10 hover:bg-brand-light/20 text-brand-light border border-brand-light/10"
+                disabled={freeMemMutation.isPending}
+                onClick={() => freeMemMutation.mutate()}
+              >
+                {freeMemMutation.isPending ? (
+                  <LuLoader className="w-4 h-4 animate-spin" />
+                ) : <MdMemory className="w-4 h-4" />}
+                <span className="text-[11px]">Free memory</span>
+              </Button>
+            </div>
 
             <div className="text-[10px] text-brand-light/40 mt-1">
               Updates every 2s

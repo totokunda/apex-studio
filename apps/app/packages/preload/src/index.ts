@@ -2,22 +2,25 @@
 // This keeps the external API identical while avoiding a single giant implementation file.
 
 // Core crypto/versioning
-export { sha256sum } from "./nodeCrypto.ts";
-export { versions } from "./versions.ts";
-export * from "./remoteVersions.ts";
+export { sha256sum } from "./nodeCrypto.js";
+export { versions } from "./versions.js";
+export * from "./remoteVersions.js";
 
 // Installer helpers (server bundle extraction, ffmpeg install)
-export * from "./installer.ts";
+export * from "./installer.js";
+
+// App updates (Electron auto-updater)
+export * from "./appUpdates.js";
 
 // Media processing primitives
-export { processMediaTo24 } from "./media/process.ts";
-export { getMediaRootAbsolute } from "./media/root.ts";
+export { processMediaTo24 } from "./media/process.js";
+export { getMediaRootAbsolute } from "./media/root.js";
 export {
   AUDIO_EXTS,
   IMAGE_EXTS,
   VIDEO_EXTS,
   getLowercaseExtension,
-} from "./media/fileExts.ts";
+} from "./media/fileExts.js";
 
 import { pathToFileURL as pathToFileURLNode, fileURLToPath as fileURLToPathNode } from "node:url";
 
@@ -30,62 +33,64 @@ export const fileURLToPath = (url: string) => {
 };
 
 // Filters
-export { fetchFilters } from "./filters/fetch.ts";
+export { fetchFilters } from "./filters/fetch.js";
 
 // Shared types
-export type { ConfigResponse } from "./types.ts";
-export type { ConvertedMediaItem } from "./media/library.ts";
+export type { ConfigResponse } from "./types.js";
+export type { ConvertedMediaItem } from "./media/library.js";
 
 // Core IPC & filesystem helpers
-export * from "./core/ipc.ts";
+export * from "./core/ipc.js";
 
 // Media library and previews
-export * from "./media/library.ts";
-export * from "./media/previews.ts";
+export * from "./media/library.js";
+export * from "./media/previews.js";
+// Explicit re-export to ensure the virtual browser shim includes this new API.
+export { exportVideoTranscodeWithFfmpeg } from "./media/previews.js";
 
 // Configuration/system settings
-export * from "./config.ts";
+export * from "./config.js";
 
 // Projects, timelines, clips, masks metadata
-export * from "./projects.ts";
+export * from "./projects.js";
 
 // Mask creation and tracking streams
-export * from "./masks.ts";
+export * from "./masks.js";
 
 // Preprocessor management and jobs
-export * from "./preprocessors.ts";
+export * from "./preprocessors.js";
 
 // Components (model assets) management
-export * from "./components.ts";
+export * from "./components.js";
 
 // Generic WebSocket helpers
-export * from "./ws.ts";
+export * from "./ws.js";
 
 // Manifest/model metadata helpers
-export * from "./manifest.ts";
+export * from "./manifest.js";
 
 // Engine run/status/result helpers
-export * from "./engine.ts";
+export * from "./engine.js";
 
 // Postprocessor helpers
-export * from "./postprocessor.ts";
+export * from "./postprocessor.js";
 
 // Unified download helpers
-export * from "./downloads.ts";
+export * from "./downloads.js";
 
 // Generic jobs and Ray job helpers
-export * from "./jobs.ts";
-export * from "./rayJobs.ts";
+export * from "./jobs.js";
+export * from "./rayJobs.js";
 
 // Settings helpers
-export * from "./settings.ts";
+export * from "./settings.js";
 
 // Export result caching (persistent, electron-store)
-export * from "./exportCache.ts";
+export * from "./exportCache.js";
 
 // Python process management (bundled API control)
-export * from "./python.ts";
+export * from "./python.js";
 
 // (uv removed) - we ship the full Python environment in the server bundle / python-api.
 // Launcher helpers (gate the main UI behind a setup/launcher screen)
-export * from "./launcher.ts";
+export * from "./launcher.js";
