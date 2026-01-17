@@ -57,6 +57,9 @@ const ImageInputList: React.FC<ImageInputListProps> = ({
   const enableScroll =
     typeof panelSize === "number" ? panelSize < totalNeededWidth : true;
 
+  const rowJustifyClass = enableScroll ? "justify-start" : "justify-center";
+  const rowWidthClass = enableScroll ? "w-max" : "w-full";
+
 
 
   return (
@@ -90,7 +93,7 @@ const ImageInputList: React.FC<ImageInputListProps> = ({
         }}
       >
         <div
-          className="flex flex-row items-start justify-start gap-x-3 py-3 w-max"
+          className={`flex flex-row items-start ${rowJustifyClass} gap-x-3 py-3 ${rowWidthClass}`}
           style={{
             minWidth: enableScroll
               ? typeof panelSize === "number" && panelSize > 0

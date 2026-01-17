@@ -70,12 +70,14 @@ interface PopoverImageProps {
   value: ImageSelection;
   onChange: (value: ImageSelection) => void;
   clipId: string | null;
+  onSelectComplete?: () => void;
 }
 
 const PopoverImage: React.FC<PopoverImageProps> = ({
   value,
   onChange,
   clipId,
+  onSelectComplete,
 }) => {
   const isUserInteractingRef = useRef(false);
   const [selectedTab, setSelectedTab] = useState<"timeline" | "library">(
@@ -205,6 +207,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
             masks: [],
           } as any;
           onChange(clip as AnyClipProps);
+          onSelectComplete?.();
         } else {
           const iw = first.mediaInfo?.image?.width ?? 0;
           const ih = first.mediaInfo?.image?.height ?? 0;
@@ -229,6 +232,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
             masks: [],
           } as any;
           onChange(clip as AnyClipProps);
+          onSelectComplete?.();
         }
       }
       bumpMediaLibraryVersion();
@@ -251,6 +255,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
     (clipId: string | null) => {
       if (!clipId) {
         onChange(null);
+        onSelectComplete?.();
         return;
       }
       const selectedClip = getClipById(clipId) as AnyClipProps | undefined;
@@ -265,8 +270,9 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
         endFrame: duration,
       } as AnyClipProps;
       onChange(projected);
+      onSelectComplete?.();
     },
-    [getClipById, onChange],
+    [getClipById, onChange, onSelectComplete],
   );
 
   return (
@@ -377,6 +383,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
                     const isSame = value && value.clipId === targetClipId;
                     if (isSame) {
                       onChange(null);
+                      onSelectComplete?.();
                       return;
                     }
                     const ext = getLowercaseExtension(media.assetUrl);
@@ -415,6 +422,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
                         masks: [],
                       } as any;
                       onChange(clip as AnyClipProps);
+                      onSelectComplete?.();
                     } else {
                       const iw = media.mediaInfo?.image?.width ?? 0;
                       const ih = media.mediaInfo?.image?.height ?? 0;
@@ -439,6 +447,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
                         masks: [],
                       } as any;
                       onChange(clip as AnyClipProps);
+                      onSelectComplete?.();
                     }
                   }}
                   className={cn(
@@ -714,7 +723,6 @@ const ImageInput: React.FC<ImageInputProps> = ({
     ],
   );
 
-  const clearSelectedAsset = useAssetControlsStore((s) => s.clearSelectedAsset);
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const getActiveProject = useProjectsStore((s) => s.getActiveProject);
   const { getTimelineDuration, getFocusFrame } = useInputControlsStore();
@@ -1100,7 +1108,6 @@ const ImageInput: React.FC<ImageInputProps> = ({
         .filter((it) => it.type === "image" || it.type === "video");
       const first = newlyAdded[0] ?? null;
       if (first) {
-        clearSelectedAsset();
         if (VIDEO_EXTS.includes(getLowercaseExtension(first.assetUrl))) {
           try {
             const info = await getMediaInfo(first.assetUrl);
@@ -1356,6 +1363,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
               value={value}
               onChange={emitSelection}
               clipId={clipId}
+          onSelectComplete={() => setIsPopoverOpen(false)}
             />
           </Popover>
           <div

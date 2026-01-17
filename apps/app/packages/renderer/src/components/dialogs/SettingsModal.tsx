@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { LuFolder, LuSettings } from "react-icons/lu";
 import { LuEye, LuEyeOff } from "react-icons/lu";
 import { LuCheck, LuLoader } from "react-icons/lu";
+import { LuInfo } from "react-icons/lu";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -10,8 +11,10 @@ import { pickMediaPaths } from "@app/preload";
 import {
   getBackendIsRemote,
   getBackendPathSizes,
+  getMemorySettings,
   previewBackendUrl,
   verifyBackendUrlAndFetchSettings,
+  setMemorySettings,
 } from "@app/preload";
 import {
   Select,
@@ -24,6 +27,12 @@ import { useControlsStore } from "@/lib/control";
 import { useSettingsStore } from "@/lib/settings-store";
 import { getFolderSize } from "@app/preload";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import NumberInputSlider from "@/components/properties/model/inputs/NumberInputSlider";
 
 import {
     Tabs,
@@ -133,6 +142,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [useFastDownload, setUseFastDownload] = useState<boolean>(true);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
   const [isBackendRemote, setIsBackendRemote] = useState<boolean>(false);
+
+  const [memoryKnobs, setMemoryKnobs] = useState<Record<string, any> | null>(null);
+  const [isLoadingMemoryKnobs, setIsLoadingMemoryKnobs] = useState<boolean>(false);
+  const [isSavingMemoryKnobs, setIsSavingMemoryKnobs] = useState<boolean>(false);
+  const memorySaveDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const pendingMemoryUpdatesRef = React.useRef<Record<string, any>>({});
 
   const normalizedBackendUrl = normalizeUrl(backendUrl);
   const normalizedBackendUrlGlobal = normalizeUrl(backendUrlGlobal);
@@ -380,6 +397,109 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     return `${gb.toFixed(2)} GB`;
   };
 
+  const boolFromEnv = (v: any): boolean => {
+    const s = String(v ?? "").trim().toLowerCase();
+    if (!s) return false;
+    return !(s === "0" || s === "false" || s === "no" || s === "off");
+  };
+
+  const getFloat = (key: string, fallback: number): number => {
+    const v = memoryKnobs?.[key];
+    const n = typeof v === "number" ? v : Number(String(v ?? ""));
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  const getInt = (key: string, fallback: number): number => {
+    const v = memoryKnobs?.[key];
+    const n = typeof v === "number" ? v : Number(String(v ?? ""));
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.trunc(n));
+  };
+
+  const refreshMemoryKnobs = async () => {
+    setIsLoadingMemoryKnobs(true);
+    try {
+      const res = await getMemorySettings();
+      if (!res?.success || !res.data?.settings) {
+        toast.error(res?.error || "Failed to load memory settings.");
+        return;
+      }
+      setMemoryKnobs(res.data.settings ?? {});
+    } catch {
+      toast.error("Failed to load memory settings.");
+    } finally {
+      setIsLoadingMemoryKnobs(false);
+    }
+  };
+
+  const flushMemoryUpdates = async () => {
+    if (memorySaveDebounceRef.current) {
+      clearTimeout(memorySaveDebounceRef.current);
+      memorySaveDebounceRef.current = null;
+    }
+    const payload = pendingMemoryUpdatesRef.current;
+    pendingMemoryUpdatesRef.current = {};
+    if (!Object.keys(payload).length) return;
+    setIsSavingMemoryKnobs(true);
+    try {
+      const res = await setMemorySettings(payload);
+      if (!res?.success || !res.data?.settings) {
+        toast.error(res?.error || "Failed to update memory settings.");
+        return;
+      }
+      setMemoryKnobs(res.data.settings ?? {});
+    } catch {
+      toast.error("Failed to update memory settings.");
+    } finally {
+      setIsSavingMemoryKnobs(false);
+    }
+  };
+
+  const queueMemoryUpdate = (partial: Record<string, any>) => {
+    setMemoryKnobs((prev) => ({ ...(prev ?? {}), ...partial }));
+    pendingMemoryUpdatesRef.current = {
+      ...pendingMemoryUpdatesRef.current,
+      ...partial,
+    };
+    if (memorySaveDebounceRef.current) {
+      clearTimeout(memorySaveDebounceRef.current);
+    }
+    memorySaveDebounceRef.current = setTimeout(() => {
+      void flushMemoryUpdates();
+    }, 350);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    void refreshMemoryKnobs();
+    return () => {
+      // Ensure the most recent knob changes are sent before the modal closes.
+      void flushMemoryUpdates();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, backendUrlGlobal]);
+
+  const InfoTip: React.FC<{ text: string }> = ({ text }) => {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="text-brand-light/70 hover:text-brand-light focus:outline-none"
+          >
+            <LuInfo className="w-3 h-3" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent
+          sideOffset={6}
+          className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+        >
+          {text}
+        </TooltipContent>
+      </Tooltip>
+    );
+  };
+
   const useFolderSizeEffect = (
     pathValue: string,
     setter: (label: string | null) => void,
@@ -485,13 +605,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </TabsTrigger>
             <TabsTrigger
               className="data-[state=active]:bg-brand-light/10 data-[state=active]:text-brand-light text-[11px] rounded-[6px] px-2 py-1 w-full!"
+              value="memory"
+            >
+              Memory
+            </TabsTrigger>
+            <TabsTrigger
+              className="data-[state=active]:bg-brand-light/10 data-[state=active]:text-brand-light text-[11px] rounded-[6px] px-2 py-1 w-full!"
               value="tokens"
             >
              API Tokens
             </TabsTrigger>
            
           </TabsList>
-          <div className="flex-1 overflow-y-auto pb-14 pr-2.5 custom-scrollbar">
+          <div className="flex-1 overflow-y-auto pb-8 mb-12 pr-2.5 custom-scrollbar">
           <TabsContent value="project">
             <div className="flex flex-col gap-4 font-poppins text-brand-light ">
               <div className="flex flex-col gap-1">
@@ -816,6 +942,394 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
           </TabsContent>
+          <TabsContent value="memory">
+            <div className="flex flex-col gap-4 font-poppins text-brand-light h-full">
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] text-brand-light/70">
+                  These knobs apply immediately on the backend process (no restart).
+                </div>
+                <div className="flex items-center gap-2">
+                  {(isLoadingMemoryKnobs || isSavingMemoryKnobs) && (
+                    <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
+                    onClick={() => void refreshMemoryKnobs()}
+                    disabled={isLoadingMemoryKnobs}
+                  >
+                    Refresh
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <div className="text-[11px] text-brand-light/80 font-medium">
+                  Offload pressure
+                </div>
+                <NumberInputSlider
+                  label="Min free VRAM fraction"
+                  description="APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION — General guardrail. If free VRAM drops below this, offloading becomes more aggressive."
+                  value={getFloat("APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.1)}
+                  onChange={(v) =>
+                    queueMemoryUpdate({ APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION: v })
+                  }
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  toFixed={2}
+                />
+                <NumberInputSlider
+                  label="Min free RAM fraction"
+                  description="APEX_OFFLOAD_MIN_FREE_RAM_FRACTION — Avoid overcommitting system RAM while offloading."
+                  value={getFloat("APEX_OFFLOAD_MIN_FREE_RAM_FRACTION", 0.08)}
+                  onChange={(v) =>
+                    queueMemoryUpdate({ APEX_OFFLOAD_MIN_FREE_RAM_FRACTION: v })
+                  }
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  toFixed={2}
+                />
+                <NumberInputSlider
+                  label="VRAM pressure min free VRAM fraction"
+                  description="APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION — Pressure detector threshold. When below this, we may offload to keep GPU stable."
+                  value={getFloat(
+                    "APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION",
+                    0.06,
+                  )}
+                  onChange={(v) =>
+                    queueMemoryUpdate({
+                      APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION: v,
+                    })
+                  }
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  toFixed={2}
+                />
+                <NumberInputSlider
+                  label="CPU safety buffer"
+                  description="APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES — Minimum CPU RAM headroom to keep free (GiB shown; stored as bytes)."
+                  value={
+                    getInt("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024 ** 3) /
+                    1024 ** 3
+                  }
+                  onChange={(gib) =>
+                    queueMemoryUpdate({
+                      APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES: Math.round(
+                        Math.max(0, gib) * 1024 ** 3,
+                      ),
+                    })
+                  }
+                  min={0}
+                  max={64}
+                  step={0.25}
+                  toFixed={2}
+                  suffix="GiB"
+                />
+                <div className="text-[10px] text-brand-light/60">
+                  Current:{" "}
+                  {formatBytes(getInt("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 0)) ||
+                    "—"}
+                </div>
+                <NumberInputSlider
+                  label="CPU multiplier"
+                  description="APEX_VRAM_PRESSURE_CPU_MULTIPLIER — Extra CPU RAM headroom multiplier when deciding whether to offload."
+                  value={getFloat("APEX_VRAM_PRESSURE_CPU_MULTIPLIER", 1.25)}
+                  onChange={(v) =>
+                    queueMemoryUpdate({ APEX_VRAM_PRESSURE_CPU_MULTIPLIER: v })
+                  }
+                  min={0.5}
+                  max={4}
+                  step={0.05}
+                  toFixed={2}
+                />
+                <NumberInputSlider
+                  label="Max CPU offload bytes"
+                  description="APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES — Cap how much we can spill to CPU (GiB shown; stored as bytes)."
+                  value={
+                    getInt(
+                      "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES",
+                      32 * 1024 ** 3,
+                    ) /
+                    1024 ** 3
+                  }
+                  onChange={(gib) =>
+                    queueMemoryUpdate({
+                      APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES: Math.round(
+                        Math.max(0, gib) * 1024 ** 3,
+                      ),
+                    })
+                  }
+                  min={0}
+                  max={256}
+                  step={1}
+                  toFixed={0}
+                  suffix="GiB"
+                />
+                <div className="text-[10px] text-brand-light/60">
+                  Current:{" "}
+                  {formatBytes(
+                    getInt("APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES", 0),
+                  ) || "—"}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <div className="text-[11px] text-brand-light/80 font-medium">
+                  Preforward (just-in-time offload)
+                </div>
+                <div className="flex items-center justify-between bg-brand-light/5 border border-brand-light/10 rounded-[8px] p-3">
+                  <div className="flex items-center gap-2">
+                    <div className="text-[11px] font-medium">Enable preforward</div>
+                    <InfoTip text="APEX_PREFWD_ENABLE — When enabled, we can offload modules just before their forward pass if VRAM is tight." />
+                  </div>
+                  <Checkbox
+                    checked={boolFromEnv(memoryKnobs?.APEX_PREFWD_ENABLE)}
+                    onCheckedChange={(checked) =>
+                      queueMemoryUpdate({
+                        APEX_PREFWD_ENABLE: checked ? "1" : "",
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <label className="text-brand-light text-[10.5px] font-medium">
+                      Preforward flush target
+                    </label>
+                    <InfoTip text='APEX_PREFWD_FLUSH_TARGET — Where to offload to when preforward decides to flush. "cpu" is faster; "disk" is safest.' />
+                  </div>
+                  <Select
+                    value={String(memoryKnobs?.APEX_PREFWD_FLUSH_TARGET ?? "cpu")}
+                    onValueChange={(value) =>
+                      queueMemoryUpdate({ APEX_PREFWD_FLUSH_TARGET: value })
+                    }
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="w-full h-7.5! text-[11px] bg-brand-background/70 rounded-[6px]"
+                    >
+                      <SelectValue placeholder="Select target" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                      <SelectItem value="cpu" className="text-[11px] font-medium">
+                        CPU
+                      </SelectItem>
+                      <SelectItem value="disk" className="text-[11px] font-medium">
+                        Disk
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <NumberInputSlider
+                  label="Preforward min free bytes"
+                  description="APEX_PREFWD_MIN_FREE_BYTES — If free VRAM is below this, preforward may offload (GiB shown; stored as bytes)."
+                  value={getInt("APEX_PREFWD_MIN_FREE_BYTES", 0) / 1024 ** 3}
+                  onChange={(gib) =>
+                    queueMemoryUpdate({
+                      APEX_PREFWD_MIN_FREE_BYTES: Math.round(
+                        Math.max(0, gib) * 1024 ** 3,
+                      ),
+                    })
+                  }
+                  min={0}
+                  max={32}
+                  step={0.25}
+                  toFixed={2}
+                  suffix="GiB"
+                />
+                <div className="text-[10px] text-brand-light/60">
+                  Current:{" "}
+                  {formatBytes(getInt("APEX_PREFWD_MIN_FREE_BYTES", 0)) || "—"}
+                </div>
+                <NumberInputSlider
+                  label="Preforward min free fraction"
+                  description="APEX_PREFWD_MIN_FREE_FRAC — If free VRAM ≥ this (and ≥ min bytes), skip offloading."
+                  value={getFloat("APEX_PREFWD_MIN_FREE_FRAC", 0.5)}
+                  onChange={(v) =>
+                    queueMemoryUpdate({ APEX_PREFWD_MIN_FREE_FRAC: v })
+                  }
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  toFixed={2}
+                />
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <div className="text-[11px] text-brand-light/80 font-medium">
+                  Decode guards (VAE/video/audio)
+                </div>
+                <div className="flex items-center justify-between bg-brand-light/5 border border-brand-light/10 rounded-[8px] p-3">
+                  <div className="flex items-center gap-2">
+                    <div className="text-[11px] font-medium">
+                      Force flush during decode
+                    </div>
+                    <InfoTip text="APEX_VAE_DECODE_FORCE_FLUSH — When enabled, we flush/offload to avoid OOM during decode-heavy stages." />
+                  </div>
+                  <Checkbox
+                    checked={boolFromEnv(memoryKnobs?.APEX_VAE_DECODE_FORCE_FLUSH)}
+                    onCheckedChange={(checked) =>
+                      queueMemoryUpdate({
+                        APEX_VAE_DECODE_FORCE_FLUSH: checked ? "1" : "",
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <label className="text-brand-light text-[10.5px] font-medium">
+                      Decode flush target
+                    </label>
+                    <InfoTip text='APEX_VAE_DECODE_FLUSH_TARGET — Where to offload during decode flush. "cpu" is faster; "disk" is safest.' />
+                  </div>
+                  <Select
+                    value={String(memoryKnobs?.APEX_VAE_DECODE_FLUSH_TARGET ?? "cpu")}
+                    onValueChange={(value) =>
+                      queueMemoryUpdate({ APEX_VAE_DECODE_FLUSH_TARGET: value })
+                    }
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="w-full h-7.5! text-[11px] bg-brand-background/70 rounded-[6px]"
+                    >
+                      <SelectValue placeholder="Select target" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                      <SelectItem value="cpu" className="text-[11px] font-medium">
+                        CPU
+                      </SelectItem>
+                      <SelectItem value="disk" className="text-[11px] font-medium">
+                        Disk
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <NumberInputSlider
+                  label="Decode min free bytes"
+                  description="APEX_VAE_DECODE_MIN_FREE_BYTES — Absolute VRAM floor before we start flushing (GiB shown; stored as bytes)."
+                  value={getInt("APEX_VAE_DECODE_MIN_FREE_BYTES", 0) / 1024 ** 3}
+                  onChange={(gib) =>
+                    queueMemoryUpdate({
+                      APEX_VAE_DECODE_MIN_FREE_BYTES: Math.round(
+                        Math.max(0, gib) * 1024 ** 3,
+                      ),
+                    })
+                  }
+                  min={0}
+                  max={32}
+                  step={0.25}
+                  toFixed={2}
+                  suffix="GiB"
+                />
+                <div className="text-[10px] text-brand-light/60">
+                  Current:{" "}
+                  {formatBytes(getInt("APEX_VAE_DECODE_MIN_FREE_BYTES", 0)) || "—"}
+                </div>
+                <NumberInputSlider
+                  label="Decode min free fraction"
+                  description="APEX_VAE_DECODE_MIN_FREE_FRAC — Fractional VRAM floor to trigger decode flushing."
+                  value={getFloat("APEX_VAE_DECODE_MIN_FREE_FRAC", 0.12)}
+                  onChange={(v) =>
+                    queueMemoryUpdate({ APEX_VAE_DECODE_MIN_FREE_FRAC: v })
+                  }
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  toFixed={2}
+                />
+                <NumberInputSlider
+                  label="Decode safety multiplier"
+                  description="APEX_VAE_DECODE_SAFETY_MULT — Extra safety factor when estimating decode memory usage."
+                  value={getFloat("APEX_VAE_DECODE_SAFETY_MULT", 8)}
+                  onChange={(v) =>
+                    queueMemoryUpdate({ APEX_VAE_DECODE_SAFETY_MULT: v })
+                  }
+                  min={1}
+                  max={16}
+                  step={0.25}
+                  toFixed={2}
+                />
+                <NumberInputSlider
+                  label="Decode target free VRAM fraction"
+                  description="APEX_VAE_DECODE_TARGET_FREE_FRACTION — Target headroom to maintain during decode (higher = more conservative)."
+                  value={getFloat("APEX_VAE_DECODE_TARGET_FREE_FRACTION", 0.3)}
+                  onChange={(v) =>
+                    queueMemoryUpdate({
+                      APEX_VAE_DECODE_TARGET_FREE_FRACTION: v,
+                    })
+                  }
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  toFixed={2}
+                />
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <div className="text-[11px] text-brand-light/80 font-medium">
+                  Weight manager
+                </div>
+                <div className="flex items-center justify-between bg-brand-light/5 border border-brand-light/10 rounded-[8px] p-3">
+                  <div className="flex items-center gap-2">
+                    <div className="text-[11px] font-medium">
+                      Disable warm weights
+                    </div>
+                    <InfoTip text="APEX_DISABLE_WARM_WEIGHTS — When enabled, avoid keeping weights warm/resident between runs." />
+                  </div>
+                  <Checkbox
+                    checked={boolFromEnv(memoryKnobs?.APEX_DISABLE_WARM_WEIGHTS)}
+                    onCheckedChange={(checked) =>
+                      queueMemoryUpdate({
+                        APEX_DISABLE_WARM_WEIGHTS: checked ? "1" : "",
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex items-center justify-between bg-brand-light/5 border border-brand-light/10 rounded-[8px] p-3">
+                  <div className="flex items-center gap-2">
+                    <div className="text-[11px] font-medium">Force disk only</div>
+                    <InfoTip text="APEX_FORCE_DISK_ONLY — Force everything to disk offload (safest on low VRAM/RAM; slowest)." />
+                  </div>
+                  <Checkbox
+                    checked={boolFromEnv(memoryKnobs?.APEX_FORCE_DISK_ONLY)}
+                    onCheckedChange={(checked) =>
+                      queueMemoryUpdate({
+                        APEX_FORCE_DISK_ONLY: checked ? "1" : "",
+                      })
+                    }
+                  />
+                </div>
+                <NumberInputSlider
+                  label="Target free VRAM fraction"
+                  description="APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION — Desired VRAM headroom for weight residency decisions."
+                  value={getFloat("APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12)}
+                  onChange={(v) =>
+                    queueMemoryUpdate({ APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION: v })
+                  }
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  toFixed={2}
+                />
+                <NumberInputSlider
+                  label="Target free RAM fraction"
+                  description="APEX_WEIGHT_TARGET_FREE_RAM_FRACTION — Desired CPU RAM headroom for weight residency decisions."
+                  value={getFloat("APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.1)}
+                  onChange={(v) =>
+                    queueMemoryUpdate({ APEX_WEIGHT_TARGET_FREE_RAM_FRACTION: v })
+                  }
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  toFixed={2}
+                />
+              </div>
+            </div>
+          </TabsContent>
           <TabsContent value="paths">
             <div className="flex flex-col gap-4 font-poppins text-brand-light h-full">
 
@@ -928,6 +1442,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   )}
                 </div>
               </div>
+              <div className="flex flex-row gap-1 items-center justify-between w-full">
+                <label className={fieldLabelClass + " w-1/3"}>
+                  <div className="flex flex-col w-full">
+                    <span>Config Path</span>
+                    {configSizeLabel && (
+                      <span className="text-[10px] text-brand-light/60 font-normal">
+                        {configSizeLabel}
+                      </span>
+                    )}
+                  </div>
+                </label>
+                <div className="flex items-center gap-1.5 w-4/5">
+                  <Input
+                    value={configPath}
+                    onChange={(e) => setConfigPath(e.target.value)}
+                    placeholder="/path/to/components"
+                    className="h-7.5 text-[11px]! rounded-[6px] disabled:opacity-100 bg-brand! w-full truncate"
+                  />
+                  {!effectiveIsRemote && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
+                      onClick={() =>
+                        handlePickDirectory(
+                          "Choose config folder",
+                          setConfigPath,
+                          configPath,
+                        )
+                      }
+                    >
+                      <LuFolder className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                </div>
+              </div>
 
               <div className="flex flex-row gap-1 items-center justify-between w-full">
                 <label className={fieldLabelClass + " w-1/3"}>
@@ -1025,6 +1575,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             disabled={saveDisabled}
             onClick={async () => {
               if (saveDisabled) return;
+              // Ensure any debounced Memory-tab updates are sent before closing.
+              await flushMemoryUpdates();
               const fpsNumeric = Number(projectFps);
               if (Number.isFinite(fpsNumeric) && fpsNumeric > 0) {
                 setGlobalFpsWithRescale(fpsNumeric);

@@ -570,7 +570,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
   const [activeTab, setActiveTab] = useState<"downloads" | "installed">(
     "installed",
   );
-  const sourceHelpShort = "Enter a CivitAI ID, URL, or local path.";
+  const sourceHelpShort = "Enter a CivitAI ID/URN, URL, or local path.";
   if (!clip || !clip.manifest) return null;
   const { data: manifest } = useManifestQuery(clip.manifest.id);
   const queryClient = useQueryClient();
@@ -1188,7 +1188,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
                   value={newLoraSource}
                   onChange={(e) => setNewLoraSource(e.target.value)}
                   className="w-full bg-brand-background border border-brand-light/15 rounded-[5px] px-2.5 py-2 mt-1.5 text-[10px] text-brand-light font-mono placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
-                  placeholder="civitai:123456 or https://... or /Users/you/models/my_lora.safetensors"
+                  placeholder="civitai:123456 or urn:air:model:lora:civitai:12345@56789 or https://... or /Users/you/models/my_lora.safetensors"
                 />
               </div>
               {hasMultipleTransformers && transformerComponents.length > 0 && (

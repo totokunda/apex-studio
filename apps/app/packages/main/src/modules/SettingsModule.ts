@@ -1101,6 +1101,18 @@ export class SettingsModule extends EventEmitter implements AppModule {
       return await this.verifyBackendUrlAndFetchSettings(url);
     });
 
+    // Live memory/env knobs (applied immediately on the backend process)
+    ipcMain.handle("config:get-memory-settings", async () => {
+      return await this.makeConfigRequest<any>("GET", "/config/memory");
+    });
+
+    ipcMain.handle(
+      "config:set-memory-settings",
+      async (_event, payload: Record<string, any>) => {
+        return await this.makeConfigRequest<any>("POST", "/config/memory", payload);
+      },
+    );
+
     // Fetch backend save-path sizes (in bytes) from the current (or provided) backend URL
     ipcMain.handle(
       "settings:get-backend-path-sizes",

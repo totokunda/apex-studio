@@ -218,6 +218,7 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
       const previewPath = meta.preview_path;
       const fileUrl = previewPath ? pathToFileURLString(previewPath) : undefined;
 
+
       // If the originating clip was deleted (or no longer references this job),
       // we still want the generation result to be "collected" so it appears in
       // GenerationsMenu (disk scan of engine_results). Importing via addAssetAsync
@@ -298,7 +299,9 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
         try {
           patch.previewPath = fileUrl;
           needsUpdate = true;
+
           const asset = await addAssetAsync({ path: fileUrl }, "apex-cache");
+
           resolvedAssetId = asset?.id;
           if (resolvedAssetId) {
             patch.assetId = resolvedAssetId;
@@ -397,15 +400,46 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
           if (!Number.isFinite(nativeW) || nativeW <= 0) nativeW = BASE_LONG_SIDE;
           if (!Number.isFinite(nativeH) || nativeH <= 0) nativeH = BASE_LONG_SIDE;
 
-          const ratio =
-            nativeH > 0 && Number.isFinite(nativeW / nativeH) ? nativeW / nativeH : 1;
+          // Compute the preview "aspect rect" dimensions in world-space (same logic as `Preview.tsx`):
+          // - short side is always `BASE_LONG_SIDE`
+          // - width scales with the viewport aspect ratio
+          const viewportAspect = useViewportStore.getState().aspectRatio as any;
+          const viewportRatio =
+            viewportAspect &&
+            Number.isFinite(viewportAspect.width) &&
+            Number.isFinite(viewportAspect.height) &&
+            viewportAspect.height > 0
+              ? viewportAspect.width / viewportAspect.height
+              : 1;
+          const rectWidth = BASE_LONG_SIDE * (Number.isFinite(viewportRatio) && viewportRatio > 0 ? viewportRatio : 1);
+          const rectHeight = BASE_LONG_SIDE;
 
-          const width = BASE_LONG_SIDE * ratio;
-          const height = BASE_LONG_SIDE;
+          // Aspect-fit the asset inside the preview rect so new clips start centered (like video/image clips).
+          const assetRatio =
+            nativeH > 0 && Number.isFinite(nativeW / nativeH) ? nativeW / nativeH : 1;
+          let width = rectWidth;
+          let height = rectHeight;
+          if (rectWidth > 0 && rectHeight > 0 && Number.isFinite(assetRatio) && assetRatio > 0) {
+            if (rectWidth / rectHeight > assetRatio) {
+              width = rectHeight * assetRatio;
+              height = rectHeight;
+            } else {
+              width = rectWidth;
+              height = rectWidth / assetRatio;
+            }
+          } else {
+            // Fallback: keep prior behavior if ratios are invalid
+            width = BASE_LONG_SIDE * assetRatio;
+            height = BASE_LONG_SIDE;
+          }
+
+          const x = (rectWidth - width) / 2;
+          const y = (rectHeight - height) / 2;
 
           const baseTransform: ClipTransform = {
-            x: 0,
-            y: 0,
+            // Keep new clips centered within the preview rect by default.
+            x: Number.isFinite(x) ? x : 0,
+            y: Number.isFinite(y) ? y : 0,
             width,
             height,
             scaleX: 1,
@@ -416,7 +450,9 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
             crop: { x: 0, y: 0, width: 1, height: 1 },
           };
           (patch as any).transform = baseTransform;
-          (patch as any).originalTransform = { ...baseTransform };
+          // `originalTransform` is expected to be origin-normalized (x/y at 0) for downstream
+          // export/mask mapping logic; keep that invariant while still centering `transform`.
+          (patch as any).originalTransform = { ...baseTransform, x: 0, y: 0 };
           (patch as any).mediaWidth = nativeW;
           (patch as any).mediaHeight = nativeH;
           (patch as any).mediaAspectRatio = nativeW / nativeH;
