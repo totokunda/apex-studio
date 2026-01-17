@@ -373,7 +373,7 @@ class OffloadMixin(base_object):
         self: "BaseEngine",
         module: torch.nn.Module | str | None,
         *,
-        offload_type: Literal["cpu", "discard"] | None = "discard"
+        offload_type: Literal["cpu", "discard"] | None = None
     ) -> None:
         """
         Pressure-aware offload helper.
@@ -509,12 +509,21 @@ class OffloadMixin(base_object):
                         module_obj.to("cpu")
                 elif offload_type == "discard":
                     if manager is not None and module_id:
-                        manager.offload_module(
-                            module_id,
-                            target="disk",
-                            drop_cpu=True,
-                            reason="offload_discard",
-                        )
+                        try:
+                            # Force-disk-only mode: "disk" semantics are pure discard.
+                            # Do NOT serialize weights; drop tracking so the only way
+                            # to access again is to reload from the original source.
+                            if getattr(manager, "force_disk_only", False):
+                                manager.forget(module_id)
+                            else:
+                                manager.offload_module(
+                                    module_id,
+                                    target="disk",
+                                    drop_cpu=True,
+                                    reason="offload_discard",
+                                )
+                        except Exception:
+                            pass
                     component = self.get_component_by_name(module)
                     if component:
                         module_type_obj = getattr(self, component.get("type"), None)

@@ -397,6 +397,21 @@ def _engine_pool_key(
     return f"{payload['engine_type']}/{payload['model_type']}:{h}"
 
 
+def _warm_weights_disabled() -> bool:
+    """
+    When enabled, we should not keep engines/weights warm between runs.
+    This disables use of the warm pool and forces aggressive cleanup.
+    """
+    for key in ("APEX_DISABLE_WARM_WEIGHTS", "APEX_FORCE_DISK_ONLY"):
+        try:
+            val = os.environ.get(key)
+            if val is not None and str(val).strip().lower() in {"1", "true", "yes", "on"}:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 @ray.remote
 def warmup_engine_from_manifest(
     manifest_path: str,
@@ -506,6 +521,18 @@ def warmup_engine_from_manifest(
             warmed_disk = True
 
         if mode_lc in {"engine", "both"}:
+            if _warm_weights_disabled():
+                # Do not warm engines into the pool when warm weights are disabled.
+                return {
+                    "status": "ok",
+                    "mode": mode_lc,
+                    "pool_key": pool_key,
+                    "warmed_disk": warmed_disk,
+                    "warmed_engine": False,
+                    "pool": _get_warm_pool().stats(),
+                    "duration_s": time.time() - t0,
+                    "note": "Warm weights disabled; skipped engine warm pool.",
+                }
 
             def _factory():
                 kwargs = {
@@ -520,7 +547,9 @@ def warmup_engine_from_manifest(
                     kwargs["attention_type"] = attention_type
                 return UniversalEngine(**kwargs)
 
-            eng, pooled = _get_warm_pool().acquire(pool_key, _factory, allow_pool=True)
+            eng, pooled = _get_warm_pool().acquire(
+                pool_key, _factory, allow_pool=not _warm_weights_disabled()
+            )
             if pooled:
                 _get_warm_pool().release(pool_key)
                 warmed_engine = True
@@ -1899,7 +1928,7 @@ def run_engine_from_manifest(
             "yaml_path": manifest_path,
             "model_type": model_type,
             "selected_components": selected_components,
-            "auto_memory_management": os.environ.get("AUTO_MEMORY_MANAGEMENT", False),
+            "auto_memory_management": True,
             **(config.get("engine_kwargs", {}) or {}),
         }
 
@@ -1919,7 +1948,9 @@ def run_engine_from_manifest(
         def _factory():
             return UniversalEngine(**input_kwargs)
 
-        engine, engine_pooled = _get_warm_pool().acquire(engine_pool_key, _factory, allow_pool=True)
+        engine, engine_pooled = _get_warm_pool().acquire(
+            engine_pool_key, _factory, allow_pool=not _warm_weights_disabled()
+        )
 
         # Compute FPS once so we don't capture the full engine/config inside callbacks.
         fps_for_video: int = 16
@@ -2517,7 +2548,7 @@ def run_engine_from_manifest(
             pass
 
         # Post-warm: keep engine warm after a successful run when pooled.
-        if engine_pooled and engine_pool_key:
+        if engine_pooled and engine_pool_key and not _warm_weights_disabled():
             try:
                 _get_warm_pool().release(engine_pool_key)
             except Exception:
@@ -2544,7 +2575,7 @@ def run_engine_from_manifest(
         # If the engine is pooled, do NOT clear torch caches (keeps it warm).
         # If not pooled, do best-effort offload + cache clearing.
         try:
-            if (not engine_pooled) and engine is not None:
+            if (not engine_pooled or _warm_weights_disabled()) and engine is not None:
                 try:
                     engine.offload_engine()
                 except Exception:
@@ -2557,7 +2588,9 @@ def run_engine_from_manifest(
             output = None
         except Exception as cleanup_err:
             logger.warning(f"run_engine_from_manifest cleanup failed: {cleanup_err}")
-        _aggressive_ram_cleanup(clear_torch_cache=not bool(engine_pooled))
+        _aggressive_ram_cleanup(
+            clear_torch_cache=(not bool(engine_pooled)) or _warm_weights_disabled()
+        )
 
 
 @ray.remote
