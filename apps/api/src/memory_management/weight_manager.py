@@ -178,14 +178,19 @@ class GlobalWeightManager:
             self._modules[module_id] = record
             self._module_index[module] = module_id
 
-            # Immediately enforce policy if warm caching is disabled.
-            if self.force_disk_only:
-                self.offload_module(
-                    module_id,
-                    target="disk",
-                    drop_cpu=True,
-                    reason="warm_cache_disabled",
-                )
+            # Force-disk-only mode is treated as "no warm caching": we *do not*
+            # try to serialize+shrink weights, because the intended policy is
+            # to discard modules at the engine layer and reload on demand.
+            #
+            # Still, if a module was registered while on GPU, move it back to CPU
+            # so we don't pin VRAM indefinitely.
+            if self.force_disk_only and record.location == "gpu":
+                try:
+                    module.to("cpu")
+                    record.location = "cpu"
+                    record.tensors = self._collect_tensor_meta(module)
+                except Exception:
+                    pass
             elif record.location == "gpu":
                 # If we registered a GPU-resident module and we're already tight on VRAM,
                 # proactively evict older modules to keep headroom.
@@ -212,6 +217,21 @@ class GlobalWeightManager:
     # --------------------------------------------------------------------- #
     # Core operations
     # --------------------------------------------------------------------- #
+    @staticmethod
+    def _is_group_offloaded_module(module: torch.nn.Module) -> bool:
+        """
+        Return True when `module` is controlled by Diffusers group offloading.
+
+        Group-offloaded modules manage their own device placement via hooks, so
+        forcing `.to(device)` here is redundant and can fight the hook logic.
+        """
+        try:
+            from src.mixins.to_mixin import _module_has_group_offload_hook
+
+            return bool(_module_has_group_offload_hook(module))
+        except Exception:
+            return False
+
     def ensure_on_device(
         self,
         module_or_id,
@@ -235,13 +255,21 @@ class GlobalWeightManager:
             target = torch.device(device)
 
         with self._lock, torch.no_grad():
+            is_group_offloaded = self._is_group_offloaded_module(module)
+
             if record.location == "disk":
                 if record.disk_path:
                     state = torch.load(record.disk_path, map_location="cpu")
                     params = dict(module.named_parameters(recurse=True))
                     buffers = dict(module.named_buffers(recurse=True))
                     for name, tensor in state.items():
-                        dest_device = target or torch.device("cpu")
+                        # Group-offloaded modules should be restored to CPU; the hook
+                        # will move submodules/tensors on-demand.
+                        dest_device = (
+                            torch.device("cpu")
+                            if is_group_offloaded
+                            else (target or torch.device("cpu"))
+                        )
                         restored = tensor.to(dest_device)
                         if name in params:
                             params[name].data = restored
@@ -257,7 +285,9 @@ class GlobalWeightManager:
                     # Callers should reload from the original checkpoint when they see a False return.
                     return False
 
-            if target is not None:
+            # If this module is group-offloaded, it controls its own placement and
+            # ensuring here is unnecessary (and can be harmful).
+            if target is not None and not is_group_offloaded:
                 module.to(target)
                 record.location = target.type
 
@@ -293,6 +323,21 @@ class GlobalWeightManager:
                     module.to("cpu")
                 record.location = "cpu"
             elif target_tier == "disk":
+                # In force-disk-only mode, "disk" effectively means "caller should discard and reload".
+                # The weight manager cannot safely null all external references, so here we avoid
+                # producing meta/empty tensors (which would cause runtime 0-numel failures) and
+                # simply move to CPU. Engines using OffloadMixin will drop references themselves.
+                if self.force_disk_only:
+                    try:
+                        if record.location != "cpu":
+                            module.to("cpu")
+                    except Exception:
+                        pass
+                    record.location = "cpu"
+                    record.tensors = self._collect_tensor_meta(module)
+                    record.last_used = time.monotonic()
+                    return record.location
+
                 # If the module is already meta-backed, there is nothing to move.
                 # Avoid attempting to materialize / save meta tensors.
                 has_meta = any(
@@ -306,7 +351,34 @@ class GlobalWeightManager:
                 if record.location != "cpu" and not has_meta:
                     module.to("cpu")
 
+                # If we're truly evicting to disk (dropping CPU weights), we must persist
+                # a copy first. Otherwise modules end up with 0-numel/meta tensors and
+                # cannot be rehydrated via `ensure_on_device(...)`.
                 if drop_cpu and not has_meta:
+                    try:
+                        disk_path = Path(
+                            record.disk_path
+                            or str(self._module_disk_path(record.module_id))
+                        )
+                        tmp_path = disk_path.with_suffix(disk_path.suffix + ".tmp")
+
+                        # Save a CPU state dict. At this point the module should already
+                        # be on CPU (see the `.to("cpu")` above), but be defensive.
+                        state = {
+                            k: (v.detach().cpu() if torch.is_tensor(v) else v)
+                            for k, v in module.state_dict().items()
+                        }
+                        torch.save(state, tmp_path)
+                        tmp_path.replace(disk_path)
+                        record.disk_path = str(disk_path)
+                    except Exception:
+                        # Best-effort: if we fail to serialize, do NOT shrink the module;
+                        # keep weights in CPU memory so the model remains runnable.
+                        record.location = "cpu"
+                        record.tensors = self._collect_tensor_meta(module)
+                        record.last_used = time.monotonic()
+                        return record.location
+
                     self._shrink_module_tensors(module)
                     record.location = "disk"
                 else:

@@ -34,11 +34,28 @@ def test_offload_to_disk_and_restore(tmp_path):
 
     module_id = manager.register_module(module, "engine:linear", owner="engine")
     record = manager._modules[module_id]
-    assert record.location == "disk"
-    # When force_disk_only is set we do not re-serialize; a subsequent ensure will
-    # return False to signal the caller to reload from the original checkpoint.
+    # In force-disk-only mode the weight manager does not serialize+shrink weights.
+    # Engines using discard semantics are expected to drop references and reload
+    # from the original checkpoint when needed.
+    assert record.location == "cpu"
     assert record.disk_path is None
-    assert manager.ensure_on_device(module_id, device=torch.device("cpu")) is False
+    assert manager.ensure_on_device(module_id, device=torch.device("cpu")) is True
+
+
+def test_ensure_on_device_skips_group_offloaded_modules(monkeypatch, tmp_path):
+    manager = GlobalWeightManager(disk_root=tmp_path)
+    module = torch.nn.Linear(2, 2)
+    module_id = manager.register_module(module, "engine:group_offloaded", owner="engine")
+
+    # Treat this module as group-offloaded and ensure we don't call `.to(...)`.
+    monkeypatch.setattr(
+        GlobalWeightManager,
+        "_is_group_offloaded_module",
+        staticmethod(lambda _module: True),
+    )
+    monkeypatch.setattr(module, "to", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("unexpected to()")))
+
+    assert manager.ensure_on_device(module_id, device=torch.device("cpu")) is True
 
 
 def test_eviction_prefers_cpu_then_disk(tmp_path):
