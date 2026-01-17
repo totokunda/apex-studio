@@ -119,7 +119,7 @@ macOS (Apple Silicon / MPS):
 cd apps/api
 python3.12 -m venv .venv
 source .venv/bin/activate
-python3 scripts/dev/dev_pip_install.py --machine mac
+python3 scripts/dev/dev_pip_install.py --machine mac --venv
 ```
 
 Linux:
@@ -129,9 +129,9 @@ cd apps/api
 python3.12 -m venv .venv
 source .venv/bin/activate
 # pick one:
-python3 scripts/dev/dev_pip_install.py --machine cpu
-# python3 scripts/dev/dev_pip_install.py --machine linux   # NVIDIA CUDA on Linux
-# python3 scripts/dev/dev_pip_install.py --machine rocm    # AMD ROCm on Linux
+python3 scripts/dev/dev_pip_install.py --machine cpu --venv
+# python3 scripts/dev/dev_pip_install.py --machine linux --venv  # NVIDIA CUDA on Linux
+# python3 scripts/dev/dev_pip_install.py --machine rocm --venv    # AMD ROCm on Linux
 ```
 
 Windows (PowerShell):
@@ -141,8 +141,8 @@ cd apps\api
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 # pick one:
-py scripts\dev\dev_pip_install.py --machine cpu
-# py scripts\dev\dev_pip_install.py --machine windows  # NVIDIA CUDA on Windows
+py scripts\dev\dev_pip_install.py --machine cpu --venv
+# py scripts\dev\dev_pip_install.py --machine windows --venv  # NVIDIA CUDA on Windows
 ```
 
 Note: **Option A** applies Apex-maintained third-party patches (diffusers + xformers) automatically.
