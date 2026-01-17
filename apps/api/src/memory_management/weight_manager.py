@@ -75,6 +75,9 @@ class GlobalWeightManager:
         self._module_index: "weakref.WeakKeyDictionary[torch.nn.Module, str]" = (
             weakref.WeakKeyDictionary()
         )
+        # Track "currently running" modules in a thread-local stack so that
+        # background loads/evictions never kick out the active component.
+        self._active_local = threading.local()
         self.disk_root = Path(disk_root or get_offload_path())
         self.disk_root.mkdir(parents=True, exist_ok=True)
 
@@ -99,6 +102,53 @@ class GlobalWeightManager:
         
         self._gpu_stats_provider = gpu_stats_provider or self._default_gpu_stats
         self._ram_stats_provider = ram_stats_provider or self._default_ram_stats
+
+    # --------------------------------------------------------------------- #
+    # Active module tracking (thread-local)
+    # --------------------------------------------------------------------- #
+    def _active_stack(self) -> list[str]:
+        stack = getattr(self._active_local, "stack", None)
+        if stack is None:
+            stack = []
+            setattr(self._active_local, "stack", stack)
+        return stack
+
+    def active_ids(self) -> Set[str]:
+        try:
+            return set(self._active_stack())
+        except Exception:
+            return set()
+
+    def push_active(self, module_id: str) -> None:
+        if not module_id:
+            return
+        try:
+            self._active_stack().append(str(module_id))
+        except Exception:
+            return
+
+    def pop_active(self, module_id: str | None = None) -> None:
+        try:
+            stack = self._active_stack()
+        except Exception:
+            return
+        if not stack:
+            return
+        if module_id is None:
+            try:
+                stack.pop()
+            except Exception:
+                return
+            return
+
+        target = str(module_id)
+        for i in range(len(stack) - 1, -1, -1):
+            if stack[i] == target:
+                try:
+                    stack.pop(i)
+                except Exception:
+                    pass
+                break
 
     # --------------------------------------------------------------------- #
     # Environment helpers
@@ -429,11 +479,15 @@ class GlobalWeightManager:
         if need_bytes <= 0 and (free_frac is None or free_frac >= target):
             return {}
 
-        active = active or set()
+        active_set = set(active or set())
+        try:
+            active_set |= self.active_ids()
+        except Exception:
+            pass
         candidates = [
             rec
             for rec in self._modules.values()
-            if rec.location == "gpu" and rec.module_id not in active
+            if rec.location == "gpu" and rec.module_id not in active_set
         ]
         # Oldest, largest modules first.
         candidates.sort(key=lambda r: (r.last_used, -r.total_bytes))
@@ -498,13 +552,17 @@ class GlobalWeightManager:
         """
         Offload all GPU-resident modules except those in `active`.
         """
-        active = active or set()
+        active_set = set(active or set())
+        try:
+            active_set |= self.active_ids()
+        except Exception:
+            pass
         offloaded: Dict[str, MemoryTier] = {}
         with self._lock:
             candidates = [
                 rec
                 for rec in self._modules.values()
-                if rec.location == "gpu" and rec.module_id not in active
+                if rec.location == "gpu" and rec.module_id not in active_set
             ]
         for rec in candidates:
             try:
