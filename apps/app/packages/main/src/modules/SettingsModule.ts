@@ -8,6 +8,14 @@ import { EventEmitter } from "node:events";
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
 
+const ALLOWED_MEMORY_SETTING_KEYS = new Set([
+  "APEX_LOAD_MODEL_VRAM_MULT",
+  "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES",
+  "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES",
+  "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION",
+  "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION",
+]);
+
 type PathKey =
   | "cachePath"
   | "componentsPath"
@@ -1117,7 +1125,13 @@ export class SettingsModule extends EventEmitter implements AppModule {
     ipcMain.handle(
       "config:set-memory-settings",
       async (_event, payload: Record<string, any>) => {
-        return await this.makeConfigRequest<any>("POST", "/config/memory", payload);
+        const filtered: Record<string, any> = {};
+        for (const [k, v] of Object.entries(payload ?? {})) {
+          if (ALLOWED_MEMORY_SETTING_KEYS.has(k)) {
+            filtered[k] = v;
+          }
+        }
+        return await this.makeConfigRequest<any>("POST", "/config/memory", filtered);
       },
     );
 

@@ -2657,10 +2657,10 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     if (overlap) {
       return (
         frame >= (clip.startFrame || 0) - (overlapAmount || 0) &&
-        frame < (clip.endFrame || 0)
+        frame <= (clip.endFrame || 0)
       );
     }
-    return frame >= (clip.startFrame || 0) && frame < (clip.endFrame || 0);
+    return frame >= (clip.startFrame || 0) && frame <= (clip.endFrame || 0);
   },
   getTimelinePosition: (timelineId: string, scrollY?: number) => {
     const timeline = get().timelines.find((t) => t.timelineId === timelineId);
