@@ -177,6 +177,7 @@ const VideoPreview: React.FC<
   const posterRequestRef = useRef(0);
   const lastPosterKeyRef = useRef<string | null>(null);
   const suppressUntilRef = useRef<number>(0);
+  const lastSeekFrameRef = useRef<number>(0);
   const { applyFilters } = useWebGLFilters();
   // Resolve clip early so timing math can reference grouping info
   const clipFromStore = useClipStore((s) =>
@@ -1218,11 +1219,19 @@ const VideoPreview: React.FC<
 
     const info = getTargetFrameInfo();
 
+    if (Math.abs(lastSeekFrameRef.current - (info?.targetFrame ?? 0)) > 8) {
+      isAccurateSeekNeededInput = true;
+    }
+
+    lastSeekFrameRef.current = info?.targetFrame ?? 0;
+ 
 
     if (!info) {
       void renderPosterFallback();
       return;
     }
+
+
 
     const focusFrameValue = focusFrameRef.current;
     if (
@@ -1239,11 +1248,6 @@ const VideoPreview: React.FC<
       strict: isAccurateSeekNeededInput,
     };
 
-    // If we are already displaying the target frame (from playback), avoid re-seeking
-    // which can cause a visible flicker/jump on pause.
-    if (!isAccurateSeekNeededInput && lastRenderedFrameRef.current === targetFrame) {
-      return;
-    }
 
     // Update the mask frame ref immediately before seeking to ensure sync
     decoderMaskFrameRef.current = maskFrameForCurrentFocus;
@@ -1261,6 +1265,7 @@ const VideoPreview: React.FC<
       const logicalId = makeDecoderId(targetAssetId);
 
       await decoderManager.seek(logicalId, timestamp, isAccurateSeekNeededInput);
+
       activeDecoderAssetIdRef.current = logicalId;
 
     } catch (e) {
@@ -1275,13 +1280,12 @@ const VideoPreview: React.FC<
       //renderPosterFallback,
       maskFrameForCurrentFocus,
       isAccurateSeekNeeded,
-      isPlaying,
       selectedAssetId,
       makeDecoderId,
       isInFrame
     ],
   );
-  
+
 
   useEffect(() => {
     

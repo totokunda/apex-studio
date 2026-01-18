@@ -36,13 +36,16 @@ export type ConvertedMediaItem = {
   hasProxy?: boolean;
 };
 
-export type ListGeneratedMediaPageParams = {
+export type ListServerMediaPageParams = {
   folderUuid?: string;
   cursor?: string | null;
   limit?: number;
+  type?: "generations" | "processors";
+  sortKey?: "date" | "name";
+  sortOrder?: "asc" | "desc";
 };
 
-export type ListGeneratedMediaPageResult = {
+export type ListServerMediaPageResult = {
   items: ConvertedMediaItem[];
   nextCursor: string | null;
 };
@@ -206,7 +209,8 @@ async function pickMediaPaths(options: {
 async function listConvertedMedia(
   folderUuid?: string,
 ): Promise<ConvertedMediaItem[]> {
-  const baseRoot = getMediaRootAbsolute();
+  const userDataDir = (await getUserDataPath())?.data?.user_data ?? "";
+  const baseRoot = join(userDataDir, "media");
 
   let symlinksAbs: string;
   let proxyAbs: string;
@@ -318,18 +322,20 @@ async function listConvertedMedia(
   return items;
 }
 
-async function listGeneratedMedia(
+async function listServerMedia(
   folderUuid?: string,
+  type: "generations" | "processors" = "generations",
 ): Promise<ConvertedMediaItem[]> {
   try {
     // Back-compat helper: load all pages (used by older codepaths/tests).
     const all: ConvertedMediaItem[] = [];
     let cursor: string | null = null;
     for (let i = 0; i < 10_000; i++) {
-      const page = await listGeneratedMediaPage({
+      const page = await listServerMediaPage({
         folderUuid,
         cursor,
         limit: 500,
+        type,
       });
       all.push(...page.items);
       if (!page.nextCursor) break;
@@ -341,79 +347,10 @@ async function listGeneratedMedia(
   }
 }
 
-let generationRootsCache:
-  | { atMs: number; roots: string[]; cachePath: string | null; userDataDir: string | null }
-  | null = null;
 
-async function getGenerationRoots(): Promise<string[]> {
-  const now = Date.now();
-  if (generationRootsCache && now - generationRootsCache.atMs < 30_000) {
-    return generationRootsCache.roots;
-  }
-
-  // Get cache path from the persisted settings file (apex-settings.json)
-  // This ensures we respect the configured cache path even if the API server
-  // is remote or unreachable.
-  let cachePath: string | null = null;
-  try {
-    const userDataRes = await getUserDataPath();
-    if (userDataRes?.success && userDataRes.data?.user_data) {
-      const userDataDir = userDataRes.data.user_data;
-      const settingsPath = join(userDataDir, "apex-settings.json");
-      if (fs.existsSync(settingsPath)) {
-        const raw = await fsp.readFile(settingsPath, "utf-8");
-        const parsed = JSON.parse(raw);
-        if (typeof parsed.cachePath === "string" && parsed.cachePath) {
-          cachePath = parsed.cachePath;
-        }
-      }
-    }
-  } catch {
-    // ignore settings read failure
-  }
-
-  // Fallback: check env var or home directory default
-  if (!cachePath) {
-    try {
-      const envPath = process.env.APEX_CACHE_PATH;
-      if (typeof envPath === "string" && envPath.length > 0) {
-        cachePath = envPath;
-      } else {
-        const home = os.homedir?.();
-        if (home && typeof home === "string" && home.length > 0) {
-          cachePath = join(home, "apex-diffusion", "cache");
-        }
-      }
-    } catch {
-      cachePath = null;
-    }
-  }
-  
-  let userDataDir: string | null = null;
-  try {
-    const userDataRes = await getUserDataPath();
-    if (userDataRes?.success && userDataRes.data?.user_data) {
-      userDataDir = userDataRes.data.user_data;
-    }
-  } catch {
-    userDataDir = null;
-  }
-
-  const roots = new Set<string>();
-  if (cachePath) roots.add(cachePath);
-  if (userDataDir) {
-    roots.add(join(userDataDir, "apex-cache"));
-    roots.add(join(userDataDir, "apex-cache-remote"));
-  }
-
-  const rootsArr = Array.from(roots.values());
-  generationRootsCache = { atMs: now, roots: rootsArr, cachePath, userDataDir };
-  return rootsArr;
-}
-
-async function listGeneratedMediaPage(
-  params: ListGeneratedMediaPageParams = {},
-): Promise<ListGeneratedMediaPageResult> {
+async function listServerMediaPage(
+  params: ListServerMediaPageParams = { type: "generations" },
+): Promise<ListServerMediaPageResult> {
   try {
     const folderUuid = params.folderUuid;
     const limit =
@@ -426,9 +363,6 @@ async function listGeneratedMediaPage(
         ? decodeGeneratedMediaCursor(params.cursor)
         : null;
 
-    const roots = await getGenerationRoots();
-    if (!roots || roots.length === 0) return { items: [], nextCursor: null };
-
     type Candidate = {
       kind: "file" | "dir";
       baseName: string;
@@ -436,245 +370,132 @@ async function listGeneratedMediaPage(
       dateKeyMs: number;
     };
 
+
+    const userDataDir = (await getUserDataPath())?.data?.user_data ?? "";
+    const serverPath = folderUuid ? join(userDataDir, "media", folderUuid, "server") : join(userDataDir, "media", "server");
+    const mediaPath = join(serverPath, params.type ?? "generations");
+    // get all directories in generationsPath and get the files with result in their names
+    
     const candidates: Candidate[] = [];
-    for (const root of roots) {
-      // IMPORTANT:
-      // - The backend historically writes to: <cache-root>/engine_results/<jobId>/...
-      // - The renderer *may* pass folderUuid to scope generations to a project.
-      // - On some platforms (notably Windows without Developer Mode/admin),
-      //   creating symlinks/junctions under engine_results/<folderUuid>/... may fail,
-      //   which would make generations appear "missing" even though outputs exist.
-      //
-      // To make generations reliably appear, when folderUuid is provided we scan BOTH:
-      //   <root>/engine_results/<folderUuid>  (preferred when present)
-      //   <root>/engine_results              (global fallback)
-      //
-      // Results are deduped by absolute path downstream.
-      const engineResultsDirs = new Set<string>();
-      if (typeof folderUuid === "string" && folderUuid.length > 0) {
-        engineResultsDirs.add(join(root, "engine_results", folderUuid));
-      } else {
-        engineResultsDirs.add(join(root, "engine_results"));
-      }
-
-      for (const engineResultsAbs of engineResultsDirs) {
-        if (!fs.existsSync(engineResultsAbs)) continue;
-
-        let entries: import("node:fs").Dirent[] = [];
-        try {
-          entries = (await fsp.readdir(engineResultsAbs, {
-            withFileTypes: true,
-          })) as unknown as import("node:fs").Dirent[];
-        } catch {
-          entries = [] as any;
-        }
-        if (!entries || entries.length === 0) continue;
-
-        for (const e of entries) {
-          const entryName = e.name;
-          const entryPath = join(engineResultsAbs, entryName);
-
-          if (!e.isDirectory()) {
-            const ext = getLowercaseExtension(entryName);
-            if (!isSupportedExt(ext)) continue;
-            const stem = entryName.replace(/\.[^.]+$/, "");
-            if (!stem.toLowerCase().startsWith("result")) continue;
-          }
-
-          let dateKeyMs = Date.now();
+    let directories = await fsp.readdir(mediaPath, { withFileTypes: true })
+    if (directories.length > 0) {
+      for (const directory of directories) {
+        if (directory.isDirectory()) {
+          const dirPath = join(mediaPath, directory.name);
           try {
-            const st = await fsp.lstat(entryPath);
-            dateKeyMs =
-              st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateKeyMs;
+            const files = await fsp.readdir(dirPath, { withFileTypes: true });
+            for (const file of files) {
+              if (file.isFile()) {
+                const fileName = file.name;
+                const baseNameWithoutExt = basename(fileName, extname(fileName));
+                // Check if the file's base name (without extension) is "result"
+                if (baseNameWithoutExt === "result") {
+                  const resultFile = join(dirPath, fileName);
+                  const st = await fsp.stat(resultFile);
+                  candidates.push({ kind: "file", baseName: directory.name, absPath: resultFile, dateKeyMs: st.birthtime?.getTime?.() ?? 0 });
+                }
+              }
+            }
           } catch {
-            // ignore
+            // Skip directories that can't be read
+            continue;
           }
-
-          candidates.push({
-            kind: e.isDirectory() ? "dir" : "file",
-            baseName: entryName,
-            absPath: entryPath,
-            dateKeyMs,
-          });
         }
       }
     }
+
 
     if (candidates.length === 0) return { items: [], nextCursor: null };
 
     // Newest candidates first (dirs are treated like batches of results).
+    const sortKey = params.sortKey ?? "date";
+    const sortOrder = params.sortOrder ?? (sortKey === "name" ? "asc" : "desc");
+
     candidates.sort((a, b) => {
-      if (a.dateKeyMs !== b.dateKeyMs) return b.dateKeyMs - a.dateKeyMs;
+      if (sortKey === "name") {
+        const cmp = a.baseName.localeCompare(b.baseName);
+        return sortOrder === "asc" ? cmp : -cmp;
+      }
+
+      if (a.dateKeyMs !== b.dateKeyMs) {
+        return sortOrder === "asc"
+          ? a.dateKeyMs - b.dateKeyMs
+          : b.dateKeyMs - a.dateKeyMs;
+      }
       return b.absPath.localeCompare(a.absPath);
     });
 
-    const items: ConvertedMediaItem[] = [];
-    const seen = new Set<string>();
-
-    // Key used for stable dedupe + pagination across multiple roots (cache/user-data/remote).
-    // If the same engine output is mirrored under different roots, absPath differs but this
-    // relative engine_results key stays consistent.
-    const generationKeyFromAbsPath = (absPath: string): string => {
-      const normalized = absPath.replace(/\\/g, "/");
-      const marker = "/engine_results/";
-      const idx = normalized.lastIndexOf(marker);
-      if (idx >= 0) return normalized.slice(idx + 1); // "engine_results/..."
-      return normalized;
-    };
-
-    const canonicalizeAbsPath = async (absPath: string): Promise<string> => {
-      // Resolve any symlink in the path (including parent dirs). This helps collapse
-      // symlinked roots and junctions; if not resolvable, fall back to the original.
-      try {
-        return await fsp.realpath(absPath);
-      } catch {
-        return absPath;
-      }
-    };
-
-    type Keyed = { item: ConvertedMediaItem; key: string };
-    const keyed: Keyed[] = [];
-
-
-
-    const isAfterCursorKeyed = (it: Keyed, cursor: any): boolean => {
-      if (!cursor) return true;
-      const cursorKey = String(cursor.absPath ?? "");
-      const cursorDate = Number(cursor.dateAddedMs ?? 0);
-      if (!Number.isFinite(cursorDate) || !cursorKey) return true;
-      if (it.item.dateAddedMs !== cursorDate) return it.item.dateAddedMs < cursorDate;
-      // Descending order; "after cursor" means strictly older / smaller tie-break.
-      return it.key < cursorKey;
-    };
-
-    const pushItem = (it: ConvertedMediaItem) => {
-      const key = generationKeyFromAbsPath(it.absPath);
-      if (seen.has(key)) return;
-      const k: Keyed = { item: it, key };
-      if (!isAfterCursorKeyed(k, cursorObj)) return;
-      seen.add(key);
-      keyed.push(k);
-      items.push(it);
-    };
-
-    for (const c of candidates) {
-      if (items.length >= limit) break;
-
-      if (c.kind === "file") {
-        const name = c.baseName;
-        if (await removeIfBrokenSymlink(c.absPath)) continue;
-        const ext = getLowercaseExtension(name);
-        const canonicalAbsPath = await canonicalizeAbsPath(c.absPath);
-        const assetUrl = pathToFileURL(canonicalAbsPath).href;
-        const type: ConvertedMediaItem["type"] = VIDEO_EXTS.has(ext)
-          ? "video"
-          : IMAGE_EXTS.has(ext)
-          ? "image"
-          : AUDIO_EXTS.has(ext)
-          ? "audio"
-          : "video";
-        pushItem({
-          name,
-          absPath: canonicalAbsPath,
-          assetUrl,
-          dateAddedMs: c.dateKeyMs,
-          type,
-        });
-        continue;
-      }
-
-      // Directory candidate: scan for "result*" media, newest first.
-      let jobEntries: import("node:fs").Dirent[] = [];
-      try {
-        jobEntries = (await fsp.readdir(c.absPath, {
-          withFileTypes: true,
-        })) as unknown as import("node:fs").Dirent[];
-      } catch {
-        jobEntries = [] as any;
-      }
-      if (!jobEntries || jobEntries.length === 0) continue;
-
-      const jobItems: ConvertedMediaItem[] = [];
-      for (const je of jobEntries) {
-        if (items.length + jobItems.length >= limit * 2) {
-          // Avoid runaway work in huge job dirs; we only need enough to fill the page.
-          break;
-        }
-
-        const fileName = je.name;
-        const ext = getLowercaseExtension(fileName);
-        if (!isSupportedExt(ext)) continue;
-        const stem = fileName.replace(/\.[^.]+$/, "");
-        if (!stem.toLowerCase().startsWith("result")) continue;
-
-        const absPath = join(c.absPath, fileName);
-        if (await removeIfBrokenSymlink(absPath)) continue;
-        const canonicalAbsPath = await canonicalizeAbsPath(absPath);
-        let dateAddedMs = c.dateKeyMs;
-        try {
-          const st = await fsp.lstat(absPath);
-          dateAddedMs =
-            st.birthtime?.getTime?.() ?? st.mtime?.getTime?.() ?? dateAddedMs;
-        } catch {
-          // ignore
-        }
-
-        const assetUrl = pathToFileURL(canonicalAbsPath).href;
-        const type: ConvertedMediaItem["type"] = VIDEO_EXTS.has(ext)
-          ? "video"
-          : IMAGE_EXTS.has(ext)
-          ? "image"
-          : AUDIO_EXTS.has(ext)
-          ? "audio"
-          : "video";
-        const displayName = `${basename(c.absPath)}/${fileName}`;
-        jobItems.push({
-          name: displayName,
-          absPath: canonicalAbsPath,
-          assetUrl,
-          dateAddedMs,
-          type,
-        });
-      }
-
-      if (jobItems.length === 0) continue;
-      jobItems.sort((a, b) => {
-        if (a.dateAddedMs !== b.dateAddedMs) return b.dateAddedMs - a.dateAddedMs;
-        const ak = generationKeyFromAbsPath(a.absPath);
-        const bk = generationKeyFromAbsPath(b.absPath);
-        return bk.localeCompare(ak);
-      });
-
-      for (const it of jobItems) {
-        if (items.length >= limit) break;
-        pushItem(it);
+    // Find starting index based on cursor
+    let startIndex = 0;
+    if (cursorObj) {
+      startIndex = candidates.findIndex(
+        (candidate) =>
+          candidate.dateKeyMs === cursorObj.dateAddedMs &&
+          candidate.absPath === cursorObj.absPath
+      );
+      // If cursor not found, start from beginning (could happen if item was deleted)
+      // Otherwise, start after the cursor item
+      if (startIndex >= 0) {
+        startIndex += 1;
+      } else {
+        startIndex = 0;
       }
     }
 
-    if (items.length === 0) return { items: [], nextCursor: null };
-    items.sort(compareGeneratedDesc);
-    const sliced = items.slice(0, limit);
-    // Next cursor uses the same stable key so duplicates can't "slip" onto later pages.
-    const last = sliced[sliced.length - 1];
+    // Slice candidates based on cursor position and limit
+    const paginatedCandidates = candidates.slice(startIndex, startIndex + limit);
+
+    // Convert candidates to items
+    const items: ConvertedMediaItem[] = [];
+    for (const candidate of paginatedCandidates) {
+      const ext = getLowercaseExtension(candidate.absPath);
+      if (!isSupportedExt(ext)) continue;
+
+      const fileName = basename(candidate.absPath);
+      const assetUrl = pathToFileURL(candidate.absPath).href;
+      const type: ConvertedMediaItem["type"] = VIDEO_EXTS.has(ext)
+        ? "video"
+        : IMAGE_EXTS.has(ext)
+        ? "image"
+        : AUDIO_EXTS.has(ext)
+        ? "audio"
+        : "video";
+
+      items.push({
+        name: fileName,
+        absPath: candidate.absPath,
+        assetUrl,
+        dateAddedMs: candidate.dateKeyMs,
+        type,
+        hasProxy: false,
+      });
+    }
+
+
+    // Generate next cursor if there are more items
     const nextCursor =
-      sliced.length < limit
-        ? null
-        : encodeGeneratedMediaCursor({
-            dateAddedMs: last.dateAddedMs,
-            absPath: generationKeyFromAbsPath(last.absPath),
-          });
-    return { items: sliced, nextCursor };
-  } catch {
-    return { items: [], nextCursor: null };
-  }
+      startIndex + limit < candidates.length && items.length > 0
+        ? encodeGeneratedMediaCursor({
+            dateAddedMs: items[items.length - 1].dateAddedMs,
+            absPath: items[items.length - 1].absPath,
+          })
+        : null;
+
+    return { items, nextCursor };
+} catch (e) {
+  console.error("Error listing generated media page", e);
+  return { items: [], nextCursor: null };
 }
+}
+
 
 async function importMediaPaths(
   inputAbsPaths: string[],
   _resolution?: string,
   folderUuid?: string,
 ): Promise<number> {
-  const baseRoot = getMediaRootAbsolute();
+  const userDataPath = (await getUserDataPath())?.data?.user_data ?? "";
+  const baseRoot = join(userDataPath, "media");
 
   let symlinksAbs: string;
   if (typeof folderUuid === "string" && folderUuid.length > 0) {
@@ -696,9 +517,11 @@ async function importMediaPaths(
     if (!isSupportedExt(ext)) continue;
     const uniqueName = ensureUniqueNameSync(symlinksAbs, fileName);
     const dstAbs = join(symlinksAbs, uniqueName);
+ 
     try {
       await fsp.rm(dstAbs, { force: true });
       await fsp.symlink(srcAbs, dstAbs);
+      console.log("symlink created", dstAbs, srcAbs);
     } catch (error) {
       console.error("Error creating symlink:", error);
       try {
@@ -755,7 +578,8 @@ async function createProxy(
   resolution: string = "480p",
   folderUuid?: string,
 ): Promise<void> {
-  const baseRoot = getMediaRootAbsolute();
+  const userDataPath = (await getUserDataPath())?.data?.user_data ?? "";
+  const baseRoot = join(userDataPath, "media");
 
   let symlinksAbs: string;
   let proxyAbs: string;
@@ -802,6 +626,12 @@ async function createProxy(
       `scale=-2:${targetHeight}`,
       "-r",
       "24",
+      "-g",
+      "1",
+      "-keyint_min",
+      "1",
+      "-sc_threshold",
+      "0",
       "-c:v",
       "libx264",
       "-preset",
@@ -846,7 +676,8 @@ async function removeProxy(
   fileName: string,
   folderUuid?: string,
 ): Promise<void> {
-  const baseRoot = getMediaRootAbsolute();
+  const userDataPath = (await getUserDataPath())?.data?.user_data ?? "";
+  const baseRoot = join(userDataPath, "media");
 
   let proxyAbs: string;
   if (typeof folderUuid === "string" && folderUuid.length > 0) {
@@ -915,8 +746,8 @@ export {
   deleteMediaPair,
   pickMediaPaths,
   listConvertedMedia,
-  listGeneratedMedia,
-  listGeneratedMediaPage,
+  listServerMedia,
+  listServerMediaPage,
   importMediaPaths,
   ensureUniqueConvertedName,
   revealMediaItemInFolder,

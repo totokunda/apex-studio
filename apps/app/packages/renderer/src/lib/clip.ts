@@ -19,7 +19,7 @@ import { v4 as uuidv4 } from "uuid";
 import { useControlsStore } from "./control";
 import { MediaItem } from "@/components/media/Item";
 import { AUDIO_EXTS, MIN_DURATION, VIDEO_EXTS, IMAGE_EXTS } from "./settings";
-import { getMediaInfo, getMediaInfoCached } from "./media/utils";
+import { getMediaInfo, getMediaInfoCached, getMediaInfoFromUrl } from "./media/utils";
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
 import { ManifestWithType, UIInput } from "./manifest/api";
@@ -40,7 +40,7 @@ interface ClipStore {
   assets: Record<string, Asset>;  
   setAssets: (assets: Record<string, Asset>) => void;
   addAssetAsync: (asset: Partial<Asset> | string, sourceDir?: "user-data" | "apex-cache") => Promise<Asset>;
-  addAsset: (asset: Partial<Asset> | string, sourceDir?: "user-data" | "apex-cache") => Asset;
+  addAsset: (asset: Partial<Asset> | string, sourceDir?: "user-data" | "apex-cache" | "backend") => Asset;
   removeAsset: (assetId: string) => void;
   updateAsset: (assetId: string, assetToUpdate: Partial<Asset>) => void;
   getClipById: (
@@ -527,7 +527,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     set({ assets: newAssets });
     return newAsset;
   },
-  addAsset: (asset, sourceDir: "user-data" | "apex-cache" = "user-data"): Asset => {
+  addAsset: (asset, sourceDir: "user-data" | "apex-cache" | "backend" = "user-data"): Asset => {
     if (typeof asset === "string") {
       asset = { path: asset };
     }
@@ -601,7 +601,19 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
 
     set({ assets: newAssets });
     // If media info wasn't cached, fetch it asynchronously and update this asset
-    if (!mediaInfo) {
+    if (!mediaInfo ) {
+      if (sourceDir === "backend") {
+        void getMediaInfoFromUrl(path as string).then((info) => {
+          if (!info) return;
+          get().updateAsset(newAsset.id, {
+            height: newAsset.height ?? info.video?.displayHeight ?? info.image?.height,
+            width: newAsset.width ?? info.video?.displayWidth ?? info.image?.width,
+            duration: newAsset.duration ?? info.duration ?? 0,
+            type: newAsset.type ?? (info.video ? "video" : info.audio ? "audio" : info.image ? "image" : "image"),
+          });
+        });
+      }
+      else {
       void getMediaInfo(path as string, { sourceDir })
         .then((info) => {
           if (!info) return;
@@ -630,6 +642,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         .catch((err) => {
           console.error("Failed to load media info for asset", path, err);
         });
+      }
     }
 
     return newAsset;

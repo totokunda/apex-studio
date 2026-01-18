@@ -273,6 +273,10 @@ async function handleConfigure(
 
   dispose(id);
   const state = getOrCreateState(id);
+  // Ensure no stale packets survive across reconfiguration.
+  // A cached EncodedPacket is only valid for the exact track/sink that created it.
+  state.cachedSeekTimestamp = null;
+  state.cachedKeyPacket = null;
 
   let formats = ALL_FORMATS;
   if (cfg.formatStr) {
@@ -531,6 +535,9 @@ function dispose(assetId?: string) {
     state.sink = null;
     state.iterationInFlight = 0;
     state.iterationResume = null;
+    // Clear any cached packets; they may belong to a previous track instance.
+    state.cachedSeekTimestamp = null;
+    state.cachedKeyPacket = null;
     return;
   }
 

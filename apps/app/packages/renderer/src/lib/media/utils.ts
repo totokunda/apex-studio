@@ -155,6 +155,7 @@ export const getMediaInfo = async (
     fullStats?: boolean;
     sourceDir?: "user-data" | "apex-cache";
     useOriginal?: boolean;
+    folderUuid?: string;
   },
 ): Promise<MediaInfo> => {
   const fsPathToAppUrl = (
@@ -183,8 +184,7 @@ export const getMediaInfo = async (
     }
   }
 
-  const folderUuid =
-    useProjectsStore.getState().getActiveProject()?.folderUuid || undefined;
+  const folderUuid = options?.folderUuid || useProjectsStore.getState().getActiveProject()?.folderUuid || undefined;
 
   const pathUrl = new URL(path);
   const startFrame = pathUrl.searchParams.get("startFrame")
@@ -248,6 +248,9 @@ export const getMediaInfo = async (
       let url: URL | null = null;
       if (path.startsWith("app://")) {
         url = new URL(path);
+        if (!url.searchParams.get("folderUuid")) {
+          url.searchParams.set("folderUuid", folderUuid ?? "");
+        }
       } else {
         fsPathForImage = fileURLToPath(hasHashSuffix ? originalPath : path);
         url = new URL(fsPathToAppUrl(primarySourceDir, fsPathForImage, folderUuid));
@@ -317,6 +320,7 @@ export const getMediaInfo = async (
   try {
     filePath = fileURLToPath(hasHashSuffix ? originalPath : path);
     const url = new URL(fsPathToAppUrl(primarySourceDir, filePath, folderUuid));
+    
     input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
   } catch (e) {
     try {
@@ -330,6 +334,7 @@ export const getMediaInfo = async (
 
   // If UrlSource creation failed for some reason, or if later reads fail, we'll fallback below
   async function gatherInfo(inp: Input, quickLoad = true) {
+
     const videoTrack = await inp.getPrimaryVideoTrack();
     const audioTrack = await inp.getPrimaryAudioTrack();
     // For quick load, only scan first ~100 packets for fast frame rate estimate
@@ -371,6 +376,7 @@ export const getMediaInfo = async (
     if (!input) throw new Error("UrlSource init failed");
     infoBundle = await gatherInfo(input, quickLoad);
   } catch (e) {
+
       // Try secondary sourceDir via UrlSource
     try {
       if (!filePath) throw new Error("Missing filePath");
@@ -384,6 +390,7 @@ export const getMediaInfo = async (
       infoBundle = await gatherInfo(input2, quickLoad);
       input = input2; // use the working input as originalInput
     } catch (e2) {
+
       // Fallback: fetch the entire resource as a Blob and use BlobSource to avoid streaming issues
       try {
         if (!filePath) throw new Error("Missing filePath");
@@ -399,6 +406,7 @@ export const getMediaInfo = async (
         });
         infoBundle = await gatherInfo(blobInputP, quickLoad);
         } catch (e3) {
+
         try {
           if (!filePath) throw new Error("Missing filePath");
           // Try secondary app protocol next
@@ -413,6 +421,7 @@ export const getMediaInfo = async (
           });
           infoBundle = await gatherInfo(blobInputS, quickLoad);
         } catch (e4) {
+
           // Last resort: original path provided
           try {
             const buffer = await readFileBuffer(
@@ -515,6 +524,126 @@ export const getMediaInfo = async (
 
   return mediaInfo;
 };
+
+
+export const getMediaInfoFromUrl = async (url: string, headers?: Record<string, string>): Promise<MediaInfo | undefined> => {
+  // check if cached 
+  const mediaCache = MediaCache.getState();
+  if (mediaCache.isMediaCached(url)) {
+    return mediaCache.getMedia(url)!;
+  }
+
+  // check if url is a valid url
+  if (!url.startsWith("http")) {
+    return undefined;
+  }
+
+
+  let extension = url.split(".").pop() || "";
+  // check if image 
+  if (IMAGE_EXTS.includes(extension)) {
+    // fetch the image
+    let realURL = new URL(url);
+    const response = await fetch(realURL, { headers });
+    const blob = await response.blob();
+    const metadata = await readImageMetadataFast(blob);
+    const mediaInfo = {
+      path: url,
+      video: null,
+      audio: null,
+      image: metadata,
+      stats: {
+        video: undefined,
+        audio: undefined,
+      },
+      duration: undefined,
+      metadata: undefined,
+      mimeType: metadata.mime,
+      format: undefined,
+      videoDecoderConfig: undefined,
+    };
+    mediaCache.setMedia(url, mediaInfo);
+    return mediaInfo;
+  }
+  // now do regular media info
+  let input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url, { requestInit: { headers } }) });
+  async function gatherInfo(inp: Input, quickLoad = true) {
+
+    const videoTrack = await inp.getPrimaryVideoTrack();
+    const audioTrack = await inp.getPrimaryAudioTrack();
+    // For quick load, only scan first ~100 packets for fast frame rate estimate
+    // For full load (when clip is on timeline), scan all packets for accuracy
+    const targetPacketCount = quickLoad ? 100 : Infinity;
+    const packetStats = await videoTrack?.computePacketStats(targetPacketCount);
+    const audioPacketStats =
+      await audioTrack?.computePacketStats(targetPacketCount);
+
+    const duration = await inp.computeDuration();
+    const metadata = await inp.getMetadataTags();
+    const mimeType = await inp.getMimeType();
+    const format = await inp.getFormat();
+
+    const videoDecoderConfig = await videoTrack?.getDecoderConfig();
+
+    if (audioTrack) {
+      const sink = new AudioBufferSink(audioTrack);
+      const sample = await sink.getBuffer(0);
+      const sampleSize = sample?.buffer.length || 2048;
+      (audioTrack as any).sampleSize = sampleSize;
+    }
+    return {
+      videoTrack,
+      audioTrack,
+      packetStats,
+      audioPacketStats,
+      duration,
+      metadata,
+      mimeType,
+      format,
+      videoDecoderConfig,
+    };
+  }
+  let infoBundle = await gatherInfo(input);
+
+  let {
+    videoTrack,
+    audioTrack,
+    packetStats,
+    audioPacketStats,
+    duration,
+    metadata,
+    mimeType,
+    format,
+    videoDecoderConfig,
+  } = infoBundle;
+  if (audioTrack && !(await audioTrack.canDecode())) {
+    audioTrack = null;
+    console.warn("Audio track cannot be decoded", url);
+  } else if (videoTrack && !(await videoTrack.canDecode())) {
+    videoTrack = null;
+    console.warn("Video track cannot be decoded", url);
+  }
+
+  const mediaInfo: MediaInfo = {
+    path: url,
+    video: videoTrack,
+    audio: audioTrack,
+    image: null,
+    stats: {
+      video: packetStats,
+      audio: audioPacketStats,
+    },
+    duration,
+    metadata: metadata,
+    mimeType: mimeType,
+    format: format,
+    videoDecoderConfig: videoDecoderConfig ?? undefined,
+  };
+
+  mediaCache.setMedia(url, mediaInfo);
+  return mediaInfo;
+   
+}
 
 // Helper to upgrade media info to full stats (call when clip added to timeline)
 export const ensureFullMediaStats = async (path: string): Promise<void> => {
