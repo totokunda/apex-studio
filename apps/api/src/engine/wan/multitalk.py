@@ -456,8 +456,8 @@ class WanMultitalkEngine(WanShared):
             if not self.scheduler:
                 safe_emit_progress(clip_pre_progress, 0.52, "Loading scheduler")
                 self.load_component_by_type("scheduler")
-                self.to_device(self.scheduler)
-                safe_emit_progress(clip_pre_progress, 0.53, "Scheduler loaded")
+            self.to_device(self.scheduler)
+            safe_emit_progress(clip_pre_progress, 0.53, "Scheduler loaded")
 
             scheduler = self.scheduler
 
