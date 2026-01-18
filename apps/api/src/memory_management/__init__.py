@@ -33,10 +33,7 @@ except Exception:  # pragma: no cover - psutil may be missing in limited envs
 
 from .config import MemoryConfig
 from .group_offloading import apply_group_offloading
-
-logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
-
+from loguru import logger
 
 # -----------------------------
 # Data structures
@@ -181,6 +178,38 @@ class ComponentMemoryManager:
                 pass
         return 0, 0
 
+    def _flush_device_caches(self, device: torch.device) -> None:
+        """
+        Best-effort cache flush without moving weights.
+
+        Used when we skip a voluntary `_offload()` to keep models warm while still
+        returning transient allocator cache back to the system.
+        """
+        try:
+            if device.type == "cuda" and torch.cuda.is_available():
+                idx = device.index if device.index is not None else torch.cuda.current_device()
+                with torch.cuda.device(idx):
+                    try:
+                        torch.cuda.ipc_collect()
+                    except Exception:
+                        pass
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+            if (
+                device.type == "mps"
+                and getattr(torch, "mps", None) is not None
+                and hasattr(torch.backends, "mps")
+                and torch.backends.mps.is_available()
+            ):
+                try:
+                    torch.mps.empty_cache()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _target_free_bytes(self, device: torch.device, reserve: int) -> int:
         free, total = self._device_free_total(device)
         if total == 0:
@@ -190,7 +219,6 @@ class ComponentMemoryManager:
         else:
             frac = self._env_float("APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10)
         target = int(total * frac)
-        print("Target free bytes: ", target, "Total: ", total, "Fraction: ", frac, free, device.type)
         if device.type in {"cuda", "xpu"}:
             target = max(target, self._env_int("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3))
         return reserve + target
@@ -306,7 +334,128 @@ class ComponentMemoryManager:
             comp.last_used = now
             comp.estimated_bytes = max(comp.estimated_bytes, self._module_size_bytes(mod))
 
+    def mark_idle(self, module: Union[str, torch.nn.Module, None]) -> None:
+        """
+        Mark a component as no longer actively in use, without moving it.
+
+        This enables "lazy offloading": pipelines may call `_offload()` after use,
+        but we can keep weights resident until VRAM pressure forces eviction.
+        """
+        label = self._resolve_label(module)
+        if label is None:
+            return
+        comp = self._components.get(label)
+        if comp is None:
+            return
+        mod_obj: Optional[torch.nn.Module] = None
+        if isinstance(module, torch.nn.Module):
+            mod_obj = module
+        else:
+            mod_obj = comp.module()
+        if mod_obj is not None:
+            try:
+                comp.device = self._module_device(mod_obj)
+                comp.estimated_bytes = max(comp.estimated_bytes, self._module_size_bytes(mod_obj))
+            except Exception:
+                pass
+        comp.in_forward = False
+        comp.last_used = time.time()
+
+    def force_offload_engine_components(
+        self,
+        engine: Any,
+        *,
+        active_labels: Optional[Set[str]] = None,
+        offload_type: str = "discard",
+    ) -> Dict[str, str]:
+        """
+        Best-effort: forcibly offload/discard tracked components belonging to `engine`.
+
+        This bypasses "lazy offload" behavior by routing through the manager's
+        forced eviction pathway (`_offload_component`), so cleanup calls can truly
+        free VRAM/RAM when requested.
+        """
+        active = {str(x) for x in (active_labels or set()) if x is not None}
+        results: Dict[str, str] = {}
+        try:
+            with self._lock:
+                comps = list(self._components.values())
+        except Exception:
+            comps = list(self._components.values())
+
+        for comp in comps:
+            try:
+                if comp is None:
+                    continue
+                if comp.in_forward:
+                    continue
+                if comp.label in active:
+                    continue
+                eng = comp.engine()
+                if eng is None or eng is not engine:
+                    continue
+                self._offload_component(comp, offload_type=offload_type)
+                results[str(comp.label)] = str(offload_type)
+            except Exception as exc:
+                results[str(getattr(comp, "label", "unknown"))] = f"error:{exc}"
+        return results
+
     # --------- pressure handling ----------
+    def _offload_min_free_bytes(self, device: torch.device) -> int:
+        """
+        Minimum free memory target used when deciding whether to honor *voluntary*
+        offload requests (i.e. pipeline cleanup calls).
+        """
+        _, total = self._device_free_total(device)
+        if total <= 0:
+            return 0
+        if device.type in {"cuda", "xpu", "mps", "npu", "mlu"}:
+            frac = self._env_float("APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.10)
+        else:
+            frac = self._env_float("APEX_OFFLOAD_MIN_FREE_RAM_FRACTION", 0.10)
+        frac = max(0.0, min(float(frac), 0.95))
+        return int(total * frac)
+
+    def _ensure_min_free(
+        self,
+        device: torch.device,
+        min_free_bytes: int,
+        *,
+        exclude_label: str | None = None,
+    ) -> None:
+        """
+        Evict cold components until `free(device) >= min_free_bytes`.
+
+        Unlike `_ensure_room`, this is used for post-run cleanup policies where the
+        user may want to keep models warm on large VRAM cards.
+        """
+        if min_free_bytes <= 0:
+            return
+        free, total = self._device_free_total(device)
+        if total == 0 or free >= min_free_bytes:
+            return
+
+        candidates = self._eviction_candidates(device, exclude_label=exclude_label)
+        for label in candidates:
+            comp = self._components.get(label)
+            if comp is None or comp.in_forward:
+                continue
+
+            # Tiered offloading: accelerator -> CPU -> Discard (for CPU pressure only).
+            if device.type != "cpu":
+                try:
+                    # Be conservative: ensure we have CPU room before offloading more weights.
+                    self._ensure_room(torch.device("cpu"), comp.estimated_bytes, exclude_label=exclude_label)
+                    self._offload_component(comp, offload_type="cpu")
+                except Exception:
+                    self._offload_component(comp, offload_type="discard")
+            else:
+                self._offload_component(comp, offload_type="discard")
+
+            free, _ = self._device_free_total(device)
+            if free >= min_free_bytes:
+                break
+
     def _ensure_room(self, device: torch.device, reserve_bytes: int, *, exclude_label: str | None = None) -> None:
         free, total = self._device_free_total(device)
         target_free = self._target_free_bytes(device, reserve_bytes)
@@ -361,6 +510,8 @@ class ComponentMemoryManager:
         module = comp.module()
         if module is None and offload_type != "discard":
             return
+        
+        logger.info(f"Offloading component: {comp.label} to {offload_type}")
         
         # Set thread-local flag to signal that this offload is FORCED by the manager
         self._evicting_flag.is_evicting = True
@@ -512,17 +663,31 @@ class ComponentMemoryManager:
                     is_forced = True
 
             # 4. Lazy Offloading Logic
-            # If this is VOLUNTARY (engine pipeline cleanup) and the result is "cpu" (RAM),
-            # we check if we can keep it on GPU (VRAM) as "idle" instead.
-            if not is_forced and final_offload_type == "cpu" and manager and mod_obj is not None:
+            # For VOLUNTARY cleanup calls, keep the module warm on accelerator if:
+            # - The user-configured "keep free VRAM" target is already satisfied, OR
+            # - We can satisfy it by evicting *other* cold components first.
+            if not is_forced and manager and mod_obj is not None and final_offload_type in {"cpu", "discard"}:
                 try:
-                    # Check current device
-                    current_dev = manager._module_device(mod_obj)
-                    if current_dev.type != "cpu":
-                        # It is currently on accelerator (GPU).
-                        # Instead of moving to CPU now, we MARK IT IDLE.
-                        manager.mark_idle(mod_obj)
-                        return  # <-- Lazy return! We do NOT execute the move.
+                    if not manager._env_bool("APEX_DISABLE_LAZY_OFFLOAD", False):
+                        current_dev = manager._module_device(mod_obj)
+                        if current_dev.type != "cpu":
+                            min_free = manager._offload_min_free_bytes(current_dev)
+                            free_before, total_before = manager._device_free_total(current_dev)
+
+                            exclude_label = None
+                            try:
+                                exclude_label = manager._resolve_label(module)
+                            except Exception:
+                                exclude_label = None
+
+                            if total_before > 0 and free_before < min_free:
+                                manager._ensure_min_free(current_dev, min_free, exclude_label=exclude_label)
+
+                            free_after, _ = manager._device_free_total(current_dev)
+                            if min_free <= 0 or free_after >= min_free:
+                                manager.mark_idle(module)
+                                manager._flush_device_caches(current_dev)
+                                return  # keep warm; pressure hooks will evict if needed
                 except Exception:
                     pass
 
