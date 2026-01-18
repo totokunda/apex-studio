@@ -1466,25 +1466,8 @@ class LTX2TI2VEngine(LTX2Shared):
                 self.transformer_temporal_patch_size,
             )
             audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
-            try:
-                latents = upsample_video(latents, self.video_vae, upsampler)
-            except Exception as e:
-                # If we hit an OOM here and the transformer is still loaded, retry once after offloading it.
-                msg = str(e).lower()
-                is_oom = ("out of memory" in msg) or ("cuda" in msg and "memory" in msg)
-                if is_oom and offload and getattr(self, "transformer", None) is not None:
-                    self.logger.warning(
-                        "OOM during latent upsampling; offloading transformer and retrying once."
-                    )
-                    try:
-                        self.free_unused_modules(active={"video_vae", "latent_upsampler"}, target="disk")
-                    except Exception:
-                        # If freeing fails, fall back to a guaranteed VRAM-freeing discard.
-                        self._offload("transformer", offload_type="discard")
-                        empty_cache()
-                    latents = upsample_video(latents, self.video_vae, upsampler)
-                else:
-                    raise
+            latents = upsample_video(latents, self.video_vae, upsampler)
+            
             del upsampler
             if offload:
                 self._offload("latent_upsampler", offload_type="cpu")
@@ -1643,47 +1626,13 @@ class LTX2TI2VEngine(LTX2Shared):
             
         # load vocoder
         vocoder = self.helpers["vocoder"]
-        try:
-            if (
-                getattr(self, "auto_memory_management", True)
-                and getattr(self, "device", None) is not None
-                and getattr(self.device, "type", None) == "cuda"
-            ):
-                min_free = self._env_float(
-                    "APEX_VRAM_DECODE_MIN_FREE_VRAM_FRACTION", 0.18
-                )
-                self._relieve_vram_pressure(
-                    reason="ltx2.vocoder(pre)",
-                    keep={"vocoder"},
-                    min_free_vram_fraction=min_free,
-                )
-        except Exception:
-            pass
         self.to_device(vocoder)
         
         safe_emit_progress(stage1_progress_callback, 0.98, "Vocoder synthesis")
         generated_mel_spectrograms = generated_mel_spectrograms.to(vocoder.dtype)
-        try:
-            audio = vocoder(generated_mel_spectrograms)
-        except torch.OutOfMemoryError:
-            try:
-                if (
-                    getattr(self, "auto_memory_management", True)
-                    and getattr(self, "device", None) is not None
-                    and getattr(self.device, "type", None) == "cuda"
-                ):
-                    min_free = self._env_float(
-                        "APEX_VRAM_DECODE_RETRY_MIN_FREE_VRAM_FRACTION", 0.25
-                    )
-                    self._relieve_vram_pressure(
-                        reason="ltx2.vocoder(retry)",
-                        keep={"vocoder"},
-                        min_free_vram_fraction=min_free,
-                    )
-            except Exception:
-                pass
-            audio = vocoder(generated_mel_spectrograms)
-        
+      
+        audio = vocoder(generated_mel_spectrograms)
+
         if offload:
             self._offload("vocoder", offload_type="cpu")
 
