@@ -716,7 +716,8 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
         timelines,
       });
       const { exportClips } = audioClipExport;
-      
+
+  
       // Skip if no export clips are available
       if (exportClips.length === 0) continue;
       
@@ -763,7 +764,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
       const cached = cacheKey ? getCachedExportResult(cacheKey) : undefined;
       let resultPath: string | undefined;
 
-      if (cached && cacheKey && false) {
+      if (cached && cacheKey) {
         try {
           const existsResp = await getPathExists(cached as string);
           if (existsResp?.success && existsResp.data?.exists) {
@@ -994,7 +995,6 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     const activeProject = useProjectsStore.getState().getActiveProject();
     const folderUuid = activeProject?.folderUuid;
-
 
     const res = await runEngine({
       manifest_id: manifestId,

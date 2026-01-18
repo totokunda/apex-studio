@@ -1,10 +1,11 @@
 import { AppModule } from "../AppModule.js";
 import { ModuleContext } from "../ModuleContext.js";
 import { getSettingsModule } from "./SettingsModule.js";
-import { protocol } from "electron";
+import { protocol, ipcMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import fsp from "node:fs/promises";
 import mime from "mime-types";
@@ -50,6 +51,87 @@ function hopHeaders(reqHeaders: Headers) {
   return out;
 }
 
+
+function parseContentLength(headers: Headers): number | null {
+  const raw = headers.get("content-length");
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n);
+}
+
+function parseExpectedBodyBytes(headers: Headers, status: number): number | null {
+  // For stream integrity enforcement, only return a value when we can know
+  // exactly how many bytes should arrive.
+  //
+  // - 200: use Content-Length
+  // - 206: use Content-Length when present, else compute from Content-Range
+  if (status === 200) {
+    return parseContentLength(headers);
+  }
+  if (status === 206) {
+    const cl = parseContentLength(headers);
+    if (cl !== null) return cl;
+    const cr = headers.get("content-range");
+    if (!cr) return null;
+    const m = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(cr.trim());
+    if (!m) return null;
+    const start = Number(m[1]);
+    const end = Number(m[2]);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+    return end - start + 1;
+  }
+  return null;
+}
+
+function enforceExpectedByteLength(
+  upstream: ReadableStream<Uint8Array>,
+  expectedBytes: number,
+): ReadableStream<Uint8Array> {
+  let seen = 0;
+  const reader = upstream.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        if (seen !== expectedBytes) {
+          controller.error(
+            new Error(
+              `Incomplete proxied stream: expected ${expectedBytes} bytes, got ${seen}`,
+            ),
+          );
+          return;
+        }
+        controller.close();
+        return;
+      }
+      if (value) {
+        seen += value.byteLength;
+        controller.enqueue(value);
+      }
+    },
+    cancel(reason) {
+      try {
+        void reader.cancel(reason);
+      } catch {
+        // ignore
+      }
+    },
+  });
+}
+
+function isCachedServerMediaPath(absPath: string, userDataDir: string): boolean {
+  // Only enforce cache integrity markers for the on-disk cache we control:
+  //   <userData>/media/<folderUuid>/server/(generations|processors)/...
+  try {
+    const normalized = path.resolve(absPath);
+    const base = path.resolve(path.join(userDataDir, "media"));
+    if (!normalized.startsWith(base + path.sep) && normalized !== base) return false;
+    return normalized.includes(`${path.sep}server${path.sep}`);
+  } catch {
+    return false;
+  }
+}
 
 interface ServerDetails {
   folderUuid: string | null;
@@ -105,6 +187,10 @@ class AppDirProtocol implements AppModule {
   private activeFolderUuid: string | null = null;
   // Cache in-flight remote file saves so we don't write the same file multiple times concurrently.
   private inflightRemoteFileSaves: Map<string, Promise<void>> = new Map();
+
+  private getServerMetaPath(savePath: string): string {
+    return `${savePath}.meta.json`;
+  }
 
   private getServerSavePath(serverDetails: ServerDetails): string | null {
     const userDataDir = this.electronApp?.getPath("userData") ?? "";
@@ -203,7 +289,6 @@ class AppDirProtocol implements AppModule {
         filePath = getCoverPath(filePath, userDataDir);
       }
 
-  
       if (isServerPath(filePath)) {
         // check if the file exists locally 
         if (!await exists(filePath)) {
@@ -219,8 +304,36 @@ class AppDirProtocol implements AppModule {
       const stat = await fsp.stat(filePath);
       const size = stat.size;
 
+      // For cached server media, require a verified marker so we never serve
+      // a file that might have been truncated by a previous network hiccup.
+      if (isCachedServerMediaPath(filePath, userDataDir)) {
+        const metaPath = this.getServerMetaPath(filePath);
+        let meta: { size?: number } | null = null;
+        try {
+          const raw = await fsp.readFile(metaPath, "utf8");
+          meta = JSON.parse(raw) as { size?: number };
+        } catch {
+          meta = null;
+        }
+        if (!meta || typeof meta.size !== "number" || meta.size !== size) {
+          // Best-effort cleanup: treat as cache miss and refetch.
+          try {
+            await fsp.rm(filePath, { force: true });
+          } catch {
+            // ignore
+          }
+          try {
+            await fsp.rm(metaPath, { force: true });
+          } catch {
+            // ignore
+          }
+          throw new Error(`Cached server file missing/invalid meta: ${filePath}`);
+        }
+      }
+
       const ct = mime.lookup(filePath) || "application/octet-stream";
       const range = parseRange(request.headers.get("range"), size);
+
 
       if (!range) {
         const headers = new Headers({
@@ -252,10 +365,18 @@ class AppDirProtocol implements AppModule {
 
     if (!response.ok) return;
     if (!response.body) return;
+    // Only persist full responses. Range responses must not be published as "complete" files.
+    if (response.status !== 200) return;
 
     const savePath = this.getServerSavePath(serverDetails);
     if (!savePath) return;
     const partPath = savePath + ".part";
+    const metaPath = this.getServerMetaPath(savePath);
+
+    // If we cannot verify completeness, do not cache to disk (better a cache miss than
+    // persisting a potentially truncated file).
+    const expectedBytes = parseExpectedBodyBytes(response.headers, response.status);
+    if (expectedBytes === null) return;
 
     await fsp.mkdir(path.dirname(partPath), { recursive: true });
 
@@ -264,33 +385,93 @@ class AppDirProtocol implements AppModule {
       // Best-effort: errors are handled by pipeline's rejection.
     });
 
+    let written = 0;
+    const counter = new Transform({
+      transform(chunk: any, _enc, cb) {
+        try {
+          if (chunk) {
+            if (Buffer.isBuffer(chunk)) {
+              written += chunk.byteLength;
+            } else if (chunk instanceof Uint8Array) {
+              written += chunk.byteLength;
+            } else if (typeof chunk?.length === "number") {
+              written += Number(chunk.length) || 0;
+            }
+          }
+        } catch {
+          // ignore
+        }
+        cb(null, chunk);
+      },
+    });
 
     try {
       const body = Readable.fromWeb(response.body as any);
-      await pipeline(body, ws);
+      await pipeline(body, counter, ws);
+
+      if (written !== expectedBytes) {
+        throw new Error(
+          `Incomplete download for ${savePath}: expected ${expectedBytes} bytes, got ${written}`,
+        );
+      }
 
       // Windows rename fails if destination exists.
       try {
         await fsp.rm(savePath, { force: true });
       } catch (e) {
-        console.log("Error removing existing file", savePath, e);
+
         // ignore
       }
       await fsp.rename(partPath, savePath);
-      console.log("Saved remote file to local file", savePath);
+
+      // Write a verified marker last (best-effort atomic).
+      const metaTmp = `${metaPath}.part`;
+      const meta = {
+        size: expectedBytes,
+        fetchedAtMs: Date.now(),
+        etag: response.headers.get("etag") ?? undefined,
+        lastModified: response.headers.get("last-modified") ?? undefined,
+      };
+      try {
+        await fsp.writeFile(metaTmp, JSON.stringify(meta), "utf8");
+        try {
+          await fsp.rm(metaPath, { force: true });
+        } catch {
+          // ignore
+        }
+        await fsp.rename(metaTmp, metaPath);
+      } catch {
+        // If meta write fails, treat the cache entry as invalid and remove it.
+        try {
+          await fsp.rm(savePath, { force: true });
+        } catch {
+          // ignore
+        }
+        try {
+          await fsp.rm(metaTmp, { force: true });
+        } catch {
+          // ignore
+        }
+      }
+
+   
     } catch (e) {
-      console.log("Error saving remote file to local file", savePath, e);
+
       // Ensure partial downloads don't accumulate.
       try {
         ws.destroy();
       } catch (e) {
-        console.log("Error destroying write stream", partPath, e);
+
         // ignore
       }
       try {
         await fsp.rm(partPath, { force: true });
       } catch {
-        console.log("Error removing partial file", partPath);
+        // ignore
+      }
+      try {
+        await fsp.rm(metaPath, { force: true });
+      } catch {
         // ignore
       }
     }
@@ -326,16 +507,46 @@ class AppDirProtocol implements AppModule {
     const serverDetails = this.parseServerDetails(filePath, folderUuid);
     const response = await this.fetchRemoteFileIfExists(serverDetails, request.headers);
 
-    // The Response body can only be consumed once; clone for background caching.
-    try {
-      const clone = response.clone();
-      this.queueSaveRemoteFileToLocalFile(clone, serverDetails);
-    } catch {
-      // Some bodies can't be cloned/teed; skip caching in that case.
+    // Background caching:
+    // - Never persist Range/206 responses as complete files.
+    // - For Range requests, best-effort kick off a *full* fetch (no Range/conditionals) to populate disk cache.
+    if (isServerPath(filePath)) {
+      const isRangeReq = Boolean(request.headers.get("range"));
+      if (!isRangeReq && response.ok && response.status === 200) {
+        // The Response body can only be consumed once; clone for background caching.
+        try {
+          const clone = response.clone();
+          this.queueSaveRemoteFileToLocalFile(clone, serverDetails);
+        } catch {
+          // Some bodies can't be cloned/teed; skip caching in that case.
+        }
+      } else if (isRangeReq) {
+        // Fire-and-forget: fetch the whole file (no Range/conditionals) and persist if verifiable.
+        const p = async () => {
+          try {
+            const full = await this.fetchRemoteFileIfExists(serverDetails, new Headers());
+            this.queueSaveRemoteFileToLocalFile(full, serverDetails);
+          } catch (e) {
+            // ignore
+          }
+        };
+        void p();
+      }
     }
 
-    const body = response?.body ? Readable.fromWeb(response.body as any) : null;
-    return new Response(body as any, { status: response?.status ?? 404, headers: response?.headers ?? new Headers() });
+    const upstream = response?.body ? (response.body as ReadableStream<Uint8Array>) : null;
+    if (!upstream) {
+      return new Response(null, {
+        status: response?.status ?? 404,
+        headers: response?.headers ?? new Headers(),
+      });
+    }
+
+    // If we can determine the expected body size, enforce it so truncated upstream streams
+    // surface as an error to the renderer (instead of silently "completing").
+    const expected = parseExpectedBodyBytes(response.headers, response.status);
+    const wrapped = expected !== null ? enforceExpectedByteLength(upstream, expected) : upstream;
+    return new Response(wrapped as any, { status: response?.status ?? 404, headers: response?.headers ?? new Headers() });
   
 }
   
@@ -355,8 +566,43 @@ class AppDirProtocol implements AppModule {
       void this.onActiveProjectIdChanged(newProjectId);
     });
 
+
+    ipcMain.handle("appdir:resolve-path", async (event, filePath: string) => {
+      let url = new URL(filePath);
+      let pathName = url.pathname;
+      filePath = decodeURIComponent(pathName);
+      filePath = path.posix.normalize(filePath).replace(/\\/g, "/");
+
+      const userDataDir = this.electronApp?.getPath("userData") ?? "";
+      if (isCoverPath(filePath)) {
+        filePath = getCoverPath(filePath, userDataDir);
+      }
+
+      if (isServerPath(filePath)) {
+        // check if the file exists locally 
+        if (!await exists(filePath)) {
+          const { folderUuid, folderName, fileName, localType, type } = this.parseServerDetails(filePath,  this.activeFolderUuid);
+          if (folderUuid && folderName && fileName) {
+            filePath = path.join(userDataDir, "media", folderUuid, "server", localType, folderName, fileName);
+          }
+          if (!await exists(filePath)) {
+            const response = await this.fetchRemoteFileIfExists({ folderUuid, folderName, fileName, localType, type }, new Headers());
+            if (response.ok) {
+              await this.saveRemoteFileToLocalFile(response, { folderUuid, folderName, fileName, localType, type });
+              // file path should now exist
+            }
+          }
+        }
+      }
+
+
+      return filePath;
+    });
+    
+
     protocol.handle("app", async (request) => {
        // CORS/preflight handling for renderer -> app:// fetches
+
        if (request.method === "OPTIONS") {
          return new Response(null, { status: 204, headers: this.corsHeadersFor(request) });
        }
@@ -364,7 +610,6 @@ class AppDirProtocol implements AppModule {
         const r = await this.returnResponseFromLocalFile(request);
         return this.withCors(request, r);
        } catch (e) {
-
         try { 
           const r = await this.fetchRemoteFile(request);
           return this.withCors(request, r);

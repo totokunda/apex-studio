@@ -261,15 +261,18 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
     try {
       setIsUploading(true);
       const paths = await pickFilesViaInput(directory);
+
       if (!paths || paths.length === 0) return;
       const existingNames = new Set(items.map((it) => it.name));
       const loadingId = toast.loading(`Importing ${paths.length} item(s)…`, {
         position: "bottom-right",
       });
       const folderUuid = activeProject?.folderUuid;
+
       await importMediaPaths(paths, undefined, folderUuid);
       toast.dismiss(loadingId);
       const list = await listConvertedMedia(folderUuid);
+      console.log(list)
       const newItemsToFetch = list.filter((it) => !existingNames.has(it.name));
       const infoPromises = newItemsToFetch.map((it) =>
         getMediaInfo(it.assetUrl),

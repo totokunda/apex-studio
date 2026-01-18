@@ -1273,7 +1273,7 @@ const TimelineClip: React.FC<
       if (clip?.type === "video") {
         const fps = useControlsStore.getState().fps;
         const duration = (currentEndFrame - currentStartFrame) / fps;
-        if (duration <= 10) {
+        if (duration <= 60) {
           otherCommands.push({
             id: "export",
             label: "Export as Video",

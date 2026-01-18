@@ -273,6 +273,10 @@ async function handleConfigure(
 
   dispose(id);
   const state = getOrCreateState(id);
+  // Ensure no stale packets survive across reconfiguration.
+  // A cached EncodedPacket is only valid for the exact track/sink that created it.
+  state.cachedSeekTimestamp = null;
+  state.cachedKeyPacket = null;
 
   let formats = ALL_FORMATS;
   if (cfg.formatStr) {
@@ -313,9 +317,7 @@ async function handleConfigure(
     if (is404) {
       throw new Error("Primary app:// URL returned 404");
     }
-    input = new Input({ formats, source: new UrlSource(url, {
-      maxCacheSize: 128 * 1024 * 1024
-    }) });
+    input = new Input({ formats, source: new UrlSource(url) });
   } catch {
     try {
       if (!filePath) {
@@ -329,9 +331,7 @@ async function handleConfigure(
       if (is404) {
         throw new Error("Secondary app:// URL returned 404");
       }
-      input = new Input({ formats, source: new UrlSource(url, {
-        maxCacheSize: 128 * 1024 * 1024
-      }) });
+      input = new Input({ formats, source: new UrlSource(url) });
     } catch {
       throw new Error("Failed to create input");
     }
@@ -535,6 +535,9 @@ function dispose(assetId?: string) {
     state.sink = null;
     state.iterationInFlight = 0;
     state.iterationResume = null;
+    // Clear any cached packets; they may belong to a previous track instance.
+    state.cachedSeekTimestamp = null;
+    state.cachedKeyPacket = null;
     return;
   }
 
