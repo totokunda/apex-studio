@@ -404,6 +404,7 @@ export function usePreprocessorJobClipSync<TJob extends JobLike>(params: {
       }
 
       const effectiveStatus = (job.latest?.status || job.status || "") as string;
+     
       const sLower = String(effectiveStatus || "").toLowerCase().trim();
       let nextStatus = mapToPreprocessorStatus(sLower);
       const pct = normalizePct(job.latest?.progress ?? (job as any).progress);
@@ -473,12 +474,15 @@ export function usePreprocessorJobClipSync<TJob extends JobLike>(params: {
         return;
       }
 
+      console.log("isComplete", isComplete);
+
       if (!isComplete) return;
       if (finalizedByJobIdRef.current.has(jobId)) return;
       if (finalizingByJobIdRef.current.has(jobId)) return;
 
       // Resolve result path (WS metadata preferred; fallback to API query).
       let resultPath = extractResultPath(job);
+      
       if (!resultPath && !fetchingResultByJobIdRef.current.has(jobId)) {
         fetchingResultByJobIdRef.current.add(jobId);
         try {
