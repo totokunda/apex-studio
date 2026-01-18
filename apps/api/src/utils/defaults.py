@@ -268,6 +268,17 @@ def get_torch_device():
 def get_cache_path() -> str:
     return DEFAULT_CACHE_PATH
 
+def get_engine_results_path() -> str:
+    os.makedirs(os.path.join(DEFAULT_CACHE_PATH, "engine_results"), exist_ok=True)
+    return os.path.join(DEFAULT_CACHE_PATH, "engine_results")
+
+def get_preprocessor_results_path() -> str:
+    os.makedirs(os.path.join(DEFAULT_CACHE_PATH, "preprocessor_results"), exist_ok=True)
+    return os.path.join(DEFAULT_CACHE_PATH, "preprocessor_results")
+
+def get_postprocessor_results_path() -> str:
+    os.makedirs(os.path.join(DEFAULT_CACHE_PATH, "postprocessor_results"), exist_ok=True)
+    return os.path.join(DEFAULT_CACHE_PATH, "postprocessor_results")
 
 def set_cache_path(path: str) -> None:
     global DEFAULT_CACHE_PATH
