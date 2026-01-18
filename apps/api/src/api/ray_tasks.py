@@ -102,6 +102,7 @@ def _optimize_mp4_for_editor_in_place(
     video_path: str,
     *,
     fps: Optional[int] = None,
+    gop_frames: Optional[int] = None,
 ) -> bool:
     """
     Best-effort post-pass for MP4s intended for interactive playback in editors.
@@ -113,6 +114,9 @@ def _optimize_mp4_for_editor_in_place(
 
     Controlled by env:
     - APEX_VIDEO_EDITOR_OPTIMIZE: enable/disable (default: true)
+    - APEX_VIDEO_EDITOR_ENGINE_GOP: engine-result GOP in frames (default: 1)
+    - APEX_VIDEO_EDITOR_PREPROCESSOR_GOP: preprocessor-result GOP in frames (default: 4)
+    - APEX_VIDEO_EDITOR_GOP_FRAMES: keyframe interval in frames (default: unset)
     - APEX_VIDEO_EDITOR_GOP_SECONDS: keyframe interval in seconds (default: 1.0)
     - APEX_VIDEO_EDITOR_CRF: x264 CRF (default: 18)
     - APEX_VIDEO_EDITOR_PRESET: x264 preset (default: veryfast)
@@ -134,6 +138,23 @@ def _optimize_mp4_for_editor_in_place(
             return False
 
         # Read tunables.
+        # Prefer explicit GOP frames if provided; fall back to env override; then GOP seconds.
+        gop_frames_int: Optional[int] = None
+        if gop_frames is not None:
+            try:
+                gop_frames_int = int(gop_frames)
+            except Exception:
+                gop_frames_int = None
+        if gop_frames_int is None:
+            try:
+                _raw = os.environ.get("APEX_VIDEO_EDITOR_GOP_FRAMES")
+                if _raw is not None and str(_raw).strip() != "":
+                    gop_frames_int = int(str(_raw).strip())
+            except Exception:
+                gop_frames_int = None
+        if gop_frames_int is not None:
+            gop_frames_int = max(1, min(1000, int(gop_frames_int)))
+
         try:
             gop_seconds = float(os.environ.get("APEX_VIDEO_EDITOR_GOP_SECONDS", "1.0") or "1.0")
         except Exception:
@@ -184,8 +205,12 @@ def _optimize_mp4_for_editor_in_place(
         ]
 
         # GOP tuning for smoother seeking/scrubbing (requires re-encode).
-        if fps_int is not None:
+        gop: Optional[int] = None
+        if gop_frames_int is not None:
+            gop = int(gop_frames_int)
+        elif fps_int is not None:
             gop = int(max(1, round(float(fps_int) * float(gop_seconds))))
+        if gop is not None:
             cmd.extend(
                 [
                     "-g",
@@ -194,7 +219,8 @@ def _optimize_mp4_for_editor_in_place(
                     str(gop),
                 ]
             )
-            # Enforce CFR in the output when FPS is known.
+        # Enforce CFR in the output when FPS is known.
+        if fps_int is not None:
             cmd.extend(["-fps_mode", "cfr", "-r", str(fps_int)])
 
         if no_bframes:
@@ -1754,12 +1780,24 @@ def _execute_preprocessor(
     send_progress(0.05, "Checking cache")
 
     if cache.is_cached():
+        result_path = cache.get_result_path()
         send_progress(1.0, "Cache found and returning")
-        send_progress(1.0, "Complete", {"status": "complete"})
+        
+        # Construct preview URL for frontend access
+        preprocessor_results_base = Path(DEFAULT_CACHE_PATH) / "preprocessor_results"
+        try:
+            relative_path = Path(result_path).relative_to(preprocessor_results_base)
+            preview_url = f"/files/preprocessor_results/{relative_path}"
+        except (ValueError, AttributeError):
+            # Fallback if path conversion fails
+            preview_url = None
+        
+        send_progress(1.0, "Complete", {"status": "complete", "result_path": result_path, "preview_url": preview_url, "type": media_type})
         return {
             "job_id": job_id,
             "status": "complete",
-            "result_path": cache.get_result_path(),
+            "result_path": result_path,
+            "preview_url": preview_url,
             "type": media_type,
         }
 
@@ -1769,6 +1807,7 @@ def _execute_preprocessor(
 
     from src.preprocess.download_tracker import DownloadProgressTracker
     from src.preprocess import util as util_module
+    from src.utils.defaults import DEFAULT_CACHE_PATH
 
     tracker = DownloadProgressTracker(
         job_id,
@@ -1825,12 +1864,49 @@ def _execute_preprocessor(
             pass
 
         send_progress(1.0, "Result saved")
-        send_progress(1.0, "Complete", {"status": "complete"})
+
+        # Post-pass: make preprocessor MP4s more iframe/editor-friendly (best-effort).
+        # (Only applies to MP4; alpha-channel preprocessors typically output WebM.)
+        try:
+            if isinstance(result_path, str) and result_path.lower().endswith(".mp4"):
+                try:
+                    preproc_gop = int(
+                        os.environ.get("APEX_VIDEO_EDITOR_PREPROCESSOR_GOP", "4") or "4"
+                    )
+                except Exception:
+                    preproc_gop = 4
+
+                fps_hint: Optional[int] = None
+                try:
+                    if cache.type == "video":
+                        fps_hint = int(
+                            max(1, round(float(cache._video_info.get("fps", 0) or 0)))
+                        )
+                except Exception:
+                    fps_hint = None
+
+                _optimize_mp4_for_editor_in_place(
+                    result_path, fps=fps_hint, gop_frames=preproc_gop
+                )
+        except Exception:
+            pass
+        
+        # Construct preview URL for frontend access
+        preprocessor_results_base = Path(DEFAULT_CACHE_PATH) / "preprocessor_results"
+        try:
+            relative_path = Path(result_path).relative_to(preprocessor_results_base)
+            preview_url = f"/files/preprocessor_results/{relative_path}"
+        except (ValueError, AttributeError):
+            # Fallback if path conversion fails
+            preview_url = None
+        
+        send_progress(1.0, "Complete", {"status": "complete", "result_path": result_path, "preview_url": preview_url, "type": cache.type})
 
         return {
             "status": "complete",
             "result_path": result_path,
             "type": cache.type,
+            "preview_url": preview_url,
         }
 
     except Exception as e:
@@ -2347,7 +2423,15 @@ def run_engine_from_manifest(
                     # Best-effort only (keeps original file if ffmpeg fails).
                     if final and result_path:
                         try:
-                            _optimize_mp4_for_editor_in_place(result_path, fps=int(fps))
+                            try:
+                                engine_gop = int(
+                                    os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1") or "1"
+                                )
+                            except Exception:
+                                engine_gop = 1
+                            _optimize_mp4_for_editor_in_place(
+                                result_path, fps=int(fps), gop_frames=engine_gop
+                            )
                         except Exception:
                             pass
 
@@ -2501,6 +2585,15 @@ def run_engine_from_manifest(
                     f"Preview saved to {result_path} with media type {media_type}"
                 )
                 try:
+                    # Construct preview URL for frontend access
+                    engine_results_base = Path(DEFAULT_CACHE_PATH) / "engine_results"
+                    try:
+                        relative_path = Path(result_path).relative_to(engine_results_base)
+                        preview_url = f"/files/engine_results/{relative_path}"
+                    except (ValueError, AttributeError):
+                        # Fallback if path conversion fails
+                        preview_url = None
+                    
                     # Send an update that does not overwrite progress (progress=None)
                     logger.info(
                         f"Sending preview websocket update at step {idx} with result path {result_path} and media type {media_type}"
@@ -2511,6 +2604,7 @@ def run_engine_from_manifest(
                         {
                             "status": "complete" if is_result else "preview",
                             "preview_path": result_path,
+                            "preview_url": preview_url,
                             "type": media_type,
                             "index": idx,
                         },
@@ -2547,6 +2641,15 @@ def run_engine_from_manifest(
             )
             logger.info(f"Preview saved to {result_path} with media type {media_type}")
             try:
+                # Construct preview URL for frontend access
+                engine_results_base = Path(DEFAULT_CACHE_PATH) / "engine_results"
+                try:
+                    relative_path = Path(result_path).relative_to(engine_results_base)
+                    preview_url = f"/files/engine_results/{relative_path}"
+                except (ValueError, AttributeError):
+                    # Fallback if path conversion fails
+                    preview_url = None
+                
                 logger.info(
                     f"Sending preview websocket update at step {idx} with result path {result_path} and media type {media_type}"
                 )
@@ -2556,6 +2659,7 @@ def run_engine_from_manifest(
                     {
                         "status": "complete" if is_result else "preview",
                         "preview_path": result_path,
+                        "preview_url": preview_url,
                         "type": media_type,
                         "index": idx,
                     },
@@ -2753,7 +2857,13 @@ def run_frame_interpolation(
 
         # Post-pass: generate a seek/editor-friendly MP4 before we mux original audio.
         try:
-            _optimize_mp4_for_editor_in_place(video_only_path, fps=fps_to_write)
+            try:
+                engine_gop = int(os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1") or "1")
+            except Exception:
+                engine_gop = 1
+            _optimize_mp4_for_editor_in_place(
+                video_only_path, fps=fps_to_write, gop_frames=engine_gop
+            )
         except Exception:
             pass
 
@@ -2798,12 +2908,21 @@ def run_frame_interpolation(
                 # If move also fails, keep path consistent
                 final_out_path = video_only_path
 
+        # Construct preview URL for frontend access
+        postprocessor_results_base = Path(DEFAULT_CACHE_PATH) / "postprocessor_results"
+        try:
+            relative_path = Path(final_out_path).relative_to(postprocessor_results_base)
+            preview_url = f"/files/postprocessor_results/{relative_path}"
+        except (ValueError, AttributeError):
+            # Fallback if path conversion fails
+            preview_url = None
+        
         send_update(
             1.0,
             "Complete",
-            {"status": "complete", "result_path": final_out_path, "type": "video"},
+            {"status": "complete", "result_path": final_out_path, "preview_url": preview_url, "type": "video"},
         )
-        return {"status": "complete", "result_path": final_out_path, "type": "video"}
+        return {"status": "complete", "result_path": final_out_path, "type": "video", "preview_url": preview_url}
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(tb)
