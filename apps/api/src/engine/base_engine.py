@@ -388,6 +388,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             "APEX_PREFWD_FLUSH_TARGET": _str("APEX_PREFWD_FLUSH_TARGET", "cpu"),
             "APEX_PREFWD_MIN_FREE_BYTES": _int("APEX_PREFWD_MIN_FREE_BYTES", 0),
             "APEX_PREFWD_MIN_FREE_FRAC": _float("APEX_PREFWD_MIN_FREE_FRAC", 0.50),
+            "APEX_PREFWD_KEEP_COMPONENTS": _str("APEX_PREFWD_KEEP_COMPONENTS", "vae"),
             # Weight manager defaults
             "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12),
             "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10),
@@ -3322,28 +3323,4 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         if component.get("type") == "scheduler":
             scheduler = self.load_scheduler(component)
             # `upload_folder()` expects a directory path, not a single file path.
-            # Save the scheduler config into a temp directory and upload only the config file.
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                config = scheduler.save_config(save_directory=tmp_dir)
-                config_path = os.path.join(tmp_dir, "scheduler_config.json")
-
-                # Be defensive: some implementations may return the config dict rather than writing it.
-                if not os.path.exists(config_path):
-                    if isinstance(config, dict):
-                        with open(config_path, "w") as f:
-                            json.dump(config, f, indent=2, sort_keys=True)
-                    else:
-                        raise RuntimeError(
-                            "Scheduler did not create scheduler_config.json and did not return a config dict."
-                        )
-
-                upload_folder(
-                    folder_path=tmp_dir,
-                    repo_id=repo_id,
-                    repo_type="model",
-                    path_in_repo="scheduler",
-                    allow_patterns=["scheduler_config.json"],
-                )
-            return True
-        else:
-            raise ValueError(f"Unsupported component type: {component.get('type')}")
+            # Save the scheduler config into a temp d
