@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from tqdm import tqdm
 import accelerate
 import psutil
-import json
+
 from src.utils.defaults import (
     get_components_path,
     get_preprocessor_path,
@@ -37,7 +37,7 @@ from src.utils.cache import empty_cache
 from logging import Logger
 from src.scheduler import SchedulerInterface
 from typing import Callable
-from src.memory_management import MemoryConfig
+from src.memory_management import MemoryConfig, get_memory_manager, install_memory_hooks
 import torch.nn as nn
 import importlib
 from diffusers.utils.torch_utils import randn_tensor
@@ -70,6 +70,10 @@ from src.lora import LoraManager, LoraItem
 from src.helpers.helpers import helpers
 from src.utils.torch_patches import patch_torch_linalg_solve_for_cusolver
 from src.memory_management import apply_group_offloading
+from src.memory_management.group_offloading import (
+    _maybe_remove_and_reapply_group_offloading,
+    _is_group_offload_enabled,
+)
 import types
 try:
     torch.backends.cuda.preferred_linalg_library()
@@ -507,6 +511,41 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         self.attention_type = kwargs.get("attention_type", "sdpa")
         attention_register.set_default(self.attention_type)
+
+        # Attach VRAM/RAM manager inspired by ComfyUI to coordinate component
+        # movement across runs before any heavy model loading happens.
+        try:
+            install_memory_hooks(self)
+        except Exception as exc:
+            self.logger.debug(f"Memory manager install failed: {exc}")
+
+    def _register_tracked_module(
+        self, module, label: str, tags: Optional[Set[str]] = None
+    ):
+        """
+        Register a component with the memory manager so we can track VRAM usage.
+        Falls back to a no-op if the manager is unavailable.
+        """
+        manager = getattr(self, "_component_memory_manager", None) or get_memory_manager()
+        try:
+            return manager.register_component(module, label, tags or set(), engine=self)
+        except Exception:
+            return None
+
+    def _install_preforward_hook(self, module, label: str):
+        """
+        Install lightweight pre/post forward hooks used by the memory manager.
+        """
+        manager = getattr(self, "_component_memory_manager", None) or get_memory_manager()
+        try:
+            comp = manager.register_component(
+                module, label, {label}, engine=self, install_hooks=False
+            )
+            if comp is not None and not comp.hooks:
+                comp.hooks = manager._attach_forward_hooks(module, label)
+            return comp
+        except Exception:
+            return None
 
     def post_init(self):
         """
@@ -2436,6 +2475,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 else item.name or f"lora_{i}"
             )
             self.loaded_loras[name] = item
+
+        if _is_group_offload_enabled(model):
+            _maybe_remove_and_reapply_group_offloading(model)
 
     def _load_loras(self):
         """If the YAML config includes a top-level `loras` list, apply them on init.

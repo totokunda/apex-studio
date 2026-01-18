@@ -278,7 +278,7 @@ class HidreamEditEngine(HidreamShared):
 
         if not self.transformer:
             self.load_component_by_type("transformer")
-            self.to_device(self.transformer)
+        self.to_device(self.transformer)
 
         self.transformer.max_seq = 8192
 
