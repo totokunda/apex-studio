@@ -234,6 +234,7 @@ class Downsample3D(Downsample2D):
         if hasattr(self, "norm") and self.norm is not None:
             # [Overridden] change to causal norm.
             hidden_states = causal_norm_wrapper(self.norm, hidden_states)
+            input(f"After norm Downsample3D {hidden_states.shape} ")
 
         if self.use_conv and self.padding == 0 and self.spatial_down:
             pad = (0, 1, 0, 1)
@@ -315,6 +316,7 @@ class ResnetBlock3D(ResnetBlock2D):
         hidden_states = input_tensor
 
         hidden_states = causal_norm_wrapper(self.norm1, hidden_states)
+        input(f"After norm1 ResnetBlock3D {hidden_states.shape} ")
 
         hidden_states = self.nonlinearity(hidden_states)
 
@@ -329,8 +331,15 @@ class ResnetBlock3D(ResnetBlock2D):
         elif self.downsample is not None:
             input_tensor = self.downsample(input_tensor, memory_state=memory_state)
             hidden_states = self.downsample(hidden_states, memory_state=memory_state)
+        input(f"After downsample ResnetBlock3D {hidden_states.shape} ")
 
         hidden_states = self.conv1(hidden_states, memory_state=memory_state)
+        input(f"After conv1 ResnetBlock3D {hidden_states.shape}  {hidden_states.device} {hidden_states.dtype}")
+        
+        if hidden_states.device != input_tensor.device:
+            input_tensor = input_tensor.to(hidden_states.device)
+        
+        input(f"After input_tensor to hidden_states ResnetBlock3D {input_tensor.shape}  {input_tensor.device} {input_tensor.dtype}")
 
         if self.time_emb_proj is not None:
             if not self.skip_time_act:
@@ -341,6 +350,7 @@ class ResnetBlock3D(ResnetBlock2D):
             hidden_states = hidden_states + temb
 
         hidden_states = causal_norm_wrapper(self.norm2, hidden_states)
+        input(f"After norm2 ResnetBlock3D {hidden_states.shape} ")
 
         if temb is not None and self.time_embedding_norm == "scale_shift":
             scale, shift = torch.chunk(temb, 2, dim=1)
@@ -1226,6 +1236,7 @@ class SeedVR2AutoencoderKL(nn.Module):
         self, x: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED
     ) -> torch.Tensor:
         _x = x.to(self.device)
+
         _x = causal_conv_slice_inputs(
             _x, self.slicing_sample_min_size, memory_state=memory_state
         )
@@ -1256,20 +1267,34 @@ class SeedVR2AutoencoderKL(nn.Module):
             self.use_slicing
             and (x.shape[2] - 1) > self.slicing_sample_min_size * sp_size
         ):
+            device = x.device
             x_slices = x[:, :, 1:].split(
                 split_size=self.slicing_sample_min_size * sp_size, dim=2
             )
-            encoded_slices = [
-                self._encode(
-                    torch.cat((x[:, :, :1], x_slices[0]), dim=2),
-                    memory_state=MemoryState.INITIALIZING,
-                )
-            ]
+            # Keep intermediate slices off GPU to reduce peak VRAM when encoding
+            # very large frames. Final concatenated output is relatively small.
+            first = self._encode(
+                torch.cat((x[:, :, :1], x_slices[0]), dim=2),
+                memory_state=MemoryState.INITIALIZING,
+            )
+            if device.type == "cuda":
+                first_cpu = first.cpu()
+                del first
+                first = first_cpu
+                torch.cuda.empty_cache()
+
+            encoded_slices = [first]
             for x_idx in range(1, len(x_slices)):
-                encoded_slices.append(
-                    self._encode(x_slices[x_idx], memory_state=MemoryState.ACTIVE)
-                )
-            return torch.cat(encoded_slices, dim=2)
+                part = self._encode(x_slices[x_idx], memory_state=MemoryState.ACTIVE)
+                if device.type == "cuda":
+                    part_cpu = part.cpu()
+                    del part
+                    part = part_cpu
+                    torch.cuda.empty_cache()
+                encoded_slices.append(part)
+
+            out = torch.cat(encoded_slices, dim=2)
+            return out.to(device) if device.type == "cuda" else out
         else:
             return self._encode(x)
 
@@ -1279,20 +1304,32 @@ class SeedVR2AutoencoderKL(nn.Module):
             self.use_slicing
             and (z.shape[2] - 1) > self.slicing_latent_min_size * sp_size
         ):
+            device = z.device
             z_slices = z[:, :, 1:].split(
                 split_size=self.slicing_latent_min_size * sp_size, dim=2
             )
-            decoded_slices = [
-                self._decode(
-                    torch.cat((z[:, :, :1], z_slices[0]), dim=2),
-                    memory_state=MemoryState.INITIALIZING,
-                )
-            ]
+            first = self._decode(
+                torch.cat((z[:, :, :1], z_slices[0]), dim=2),
+                memory_state=MemoryState.INITIALIZING,
+            )
+            if device.type == "cuda":
+                first_cpu = first.cpu()
+                del first
+                first = first_cpu
+                torch.cuda.empty_cache()
+
+            decoded_slices = [first]
             for z_idx in range(1, len(z_slices)):
-                decoded_slices.append(
-                    self._decode(z_slices[z_idx], memory_state=MemoryState.ACTIVE)
-                )
-            return torch.cat(decoded_slices, dim=2)
+                part = self._decode(z_slices[z_idx], memory_state=MemoryState.ACTIVE)
+                if device.type == "cuda":
+                    part_cpu = part.cpu()
+                    del part
+                    part = part_cpu
+                    torch.cuda.empty_cache()
+                decoded_slices.append(part)
+
+            out = torch.cat(decoded_slices, dim=2)
+            return out.to(device) if device.type == "cuda" else out
         else:
             return self._decode(z)
 
@@ -1421,7 +1458,11 @@ class SeedVR2AutoencoderKLWrapper(SeedVR2AutoencoderKL, diffusers.AutoencoderKL)
         if split_size is not None and split_size > 0:
             self.enable_slicing()
             self.slicing_sample_min_size = split_size
-            self.slicing_latent_min_size = split_size // self.temporal_downsample_factor
+            # NOTE: allow very small split_size values for memory-constrained runs.
+            # Latent slicing uses `split()` which requires a positive split_size.
+            self.slicing_latent_min_size = max(
+                1, split_size // self.temporal_downsample_factor
+            )
         else:
             self.disable_slicing()
         for module in self.modules():

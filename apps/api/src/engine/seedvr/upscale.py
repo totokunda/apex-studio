@@ -404,14 +404,37 @@ class SeedVRUpscaleEngine(BaseEngine):
         """
         if self.vae is None:
             self.load_component_by_type("vae")
+
+        # VAE encode is memory-hungry (large activations). Ensure the transformer
+        # is offloaded if it was previously loaded to free VRAM.
+        if getattr(self, "transformer", None) is not None:
+            self._offload("transformer")
+            gc.collect()
+            empty_cache()
+
         self.to_device(self.vae)
         if hasattr(self.vae, "set_memory_limit"):
             self.vae.set_memory_limit(
                 conv_max_mem=conv_max_mem, norm_max_mem=norm_max_mem
             )
         if hasattr(self.vae, "set_causal_slicing"):
+            # Adaptive temporal slicing: at very high spatial resolutions, encoding
+            # many frames at once can OOM inside normalization (e.g. GroupNorm).
+            # Reduce split_size to keep (T, H, W) working-set bounded.
+            effective_split_size = split_size
+            if samples:
+                _, t, h, w = samples[0].shape
+                if t > 1 and (h * w) >= (1024 * 1024):
+                    # Keep slices >= 2 frames; some temporal-downsampling convs
+                    # can have stride 2, and will error if given a single-frame slice.
+                    effective_split_size = min(effective_split_size, 2)
+                    if effective_split_size != split_size:
+                        self.logger.info(
+                            f"VAE encode: reducing split_size {split_size} -> {effective_split_size} "
+                            f"for large frames (t={t}, h={h}, w={w})"
+                        )
             self.vae.set_causal_slicing(
-                split_size=split_size, memory_device=memory_device
+                split_size=effective_split_size, memory_device=memory_device
             )
 
         latents = []
@@ -482,14 +505,32 @@ class SeedVRUpscaleEngine(BaseEngine):
         """
         if self.vae is None:
             self.load_component_by_type("vae")
+
+        # VAE decode is also memory-hungry; keep transformer off GPU while decoding.
+        if getattr(self, "transformer", None) is not None:
+            self._offload("transformer")
+            gc.collect()
+            empty_cache()
+
         self.to_device(self.vae)
         if hasattr(self.vae, "set_memory_limit"):
             self.vae.set_memory_limit(
                 conv_max_mem=conv_max_mem, norm_max_mem=norm_max_mem
             )
         if hasattr(self.vae, "set_causal_slicing"):
+            effective_split_size = split_size
+            if latents:
+                # latents are [T, H, W, C] per `_seedvr_vae_encode` output
+                t, h, w, _ = latents[0].shape
+                if t > 1 and (h * w) >= (1024 * 1024):
+                    effective_split_size = min(effective_split_size, 2)
+                    if effective_split_size != split_size:
+                        self.logger.info(
+                            f"VAE decode: reducing split_size {split_size} -> {effective_split_size} "
+                            f"for large latents (t={t}, h={h}, w={w})"
+                        )
             self.vae.set_causal_slicing(
-                split_size=split_size, memory_device=memory_device
+                split_size=effective_split_size, memory_device=memory_device
             )
         samples = []
         dtype = self._vae_dtype
@@ -724,6 +765,10 @@ class SeedVRUpscaleEngine(BaseEngine):
         num_steps: int,
         dit_offload: bool = True,
         decode: bool = True,
+        vae_norm_max_mem: float = 0.5,
+        vae_conv_max_mem: float = 0.5,
+        vae_split_size: int = 4,
+        vae_memory_device: str = "same",
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> List[Tensor]:
         """
@@ -843,13 +888,23 @@ class SeedVRUpscaleEngine(BaseEngine):
             torch.cuda.synchronize()
         gc.collect()
         empty_cache()
+        
+        # flush before 
+        self._flush_for_decode(
+            "transformer"
+        )
 
         # VAE decode
         self.to_device(self.vae)
+        
         samples = self._seedvr_vae_decode(
             latents,
             offload=dit_offload,
             progress_callback=emit_decode_progress,
+            norm_max_mem=vae_norm_max_mem,
+            conv_max_mem=vae_conv_max_mem,
+            split_size=vae_split_size,
+            memory_device=vae_memory_device,
         )
 
         # Free latents after decoding
@@ -1256,6 +1311,10 @@ class SeedVRUpscaleEngine(BaseEngine):
                 num_steps=num_inference_steps,
                 dit_offload=offload,
                 progress_callback=sampling_progress,
+                vae_norm_max_mem=vae_norm_max_mem,
+                vae_conv_max_mem=vae_conv_max_mem,
+                vae_split_size=vae_split_size,
+                vae_memory_device=vae_memory_device,
             )
 
             # Process outputs

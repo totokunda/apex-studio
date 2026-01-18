@@ -74,6 +74,7 @@ class InflatedCausalConv3d(Conv3d):
         split_dim=3,
         padding=(0, 0, 0, 0, 0, 0),
         prev_cache=None,
+        depth_idx=0,
     ):
         # Compatible with no limit.
         if math.isinf(self.memory_limit):
@@ -107,15 +108,38 @@ class InflatedCausalConv3d(Conv3d):
 
         # Collect results on CPU to minimize GPU memory, then copy back at end
         results_cpu = []
-        output_sizes = []
         result_device = None
         result_dtype = None
 
         # Loop Fwd.
         cache = None
+        output = None
+        offset = 0
+        
+        # Calculate total input size along split_dim to determine total output size
+        total_input_size = sum(t.size(split_dim) for t in x)
+        
+        # Calculate expected output size based on Conv3d formula
+        param_idx = split_dim - 2
+        if 0 <= param_idx < 3:
+            k = self.kernel_size[param_idx]
+            s = self.stride[param_idx]
+            d = self.dilation[param_idx]
+            # self.padding has been adjusted in __init__ (temporal pad removed).
+            # But the logic inside the loop (lines 140-144) applies `self.padding` to boundaries.
+            # So effectively, the full operation has `self.padding[param_idx] * 2`.
+            p_total = self.padding[param_idx] * 2
+            total_output_size = (total_input_size + p_total - d * (k - 1) - 1) // s + 1
+        else:
+            total_output_size = total_input_size
+
         for idx in range(len(x)):
             # Concat prev cache from last dim
+            # This allocates a new tensor for the input chunk if cache exists.
             if prev_cache is not None:
+                # OPTIMIZATION: If possible, pre-allocate x[idx] with cache?
+                # But x is a list of views (from split). We can't resize views.
+                # So concat is necessary unless we rewrite split logic.
                 x[idx] = torch.cat([prev_cache[idx], x[idx]], dim=split_dim - 1)
 
             # Get padding pattern.
@@ -150,50 +174,44 @@ class InflatedCausalConv3d(Conv3d):
                 split_dim=split_dim + 1,
                 padding=padding,
                 prev_cache=cache,
+                depth_idx=depth_idx + 1,
             )
 
             # Free input slice immediately
+            # We must be careful: x[idx] might be holding the large `cat` tensor.
+            # Deleting it frees GPU memory.
             x[idx] = None
-
-            # Store metadata from first result
-            if result_device is None:
+            
+            if output is None:
                 result_device = result.device
                 result_dtype = result.dtype
+                
+                out_shape = list(result.shape)
+                out_shape[split_dim] = total_output_size
+                
+                if result_device.type == "cuda":
+                    torch.cuda.empty_cache()
+                
+                # Pre-allocate on CPU to save VRAM
+                output = torch.empty(*out_shape, device="cpu", dtype=result_dtype, pin_memory=True)
 
-            # Move result to CPU immediately to free GPU memory
-            results_cpu.append(result.cpu())
-            output_sizes.append(result.size(split_dim))
+            # Copy result to pre-allocated output buffer immediately
+            size = result.size(split_dim)
+            if size > 0:
+                 output.narrow(split_dim, offset, size).copy_(result.detach().cpu())
+                 offset += size
+            
+            # Free result memory immediately
             del result
 
             # Update cache.
             cache = next_cache
 
-        # Pre-allocate output and copy slices back
-        total_output_size = sum(output_sizes)
-        out_shape = list(results_cpu[0].shape)
-        out_shape[split_dim] = total_output_size
-
-        # Clear cache and try GPU allocation
-        if result_device.type == "cuda":
-            torch.cuda.empty_cache()
-
-        # Allocate on CPU first, then try to move to GPU
-        output = torch.empty(*out_shape, device="cpu", dtype=result_dtype, pin_memory=True)
-        offset = 0
-        for result_cpu, size in zip(results_cpu, output_sizes):
-            output.narrow(split_dim, offset, size).copy_(result_cpu)
-            offset += size
-        del results_cpu
-
         # Try moving to GPU
         if result_device.type == "cuda":
             torch.cuda.empty_cache()
-            try:
+            if depth_idx == 0:
                 output = output.to(result_device, non_blocking=True)
-            except torch.cuda.OutOfMemoryError:
-                # Keep on CPU - caller must handle this
-                logger.warning("OOM during memory_limit_conv output transfer, keeping on CPU")
-                pass
 
         return output
 
@@ -402,22 +420,75 @@ def causal_norm_wrapper(norm_layer: nn.Module, x: torch.Tensor) -> torch.Tensor:
                 isinstance(norm_layer, nn.GroupNorm)
                 and memory_occupy > get_norm_limit()
             ):
-                num_chunks = min(
-                    4 if x.element_size() == 2 else 2, norm_layer.num_groups
+                # Try to reduce peak memory for GroupNorm.
+                #
+                # 1) Prefer splitting along channel dim on group boundaries (exact).
+                # 2) If that is not possible (e.g. num_groups == 1), fall back to
+                #    splitting along (b*t) batch dim (also exact for GroupNorm).
+                #
+                # Both strategies preserve GroupNorm semantics because GN computes
+                # statistics independently per-sample and per-group.
+                max_chunks = 4 if x.element_size() == 2 else 2
+                channel_chunks = min(max_chunks, norm_layer.num_groups)
+                can_channel_chunk = (
+                    channel_chunks > 1
+                    and norm_layer.num_groups % channel_chunks == 0
+                    and x.size(1) % channel_chunks == 0
                 )
 
-                assert norm_layer.num_groups % num_chunks == 0
-                num_groups_per_chunk = norm_layer.num_groups // num_chunks
+                if can_channel_chunk:
+                    num_groups_per_chunk = norm_layer.num_groups // channel_chunks
+                    x_chunks = list(x.chunk(channel_chunks, dim=1))
 
-                x = list(x.chunk(num_chunks, dim=1))
-                weights = norm_layer.weight.chunk(num_chunks, dim=0)
-                biases = norm_layer.bias.chunk(num_chunks, dim=0)
-                for i, (w, b) in enumerate(zip(weights, biases)):
-                    x[i] = F.group_norm(
-                        x[i], num_groups_per_chunk, w, b, norm_layer.eps
-                    )
-                    x[i] = x[i].to(input_dtype)
-                x = torch.cat(x, dim=1)
+                    if norm_layer.weight is None:
+                        weights = (None,) * channel_chunks
+                    else:
+                        weights = norm_layer.weight.chunk(channel_chunks, dim=0)
+                    if norm_layer.bias is None:
+                        biases = (None,) * channel_chunks
+                    else:
+                        biases = norm_layer.bias.chunk(channel_chunks, dim=0)
+                    
+                    
+            
+                    for i, (w, b) in enumerate(zip(weights, biases)):
+                        y = F.group_norm(
+                            x_chunks[i],
+                            num_groups_per_chunk,
+                            w,
+                            b,
+                            norm_layer.eps,
+                        )
+                        # In-place update to reuse memory of the chunk (which is a view of x)
+                        # We must ensure x_chunks[i] is contiguous or copy_ works efficiently.
+                        x_chunks[i].copy_(y)
+                        # Explicitly delete y to free memory before next iteration
+                        del y
+                    # x is already updated in place, no need for cat.
+                    # x = torch.cat(x_chunks, dim=1) # Removed
+                else:
+                    # Batch/time chunking fallback: split (b*t, c, h, w) along dim=0.
+                    bt = x.size(0)
+                    # Use the same "norm limit" knob as the channel-chunking path.
+                    norm_limit = get_norm_limit()
+                    num_splits = min(bt, math.ceil(memory_occupy / norm_limit))
+                    if num_splits <= 1 and bt > 1:
+                        num_splits = bt
+                    size_per_split = bt // num_splits
+                    split_sizes = [size_per_split] * (num_splits - 1)
+                    split_sizes += [bt - sum(split_sizes)]
+
+                    outs = []
+                    for x_part in x.split(split_sizes, dim=0):
+                        y = F.group_norm(
+                            x_part,
+                            norm_layer.num_groups,
+                            norm_layer.weight,
+                            norm_layer.bias,
+                            norm_layer.eps,
+                        )
+                        outs.append(y.to(input_dtype) if y.dtype != input_dtype else y)
+                    x = torch.cat(outs, dim=0)
             else:
                 x = norm_layer(x)
             x = rearrange(x, "(b t) c h w -> b c t h w", t=t)
