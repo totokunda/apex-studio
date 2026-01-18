@@ -31,6 +31,7 @@ from src.utils.defaults import (
     get_lora_path,
     get_preprocessor_path,
     get_config_store_path,
+    get_cache_path,
 )
 from src.utils.config_store import read_json_dict
 from diffusers.utils import export_to_video
@@ -1782,15 +1783,27 @@ def _execute_preprocessor(
     if cache.is_cached():
         result_path = cache.get_result_path()
         send_progress(1.0, "Cache found and returning")
-        
         # Construct preview URL for frontend access
-        preprocessor_results_base = Path(DEFAULT_CACHE_PATH) / "preprocessor_results"
+        preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
         try:
             relative_path = Path(result_path).relative_to(preprocessor_results_base)
             preview_url = f"/files/preprocessor_results/{relative_path}"
         except (ValueError, AttributeError):
             # Fallback if path conversion fails
             preview_url = None
+            
+        results_dict = {
+            "Complete": "Complete",
+            "result_path": result_path,
+            "preview_url": preview_url,
+            "type": media_type,
+            "preprocessor_name": preprocessor_name,
+            "input_path": input_path,
+            "job_id": job_id,
+            "start_frame": start_frame,
+        }
+        
+        logger.info(f"{results_dict}")
         
         send_progress(1.0, "Complete", {"status": "complete", "result_path": result_path, "preview_url": preview_url, "type": media_type})
         return {
@@ -1807,7 +1820,6 @@ def _execute_preprocessor(
 
     from src.preprocess.download_tracker import DownloadProgressTracker
     from src.preprocess import util as util_module
-    from src.utils.defaults import DEFAULT_CACHE_PATH
 
     tracker = DownloadProgressTracker(
         job_id,
@@ -1871,7 +1883,7 @@ def _execute_preprocessor(
             if isinstance(result_path, str) and result_path.lower().endswith(".mp4"):
                 try:
                     preproc_gop = int(
-                        os.environ.get("APEX_VIDEO_EDITOR_PREPROCESSOR_GOP", "4") or "4"
+                        os.environ.get("APEX_VIDEO_EDITOR_PREPROCESSOR_GOP", "1") or "1"
                     )
                 except Exception:
                     preproc_gop = 4
@@ -1892,13 +1904,27 @@ def _execute_preprocessor(
             pass
         
         # Construct preview URL for frontend access
-        preprocessor_results_base = Path(DEFAULT_CACHE_PATH) / "preprocessor_results"
+        preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
         try:
             relative_path = Path(result_path).relative_to(preprocessor_results_base)
             preview_url = f"/files/preprocessor_results/{relative_path}"
         except (ValueError, AttributeError):
             # Fallback if path conversion fails
             preview_url = None
+            
+        results_dict = {
+            "Complete": "Complete",
+            "result_path": result_path,
+            "preview_url": preview_url,
+            "type": cache.type,
+            "preprocessor_name": preprocessor_name,
+            "input_path": input_path,
+            "job_id": job_id,
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "kwargs": kwargs,
+        }
+        logger.info(f"{results_dict}")
         
         send_progress(1.0, "Complete", {"status": "complete", "result_path": result_path, "preview_url": preview_url, "type": cache.type})
 
@@ -2067,9 +2093,6 @@ def run_engine_from_manifest(
             "selected_components": selected_components,
             "auto_memory_management": _bool_env("AUTO_MEMORY_MANAGEMENT", False),
             **(config.get("engine_kwargs", {}) or {}),
-            "memory_management":{
-                "transformer": MemoryConfig.for_block_level(),
-            }
         }
 
         if attention_type:
