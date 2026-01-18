@@ -209,6 +209,11 @@ spec:
         - - vae_norm_max_mem
         - - vae_split_size
         - - vae_memory_device
+        - - vae_tiling
+        - - vae_tile_size_height
+        - - vae_tile_size_width
+        - - vae_tile_overlap_height
+        - - vae_tile_overlap_width
     - name: chunking
       label: Chunking
       collapsible: true
@@ -429,5 +434,54 @@ spec:
       panel: sampling
       required: false
       default: 8
+      min: 1
+      step: 1
+    - id: vae_tiling
+      label: VAE Tiling
+      description: Use tiling for the upscaling
+      type: boolean
+      panel: vae_settings
+      required: false
+      default: false
+    - id: vae_tile_size_height
+      label: VAE Tile Size Height
+      description: VAE tile size height for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: vae_settings
+      required: false
+      default: 512
+      min: 256
+      max: 8192
+      step: 16
+    - id: vae_tile_size_width
+      label: VAE Tile Size Width
+      description: VAE tile size width for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: vae_settings
+      required: false
+      default: 512
+      min: 256
+      max: 8192
+      step: 16
+    - id: vae_tile_overlap_height
+      label: VAE Tile Overlap Height
+      description: VAE tile overlap height for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: vae_settings
+      required: false
+      default: 64
+      min: 1
+      step: 1
+    - id: vae_tile_overlap_width
+      label: VAE Tile Overlap Width
+      description: VAE tile overlap width for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: vae_settings
+      required: false
+      default: 64
       min: 1
       step: 1

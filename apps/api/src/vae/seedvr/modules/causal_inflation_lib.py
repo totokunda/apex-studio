@@ -16,23 +16,85 @@ import math
 from contextlib import contextmanager
 from typing import List, Optional, Union
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
-from torch.nn import RMSNorm
+from diffusers.models.normalization import RMSNorm
 from einops import rearrange
 from torch import Tensor, nn
 from torch.nn import Conv3d
 
+from .context_parallel_lib import cache_send_recv, get_cache_size
+from .global_config import get_norm_limit
+from .types import MemoryState, _inflation_mode_t, _memory_device_t
+from src.vae.seedvr.modules.half_precision_fixes import safe_pad_operation
+from src.vae.seedvr.modules.mem import retry_on_oom
 
-from src.vae.seedvr.modules.utils import safe_pad_operation
-from loguru import logger
-from src.vae.seedvr.modules.context_parallel_lib import cache_send_recv, get_cache_size
-from src.vae.seedvr.modules.global_config import get_norm_limit
-from src.vae.seedvr.modules.types import (
-    MemoryState,
-    _inflation_mode_t,
-    _memory_device_t,
-)
+
+# 4. NVIDIA Conv3d Memory Bug - Workaround for PyTorch >= 2.9 + cuDNN >= 91002
+def _check_conv3d_memory_bug():
+    """
+    Check if Conv3d memory bug workaround needed.
+    Bug: PyTorch 2.9+ with cuDNN >= 91002 uses 3x memory for Conv3d 
+    with fp16/bfloat16 due to buggy dispatch layer.
+    """
+    try:
+        # Exclude AMD ROCm/HIP builds (they use MIOpen, not cuDNN)
+        if hasattr(torch.version, 'hip') and torch.version.hip is not None:
+            return False
+        
+        # Must have CUDA available
+        if not (hasattr(torch, 'cuda') and torch.cuda.is_available()):
+            return False
+        
+        # Must have cuDNN actually available (not just the attribute)
+        if not (hasattr(torch.backends.cudnn, 'is_available') and 
+                torch.backends.cudnn.is_available()):
+            return False
+        
+        # Check device capability (NVIDIA GPUs)
+        if torch.cuda.get_device_capability()[0] < 3:
+            return False
+        
+        # Parse torch version
+        version_str = torch.__version__.split('+')[0]
+        parts = version_str.split('.')
+        torch_version = tuple(int(p) for p in parts[:2])
+        
+        # Bug affects PyTorch 2.9 and later versions
+        if torch_version < (2, 9):
+            return False
+        
+        if not hasattr(torch.backends.cudnn, 'version'):
+            return False
+            
+        cudnn_version = torch.backends.cudnn.version()
+        if cudnn_version is None or cudnn_version < 91002:
+            return False
+        
+        return True
+    except:
+        return False
+
+NVIDIA_CONV3D_MEMORY_BUG_WORKAROUND = _check_conv3d_memory_bug()
+
+
+# Single GPU inference - no distributed processing needed
+#print("Warning: Using single GPU inference mode - distributed features disabled in causal_inflation_lib")
+
+# Mock distributed functions for single GPU inference
+def get_sequence_parallel_group():
+    return None
+
+def get_sequence_parallel_rank():
+    return 0
+
+def get_sequence_parallel_world_size():
+    return 1
+
+def get_next_sequence_parallel_rank():
+    return 0
+
+def get_prev_sequence_parallel_rank():
+    return 0
 
 
 @contextmanager
@@ -66,6 +128,37 @@ class InflatedCausalConv3d(Conv3d):
 
     def set_memory_device(self, memory_device: _memory_device_t):
         self.memory_device = memory_device
+    
+    def _conv_forward(self, input, weight, bias, *args, **kwargs):
+        """
+        Override _conv_forward to work around NVIDIA Conv3d memory bug.
+        
+        Bug: PyTorch 2.9-2.10 with cuDNN >= 91002 uses 3x memory for Conv3d 
+        with fp16/bfloat16 weights due to buggy dispatch layer.
+        
+        Workaround: Call torch.cudnn_convolution directly to bypass buggy layer.
+        Status is logged at startup in compatibility.py.
+        """
+        if (NVIDIA_CONV3D_MEMORY_BUG_WORKAROUND and 
+            weight.dtype in (torch.float16, torch.bfloat16) and 
+            hasattr(torch.backends.cudnn, 'is_available') and
+            torch.backends.cudnn.is_available() and
+            getattr(torch.backends.cudnn, 'enabled', True)):
+            try:
+                # Direct cuDNN call bypasses buggy PyTorch dispatch layer (NVIDIA only)
+                out = torch.cudnn_convolution(
+                    input, weight, self.padding, self.stride, self.dilation, self.groups,
+                    benchmark=False, deterministic=False, allow_tf32=True
+                )
+                if bias is not None:
+                    out += bias.reshape((1, -1) + (1,) * (out.ndim - 2))
+                return out
+            except RuntimeError:
+                # Fallback if direct cuDNN call fails (dev builds, edge cases)
+                pass
+        
+        # Use standard path for unaffected configurations or if workaround failed
+        return super()._conv_forward(input, weight, bias, *args, **kwargs)
 
     def memory_limit_conv(
         self,
@@ -74,7 +167,6 @@ class InflatedCausalConv3d(Conv3d):
         split_dim=3,
         padding=(0, 0, 0, 0, 0, 0),
         prev_cache=None,
-        depth_idx=0,
     ):
         # Compatible with no limit.
         if math.isinf(self.memory_limit):
@@ -88,13 +180,23 @@ class InflatedCausalConv3d(Conv3d):
             shape[split_dim - 1] += prev_cache.size(split_dim - 1)
         shape[-3:] += torch.tensor(padding).view(3, 2).sum(-1).flip(0)
         memory_occupy = shape.prod() * x.element_size() / 1024**3  # GiB
-
         if memory_occupy < self.memory_limit or split_dim == x.ndim:
+            x_concat = x
             if prev_cache is not None:
-                x = torch.cat([prev_cache, x], dim=split_dim - 1)
-            x = safe_pad_operation(x, padding, value=0.0)
-            with ignore_padding(self):
-                return super().forward(x)
+                x_concat = torch.cat([prev_cache, x], dim=split_dim - 1)
+            
+            def pad_and_forward():
+                padded = safe_pad_operation(x_concat, padding, mode='constant', value=0.0)
+                with ignore_padding(self):
+                    return Conv3d.forward(self, padded)
+            
+            return retry_on_oom(
+                pad_and_forward,
+                debug=getattr(self, 'debug', None),
+                operation_name="InflatedCausalConv3d.pad_and_forward"
+            )
+
+        # Exceed memory limit, splitting tensor
 
         # Split input (& prev_cache).
         num_splits = math.ceil(memory_occupy / self.memory_limit)
@@ -105,41 +207,11 @@ class InflatedCausalConv3d(Conv3d):
         x = list(x.split(split_sizes, dim=split_dim))
         if prev_cache is not None:
             prev_cache = list(prev_cache.split(split_sizes, dim=split_dim))
-
-        # Collect results on CPU to minimize GPU memory, then copy back at end
-        results_cpu = []
-        result_device = None
-        result_dtype = None
-
         # Loop Fwd.
         cache = None
-        output = None
-        offset = 0
-        
-        # Calculate total input size along split_dim to determine total output size
-        total_input_size = sum(t.size(split_dim) for t in x)
-        
-        # Calculate expected output size based on Conv3d formula
-        param_idx = split_dim - 2
-        if 0 <= param_idx < 3:
-            k = self.kernel_size[param_idx]
-            s = self.stride[param_idx]
-            d = self.dilation[param_idx]
-            # self.padding has been adjusted in __init__ (temporal pad removed).
-            # But the logic inside the loop (lines 140-144) applies `self.padding` to boundaries.
-            # So effectively, the full operation has `self.padding[param_idx] * 2`.
-            p_total = self.padding[param_idx] * 2
-            total_output_size = (total_input_size + p_total - d * (k - 1) - 1) // s + 1
-        else:
-            total_output_size = total_input_size
-
         for idx in range(len(x)):
             # Concat prev cache from last dim
-            # This allocates a new tensor for the input chunk if cache exists.
             if prev_cache is not None:
-                # OPTIMIZATION: If possible, pre-allocate x[idx] with cache?
-                # But x is a list of views (from split). We can't resize views.
-                # So concat is necessary unless we rewrite split logic.
                 x[idx] = torch.cat([prev_cache[idx], x[idx]], dim=split_dim - 1)
 
             # Get padding pattern.
@@ -163,73 +235,46 @@ class InflatedCausalConv3d(Conv3d):
             if next_catch_size != 0:
                 assert next_catch_size <= x[idx].size(split_dim)
                 next_cache = (
-                    x[idx]
-                    .transpose(0, split_dim)[-next_catch_size:]
-                    .transpose(0, split_dim)
+                    x[idx].transpose(0, split_dim)[-next_catch_size:].transpose(0, split_dim)
                 )
 
             # Recursive.
-            result = self.memory_limit_conv(
+            x[idx] = self.memory_limit_conv(
                 x[idx],
                 split_dim=split_dim + 1,
                 padding=padding,
-                prev_cache=cache,
-                depth_idx=depth_idx + 1,
+                prev_cache=cache
             )
-
-            # Free input slice immediately
-            # We must be careful: x[idx] might be holding the large `cat` tensor.
-            # Deleting it frees GPU memory.
-            x[idx] = None
-            
-            if output is None:
-                result_device = result.device
-                result_dtype = result.dtype
-                
-                out_shape = list(result.shape)
-                out_shape[split_dim] = total_output_size
-                
-                if result_device.type == "cuda":
-                    torch.cuda.empty_cache()
-                
-                # Pre-allocate on CPU to save VRAM
-                output = torch.empty(*out_shape, device="cpu", dtype=result_dtype, pin_memory=True)
-
-            # Copy result to pre-allocated output buffer immediately
-            size = result.size(split_dim)
-            if size > 0:
-                 output.narrow(split_dim, offset, size).copy_(result.detach().cpu())
-                 offset += size
-            
-            # Free result memory immediately
-            del result
 
             # Update cache.
             cache = next_cache
 
-        # Try moving to GPU
-        if result_device.type == "cuda":
-            torch.cuda.empty_cache()
-            if depth_idx == 0:
-                output = output.to(result_device, non_blocking=True)
-
+        output = retry_on_oom(
+            torch.cat,
+            x,
+            split_dim,
+            debug=getattr(self, 'debug', None),
+            operation_name="InflatedCausalConv3d.concat_splits"
+        )
         return output
 
     def forward(
         self,
         input: Union[Tensor, List[Tensor]],
-        memory_state: MemoryState = MemoryState.UNSET,
+        memory_state: MemoryState = MemoryState.UNSET
     ) -> Tensor:
         assert memory_state != MemoryState.UNSET
         if memory_state != MemoryState.ACTIVE:
             self.memory = None
-        if math.isinf(self.memory_limit) and torch.is_tensor(input):
+        if (
+            math.isinf(self.memory_limit)
+            and torch.is_tensor(input)
+            and get_sequence_parallel_group() is None
+        ):
             return self.basic_forward(input, memory_state)
         return self.slicing_forward(input, memory_state)
 
-    def basic_forward(
-        self, input: Tensor, memory_state: MemoryState = MemoryState.UNSET
-    ):
+    def basic_forward(self, input: Tensor, memory_state: MemoryState = MemoryState.UNSET):
         mem_size = self.stride[0] - self.kernel_size[0]
         if (self.memory is not None) and (memory_state == MemoryState.ACTIVE):
             input = extend_head(input, memory=self.memory, times=-1)
@@ -255,7 +300,6 @@ class InflatedCausalConv3d(Conv3d):
         input: Union[Tensor, List[Tensor]],
         memory_state: MemoryState = MemoryState.UNSET,
     ) -> Tensor:
-
         squeeze_out = False
         if torch.is_tensor(input):
             input = [input]
@@ -263,51 +307,23 @@ class InflatedCausalConv3d(Conv3d):
 
         cache_size = self.kernel_size[0] - self.stride[0]
         cache = cache_send_recv(
-            input,
-            cache_size=cache_size,
-            memory=self.memory,
-            times=self.temporal_padding * 2,
+            input, cache_size=cache_size, memory=self.memory, times=self.temporal_padding * 2
         )
 
-        # For slice=4 and sp=2, and 17 frames in total
-        #                  sp0                  sp1
-        # slice 0: [`0 0` 0 1 2 {3 4}]   [{3 4} 5 6 (7 8)]    extend=`0 0` cache={3 4} memory=(7 8)
-        # slice 1: [(7 8) 9 10 {11 12}]  [{11 12} 13 14 15 16]
-        sp_rank = 0
-        sp_size = 1
-        sp_group = None
-        send_dst = 1
-        recv_src = 0
+        # Single GPU inference - simplified memory management
         if (
-            memory_state
-            in [MemoryState.INITIALIZING, MemoryState.ACTIVE]  # use_slicing
+            memory_state in [MemoryState.INITIALIZING, MemoryState.ACTIVE]  # use_slicing
             and not self.training
             and (self.memory_device is not None)
-            and sp_rank in [0, sp_size - 1]
             and cache_size != 0
         ):
             if cache_size > input[-1].size(2) and cache is not None and len(input) == 1:
                 input[0] = torch.cat([cache, input[0]], dim=2)
                 cache = None
-            assert cache_size <= input[-1].size(2)
-            if sp_size == 1:
+            if cache_size <= input[-1].size(2):
                 self.memory = input[-1][:, :, -cache_size:].detach().contiguous()
-            else:
-                if sp_rank == sp_size - 1:
-                    dist.send(
-                        input[-1][:, :, -cache_size:].detach().contiguous(),
-                        send_dst,
-                        group=sp_group,
-                    )
-                if sp_rank == 0:
-                    shape = list(input[0].size())
-                    shape[2] = cache_size
-                    self.memory = torch.empty(
-                        *shape, device=input[0].device, dtype=input[0].dtype
-                    ).contiguous()
-                    dist.recv(self.memory, recv_src, group=sp_group)
-            if self.memory_device == "cpu" and self.memory is not None:
-                self.memory = self.memory.to("cpu")
+                if self.memory_device == "cpu" and self.memory is not None:
+                    self.memory = self.memory.to("cpu")
 
         padding = tuple(x for x in reversed(self.padding) for _ in range(2))
         for i in range(len(input)):
@@ -316,23 +332,19 @@ class InflatedCausalConv3d(Conv3d):
             cache_size = 0
             if i < len(input) - 1:
                 cache_len = cache.size(2) if cache is not None else 0
-                cache_size = get_cache_size(
-                    self, input[i].size(2) + cache_len, pad_len=0
-                )
+                cache_size = get_cache_size(self, input[i].size(2) + cache_len, pad_len=0)
             if cache_size != 0:
                 if cache_size > input[i].size(2) and cache is not None:
                     input[i] = torch.cat([cache, input[i]], dim=2)
                     cache = None
-                assert cache_size <= input[i].size(
-                    2
-                ), f"{cache_size} > {input[i].size(2)}"
+                assert cache_size <= input[i].size(2), f"{cache_size} > {input[i].size(2)}"
                 next_cache = input[i][:, :, -cache_size:]
 
             # Conv forward for this input slice.
             input[i] = self.memory_limit_conv(
                 input[i],
                 padding=padding,
-                prev_cache=cache,
+                prev_cache=cache
             )
 
             # Update cache.
@@ -347,19 +359,10 @@ class InflatedCausalConv3d(Conv3d):
             output_numel = sum(o.numel() for o in output)
         else:
             raise NotImplementedError
-        return (
-            2 * math.prod(self.kernel_size) * self.in_channels * (output_numel / 1e6)
-        ) / 1e6
+        return (2 * math.prod(self.kernel_size) * self.in_channels * (output_numel / 1e6)) / 1e6
 
     def _load_from_state_dict(
-        self,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
+        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
     ):
         if self.inflation_mode != "none":
             state_dict = modify_state_dict(
@@ -397,102 +400,60 @@ def init_causal_conv3d(
 
 
 def causal_norm_wrapper(norm_layer: nn.Module, x: torch.Tensor) -> torch.Tensor:
-    input_dtype = x.dtype
     if isinstance(norm_layer, (nn.LayerNorm, RMSNorm)):
         if x.ndim == 4:
             x = rearrange(x, "b c h w -> b h w c")
             x = norm_layer(x)
             x = rearrange(x, "b h w c -> b c h w")
-            return x.to(input_dtype)
+            return x
         if x.ndim == 5:
             x = rearrange(x, "b c t h w -> b t h w c")
             x = norm_layer(x)
             x = rearrange(x, "b t h w c -> b c t h w")
-            return x.to(input_dtype)
+            return x
     if isinstance(norm_layer, (nn.GroupNorm, nn.BatchNorm2d, nn.SyncBatchNorm)):
         if x.ndim <= 4:
-            return norm_layer(x).to(input_dtype)
+            return norm_layer(x)
         if x.ndim == 5:
             t = x.size(2)
             x = rearrange(x, "b c t h w -> (b t) c h w")
             memory_occupy = x.numel() * x.element_size() / 1024**3
-            if (
-                isinstance(norm_layer, nn.GroupNorm)
-                and memory_occupy > get_norm_limit()
-            ):
-                # Try to reduce peak memory for GroupNorm.
-                #
-                # 1) Prefer splitting along channel dim on group boundaries (exact).
-                # 2) If that is not possible (e.g. num_groups == 1), fall back to
-                #    splitting along (b*t) batch dim (also exact for GroupNorm).
-                #
-                # Both strategies preserve GroupNorm semantics because GN computes
-                # statistics independently per-sample and per-group.
-                max_chunks = 4 if x.element_size() == 2 else 2
-                channel_chunks = min(max_chunks, norm_layer.num_groups)
-                can_channel_chunk = (
-                    channel_chunks > 1
-                    and norm_layer.num_groups % channel_chunks == 0
-                    and x.size(1) % channel_chunks == 0
+            if isinstance(norm_layer, nn.GroupNorm) and memory_occupy > get_norm_limit():
+                num_chunks = min(4 if x.element_size() == 2 else 2, norm_layer.num_groups)
+                assert norm_layer.num_groups % num_chunks == 0
+                num_groups_per_chunk = norm_layer.num_groups // num_chunks
+
+                x = list(x.chunk(num_chunks, dim=1))
+                weights = norm_layer.weight.chunk(num_chunks, dim=0)
+                biases = norm_layer.bias.chunk(num_chunks, dim=0)
+                
+                for i, (w, b) in enumerate(zip(weights, biases)):
+                    def apply_group_norm():
+                        return F.group_norm(x[i], num_groups_per_chunk, w, b, norm_layer.eps)
+                    
+                    x[i] = retry_on_oom(
+                        apply_group_norm,
+                        debug=getattr(norm_layer, 'debug', None),
+                        operation_name=f"GroupNorm.chunk_{i}"
+                    )
+                    x[i] = x[i]
+                
+                x = retry_on_oom(
+                    torch.cat,
+                    x,
+                    dim=1,
+                    debug=getattr(norm_layer, 'debug', None),
+                    operation_name="GroupNorm.concat_chunks"
                 )
-
-                if can_channel_chunk:
-                    num_groups_per_chunk = norm_layer.num_groups // channel_chunks
-                    x_chunks = list(x.chunk(channel_chunks, dim=1))
-
-                    if norm_layer.weight is None:
-                        weights = (None,) * channel_chunks
-                    else:
-                        weights = norm_layer.weight.chunk(channel_chunks, dim=0)
-                    if norm_layer.bias is None:
-                        biases = (None,) * channel_chunks
-                    else:
-                        biases = norm_layer.bias.chunk(channel_chunks, dim=0)
-                    
-                    
-            
-                    for i, (w, b) in enumerate(zip(weights, biases)):
-                        y = F.group_norm(
-                            x_chunks[i],
-                            num_groups_per_chunk,
-                            w,
-                            b,
-                            norm_layer.eps,
-                        )
-                        # In-place update to reuse memory of the chunk (which is a view of x)
-                        # We must ensure x_chunks[i] is contiguous or copy_ works efficiently.
-                        x_chunks[i].copy_(y)
-                        # Explicitly delete y to free memory before next iteration
-                        del y
-                    # x is already updated in place, no need for cat.
-                    # x = torch.cat(x_chunks, dim=1) # Removed
-                else:
-                    # Batch/time chunking fallback: split (b*t, c, h, w) along dim=0.
-                    bt = x.size(0)
-                    # Use the same "norm limit" knob as the channel-chunking path.
-                    norm_limit = get_norm_limit()
-                    num_splits = min(bt, math.ceil(memory_occupy / norm_limit))
-                    if num_splits <= 1 and bt > 1:
-                        num_splits = bt
-                    size_per_split = bt // num_splits
-                    split_sizes = [size_per_split] * (num_splits - 1)
-                    split_sizes += [bt - sum(split_sizes)]
-
-                    outs = []
-                    for x_part in x.split(split_sizes, dim=0):
-                        y = F.group_norm(
-                            x_part,
-                            norm_layer.num_groups,
-                            norm_layer.weight,
-                            norm_layer.bias,
-                            norm_layer.eps,
-                        )
-                        outs.append(y.to(input_dtype) if y.dtype != input_dtype else y)
-                    x = torch.cat(outs, dim=0)
             else:
-                x = norm_layer(x)
+                x = retry_on_oom(
+                    norm_layer,
+                    x,
+                    debug=getattr(norm_layer, 'debug', None),
+                    operation_name="GroupNorm.direct"
+                )
             x = rearrange(x, "(b t) c h w -> b c t h w", t=t)
-            return x.to(input_dtype)
+            return x
     raise NotImplementedError
 
 
@@ -500,15 +461,13 @@ def remove_head(tensor: Tensor, times: int = 1) -> Tensor:
     """
     Remove duplicated first frame features in the up-sampling process.
     """
-    sp_rank = 0
-    if times == 0 or sp_rank > 0:
+    # Single GPU inference - always process
+    if times == 0:
         return tensor
     return torch.cat(tensors=(tensor[:, :, :1], tensor[:, :, times + 1 :]), dim=2)
 
 
-def extend_head(
-    tensor: Tensor, times: int = 2, memory: Optional[Tensor] = None
-) -> Tensor:
+def extend_head(tensor: Tensor, times: int = 2, memory: Optional[Tensor] = None) -> Tensor:
     """
     When memory is None:
         - Duplicate first frame features in the down-sampling process.
@@ -523,14 +482,10 @@ def extend_head(
     else:
         tile_repeat = [1] * tensor.ndim
         tile_repeat[2] = times
-        return torch.cat(
-            tensors=(torch.tile(tensor[:, :, :1], tile_repeat), tensor), dim=2
-        )
+        return torch.cat(tensors=(torch.tile(tensor[:, :, :1], tile_repeat), tensor), dim=2)
 
 
-def inflate_weight(
-    weight_2d: torch.Tensor, weight_3d: torch.Tensor, inflation_mode: str
-):
+def inflate_weight(weight_2d: torch.Tensor, weight_3d: torch.Tensor, inflation_mode: str):
     """
     Inflate a 2D convolution weight matrix to a 3D one.
     Parameters:
