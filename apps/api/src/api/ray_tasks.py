@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import ray
 import traceback
 from loguru import logger
+from src.memory_management import MemoryConfig
 from src.preprocess.aux_cache import AuxillaryCache
 import importlib
 import hashlib
@@ -83,6 +84,140 @@ def _apply_memory_env_from_store() -> None:
     except Exception:
         # Best-effort only.
         return
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """
+    Parse a boolean-ish environment variable.
+
+    Accepts: 1/0, true/false, yes/no, on/off (case-insensitive).
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _optimize_mp4_for_editor_in_place(
+    video_path: str,
+    *,
+    fps: Optional[int] = None,
+) -> bool:
+    """
+    Best-effort post-pass for MP4s intended for interactive playback in editors.
+
+    Goals:
+    - Make MP4 seekable/streamable via `-movflags +faststart`
+    - Optionally enforce CFR + a shorter GOP for smoother scrubbing
+    - Keep behavior best-effort: on failure, leave the original file intact
+
+    Controlled by env:
+    - APEX_VIDEO_EDITOR_OPTIMIZE: enable/disable (default: true)
+    - APEX_VIDEO_EDITOR_GOP_SECONDS: keyframe interval in seconds (default: 1.0)
+    - APEX_VIDEO_EDITOR_CRF: x264 CRF (default: 18)
+    - APEX_VIDEO_EDITOR_PRESET: x264 preset (default: veryfast)
+    - APEX_VIDEO_EDITOR_NO_BFRAMES: disable B-frames for monotonic timestamps (default: true)
+    """
+    try:
+        import subprocess
+
+        from src.utils.ffmpeg import get_ffmpeg_path
+
+        if not _env_flag("APEX_VIDEO_EDITOR_OPTIMIZE", default=True):
+            return False
+
+        if not (isinstance(video_path, str) and os.path.isfile(video_path)):
+            return False
+
+        base = Path(video_path)
+        if base.suffix.lower() != ".mp4":
+            return False
+
+        # Read tunables.
+        try:
+            gop_seconds = float(os.environ.get("APEX_VIDEO_EDITOR_GOP_SECONDS", "1.0") or "1.0")
+        except Exception:
+            gop_seconds = 1.0
+        gop_seconds = max(0.25, min(10.0, gop_seconds))
+
+        try:
+            crf = int(os.environ.get("APEX_VIDEO_EDITOR_CRF", "18") or "18")
+        except Exception:
+            crf = 18
+        crf = max(0, min(51, crf))
+
+        preset = str(os.environ.get("APEX_VIDEO_EDITOR_PRESET", "veryfast") or "veryfast").strip()
+        if not preset:
+            preset = "veryfast"
+
+        no_bframes = _env_flag("APEX_VIDEO_EDITOR_NO_BFRAMES", default=True)
+
+        # If we don't know the FPS, keep it as-is and only ensure faststart.
+        fps_int: Optional[int] = None
+        if fps is not None:
+            try:
+                fps_int = int(max(1, round(float(fps))))
+            except Exception:
+                fps_int = None
+
+        temp_out_path = base.with_name(f"{base.stem}_editor{base.suffix}")
+
+        cmd: List[str] = [
+            get_ffmpeg_path(),
+            "-y",
+            "-i",
+            str(base),
+            # Video only: audio is muxed later in our pipeline.
+            "-an",
+            "-map",
+            "0:v:0",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            preset,
+            "-crf",
+            str(crf),
+            "-sc_threshold",
+            "0",
+        ]
+
+        # GOP tuning for smoother seeking/scrubbing (requires re-encode).
+        if fps_int is not None:
+            gop = int(max(1, round(float(fps_int) * float(gop_seconds))))
+            cmd.extend(
+                [
+                    "-g",
+                    str(gop),
+                    "-keyint_min",
+                    str(gop),
+                ]
+            )
+            # Enforce CFR in the output when FPS is known.
+            cmd.extend(["-fps_mode", "cfr", "-r", str(fps_int)])
+
+        if no_bframes:
+            # Avoid B-frame reordering; often improves editor scrubbing and makes timestamps simpler.
+            cmd.extend(["-x264-params", "bframes=0"])
+
+        cmd.extend(
+            [
+                "-movflags",
+                "+faststart",
+                str(temp_out_path),
+            ]
+        )
+
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode != 0 or not temp_out_path.is_file():
+            return False
+
+        temp_out_path.replace(base)
+        return True
+    except Exception:
+        return False
+
 
 def _get_warm_pool() -> EngineWarmPool:
     """
@@ -2082,7 +2217,7 @@ def run_engine_from_manifest(
             "model_type": model_type,
             "selected_components": selected_components,
             "auto_memory_management": _bool_env("AUTO_MEMORY_MANAGEMENT", False),
-            **(config.get("engine_kwargs", {}) or {}),
+            **(config.get("engine_kwargs", {}) or {})
         }
 
         if attention_type:
@@ -2273,7 +2408,15 @@ def run_engine_from_manifest(
                             "copy",
                             "-c:a",
                             "aac",
+                            "-b:a",
+                            "192k",
+                            "-ar",
+                            "48000",
+                            "-ac",
+                            "2",
                             "-shortest",
+                            "-movflags",
+                            "+faststart",
                             str(temp_out_path),
                         ]
                     )
@@ -2295,6 +2438,12 @@ def run_engine_from_manifest(
                             "copy",
                             "-c:a",
                             "aac",
+                            "-b:a",
+                            "192k",
+                            "-ar",
+                            "48000",
+                            "-ac",
+                            "2",
                             "-shortest",
                             "-movflags",
                             "+faststart",
@@ -2362,6 +2511,12 @@ def run_engine_from_manifest(
                     "copy",
                     "-c:a",
                     "aac",
+                    "-b:a",
+                    "192k",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
                     "-shortest",
                     "-movflags",
                     "+faststart",
@@ -2413,6 +2568,14 @@ def run_engine_from_manifest(
                         quality=8.0 if final else 5.0,
                     )
                     media_type = "video"
+
+                    # Post-pass: generate a seek/editor-friendly MP4 before we mux audio.
+                    # Best-effort only (keeps original file if ffmpeg fails).
+                    if final and result_path:
+                        try:
+                            _optimize_mp4_for_editor_in_place(result_path, fps=int(fps))
+                        except Exception:
+                            pass
 
                     # If this is the final video and we have audio inputs to save, try to mux them in.
                     if final and media_type == "video" and result_path and audio_inputs:
@@ -2821,6 +2984,12 @@ def run_frame_interpolation(
 
         fps_to_write = int(max(1, round(target_fps)))
         export_to_video(frames, video_only_path, fps=fps_to_write, quality=8.0)
+
+        # Post-pass: generate a seek/editor-friendly MP4 before we mux original audio.
+        try:
+            _optimize_mp4_for_editor_in_place(video_only_path, fps=fps_to_write)
+        except Exception:
+            pass
 
         # Try to mux audio from input_path into the final output without changing rate/tempo
         # If no audio is present, fall back to the video-only file
