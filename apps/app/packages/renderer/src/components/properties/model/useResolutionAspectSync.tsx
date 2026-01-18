@@ -146,7 +146,37 @@ export function useResolutionAspectSync(opts: {
       let heightInt: number;
       let widthInt: number;
 
-      if (hasValidCurrentDims) {
+      // Check current AR setting
+      const arInput = getInputById("aspect_ratio") as any;
+      const currentAR = String(arInput?.value ?? arInput?.default ?? "custom");
+
+      // If we have a standard aspect ratio selected, prioritize recalculating dimensions
+      // to match that ratio exactly at the new resolution, rather than scaling old dimensions
+      // (which might have drifted or been snapped).
+      if (currentAR !== "custom") {
+        const dims =
+          computeDimsFromResolutionAndAR(resBaseline, currentAR) ??
+          (() => {
+            const heightSnapped = snapToStep(
+              resBaseline,
+              heightInput?.step,
+              heightInput?.min,
+              heightInput?.max,
+            );
+            const widthSnapped = snapToStep(
+              resBaseline,
+              widthInput?.step,
+              widthInput?.min,
+              widthInput?.max,
+            );
+            return {
+              height: Math.max(1, Math.round(heightSnapped)),
+              width: Math.max(1, Math.round(widthSnapped)),
+            };
+          })();
+        heightInt = dims.height;
+        widthInt = dims.width;
+      } else if (hasValidCurrentDims) {
         // Preserve current aspect ratio and scale so that either:
         // - default: the *shorter* side matches the selected resolution baseline
         // - SD (512): the *longer* side matches the selected resolution baseline
@@ -154,11 +184,24 @@ export function useResolutionAspectSync(opts: {
         const shorter = Math.min(currentWidthRaw, currentHeightRaw);
         if (longer <= 0 || shorter <= 0) return;
 
+        const isHeightLonger = currentHeightRaw >= currentWidthRaw;
+        const useHeightAsBaseline = useLongerSideBaseline
+          ? isHeightLonger
+          : !isHeightLonger;
+
+        const baselineInput = useHeightAsBaseline ? heightInput : widthInput;
+        const targetBaseline = snapToStep(
+          resBaseline,
+          baselineInput?.step,
+          baselineInput?.min,
+          baselineInput?.max,
+        );
+
         const scaleDenom = useLongerSideBaseline ? longer : shorter;
-        const scale = resBaseline / scaleDenom;
+        const scale = targetBaseline / scaleDenom;
+
         const targetLonger = longer * scale;
         const targetShorter = shorter * scale;
-        const isHeightLonger = currentHeightRaw >= currentWidthRaw;
 
         const targetHeight = isHeightLonger ? targetLonger : targetShorter;
         const targetWidth = isHeightLonger ? targetShorter : targetLonger;
@@ -180,7 +223,8 @@ export function useResolutionAspectSync(opts: {
         widthInt = Math.max(1, Math.round(snappedWidth));
       } else {
         // Fallback: derive from aspect ratio selector using resolution baseline
-        const arInput = getInputById("aspect_ratio") as any;
+        // Note: if we reached here, currentAR is "custom" but hasValidCurrentDims is false,
+        // OR currentAR is missing. We try to use whatever is in the AR input.
         const arVal = String(arInput?.value ?? arInput?.default ?? "");
         const dims =
           computeDimsFromResolutionAndAR(resBaseline, arVal) ??
@@ -206,8 +250,21 @@ export function useResolutionAspectSync(opts: {
         widthInt = dims.width;
       }
 
+      // Check if the new dimensions match a specific aspect ratio option
+      const arOptions: any[] = arInput?.options || [];
+      let bestAR = "custom";
+
+      for (const opt of arOptions) {
+        if (opt.value === "custom") continue;
+        const dims = computeDimsFromResolutionAndAR(resBaseline, opt.value);
+        if (dims && dims.width === widthInt && dims.height === heightInt) {
+          bestAR = opt.value;
+          break;
+        }
+      }
+
       // Prevent auto-sync effect from overriding our maintained ratio
-      updateModelInput(clipId, "aspect_ratio", { value: "custom" });
+      updateModelInput(clipId, "aspect_ratio", { value: bestAR });
       updateModelInput(clipId, "height", { value: String(heightInt) });
       updateModelInput(clipId, "width", { value: String(widthInt) });
     },
@@ -246,8 +303,36 @@ export function useResolutionAspectSync(opts: {
 
       updateModelInput(clipId, "height", { value: String(dims.height) });
       updateModelInput(clipId, "width", { value: String(dims.width) });
+
+      // Check if new dimensions match a specific resolution
+      const resOptions: any[] = resInput?.options || [];
+      let bestRes = "custom";
+
+      for (const opt of resOptions) {
+        if (opt.value === "custom") continue;
+        // We need the numeric baseline for computeDims
+        const baseline = Number(opt.value);
+        if (!Number.isFinite(baseline)) continue;
+
+        const checkDims = computeDimsFromResolutionAndAR(baseline, newVal);
+        if (
+          checkDims &&
+          checkDims.width === dims.width &&
+          checkDims.height === dims.height
+        ) {
+          bestRes = opt.value;
+          break;
+        }
+      }
+      updateModelInput(clipId, "resolution", { value: bestRes });
     },
-    [clipId, computeDimsFromResolutionAndAR, getInputById, getSelectedOption, updateModelInput],
+    [
+      clipId,
+      computeDimsFromResolutionAndAR,
+      getInputById,
+      getSelectedOption,
+      updateModelInput,
+    ],
   );
 
   // Sync effect: ensure height and width reflect selected resolution and aspect ratio.
@@ -309,5 +394,3 @@ export function useResolutionAspectSync(opts: {
     handleAspectRatioChange,
   };
 }
-
-
