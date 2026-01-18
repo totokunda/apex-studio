@@ -22,7 +22,7 @@ import yaml
 import numpy as np
 import json
 from src.utils.cache import empty_cache
-from src.utils.warm_pool import stable_hash_dict
+from src.utils.warm_pool import EngineWarmPool, stable_hash_dict
 from src.api.preprocessor_registry import get_preprocessor_info
 from src.engine.registry import UniversalEngine
 from src.mixins.download_mixin import DownloadMixin
@@ -31,6 +31,7 @@ from src.utils.defaults import (
     get_lora_path,
     get_preprocessor_path,
     get_config_store_path,
+    get_cache_path,
 )
 from src.utils.config_store import read_json_dict
 from diffusers.utils import export_to_video
@@ -43,6 +44,16 @@ import ctypes
 import ctypes.util
 import time
 import struct
+
+# Per-worker engine warm pool (process-local).
+_ENGINE_WARM_POOL: EngineWarmPool | None = None
+
+
+def _get_engine_warm_pool() -> EngineWarmPool:
+    global _ENGINE_WARM_POOL
+    if _ENGINE_WARM_POOL is None:
+        _ENGINE_WARM_POOL = EngineWarmPool.from_env()
+    return _ENGINE_WARM_POOL
 
 _MEM_ENV_KEYS = [
     "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION",
@@ -262,7 +273,38 @@ def free_unused_modules_in_warm_pool(
       the same worker (typically via the same GPU resource selection) to see the pool.
     - To avoid interfering with running jobs, we skip `in_use` engines by default.
     """
-    return {"status": "ok"}
+    try:
+        pool = _get_engine_warm_pool()
+        if not pool.enabled:
+            return {"status": "complete", "enabled": False, "evicted": 0}
+
+        # We currently only support "evict/offload idle engines" (best-effort).
+        # This is enough to free VRAM/RAM without needing to introspect internals.
+        active = active or []
+        active_set = {str(x) for x in active if x is not None}
+        keys = list((pool.stats() or {}).get("keys") or [])
+
+        evicted = 0
+        for k in keys:
+            if k in active_set:
+                continue
+            # discard() is safe no-op for missing/in-use entries
+            try:
+                pool.discard(str(k))
+                evicted += 1
+            except Exception:
+                continue
+
+        return {
+            "status": "complete",
+            "enabled": True,
+            "requested_target": target,
+            "include_in_use": bool(include_in_use),
+            "evicted": int(evicted),
+            "pool": pool.stats(),
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 _WIN_INVALID_PATH_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
@@ -633,7 +675,147 @@ def warmup_engine_from_manifest(
     *,
     mode: str = "engine",
 ) -> Dict[str, Any]:
-    return {"status": "ok"}
+    _apply_memory_env_from_store()
+
+    selected_components = selected_components or {}
+    mode = (mode or "engine").strip().lower()
+    if mode not in {"disk", "engine", "both"}:
+        mode = "engine"
+
+    engine = None
+    engine_pool_key = None
+    pooled = False
+    pool = _get_engine_warm_pool()
+
+    try:
+        from src.utils.yaml import load_yaml as load_manifest_yaml
+        from src.manifest.loader import validate_and_normalize
+        from src.engine.registry import UniversalEngine
+
+        raw = load_manifest_yaml(manifest_path)
+        config = validate_and_normalize(raw)
+
+        engine_type = config.get("engine") or (config.get("spec") or {}).get("engine")
+        model_type = config.get("type") or (config.get("spec") or {}).get("model_type")
+        if isinstance(model_type, list):
+            model_type = model_type[0] if model_type else None
+
+        attention_type = None
+        try:
+            attention_type = (selected_components or {}).get("attention", {}).get("name", None)
+        except Exception:
+            attention_type = None
+
+        def _bool_env(name: str, default: bool = True) -> bool:
+            try:
+                v = os.environ.get(name)
+                if v is None:
+                    return default
+                return str(v).strip().lower() not in ("0", "false", "no", "off")
+            except Exception:
+                return default
+
+        auto_mm = _bool_env("AUTO_MEMORY_MANAGEMENT", False)
+
+        engine_kwargs = (config.get("engine_kwargs", {}) or {})
+        input_kwargs = {
+            "engine_type": engine_type,
+            "yaml_path": manifest_path,
+            "model_type": model_type,
+            "selected_components": selected_components,
+            "auto_memory_management": auto_mm,
+            **engine_kwargs,
+        }
+        if attention_type:
+            input_kwargs["attention_type"] = attention_type
+
+        # Disk warmup: create an engine instance on CPU to trigger download() + disk page-cache prewarm.
+        # (BaseEngine.download does a bounded, best-effort mmap page-touch over weight files.)
+        disk_ok = False
+        if mode in {"disk", "both"}:
+            try:
+                cpu_kwargs = dict(input_kwargs)
+                cpu_kwargs["device"] = torch.device("cpu")
+                _ = UniversalEngine(**cpu_kwargs)
+                disk_ok = True
+            except Exception as e:
+                logger.warning(f"Disk warmup failed for {manifest_path}: {e}")
+                disk_ok = False
+
+        if mode in {"engine", "both"}:
+            engine_pool_key = _engine_pool_key(
+                manifest_path=manifest_path,
+                engine_type=engine_type,
+                model_type=model_type,
+                selected_components=selected_components or {},
+                engine_kwargs=engine_kwargs,
+                attention_type=attention_type,
+                auto_memory_management=auto_mm,
+            )
+
+            def _factory():
+                return UniversalEngine(**input_kwargs)
+
+            allow_pool = not _warm_weights_disabled()
+            engine, pooled = pool.acquire(engine_pool_key, _factory, allow_pool=allow_pool)
+
+            # Optional: load weights/components to avoid first-run stalls.
+            # This can be expensive; keep it opt-in.
+            if _env_flag("APEX_WARMUP_LOAD_COMPONENTS", default=False):
+                warm_components_raw = os.environ.get(
+                    "APEX_WARMUP_COMPONENTS", "scheduler,text_encoder,vae,transformer"
+                )
+                warm_components_raw = str(warm_components_raw or "").strip().lower()
+                warm_components: List[str]
+                if warm_components_raw in {"*", "all"}:
+                    warm_components = []
+                    try:
+                        comps_cfg = (engine.engine.config or {}).get("components", [])  # type: ignore[union-attr]
+                        if isinstance(comps_cfg, list):
+                            for c in comps_cfg:
+                                if isinstance(c, dict):
+                                    if c.get("name"):
+                                        warm_components.append(str(c.get("name")))
+                                    if c.get("type"):
+                                        warm_components.append(str(c.get("type")))
+                    except Exception:
+                        warm_components = []
+                else:
+                    warm_components = [s.strip() for s in warm_components_raw.split(",") if s.strip()]
+
+                if warm_components:
+                    try:
+                        eng_impl = getattr(engine, "engine", None)
+                        comps_cfg = getattr(eng_impl, "config", {}).get("components", []) if eng_impl is not None else []
+                        if eng_impl is not None and isinstance(comps_cfg, list):
+                            eng_impl.load_components(comps_cfg, warm_components)
+                    except Exception as e:
+                        logger.warning(f"Engine component warmup failed for key={engine_pool_key}: {e}")
+
+            # Release back into pool for future runs.
+            if pooled and engine_pool_key:
+                pool.release(engine_pool_key)
+
+        return {
+            "status": "complete",
+            "mode": mode,
+            "disk_ok": disk_ok if mode in {"disk", "both"} else None,
+            "engine_pooled": bool(pooled),
+            "engine_pool_key": engine_pool_key,
+            "pool": pool.stats(),
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+    finally:
+        # If we didn't pool the instance, aggressively offload so warmup doesn't hoard VRAM/RAM.
+        try:
+            if engine is not None and (not pooled or _warm_weights_disabled()):
+                try:
+                    engine.offload_engine()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 
 def _cleanup_lora_artifacts_if_remote(lora_item: Any) -> None:
@@ -1782,15 +1964,27 @@ def _execute_preprocessor(
     if cache.is_cached():
         result_path = cache.get_result_path()
         send_progress(1.0, "Cache found and returning")
-        
         # Construct preview URL for frontend access
-        preprocessor_results_base = Path(DEFAULT_CACHE_PATH) / "preprocessor_results"
+        preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
         try:
             relative_path = Path(result_path).relative_to(preprocessor_results_base)
             preview_url = f"/files/preprocessor_results/{relative_path}"
         except (ValueError, AttributeError):
             # Fallback if path conversion fails
             preview_url = None
+            
+        results_dict = {
+            "Complete": "Complete",
+            "result_path": result_path,
+            "preview_url": preview_url,
+            "type": media_type,
+            "preprocessor_name": preprocessor_name,
+            "input_path": input_path,
+            "job_id": job_id,
+            "start_frame": start_frame,
+        }
+        
+        logger.info(f"{results_dict}")
         
         send_progress(1.0, "Complete", {"status": "complete", "result_path": result_path, "preview_url": preview_url, "type": media_type})
         return {
@@ -1807,7 +2001,6 @@ def _execute_preprocessor(
 
     from src.preprocess.download_tracker import DownloadProgressTracker
     from src.preprocess import util as util_module
-    from src.utils.defaults import DEFAULT_CACHE_PATH
 
     tracker = DownloadProgressTracker(
         job_id,
@@ -1871,7 +2064,7 @@ def _execute_preprocessor(
             if isinstance(result_path, str) and result_path.lower().endswith(".mp4"):
                 try:
                     preproc_gop = int(
-                        os.environ.get("APEX_VIDEO_EDITOR_PREPROCESSOR_GOP", "4") or "4"
+                        os.environ.get("APEX_VIDEO_EDITOR_PREPROCESSOR_GOP", "1") or "1"
                     )
                 except Exception:
                     preproc_gop = 4
@@ -1892,13 +2085,27 @@ def _execute_preprocessor(
             pass
         
         # Construct preview URL for frontend access
-        preprocessor_results_base = Path(DEFAULT_CACHE_PATH) / "preprocessor_results"
+        preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
         try:
             relative_path = Path(result_path).relative_to(preprocessor_results_base)
             preview_url = f"/files/preprocessor_results/{relative_path}"
         except (ValueError, AttributeError):
             # Fallback if path conversion fails
             preview_url = None
+            
+        results_dict = {
+            "Complete": "Complete",
+            "result_path": result_path,
+            "preview_url": preview_url,
+            "type": cache.type,
+            "preprocessor_name": preprocessor_name,
+            "input_path": input_path,
+            "job_id": job_id,
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "kwargs": kwargs,
+        }
+        logger.info(f"{results_dict}")
         
         send_progress(1.0, "Complete", {"status": "complete", "result_path": result_path, "preview_url": preview_url, "type": cache.type})
 
@@ -2067,9 +2274,6 @@ def run_engine_from_manifest(
             "selected_components": selected_components,
             "auto_memory_management": _bool_env("AUTO_MEMORY_MANAGEMENT", False),
             **(config.get("engine_kwargs", {}) or {}),
-            "memory_management":{
-                "transformer": MemoryConfig.for_block_level(),
-            }
         }
 
         if attention_type:
@@ -2089,7 +2293,16 @@ def run_engine_from_manifest(
         def _factory():
             return UniversalEngine(**input_kwargs)
 
-        engine = _factory()
+        # Acquire from per-worker warm pool when enabled.
+        # This allows a previous warmup (or a previous run) to reuse the already-loaded engine.
+        allow_pool = not _warm_weights_disabled()
+        try:
+            engine, engine_pooled = _get_engine_warm_pool().acquire(
+                engine_pool_key, _factory, allow_pool=allow_pool
+            )
+        except Exception:
+            engine = _factory()
+            engine_pooled = False
 
         # Compute FPS once so we don't capture the full engine/config inside callbacks.
         fps_for_video: int = 16
@@ -2742,10 +2955,13 @@ def run_engine_from_manifest(
         except Exception:
             pass
 
-        try:
-            engine.offload_engine()
-        except Exception as e:
-            logger.warning(f"Failed to offload engine: {e}")
+        # If we are pooling, keep weights warm after the run (unless explicitly disabled).
+        # Otherwise, aggressively offload to minimize VRAM/RAM usage.
+        if (not engine_pooled) or _warm_weights_disabled():
+            try:
+                engine.offload_engine()
+            except Exception as e:
+                logger.warning(f"Failed to offload engine: {e}")
         send_progress(1.0, "Complete", {"status": "complete"})
         return {"status": "complete", "result_path": result_path, "type": media_type}
 
@@ -2762,6 +2978,13 @@ def run_engine_from_manifest(
         # If the engine is pooled, do NOT clear torch caches (keeps it warm).
         # If not pooled, do best-effort offload + cache clearing.
         try:
+            # Release warm pool lease first so later evictions can happen.
+            try:
+                if engine_pooled and engine_pool_key:
+                    _get_engine_warm_pool().release(engine_pool_key)
+            except Exception:
+                pass
+
             if (not engine_pooled or _warm_weights_disabled()) and engine is not None:
                 try:
                     engine.offload_engine()

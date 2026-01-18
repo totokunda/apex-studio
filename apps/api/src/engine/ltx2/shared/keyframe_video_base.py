@@ -250,7 +250,7 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
 
         if not self.scheduler:
             self.load_component_by_type("scheduler")
-            self.to_device(self.scheduler)
+        self.to_device(self.scheduler)
 
         # For now, duplicate the scheduler for use with the audio latents
         audio_scheduler = copy.deepcopy(self.scheduler)

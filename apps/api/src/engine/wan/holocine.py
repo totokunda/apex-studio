@@ -625,7 +625,7 @@ class WanHoloCineEngine(WanShared):
                         )
 
                         self.load_component_by_name("high_noise_transformer")
-                        self.to_device(self.high_noise_transformer)
+                        
                         comp = (
                             self.get_component_by_name("high_noise_transformer") or {}
                         )
@@ -635,6 +635,7 @@ class WanHoloCineEngine(WanShared):
                             float(i) / float(total_steps) if total_steps else 0.0,
                             "New transformer ready",
                         )
+                    self.to_device(self.high_noise_transformer)
 
                     transformer = self.high_noise_transformer
 
@@ -662,14 +663,14 @@ class WanHoloCineEngine(WanShared):
                             "Loading alternate transformer",
                         )
                         self.load_component_by_name("low_noise_transformer")
-                        self.to_device(self.low_noise_transformer)
+                        
                         self.check_sparse_self_attn("low_noise_transformer")
                         safe_emit_progress(
                             denoise_progress_callback,
                             float(i) / float(total_steps) if total_steps else 0.0,
                             "Alternate transformer ready",
                         )
-
+                    self.to_device(self.low_noise_transformer)
                     transformer = self.low_noise_transformer
                     if isinstance(guidance_scale, list):
                         guidance_scale = guidance_scale[1]
