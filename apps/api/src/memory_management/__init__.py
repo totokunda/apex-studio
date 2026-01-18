@@ -1,16 +1,609 @@
 """
-Lightweight memory management utilities.
+Memory management utilities inspired by ComfyUI's model management.
 
-Currently this module exposes `MemoryConfig`, which is used to configure how
-models are offloaded via diffusers' native group offloading APIs.
+This module now exposes a `ComponentMemoryManager` that tracks engine components,
+monitors VRAM/RAM pressure, and proactively offloads/loads modules to keep
+inference runs stable. It installs lightweight forward hooks on registered
+modules so we can:
+  • Pre‑flight GPU allocations before forward passes.
+  • Offload cold components when VRAM falls below configured headroom.
+  • Keep the engine's view of component locations (CPU/GPU) in sync after
+    manual offloads.
+
+The manager is attached per‑engine via `install_memory_hooks(engine)` and
+wraps `engine.to_device` / `_offload` to coordinate RAM/VRAM usage across runs.
 """
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+import types
+import weakref
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
+
+import torch
+try:
+    import psutil
+except Exception:  # pragma: no cover - psutil may be missing in limited envs
+    psutil = None
 
 from .config import MemoryConfig
 from .group_offloading import apply_group_offloading
 
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+
+# -----------------------------
+# Data structures
+# -----------------------------
+@dataclass
+class ManagedComponent:
+    label: str
+    tags: Set[str] = field(default_factory=set)
+    module_ref: weakref.ReferenceType | None = None
+    engine_ref: weakref.ReferenceType | None = None
+    hooks: Tuple[Any, ...] = field(default_factory=tuple)
+    estimated_bytes: int = 0
+    last_used: float = field(default_factory=lambda: time.time())
+    in_forward: bool = False
+    pinned: bool = False
+    device: Optional[torch.device] = None
+
+    def module(self) -> Optional[torch.nn.Module]:
+        return None if self.module_ref is None else self.module_ref()
+
+    def engine(self) -> Any:
+        return None if self.engine_ref is None else self.engine_ref()
+
+
+# -----------------------------
+# Core manager
+# -----------------------------
+class ComponentMemoryManager:
+    """
+    Lightweight VRAM/RAM manager that mirrors ComfyUI's model management ideas.
+
+    Responsibilities:
+    - Track engine components and their approximate weight size.
+    - Guard GPU moves (`to_device`) to ensure headroom before allocating.
+    - Attach forward hooks that evict cold components when pressure is detected.
+    - Update bookkeeping when components are offloaded/discarded.
+    """
+
+    def __init__(self) -> None:
+        self._components: Dict[str, ManagedComponent] = {}
+        self._module_to_label: Dict[int, str] = {}
+        self._lock = threading.Lock()
+        self._evicting_flag = threading.local()  # Track if we are currently forcing eviction
+
+    # --------- environment helpers ----------
+    @staticmethod
+    def _env_bool(name: str, default: bool = False) -> bool:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        try:
+            raw = os.environ.get(name, "")
+            if raw == "":
+                return default
+            return float(raw)
+        except Exception:
+            return default
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            raw = os.environ.get(name, "")
+            if raw == "":
+                return default
+            return int(float(raw))
+        except Exception:
+            return default
+
+    def _debug_enabled(self) -> bool:
+        return self._env_bool("APEX_MEM_DEBUG", False)
+
+    def _log_debug(self, msg: str) -> None:
+        if self._debug_enabled():
+            logger.info(msg)
+        else:
+            logger.debug(msg)
+
+    # --------- sizing helpers ----------
+    def _module_device(self, module: torch.nn.Module) -> torch.device:
+        for param in module.parameters(recurse=True):
+            return param.device
+        for buf in module.buffers(recurse=True):
+            return buf.device
+        return torch.device("cpu")
+
+    def _module_size_bytes(self, module: torch.nn.Module) -> int:
+        total = 0
+        try:
+            for p in module.parameters(recurse=True):
+                if p is not None:
+                    total += p.numel() * p.element_size()
+            for b in module.buffers(recurse=True):
+                if b is not None:
+                    total += b.numel() * b.element_size()
+        except Exception:
+            pass
+        return int(total)
+
+    def _estimate_allocation_bytes(self, modules: Sequence[torch.nn.Module]) -> int:
+        """
+        Estimate memory required to move the provided modules onto an accelerator.
+        Mirrors ComfyUI's "weight + safety margin" approach.
+        """
+        base = sum(self._module_size_bytes(m) for m in modules)
+        mult = self._env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20)
+        extra = self._env_int("APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2)
+        return int(base * mult + extra)
+
+    # --------- memory stats ----------
+    def _device_free_total(self, device: torch.device) -> Tuple[int, int]:
+        """
+        Return (free_bytes, total_bytes) for the given device.
+        """
+        try:
+            if device.type == "cuda" and torch.cuda.is_available():
+                idx = device.index if device.index is not None else torch.cuda.current_device()
+                free, total = torch.cuda.mem_get_info(idx)
+                return int(free), int(total)
+            if device.type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+                idx = device.index if device.index is not None else torch.xpu.current_device()
+                stats = torch.xpu.memory_stats(idx)
+                free = int(stats.get("available_bytes.all.current", 0))
+                total = int(torch.xpu.get_device_properties(idx).total_memory)
+                return free, total
+            if device.type == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                if psutil:
+                    vm = psutil.virtual_memory()
+                    return int(vm.available), int(vm.total)
+                return 0, 0
+        except Exception:
+            pass
+
+        if psutil:
+            try:
+                vm = psutil.virtual_memory()
+                return int(vm.available), int(vm.total)
+            except Exception:
+                pass
+        return 0, 0
+
+    def _target_free_bytes(self, device: torch.device, reserve: int) -> int:
+        free, total = self._device_free_total(device)
+        if total == 0:
+            return reserve
+        if device.type in {"cuda", "xpu", "mps", "npu", "mlu"}:
+            frac = self._env_float("APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12)
+        else:
+            frac = self._env_float("APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10)
+        target = int(total * frac)
+        print("Target free bytes: ", target, "Total: ", total, "Fraction: ", frac, free, device.type)
+        if device.type in {"cuda", "xpu"}:
+            target = max(target, self._env_int("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3))
+        return reserve + target
+
+    # --------- registration ----------
+    def register_component(
+        self,
+        module: torch.nn.Module,
+        label: str,
+        tags: Optional[Iterable[str]] = None,
+        *,
+        engine: Any | None = None,
+        pinned: bool = False,
+        install_hooks: bool = True,
+    ) -> ManagedComponent | None:
+        if module is None:
+            return None
+        try:
+            with self._lock:
+                if id(module) in self._module_to_label:
+                    existing_label = self._module_to_label[id(module)]
+                    comp = self._components.get(existing_label)
+                    if comp:
+                        return comp
+
+                comp = ManagedComponent(
+                    label=label,
+                    tags=set(tags or []),
+                    module_ref=weakref.ref(module),
+                    engine_ref=weakref.ref(engine) if engine is not None else None,
+                    estimated_bytes=self._module_size_bytes(module),
+                    pinned=pinned,
+                    device=self._module_device(module),
+                )
+                if install_hooks:
+                    comp.hooks = self._attach_forward_hooks(module, label)
+                self._components[label] = comp
+                self._module_to_label[id(module)] = label
+                self._log_debug(
+                    f"[mem] registered component '{label}' "
+                    f"(size={comp.estimated_bytes/1e6:.2f}MB, device={comp.device})"
+                )
+                return comp
+        except Exception as exc:
+            logger.warning(f"Failed to register component {label}: {exc}")
+        return None
+
+    def _attach_forward_hooks(self, module: torch.nn.Module, label: str) -> Tuple[Any, ...]:
+        handles: List[Any] = []
+        try:
+            def _pre(_mod, _inputs):
+                self._on_forward_start(label, _mod)
+
+            def _post(_mod, _inputs, _outputs):
+                self._on_forward_end(label, _mod)
+
+            handles.append(module.register_forward_pre_hook(_pre))
+            handles.append(module.register_forward_hook(_post))
+        except Exception as exc:
+            logger.debug(f"Could not attach forward hooks for {label}: {exc}")
+        return tuple(handles)
+
+    # --------- lifecycle ----------
+    def _on_forward_start(self, label: str, module: torch.nn.Module) -> None:
+        comp = self._components.get(label)
+        if comp is None:
+            return
+        comp.in_forward = True
+        comp.last_used = time.time()
+        device = self._module_device(module)
+        comp.device = device
+
+        reserve = max(comp.estimated_bytes, 0)
+        reserve = int(reserve * self._env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20))
+        reserve += self._env_int("APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2)
+
+        self._ensure_room(device, reserve, exclude_label=label)
+
+    def _on_forward_end(self, label: str, module: torch.nn.Module) -> None:
+        comp = self._components.get(label)
+        if comp is None:
+            return
+        comp.in_forward = False
+        comp.device = self._module_device(module)
+        comp.last_used = time.time()
+
+    def mark_offloaded(
+        self,
+        module: Union[str, torch.nn.Module, None],
+        *,
+        offload_type: str = "cpu",
+    ) -> None:
+        label = self._resolve_label(module)
+        if label is None:
+            return
+        comp = self._components.get(label)
+        if comp is None:
+            return
+        comp.device = torch.device("cpu") if offload_type == "cpu" else None
+        comp.last_used = time.time()
+        self._log_debug(f"[mem] marked '{label}' offloaded ({offload_type})")
+
+    def mark_moved(self, modules: Sequence[torch.nn.Module], device: torch.device) -> None:
+        now = time.time()
+        for mod in modules:
+            label = self._module_to_label.get(id(mod))
+            if not label:
+                continue
+            comp = self._components.get(label)
+            if comp is None:
+                continue
+            comp.device = device
+            comp.last_used = now
+            comp.estimated_bytes = max(comp.estimated_bytes, self._module_size_bytes(mod))
+
+    # --------- pressure handling ----------
+    def _ensure_room(self, device: torch.device, reserve_bytes: int, *, exclude_label: str | None = None) -> None:
+        free, total = self._device_free_total(device)
+        target_free = self._target_free_bytes(device, reserve_bytes)
+        if total == 0:
+            return
+
+        if free >= target_free:
+            return
+
+        self._log_debug(
+            f"[mem] pressure detected on {device}: free={free/1e9:.2f}GB "
+            f"target={target_free/1e9:.2f}GB"
+        )
+        candidates = self._eviction_candidates(device, exclude_label=exclude_label)
+        for label in candidates:
+            comp = self._components.get(label)
+            if comp is None or comp.in_forward:
+                continue
+            
+            # Tiered offloading: GPU -> CPU -> Discard
+            if device.type != "cpu":
+                try:
+                    self._ensure_room(torch.device("cpu"), comp.estimated_bytes, exclude_label=exclude_label)
+                    self._offload_component(comp, offload_type="cpu")
+                except Exception:
+                    self._offload_component(comp, offload_type="discard")
+            else:
+                self._offload_component(comp, offload_type="discard")
+
+            free, _ = self._device_free_total(device)
+            if free >= target_free:
+                break
+
+    def _eviction_candidates(self, device: torch.device, *, exclude_label: str | None = None) -> List[str]:
+        """
+        Return component labels sorted by LRU (oldest first) for the given device.
+        """
+        comps: List[Tuple[float, str]] = []
+        for label, comp in self._components.items():
+            if exclude_label is not None and label == exclude_label:
+                continue
+            if comp.in_forward or comp.pinned:
+                continue
+            if comp.device is not None and comp.device.type != device.type:
+                continue
+            comps.append((comp.last_used, label))
+
+        comps.sort(key=lambda x: x[0])
+        return [label for _, label in comps]
+
+    def _offload_component(self, comp: ManagedComponent, offload_type: str = "cpu") -> None:
+        module = comp.module()
+        if module is None and offload_type != "discard":
+            return
+        
+        # Set thread-local flag to signal that this offload is FORCED by the manager
+        self._evicting_flag.is_evicting = True
+        try:
+            engine = comp.engine()
+            try:
+                if engine is not None and hasattr(engine, "_offload"):
+                    # Must pass label (str) for discard so OffloadMixin can nullify the attribute.
+                    # For CPU, passing module object is fine (and slightly faster/safer if attr changed).
+                    target = comp.label if offload_type == "discard" else (module if module is not None else comp.label)
+                    engine._offload(target, offload_type=offload_type)  # type: ignore[attr-defined]
+                else:
+                    if module is not None:
+                        module.to("cpu")
+
+                if offload_type == "discard":
+                    comp.device = None
+                else:
+                    comp.device = torch.device("cpu")
+
+                comp.last_used = time.time()
+                self._log_debug(f"[mem] offloaded '{comp.label}' ({offload_type})")
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(f"Offload failed for {comp.label}: {exc}")
+        finally:
+            self._evicting_flag.is_evicting = False
+
+    # --------- engine wiring ----------
+    def _resolve_label(self, module: Union[str, torch.nn.Module, None]) -> Optional[str]:
+        if module is None:
+            return None
+        if isinstance(module, str):
+            return module
+        return self._module_to_label.get(id(module))
+
+    def _normalize_modules(
+        self,
+        engine: Any,
+        components: Tuple[Union[str, torch.nn.Module], ...] | List[Union[str, torch.nn.Module]],
+    ) -> List[torch.nn.Module]:
+        mods: List[torch.nn.Module] = []
+        for comp in components:
+            mod = None
+            if isinstance(comp, str):
+                mod = getattr(engine, comp, None)
+                if mod is None:
+                    helpers = getattr(engine, "helpers", {})
+                    mod = helpers.get(comp) if isinstance(helpers, dict) else None
+            else:
+                mod = comp
+            if mod is not None and hasattr(mod, "to"):
+                mods.append(mod)
+        return mods
+
+    def _wrap_to_device(self, engine: Any) -> None:
+        if getattr(engine, "_apex_mem_to_device_wrapped", False):
+            return
+        if not hasattr(engine, "to_device"):
+            return
+        original = engine.to_device
+
+        def _wrapped_to_device(self, *components, device=None):
+            target_device = device
+            if target_device is None:
+                target_device = getattr(self, "device", None) or torch.device("cpu")
+            if isinstance(target_device, str):
+                target_device = torch.device(target_device)
+
+            if components:
+                modules = self._component_memory_manager._normalize_modules(self, components)
+            else:
+                defaults: List[torch.nn.Module] = []
+                for maybe_mod in (
+                    getattr(self, "vae", None),
+                    getattr(self, "text_encoder", None),
+                    getattr(self, "transformer", None),
+                    getattr(self, "scheduler", None),
+                ):
+                    if maybe_mod is not None:
+                        defaults.append(maybe_mod)
+                helpers_map = getattr(self, "_helpers", None) or getattr(self, "helpers", None)
+                if isinstance(helpers_map, dict):
+                    defaults.extend([h for h in helpers_map.values() if h is not None])
+                modules = self._component_memory_manager._normalize_modules(self, tuple(defaults))
+
+            reserve = self._component_memory_manager._estimate_allocation_bytes(modules) if modules else 0
+            self._component_memory_manager._ensure_room(target_device, reserve)
+
+            result = original(*components, device=device)
+            self._component_memory_manager.mark_moved(modules, target_device)
+            return result
+
+        engine.to_device = types.MethodType(_wrapped_to_device, engine)
+        engine._apex_mem_to_device_wrapped = True
+
+    def _wrap_offload(self, engine: Any) -> None:
+        if getattr(engine, "_apex_mem_offload_wrapped", False):
+            return
+        if not hasattr(engine, "_offload"):
+            return
+        original = engine._offload
+
+        def _wrapped_offload(self, module, *, offload_type: str = "discard"):
+            # Intercept "discard" requests: try to keep in RAM (CPU) if space permits.
+            # Lazy Offloading: If offload_type is "discard" or "cpu", we might prefer
+            # to just mark it as IDLE and leave it on GPU until pressure forces it out.
+            
+            manager = getattr(self, "_component_memory_manager", None)
+            
+            final_offload_type = offload_type
+            
+            # 1. Resolve Module Object
+            mod_obj = module
+            if manager:
+                try:
+                    if isinstance(module, str):
+                        # Try to resolve from registered components first
+                        comp = manager._components.get(module)
+                        if comp:
+                            mod_obj = comp.module()
+                        
+                        # Fallback to engine lookup
+                        if mod_obj is None:
+                            mod_obj = getattr(self, module, None)
+                        if mod_obj is None:
+                            # Check both _helpers and helpers
+                            helpers = getattr(self, "_helpers", None) or getattr(self, "helpers", None) or {}
+                            mod_obj = helpers.get(module)
+                except Exception:
+                    pass
+
+            # 2. Downgrade Discard -> CPU if RAM allows
+            if final_offload_type == "discard" and manager and mod_obj is not None:
+                try:
+                    size = manager._module_size_bytes(mod_obj)
+                    cpu_dev = torch.device("cpu")
+                    free, _ = manager._device_free_total(cpu_dev)
+                    target_free = manager._target_free_bytes(cpu_dev, 0)
+                    
+                    if free > (target_free + size + 2 * 1024**3):
+                        final_offload_type = "cpu"
+                except Exception:
+                    pass
+
+            # 3. Check for Forced Eviction vs Voluntary Offload
+            is_forced = False
+            if manager:
+                if hasattr(manager, "_evicting_flag") and getattr(manager._evicting_flag, "is_evicting", False):
+                    is_forced = True
+
+            # 4. Lazy Offloading Logic
+            # If this is VOLUNTARY (engine pipeline cleanup) and the result is "cpu" (RAM),
+            # we check if we can keep it on GPU (VRAM) as "idle" instead.
+            if not is_forced and final_offload_type == "cpu" and manager and mod_obj is not None:
+                try:
+                    # Check current device
+                    current_dev = manager._module_device(mod_obj)
+                    if current_dev.type != "cpu":
+                        # It is currently on accelerator (GPU).
+                        # Instead of moving to CPU now, we MARK IT IDLE.
+                        manager.mark_idle(mod_obj)
+                        return  # <-- Lazy return! We do NOT execute the move.
+                except Exception:
+                    pass
+
+            # 5. Execute actual offload (if forced, or if moving to discard, or if already on CPU)
+            result = original(module, offload_type=final_offload_type)
+            try:
+                if manager:
+                    manager.mark_offloaded(module, offload_type=final_offload_type)
+            except Exception:
+                pass
+            return result
+
+        engine._offload = types.MethodType(_wrapped_offload, engine)
+        engine._apex_mem_offload_wrapped = True
+
+    def _register_existing_components(self, engine: Any) -> None:
+        for name in ("transformer", "vae", "text_encoder", "scheduler"):
+            mod = getattr(engine, name, None)
+            if mod is not None:
+                self.register_component(mod, name, {name}, engine=engine, pinned=name == "scheduler")
+        helpers = getattr(engine, "_helpers", None) or getattr(engine, "helpers", None)
+        if isinstance(helpers, dict):
+            for key, helper in helpers.items():
+                self.register_component(helper, key, {"helper"}, engine=engine, pinned=False)
+
+    def install_for_engine(self, engine: Any) -> None:
+        """
+        Attach manager to an engine instance: wrap to_device/offload, register
+        any preloaded modules, and expose helper methods used inside BaseEngine.
+        """
+        setattr(engine, "_component_memory_manager", self)
+        self._register_existing_components(engine)
+        self._wrap_to_device(engine)
+        self._wrap_offload(engine)
+
+        # Expose helpers for BaseEngine.load_component path.
+        def _register_tracked_module(self_obj, module, label, tags=None):
+            return self.register_component(module, label, tags or set(), engine=self_obj)
+
+        def _install_preforward_hook(self_obj, module, label):
+            comp = self.register_component(module, label, {label}, engine=self_obj, install_hooks=False)
+            if comp is not None and not comp.hooks:
+                comp.hooks = self._attach_forward_hooks(module, label)
+            return comp
+
+        if not hasattr(engine, "_register_tracked_module"):
+            engine._register_tracked_module = types.MethodType(_register_tracked_module, engine)
+        if not hasattr(engine, "_install_preforward_hook"):
+            engine._install_preforward_hook = types.MethodType(_install_preforward_hook, engine)
+
+
+# -----------------------------
+# Public helpers
+# -----------------------------
+_GLOBAL_MANAGER: ComponentMemoryManager | None = None
+
+
+def get_memory_manager() -> ComponentMemoryManager:
+    global _GLOBAL_MANAGER
+    if _GLOBAL_MANAGER is None:
+        _GLOBAL_MANAGER = ComponentMemoryManager()
+    return _GLOBAL_MANAGER
+
+
+def install_memory_hooks(engine: Any) -> ComponentMemoryManager:
+    """
+    Attach the global memory manager to the given engine instance.
+
+    This is idempotent: calling multiple times will reuse the same manager.
+    """
+    manager = get_memory_manager()
+    manager.install_for_engine(engine)
+    return manager
+
+
 __all__ = [
     "MemoryConfig",
     "apply_group_offloading",
+    "ComponentMemoryManager",
+    "get_memory_manager",
+    "install_memory_hooks",
 ]
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"

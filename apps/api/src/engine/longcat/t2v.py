@@ -107,7 +107,7 @@ class LongCatT2VEngine(LongCatShared):
         # 4. Prepare timesteps
         if not self.scheduler:
             self.load_component_by_type("scheduler")
-            self.to_device(self.scheduler)
+        self.to_device(self.scheduler)
 
         sigmas = self.get_timesteps_sigmas(num_inference_steps, use_distill=use_distill)
         timesteps, num_inference_steps = self._get_timesteps(

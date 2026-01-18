@@ -220,7 +220,7 @@ class LongCatShared(BaseEngine):
         self._init_lora_manager(get_lora_path())
         if not self.transformer:
             self.load_component_by_type("transformer")
-            self.to_device(self.transformer)
+        self.to_device(self.transformer)
 
         cfg_step_lora = self.preloaded_loras.get("cfg_step_lora", None)
         self.logger.info(f"Applying cfg_step_lora: {cfg_step_lora}")
