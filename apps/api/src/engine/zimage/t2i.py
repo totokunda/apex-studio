@@ -147,9 +147,7 @@ class ZImageT2IEngine(ZImageShared):
             generator,
             latents,
         )
-        
-       
-        
+  
         safe_emit_progress(progress_callback, 0.32, "Initialized latent noise")
 
         # Repeat prompt_embeds for num_images_per_prompt

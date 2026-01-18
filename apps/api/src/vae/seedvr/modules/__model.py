@@ -364,6 +364,7 @@ class ResnetBlock3D(ResnetBlock2D):
             input_tensor = self.conv_shortcut(input_tensor, memory_state=memory_state)
 
         output_tensor = input_tensor + hidden_states
+        input(f"After output {output_tensor.shape} ")
 
         return output_tensor
 
@@ -892,20 +893,32 @@ class SeedVR2AutoencoderKL(nn.Module):
             self.use_slicing
             and (x.shape[2] - 1) > self.slicing_sample_min_size * sp_size
         ):
+            device = x.device
             x_slices = x[:, :, 1:].split(
                 split_size=self.slicing_sample_min_size * sp_size, dim=2
             )
-            encoded_slices = [
-                self._encode(
-                    torch.cat((x[:, :, :1], x_slices[0]), dim=2),
-                    memory_state=MemoryState.INITIALIZING,
-                )
-            ]
+            first = self._encode(
+                torch.cat((x[:, :, :1], x_slices[0]), dim=2),
+                memory_state=MemoryState.INITIALIZING,
+            )
+            if device.type == "cuda":
+                first_cpu = first.cpu()
+                del first
+                first = first_cpu
+                torch.cuda.empty_cache()
+
+            encoded_slices = [first]
             for x_idx in range(1, len(x_slices)):
-                encoded_slices.append(
-                    self._encode(x_slices[x_idx], memory_state=MemoryState.ACTIVE)
-                )
-            return torch.cat(encoded_slices, dim=2)
+                part = self._encode(x_slices[x_idx], memory_state=MemoryState.ACTIVE)
+                if device.type == "cuda":
+                    part_cpu = part.cpu()
+                    del part
+                    part = part_cpu
+                    torch.cuda.empty_cache()
+                encoded_slices.append(part)
+
+            out = torch.cat(encoded_slices, dim=2)
+            return out.to(device) if device.type == "cuda" else out
         else:
             return self._encode(x, memory_state=MemoryState.DISABLED)
 
@@ -915,20 +928,32 @@ class SeedVR2AutoencoderKL(nn.Module):
             self.use_slicing
             and (z.shape[2] - 1) > self.slicing_latent_min_size * sp_size
         ):
+            device = z.device
             z_slices = z[:, :, 1:].split(
                 split_size=self.slicing_latent_min_size * sp_size, dim=2
             )
-            decoded_slices = [
-                self._decode(
-                    torch.cat((z[:, :, :1], z_slices[0]), dim=2),
-                    memory_state=MemoryState.INITIALIZING,
-                )
-            ]
+            first = self._decode(
+                torch.cat((z[:, :, :1], z_slices[0]), dim=2),
+                memory_state=MemoryState.INITIALIZING,
+            )
+            if device.type == "cuda":
+                first_cpu = first.cpu()
+                del first
+                first = first_cpu
+                torch.cuda.empty_cache()
+
+            decoded_slices = [first]
             for z_idx in range(1, len(z_slices)):
-                decoded_slices.append(
-                    self._decode(z_slices[z_idx], memory_state=MemoryState.ACTIVE)
-                )
-            return torch.cat(decoded_slices, dim=2)
+                part = self._decode(z_slices[z_idx], memory_state=MemoryState.ACTIVE)
+                if device.type == "cuda":
+                    part_cpu = part.cpu()
+                    del part
+                    part = part_cpu
+                    torch.cuda.empty_cache()
+                decoded_slices.append(part)
+
+            out = torch.cat(decoded_slices, dim=2)
+            return out.to(device) if device.type == "cuda" else out
         else:
             return self._decode(z, memory_state=MemoryState.DISABLED)
 
@@ -956,10 +981,13 @@ class SeedVR2AutoencoderKL(nn.Module):
         assert (
             split_size is None or memory_device is not None
         ), "if split_size is set, memory_device must not be None."
-        if split_size is not None:
+        if split_size is not None and split_size > 0:
             self.enable_slicing()
             self.slicing_sample_min_size = split_size
-            self.slicing_latent_min_size = split_size // self.temporal_downsample_factor
+            # Latent slicing uses `split()` which requires a positive split_size.
+            self.slicing_latent_min_size = max(
+                1, split_size // self.temporal_downsample_factor
+            )
         else:
             self.disable_slicing()
         for module in self.modules():
@@ -1033,13 +1061,14 @@ class SeedVR2AutoencoderKLWrapper(
         assert (
             split_size is None or memory_device is not None
         ), "if split_size is set, memory_device must not be None."
-        if split_size is not None:
+        if split_size is not None and split_size > 0:
             self.enable_slicing()
+            self.slicing_sample_min_size = split_size
+            self.slicing_latent_min_size = max(
+                1, split_size // self.temporal_downsample_factor
+            )
         else:
             self.disable_slicing()
-        self.slicing_sample_min_size = split_size
-        if split_size is not None:
-            self.slicing_latent_min_size = split_size // self.temporal_downsample_factor
         for module in self.modules():
             if isinstance(module, InflatedCausalConv3d):
                 module.set_memory_device(memory_device)
