@@ -138,6 +138,11 @@ export class SettingsModule extends EventEmitter implements AppModule {
     }
   }
 
+  getActiveProjectId(): string | null {
+    const v = (this.store.get("activeProjectId") as string | number | null | undefined) ?? null;
+    return typeof v === "string" ? v : v ? String(v) : null;
+  }
+
   /**
    * Temporarily switch the active backend URL in-memory (emits backend-url-changed),
    * without persisting it to disk. Intended for the Settings "Verify" flow.
@@ -833,13 +838,16 @@ export class SettingsModule extends EventEmitter implements AppModule {
       "settings:get-active-project-id",
       (): string | number | undefined | null => {
         return this.store.get("activeProjectId") ?? null;
+        
       },
+
     );
 
     ipcMain.handle(
       "settings:set-active-project-id",
       (_event, projectId: string | number | null): void => {
         this.store.set("activeProjectId", projectId ?? null);
+        this.emit("active-project-id-changed", projectId ?? null);
       },
     );
 

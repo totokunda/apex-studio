@@ -17,8 +17,12 @@ import { pythonProcess } from "./modules/PythonProcess.js";
 import { remoteVersioningModule } from "./modules/RemoteVersioningModule.js";
 import { installerModule } from "./modules/InstallerModule.js";
 import { launcherStatusModule } from "./modules/LauncherStatusModule.js";
+import { app } from "electron";
 
 export async function initApp(initConfig: AppInitConfig) {
+  // Set app name early, before any modules are initialized
+  app.setName("Apex Studio");
+
   // Consider "dev mode" only when the renderer is served from an http(s) dev server.
   // In production we now load the renderer via `app://renderer/index.html`, which is also a URL,
   // so `instanceof URL` alone is not sufficient.

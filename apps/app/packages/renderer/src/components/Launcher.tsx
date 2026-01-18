@@ -107,10 +107,12 @@ function coverPathToAppUserDataUrl(
   const baseForUrl = normalizeForUrlPath(stripTrailingSlashes(rawBase));
   const rel = absForUrl.startsWith(baseForUrl) ? absForUrl.slice(baseForUrl.length) : "";
   const pathPart = rel.startsWith("/") ? rel : `/${rel}`;
+
   const v =
     version != null && String(version).length > 0
       ? `?v=${encodeURIComponent(String(version))}`
       : "";
+    console.log(`app://user-data${encodeURI(pathPart)}${v}`);
   return `app://user-data${encodeURI(pathPart)}${v}`;
 }
 
