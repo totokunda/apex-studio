@@ -258,8 +258,12 @@ const ModelClip: React.FC<Props> = ({
             mediaInfoRef.current,
             imageCanvas.current,
             timelineHeight,
+            // Use the computed thumbnail width (in px) for this clip, and do NOT
+            // cap rendering to the global timeline width. ModelClip renders its
+            // canvas at full `clipWidth`, so we must generate enough tiles to
+            // cover that width (especially noticeable when zooming in).
+            thumbnailClipWidth,
             clipWidth,
-            timelineWidth,
             timelineWidth,
             timelineDuration,
             startFrame,

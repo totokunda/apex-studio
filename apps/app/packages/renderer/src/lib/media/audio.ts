@@ -2,6 +2,7 @@ import { MediaInfo } from "../types";
 import { WrappedAudioBuffer } from "mediabunny";
 import { pruneStaleDecoders } from "./utils";
 import { MediaCache } from "./cache";
+import { useProjectsStore } from "../projects";
 import type {
   AudioWorkerMessage,
   AudioWorkerResponse,
@@ -12,10 +13,20 @@ export const BLOCK_SIZE = 2048;
 // Worker pool - one worker per audio asset for concurrent decoding
 const audioWorkers = new Map<string, WorkerState>();
 
+function getActiveFolderUuid(): string | undefined {
+  try {
+    return useProjectsStore.getState().getActiveProject()?.folderUuid || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 type WorkerState = {
   worker: Worker;
   requestId: number;
   configured: boolean;
+  configuredFolderUuid?: string;
+  requestedFolderUuid?: string;
   configurePromise: Promise<void> | null;
   pendingResolvers: Map<
     number,
@@ -52,6 +63,8 @@ function getOrCreateAudioWorker(assetId: string): WorkerState {
     worker,
     requestId: 0,
     configured: false,
+    configuredFolderUuid: undefined,
+    requestedFolderUuid: undefined,
     configurePromise: null,
     pendingResolvers: new Map<
       number,
@@ -160,6 +173,7 @@ function getOrCreateAudioWorker(assetId: string): WorkerState {
           clearTimeout(configResolver.timeoutId);
           state.pendingConfigureResolvers.delete(msg.requestId ?? 0);
           state.configured = true;
+          state.configuredFolderUuid = state.requestedFolderUuid;
           state.configurePromise = null;
           configResolver.resolve();
         }
@@ -219,9 +233,10 @@ export async function preconfigureAudioWorker(
 
   const assetId = path;
   const workerState = getOrCreateAudioWorker(assetId);
+  const folderUuid = getActiveFolderUuid();
 
   // If already configured or configuring, wait for existing promise
-  if (workerState.configured) {
+  if (workerState.configured && workerState.configuredFolderUuid === folderUuid) {
     return;
   }
   if (workerState.configurePromise) {
@@ -251,6 +266,7 @@ export async function preconfigureAudioWorker(
   const formatStr = formatMap[ext];
 
   const requestId = ++workerState.requestId;
+  workerState.requestedFolderUuid = folderUuid;
 
   // Create configuration promise using the resolver map (no handler replacement)
   workerState.configurePromise = new Promise<void>((resolve, reject) => {
@@ -279,6 +295,7 @@ export async function preconfigureAudioWorker(
           path,
         },
         formatStr,
+        folderUuid,
       },
       requestId,
     } satisfies AudioWorkerMessage);
@@ -386,6 +403,7 @@ export const getAudioIterator = async (
     const assetId = path; // Use path as asset ID
     const workerState = getOrCreateAudioWorker(assetId);
     const requestId = ++workerState.requestId;
+    const folderUuid = getActiveFolderUuid();
 
     // Set up pending state for this request
     const pendingState = {
@@ -399,7 +417,7 @@ export const getAudioIterator = async (
     // Wait for preconfiguration if it's in progress, or configure now
     if (workerState.configurePromise) {
       await workerState.configurePromise;
-    } else if (!workerState.configured) {
+    } else if (!workerState.configured || workerState.configuredFolderUuid !== folderUuid) {
       // Not preconfigured, configure now
       const ext = path.split(".").pop()?.toLowerCase() || "";
       const formatMap: Record<string, string> = {
@@ -417,6 +435,7 @@ export const getAudioIterator = async (
       const formatStr = formatMap[ext];
 
       const configRequestId = ++workerState.requestId;
+      workerState.requestedFolderUuid = folderUuid;
 
       // Configure worker with the audio track using resolver map (no handler replacement)
       const configPromise = new Promise<void>((resolve, reject) => {
@@ -443,6 +462,7 @@ export const getAudioIterator = async (
               path,
             },
             formatStr,
+            folderUuid,
           },
           requestId: configRequestId,
         } satisfies AudioWorkerMessage);

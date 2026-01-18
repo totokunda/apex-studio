@@ -42,7 +42,7 @@ const JobsMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [jobsById, setJobsById] = useState<Record<string, TrackedJob>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
-  const { updateClip, addAssetAsync, updatePreprocessor } = useClipStore();
+  const { updateClip, addAssetAsync,  updatePreprocessor } = useClipStore();
   const { fps } = useControlsStore();
   // Poll aggregated Ray jobs
   const { data: polledJobs = [] } = useQuery<RayJobStatus[]>({
@@ -110,7 +110,7 @@ const JobsMenu: React.FC = () => {
     updateClip,
     addAssetAsync,
     fps,
-  });
+  }); 
 
   useDownloadJobClipSync({
     jobsById,
