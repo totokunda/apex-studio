@@ -1258,10 +1258,7 @@ export async function exportClip(
   }
 
   // Fast path: single video clip export that requires no canvas compositing.
-  console.log("mode", mode);
-  console.log("workingClip.type", workingClip.type);
-  console.log("canUseFfmpegFastPathForVideoClip(workingClip as ExportVideoClip)", canUseFfmpegFastPathForVideoClip(workingClip as ExportVideoClip));
-  console.log("opts.backgroundColor", opts.backgroundColor);
+
   if (
     mode === "video" &&
     workingClip.type === "video" &&
@@ -1566,6 +1563,8 @@ export async function exportClip(
       );
 
       const audioSrc = await getAudioSrc(audioClip.src);
+
+      
       if (!audioSrc) return null;
 
       const effectiveTrimStart = baseTrimStart + srcStartFrame;
