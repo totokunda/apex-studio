@@ -280,8 +280,8 @@ class ZImageControlEngine(ZImageShared):
             self.load_component_by_type("scheduler")
             safe_emit_progress(progress_callback, 0.20, "Scheduler loaded")
             safe_emit_progress(progress_callback, 0.21, "Moving scheduler to device")
-            self.to_device(self.scheduler)
-            safe_emit_progress(progress_callback, 0.22, "Scheduler on device")
+        self.to_device(self.scheduler)
+        safe_emit_progress(progress_callback, 0.22, "Scheduler on device")
 
         # 5. Prepare timesteps
         mu = self.calculate_shift(
@@ -309,8 +309,8 @@ class ZImageControlEngine(ZImageShared):
             self.load_component_by_type("transformer")
             safe_emit_progress(progress_callback, 0.24, "Transformer loaded")
             safe_emit_progress(progress_callback, 0.25, "Moving transformer to device")
-            self.to_device(self.transformer)
-            safe_emit_progress(progress_callback, 0.26, "Transformer on device")
+        self.to_device(self.transformer)
+        safe_emit_progress(progress_callback, 0.26, "Transformer on device")
 
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.40, 0.92)
         # 6. Denoising loop
