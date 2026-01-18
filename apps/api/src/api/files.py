@@ -1,9 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Optional
 import mimetypes
 import hashlib
+import stat
 
 from src.utils.defaults import get_cache_path, get_components_path
 
@@ -80,23 +81,59 @@ def _is_valid_sha256_hex(s: str) -> bool:
 
 
 @router.get("")
-def get_file(_request: Request, scope: str, path: str):
+def get_file(request: Request, scope: str, path: str):
     base = _base_for_scope(scope)
     target = _safe_join(base, path)
-    if not target.is_file():
+
+    try:
+        stat_result = target.stat()
+    except OSError:
         raise HTTPException(status_code=404, detail="Not found")
+
+    if not stat.S_ISREG(stat_result.st_mode):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Simple/fast weak ETag based on mtime and size
+    etag = f'"{stat_result.st_mtime}-{stat_result.st_size}"'
+
+    # Handle If-None-Match manually since Starlette's FileResponse doesn't (yet)
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
+
+    # Handle If-Range (RFC 7233):
+    # If the client provides a conditional range request, verify the ETag.
+    # If the ETag matches, we allow the 206 Partial Content (via FileResponse).
+    # If it doesn't match, we must ignore the Range header and send 200 (full resource).
+    if_range = request.headers.get("if-range")
+    if if_range and if_range != etag and request.headers.get("range"):
+        # Remove 'range' from the raw ASGI scope headers so Starlette ignores it
+        # and serves a 200 OK with the full new file.
+        request.scope["headers"] = [
+            (k, v) for k, v in request.scope["headers"]
+            if k.lower() != b"range"
+        ]
 
     content_type, _ = mimetypes.guess_type(str(target))
     if not content_type:
         content_type = "application/octet-stream"
 
-    # Let Starlette handle efficient file streaming + Range/HEAD support.
     return TunedFileResponse(
         path=target,
+        status_code=206,
+        stat_result=stat_result,
         media_type=content_type,
-        headers={"Accept-Ranges": "bytes"},
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=14400",  # 4 hours
+            "ETag": etag,
+        },
     )
 
+@router.get("/exists")
+def exists_file(scope: str, path: str):
+    base = _base_for_scope(scope)
+    target = _safe_join(base, path)
+    return {"exists": target.exists()}
 
 @router.get("/match")
 def match_file(scope: str, path: str, sha256: str, size: Optional[int] = None):

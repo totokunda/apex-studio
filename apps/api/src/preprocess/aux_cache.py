@@ -50,7 +50,7 @@ class AuxillaryCache:
         self.end_frame = end_frame
         self.params = params
         self.cache_key = self._create_cache_key()
-        self.cache_path = Path(DEFAULT_CACHE_PATH) / self.cache_key
+        self.cache_path = Path(DEFAULT_CACHE_PATH) / "preprocessor_results" / self.cache_key
         self.metadata_path = self.cache_path / "metadata.json"
         self.supports_alpha_channel = supports_alpha_channel
         self.result_path = (
