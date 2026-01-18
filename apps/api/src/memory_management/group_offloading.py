@@ -15,6 +15,7 @@
 # Copied from diffusers.hooks.group_offloading.py with more modifications
 import hashlib
 import os
+import shutil
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -105,6 +106,9 @@ class ModuleGroup:
 
         self.offload_to_disk_path = offload_to_disk_path
         self._is_offloaded_to_disk = False
+        # If disk writes fail (e.g. no space left) we can fall back to CPU-memory offload.
+        # This flag prevents `onload_` from trying to read a file that was never written.
+        self._disk_offload_disabled = False
 
         if self.offload_to_disk_path is not None:
             # Instead of `group_id or str(id(self))` we do this because `group_id` can be "" as well.
@@ -310,9 +314,41 @@ class ModuleGroup:
         # we perform a write.
         # Check if the file has been saved in this session or if it already exists on disk.
         if not self._is_offloaded_to_disk and not os.path.exists(self.safetensors_file_path):
-            os.makedirs(os.path.dirname(self.safetensors_file_path), exist_ok=True)
-            tensors_to_save = {key: tensor.data.to(self.offload_device) for tensor, key in self.tensor_to_key.items()}
-            safetensors.torch.save_file(tensors_to_save, self.safetensors_file_path)
+            # Safety: avoid filling the host disk. If we're low on space, fall back to
+            # CPU-memory offload instead of writing a new safetensors file.
+            try:
+                min_free = int(
+                    float(
+                        os.environ.get("APEX_GROUP_OFFLOAD_MIN_FREE_DISK_BYTES", str(5 * 1024**3))
+                        or str(5 * 1024**3)
+                    )
+                )
+            except Exception:
+                min_free = 5 * 1024**3
+
+            try:
+                usage = shutil.disk_usage(os.path.dirname(self.safetensors_file_path) or ".")
+                if int(usage.free) < int(min_free):
+                    self._disk_offload_disabled = True
+                    # Lazily init CPU cache so the memory path works even when disk mode
+                    # was configured originally.
+                    if not self.cpu_param_dict:
+                        self.cpu_param_dict = self._init_cpu_param_dict()
+                    return self._offload_to_memory()
+            except Exception:
+                # If we can't determine free space, proceed and let the write fail.
+                pass
+
+            try:
+                os.makedirs(os.path.dirname(self.safetensors_file_path), exist_ok=True)
+                tensors_to_save = {key: tensor.data.to(self.offload_device) for tensor, key in self.tensor_to_key.items()}
+                safetensors.torch.save_file(tensors_to_save, self.safetensors_file_path)
+            except OSError:
+                # e.g. ENOSPC: disable disk offload for this group and fall back to memory.
+                self._disk_offload_disabled = True
+                if not self.cpu_param_dict:
+                    self.cpu_param_dict = self._init_cpu_param_dict()
+                return self._offload_to_memory()
 
         # The group is now considered offloaded to disk for the rest of the session.
         self._is_offloaded_to_disk = True
@@ -350,17 +386,26 @@ class ModuleGroup:
     @torch.compiler.disable()
     def onload_(self):
         r"""Onloads the group of parameters to the onload_device."""
-        if self.offload_to_disk_path is not None:
+        if (
+            self.offload_to_disk_path is not None
+            and not self._disk_offload_disabled
+            and self._is_offloaded_to_disk
+            and os.path.exists(getattr(self, "safetensors_file_path", "") or "")
+        ):
             self._onload_from_disk()
         else:
+            if not self.cpu_param_dict:
+                self.cpu_param_dict = self._init_cpu_param_dict()
             self._onload_from_memory()
 
     @torch.compiler.disable()
     def offload_(self):
         r"""Offloads the group of parameters to the offload_device."""
-        if self.offload_to_disk_path:
+        if self.offload_to_disk_path and not self._disk_offload_disabled:
             self._offload_to_disk()
         else:
+            if not self.cpu_param_dict:
+                self.cpu_param_dict = self._init_cpu_param_dict()
             self._offload_to_memory()
 
 
