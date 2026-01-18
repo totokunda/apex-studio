@@ -22,7 +22,7 @@ import yaml
 import numpy as np
 import json
 from src.utils.cache import empty_cache
-from src.utils.warm_pool import EngineWarmPool, stable_hash_dict
+from src.utils.warm_pool import stable_hash_dict
 from src.api.preprocessor_registry import get_preprocessor_info
 from src.engine.registry import UniversalEngine
 from src.mixins.download_mixin import DownloadMixin
@@ -219,17 +219,6 @@ def _optimize_mp4_for_editor_in_place(
         return False
 
 
-def _get_warm_pool() -> EngineWarmPool:
-    """
-    Lazily create the warm pool inside the Ray worker process.
-
-    Important: Ray pickles remote functions (including module globals) when submitting
-    from the driver. A module-level EngineWarmPool instance contains an RLock which
-    is not picklable. This accessor avoids creating the pool until after deserialization.
-    """
-    if not hasattr(_get_warm_pool, "_pool"):
-        _get_warm_pool._pool = EngineWarmPool.from_env()  # type: ignore[attr-defined]
-    return _get_warm_pool._pool  # type: ignore[attr-defined]
 
 
 @ray.remote(num_cpus=0.1)
@@ -247,85 +236,7 @@ def free_unused_modules_in_warm_pool(
       the same worker (typically via the same GPU resource selection) to see the pool.
     - To avoid interfering with running jobs, we skip `in_use` engines by default.
     """
-    pool = _get_warm_pool()
-    active_set = {str(x).strip() for x in (active or []) if str(x).strip()}
-    target_lc = str(target or "disk").strip().lower()
-    if target_lc not in {"cpu", "disk"}:
-        target_lc = "disk"
-
-    reserved_keys: List[str] = []
-    skipped_in_use: List[str] = []
-
-    # Reserve eligible engines under lock so other tasks won't acquire them while we offload.
-    try:
-        with pool._lock:  # type: ignore[attr-defined]
-            for key, ent in list(pool._entries.items()):  # type: ignore[attr-defined]
-                if getattr(ent, "in_use", 0) > 0 and not include_in_use:
-                    skipped_in_use.append(str(key))
-                    continue
-                try:
-                    ent.in_use = int(getattr(ent, "in_use", 0)) + 1
-                except Exception:
-                    ent.in_use = 1
-                reserved_keys.append(str(key))
-    except Exception as e:
-        return {"status": "error", "error": f"Failed to reserve warm pool entries: {e}"}
-
-    results: Dict[str, Any] = {
-        "status": "ok",
-        "target": target_lc,
-        "active": sorted(active_set),
-        "reserved": reserved_keys,
-        "skipped_in_use": skipped_in_use,
-        "offloaded": {},
-        "errors": {},
-        "pool": {},
-    }
-
-    try:
-        results["pool"] = pool.stats()
-    except Exception:
-        results["pool"] = {}
-
-    # Perform offload outside lock.
-    for key in reserved_keys:
-        try:
-            with pool._lock:  # type: ignore[attr-defined]
-                ent = pool._entries.get(key)  # type: ignore[attr-defined]
-                eng = getattr(ent, "engine", None) if ent is not None else None
-            if eng is None:
-                results["errors"][key] = "Missing engine for pool entry"
-                continue
-            base = getattr(eng, "engine", eng)
-            if hasattr(base, "free_unused_modules"):
-                off = base.free_unused_modules(active=active_set, target=target_lc)
-            elif hasattr(base, "free_unused_parameters"):
-                off = base.free_unused_parameters(active=active_set, target=target_lc)
-            else:
-                results["errors"][key] = "Engine does not support free_unused_modules"
-                continue
-            results["offloaded"][key] = off
-        except Exception as e:
-            results["errors"][key] = str(e)
-        finally:
-            # Release reservation
-            try:
-                with pool._lock:  # type: ignore[attr-defined]
-                    ent = pool._entries.get(key)  # type: ignore[attr-defined]
-                    if ent is not None:
-                        ent.in_use = max(0, int(getattr(ent, "in_use", 0)) - 1)
-                        try:
-                            ent.last_used_ts = pool._now()  # type: ignore[attr-defined]
-                        except Exception:
-                            pass
-                        try:
-                            pool._evict_locked()  # type: ignore[attr-defined]
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-    return results
+    return {"status": "ok"}
 
 
 _WIN_INVALID_PATH_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
@@ -696,159 +607,7 @@ def warmup_engine_from_manifest(
     *,
     mode: str = "engine",
 ) -> Dict[str, Any]:
-    """
-    Best-effort warmup that won't interfere with a running engine.
-
-    - mode="disk": warm OS page cache for weight files only (bounded via env).
-    - mode="engine": instantiate engine into the warm pool (no inference).
-    - mode="both": do both.
-    """
-    _apply_memory_env_from_store()
-    t0 = time.time()
-    selected_components = selected_components or {}
-    mode_lc = str(mode or "engine").strip().lower()
-
-    try:
-        from src.utils.yaml import load_yaml as load_manifest_yaml
-        from src.manifest.loader import validate_and_normalize
-        from src.mixins.loader_mixin import LoaderMixin
-        from glob import glob
-
-        raw = load_manifest_yaml(manifest_path)
-        config = validate_and_normalize(raw)
-        engine_type = config.get("engine") or (config.get("spec") or {}).get("engine")
-        model_type = config.get("type") or (config.get("spec") or {}).get("model_type")
-        if isinstance(model_type, list):
-            model_type = model_type[0] if model_type else None
-
-        attention_type = None
-        if isinstance(selected_components, dict):
-            attention_type = selected_components.get("attention", {}).get("name", None)
-            # mirror run path: don't let attention selection pollute other selections
-            selected_components = dict(selected_components)
-            selected_components.pop("attention", None)
-
-        engine_kwargs = (config.get("engine_kwargs", {}) or {})
-        auto_mm = os.environ.get("AUTO_MEMORY_MANAGEMENT", False)
-
-        pool_key = _engine_pool_key(
-            manifest_path=manifest_path,
-            engine_type=engine_type,
-            model_type=model_type,
-            selected_components=selected_components or {},
-            engine_kwargs=engine_kwargs,
-            attention_type=attention_type,
-            auto_memory_management=auto_mm,
-        )
-
-        warmed_disk = False
-        warmed_engine = False
-
-        if mode_lc in {"disk", "both"}:
-            default_max_bytes = 256 * 1024 * 1024
-            max_bytes = default_max_bytes
-            try:
-                max_bytes_env = os.environ.get("APEX_DISK_PREWARM_MAX_BYTES")
-                if max_bytes_env is not None and str(max_bytes_env).strip() != "":
-                    v = int(str(max_bytes_env).strip())
-                    if v > 0:
-                        max_bytes = v
-                    else:
-                        max_bytes = None
-            except Exception:
-                max_bytes = default_max_bytes
-
-            tmp = LoaderMixin()
-            exts_default = ["safetensors", "bin", "pt", "ckpt", "gguf", "pth"]
-            for comp in (config.get("components") or []):
-                extensions = comp.get("extensions", exts_default) or exts_default
-                if "gguf" not in [str(x).lstrip(".").lower() for x in extensions]:
-                    extensions = list(extensions) + ["gguf"]
-
-                def _iter_weight_files(path: Any) -> List[str]:
-                    if not path:
-                        return []
-                    if isinstance(path, dict):
-                        path = path.get("path") or path.get("model_path") or path.get(
-                            "file"
-                        )
-                    if not path:
-                        return []
-                    path_str = os.fspath(path)
-                    if os.path.isdir(path_str):
-                        files: List[str] = []
-                        for ext in extensions:
-                            ext = str(ext).lstrip(".")
-                            files.extend(glob(os.path.join(path_str, f"*.{ext}")))
-                        return files
-                    path_lower = path_str.lower()
-                    for ext in extensions:
-                        ext = str(ext).lstrip(".").lower()
-                        if path_lower.endswith(f".{ext}"):
-                            return [path_str]
-                    return []
-
-                for fp in _iter_weight_files(comp.get("model_path")):
-                    tmp._prewarm_model(fp, max_bytes=max_bytes)
-                extra = comp.get("extra_model_paths") or []
-                if isinstance(extra, str):
-                    extra = [extra]
-                for p in extra:
-                    for fp in _iter_weight_files(p):
-                        tmp._prewarm_model(fp, max_bytes=max_bytes)
-            warmed_disk = True
-
-        if mode_lc in {"engine", "both"}:
-            if _warm_weights_disabled():
-                # Do not warm engines into the pool when warm weights are disabled.
-                return {
-                    "status": "ok",
-                    "mode": mode_lc,
-                    "pool_key": pool_key,
-                    "warmed_disk": warmed_disk,
-                    "warmed_engine": False,
-                    "pool": _get_warm_pool().stats(),
-                    "duration_s": time.time() - t0,
-                    "note": "Warm weights disabled; skipped engine warm pool.",
-                }
-
-            def _factory():
-                kwargs = {
-                    "engine_type": engine_type,
-                    "yaml_path": manifest_path,
-                    "model_type": model_type,
-                    "selected_components": selected_components or {},
-                    "auto_memory_management": auto_mm,
-                    **engine_kwargs,
-                }
-                if attention_type:
-                    kwargs["attention_type"] = attention_type
-                return UniversalEngine(**kwargs)
-
-            eng, pooled = _get_warm_pool().acquire(
-                pool_key, _factory, allow_pool=not _warm_weights_disabled()
-            )
-            if pooled:
-                _get_warm_pool().release(pool_key)
-                warmed_engine = True
-            else:
-                try:
-                    if hasattr(eng, "offload_engine"):
-                        eng.offload_engine()
-                except Exception:
-                    pass
-
-        return {
-            "status": "ok",
-            "mode": mode_lc,
-            "pool_key": pool_key,
-            "warmed_disk": warmed_disk,
-            "warmed_engine": warmed_engine,
-            "pool": _get_warm_pool().stats(),
-            "duration_s": time.time() - t0,
-        }
-    except Exception as e:
-        return {"status": "error", "error": str(e), "duration_s": time.time() - t0}
+    return {"status": "ok"}
 
 
 def _cleanup_lora_artifacts_if_remote(lora_item: Any) -> None:
@@ -2051,6 +1810,20 @@ def _execute_preprocessor(
             result = preprocessor(cache.image, job_id=job_id, **kwargs)
 
         result_path = cache.save_result(result)
+
+        # Post-pass: generate a seek/editor-friendly MP4 for preprocessor outputs too.
+        # Best-effort only; leaves the original file intact on failure.
+        try:
+            if media_type == "video" and isinstance(result_path, str):
+                fps_hint = None
+                try:
+                    fps_hint = int(round(float((cache._video_info or {}).get("fps") or 0)))
+                except Exception:
+                    fps_hint = None
+                _optimize_mp4_for_editor_in_place(result_path, fps=fps_hint)
+        except Exception:
+            pass
+
         send_progress(1.0, "Result saved")
         send_progress(1.0, "Complete", {"status": "complete"})
 
@@ -2217,7 +1990,10 @@ def run_engine_from_manifest(
             "model_type": model_type,
             "selected_components": selected_components,
             "auto_memory_management": _bool_env("AUTO_MEMORY_MANAGEMENT", False),
-            **(config.get("engine_kwargs", {}) or {})
+            **(config.get("engine_kwargs", {}) or {}),
+            "memory_management":{
+                "transformer": MemoryConfig.for_block_level(),
+            }
         }
 
         if attention_type:
@@ -2237,9 +2013,7 @@ def run_engine_from_manifest(
         def _factory():
             return UniversalEngine(**input_kwargs)
 
-        engine, engine_pooled = _get_warm_pool().acquire(
-            engine_pool_key, _factory, allow_pool=not _warm_weights_disabled()
-        )
+        engine = _factory()
 
         # Compute FPS once so we don't capture the full engine/config inside callbacks.
         fps_for_video: int = 16
@@ -2864,18 +2638,10 @@ def run_engine_from_manifest(
         except Exception:
             pass
 
-        # Post-warm: keep engine warm after a successful run when pooled.
-        if engine_pooled and engine_pool_key and not _warm_weights_disabled():
-            try:
-                _get_warm_pool().release(engine_pool_key)
-            except Exception:
-                pass
-        else:
-            # Legacy behavior when not pooled: offload and clear caches.
-            try:
-                engine.offload_engine()
-            except Exception as e:
-                logger.warning(f"Failed to offload engine: {e}")
+        try:
+            engine.offload_engine()
+        except Exception as e:
+            logger.warning(f"Failed to offload engine: {e}")
         send_progress(1.0, "Complete", {"status": "complete"})
         return {"status": "complete", "result_path": result_path, "type": media_type}
 
