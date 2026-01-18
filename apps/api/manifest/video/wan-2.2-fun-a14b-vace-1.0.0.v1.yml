@@ -109,6 +109,9 @@ spec:
     label: High Noise Transformer
     name: high_noise_transformer
     base: wan.fun_vace
+    block_modules:
+      - blocks
+      - vace_blocks
     model_path:
     - path: alibaba-pai/Wan2.2-VACE-Fun-A14B/high_noise_model
       variant: default
@@ -204,6 +207,9 @@ spec:
     label: Low Noise Transformer
     name: low_noise_transformer
     base: wan.fun_vace
+    block_modules:
+      - vace_blocks
+      - blocks
     model_path:
     - path: alibaba-pai/Wan2.2-VACE-Fun-A14B/low_noise_model
       variant: default

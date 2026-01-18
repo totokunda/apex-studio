@@ -119,6 +119,11 @@ class BaseWanAttentionBlock(WanAttentionBlock):
 
 
 class FunVACETransformer3DModel(WanTransformer3DModel):
+    _group_offload_block_modules = ["vace_blocks", "blocks"]  # optional if you set in manifest
+    # Keys to ignore when group offloading moves inputs/outputs between devices.
+    # These are large intermediates that this model intentionally keeps on CPU and
+    # moves to CUDA only in small slices.
+    _skip_keys = ["hints", "c"]
     @register_to_config
     def __init__(
         self,
@@ -235,8 +240,14 @@ class FunVACETransformer3DModel(WanTransformer3DModel):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
 
                 def create_custom_forward(module, **static_kwargs):
-                    def custom_forward(*inputs):
-                        return module(*inputs, **static_kwargs)
+                    # IMPORTANT:
+                    # Pass `c` as a kwarg so group offloading can exclude it via
+                    # `_skip_keys = ["c"]`. If `c` is passed positionally, the
+                    # group-offloading hook will move it to CUDA, which breaks
+                    # VACE's CPU-offloaded latent stack and causes device-mismatch
+                    # errors during `torch.stack(all_c)`.
+                    def custom_forward(c_in):
+                        return module(c=c_in, **static_kwargs)
 
                     return custom_forward
 
@@ -249,7 +260,8 @@ class FunVACETransformer3DModel(WanTransformer3DModel):
                     **ckpt_kwargs,
                 )
             else:
-                c = block(c, **new_kwargs)
+                # See note above: keep `c` in kwargs for group offloading.
+                c = block(c=c, **new_kwargs)
         hints = torch.unbind(c)[:-1]
         return hints
 
@@ -425,6 +437,15 @@ class FunVACETransformer3DModel(WanTransformer3DModel):
                             "context_lens": context_lens,
                             "dtype": dtype,
                             "t": t,
+                            # IMPORTANT:
+                            # Pass VACE hints via kwargs so group offloading can exclude them
+                            # using this model's `_skip_keys = ["hints"]`.
+                            #
+                            # When passed positionally (as a checkpoint input), group offloading
+                            # will always move `hints` to the onload device, which can OOM and
+                            # defeats per-block hint movement in `BaseWanAttentionBlock`.
+                            "hints": hints,
+                            "context_scale": vace_context_scale,
                         }
 
                         ckpt_kwargs = (
@@ -436,8 +457,6 @@ class FunVACETransformer3DModel(WanTransformer3DModel):
                         x = torch.utils.checkpoint.checkpoint(
                             create_custom_forward(block, **extra_kwargs),
                             x,
-                            hints,
-                            vace_context_scale,
                             **ckpt_kwargs,
                         )
                     else:
@@ -470,6 +489,9 @@ class FunVACETransformer3DModel(WanTransformer3DModel):
                         "context_lens": context_lens,
                         "dtype": dtype,
                         "t": t,
+                        # See note above: keep `hints` in kwargs for group offloading.
+                        "hints": hints,
+                        "context_scale": vace_context_scale,
                     }
 
                     ckpt_kwargs = (
@@ -481,8 +503,6 @@ class FunVACETransformer3DModel(WanTransformer3DModel):
                     x = torch.utils.checkpoint.checkpoint(
                         create_custom_forward(block, **extra_kwargs),
                         x,
-                        hints,
-                        vace_context_scale,
                         **ckpt_kwargs,
                     )
                 else:
