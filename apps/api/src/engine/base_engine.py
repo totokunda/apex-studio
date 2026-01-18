@@ -825,26 +825,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             device = "cpu"
         component_module = None
 
-        # Proactively relieve VRAM pressure before loading heavyweight components.
-        # This complements lazy-load guards (e.g. text encoders) and prevents the
-        # "can't load weights because previous run kept everything resident" failure mode.
-        try:
-            if (
-                (not no_weights)
-                and getattr(self, "auto_memory_management", True)
-                and device == "cuda"
-                and component_type in {"transformer", "vae", "helper"}
-            ):
-                keep = {
-                    str(component.get("name") or component_type or ""),
-                    str(component_type or ""),
-                }
-                keep = {k for k in keep if k}
-                self._relieve_vram_pressure(
-                    reason=f"load_component:{component_type}", keep=keep
-                )
-        except Exception:
-            pass
+      
 
         if component_type == "scheduler":
             scheduler = self.load_scheduler(component)
@@ -1241,18 +1222,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 # Proactively relieve VRAM pressure before materializing weights.
                 # Text encoders are often lazily loaded during prompt encoding, which
                 # can occur after the transformer has already filled VRAM.
-                if (
-                    (not no_weights)
-                    and getattr(self, "auto_memory_management", True)
-                    and device == "cuda"
-                ):
-                    try:
-                        self._relieve_vram_pressure(
-                            reason="text_encoder.load_model",
-                            keep={component.get("name") or "text_encoder", "text_encoder"},
-                        )
-                    except Exception:
-                        pass
+ 
                 model = original_load_model(
                     no_weights=no_weights, to_device=False, *args, **kwargs
                 )
@@ -1286,12 +1256,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
                 self._maybe_compile_module(text_encoder.model, component)
                 self.to_device(text_encoder)
-                try:
-                    self._refresh_tracked_module(
-                        text_encoder, component.get("name") or "text_encoder"
-                    )
-                except Exception:
-                    pass
+
                 return text_encoder.model
 
             text_encoder.load_model = _patched_load_model  # type: ignore
@@ -1301,27 +1266,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             original_load_model = text_encoder.load_model
 
             def _guarded_load_model(*args, **kwargs):
-                try:
-                    nw = bool(kwargs.get("no_weights", False))
-                except Exception:
-                    nw = False
-                if (
-                    (not nw)
-                    and getattr(self, "auto_memory_management", True)
-                    and device == "cuda"
-                ):
-                    try:
-                        self._relieve_vram_pressure(
-                            reason="text_encoder.load_model",
-                            keep={component_name, "text_encoder"},
-                        )
-                    except Exception:
-                        pass
                 model = original_load_model(*args, **kwargs)
-                try:
-                    self._refresh_tracked_module(text_encoder, component_name)
-                except Exception:
-                    pass
+                
                 return model
 
             text_encoder.load_model = _guarded_load_model  # type: ignore
@@ -2476,19 +2422,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         # Applying LoRAs can allocate additional adapter weights/buffers on GPU.
         # In pooled mode, previous components may still be resident; ensure we
         # have headroom or proactively offload/discard other components.
-        try:
-            if (
-                getattr(self, "auto_memory_management", True)
-                and getattr(self, "device", None) is not None
-                and getattr(self.device, "type", None) == "cuda"
-            ):
-                keep = {model_name_or_type}
-                # Also keep the canonical transformer attribute when applicable.
-                if model_name_or_type != "transformer" and getattr(self, "transformer", None) is model:
-                    keep.add("transformer")
-                self._relieve_vram_pressure(reason="apply_loras", keep=keep)
-        except Exception:
-            pass
+
 
         resolved = self.lora_manager.load_into(
             model, loras, adapter_names=adapter_names, scales=scales
