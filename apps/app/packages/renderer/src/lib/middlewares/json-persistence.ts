@@ -1535,10 +1535,15 @@ const hydrateStoresFromProjectJson = async (
 
       const assetsRecord: Record<string, Asset> =
         (doc.assets as Record<string, Asset>) ?? {};
+      
+        // get active project folder uuid
+      
+      const folderUuid = doc.meta.id
 
       const promises = Object.values(assetsRecord).map(async (asset) => {
         let useCache = asset.path.includes('cache/engine_results');
-        return await getMediaInfo(asset.path, {sourceDir: useCache ? 'apex-cache' : 'user-data'});
+        //
+        return await getMediaInfo(asset.path, {sourceDir: useCache ? 'apex-cache' : 'user-data', folderUuid});
       });
       try { 
          await Promise.all(promises);

@@ -155,6 +155,7 @@ export const getMediaInfo = async (
     fullStats?: boolean;
     sourceDir?: "user-data" | "apex-cache";
     useOriginal?: boolean;
+    folderUuid?: string;
   },
 ): Promise<MediaInfo> => {
   const fsPathToAppUrl = (
@@ -183,8 +184,7 @@ export const getMediaInfo = async (
     }
   }
 
-  const folderUuid =
-    useProjectsStore.getState().getActiveProject()?.folderUuid || undefined;
+  const folderUuid = options?.folderUuid || useProjectsStore.getState().getActiveProject()?.folderUuid || undefined;
 
   const pathUrl = new URL(path);
   const startFrame = pathUrl.searchParams.get("startFrame")
@@ -248,6 +248,9 @@ export const getMediaInfo = async (
       let url: URL | null = null;
       if (path.startsWith("app://")) {
         url = new URL(path);
+        if (!url.searchParams.get("folderUuid")) {
+          url.searchParams.set("folderUuid", folderUuid ?? "");
+        }
       } else {
         fsPathForImage = fileURLToPath(hasHashSuffix ? originalPath : path);
         url = new URL(fsPathToAppUrl(primarySourceDir, fsPathForImage, folderUuid));
@@ -317,12 +320,16 @@ export const getMediaInfo = async (
   try {
     filePath = fileURLToPath(hasHashSuffix ? originalPath : path);
     const url = new URL(fsPathToAppUrl(primarySourceDir, filePath, folderUuid));
-    input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
+    input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url, {
+      maxCacheSize: 128 * 1024 * 1024,
+    }) });
   } catch (e) {
     try {
       if (!filePath) throw e;
       const url = new URL(fsPathToAppUrl(secondarySourceDir, filePath, folderUuid));
-      input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
+      input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url, {
+        maxCacheSize: 128 * 1024 * 1024,
+      }) });
     } catch (e) {
       input = null;
     }
@@ -379,7 +386,9 @@ export const getMediaInfo = async (
       );
       const input2 = new Input({
         formats: ALL_FORMATS,
-        source: new UrlSource(fallbackUrl),
+        source: new UrlSource(fallbackUrl, {
+          maxCacheSize: 128 * 1024 * 1024,
+        }),
       });
       infoBundle = await gatherInfo(input2, quickLoad);
       input = input2; // use the working input as originalInput

@@ -707,7 +707,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             <DropdownMenuTrigger asChild>
               <button
                 className={cn(
-                  "px-2.5 py-1.5 rounded-md text-brand-light/90 text-[12px] flex bg-brand flex-row items-center gap-x-2 transition-colors",
+                  "px-2.5 py-1.5 rounded-[6px] text-brand-light/90 text-[11px] font-medium flex bg-brand flex-row items-center gap-x-2 transition-colors",
                   "hover:bg-brand-light/10",
                   (filterOpen || selectedTypes.size > 0) && "bg-brand-light/10",
                 )}
@@ -778,7 +778,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             <DropdownMenuTrigger asChild>
               <button
                 className={cn(
-                  "px-2.5 py-1.5 rounded-md text-brand-light/90 text-[12px] flex bg-brand flex-row items-center gap-x-2 transition-colors",
+                  "px-2.5 py-1.5 rounded-[6px] text-brand-light/90 text-[11px] font-medium flex bg-brand flex-row items-center gap-x-2 transition-colors",
                   "hover:bg-brand-light/10",
                   sortOpen && "bg-brand-light/10",
                 )}
