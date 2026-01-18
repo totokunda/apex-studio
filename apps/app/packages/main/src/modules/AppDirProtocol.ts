@@ -485,13 +485,25 @@ class AppDirProtocol implements AppModule {
     folderUuid = folderUuid ?? splitFilePath[splitFilePath.length - 3] ?? null; 
     let type: "engine_results" | "postprocessor_results" | "preprocessor_results" = "engine_results";
     let localType: "generations" | "processors" = "generations";
+    
+    // Check if filename matches pattern: {hash1}_{name}_{hash2}
+    // Example: a2545f8521ba08cbb0b086cd0e68ef9d_recolor_580709eccb358ce3
+    if (fileName) {
+      const hashNameHashPattern = /^[a-f0-9]{32}_[a-zA-Z0-9_]+_[a-f0-9]+$/i;
+      if (hashNameHashPattern.test(fileName)) {
+        type = "preprocessor_results";
+        localType = "processors";
+        return { folderUuid, folderName, fileName, type, localType };
+      }
+    }
+    
     if (filePath.includes("preprocessor_results")) {
       type = "preprocessor_results";
       localType = "processors";
     } else if (filePath.includes("postprocessor_results")) {
       type = "postprocessor_results";
       localType = "processors";
-    }
+    } 
     return { folderUuid, folderName, fileName, type, localType };
   }
 
