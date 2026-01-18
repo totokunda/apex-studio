@@ -2,6 +2,8 @@ import { getChromeMajorVersion } from "@app/electron-versions";
 import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 
 export default /**
  * @type {import('vite').UserConfig}
@@ -203,7 +205,7 @@ function mockExposed() {
     async load(id) {
       if (id === resolvedVirtualModuleId) {
         const entryAbs = new URL("./src/index.ts", import.meta.url);
-        const exportedNames = collectExportNames(entryAbs.pathname);
+        const exportedNames = collectExportNames(fileURLToPath(entryAbs));
         return exportedNames.reduce((s, key) => {
           return (
             s +
