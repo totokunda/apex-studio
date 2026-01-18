@@ -161,26 +161,11 @@ class RenderStepEnabledResponse(BaseModel):
 
 
 class MemorySettingsRequest(BaseModel):
-    APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION: Optional[float] = None
-    APEX_OFFLOAD_MIN_FREE_RAM_FRACTION: Optional[float] = None
-    APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION: Optional[float] = None
+    APEX_LOAD_MODEL_VRAM_MULT: Optional[float] = None
+    APEX_LOAD_MODEL_VRAM_EXTRA_BYTES: Optional[int] = None
     APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES: Optional[int] = None
-    APEX_VRAM_PRESSURE_CPU_MULTIPLIER: Optional[float] = None
-    APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES: Optional[int] = None
-    APEX_VAE_DECODE_FORCE_FLUSH: Optional[str] = None
-    APEX_VAE_DECODE_FLUSH_TARGET: Optional[str] = None
-    APEX_VAE_DECODE_MIN_FREE_BYTES: Optional[int] = None
-    APEX_VAE_DECODE_MIN_FREE_FRAC: Optional[float] = None
-    APEX_VAE_DECODE_SAFETY_MULT: Optional[float] = None
-    APEX_VAE_DECODE_TARGET_FREE_FRACTION: Optional[float] = None
-    APEX_PREFWD_ENABLE: Optional[str] = None
-    APEX_PREFWD_FLUSH_TARGET: Optional[str] = None
-    APEX_PREFWD_MIN_FREE_BYTES: Optional[int] = None
-    APEX_PREFWD_MIN_FREE_FRAC: Optional[float] = None
     APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION: Optional[float] = None
     APEX_WEIGHT_TARGET_FREE_RAM_FRACTION: Optional[float] = None
-    APEX_DISABLE_WARM_WEIGHTS: Optional[str] = None
-    APEX_FORCE_DISK_ONLY: Optional[str] = None
 
 
 class MemorySettingsResponse(BaseModel):
@@ -743,7 +728,10 @@ def get_memory_settings():
 @router.post("/memory", response_model=MemorySettingsResponse)
 def set_memory_settings(request: MemorySettingsRequest):
     """Update memory management settings via environment variables."""
-    updates = request.dict(exclude_none=False)
+    # Only apply keys explicitly sent by the client.
+    # This preserves other persisted memory overrides while still allowing deletion
+    # via explicit `null` or empty string.
+    updates = request.dict(exclude_unset=True)
     try:
         # Load existing persisted config so we can add/remove keys.
         store_path = Path(get_config_store_path())

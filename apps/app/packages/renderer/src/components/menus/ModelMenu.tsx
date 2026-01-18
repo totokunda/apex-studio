@@ -567,7 +567,7 @@ const ModelMenu: React.FC = () => {
       queryClient.getQueryData<ManifestDocument[]>(["manifest"]),
     placeholderData: (prev) => prev,
     retry: true,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
     staleTime: Infinity,
     
   });
