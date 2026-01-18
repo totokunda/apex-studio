@@ -895,9 +895,7 @@ async function handleConfigure(
     if (is404) {
       throw new Error("Primary app:// URL returned 404");
     }
-    input = new Input({ formats, source: new UrlSource(url, {
-      maxCacheSize: 128 * 1024 * 1024,
-    }) });
+    input = new Input({ formats, source: new UrlSource(url) });
   } catch (e) {
     try {
       if (!filePath) {
@@ -911,9 +909,7 @@ async function handleConfigure(
       if (is404) {
         throw new Error("Secondary app:// URL returned 404");
       }
-      input = new Input({ formats, source: new UrlSource(url, {
-        maxCacheSize: 128 * 1024 * 1024,
-      }) });
+      input = new Input({ formats, source: new UrlSource(url) });
     } catch (e) {
       throw new Error("Failed to create input");
     }

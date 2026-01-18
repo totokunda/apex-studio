@@ -494,7 +494,8 @@ async function importMediaPaths(
   _resolution?: string,
   folderUuid?: string,
 ): Promise<number> {
-  const baseRoot = getMediaRootAbsolute();
+  const userDataPath = (await getUserDataPath())?.data?.user_data ?? "";
+  const baseRoot = join(userDataPath, "media");
 
   let symlinksAbs: string;
   if (typeof folderUuid === "string" && folderUuid.length > 0) {
@@ -516,9 +517,11 @@ async function importMediaPaths(
     if (!isSupportedExt(ext)) continue;
     const uniqueName = ensureUniqueNameSync(symlinksAbs, fileName);
     const dstAbs = join(symlinksAbs, uniqueName);
+ 
     try {
       await fsp.rm(dstAbs, { force: true });
       await fsp.symlink(srcAbs, dstAbs);
+      console.log("symlink created", dstAbs, srcAbs);
     } catch (error) {
       console.error("Error creating symlink:", error);
       try {
@@ -575,7 +578,8 @@ async function createProxy(
   resolution: string = "480p",
   folderUuid?: string,
 ): Promise<void> {
-  const baseRoot = getMediaRootAbsolute();
+  const userDataPath = (await getUserDataPath())?.data?.user_data ?? "";
+  const baseRoot = join(userDataPath, "media");
 
   let symlinksAbs: string;
   let proxyAbs: string;
@@ -622,6 +626,12 @@ async function createProxy(
       `scale=-2:${targetHeight}`,
       "-r",
       "24",
+      "-g",
+      "1",
+      "-keyint_min",
+      "1",
+      "-sc_threshold",
+      "0",
       "-c:v",
       "libx264",
       "-preset",
@@ -666,7 +676,8 @@ async function removeProxy(
   fileName: string,
   folderUuid?: string,
 ): Promise<void> {
-  const baseRoot = getMediaRootAbsolute();
+  const userDataPath = (await getUserDataPath())?.data?.user_data ?? "";
+  const baseRoot = join(userDataPath, "media");
 
   let proxyAbs: string;
   if (typeof folderUuid === "string" && folderUuid.length > 0) {
