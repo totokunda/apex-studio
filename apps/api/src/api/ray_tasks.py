@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import ray
 import traceback
 from loguru import logger
-from src.memory_management import MemoryConfig
+from src.memory_management import MemoryConfig, get_memory_manager
 from src.preprocess.aux_cache import AuxillaryCache
 import importlib
 import hashlib
@@ -266,41 +266,86 @@ def free_unused_modules_in_warm_pool(
     include_in_use: bool = False,
 ) -> Dict[str, Any]:
     """
-    Best-effort free GPU memory by offloading tracked modules on warm-pooled engines.
+    Best-effort free VRAM/RAM by offloading tracked modules on *idle* warm-pooled engines.
 
     Important:
     - The warm pool is **per-Ray-worker-process**. This function must be scheduled onto
       the same worker (typically via the same GPU resource selection) to see the pool.
-    - To avoid interfering with running jobs, we skip `in_use` engines by default.
+    - To avoid interfering with running jobs, we **only** touch engines that are not `in_use`.
     """
     try:
         pool = _get_engine_warm_pool()
         if not pool.enabled:
             return {"status": "complete", "enabled": False, "evicted": 0}
 
-        # We currently only support "evict/offload idle engines" (best-effort).
-        # This is enough to free VRAM/RAM without needing to introspect internals.
-        active = active or []
-        active_set = {str(x) for x in active if x is not None}
-        keys = list((pool.stats() or {}).get("keys") or [])
+        # `active` refers to component names to keep resident (e.g. "transformer,vae"),
+        # not warm-pool keys. We only use it to prevent evicting those components.
+        active_set = {str(x) for x in (active or []) if x is not None}
 
+        # Map API target -> offload behavior.
+        requested_target = str(target or "disk").strip().lower()
+        offload_type = "cpu" if requested_target == "cpu" else "discard"
+
+        manager = get_memory_manager()
+
+        # Only act on idle entries (never interfere with active runs).
+        entries = pool.snapshot_entries()
+        offloaded: Dict[str, Dict[str, Any]] = {}
+        errors: Dict[str, str] = {}
+        skipped_in_use: List[str] = []
         evicted = 0
-        for k in keys:
-            if k in active_set:
-                continue
-            # discard() is safe no-op for missing/in-use entries
+
+        for key, info in (entries or {}).items():
             try:
-                pool.discard(str(k))
-                evicted += 1
+                in_use = int((info or {}).get("in_use", 0))
             except Exception:
+                in_use = 0
+            if in_use > 0:
+                skipped_in_use.append(str(key))
                 continue
+
+            engine = (info or {}).get("engine", None)
+            if engine is None:
+                # Stale entry: drop it.
+                try:
+                    pool.discard(str(key), offload=False)
+                    evicted += 1
+                except Exception:
+                    pass
+                continue
+
+            # Force cleanup *inside* the component manager so it can't be skipped by
+            # lazy offload behavior (this is a "free memory now" request).
+            try:
+                offloaded[str(key)] = manager.force_offload_engine_components(
+                    engine, active_labels=active_set, offload_type=offload_type
+                )
+            except Exception as e:
+                errors[str(key)] = f"component_manager_cleanup_failed: {e}"
+
+            # Drop the engine reference from the warm pool (do not attempt offload again).
+            try:
+                pool.discard(str(key), offload=False)
+                evicted += 1
+            except Exception as e:
+                errors[str(key)] = f"pool_discard_failed: {e}"
+
+            # Best-effort: flush allocator caches after each engine cleanup.
+            try:
+                empty_cache()
+                gc.collect()
+            except Exception:
+                pass
 
         return {
             "status": "complete",
             "enabled": True,
-            "requested_target": target,
+            "requested_target": requested_target,
             "include_in_use": bool(include_in_use),
             "evicted": int(evicted),
+            "offloaded": offloaded,
+            "errors": errors,
+            "skipped_in_use": skipped_in_use,
             "pool": pool.stats(),
         }
     except Exception as e:

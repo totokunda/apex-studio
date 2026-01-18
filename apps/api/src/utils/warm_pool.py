@@ -236,7 +236,7 @@ class EngineWarmPool:
             ent.last_used_ts = self._now()
             self._evict_locked()
 
-    def discard(self, key: str) -> None:
+    def discard(self, key: str, *, offload: bool = True) -> None:
         """
         Remove an entry from the pool (and offload) regardless of TTL.
         Safe no-op if missing or in-use.
@@ -251,11 +251,29 @@ class EngineWarmPool:
                 return
             eng = ent.engine
             del self._entries[key]
-        try:
-            if hasattr(eng, "offload_engine"):
-                eng.offload_engine()
-        except Exception:
-            pass
+        if offload:
+            try:
+                if hasattr(eng, "offload_engine"):
+                    eng.offload_engine()
+            except Exception:
+                pass
+
+    def snapshot_entries(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Return a shallow snapshot of current pool entries.
+
+        This is intended for best-effort cleanup/diagnostics in the *same process*.
+        Callers must still respect `in_use` (never offload/evict in-use engines).
+        """
+        with self._lock:
+            out: Dict[str, Dict[str, Any]] = {}
+            for k, ent in self._entries.items():
+                out[str(k)] = {
+                    "engine": ent.engine,
+                    "in_use": int(ent.in_use),
+                    "last_used_ts": float(ent.last_used_ts),
+                }
+            return out
 
     def stats(self) -> Dict[str, Any]:
         with self._lock:
