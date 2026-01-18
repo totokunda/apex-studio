@@ -1,5 +1,7 @@
-import { generateTimelineSamples } from "@/lib/media/timeline";
-import { getNearestCachedCanvasSamples } from "@/lib/media/canvas";
+import {
+  fetchCanvasSamplesStream,
+  getNearestCachedCanvasSamples,
+} from "@/lib/media/canvas";
 import { useControlsStore } from "@/lib/control";
 import { MediaInfo, VideoClipProps } from "@/lib/types";
 import { getClipWidth } from "@/lib/clip";
@@ -88,13 +90,18 @@ export const generateTimelineThumbnailVideo = async (
       frameIndices[frameIndices.length - 1] - 1;
   } else if (numColumns > 1) {
     // When timeline duration is less than numColumns, duplicate frames
-    frameIndices = Array.from({ length: numColumns }, (_, i) => {
-      const frameIndex = Math.floor(
-        i / Math.ceil(numColumns / (timelineSpan + 1)),
-      );
-      const clampedIndex = Math.min(frameIndex, timelineSpan);
-      return timelineStartFrame + clampedIndex;
-    });
+    try {
+      frameIndices = Array.from({ length: numColumns }, (_, i) => {
+        const frameIndex = Math.floor(
+          i / Math.ceil(numColumns / (timelineSpan + 1)),
+        );
+        const clampedIndex = Math.min(frameIndex, timelineSpan);
+        return timelineStartFrame + clampedIndex;
+      });
+    } catch (e) {
+      frameIndices = [timelineStartFrame];
+    }
+   
   } else {
     // Single column case
     frameIndices = [timelineStartFrame];
@@ -181,10 +188,17 @@ export const generateTimelineThumbnailVideo = async (
   );
   const ctx = imageCanvas.getContext("2d");
   if (ctx) {
-    ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
     let x = overHang;
     const targetWidth = Math.max(1, imageCanvas.width);
     const targetHeight = Math.max(1, imageCanvas.height);
+    const expectedTileWidth = Math.max(1, Math.floor(thumbnailWidth));
+    let lastCanvasToTile: HTMLCanvasElement | null = null;
+
+    // Always paint a background so we never show transparent/white gaps.
+    // We intentionally "overfill" the entire canvas; the Konva clip will cut it.
+    ctx.clearRect(0, 0, targetWidth, targetHeight);
+    ctx.fillStyle = "#0B0B0D";
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
 
     // When resizing from the left for video, truncate from the left by
     // skipping the overflow width from the left side of the tile sequence.
@@ -194,14 +208,14 @@ export const generateTimelineThumbnailVideo = async (
       for (let i = 0; i < nearest.length; i++) {
         const sample = nearest[i];
         if (!sample) {
+          totalTileWidth += expectedTileWidth;
           continue;
         }
         const anyCanvas = sample.canvas as any;
-        const tileWidth = Math.max(
+        totalTileWidth += Math.max(
           1,
           anyCanvas.width || anyCanvas.naturalWidth || 1,
         );
-        totalTileWidth += tileWidth;
       }
       const drawableWidth = Math.max(0, targetWidth - x);
       skipRemaining = Math.max(0, totalTileWidth - drawableWidth);
@@ -209,22 +223,19 @@ export const generateTimelineThumbnailVideo = async (
 
     for (let i = 0; i < nearest.length && x < targetWidth; i++) {
       const sample = nearest[i];
-      if (!sample) {
-        continue;
-      }
-      const inputCanvas = sample.canvas as HTMLCanvasElement;
-      const canvasToTile = applyMask(
-        inputCanvas,
-        Math.round(frameIndices[i] * fpsAdjustment),
-      );
-      const anyCanvas = canvasToTile as any;
+      const inputCanvas = (sample?.canvas as HTMLCanvasElement | undefined) ?? null;
+      const canvasToTile = inputCanvas
+        ? applyMask(inputCanvas, Math.round(frameIndices[i] * fpsAdjustment))
+        : null;
+      if (canvasToTile) lastCanvasToTile = canvasToTile;
+      const anyCanvas = (canvasToTile as any) ?? null;
       const tileWidth = Math.max(
         1,
-        anyCanvas.width || anyCanvas.naturalWidth || 1,
+        anyCanvas?.width || anyCanvas?.naturalWidth || expectedTileWidth,
       );
       const tileHeight = Math.max(
         1,
-        anyCanvas.height || anyCanvas.naturalHeight || 1,
+        anyCanvas?.height || anyCanvas?.naturalHeight || targetHeight,
       );
       const sourceHeight = Math.min(tileHeight, targetHeight);
 
@@ -245,18 +256,65 @@ export const generateTimelineThumbnailVideo = async (
       if (remaining <= 0) break;
       const drawWidth = Math.min(availableSrcWidth, remaining);
       if (drawWidth <= 0) break;
-      ctx.drawImage(
-        canvasToTile,
-        srcX,
-        0,
-        drawWidth,
-        sourceHeight,
-        x,
-        0,
-        drawWidth,
-        sourceHeight,
-      );
+      if (canvasToTile) {
+        ctx.drawImage(
+          canvasToTile,
+          srcX,
+          0,
+          drawWidth,
+          sourceHeight,
+          x,
+          0,
+          drawWidth,
+          sourceHeight,
+        );
+      }
       x += drawWidth;
+    }
+
+    // If the nearest-cache pass didn't fully cover the width (e.g. cache misses),
+    // repeat the last available tile so we never show the underlying fill while
+    // the exact stream is still decoding.
+    if (lastCanvasToTile && x < targetWidth) {
+      const anyCanvas = lastCanvasToTile as any;
+      const tileWidth = Math.max(
+        1,
+        anyCanvas.width || anyCanvas.naturalWidth || expectedTileWidth,
+      );
+      const tileHeight = Math.max(
+        1,
+        anyCanvas.height || anyCanvas.naturalHeight || targetHeight,
+      );
+      const sourceHeight = Math.min(tileHeight, targetHeight);
+      let guard = 0;
+      while (x < targetWidth && guard++ < 2048) {
+        const remaining = targetWidth - x;
+        const drawWidth = Math.min(tileWidth, remaining);
+        if (drawWidth <= 0) break;
+        ctx.drawImage(
+          lastCanvasToTile,
+          0,
+          0,
+          drawWidth,
+          sourceHeight,
+          x,
+          0,
+          drawWidth,
+          sourceHeight,
+        );
+        x += drawWidth;
+      }
+    }
+
+    // Snapshot the cached (unfiltered) render so the streaming pass can use it
+    // as a base. This prevents a white/empty flash when we start the async stream.
+    const seedCanvas = document.createElement("canvas");
+    seedCanvas.width = targetWidth;
+    seedCanvas.height = targetHeight;
+    const seedCtx = seedCanvas.getContext("2d");
+    if (seedCtx) {
+      seedCtx.clearRect(0, 0, targetWidth, targetHeight);
+      seedCtx.drawImage(imageCanvas, 0, 0);
     }
 
     // Apply WebGL filters to video thumbnails
@@ -271,80 +329,110 @@ export const generateTimelineThumbnailVideo = async (
       noise: vidClip?.noise,
       vignette: vidClip?.vignette,
     });
-  }
-  groupRef.current?.getLayer()?.batchDraw();
 
-  // 2) Debounced fetch of exact frames and redraw when available
-  if (exactVideoUpdateTimerRef.current != null) {
-    window.clearTimeout(exactVideoUpdateTimerRef.current);
-    exactVideoUpdateTimerRef.current = null;
-  }
-  const DEBOUNCE_MS = hasCachedSamples ? 100 : 0;
-  const requestKey = `${currentClipId}|${timelineStartFrame}-${timelineEndFrame}|${thumbnailWidth}x${timelineHeight}|${overHang}|${frameIndices.join(",")}`;
-  exactVideoUpdateTimerRef.current = window.setTimeout(async () => {
-    const mySeq = ++exactVideoUpdateSeqRef.current;
-    try {
-      if (lastExactRequestKeyRef.current === requestKey) {
-        return;
-      }
-      const exactSamples = await generateTimelineSamples(
-        currentClipId,
-        asset.path,
-        frameIndices,
-        thumbnailWidth,
-        timelineHeight,
-        tClipWidth,
-        {
-          volume: (currentClip as any)?.volume,
-          fadeIn: (currentClip as any)?.fadeIn,
-          fadeOut: (currentClip as any)?.fadeOut,
-        },
-      );
+    // 2) Debounced fetch of exact frames and redraw when available
+    if (exactVideoUpdateTimerRef.current != null) {
+      window.clearTimeout(exactVideoUpdateTimerRef.current);
+      exactVideoUpdateTimerRef.current = null;
+    }
+    const DEBOUNCE_MS = hasCachedSamples ? 100 : 0;
+    const requestKey = `${currentClipId}|${timelineStartFrame}-${timelineEndFrame}|${thumbnailWidth}x${timelineHeight}|${overHang}|${frameIndices.join(",")}`;
+    exactVideoUpdateTimerRef.current = window.setTimeout(async () => {
+      const mySeq = ++exactVideoUpdateSeqRef.current;
+      try {
+        if (lastExactRequestKeyRef.current === requestKey) {
+          return;
+        }
 
-      if (mySeq !== exactVideoUpdateSeqRef.current) {
-        return;
-      }
-      const ctx2 = imageCanvas.getContext("2d");
+        // Stream exact frames sequentially: decode/draw tile-by-tile as data arrives.
+        const decoded: (HTMLCanvasElement | null)[] = new Array(
+          frameIndices.length,
+        ).fill(null);
 
-      if (ctx2 && exactSamples) {
-        ctx2.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
-        let x2 = overHang;
+        const workingCanvas = document.createElement("canvas");
+        workingCanvas.width = Math.max(1, imageCanvas.width);
+        workingCanvas.height = Math.max(1, imageCanvas.height);
+        const wctx = workingCanvas.getContext("2d");
+        if (!wctx) return;
+
+        // Seed with the cached render so missing frames don’t show as white.
+        wctx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+        if (seedCtx) {
+          // If we managed to create a seed snapshot, use it.
+          wctx.drawImage(seedCanvas, 0, 0);
+        }
+
+        const ctx2 = imageCanvas.getContext("2d");
+        if (!ctx2) return;
+
         const targetWidth2 = Math.max(1, imageCanvas.width);
         const targetHeight2 = Math.max(1, imageCanvas.height);
 
-        // Calculate left-side skip when resizing from left for video
+        const vidClip = currentClip as VideoClipProps;
+        const filters = {
+          brightness: vidClip?.brightness,
+          contrast: vidClip?.contrast,
+          hue: vidClip?.hue,
+          saturation: vidClip?.saturation,
+          blur: vidClip?.blur,
+          sharpness: vidClip?.sharpness,
+          noise: vidClip?.noise,
+          vignette: vidClip?.vignette,
+        };
+
+        const present = () => {
+          if (mySeq !== exactVideoUpdateSeqRef.current) return;
+          ctx2.clearRect(0, 0, targetWidth2, targetHeight2);
+          ctx2.drawImage(workingCanvas, 0, 0);
+          // Apply filters on each present, but throttle calls to keep perf OK.
+          applyFilters(imageCanvas, filters);
+          groupRef.current?.getLayer()?.batchDraw();
+        };
+
+        // Approximate left-side truncation during streaming using expected tile widths
+        let x2 = overHang;
         let skipRemaining2 = 0;
         if (resizeSide === "left" && clipType === "video") {
-          let totalTileWidth2 = 0;
-          for (let i = 0; i < exactSamples.length; i++) {
-            const sample = exactSamples[i];
-            const anyCanvas = sample.canvas as any;
-            const tileWidth = Math.max(
-              1,
-              anyCanvas.width || anyCanvas.naturalWidth || 1,
-            );
-            totalTileWidth2 += tileWidth;
-          }
+          const expectedTileWidth = Math.max(1, Math.floor(thumbnailWidth));
+          const totalTileWidth2 = expectedTileWidth * frameIndices.length;
           const drawableWidth2 = Math.max(0, targetWidth2 - x2);
           skipRemaining2 = Math.max(0, totalTileWidth2 - drawableWidth2);
         }
 
-        for (let i = 0; i < exactSamples.length && x2 < targetWidth2; i++) {
-          const sample = exactSamples[i];
-          const inputCanvas = sample.canvas as HTMLCanvasElement;
-          const canvasToTile = applyMask(
-            inputCanvas,
-            Math.round(frameIndices[i] * fpsAdjustment),
-          );
-          const anyCanvas = canvasToTile as any;
-          const tileWidth = Math.max(
-            1,
-            anyCanvas.width || anyCanvas.naturalWidth || 1,
-          );
-          const tileHeight = Math.max(
-            1,
-            anyCanvas.height || anyCanvas.naturalHeight || 1,
-          );
+        let lastPresentAt = 0;
+        for await (const { pos, frameIndex: fi, sample } of fetchCanvasSamplesStream(
+          asset.path,
+          frameIndices,
+          thumbnailWidth,
+          timelineHeight,
+          { mediaInfo: mediaInfoRef ?? undefined },
+        )) {
+          if (mySeq !== exactVideoUpdateSeqRef.current) return;
+          if (x2 >= targetWidth2) break;
+
+          // If the stream yields null (decode fail / missing), fall back to the
+          // nearest cached sample for this position so we never blank a tile.
+          const fallbackWrapped = nearest[pos] ?? null;
+          const inputCanvas =
+            ((sample?.canvas as HTMLCanvasElement | undefined) ??
+              (fallbackWrapped?.canvas as HTMLCanvasElement | undefined)) ??
+            null;
+          decoded[pos] = inputCanvas;
+
+          // If we don't have a tile yet, still advance layout to keep the stream moving.
+          let canvasToTile: HTMLCanvasElement | null = null;
+          let tileWidth = Math.max(1, Math.floor(thumbnailWidth));
+          let tileHeight = targetHeight2;
+          if (inputCanvas) {
+            canvasToTile = applyMask(inputCanvas, Math.round(fi * fpsAdjustment));
+            const anyCanvas = canvasToTile as any;
+            tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
+            tileHeight = Math.max(
+              1,
+              anyCanvas.height || anyCanvas.naturalHeight || 1,
+            );
+          }
+
           const sourceHeight = Math.min(tileHeight, targetHeight2);
 
           // Apply left-side truncation when needed
@@ -356,7 +444,7 @@ export const generateTimelineThumbnailVideo = async (
             availableSrcWidth2 = tileWidth - consume2;
             skipRemaining2 -= consume2;
             if (availableSrcWidth2 <= 0) {
-              continue; // this tile is fully truncated away
+              continue; // fully truncated away
             }
           }
 
@@ -364,44 +452,149 @@ export const generateTimelineThumbnailVideo = async (
           if (remaining2 <= 0) break;
           const drawWidth2 = Math.min(availableSrcWidth2, remaining2);
           if (drawWidth2 <= 0) break;
-          ctx2.drawImage(
-            canvasToTile,
-            srcX2,
-            0,
-            drawWidth2,
-            sourceHeight,
-            x2,
-            0,
-            drawWidth2,
-            sourceHeight,
-          );
+
+          if (canvasToTile) {
+            wctx.drawImage(
+              canvasToTile,
+              srcX2,
+              0,
+              drawWidth2,
+              sourceHeight,
+              x2,
+              0,
+              drawWidth2,
+              sourceHeight,
+            );
+          }
           x2 += drawWidth2;
+
+          const now = performance.now();
+          if (now - lastPresentAt > 140) {
+            lastPresentAt = now;
+            present();
+          }
         }
 
-        // Apply WebGL filters to exact video thumbnails
-        const vidClip = currentClip as VideoClipProps;
-        applyFilters(imageCanvas, {
-          brightness: vidClip?.brightness,
-          contrast: vidClip?.contrast,
-          hue: vidClip?.hue,
-          saturation: vidClip?.saturation,
-          blur: vidClip?.blur,
-          sharpness: vidClip?.sharpness,
-          noise: vidClip?.noise,
-          vignette: vidClip?.vignette,
-        });
-      }
-    } finally {
-      if (mySeq === exactVideoUpdateSeqRef.current) {
-        groupRef.current?.getLayer()?.batchDraw();
+        if (mySeq !== exactVideoUpdateSeqRef.current) return;
 
-        lastExactRequestKeyRef.current = requestKey;
+        // Final pass: redraw precisely (accurate left-truncation) on top of the
+        // cached seed so any missing/failed samples still show *something*.
+        wctx.clearRect(0, 0, targetWidth2, targetHeight2);
+        // Seed with cached render to prevent blank tiles if decode failed.
+        wctx.drawImage(seedCanvas, 0, 0);
+        let xFinal = overHang;
+        let skipFinal = 0;
+        if (resizeSide === "left" && clipType === "video") {
+          let total = 0;
+          for (let i = 0; i < frameIndices.length; i++) {
+            const fi = frameIndices[i]!;
+            const c = decoded[i];
+            if (c) {
+              const masked = applyMask(c, Math.round(fi * fpsAdjustment));
+              const anyCanvas = masked as any;
+              total += Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
+            } else {
+              total += Math.max(1, Math.floor(thumbnailWidth));
+            }
+          }
+          const drawable = Math.max(0, targetWidth2 - xFinal);
+          skipFinal = Math.max(0, total - drawable);
+        }
 
-        // Force rerender if there were no cached samples initially
-        if (!hasCachedSamples) {
-          setForceRerenderCounter((prev) => prev + 1);
+        for (let i = 0; i < frameIndices.length && xFinal < targetWidth2; i++) {
+          const fi = frameIndices[i]!;
+          // Prefer decoded sample; fall back to nearest cached if missing.
+          const c = decoded[i] ?? ((nearest[i]?.canvas as HTMLCanvasElement | undefined) ?? null);
+          let tileCanvas: HTMLCanvasElement | null = null;
+          let tileW = Math.max(1, Math.floor(thumbnailWidth));
+          let tileH = targetHeight2;
+          if (c) {
+            tileCanvas = applyMask(c, Math.round(fi * fpsAdjustment));
+            const anyCanvas = tileCanvas as any;
+            tileW = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
+            tileH = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
+          }
+          const sourceH = Math.min(tileH, targetHeight2);
+
+          let srcX = 0;
+          let availW = tileW;
+          if (skipFinal > 0) {
+            const consume = Math.min(skipFinal, tileW);
+            srcX = consume;
+            availW = tileW - consume;
+            skipFinal -= consume;
+            if (availW <= 0) {
+              continue;
+            }
+          }
+          const remaining = targetWidth2 - xFinal;
+          if (remaining <= 0) break;
+          const drawW = Math.min(availW, remaining);
+          if (drawW <= 0) break;
+          if (tileCanvas) {
+            wctx.drawImage(
+              tileCanvas,
+              srcX,
+              0,
+              drawW,
+              sourceH,
+              xFinal,
+              0,
+              drawW,
+              sourceH,
+            );
+          }
+          xFinal += drawW;
+        }
+
+        // If we still didn't fill the width (e.g. stream yielded nulls), repeat the
+        // last decoded tile to guarantee full coverage.
+        if (xFinal < targetWidth2) {
+          let last: HTMLCanvasElement | null = null;
+          for (let i = decoded.length - 1; i >= 0; i--) {
+            const c = decoded[i];
+            if (c) {
+              const fi = frameIndices[i]!;
+              last = applyMask(c, Math.round(fi * fpsAdjustment));
+              break;
+            }
+          }
+          if (last) {
+            const anyCanvas = last as any;
+            const tileW = Math.max(
+              1,
+              anyCanvas.width || anyCanvas.naturalWidth || Math.floor(thumbnailWidth) || 1,
+            );
+            const tileH = Math.max(
+              1,
+              anyCanvas.height || anyCanvas.naturalHeight || targetHeight2,
+            );
+            const sourceH = Math.min(tileH, targetHeight2);
+            let guard = 0;
+            while (xFinal < targetWidth2 && guard++ < 2048) {
+              const remaining = targetWidth2 - xFinal;
+              const drawW = Math.min(tileW, remaining);
+              if (drawW <= 0) break;
+              wctx.drawImage(last, 0, 0, drawW, sourceH, xFinal, 0, drawW, sourceH);
+              xFinal += drawW;
+            }
+          }
+        }
+
+        present();
+      } finally {
+        if (mySeq === exactVideoUpdateSeqRef.current) {
+          groupRef.current?.getLayer()?.batchDraw();
+
+          lastExactRequestKeyRef.current = requestKey;
+
+          // Force rerender if there were no cached samples initially
+          if (!hasCachedSamples) {
+            setForceRerenderCounter((prev) => prev + 1);
+          }
         }
       }
-    }
-  }, DEBOUNCE_MS);
+    }, DEBOUNCE_MS);
+  }
+  groupRef.current?.getLayer()?.batchDraw();
 };

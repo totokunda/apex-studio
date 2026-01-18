@@ -1,5 +1,6 @@
 {
   "name": "apex-studio",
+  "productName": "Apex Studio",
   "description": "Apex Studio",
   "version": "0.1.0",
   "private": true,
@@ -41,6 +42,7 @@
   "devDependencies": {
     "@npmcli/map-workspaces": "5.0.0",
     "@playwright/test": "1.55.0",
+    "@types/mime-types": "^3.0.1",
     "@types/node": "24.5.2",
     "@types/tar-stream": "^3.1.4",
     "baseline-browser-mapping": "^2.8.32",
@@ -63,6 +65,7 @@
     "drizzle-orm": "^0.44.7",
     "electron-store": "^11.0.2",
     "mime": "^4.1.0",
+    "node-ts": "^8.0.10",
     "soundtouchjs": "^0.2.1",
     "ws": "^8.18.3"
   }

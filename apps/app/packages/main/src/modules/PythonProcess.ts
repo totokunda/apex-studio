@@ -792,7 +792,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
   private async spawnProcess(): Promise<void> {
     const isPackaged = this.app?.isPackaged ?? false;
-    const mirrorPythonLogsToStdout = !isPackaged || this.config.devMode;
+    const mirrorPythonLogsToStdout = false; // !isPackaged || this.config.devMode;
 
     // Prepare log file
     if (!this.latestLogPath || !this.sessionLogPath) {
