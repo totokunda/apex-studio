@@ -348,14 +348,8 @@ def _container_context(container: object, *, self_obj=None) -> list[str]:
 class OffloadMixin(base_object):
     """
     Add to any class that owns a torch.nn.Module (e.g. your Trainer or Model
-    wrapper).
-
-    Recommended usage in Apex engines is to offload by **component name**:
-        `self._offload("transformer")`
-    because that allows safe "discard" semantics (dropping references on the engine).
-
-    If you pass a module object directly, only `"cpu"` offload is supported; `"discard"`
-    requires a string name so the engine can sever references.
+    wrapper).  Call `self._offload(self.model)` when you are finished with a
+    module and want to give the accelerator memory back.
 
     Example
     -------
@@ -365,22 +359,19 @@ class OffloadMixin(base_object):
             self.model = model
 
         def teardown(self):
-            # Explicitly choose a behavior for module objects.
-            self._offload(self.model, offload_type="cpu")
+            self._offload(self.model)   # <- frees VRAM / MRAM
     """
 
     def _offload(
         self: "BaseEngine",
         module: torch.nn.Module | str | None,
         *,
-        offload_type: Literal["cpu", "discard"] | None = None
+        offload_type: Literal["cpu", "discard"] = "discard",
     ) -> None:
         """
-        Pressure-aware offload helper.
-
-        - If `offload_type` is explicitly set ("cpu" / "discard"), we do it immediately.
-        - If `offload_type` is None (default), we keep the module warm and only offload
-          when we're under RAM/VRAM pressure.
+        Move every weight/buffer to CPU **and** clear CUDA/MPS/CPU caches.
+        Optionally (default) also delete the module's parameters and buffers so it no
+        longer occupies CPU or accelerator memory.
 
         Parameters
         ----------
@@ -399,78 +390,12 @@ class OffloadMixin(base_object):
         #         self._null_module_refs(module)
         #     return
 
-        import os
         import torch
-
-        def _env_float(name: str, default: float) -> float:
-            raw = os.environ.get(name)
-            if raw is None:
-                return default
-            try:
-                return float(str(raw).strip())
-            except Exception:
-                return default
-
-        def _cpu_free_fraction() -> float | None:
-            try:
-                import psutil  # type: ignore
-
-                vm = psutil.virtual_memory()
-                if vm.total <= 0:
-                    return None
-                return float(vm.available) / float(vm.total)
-            except Exception:
-                return None
-
-        def _cuda_free_fraction() -> float | None:
-            try:
-                if not torch.cuda.is_available():
-                    return None
-                free, total = torch.cuda.mem_get_info()
-                if total <= 0:
-                    return None
-                return float(free) / float(total)
-            except Exception:
-                return None
-
-        # Default policy: keep warm until pressure, then offload safely.
-        if offload_type is None:
-            min_free_vram = _env_float("APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.10)
-            min_free_ram = _env_float("APEX_OFFLOAD_MIN_FREE_RAM_FRACTION", 0.08)
-
-            vram_free = _cuda_free_fraction()
-            ram_free = _cpu_free_fraction()
-
-            under_vram = vram_free is not None and vram_free < min_free_vram
-            under_ram = ram_free is not None and ram_free < min_free_ram
-
-            # If neither is under pressure, keep everything as-is (warm).
-            if not under_vram and not under_ram:
-                return
-
-            # Under pressure: choose the least risky action.
-            # - Prefer offload-to-CPU only when RAM headroom is healthy.
-            # - Otherwise discard to avoid CPU OOM.
-            if under_vram and (ram_free is None or ram_free >= (min_free_ram + 0.05)):
-                offload_type = "cpu"
-            else:
-                offload_type = "discard"
 
         # Keep no_grad behavior without importing torch at module import time.
         with torch.no_grad():
             if not module:
                 return
-
-            manager = None
-            try:
-                from src.memory_management import get_global_weight_manager
-
-                manager = get_global_weight_manager()
-            except Exception:
-                manager = None
-
-            module_obj = None
-            module_id = None
 
             if isinstance(module, str):
                 # IMPORTANT:
@@ -484,46 +409,10 @@ class OffloadMixin(base_object):
                         module_obj = self._helpers[module]
                     else:
                         return
-                try:
-                    if manager is not None:
-                        module_id = getattr(self, "_component_memory_ids", {}).get(
-                            module
-                        )
-                        register_fn = getattr(self, "_register_tracked_module", None)
-                        if module_id is None and callable(register_fn):
-                            register_fn(module_obj, module)
-                            module_id = getattr(self, "_component_memory_ids", {}).get(
-                                module
-                            )
-                        if module_id:
-                            manager.refresh(module_id)
-                except Exception:
-                    module_id = None
-
+                
                 if offload_type == "cpu":
-                    if manager is not None and module_id:
-                        manager.offload_module(
-                            module_id, target="cpu", reason="offload_cpu"
-                        )
-                    else:
-                        module_obj.to("cpu")
+                    module_obj.to("cpu")
                 elif offload_type == "discard":
-                    if manager is not None and module_id:
-                        try:
-                            # Force-disk-only mode: "disk" semantics are pure discard.
-                            # Do NOT serialize weights; drop tracking so the only way
-                            # to access again is to reload from the original source.
-                            if getattr(manager, "force_disk_only", False):
-                                manager.forget(module_id)
-                            else:
-                                manager.offload_module(
-                                    module_id,
-                                    target="disk",
-                                    drop_cpu=True,
-                                    reason="offload_discard",
-                                )
-                        except Exception:
-                            pass
                     component = self.get_component_by_name(module)
                     if component:
                         module_type_obj = getattr(self, component.get("type"), None)
@@ -547,28 +436,8 @@ class OffloadMixin(base_object):
                     self.logger.info(f"Setting {module} to None")
                     setattr(self, module, None)
             else:
-                module_obj = module
-                try:
-                    if manager is not None:
-                        module_id = getattr(module_obj, "_apex_mem_id", None)
-                        register_fn = getattr(self, "_register_tracked_module", None)
-                        if module_id is None and callable(register_fn):
-                            register_fn(
-                                module_obj, getattr(module_obj, "__class__", type("X", (), {})).__name__
-                            )
-                            module_id = getattr(module_obj, "_apex_mem_id", None)
-                        if module_id:
-                            manager.refresh(module_id)
-                except Exception:
-                    module_id = None
-
                 if offload_type == "cpu":
-                    if manager is not None and module_id:
-                        manager.offload_module(
-                            module_id, target="cpu", reason="offload_cpu"
-                        )
-                    else:
-                        module.to("cpu")
+                    module.to("cpu")
                 elif offload_type == "discard":
                     raise ValueError(
                         f"Invalid offload type: {offload_type} for module."

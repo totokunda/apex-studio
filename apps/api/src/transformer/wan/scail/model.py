@@ -137,6 +137,115 @@ def rope_params(max_seq_len, dim, theta=10000):
     return freqs
 
 
+def _rope_split_freqs(freqs: torch.Tensor, head_dim: int):
+    """
+    Split frequency table into (t, h, w) parts matching the per-head rotary layout.
+
+    freqs: [max_seq, head_dim/2] complex
+    """
+    if head_dim % 2 != 0:
+        raise ValueError(f"head_dim must be even for RoPE, got {head_dim}")
+    c = head_dim // 2
+    return freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+
+
+@amp.autocast(enabled=False)
+def _rope_apply_3d_chunked(
+    x: torch.Tensor,
+    freqs: torch.Tensor,
+    *,
+    f: int,
+    h: int,
+    w: int,
+    shift_f: int,
+    shift_h: int,
+    shift_w: int,
+    downsample_hw_by_2: bool = False,
+    chunk_size: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Apply 3D RoPE (t/h/w) to x in chunks to reduce peak memory.
+
+    x: [B, S, N, D] where D is per-head dim (must be even).
+    freqs: [max_seq, D/2] complex
+    """
+    if x.ndim != 4:
+        raise ValueError(f"Expected x to be 4D [B,S,N,D], got shape {tuple(x.shape)}")
+
+    b, s, n, d = x.shape
+    if d % 2 != 0:
+        raise ValueError(f"Per-head dim must be even for RoPE, got {d}")
+
+    freqs_t, freqs_h, freqs_w = _rope_split_freqs(freqs, d)
+
+    if downsample_hw_by_2:
+        if h % 2 != 0 or w % 2 != 0:
+            raise ValueError(f"Expected even H/W for downsampled RoPE, got H={h}, W={w}")
+        seq_len = f * (h // 2) * (w // 2)
+    else:
+        seq_len = f * h * w
+
+    if seq_len != s:
+        raise AssertionError(f"seq_len mismatch: expected {seq_len}, got {s}")
+
+    # Basic range checks (helps catch misconfigured shifts early).
+    if shift_f < 0 or shift_h < 0 or shift_w < 0:
+        raise ValueError(f"Negative RoPE shift not supported: {shift_f=}, {shift_h=}, {shift_w=}")
+    if shift_f + f > freqs_t.size(0):
+        raise AssertionError(f"{shift_f + f} > {freqs_t.size(0)}")
+    if shift_h + h > freqs_h.size(0):
+        raise AssertionError(f"{shift_h + h} > {freqs_h.size(0)}")
+    if shift_w + w > freqs_w.size(0):
+        raise AssertionError(f"{shift_w + w} > {freqs_w.size(0)}")
+
+    if chunk_size is None or chunk_size <= 0:
+        chunk_size = s
+
+    out = torch.empty((b, s, n, d), device=x.device, dtype=torch.float32)
+
+    # Pre-slice the ranges we will index into (keeps index math simple).
+    freqs_t = freqs_t[shift_f : shift_f + f]
+    freqs_h = freqs_h[shift_h : shift_h + h]
+    freqs_w = freqs_w[shift_w : shift_w + w]
+
+    if downsample_hw_by_2:
+        # Match the old avg_pool2d(kernel=2,stride=2) behavior on (H,W) after slicing.
+        freqs_h = 0.5 * (freqs_h[0::2] + freqs_h[1::2])
+        freqs_w = 0.5 * (freqs_w[0::2] + freqs_w[1::2])
+        hw = (h // 2) * (w // 2)
+        w_eff = w // 2
+    else:
+        hw = h * w
+        w_eff = w
+
+    for start in range(0, s, chunk_size):
+        end = min(start + chunk_size, s)
+        pos = torch.arange(start, end, device=x.device, dtype=torch.long)
+
+        t_idx = pos // hw
+        rem = pos - t_idx * hw
+        h_idx = rem // w_eff
+        w_idx = rem - h_idx * w_eff
+
+        mult = torch.cat(
+            [
+                freqs_t.index_select(0, t_idx),
+                freqs_h.index_select(0, h_idx),
+                freqs_w.index_select(0, w_idx),
+            ],
+            dim=1,
+        )  # [chunk, D/2] complex
+
+        # Complex multiply in float64 for numerical stability (matches original).
+        x_chunk = x[:, start:end].to(torch.float64).reshape(b, end - start, n, -1, 2)
+        x_chunk = torch.view_as_complex(x_chunk)  # [B, chunk, N, D/2]
+        y_chunk = x_chunk * mult.view(1, end - start, 1, -1)
+        y_chunk = torch.view_as_real(y_chunk).flatten(-2)  # [B, chunk, N, D]
+        out[:, start:end] = y_chunk.float()
+
+    return out
+
+
 @amp.autocast(enabled=False)
 def rope_apply_ref(x, freqs, **kwargs):
     f = 1
@@ -145,38 +254,20 @@ def rope_apply_ref(x, freqs, **kwargs):
     shift_f = 0
     shift_h = kwargs["rope_H_shift"]
     shift_w = kwargs["rope_W_shift"]
+    rope_chunk_size = kwargs.get("rope_chunk_size", None)
 
-    n, c = x.size(2), x.size(3) // 2
-
-    # split freqs
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-
-    # loop over samples
-    output = []
-    for i in range(x.size(0)):
-        seq_len = f * h * w
-        assert seq_len == x.size(1)
-
-        # precompute multipliers
-        x_i = torch.view_as_complex(
-            x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2)
-        )
-        freqs_i = torch.cat(
-            [
-                freqs[0][shift_f : shift_f + f].view(f, 1, 1, -1).expand(f, h, w, -1),
-                freqs[1][shift_h : shift_h + h].view(1, h, 1, -1).expand(f, h, w, -1),
-                freqs[2][shift_w : shift_w + w].view(1, 1, w, -1).expand(f, h, w, -1),
-            ],
-            dim=-1,
-        ).reshape(seq_len, 1, -1)
-
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
-
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).float()
+    return _rope_apply_3d_chunked(
+        x,
+        freqs,
+        f=f,
+        h=h,
+        w=w,
+        shift_f=shift_f,
+        shift_h=shift_h,
+        shift_w=shift_w,
+        downsample_hw_by_2=False,
+        chunk_size=rope_chunk_size,
+    )
 
 
 @amp.autocast(enabled=False)
@@ -184,41 +275,23 @@ def rope_apply_video(x, freqs, **kwargs):
     f = kwargs["rope_T"]
     h = kwargs["rope_H"]
     w = kwargs["rope_W"]
-    shift_f = 1  # reference frame
+    shift_f = 1 + int(kwargs.get("rope_T_shift", 0) or 0)  # reference frame
     shift_h = kwargs["rope_H_shift"]
     shift_w = kwargs["rope_W_shift"]
+    rope_chunk_size = kwargs.get("rope_chunk_size", None)
 
-    n, c = x.size(2), x.size(3) // 2
-
-    # split freqs
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-
-    # loop over samples
-    output = []
-    for i in range(x.size(0)):
-        seq_len = f * h * w
-        assert seq_len == x.size(1)
-
-        # precompute multipliers
-        x_i = torch.view_as_complex(
-            x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2)
-        )
-        freqs_i = torch.cat(
-            [
-                freqs[0][shift_f : shift_f + f].view(f, 1, 1, -1).expand(f, h, w, -1),
-                freqs[1][shift_h : shift_h + h].view(1, h, 1, -1).expand(f, h, w, -1),
-                freqs[2][shift_w : shift_w + w].view(1, 1, w, -1).expand(f, h, w, -1),
-            ],
-            dim=-1,
-        ).reshape(seq_len, 1, -1)
-
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
-
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).float()
+    return _rope_apply_3d_chunked(
+        x,
+        freqs,
+        f=f,
+        h=h,
+        w=w,
+        shift_f=shift_f,
+        shift_h=shift_h,
+        shift_w=shift_w,
+        downsample_hw_by_2=False,
+        chunk_size=rope_chunk_size,
+    )
 
 
 @amp.autocast(enabled=False)
@@ -226,60 +299,23 @@ def rope_apply_pose(x, freqs, **kwargs):
     f = kwargs["rope_T"]
     h = kwargs["rope_H"]
     w = kwargs["rope_W"]
-    shift_f = 1  # reference frame
+    shift_f = 1 + int(kwargs.get("rope_T_shift", 0) or 0)  # reference frame
     shift_h = kwargs["rope_H_shift"] + kwargs["global_rope_H"]
     shift_w = kwargs["rope_W_shift"] + kwargs["global_rope_W"]
+    rope_chunk_size = kwargs.get("rope_chunk_size", None)
 
-    n, c = x.size(2), x.size(3) // 2
-
-    # split freqs
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-
-    # loop over samples
-    output = []
-    for i in range(x.size(0)):
-        seq_len = f * (h // 2) * (w // 2)  # downsampled
-        assert seq_len == x.size(1)
-
-        # precompute multipliers
-        x_i = torch.view_as_complex(
-            x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2)
-        )
-        freqs_i = torch.cat(
-            [
-                freqs[0][shift_f : shift_f + f].view(f, 1, 1, -1).expand(f, h, w, -1),
-                freqs[1][shift_h : shift_h + h].view(1, h, 1, -1).expand(f, h, w, -1),
-                freqs[2][shift_w : shift_w + w].view(1, 1, w, -1).expand(f, h, w, -1),
-            ],
-            dim=-1,
-        )  # T H W D
-
-        assert shift_w + w <= freqs[2].size(0), f"{shift_w + w} > {freqs[2].size(0)}"
-
-        # downsample
-        freqs_i_real = F.avg_pool2d(
-            freqs_i.real.permute(0, 3, 1, 2), kernel_size=2, stride=2
-        ).permute(
-            0, 2, 3, 1
-        )  # T H W D -> T D H W -> T D H/2 W/2 -> T H/2 W/2 D
-
-        freqs_i_imag = F.avg_pool2d(
-            freqs_i.imag.permute(0, 3, 1, 2), kernel_size=2, stride=2
-        ).permute(
-            0, 2, 3, 1
-        )  # T H W D -> T D H W -> T D H/2 W/2 -> T H/2 W/2 D
-
-        freqs_i = torch.complex(freqs_i_real, freqs_i_imag)
-
-        freqs_i = freqs_i.reshape(seq_len, 1, -1)
-
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
-
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).float()
+    return _rope_apply_3d_chunked(
+        x,
+        freqs,
+        f=f,
+        h=h,
+        w=w,
+        shift_f=shift_f,
+        shift_h=shift_h,
+        shift_w=shift_w,
+        downsample_hw_by_2=True,
+        chunk_size=rope_chunk_size,
+    )
 
 
 def rope_apply_scail(x, **kwargs):
@@ -680,24 +716,28 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
             "modulated_norm_chunk_size": None,
             "norm_chunk_size": None,
             "out_modulated_norm_chunk_size": None,
+            "rope_chunk_size": None,
         },
         "light": {
             "ffn_chunk_size": 2048,
             "modulated_norm_chunk_size": 16384,
             "norm_chunk_size": 8192,
             "out_modulated_norm_chunk_size": 16384,
+            "rope_chunk_size": 8192,
         },
         "balanced": {
             "ffn_chunk_size": 512,
             "modulated_norm_chunk_size": 8192,
             "norm_chunk_size": 4096,
             "out_modulated_norm_chunk_size": 8192,
+            "rope_chunk_size": 4096,
         },
         "aggressive": {
             "ffn_chunk_size": 256,
             "modulated_norm_chunk_size": 4096,
             "norm_chunk_size": 2048,
             "out_modulated_norm_chunk_size": 4096,
+            "rope_chunk_size": 1024,
         },
     }
 
@@ -861,6 +901,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
         p = self._CHUNKING_PROFILES[profile_name]
         self._chunking_profile_name = profile_name
         self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+        self._rope_chunk_size = p.get("rope_chunk_size", None)
 
         self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
         for block in self.blocks:
@@ -926,6 +967,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
+        rope_t_shift = int(kwargs.get("rope_T_shift", 0) or 0)
         clip_fea = encoder_hidden_states_clip
         x = hidden_states.unbind(dim=0)
         ref_latents = encoder_hidden_states_reference.unbind(dim=0)
@@ -1004,7 +1046,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
         )
 
         # arguments
-        kwargs = dict(
+        model_kwargs = dict(
             e=e0,
             seq_lens=seq_lens,
             grid_sizes=grid_sizes,
@@ -1016,29 +1058,31 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
             pose_length=pose_length,
         )
 
-        kwargs["rope_T"] = rope_t
-        kwargs["rope_H"] = rope_h
-        kwargs["rope_W"] = rope_w
-        kwargs["hidden_size_head"] = self.hidden_size_head
+        model_kwargs["rope_T"] = rope_t
+        model_kwargs["rope_H"] = rope_h
+        model_kwargs["rope_W"] = rope_w
+        model_kwargs["hidden_size_head"] = self.hidden_size_head
 
-        kwargs["global_rope_H"] = self.pose_rope_shift[1]
-        kwargs["global_rope_W"] = self.pose_rope_shift[2]
+        model_kwargs["global_rope_H"] = self.pose_rope_shift[1]
+        model_kwargs["global_rope_W"] = self.pose_rope_shift[2]
+        model_kwargs["rope_chunk_size"] = getattr(self, "_rope_chunk_size", None)
+        model_kwargs["rope_T_shift"] = rope_t_shift
 
         # TODO: add shift based on rank of sequence parallelism
-        kwargs["rope_H_shift"] = 0
-        kwargs["rope_W_shift"] = 0
+        model_kwargs["rope_H_shift"] = 0
+        model_kwargs["rope_W_shift"] = 0
 
         def apply_rope_scail(x):
             """
             x: [b, s, n, d]
             """
-            y = rope_apply_scail(x, **kwargs)
+            y = rope_apply_scail(x, **model_kwargs)
             return y
 
-        kwargs["rope_apply_func"] = apply_rope_scail
+        model_kwargs["rope_apply_func"] = apply_rope_scail
 
         for block in self.blocks:
-            x = block(x, **kwargs)
+            x = block(x, **model_kwargs)
 
         # head
         x = self.head(x, e)
