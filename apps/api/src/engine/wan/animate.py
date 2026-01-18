@@ -519,7 +519,7 @@ class WanAnimateEngine(WanShared):
 
         if self.transformer is None:
             self.load_component_by_type("transformer")
-            self.to_device(self.transformer)
+        self.to_device(self.transformer)
         if chunking_profile != "none":
             self.transformer.set_chunking_profile(chunking_profile)
         safe_emit_progress(progress_callback, 0.25, "Transformer ready")
@@ -585,7 +585,7 @@ class WanAnimateEngine(WanShared):
 
         if self.scheduler is None:
             self.load_component_by_type("scheduler")
-            self.to_device(self.scheduler)
+        self.to_device(self.scheduler)
         # 6. Prepare timesteps
         timesteps, num_inference_steps = self._get_timesteps(
             scheduler=self.scheduler,

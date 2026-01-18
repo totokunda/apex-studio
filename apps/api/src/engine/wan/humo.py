@@ -38,7 +38,7 @@ class HuMoEngine(WanShared):
 
         if self.vae is None:
             self.load_component_by_type("vae")
-            self.to_device(self.vae)
+        self.to_device(self.vae)
 
         # Load image.
         if isinstance(image, list):
@@ -524,7 +524,7 @@ class HuMoEngine(WanShared):
         if not self.scheduler:
             safe_emit_progress(progress_callback, 0.30, "Loading scheduler")
             self.load_component_by_type("scheduler")
-            self.to_device(self.scheduler)
+        self.to_device(self.scheduler)
 
         timesteps, num_inference_steps = self._get_timesteps(
             self.scheduler,
@@ -538,7 +538,8 @@ class HuMoEngine(WanShared):
         if not self.transformer:
             safe_emit_progress(progress_callback, 0.42, "Loading transformer")
             self.load_component_by_type("transformer")
-            self.to_device(self.transformer)
+            
+        self.to_device(self.transformer)
         if chunking_profile != "none":
             self.transformer.set_chunking_profile(chunking_profile)
         safe_emit_progress(progress_callback, 0.45, "Transformer ready")

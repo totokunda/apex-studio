@@ -494,6 +494,7 @@ class LTX2TI2VEngine(LTX2Shared):
         **kwargs,
     ):
         
+
         # Progress mapping:
         # - If `upsample=True` (stage-1 + stage-2 refinement), map stage-1 to [0.00, 0.90] and stage-2 to [0.90, 1.00]
         #   so progress doesn't "reset" mid-run.

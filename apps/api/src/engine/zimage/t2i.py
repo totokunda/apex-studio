@@ -129,8 +129,9 @@ class ZImageT2IEngine(ZImageShared):
             self.load_component_by_type("transformer")
             safe_emit_progress(progress_callback, 0.23, "Transformer loaded")
             safe_emit_progress(progress_callback, 0.24, "Moving transformer to device")
-            self.to_device(self.transformer)
-            safe_emit_progress(progress_callback, 0.25, "Transformer on device")
+            
+        self.to_device(self.transformer)
+        safe_emit_progress(progress_callback, 0.25, "Transformer on device")
 
         safe_emit_progress(progress_callback, 0.25, "Transformer ready")
 
@@ -167,7 +168,7 @@ class ZImageT2IEngine(ZImageShared):
 
         if not self.scheduler:
             self.load_component_by_type("scheduler")
-            self.to_device(self.scheduler)
+        self.to_device(self.scheduler)
 
         safe_emit_progress(progress_callback, 0.36, "Scheduler ready")
 

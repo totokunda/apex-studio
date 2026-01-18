@@ -238,7 +238,7 @@ class LucyEditEngine(WanShared):
 
                     if not getattr(self, "transformer", None):
                         self.load_component_by_type("transformer")
-                        self.to_device(self.transformer)
+                    self.to_device(self.transformer)
 
                     current_model = self.transformer
                     current_guidance_scale = (

@@ -183,7 +183,7 @@ class HunyuanT2VEngine(HunyuanVideoShared):
         else:
             if self.vae is None:
                 self.load_component_by_type("vae")
-                self.to_device(self.vae)
+            self.to_device(self.vae)
 
             video = self.vae_decode(latents, offload=offload)
             video = self._tensor_to_frames(video)

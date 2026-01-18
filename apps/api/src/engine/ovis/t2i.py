@@ -315,11 +315,11 @@ class OvisT2IEngine(BaseEngine):
 
         if not self.transformer:
             self.load_component_by_type("transformer")
-            self.to_device(self.transformer)
+        self.to_device(self.transformer)
 
         if not self.scheduler:
             self.load_component_by_type("scheduler")
-            self.to_device(self.scheduler)
+        self.to_device(self.scheduler)
 
         # 4. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels // 4
