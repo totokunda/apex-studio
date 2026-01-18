@@ -38,6 +38,9 @@ spec:
     name: seedvr2/vae
     label: SeedVR2 VAE
     base: seedvr
+    block_modules:
+      - encoder
+      - decoder
     model_path:
     - path: ByteDance-Seed/SeedVR2-3B/ema_vae.pth
       variant: default
