@@ -53,5 +53,3 @@ def run(ctx: SmokeContext) -> None:
     except Exception:
         # torch import failures are already caught above
         pass
-
-

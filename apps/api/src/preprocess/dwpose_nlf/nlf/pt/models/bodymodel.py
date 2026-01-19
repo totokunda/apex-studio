@@ -4,6 +4,7 @@ import torch.nn as nn
 import numpy as np
 from pt.rotation import mat2rotvec, rotvec2mat
 
+
 class BodyModel(nn.Module):
     """
     Represents a statistical body model of the SMPL family.
@@ -44,8 +45,8 @@ class BodyModel(nn.Module):
     def __init__(
         self,
         model_config: dict,
-        model_name: str = 'smpl',
-        gender: str = 'neutral',
+        model_name: str = "smpl",
+        gender: str = "neutral",
         model_root: Optional[str] = None,
         num_betas: Optional[int] = None,
         vertex_subset_size: Optional[int] = None,
@@ -60,29 +61,42 @@ class BodyModel(nn.Module):
 
         # Register buffers and parameters
 
-        self.v_template = nn.Buffer(torch.zeros(model_config['v_template'], dtype=torch.float32))
-        self.shapedirs = nn.Buffer(torch.zeros(model_config['shapedirs'], dtype=torch.float32))
-        self.posedirs = nn.Buffer(torch.zeros(model_config['posedirs'], dtype=torch.float32))
+        self.v_template = nn.Buffer(
+            torch.zeros(model_config["v_template"], dtype=torch.float32)
+        )
+        self.shapedirs = nn.Buffer(
+            torch.zeros(model_config["shapedirs"], dtype=torch.float32)
+        )
+        self.posedirs = nn.Buffer(
+            torch.zeros(model_config["posedirs"], dtype=torch.float32)
+        )
         self.J_regressor_post_lbs = nn.Buffer(
-            torch.zeros(model_config['J_regressor_post_lbs'], dtype=torch.float32)
+            torch.zeros(model_config["J_regressor_post_lbs"], dtype=torch.float32)
         )
-        self.J_template = nn.Buffer(torch.zeros(model_config['J_template'], dtype=torch.float32))
-        self.J_shapedirs = nn.Buffer(torch.zeros(model_config['J_shapedirs'], dtype=torch.float32))
-        self.kid_shapedir = nn.Buffer(torch.zeros(model_config['kid_shapedir'], dtype=torch.float32))
+        self.J_template = nn.Buffer(
+            torch.zeros(model_config["J_template"], dtype=torch.float32)
+        )
+        self.J_shapedirs = nn.Buffer(
+            torch.zeros(model_config["J_shapedirs"], dtype=torch.float32)
+        )
+        self.kid_shapedir = nn.Buffer(
+            torch.zeros(model_config["kid_shapedir"], dtype=torch.float32)
+        )
         self.kid_J_shapedir = nn.Buffer(
-            torch.zeros(model_config['kid_J_shapedir'], dtype=torch.float32)
+            torch.zeros(model_config["kid_J_shapedir"], dtype=torch.float32)
         )
-        self.weights = nn.Buffer(torch.zeros(model_config['weights'], dtype=torch.float32))
-        self.kintree_parents = model_config['kintree_parents']
+        self.weights = nn.Buffer(
+            torch.zeros(model_config["weights"], dtype=torch.float32)
+        )
+        self.kintree_parents = model_config["kintree_parents"]
         self.kintree_parents_tensor = nn.Buffer(
-            torch.zeros(model_config['kintree_parents_tensor'], dtype=torch.int64)
+            torch.zeros(model_config["kintree_parents_tensor"], dtype=torch.int64)
         )
-        
-        self.num_joints = model_config['num_joints']
-        self.num_vertices = model_config['num_vertices']
-        self.num_betas = model_config['num_betas']
 
-       
+        self.num_joints = model_config["num_joints"]
+        self.num_vertices = model_config["num_vertices"]
+        self.num_betas = model_config["num_betas"]
+
     def forward(
         self,
         pose_rotvecs: Optional[torch.Tensor] = None,
@@ -140,7 +154,9 @@ class BodyModel(nn.Module):
                 orientations=torch.empty((0, self.num_joints, 3, 3), device=device),
             )
             if return_vertices:
-                result['vertices'] = torch.empty((0, self.num_vertices, 3), device=device)
+                result["vertices"] = torch.empty(
+                    (0, self.num_vertices, 3), device=device
+                )
             return result
 
         if rel_rotmats is not None:
@@ -149,11 +165,13 @@ class BodyModel(nn.Module):
             pose_rotvecs = pose_rotvecs.float()
             rel_rotmats = rotvec2mat(pose_rotvecs.view(batch_size, self.num_joints, 3))
         elif glob_rotmats is None:
-            rel_rotmats = torch.eye(3, device=device).repeat(batch_size, self.num_joints, 1, 1)
+            rel_rotmats = torch.eye(3, device=device).repeat(
+                batch_size, self.num_joints, 1, 1
+            )
 
         if glob_rotmats is None:
             if rel_rotmats is None:
-                raise ValueError('Rotation info missing.')
+                raise ValueError("Rotation info missing.")
             glob_rotmats_ = [rel_rotmats[:, 0]]
             for i_joint in range(1, self.num_joints):
                 i_parent = self.kintree_parents[i_joint]
@@ -185,18 +203,22 @@ class BodyModel(nn.Module):
         j = (
             self.J_template
             + torch.einsum(
-                'jcs,bs->bjc', self.J_shapedirs[:, :, :num_betas], shape_betas[:, :num_betas]
+                "jcs,bs->bjc",
+                self.J_shapedirs[:, :, :num_betas],
+                shape_betas[:, :num_betas],
             )
-            + torch.einsum('jc,b->bjc', self.kid_J_shapedir, kid_factor)
+            + torch.einsum("jc,b->bjc", self.kid_J_shapedir, kid_factor)
         )
 
         bones1 = j[:, 1:] - j[:, parent_indices1]
-        rotated_bones1 = torch.einsum('bjCc,bjc->bjC', parent_glob_rotmats1, bones1)
+        rotated_bones1 = torch.einsum("bjCc,bjc->bjC", parent_glob_rotmats1, bones1)
 
         glob_positions = [j[:, 0]]
         for i_joint in range(1, self.num_joints):
             i_parent = self.kintree_parents[i_joint]
-            glob_positions.append(glob_positions[i_parent] + rotated_bones1[:, i_joint - 1])
+            glob_positions.append(
+                glob_positions[i_parent] + rotated_bones1[:, i_joint - 1]
+            )
         glob_positions = torch.stack(glob_positions, dim=1)
 
         trans = (
@@ -206,22 +228,26 @@ class BodyModel(nn.Module):
         )
 
         if not return_vertices:
-            return dict(joints=(glob_positions + trans[:, None]), orientations=glob_rotmats)
+            return dict(
+                joints=(glob_positions + trans[:, None]), orientations=glob_rotmats
+            )
 
         pose_feature = rel_rotmats1.reshape(-1, (self.num_joints - 1) * 3 * 3)
 
         v_posed = (
             self.v_template
             + torch.einsum(
-                'vcp,bp->bvc', self.shapedirs[:, :, :num_betas], shape_betas[:, :num_betas]
+                "vcp,bp->bvc",
+                self.shapedirs[:, :, :num_betas],
+                shape_betas[:, :num_betas],
             )
-            + torch.einsum('vcp,bp->bvc', self.posedirs, pose_feature)
-            + torch.einsum('vc,b->bvc', self.kid_shapedir, kid_factor)
+            + torch.einsum("vcp,bp->bvc", self.posedirs, pose_feature)
+            + torch.einsum("vc,b->bvc", self.kid_shapedir, kid_factor)
         )
 
-        translations = glob_positions - torch.einsum('bjCc,bjc->bjC', glob_rotmats, j)
+        translations = glob_positions - torch.einsum("bjCc,bjc->bjC", glob_rotmats, j)
         vertices = (
-            torch.einsum('bjCc,vj,bvc->bvC', glob_rotmats, self.weights, v_posed)
+            torch.einsum("bjCc,vj,bvc->bvC", glob_rotmats, self.weights, v_posed)
             + self.weights @ translations
         )
 
@@ -288,7 +314,9 @@ class BodyModel(nn.Module):
             and rel_rotmats is None
             and glob_rotmats is None
         ):
-            shape_betas = torch.zeros((1, 0), dtype=torch.float32, device=self.v_template.device)
+            shape_betas = torch.zeros(
+                (1, 0), dtype=torch.float32, device=self.v_template.device
+            )
 
         # Call forward with the adjusted arguments
         result = self.forward(
@@ -361,7 +389,10 @@ class BodyModel(nn.Module):
         new_rotmat = R @ current_rotmat
         new_pose_rotvec = torch.cat([mat2rotvec(new_rotmat), pose_rotvecs[3:]], dim=0)
 
-        pelvis = self.J_template[0] + self.J_shapedirs[0, :, : shape_betas.shape[0]] @ shape_betas
+        pelvis = (
+            self.J_template[0]
+            + self.J_shapedirs[0, :, : shape_betas.shape[0]] @ shape_betas
+        )
         if kid_factor is not None:
             pelvis += self.kid_J_shapedir[0] * kid_factor
 

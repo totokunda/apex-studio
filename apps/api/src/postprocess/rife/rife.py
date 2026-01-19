@@ -91,7 +91,9 @@ class RifePostprocessor(BasePostprocessor):
         self.exp = exp
         self.ssim_static_thresh = ssim_static_thresh
         self.ssim_hardcut_thresh = ssim_hardcut_thresh
-        model_dir = self.download_rife(model_dir, save_path=save_path, progress_callback=progress_callback)
+        model_dir = self.download_rife(
+            model_dir, save_path=save_path, progress_callback=progress_callback
+        )
         if download_only:
             return
 
@@ -99,7 +101,12 @@ class RifePostprocessor(BasePostprocessor):
         self.device = device or get_torch_device()
         self.model = _load_rife_model(model_dir, self.device, logger=logger)
 
-    def download_rife(self, model_dir: str, save_path: str, progress_callback: Optional[Callable[[int, int, Optional[str]], None]] = None):
+    def download_rife(
+        self,
+        model_dir: str,
+        save_path: str,
+        progress_callback: Optional[Callable[[int, int, Optional[str]], None]] = None,
+    ):
         if self._is_url(model_dir):
             # check if the save_path exists
             save_rife_path = os.path.join(save_path, "rife")
@@ -128,7 +135,9 @@ class RifePostprocessor(BasePostprocessor):
                     pass
                 return os.path.join(save_rife_path, "train_log")
             os.makedirs(save_rife_path, exist_ok=True)
-            path = self._download_from_url(model_dir, save_path=save_path, progress_callback=progress_callback)
+            path = self._download_from_url(
+                model_dir, save_path=save_path, progress_callback=progress_callback
+            )
             # Extract full contents so Python modules under train_log are available
             with zipfile.ZipFile(path, "r") as zip_ref:
                 zip_ref.extractall(save_rife_path)

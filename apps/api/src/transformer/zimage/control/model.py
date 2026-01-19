@@ -38,7 +38,6 @@ from diffusers.utils import (
 )
 from .base_model import ZImageTransformer2DModel, ZImageTransformerBlock
 
-
 ADALN_EMBED_DIM = 256
 SEQ_MULTI_OF = 32
 
@@ -304,9 +303,13 @@ class ZImageControlTransformer2DModel(ZImageTransformer2DModel):
         x_pad_token = self.x_pad_token
         dequant = getattr(x_pad_token, "dequant", None)
         if callable(dequant):
-            x_pad_token = dequant(dtype=control_context.dtype).to(device=control_context.device)
+            x_pad_token = dequant(dtype=control_context.dtype).to(
+                device=control_context.device
+            )
         else:
-            x_pad_token = x_pad_token.to(device=control_context.device, dtype=control_context.dtype)
+            x_pad_token = x_pad_token.to(
+                device=control_context.device, dtype=control_context.dtype
+            )
         control_context[torch.cat(x_inner_pad_mask)] = x_pad_token
         control_context = list(control_context.split(x_item_seqlens, dim=0))
         x_freqs_cis = list(
@@ -435,9 +438,13 @@ class ZImageControlTransformer2DModel(ZImageTransformer2DModel):
         x_pad_token = self.x_pad_token
         dequant = getattr(x_pad_token, "dequant", None)
         if callable(dequant):
-            x_pad_token = dequant(dtype=control_context.dtype).to(device=control_context.device)
+            x_pad_token = dequant(dtype=control_context.dtype).to(
+                device=control_context.device
+            )
         else:
-            x_pad_token = x_pad_token.to(device=control_context.device, dtype=control_context.dtype)
+            x_pad_token = x_pad_token.to(
+                device=control_context.device, dtype=control_context.dtype
+            )
         control_context[torch.cat(control_context_inner_pad_mask)] = x_pad_token
         control_context = list(
             control_context.split(control_context_item_seqlens, dim=0)

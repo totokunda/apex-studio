@@ -2,7 +2,9 @@ import torch
 from typing import Optional
 
 
-def heatmap_to_image(coords: torch.Tensor, proc_side: int, stride: int, centered_stride: bool):
+def heatmap_to_image(
+    coords: torch.Tensor, proc_side: int, stride: int, centered_stride: bool
+):
     # stride = FLAGS.stride_train if is_training else FLAGS.stride_test
 
     last_image_pixel = proc_side - 1
@@ -16,20 +18,32 @@ def heatmap_to_image(coords: torch.Tensor, proc_side: int, stride: int, centered
 
 
 def heatmap_to_25d(
-    coords: torch.Tensor, proc_side: int, stride: int, centered_stride: bool, box_size_m: float
+    coords: torch.Tensor,
+    proc_side: int,
+    stride: int,
+    centered_stride: bool,
+    box_size_m: float,
 ):
     coords2d = heatmap_to_image(coords[..., :2], proc_side, stride, centered_stride)
     return torch.cat([coords2d, coords[..., 2:] * box_size_m], dim=-1)
 
 
 def heatmap_to_metric(
-    coords: torch.Tensor, proc_side: int, stride: int, centered_stride: bool, box_size_m: float
+    coords: torch.Tensor,
+    proc_side: int,
+    stride: int,
+    centered_stride: bool,
+    box_size_m: float,
 ):
     xy = coords[..., :2]
     # if 'tanmetric' in FLAGS.custom:
     #     a = 0.35
     #     xy = a * torch.tan((xy - 0.5) / a) + 0.5
 
-    coords2d = heatmap_to_image(xy, proc_side, stride, centered_stride) * box_size_m / proc_side
+    coords2d = (
+        heatmap_to_image(xy, proc_side, stride, centered_stride)
+        * box_size_m
+        / proc_side
+    )
 
     return torch.cat([coords2d, coords[..., 2:] * box_size_m], dim=-1)

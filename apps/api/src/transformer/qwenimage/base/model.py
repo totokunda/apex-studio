@@ -40,7 +40,6 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import AdaLayerNormContinuous, RMSNorm
 from src.attention import attention_register
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
@@ -545,7 +544,6 @@ class QwenDoubleStreamAttnProcessor2_0:
             img_key = apply_rotary_emb_qwen(img_key, img_freqs, use_real=False)
             txt_query = apply_rotary_emb_qwen(txt_query, txt_freqs, use_real=False)
             txt_key = apply_rotary_emb_qwen(txt_key, txt_freqs, use_real=False)
-        
 
         # Concatenate for joint attention
         # Order: [text, image]
@@ -941,7 +939,7 @@ class QwenImageTransformer2DModel(
         image_rotary_emb = self.pos_embed(
             img_shapes, txt_seq_lens, device=hidden_states.device
         )
-        
+
         for index_block, block in enumerate(self.transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 encoder_hidden_states, hidden_states = (

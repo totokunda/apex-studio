@@ -23,5 +23,3 @@ def run(ctx: SmokeContext) -> None:
             fail(f"Failed to parse manifest {p}: {e}")
 
     log("[smoke] manifest parse ok")
-
-

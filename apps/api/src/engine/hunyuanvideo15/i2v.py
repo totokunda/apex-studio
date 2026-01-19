@@ -9,12 +9,12 @@ from src.helpers.hunyuanvideo15.cache import CacheHelper
 from src.utils.progress import safe_emit_progress, make_mapped_progress
 import torch
 
+
 class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
     """HunyuanVideo 1.5 Text/Image-to-Video Engine Implementation"""
 
     def __init__(self, yaml_path: str, **kwargs):
         super().__init__(yaml_path, **kwargs)
-    
 
     def prepare_cond_latents_and_mask(
         self,
@@ -49,7 +49,9 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         latent_condition[:, :, 1:, :, :] = 0
         latent_condition = latent_condition.to(device=device, dtype=dtype)
 
-        latent_mask = torch.zeros(batch, 1, frames, height, width, dtype=dtype, device=device)
+        latent_mask = torch.zeros(
+            batch, 1, frames, height, width, dtype=dtype, device=device
+        )
         latent_mask[:, :, 0, :, :] = 1.0
 
         return latent_condition, latent_mask
@@ -69,8 +71,7 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
     @property
     def interrupt(self):
         return self._interrupt
-    
-    
+
     def run(
         self,
         image: InputImage,
@@ -105,22 +106,26 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         use_light_vae: bool = False,
         **kwargs,
     ):
-        
+
         safe_emit_progress(progress_callback, 0.0, "Starting image-to-video pipeline")
         num_frames = self._parse_num_frames(duration, fps)
         safe_emit_progress(progress_callback, 0.02, "Loading and resizing input image")
         image = self._load_image(image)
-        image, height, width = self._aspect_ratio_resize(image, mod_value=32, max_area=height * width)
-        image = self.video_processor.resize(image, height=height, width=width, resize_mode="crop")
+        image, height, width = self._aspect_ratio_resize(
+            image, mod_value=32, max_area=height * width
+        )
+        image = self.video_processor.resize(
+            image, height=height, width=width, resize_mode="crop"
+        )
         device = self.device
-        
+
         self._get_image_latents(
             image=image,
             height=height,
             width=width,
             device=device,
         )
-        
+
         self.load_component_by_type("vae")
         if seed is not None:
             generator = torch.Generator(device=device).manual_seed(seed)
@@ -129,7 +134,6 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         self._current_timestep = None
         self._interrupt = False
 
-        
         transformer_dtype = self.component_dtypes.get("transformer")
 
         # 2. Define call parameters
@@ -148,28 +152,36 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
             device=device,
             dtype=transformer_dtype,
         )
-        
+
         # 4. Encode input prompt
         safe_emit_progress(progress_callback, 0.10, "Encoding prompt")
-        prompt_embeds, prompt_embeds_mask, prompt_embeds_2, prompt_embeds_mask_2 = self.encode_prompt(
-            prompt=prompt,
-            device=device,
-            dtype=transformer_dtype,
-            batch_size=batch_size,
-            num_videos_per_prompt=num_videos_per_prompt,
-            prompt_embeds=prompt_embeds,
-            prompt_embeds_mask=prompt_embeds_mask,
-            prompt_embeds_2=prompt_embeds_2,
-            prompt_embeds_mask_2=prompt_embeds_mask_2,
-            offload=offload,
+        prompt_embeds, prompt_embeds_mask, prompt_embeds_2, prompt_embeds_mask_2 = (
+            self.encode_prompt(
+                prompt=prompt,
+                device=device,
+                dtype=transformer_dtype,
+                batch_size=batch_size,
+                num_videos_per_prompt=num_videos_per_prompt,
+                prompt_embeds=prompt_embeds,
+                prompt_embeds_mask=prompt_embeds_mask,
+                prompt_embeds_2=prompt_embeds_2,
+                prompt_embeds_mask_2=prompt_embeds_mask_2,
+                offload=offload,
+            )
         )
 
         do_classifier_free_guidance = guidance_scale > 1.0 and (
             negative_prompt is not None or negative_prompt_embeds is not None
         )
 
-        if do_classifier_free_guidance and negative_prompt is not None and negative_prompt_embeds is None:
-            safe_emit_progress(progress_callback, 0.14, "Encoding negative prompt (CFG)")
+        if (
+            do_classifier_free_guidance
+            and negative_prompt is not None
+            and negative_prompt_embeds is None
+        ):
+            safe_emit_progress(
+                progress_callback, 0.14, "Encoding negative prompt (CFG)"
+            )
             (
                 negative_prompt_embeds,
                 negative_prompt_embeds_mask,
@@ -186,7 +198,7 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
                 prompt_embeds_2=negative_prompt_embeds_2,
                 prompt_embeds_mask_2=negative_prompt_embeds_mask_2,
             )
-            
+
         if not self.scheduler:
             safe_emit_progress(progress_callback, 0.18, "Loading scheduler")
             self.load_component_by_type("scheduler")
@@ -194,8 +206,14 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
 
         # 5. Prepare timesteps
         safe_emit_progress(progress_callback, 0.20, "Preparing timesteps")
-        sigmas = np.linspace(1.0, 0.0, num_inference_steps + 1)[:-1] if sigmas is None else sigmas
-        timesteps, num_inference_steps = self._get_timesteps(self.scheduler, num_inference_steps,  sigmas=sigmas)
+        sigmas = (
+            np.linspace(1.0, 0.0, num_inference_steps + 1)[:-1]
+            if sigmas is None
+            else sigmas
+        )
+        timesteps, num_inference_steps = self._get_timesteps(
+            self.scheduler, num_inference_steps, sigmas=sigmas
+        )
 
         # 6. Prepare latent variables
         safe_emit_progress(progress_callback, 0.25, "Preparing latents")
@@ -228,9 +246,11 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         if not self.transformer:
             safe_emit_progress(progress_callback, 0.30, "Loading transformer")
             self.load_component_by_name("transformer")
-        
+
         self.to_device(self.transformer)
-        if chunking_profile != "none" and hasattr(self.transformer, "set_chunking_profile"):
+        if chunking_profile != "none" and hasattr(
+            self.transformer, "set_chunking_profile"
+        ):
             self.transformer.set_chunking_profile(chunking_profile)
 
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.50, 0.90)
@@ -245,10 +265,14 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
                     continue
 
                 self._current_timestep = t
-                latent_model_input = torch.cat([latents, cond_latents_concat, mask_concat], dim=1)
+                latent_model_input = torch.cat(
+                    [latents, cond_latents_concat, mask_concat], dim=1
+                )
 
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                timestep = t.expand(latent_model_input.shape[0]).to(latent_model_input.dtype)
+                timestep = t.expand(latent_model_input.shape[0]).to(
+                    latent_model_input.dtype
+                )
 
                 if self.transformer.config.use_meanflow:
                     if i == len(timesteps) - 1:
@@ -302,14 +326,23 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
                             **cond_kwargs,
                         )[0]
 
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                    noise_pred = noise_pred_uncond + guidance_scale * (
+                        noise_pred_text - noise_pred_uncond
+                    )
 
                     if guidance_rescale > 0.0:
                         # Rescale CFG to reduce overexposure (see: https://arxiv.org/pdf/2305.08891.pdf, Sec. 3.4)
-                        std_text = noise_pred_text.std(dim=list(range(1, noise_pred_text.ndim)), keepdim=True)
-                        std_cfg = noise_pred.std(dim=list(range(1, noise_pred.ndim)), keepdim=True)
+                        std_text = noise_pred_text.std(
+                            dim=list(range(1, noise_pred_text.ndim)), keepdim=True
+                        )
+                        std_cfg = noise_pred.std(
+                            dim=list(range(1, noise_pred.ndim)), keepdim=True
+                        )
                         noise_pred_rescaled = noise_pred * (std_text / std_cfg)
-                        noise_pred = guidance_rescale * noise_pred_rescaled + (1 - guidance_rescale) * noise_pred
+                        noise_pred = (
+                            guidance_rescale * noise_pred_rescaled
+                            + (1 - guidance_rescale) * noise_pred
+                        )
                 else:
                     with self.transformer.cache_context("pred_cond"):
                         noise_pred = self.transformer(
@@ -324,7 +357,9 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                latents = self.scheduler.step(
+                    noise_pred, t, latents, return_dict=False
+                )[0]
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
@@ -332,7 +367,9 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
                         latents = latents.to(latents_dtype)
 
                 # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                if i == len(timesteps) - 1 or (
+                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+                ):
                     progress_bar.update()
                     denoise_progress_callback(
                         float(i + 1) / float(max(num_inference_steps, 1)),
@@ -342,7 +379,7 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         self._current_timestep = None
         if offload:
             self._offload("transformer")
-        
+
         if return_latents:
             safe_emit_progress(progress_callback, 1.0, "Returning latents")
             return latents
@@ -351,9 +388,13 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
                 self.load_component_by_type("vae")
             self.vae.enable_tiling(use_light_vae=use_light_vae)
             self.to_device(self.vae)
-            safe_emit_progress(progress_callback, 0.95, "Decoding latents to video with light VAE")
+            safe_emit_progress(
+                progress_callback, 0.95, "Decoding latents to video with light VAE"
+            )
             safe_emit_progress(progress_callback, 0.95, "Decoding latents to video")
             video = self.vae_decode(latents, offload=offload)
             postprocessed_video = self._tensor_to_frames(video)
-            safe_emit_progress(progress_callback, 1.0, "Completed image-to-video pipeline")
+            safe_emit_progress(
+                progress_callback, 1.0, "Completed image-to-video pipeline"
+            )
             return postprocessed_video

@@ -36,10 +36,14 @@ def load_2d(ex, joint_info, full_joint_info, learning_phase, rng):
     center_point = boxlib.center(bbox)
 
     if FLAGS.geom_aug:
-        center_point += util.random_uniform_disc(geom_rng) * FLAGS.shift_aug / 100 * crop_side
+        center_point += (
+            util.random_uniform_disc(geom_rng) * FLAGS.shift_aug / 100 * crop_side
+        )
 
-    has_3d_camera = hasattr(ex, 'camera') and ex.camera is not None
-    orig_cam = ex.camera if has_3d_camera else cameralib.Camera.from_fov(8, im_from_file.shape)
+    has_3d_camera = hasattr(ex, "camera") and ex.camera is not None
+    orig_cam = (
+        ex.camera if has_3d_camera else cameralib.Camera.from_fov(8, im_from_file.shape)
+    )
     cam = orig_cam.copy()
 
     if has_3d_camera:
@@ -93,7 +97,6 @@ def load_2d(ex, joint_info, full_joint_info, learning_phase, rng):
 
     # if foot joints are given and
 
-
     imcoords = cameralib.reproject_image_points(imcoords, orig_cam, cam)
 
     interp_str = (
@@ -101,8 +104,10 @@ def load_2d(ex, joint_info, full_joint_info, learning_phase, rng):
         if learning_phase == TRAIN
         else FLAGS.image_interpolation_test
     )
-    antialias = FLAGS.antialias_train if learning_phase == TRAIN else FLAGS.antialias_test
-    interp = getattr(cv2, 'INTER_' + interp_str.upper())
+    antialias = (
+        FLAGS.antialias_train if learning_phase == TRAIN else FLAGS.antialias_test
+    )
+    interp = getattr(cv2, "INTER_" + interp_str.upper())
 
     im = cameralib.reproject_image(
         im_from_file,
@@ -134,10 +139,10 @@ def load_2d(ex, joint_info, full_joint_info, learning_phase, rng):
         rng=point_sampler_rng,
     )
 
-    #num_strides = FLAGS.proc_side // FLAGS.stride_train
-    #start = (num_strides // 2) * FLAGS.stride_train
-    #end = start + FLAGS.stride_train
-    start = FLAGS.proc_side // 2 -7
+    # num_strides = FLAGS.proc_side // FLAGS.stride_train
+    # start = (num_strides // 2) * FLAGS.stride_train
+    # end = start + FLAGS.stride_train
+    start = FLAGS.proc_side // 2 - 7
     end = start + 14
     im[start:end, start:end, :] = make_marker(14).astype(np.float32) / 255.0
 

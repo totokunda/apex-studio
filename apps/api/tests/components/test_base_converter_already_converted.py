@@ -51,5 +51,3 @@ def test_model_keys_mismatch_does_not_false_positive():
     # Target model expects the post-conversion keys, so this ckpt is not yet converted.
     model_keys = ["new.block.weight", "new.block.bias"]
     assert converter._already_converted(sd, model_keys) is False
-
-

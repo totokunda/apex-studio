@@ -11,6 +11,7 @@ from starlette.responses import Response
 
 from .log_suppression import is_suppressed_http_path
 
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or raw == "":
@@ -74,7 +75,9 @@ class ResponseCoalescer:
     def __init__(self, ttl_seconds: float) -> None:
         self.ttl_seconds = float(ttl_seconds)
         # cache_key -> (expires_at, status_code, media_type, headers, body_bytes)
-        self._cache: Dict[str, Tuple[float, int, Optional[str], Dict[str, str], bytes]] = {}
+        self._cache: Dict[
+            str, Tuple[float, int, Optional[str], Dict[str, str], bytes]
+        ] = {}
 
     def get(self, cache_key: str, now: float) -> Optional[Response]:
         hit = self._cache.get(cache_key)
@@ -84,7 +87,12 @@ class ResponseCoalescer:
         if now > expires_at:
             self._cache.pop(cache_key, None)
             return None
-        return Response(content=body, status_code=status_code, media_type=media_type, headers=headers)
+        return Response(
+            content=body,
+            status_code=status_code,
+            media_type=media_type,
+            headers=headers,
+        )
 
     def put(self, cache_key: str, now: float, response: Response) -> None:
         # Only cache non-streaming, fully-materialized responses
@@ -105,7 +113,13 @@ class ResponseCoalescer:
                 continue
             headers[k] = v
 
-        self._cache[cache_key] = (now + self.ttl_seconds, int(response.status_code), media_type, headers, bytes(body))
+        self._cache[cache_key] = (
+            now + self.ttl_seconds,
+            int(response.status_code),
+            media_type,
+            headers,
+            bytes(body),
+        )
 
 
 def _is_noisy_poll_path(path: str) -> bool:
@@ -157,7 +171,9 @@ def install_stability_middleware(app: Any) -> None:
     last_log_ts = time.time()
 
     @app.middleware("http")
-    async def _stability(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    async def _stability(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         nonlocal last_log_ts
         now = time.time()
 
@@ -168,12 +184,14 @@ def install_stability_middleware(app: Any) -> None:
             counts[key] = counts.get(key, 0) + 1
         if now - last_log_ts >= log_every:
             last_log_ts = now
-            # log without importing loguru; rely on uvicorn/gunicorn std logging
+            # log without importing loguru; rely on uvicorn std logging
             try:
                 import logging
 
                 logger = logging.getLogger("apex.stability")
-                top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[: max(1, top_n)]
+                top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[
+                    : max(1, top_n)
+                ]
                 total = sum(counts.values())
                 logger.info("request-stats total=%s top=%s", total, top)
             except Exception:
@@ -202,5 +220,3 @@ def install_stability_middleware(app: Any) -> None:
             return response
 
         return await call_next(request)
-
-

@@ -26,33 +26,36 @@ from nlf.pt.inference_scripts.predict_tdpw import (
 
 def initialize():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-path', type=str, required=True)
-    parser.add_argument('--output-path', type=str, required=True)
-    parser.add_argument('--default-fov', type=float, default=55)
-    parser.add_argument('--num-aug', type=int, default=5)
-    parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--internal-batch-size', type=int, default=64)
-    parser.add_argument('--antialias-factor', type=int, default=2)
-    parser.add_argument('--viz', action=spu.argparse.BoolAction)
-    parser.add_argument('--clahe', action=spu.argparse.BoolAction)
+    parser.add_argument("--model-path", type=str, required=True)
+    parser.add_argument("--output-path", type=str, required=True)
+    parser.add_argument("--default-fov", type=float, default=55)
+    parser.add_argument("--num-aug", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--internal-batch-size", type=int, default=64)
+    parser.add_argument("--antialias-factor", type=int, default=2)
+    parser.add_argument("--viz", action=spu.argparse.BoolAction)
+    parser.add_argument("--clahe", action=spu.argparse.BoolAction)
     spu.argparse.initialize(parser)
 
 
 def main():
     initialize()
-    logger.info('Loading model...')
+    logger.info("Loading model...")
     model = torch.jit.load(FLAGS.model_path)
-    logger.info('Model loaded.')
+    logger.info("Model loaded.")
 
-    body_model_name = 'smpl'
-    cano_verts = np.load(f'{PROJDIR}/canonical_verts/{body_model_name}.npy')
-    cano_joints = np.load(f'{PROJDIR}/canonical_joints/{body_model_name}.npy')
+    body_model_name = "smpl"
+    cano_verts = np.load(f"{PROJDIR}/canonical_verts/{body_model_name}.npy")
+    cano_joints = np.load(f"{PROJDIR}/canonical_joints/{body_model_name}.npy")
     vertex_subset = np.arange(6890)
     cano_all = torch.cat(
-        [torch.as_tensor(cano_verts[vertex_subset]), torch.as_tensor(cano_joints)], dim=0
-    ).to(dtype=torch.float32, device='cuda')
+        [torch.as_tensor(cano_verts[vertex_subset]), torch.as_tensor(cano_joints)],
+        dim=0,
+    ).to(dtype=torch.float32, device="cuda")
 
-    K = np.array([[5000, 0.0, 512 / 2.0], [0.0, 5000, 512 / 2.0], [0.0, 0.0, 1.0]], np.float32)
+    K = np.array(
+        [[5000, 0.0, 512 / 2.0], [0.0, 5000, 512 / 2.0], [0.0, 0.0, 1.0]], np.float32
+    )
 
     predict_fn = functools.partial(
         model.estimate_poses_batched,
@@ -63,12 +66,12 @@ def main():
         weights=model.get_weights_for_canonical_points(cano_all),
     )
 
-    labels = np.load(f'{DATA_ROOT}/ssp_3d/labels.npz')
-    centers = labels['bbox_centres']
-    size = labels['bbox_whs'][:, np.newaxis]
+    labels = np.load(f"{DATA_ROOT}/ssp_3d/labels.npz")
+    centers = labels["bbox_centres"]
+    size = labels["bbox_whs"][:, np.newaxis]
     boxes = np.concatenate([centers - size / 2, size, size], axis=1).astype(np.float32)
 
-    image_paths = [f'{DATA_ROOT}/ssp_3d/images/{n}' for n in labels['fnames']]
+    image_paths = [f"{DATA_ROOT}/ssp_3d/images/{n}" for n in labels["fnames"]]
     extra_data = zip(
         more_itertools.chunked(image_paths, FLAGS.batch_size),
         more_itertools.chunked(boxes, FLAGS.batch_size),
@@ -83,31 +86,35 @@ def main():
     result_joint_uncert_batches = []
 
     camera = cameralib.Camera(intrinsic_matrix=K)
-    faces = np.load(f'{PROJDIR}/smpl_faces.npy')
+    faces = np.load(f"{PROJDIR}/smpl_faces.npy")
     viz = poseviz.PoseViz(body_model_faces=faces, paused=True) if FLAGS.viz else None
 
-
-    for (frame_batch_cpu, frame_batch_gpu), (extra_batch, boxes_batch) in spu.progressbar(
+    for (frame_batch_cpu, frame_batch_gpu), (
+        extra_batch,
+        boxes_batch,
+    ) in spu.progressbar(
         zip(frames_cpu_gpu, extra_data), total=len(image_paths), step=FLAGS.batch_size
     ):
 
         boxes_b = [torch.from_numpy(b[torch.newaxis]).cuda() for b in boxes_batch]
         pred = predict_fn(frame_batch_gpu, boxes_b)
 
-        pred['vertices'], pred['joints'] = ragged_split(
-            pred['poses3d'], [len(vertex_subset), len(cano_joints)], dim=-2
+        pred["vertices"], pred["joints"] = ragged_split(
+            pred["poses3d"], [len(vertex_subset), len(cano_joints)], dim=-2
         )
-        pred['vertex_uncertainties'], pred['joint_uncertainties'] = ragged_split(
-            pred['uncertainties'], [len(vertex_subset), len(cano_joints)], dim=-1
+        pred["vertex_uncertainties"], pred["joint_uncertainties"] = ragged_split(
+            pred["uncertainties"], [len(vertex_subset), len(cano_joints)], dim=-1
         )
 
         pred = nested_map(lambda x: torch.squeeze(x, 0).cpu().numpy(), pred)
-        result_verts_batches.append(pred['vertices'])
-        result_joints_batches.append(pred['joints'])
-        result_vert_uncert_batches.append(pred['vertex_uncertainties'])
-        result_joint_uncert_batches.append(pred['joint_uncertainties'])
+        result_verts_batches.append(pred["vertices"])
+        result_joints_batches.append(pred["joints"])
+        result_vert_uncert_batches.append(pred["vertex_uncertainties"])
+        result_joint_uncert_batches.append(pred["joint_uncertainties"])
         if viz is not None:
-            for frame_cpu, box, vertices in zip(frame_batch_cpu, boxes_batch, pred['vertices']):
+            for frame_cpu, box, vertices in zip(
+                frame_batch_cpu, boxes_batch, pred["vertices"]
+            ):
                 viz.update(
                     frame=frame_cpu,
                     boxes=box[np.newaxis],
@@ -127,6 +134,6 @@ def main():
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     with torch.inference_mode():
         main()

@@ -33,4 +33,3 @@ def get_ffmpeg_path(default: str = "ffmpeg") -> str:
         if which(candidate):
             return candidate
     return default
-

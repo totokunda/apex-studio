@@ -3,16 +3,19 @@ import pt.models.field as pt_field
 import pt.models.nlf_model as pt_nlf_model
 from pt.multiperson import multiperson_model, person_detector
 from safetensors.torch import load_file
-import yaml 
+import yaml
 import torch
 from PIL import Image
 import numpy as np
+
 with open("model_config.yaml", "r") as f:
     config = yaml.safe_load(f)
-    
+
 backbone, normalizer, out_channels = backbone_builder.build_backbone(config)
 weight_field = pt_field.build_field(config)
-model_pytorch = pt_nlf_model.NLFModel(config, backbone, weight_field, normalizer, out_channels)
+model_pytorch = pt_nlf_model.NLFModel(
+    config, backbone, weight_field, normalizer, out_channels
+)
 onnx_path = "/home/tosin_coverquick_co/apex/ts/yolov8x.onnx"
 detector = person_detector.PersonDetector(onnx_path)
 
@@ -34,9 +37,11 @@ multimodel = multimodel.cuda()
 multimodel.crop_model.backbone.half()
 multimodel.crop_model.heatmap_head.layer.half()
 
-jit_model = torch.jit.load("/home/tosin_coverquick_co/apex/ts/nlf_l_multi_0.3.2.torchscript")
+jit_model = torch.jit.load(
+    "/home/tosin_coverquick_co/apex/ts/nlf_l_multi_0.3.2.torchscript"
+)
 
-image_path = "/home/tosin_coverquick_co/apex/assets/demo_images/chroma.jpg" 
+image_path = "/home/tosin_coverquick_co/apex/assets/demo_images/chroma.jpg"
 image = Image.open(image_path)
 image = image.convert("RGB")
 image = image.resize((512, 512))

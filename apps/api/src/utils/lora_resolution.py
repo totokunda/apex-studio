@@ -9,9 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from src.utils.config_store import config_store_lock, read_json_dict, write_json_dict_atomic
+from src.utils.config_store import (
+    config_store_lock,
+    read_json_dict,
+    write_json_dict_atomic,
+)
 from src.utils.defaults import get_config_store_path, get_lora_path
-
 
 LORA_RESOLUTION_STORE_KEY = "lora_resolutions"
 
@@ -105,7 +108,9 @@ def _stable_ids_for_civitai_version_id(
     return [f"civitai:{version_id}:{ext}" for ext in order]
 
 
-def _parse_air_urn_minimal(text: str) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
+def _parse_air_urn_minimal(
+    text: str,
+) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
     """
     Minimal AIR URN parser for our use-case (civitai resolution) without importing
     heavy model/runtime deps.
@@ -339,7 +344,9 @@ def resolve_lora_local_paths(
             if isinstance(entry, dict):
                 lp = entry.get("local_paths")
                 if isinstance(lp, list):
-                    cleaned = [p for p in lp if isinstance(p, str) and _is_complete_file(p)]
+                    cleaned = [
+                        p for p in lp if isinstance(p, str) and _is_complete_file(p)
+                    ]
                     if cleaned:
                         return cleaned
     except Exception:
@@ -371,5 +378,3 @@ def resolve_lora_local_paths(
 def resolve_lora_download_status(source: str) -> Tuple[bool, List[str]]:
     paths = resolve_lora_local_paths(source, update_store=False)
     return (len(paths) > 0, paths)
-
-

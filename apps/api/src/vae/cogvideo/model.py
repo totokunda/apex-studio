@@ -34,7 +34,6 @@ from diffusers.models.autoencoders.vae import (
     DiagonalGaussianDistribution,
 )
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 

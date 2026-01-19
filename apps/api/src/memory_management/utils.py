@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Sequence, Tuple, cast
 import torch
 
+
 @dataclass(frozen=True)
 class BlockTensorEntry:
     kind: Literal["param", "buffer"]
@@ -93,7 +94,9 @@ def analyze_block_to_flat_spec(
     skip = set(skip_names or [])
     named = [
         (kind, name, t)
-        for (kind, name, t) in _collect_named_tensors(block, include_buffers=include_buffers)
+        for (kind, name, t) in _collect_named_tensors(
+            block, include_buffers=include_buffers
+        )
         if name not in skip and t.numel() > 0
     ]
     if not named:
@@ -119,7 +122,7 @@ def analyze_block_to_flat_spec(
     byte_offset = 0
     for kind, name, t in named:
         base = _as_physical_tensor(t)
-        
+
         # Align byte_offset to `alignment` bytes (default 128 for cache/DMA efficiency)
         if alignment > 1:
             padding = (alignment - (byte_offset % alignment)) % alignment
@@ -157,7 +160,10 @@ def allocate_block_flat_tensor(
     device = torch.device(device)
     if device.type == "cpu":
         return torch.empty(
-            (spec.total_bytes,), device=device, dtype=spec.flat_dtype, pin_memory=pin_memory
+            (spec.total_bytes,),
+            device=device,
+            dtype=spec.flat_dtype,
+            pin_memory=pin_memory,
         )
     return torch.empty((spec.total_bytes,), device=device, dtype=spec.flat_dtype)
 
@@ -171,9 +177,13 @@ def pack_block_to_flat(
 ) -> torch.Tensor:
     """Copy raw storage bytes from `block` into `flat` according to `spec`."""
     if flat.numel() != spec.total_bytes:
-        raise ValueError(f"Flat tensor has numel={flat.numel()} but spec expects {spec.total_bytes}")
+        raise ValueError(
+            f"Flat tensor has numel={flat.numel()} but spec expects {spec.total_bytes}"
+        )
     if flat.dtype != spec.flat_dtype:
-        raise ValueError(f"Flat tensor dtype={flat.dtype} but spec dtype={spec.flat_dtype}")
+        raise ValueError(
+            f"Flat tensor dtype={flat.dtype} but spec dtype={spec.flat_dtype}"
+        )
 
     params: Dict[str, torch.Tensor] = dict(block.named_parameters(recurse=True))
     buffers: Dict[str, torch.Tensor] = dict(block.named_buffers(recurse=True))
@@ -207,9 +217,13 @@ def unpack_flat_to_block(
     (zero-copy) using `set_()`. This is instant and avoids D2D copies.
     """
     if flat.numel() != spec.total_bytes:
-        raise ValueError(f"Flat tensor has numel={flat.numel()} but spec expects {spec.total_bytes}")
+        raise ValueError(
+            f"Flat tensor has numel={flat.numel()} but spec expects {spec.total_bytes}"
+        )
     if flat.dtype != spec.flat_dtype:
-        raise ValueError(f"Flat tensor dtype={flat.dtype} but spec dtype={spec.flat_dtype}")
+        raise ValueError(
+            f"Flat tensor dtype={flat.dtype} but spec dtype={spec.flat_dtype}"
+        )
 
     params: Dict[str, torch.Tensor] = dict(block.named_parameters(recurse=True))
     buffers: Dict[str, torch.Tensor] = dict(block.named_buffers(recurse=True))
@@ -218,7 +232,7 @@ def unpack_flat_to_block(
         for e in spec.entries:
             t = params[e.name] if e.kind == "param" else buffers[e.name]
             base = _as_physical_tensor(t)
-            
+
             # Check if we can use zero-copy aliasing (set_)
             # Conditions: Byte offset is divisible by element size (alignment)
             elem_size = base.element_size()
@@ -229,9 +243,11 @@ def unpack_flat_to_block(
                     f"dest physical dtype={_physical_dtype(t)} but spec expects {e.physical_dtype}. "
                     "Make sure the destination block template is instantiated/cast to match the spec."
                 )
-            
+
             expected_bytes = e.numel * elem_size
-            if (e.byte_start % elem_size == 0) and (expected_bytes == (e.byte_end - e.byte_start)):
+            if (e.byte_start % elem_size == 0) and (
+                expected_bytes == (e.byte_end - e.byte_start)
+            ):
                 # Aliasing path: Set `t` storage to point into `flat`.
                 offset_elem = e.byte_start // elem_size
                 # Use untyped_storage() to access the raw bytes of flat.
@@ -269,4 +285,3 @@ def describe_block_flat_spec(spec: BlockFlatSpec, *, max_rows: int = 25) -> str:
     if len(spec.entries) > max_rows:
         rows.append(f"... ({len(spec.entries) - max_rows} more)")
     return "\n".join(rows)
-

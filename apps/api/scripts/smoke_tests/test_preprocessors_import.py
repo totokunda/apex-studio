@@ -39,5 +39,3 @@ def run(ctx: SmokeContext) -> None:
         fail("Preprocessor import failures:\n" + msgs)
 
     log(f"[smoke] preprocessors import ok: {len(preprocessors)}")
-
-
