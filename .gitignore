@@ -215,3 +215,5 @@ test_model.py
 apps/api/runs/**
 apps/api/ptlflow_logs
 apps/api/apex-test-suite
+apps/api/pytorch
+apps/api/vision
