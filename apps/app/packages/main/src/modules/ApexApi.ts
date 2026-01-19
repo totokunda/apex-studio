@@ -31,6 +31,9 @@ const STREAM_CONNECT_TIMEOUT_MS = Number(
 const UPLOAD_TIMEOUT_MS = Number(process.env.APEX_API_UPLOAD_TIMEOUT_MS || 60_000);
 const PROBE_TTL_OK_MS = Number(process.env.APEX_API_PROBE_TTL_OK_MS || 30_000);
 const PROBE_TTL_FAIL_MS = Number(process.env.APEX_API_PROBE_TTL_FAIL_MS || 5_000);
+const MANIFEST_ENUM_CACHE_TTL_MS = Number(
+  process.env.APEX_MANIFEST_ENUM_CACHE_TTL_MS || 300_000,
+);
 const REMOTE_FILE_EXISTS_TIMEOUT_MS = Number(
   process.env.APEX_API_REMOTE_FILE_EXISTS_TIMEOUT_MS || 1000,
 );
@@ -69,6 +72,12 @@ export class ApexApi implements AppModule {
   private probeInFlight: Promise<ConfigResponse<null>> | null = null;
   private probeLastAt: number = 0;
   private probeLastRes: ConfigResponse<null> | null = null;
+  private manifestEnumCache: Map<
+    string,
+    { expiresAt: number; value: ConfigResponse<unknown> }
+  > = new Map();
+  private manifestEnumInFlight: Map<string, Promise<ConfigResponse<unknown>>> =
+    new Map();
 
   constructor(backendUrl?: string) {
     if (backendUrl) {
@@ -93,6 +102,9 @@ export class ApexApi implements AppModule {
       this.loopbackAppearsRemote = false;
       this.probeLastAt = 0;
       this.probeLastRes = null;
+      // Clear any cached manifest enumeration results for the previous backend.
+      this.manifestEnumCache.clear();
+      this.manifestEnumInFlight.clear();
       void this.#probeBackendLocality();
     });
 
@@ -1480,6 +1492,24 @@ export class ApexApi implements AppModule {
     body?: any,
   ): Promise<ConfigResponse<T>> {
     try {
+      const baseUrl = this.backendUrl;
+      const isManifestEnumGet =
+        method === "GET" &&
+        (endpoint === "/manifest/types" || endpoint === "/manifest/list");
+      const cacheKey = isManifestEnumGet
+        ? `${baseUrl}|${method}|${endpoint}`
+        : null;
+
+      if (cacheKey) {
+        const now = Date.now();
+        const hit = this.manifestEnumCache.get(cacheKey);
+        if (hit && now < hit.expiresAt) {
+          return hit.value as ConfigResponse<T>;
+        }
+        const inflight = this.manifestEnumInFlight.get(cacheKey);
+        if (inflight) return (await inflight) as ConfigResponse<T>;
+      }
+
       const options: RequestInit = {
         method,
         headers: {
@@ -1491,32 +1521,72 @@ export class ApexApi implements AppModule {
         options.body = JSON.stringify(body);
       }
 
-      const response = await this.#fetchWithTimeout(
-        `${this.backendUrl}${endpoint}`,
-        options,
-        DEFAULT_REQUEST_TIMEOUT_MS,
-      );
+      const run = (async (): Promise<ConfigResponse<T>> => {
+        const response = await this.#fetchWithTimeout(
+          `${baseUrl}${endpoint}`,
+          options,
+          DEFAULT_REQUEST_TIMEOUT_MS,
+        );
 
-      
+        if (!response.ok) {
+          console.log("Failed to make request", response.statusText, endpoint);
+          const errorData = await response
+            .json()
+            .catch(() => ({ detail: "Unknown error" }));
+          return {
+            success: false,
+            error:
+              errorData.detail ||
+              `HTTP ${response.status}: ${response.statusText}`,
+          };
+        }
 
-      if (!response.ok) {
-        console.log("Failed to make request", response.statusText, endpoint);
-        const errorData = await response
-          .json()
-          .catch(() => ({ detail: "Unknown error" }));
-        return {
-          success: false,
-          error:
-            errorData.detail ||
-            `HTTP ${response.status}: ${response.statusText}`,
+        const data = await response.json();
+        const res: ConfigResponse<T> = {
+          success: true,
+          data: data as T,
         };
-      }
 
-      const data = await response.json();
-      return {
-        success: true,
-        data: data as T,
-      };
+        // Opt-in, short-lived in-process cache for manifest enumeration.
+        // Node/Electron fetch does not do HTTP caching by default; this prevents
+        // repeated disk enumeration on rapid UI refreshes.
+        const isManifestEnumGet =
+          method === "GET" &&
+          (endpoint === "/manifest/types" || endpoint === "/manifest/list");
+        if (isManifestEnumGet) {
+          const cacheControl = response.headers.get("cache-control") || "";
+          const m = cacheControl.match(/(?:^|,)\s*max-age=(\d+)\s*(?:,|$)/i);
+          const maxAgeSeconds = m ? Number(m[1]) : NaN;
+          const ttlMs =
+            Number.isFinite(maxAgeSeconds) && maxAgeSeconds >= 0
+              ? maxAgeSeconds * 1000
+              : MANIFEST_ENUM_CACHE_TTL_MS;
+          const cacheKey = `${baseUrl}|${method}|${endpoint}`;
+          this.manifestEnumCache.set(cacheKey, {
+            expiresAt: Date.now() + ttlMs,
+            value: res as ConfigResponse<unknown>,
+          });
+        }
+
+        return res;
+      })();
+
+      // Dedupe concurrent callers for the cached manifest endpoints
+      const isManifestEnumGet2 =
+        method === "GET" &&
+        (endpoint === "/manifest/types" || endpoint === "/manifest/list");
+      const cacheKey2 = isManifestEnumGet2
+        ? `${baseUrl}|${method}|${endpoint}`
+        : null;
+      if (cacheKey2) {
+        this.manifestEnumInFlight.set(
+          cacheKey2,
+          run as Promise<ConfigResponse<unknown>>,
+        );
+      }
+      return await run.finally(() => {
+        if (cacheKey2) this.manifestEnumInFlight.delete(cacheKey2);
+      });
     } catch (error) {
       // Best-effort background locality refresh on failures; do not block API calls.
       void this.#probeBackendLocality().catch(() => {});

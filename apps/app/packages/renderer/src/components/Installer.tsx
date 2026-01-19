@@ -41,6 +41,7 @@ type InstallPhaseId =
   | "download_bundle"
   | "extract_bundle"
   | "download_models"
+  | "verify_attention"
   | "update_configs";
 
 type InstallPhaseState = {
@@ -163,6 +164,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
         { id: "download_bundle" as const, label: "Download Bundle" },
         { id: "extract_bundle" as const, label: "Extract Bundle" },
         { id: "download_models" as const, label: "Download Models" },
+        { id: "verify_attention" as const, label: "Verify Attention Backends" },
         { id: "update_configs" as const, label: "Update Configs" },
       ] satisfies Array<{ id: InstallPhaseId; label: string }>,
     [],
@@ -177,6 +179,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     download_bundle: { status: "pending", percent: null, message: null },
     extract_bundle: { status: "pending", percent: null, message: null },
     download_models: { status: "pending", percent: null, message: null },
+    verify_attention: { status: "pending", percent: null, message: null },
     update_configs: { status: "pending", percent: null, message: null },
   }));
   const extractionFilesRef = useRef<string[]>([]);
@@ -188,6 +191,19 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     width: number;
     height: number;
   }>({ width: 0, height: 0 });
+
+  // Attention backend verification emits one event per backend; keep a small rolling log.
+  const attentionEventsRef = useRef<string[]>([]);
+  const [attentionListVersion, setAttentionListVersion] = useState<number>(0);
+  const appendAttentionEvent = (line: string) => {
+    const s = String(line || "").trim();
+    if (!s) return;
+    const prev = attentionEventsRef.current;
+    // Avoid spamming duplicates when backend retries.
+    if (prev.length > 0 && prev[prev.length - 1] === s) return;
+    attentionEventsRef.current = prev.concat([s]).slice(-200);
+    setAttentionListVersion((v) => v + 1);
+  };
 
   const lastDownloadUiUpdateAtRef = useRef<number>(0);
   const lastDownloadPctRef = useRef<number | null>(null);
@@ -241,6 +257,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       download_bundle: { status: "pending", percent: null, message: null },
       extract_bundle: { status: "pending", percent: null, message: null },
       download_models: { status: "pending", percent: null, message: null },
+      verify_attention: { status: "pending", percent: null, message: null },
       update_configs: { status: "pending", percent: null, message: null },
     });
   };
@@ -452,6 +469,8 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     extractionFilesRef.current = [];
     setExtractionListVersion((v) => v + 1);
     extractionPendingRef.current = [];
+    attentionEventsRef.current = [];
+    setAttentionListVersion((v) => v + 1);
     if (extractionFlushTimerRef.current !== null) {
       window.clearTimeout(extractionFlushTimerRef.current);
       extractionFlushTimerRef.current = null;
@@ -481,6 +500,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       },
       extract_bundle: { status: hasLocal ? "active" : "pending", percent: null, message: null },
       download_models: { status: "pending", percent: null, message: null },
+      verify_attention: { status: "pending", percent: null, message: null },
       update_configs: { status: "pending", percent: null, message: null },
     });
     setActivePhase(hasLocal ? "extract_bundle" : "download_bundle");
@@ -647,6 +667,11 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
         percent: 0,
         message: "Starting setup…",
       });
+      patchPhase("verify_attention", {
+        status: "pending",
+        percent: null,
+        message: null,
+      });
       patchPhase("update_configs", {
         status: "pending",
         percent: null,
@@ -697,19 +722,42 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
             const status = String(payload?.status || "processing");
             const message = String(payload?.message || "");
             const progressRaw = payload?.progress;
-            const pct =
+            const pctOverall =
               typeof progressRaw === "number" && Number.isFinite(progressRaw)
                 ? Math.round(Math.max(0, Math.min(1, progressRaw)) * 100)
                 : null;
             const task = String(payload?.metadata?.task || "");
+            const taskProgressRaw = payload?.metadata?.task_progress;
+            const pctTask =
+              typeof taskProgressRaw === "number" && Number.isFinite(taskProgressRaw)
+                ? Math.round(Math.max(0, Math.min(1, taskProgressRaw)) * 100)
+                : null;
+            const pct = pctTask ?? pctOverall;
 
             if (task === "mask" || task === "rife") {
+              if (activePhaseRef.current !== "download_models") {
+                setActivePhase("download_models");
+              }
               patchPhase("download_models", {
                 status: status === "error" ? "error" : "active",
                 ...(pct !== null ? { percent: pct } : {}),
                 message: message || "Downloading models…",
               });
+            } else if (task === "attention") {
+              if (activePhaseRef.current !== "verify_attention") {
+                setActivePhase("verify_attention");
+              }
+              patchPhase("verify_attention", {
+                status: status === "error" ? "error" : "active",
+                ...(pct !== null ? { percent: pct } : {}),
+                message: message || "Verifying attention backends…",
+              });
+              // Keep a rolling log in the UI so the user can see each backend check.
+              appendAttentionEvent(message || "Verifying attention backends…");
             } else if (task === "config") {
+              if (activePhaseRef.current !== "update_configs") {
+                setActivePhase("update_configs");
+              }
               patchPhase("update_configs", {
                 status: status === "error" ? "error" : "active",
                 ...(pct !== null ? { percent: pct } : {}),
@@ -748,6 +796,11 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
         status: "completed",
         percent: 100,
         message: "Models installed",
+      });
+      patchPhase("verify_attention", {
+        status: "completed",
+        percent: 100,
+        message: "Attention verified",
       });
 
       // Update Configs (ffmpeg install + any config flags already applied by setup.py)
@@ -1444,6 +1497,31 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                       ) : activePhase === "download_models" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
                           Models are being downloaded...
+                        </div>
+                      ) : activePhase === "verify_attention" ? (
+                        <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-3 h-full flex flex-col min-h-0">
+                          <div className="text-[11px] text-brand-light/70 mb-2">
+                            Attention backend checks
+                          </div>
+                          <div
+                            key={attentionListVersion}
+                            className="flex-1 min-h-0 rounded border border-brand-light/10 bg-black/30 overflow-auto p-2"
+                          >
+                            {attentionEventsRef.current.length === 0 ? (
+                              <div className="text-[10.5px] text-brand-light/50">
+                                Waiting for verification to start…
+                              </div>
+                            ) : (
+                              <ScrollAreaPrimitive.Root className="flex flex-col gap-1">
+                                {attentionEventsRef.current.map((ln, idx) => (
+                                  <div key={`${idx}-${ln}`} className="text-[10.5px] text-brand-light/60">
+                                    {ln}
+                                  </div>
+                                ))}
+                                 <ScrollBar orientation="vertical" />
+                              </ScrollAreaPrimitive.Root>
+                            )}
+                          </div>
                         </div>
                       ) : activePhase === "update_configs" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">

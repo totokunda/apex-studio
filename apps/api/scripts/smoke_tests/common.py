@@ -6,10 +6,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
-
+from loguru import logger
 
 def log(msg: str) -> None:
-    print(msg, flush=True)
+    logger.debug("{}", msg)
 
 
 def fail(msg: str) -> None:

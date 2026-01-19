@@ -27,8 +27,8 @@ const require = createRequire(import.meta.url);
 const DEFAULT_API_PORT = 8765;
 const DEFAULT_API_HOST = "127.0.0.1";
 // Keep this tight: we want near-immediate detection/restart if the backend dies.
-const HEALTH_CHECK_INTERVAL_MS = 2000;
-const HEALTH_CHECK_TIMEOUT_MS = 1500;
+const HEALTH_CHECK_INTERVAL_MS = 10000;
+const HEALTH_CHECK_TIMEOUT_MS = 3000;
 const MAX_STARTUP_WAIT_MS = 60000;
 // Small delay to avoid hot-looping the event loop on repeated instant exits.
 const RESTART_DELAY_MS = 500;
@@ -792,7 +792,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
   private async spawnProcess(): Promise<void> {
     const isPackaged = this.app?.isPackaged ?? false;
-    const mirrorPythonLogsToStdout = false; // !isPackaged || this.config.devMode;
+    const mirrorPythonLogsToStdout = !isPackaged || this.config.devMode;
 
     // Prepare log file
     if (!this.latestLogPath || !this.sessionLogPath) {

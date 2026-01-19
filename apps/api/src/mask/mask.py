@@ -1,5 +1,21 @@
-from sam2.build_sam import build_sam2_video_predictor
-from sam2.sam2_video_predictor import SAM2VideoPredictor
+from __future__ import annotations
+
+from typing import Any
+
+_HAS_SAM2 = False
+_SAM2_IMPORT_ERROR: Exception | None = None
+try:
+    from sam2.build_sam import build_sam2_video_predictor  # type: ignore
+    from sam2.sam2_video_predictor import SAM2VideoPredictor  # type: ignore
+
+    _HAS_SAM2 = True
+except Exception as e:
+    # SAM2 is optional on some platforms (notably Intel macOS, where torch tops out at 2.2.x
+    # but SAM2 requires torch>=2.5.1). We keep the server importable and fail at call sites.
+    build_sam2_video_predictor = None  # type: ignore[assignment]
+    SAM2VideoPredictor = object  # type: ignore[assignment]
+    _SAM2_IMPORT_ERROR = e
+
 from src.mixins import LoaderMixin
 from PIL import Image, ImageOps
 import torch
@@ -23,6 +39,19 @@ from src.utils.mask_device import resolve_mask_device
 
 # create an enum for the model types
 from enum import Enum
+
+
+def _require_sam2() -> None:
+    if _HAS_SAM2:
+        return
+    msg = (
+        "SAM2 is not available in this environment. "
+        "On Intel macOS (x86_64), PyTorch wheels top out at 2.2.x but SAM2 requires torch>=2.5.1, "
+        "so SAM2 is intentionally excluded from installation on that platform."
+    )
+    if _SAM2_IMPORT_ERROR is not None:
+        raise RuntimeError(msg + f" (import error: {_SAM2_IMPORT_ERROR})")
+    raise RuntimeError(msg)
 
 
 class ModelType(Enum):
@@ -1127,6 +1156,7 @@ class UnifiedSAM2Predictor:
         use_compile: bool = False,
         use_tf32: bool = True,
     ):
+        _require_sam2()
         # Create logger inside actor to avoid pickling issues
         from loguru import logger as actor_logger
 
@@ -1167,6 +1197,7 @@ class UnifiedSAM2Predictor:
 
     def get_predictor(self) -> UnifiedSAM2VideoPredictor:
         """Get or create the custom video predictor with optimizations."""
+        _require_sam2()
         if self._predictor is None:
             # Enable TF32 for Ampere+ GPUs (must be done before model load)
             if self.use_tf32:
@@ -1937,6 +1968,7 @@ def get_sam2_predictor(
     """
     Get or create a singleton UnifiedSAM2Predictor in-process.
     """
+    _require_sam2()
     key = (model_type.value, use_compile, use_tf32)
     if key in _PREDICTOR_SINGLETONS:
         return _PREDICTOR_SINGLETONS[key]

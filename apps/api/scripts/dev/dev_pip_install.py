@@ -19,10 +19,57 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+DEFAULT_TORCH_VERSION = "2.9.1"
+DEFAULT_TORCHVISION_VERSION = "0.24.1"
+DEFAULT_TORCHAUDIO_VERSION = "2.9.1"
+
+# Keep numpy pinned to the same version as `requirements/requirements.txt`.
+# This avoids uv selecting new numba/llvmlite releases that require numpy 2.x and
+# then falling back to source builds on macOS.
+PINNED_NUMPY_SPEC = "numpy==1.26.4"
+
+# Intel macOS (x86_64): latest supported torch stack.
+MACOS_INTEL_TORCH_VERSION = "2.2.2"
+MACOS_INTEL_TORCHVISION_VERSION = "0.17.2"
+MACOS_INTEL_TORCHAUDIO_VERSION = "2.2.2"
+
+
+def _is_intel_macos() -> bool:
+    if sys.platform != "darwin":
+        return False
+    try:
+        arch = (platform.machine() or "").lower()
+    except Exception:
+        arch = ""
+    return arch in {"x86_64", "amd64", "i386", "i686"} or arch.startswith("x86")
+
+
+def _torch_stack_versions() -> tuple[str, str, str]:
+    if _is_intel_macos():
+        return (
+            MACOS_INTEL_TORCH_VERSION,
+            MACOS_INTEL_TORCHVISION_VERSION,
+            MACOS_INTEL_TORCHAUDIO_VERSION,
+        )
+    return (
+        DEFAULT_TORCH_VERSION,
+        DEFAULT_TORCHVISION_VERSION,
+        DEFAULT_TORCHAUDIO_VERSION,
+    )
+
+
+TORCH_VERSION, TORCHVISION_VERSION, TORCHAUDIO_VERSION = _torch_stack_versions()
+
+# setuptools pin for Intel macOS torch stack.
+# We keep this conservative to avoid build/metadata toolchain changes that can break
+# older PyTorch stacks and their ecosystem on x86_64 macOS.
+SETUPTOOLS_SPEC = "setuptools>=61,<70" if _is_intel_macos() else "setuptools"
 
 TORCH_INDEX = {
     "cpu": "https://download.pytorch.org/whl/cpu",
@@ -35,10 +82,15 @@ TORCH_INDEX = {
 }
 
 
-def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
+def _run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     printable = " ".join(cmd)
     print(f"+ {printable}")
-    subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True)
+    subprocess.run(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        check=True,
+    )
 
 
 def _bootstrap_uv(py: Path, *, cwd: Path | None = None) -> None:
@@ -69,6 +121,8 @@ def _install(
         cmd = [str(py), "-m", "uv", "pip", "install"]
         if use_no_build_isolation:
             cmd.append("--no-build-isolation")
+        # Use unsafe-best-match to ensure we pick the best wheel across multiple indices.
+        cmd += ["--index-strategy", "unsafe-best-match"]
         cmd += args
         _run(cmd, cwd=cwd)
         return
@@ -87,6 +141,134 @@ def _venv_python(venv_dir: Path) -> Path:
     if sys.platform == "win32":
         return venv_dir / "Scripts" / "python.exe"
     return venv_dir / "bin" / "python"
+
+
+def _python_machine(py: Path) -> str:
+    """
+    Return the architecture reported by the given interpreter, e.g. "x86_64" or "arm64".
+    Best-effort: returns empty string on failure.
+    """
+    try:
+        out = subprocess.check_output(
+            [str(py), "-c", "import platform; print(platform.machine())"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        return (out or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _ensure_venv_arch_matches_launcher(venv_dir: Path) -> None:
+    """
+    On Apple Silicon, it's possible to launch this script with an x86_64-only
+    interpreter (e.g. a Rosetta "intel64" launcher) but end up with a venv whose
+    `bin/python` is a universal2 binary that defaults to arm64.
+
+    That mismatch causes pip to miss x86_64 wheels (e.g. numba/llvmlite) and
+    compile from source instead.
+
+    If we detect this situation, replace the venv's `bin/python` with the exact
+    launcher binary so the venv consistently runs under the requested arch.
+    """
+    if sys.platform != "darwin":
+        return
+
+    launcher_machine = (platform.machine() or "").lower()
+    if launcher_machine not in {"x86_64", "amd64"}:
+        return
+
+    try:
+        # Always copy the launcher into the venv. On Apple Silicon, venvs created from
+        # framework/universal2 Pythons can "flip" arch based on how they're invoked.
+        # Overwriting `bin/python` with the x86_64-only launcher makes the venv stable.
+        venv_py = _venv_python(venv_dir)
+        print(
+            "Forcing venv python to x86_64 (copying the launcher binary) "
+            "to prefer binary wheels and keep arch stable."
+        )
+        shutil.copy2(sys.executable, venv_py)
+        venv_py.chmod(0o755)
+    except Exception as e:
+        print(f"Warning: Failed to force venv python architecture: {e}")
+
+
+def _remove_obsolete_typing_backport(py: Path) -> None:
+    """
+    PyInstaller error:
+      "The 'typing' package is an obsolete backport of a standard library package and is incompatible with PyInstaller."
+
+    Even in dev mode, having this package can cause weird resolution issues or crashes.
+    """
+    try:
+        # `pip uninstall` returns non-zero when the package isn't installed; that's fine.
+        subprocess.run(
+            [str(py), "-m", "pip", "uninstall", "-y", "typing"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        pass
+
+
+def _build_and_install_rust_wheels(py: Path, project_root: Path) -> None:
+    rust_project = project_root / "rust" / "apex_download_rs"
+    if not rust_project.exists():
+        return
+
+    # Check for cargo/rustc
+    cargo = shutil.which("cargo")
+    if not cargo:
+        print("Warning: `cargo` not found on PATH; skipping rust wheel build.")
+        return
+
+    # Install maturin in the target environment
+    _install(py, ["maturin>=1.6,<2.0"])
+
+    print(f"Building Rust wheel (maturin): {rust_project}")
+    # Use a temporary directory for the wheel to avoid noise
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            target: str | None = None
+            # If we're running an x86_64 Python under Rosetta on Apple Silicon, ensure
+            # we build an x86_64 wheel (otherwise maturin will default to arm64 host).
+            if sys.platform == "darwin":
+                host_machine = (platform.machine() or "").lower()
+                py_machine = _python_machine(py)
+                if host_machine == "arm64" and py_machine in {"x86_64", "amd64"}:
+                    target = "x86_64-apple-darwin"
+
+            env = None
+            cmd = [
+                str(py),
+                "-m",
+                "maturin",
+                "build",
+                "--release",
+                "--strip",
+                "--interpreter",
+                str(py),
+                "--out",
+                tmpdir,
+            ]
+            if target:
+                cmd += ["--target", target]
+                env = dict(os.environ)
+                env["CARGO_BUILD_TARGET"] = target
+
+            _run(
+                cmd,
+                cwd=rust_project,
+                env=env,
+            )
+            wheels = list(Path(tmpdir).glob("*.whl"))
+            if wheels:
+                _install(py, [str(wheels[0])])
+        except Exception as e:
+            print(f"Warning: Failed to build/install Rust wheels: {e}")
 
 
 def _detect_default_machine() -> str:
@@ -191,6 +373,7 @@ def main() -> int:
         venv_dir = (project_root / args.venv).resolve()
         if not venv_dir.exists():
             _run([sys.executable, "-m", "venv", str(venv_dir)], cwd=project_root)
+        _ensure_venv_arch_matches_launcher(venv_dir)
         py = _venv_python(venv_dir)
     else:
         py = Path(sys.executable)
@@ -201,6 +384,11 @@ def main() -> int:
     req_file = machine_map[args.machine]
     if not req_file.exists():
         raise SystemExit(f"Machine requirements file not found: {req_file}")
+
+    # macOS: treat Intel (x86_64) as CPU-only even if the user passes `--machine mac`.
+    # This keeps `--machine mac` working across Apple Silicon + Intel.
+    if args.machine in {"mac", "mps"} and _is_intel_macos():
+        req_file = requirements_dir / "cpu" / "requirements.txt"
 
     torch_backend = args.torch
     if torch_backend == "auto":
@@ -213,8 +401,12 @@ def main() -> int:
     #   PEP517 build isolation.
     # - On Windows, some sdists (notably `lmdb`/py-lmdb when a wheel isn't available) expect
     #   helper modules (e.g. `patch-ng`) to be available at build time.
+    # - On macOS, some legacy sdists (e.g. chumpy) can import `pip` during setup/metadata,
+    #   which is not present in isolated build environments.
     auto_no_build_isolation = (
-        sys.platform.startswith("linux") or sys.platform == "win32"
+        sys.platform.startswith("linux")
+        or sys.platform == "win32"
+        or sys.platform == "darwin"
     ) and not args.build_isolation
     use_no_build_isolation = args.no_build_isolation or auto_no_build_isolation
 
@@ -230,7 +422,7 @@ def main() -> int:
         [
             "--upgrade",
             "pip",
-            "setuptools",
+            SETUPTOOLS_SPEC,
             "wheel",
             # Keep packaging in sync with setuptools. Newer setuptools calls
             # `packaging.utils.canonicalize_version(..., strip_trailing_zero=...)`.
@@ -240,7 +432,7 @@ def main() -> int:
             # Pre-install build helpers that some sdists forget to declare.
             # (Example: opendr/opendr-toolkit needs Cython/numpy at build time but doesn't specify them.)
             "Cython>=0.29.36",
-            "numpy",
+            PINNED_NUMPY_SPEC,
             "psutil",
             "enscons",
             "pytoml",
@@ -248,14 +440,35 @@ def main() -> int:
             # Even when it's present in our requirements, pip can attempt to build lmdb before
             # installing patch-ng, so we ensure it's already available here.
             "patch-ng",
+            # Dev tooling
+            "honcho",
         ],
         use_no_build_isolation=False,
     )
 
     # 3) torch
+    suffix = ""
+    if sys.platform == "linux":
+        if torch_backend == "cpu":
+            suffix = "+cpu"
+        elif torch_backend.startswith("cu"):
+            suffix = f"+{torch_backend}"
+        elif torch_backend == "rocm":
+            suffix = "+rocm6.4"
+    elif sys.platform == "win32":
+        if torch_backend.startswith("cu"):
+            suffix = f"+{torch_backend}"
+
     if torch_backend == "pypi":
         if sys.platform == "darwin":
-            _install(py, ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"])
+            _install(
+                py,
+                [
+                    f"torch=={TORCH_VERSION}",
+                    f"torchvision=={TORCHVISION_VERSION}",
+                    f"torchaudio=={TORCHAUDIO_VERSION}",
+                ],
+            )
         else:
             _install(py, ["torch", "torchvision", "torchaudio"])
     elif torch_backend == "rocm-win-direct":
@@ -269,9 +482,18 @@ def main() -> int:
         )
     else:
         index = TORCH_INDEX[torch_backend]
-        _install(py, ["--index-url", index, "torch", "torchvision", "torchaudio"])
+        # Map torch/vision/audio to specific versions with suffixes if needed
+        specs = [
+            f"torch=={TORCH_VERSION}{suffix}",
+            f"torchvision=={TORCHVISION_VERSION}{suffix}",
+            f"torchaudio=={TORCHAUDIO_VERSION}{suffix}",
+        ]
+        _install(py, ["--index-url", index, *specs])
 
     # 4) machine requirements
+    # 4a) Build & install Rust wheels (apex_download_rs) if cargo is available.
+    _build_and_install_rust_wheels(py, project_root)
+
     _install(
         py,
         ["-r", str(req_file)],
@@ -317,6 +539,9 @@ def main() -> int:
 
     # 5) install apex-engine itself (expose the CLI) without re-resolving deps
     _install(py, ["-e", ".", "--no-deps"], cwd=project_root)
+
+    # 5a) Remove obsolete typing backport if it was accidentally pulled in.
+    _remove_obsolete_typing_backport(py)
 
     print("\nDone.")
     if args.venv and sys.platform != "win32":
