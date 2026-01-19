@@ -413,7 +413,7 @@ class SeedVRUpscaleEngine(BaseEngine):
             self.vae.set_causal_slicing(
                 split_size=split_size, memory_device=memory_device
             )
-        
+
         ## enable tiling
         if self.vae_tiling:
             self.vae.enable_tiling(**self.vae_tiling_kwargs)
@@ -779,7 +779,9 @@ class SeedVRUpscaleEngine(BaseEngine):
             progress_callback, 0.0, sampling_end
         )
         emit_decode_progress = (
-            make_mapped_progress(progress_callback, sampling_end, 1.0) if decode else None
+            make_mapped_progress(progress_callback, sampling_end, 1.0)
+            if decode
+            else None
         )
 
         with self._progress_bar(total=num_steps, desc="SeedVR Sampling") as pbar:
@@ -903,7 +905,6 @@ class SeedVRUpscaleEngine(BaseEngine):
         vae_tile_size_width: int = 512,
         vae_tile_overlap_height: int = 64,
         vae_tile_overlap_width: int = 64,
-        
         **kwargs,
     ) -> Union[List[Image.Image], Image.Image]:
         """
@@ -946,7 +947,7 @@ class SeedVRUpscaleEngine(BaseEngine):
 
         safe_emit_progress(progress_callback, 0.0, "Starting SeedVR upscale")
         vae_split_size = max(vae_split_size, 4)
-        
+
         self.vae_tiling_kwargs = {
             "tile_size": (vae_tile_size_height, vae_tile_size_width),
             "tile_overlap": (vae_tile_overlap_height, vae_tile_overlap_width),
@@ -1153,7 +1154,7 @@ class SeedVRUpscaleEngine(BaseEngine):
             del cond_latents_all
             gc.collect()
             empty_cache()
-            
+
             # offload dit
             if offload:
                 self._offload("transformer")
@@ -1322,5 +1323,11 @@ class SeedVRUpscaleEngine(BaseEngine):
         else:
             return [output_frames]
 
-    def _render_step(self, latents: torch.Tensor, render_on_step_callback: Callable, timestep: Optional[torch.Tensor] = None, image: Optional[bool] = False):
+    def _render_step(
+        self,
+        latents: torch.Tensor,
+        render_on_step_callback: Callable,
+        timestep: Optional[torch.Tensor] = None,
+        image: Optional[bool] = False,
+    ):
         self.logger.warning("Rendering step not supported for SeedVR upscale")

@@ -26,7 +26,7 @@ def _init_ray() -> None:
     """
     Initialize Ray (once) with sane defaults for this service.
 
-    IMPORTANT: do NOT initialize Ray at import-time. When running under Gunicorn,
+    IMPORTANT: do NOT initialize Ray at import-time. When running under uvicorn,
     import-time side effects interact badly with multi-worker preload/forking and
     can lead to very slow startup or hung workers.
     """
@@ -55,7 +55,10 @@ def _init_ray() -> None:
                 _system_config={
                     "automatic_object_spilling_enabled": True,
                     "object_spilling_config": json.dumps(
-                        {"type": "filesystem", "params": {"directory_path": str(spill_dir)}}
+                        {
+                            "type": "filesystem",
+                            "params": {"directory_path": str(spill_dir)},
+                        }
                     ),
                 },
             )
@@ -121,7 +124,7 @@ def _install_shutdown_handler():
     if _shutdown_handler_installed:
         return
     _shutdown_handler_installed = True
-    
+
     # Only install in main thread (signal handlers must be set from main thread)
     try:
         if threading.current_thread() is threading.main_thread():

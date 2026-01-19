@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def procrustes(X, Y, scaling=True, reflection='best'):
+def procrustes(X, Y, scaling=True, reflection="best"):
     # From https://github.com/prlz77/prlz77.cvtools
     """A port of MATLAB's `procrustes` function to Numpy.
     Procrustes analysis determines a linear transformation (translation,
@@ -44,8 +44,8 @@ def procrustes(X, Y, scaling=True, reflection='best'):
     X0 = X - muX
     Y0 = Y - muY
 
-    ssX = (X0 ** 2.).sum()
-    ssY = (Y0 ** 2.).sum()
+    ssX = (X0**2.0).sum()
+    ssY = (Y0**2.0).sum()
 
     # centred Frobenius norm
     normX = np.sqrt(ssX)
@@ -64,7 +64,7 @@ def procrustes(X, Y, scaling=True, reflection='best'):
     V = Vt.T
     T = np.dot(V, U.T)
 
-    if reflection != 'best':
+    if reflection != "best":
         # does the current solution use a reflection?
         have_reflection = np.linalg.det(T) < 0
 
@@ -82,7 +82,7 @@ def procrustes(X, Y, scaling=True, reflection='best'):
         b = traceTA * normX / normY
 
         # standarised distance between X and b*Y*T + c
-        d = 1 - traceTA ** 2
+        d = 1 - traceTA**2
 
         # transformed coords
         Z = normX * traceTA * np.dot(Y0, T) + muX
@@ -98,6 +98,6 @@ def procrustes(X, Y, scaling=True, reflection='best'):
     c = muX - b * np.dot(muY, T)
 
     # transformation values
-    tform = {'rotation': T, 'scale': b, 'translation': c}
+    tform = {"rotation": T, "scale": b, "translation": c}
 
     return d, Z, tform

@@ -25,7 +25,6 @@ from tqdm import tqdm
 
 from src.utils.defaults import DEFAULT_HEADERS
 
-
 ProgressCb = Callable[[int, Optional[int], Optional[str]], None]
 
 
@@ -295,7 +294,9 @@ def main() -> None:
     ap.add_argument("--url", required=True)
     ap.add_argument("--out-dir", default="/tmp/apex_download_bench")
     ap.add_argument("--python-chunk-bytes", type=int, default=1024 * 1024)
-    ap.add_argument("--no-progress", action="store_true", help="Disable tqdm progress callbacks")
+    ap.add_argument(
+        "--no-progress", action="store_true", help="Disable tqdm progress callbacks"
+    )
     ap.add_argument(
         "--rust",
         action="store_true",
@@ -313,9 +314,13 @@ def main() -> None:
     url = args.url
 
     # Default: run both (if rust is installed)
-    run_python = args.python or (not args.python and not args.rust and not args.hf_transfer)
+    run_python = args.python or (
+        not args.python and not args.rust and not args.hf_transfer
+    )
     run_rust = args.rust or (not args.python and not args.rust and not args.hf_transfer)
-    run_hf = args.hf_transfer or (not args.python and not args.rust and not args.hf_transfer)
+    run_hf = args.hf_transfer or (
+        not args.python and not args.rust and not args.hf_transfer
+    )
 
     results: list[Result] = []
 

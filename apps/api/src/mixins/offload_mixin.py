@@ -6,7 +6,6 @@ import types
 from typing import Literal
 from typing import TYPE_CHECKING
 
-
 if TYPE_CHECKING:
     from engine.base_engine import BaseEngine
     import torch
@@ -409,7 +408,7 @@ class OffloadMixin(base_object):
                         module_obj = self._helpers[module]
                     else:
                         return
-                
+
                 if offload_type == "cpu":
                     module_obj.to("cpu")
                 elif offload_type == "discard":
@@ -484,5 +483,5 @@ class OffloadMixin(base_object):
             mx.clear_cache()
         except Exception:
             pass
-        
+
         gc.collect()

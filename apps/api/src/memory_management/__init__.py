@@ -23,9 +23,21 @@ import time
 import types
 import weakref
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
 import torch
+
 try:
     import psutil
 except Exception:  # pragma: no cover - psutil may be missing in limited envs
@@ -34,6 +46,7 @@ except Exception:  # pragma: no cover - psutil may be missing in limited envs
 from .config import MemoryConfig
 from .group_offloading import apply_group_offloading
 from loguru import logger
+
 
 # -----------------------------
 # Data structures
@@ -76,7 +89,9 @@ class ComponentMemoryManager:
         self._components: Dict[str, ManagedComponent] = {}
         self._module_to_label: Dict[int, str] = {}
         self._lock = threading.Lock()
-        self._evicting_flag = threading.local()  # Track if we are currently forcing eviction
+        self._evicting_flag = (
+            threading.local()
+        )  # Track if we are currently forcing eviction
 
     # --------- environment helpers ----------
     @staticmethod
@@ -153,16 +168,32 @@ class ComponentMemoryManager:
         """
         try:
             if device.type == "cuda" and torch.cuda.is_available():
-                idx = device.index if device.index is not None else torch.cuda.current_device()
+                idx = (
+                    device.index
+                    if device.index is not None
+                    else torch.cuda.current_device()
+                )
                 free, total = torch.cuda.mem_get_info(idx)
                 return int(free), int(total)
-            if device.type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
-                idx = device.index if device.index is not None else torch.xpu.current_device()
+            if (
+                device.type == "xpu"
+                and hasattr(torch, "xpu")
+                and torch.xpu.is_available()
+            ):
+                idx = (
+                    device.index
+                    if device.index is not None
+                    else torch.xpu.current_device()
+                )
                 stats = torch.xpu.memory_stats(idx)
                 free = int(stats.get("available_bytes.all.current", 0))
                 total = int(torch.xpu.get_device_properties(idx).total_memory)
                 return free, total
-            if device.type == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            if (
+                device.type == "mps"
+                and hasattr(torch.backends, "mps")
+                and torch.backends.mps.is_available()
+            ):
                 if psutil:
                     vm = psutil.virtual_memory()
                     return int(vm.available), int(vm.total)
@@ -187,7 +218,11 @@ class ComponentMemoryManager:
         """
         try:
             if device.type == "cuda" and torch.cuda.is_available():
-                idx = device.index if device.index is not None else torch.cuda.current_device()
+                idx = (
+                    device.index
+                    if device.index is not None
+                    else torch.cuda.current_device()
+                )
                 with torch.cuda.device(idx):
                     try:
                         torch.cuda.ipc_collect()
@@ -220,7 +255,10 @@ class ComponentMemoryManager:
             frac = self._env_float("APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10)
         target = int(total * frac)
         if device.type in {"cuda", "xpu"}:
-            target = max(target, self._env_int("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3))
+            target = max(
+                target,
+                self._env_int("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3),
+            )
         return reserve + target
 
     # --------- registration ----------
@@ -266,9 +304,12 @@ class ComponentMemoryManager:
             logger.warning(f"Failed to register component {label}: {exc}")
         return None
 
-    def _attach_forward_hooks(self, module: torch.nn.Module, label: str) -> Tuple[Any, ...]:
+    def _attach_forward_hooks(
+        self, module: torch.nn.Module, label: str
+    ) -> Tuple[Any, ...]:
         handles: List[Any] = []
         try:
+
             def _pre(_mod, _inputs):
                 self._on_forward_start(label, _mod)
 
@@ -321,7 +362,9 @@ class ComponentMemoryManager:
         comp.last_used = time.time()
         self._log_debug(f"[mem] marked '{label}' offloaded ({offload_type})")
 
-    def mark_moved(self, modules: Sequence[torch.nn.Module], device: torch.device) -> None:
+    def mark_moved(
+        self, modules: Sequence[torch.nn.Module], device: torch.device
+    ) -> None:
         now = time.time()
         for mod in modules:
             label = self._module_to_label.get(id(mod))
@@ -332,7 +375,9 @@ class ComponentMemoryManager:
                 continue
             comp.device = device
             comp.last_used = now
-            comp.estimated_bytes = max(comp.estimated_bytes, self._module_size_bytes(mod))
+            comp.estimated_bytes = max(
+                comp.estimated_bytes, self._module_size_bytes(mod)
+            )
 
     def mark_idle(self, module: Union[str, torch.nn.Module, None]) -> None:
         """
@@ -355,7 +400,9 @@ class ComponentMemoryManager:
         if mod_obj is not None:
             try:
                 comp.device = self._module_device(mod_obj)
-                comp.estimated_bytes = max(comp.estimated_bytes, self._module_size_bytes(mod_obj))
+                comp.estimated_bytes = max(
+                    comp.estimated_bytes, self._module_size_bytes(mod_obj)
+                )
             except Exception:
                 pass
         comp.in_forward = False
@@ -445,7 +492,11 @@ class ComponentMemoryManager:
             if device.type != "cpu":
                 try:
                     # Be conservative: ensure we have CPU room before offloading more weights.
-                    self._ensure_room(torch.device("cpu"), comp.estimated_bytes, exclude_label=exclude_label)
+                    self._ensure_room(
+                        torch.device("cpu"),
+                        comp.estimated_bytes,
+                        exclude_label=exclude_label,
+                    )
                     self._offload_component(comp, offload_type="cpu")
                 except Exception:
                     self._offload_component(comp, offload_type="discard")
@@ -456,7 +507,13 @@ class ComponentMemoryManager:
             if free >= min_free_bytes:
                 break
 
-    def _ensure_room(self, device: torch.device, reserve_bytes: int, *, exclude_label: str | None = None) -> None:
+    def _ensure_room(
+        self,
+        device: torch.device,
+        reserve_bytes: int,
+        *,
+        exclude_label: str | None = None,
+    ) -> None:
         free, total = self._device_free_total(device)
         target_free = self._target_free_bytes(device, reserve_bytes)
         if total == 0:
@@ -474,11 +531,15 @@ class ComponentMemoryManager:
             comp = self._components.get(label)
             if comp is None or comp.in_forward:
                 continue
-            
+
             # Tiered offloading: GPU -> CPU -> Discard
             if device.type != "cpu":
                 try:
-                    self._ensure_room(torch.device("cpu"), comp.estimated_bytes, exclude_label=exclude_label)
+                    self._ensure_room(
+                        torch.device("cpu"),
+                        comp.estimated_bytes,
+                        exclude_label=exclude_label,
+                    )
                     self._offload_component(comp, offload_type="cpu")
                 except Exception:
                     self._offload_component(comp, offload_type="discard")
@@ -489,7 +550,9 @@ class ComponentMemoryManager:
             if free >= target_free:
                 break
 
-    def _eviction_candidates(self, device: torch.device, *, exclude_label: str | None = None) -> List[str]:
+    def _eviction_candidates(
+        self, device: torch.device, *, exclude_label: str | None = None
+    ) -> List[str]:
         """
         Return component labels sorted by LRU (oldest first) for the given device.
         """
@@ -506,13 +569,15 @@ class ComponentMemoryManager:
         comps.sort(key=lambda x: x[0])
         return [label for _, label in comps]
 
-    def _offload_component(self, comp: ManagedComponent, offload_type: str = "cpu") -> None:
+    def _offload_component(
+        self, comp: ManagedComponent, offload_type: str = "cpu"
+    ) -> None:
         module = comp.module()
         if module is None and offload_type != "discard":
             return
-        
+
         logger.info(f"Offloading component: {comp.label} to {offload_type}")
-        
+
         # Set thread-local flag to signal that this offload is FORCED by the manager
         self._evicting_flag.is_evicting = True
         try:
@@ -521,7 +586,11 @@ class ComponentMemoryManager:
                 if engine is not None and hasattr(engine, "_offload"):
                     # Must pass label (str) for discard so OffloadMixin can nullify the attribute.
                     # For CPU, passing module object is fine (and slightly faster/safer if attr changed).
-                    target = comp.label if offload_type == "discard" else (module if module is not None else comp.label)
+                    target = (
+                        comp.label
+                        if offload_type == "discard"
+                        else (module if module is not None else comp.label)
+                    )
                     engine._offload(target, offload_type=offload_type)  # type: ignore[attr-defined]
                 else:
                     if module is not None:
@@ -540,7 +609,9 @@ class ComponentMemoryManager:
             self._evicting_flag.is_evicting = False
 
     # --------- engine wiring ----------
-    def _resolve_label(self, module: Union[str, torch.nn.Module, None]) -> Optional[str]:
+    def _resolve_label(
+        self, module: Union[str, torch.nn.Module, None]
+    ) -> Optional[str]:
         if module is None:
             return None
         if isinstance(module, str):
@@ -550,7 +621,9 @@ class ComponentMemoryManager:
     def _normalize_modules(
         self,
         engine: Any,
-        components: Tuple[Union[str, torch.nn.Module], ...] | List[Union[str, torch.nn.Module]],
+        components: (
+            Tuple[Union[str, torch.nn.Module], ...] | List[Union[str, torch.nn.Module]]
+        ),
     ) -> List[torch.nn.Module]:
         mods: List[torch.nn.Module] = []
         for comp in components:
@@ -581,7 +654,9 @@ class ComponentMemoryManager:
                 target_device = torch.device(target_device)
 
             if components:
-                modules = self._component_memory_manager._normalize_modules(self, components)
+                modules = self._component_memory_manager._normalize_modules(
+                    self, components
+                )
             else:
                 defaults: List[torch.nn.Module] = []
                 for maybe_mod in (
@@ -592,12 +667,20 @@ class ComponentMemoryManager:
                 ):
                     if maybe_mod is not None:
                         defaults.append(maybe_mod)
-                helpers_map = getattr(self, "_helpers", None) or getattr(self, "helpers", None)
+                helpers_map = getattr(self, "_helpers", None) or getattr(
+                    self, "helpers", None
+                )
                 if isinstance(helpers_map, dict):
                     defaults.extend([h for h in helpers_map.values() if h is not None])
-                modules = self._component_memory_manager._normalize_modules(self, tuple(defaults))
+                modules = self._component_memory_manager._normalize_modules(
+                    self, tuple(defaults)
+                )
 
-            reserve = self._component_memory_manager._estimate_allocation_bytes(modules) if modules else 0
+            reserve = (
+                self._component_memory_manager._estimate_allocation_bytes(modules)
+                if modules
+                else 0
+            )
             self._component_memory_manager._ensure_room(target_device, reserve)
 
             result = original(*components, device=device)
@@ -618,11 +701,11 @@ class ComponentMemoryManager:
             # Intercept "discard" requests: try to keep in RAM (CPU) if space permits.
             # Lazy Offloading: If offload_type is "discard" or "cpu", we might prefer
             # to just mark it as IDLE and leave it on GPU until pressure forces it out.
-            
+
             manager = getattr(self, "_component_memory_manager", None)
-            
+
             final_offload_type = offload_type
-            
+
             # 1. Resolve Module Object
             mod_obj = module
             if manager:
@@ -632,13 +715,17 @@ class ComponentMemoryManager:
                         comp = manager._components.get(module)
                         if comp:
                             mod_obj = comp.module()
-                        
+
                         # Fallback to engine lookup
                         if mod_obj is None:
                             mod_obj = getattr(self, module, None)
                         if mod_obj is None:
                             # Check both _helpers and helpers
-                            helpers = getattr(self, "_helpers", None) or getattr(self, "helpers", None) or {}
+                            helpers = (
+                                getattr(self, "_helpers", None)
+                                or getattr(self, "helpers", None)
+                                or {}
+                            )
                             mod_obj = helpers.get(module)
                 except Exception:
                     pass
@@ -650,7 +737,7 @@ class ComponentMemoryManager:
                     cpu_dev = torch.device("cpu")
                     free, _ = manager._device_free_total(cpu_dev)
                     target_free = manager._target_free_bytes(cpu_dev, 0)
-                    
+
                     if free > (target_free + size + 2 * 1024**3):
                         final_offload_type = "cpu"
                 except Exception:
@@ -659,20 +746,29 @@ class ComponentMemoryManager:
             # 3. Check for Forced Eviction vs Voluntary Offload
             is_forced = False
             if manager:
-                if hasattr(manager, "_evicting_flag") and getattr(manager._evicting_flag, "is_evicting", False):
+                if hasattr(manager, "_evicting_flag") and getattr(
+                    manager._evicting_flag, "is_evicting", False
+                ):
                     is_forced = True
 
             # 4. Lazy Offloading Logic
             # For VOLUNTARY cleanup calls, keep the module warm on accelerator if:
             # - The user-configured "keep free VRAM" target is already satisfied, OR
             # - We can satisfy it by evicting *other* cold components first.
-            if not is_forced and manager and mod_obj is not None and final_offload_type in {"cpu", "discard"}:
+            if (
+                not is_forced
+                and manager
+                and mod_obj is not None
+                and final_offload_type in {"cpu", "discard"}
+            ):
                 try:
                     if not manager._env_bool("APEX_DISABLE_LAZY_OFFLOAD", False):
                         current_dev = manager._module_device(mod_obj)
                         if current_dev.type != "cpu":
                             min_free = manager._offload_min_free_bytes(current_dev)
-                            free_before, total_before = manager._device_free_total(current_dev)
+                            free_before, total_before = manager._device_free_total(
+                                current_dev
+                            )
 
                             exclude_label = None
                             try:
@@ -681,7 +777,9 @@ class ComponentMemoryManager:
                                 exclude_label = None
 
                             if total_before > 0 and free_before < min_free:
-                                manager._ensure_min_free(current_dev, min_free, exclude_label=exclude_label)
+                                manager._ensure_min_free(
+                                    current_dev, min_free, exclude_label=exclude_label
+                                )
 
                             free_after, _ = manager._device_free_total(current_dev)
                             if min_free <= 0 or free_after >= min_free:
@@ -707,11 +805,15 @@ class ComponentMemoryManager:
         for name in ("transformer", "vae", "text_encoder", "scheduler"):
             mod = getattr(engine, name, None)
             if mod is not None:
-                self.register_component(mod, name, {name}, engine=engine, pinned=name == "scheduler")
+                self.register_component(
+                    mod, name, {name}, engine=engine, pinned=name == "scheduler"
+                )
         helpers = getattr(engine, "_helpers", None) or getattr(engine, "helpers", None)
         if isinstance(helpers, dict):
             for key, helper in helpers.items():
-                self.register_component(helper, key, {"helper"}, engine=engine, pinned=False)
+                self.register_component(
+                    helper, key, {"helper"}, engine=engine, pinned=False
+                )
 
     def install_for_engine(self, engine: Any) -> None:
         """
@@ -725,18 +827,26 @@ class ComponentMemoryManager:
 
         # Expose helpers for BaseEngine.load_component path.
         def _register_tracked_module(self_obj, module, label, tags=None):
-            return self.register_component(module, label, tags or set(), engine=self_obj)
+            return self.register_component(
+                module, label, tags or set(), engine=self_obj
+            )
 
         def _install_preforward_hook(self_obj, module, label):
-            comp = self.register_component(module, label, {label}, engine=self_obj, install_hooks=False)
+            comp = self.register_component(
+                module, label, {label}, engine=self_obj, install_hooks=False
+            )
             if comp is not None and not comp.hooks:
                 comp.hooks = self._attach_forward_hooks(module, label)
             return comp
 
         if not hasattr(engine, "_register_tracked_module"):
-            engine._register_tracked_module = types.MethodType(_register_tracked_module, engine)
+            engine._register_tracked_module = types.MethodType(
+                _register_tracked_module, engine
+            )
         if not hasattr(engine, "_install_preforward_hook"):
-            engine._install_preforward_hook = types.MethodType(_install_preforward_hook, engine)
+            engine._install_preforward_hook = types.MethodType(
+                _install_preforward_hook, engine
+            )
 
 
 # -----------------------------

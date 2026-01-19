@@ -225,7 +225,7 @@ class OviEngine(WanShared):
         safe_emit_progress(
             progress_callback, 0.0, "Starting Ovi video+audio generation pipeline"
         )
-        
+
         if image is not None:
             safe_emit_progress(progress_callback, 0.01, "Loading input image")
             image = self._load_image(image)
@@ -234,7 +234,6 @@ class OviEngine(WanShared):
                 max_area=height * width,
                 mod_value=64,
             )
-        
 
         specs = self._get_model_specs()
         if seed is None:
@@ -251,7 +250,6 @@ class OviEngine(WanShared):
         else:
             target_area = specs["video_area"]
         text_formatter = specs["formatter"]
-        
 
         logging.info(
             f"Video latent length: {video_latent_length}, Audio latent length: {audio_latent_length}"
@@ -259,8 +257,6 @@ class OviEngine(WanShared):
         logging.info(f"Target area: {target_area}")
 
         safe_emit_progress(progress_callback, 0.02, "Loaded Ovi model specs")
-
-    
 
         device = self.device
         target_dtype = torch.bfloat16  # Ovi uses bfloat16 by default
@@ -362,7 +358,9 @@ class OviEngine(WanShared):
             # Add temporal dim: (1, 3, 1, H, W)
             input_tensor = first_frame.unsqueeze(2)
             safe_emit_progress(progress_callback, 0.29, "Encoding first frame (VAE)")
-            latents_images = self.vae_encode(input_tensor, dtype=target_dtype, component_name="transformer_vae")
+            latents_images = self.vae_encode(
+                input_tensor, dtype=target_dtype, component_name="transformer_vae"
+            )
             latents_images = latents_images.squeeze(0)  # (C, T, H, W)
             self.latents_images = latents_images
 
@@ -516,8 +514,7 @@ class OviEngine(WanShared):
                     t=timestep_input,
                     **pos_forward_args,
                 )
-                
-              
+
                 # Negative forward
                 neg_forward_args = {
                     "audio_context": [text_embeddings_audio_neg],
@@ -534,8 +531,7 @@ class OviEngine(WanShared):
                     t=timestep_input,
                     **neg_forward_args,
                 )
-                
-           
+
                 # Guidance
                 pred_video_guided = pred_vid_neg[0] + video_guidance_scale * (
                     pred_vid_pos[0] - pred_vid_neg[0]
@@ -543,7 +539,7 @@ class OviEngine(WanShared):
                 pred_audio_guided = pred_audio_neg[0] + audio_guidance_scale * (
                     pred_audio_pos[0] - pred_audio_neg[0]
                 )
-                
+
                 # Step
                 video_noise = self.transformer_scheduler.step(
                     pred_video_guided.unsqueeze(0),
@@ -558,7 +554,7 @@ class OviEngine(WanShared):
                     audio_noise.unsqueeze(0),
                     return_dict=False,
                 )[0].squeeze(0)
-                
+
                 # Avoid noisy per-step prints (slow + pollutes logs). If needed, use logger.debug.
 
                 # Optional per-step previews (if wired in from the orchestrator)

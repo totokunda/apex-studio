@@ -719,7 +719,10 @@ class WanAttentionBlock(nn.Module):
         self._ff_chunk_dim = dim
 
     def set_chunk_norms(
-        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
     ) -> None:
         self._mod_norm_chunk_size = modulated_norm_chunk_size
         self._norm_chunk_size = norm_chunk_size
@@ -761,7 +764,9 @@ class WanAttentionBlock(nn.Module):
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
             # cross-attention
-            norm_x = _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size).type_as(x)
+            norm_x = _chunked_norm(
+                self.norm3, x, chunk_size=self._norm_chunk_size
+            ).type_as(x)
             x = x + self.cross_attn(norm_x, context, context_lens, dtype, t=t)
 
             # ffn function with chunked modulated norm
@@ -770,7 +775,9 @@ class WanAttentionBlock(nn.Module):
             ).to(dtype)
 
             if self._ff_chunk_size is not None:
-                y = _chunked_feed_forward(self.ffn, temp_x, self._ff_chunk_dim, self._ff_chunk_size)
+                y = _chunked_feed_forward(
+                    self.ffn, temp_x, self._ff_chunk_dim, self._ff_chunk_size
+                )
             else:
                 y = self.ffn(temp_x)
             x = x + y * e[5]
@@ -800,7 +807,9 @@ class Head(nn.Module):
         # Chunking configuration (disabled by default)
         self._mod_norm_chunk_size: Optional[int] = None
 
-    def set_chunk_norms(self, *, modulated_norm_chunk_size: Optional[int] = None) -> None:
+    def set_chunk_norms(
+        self, *, modulated_norm_chunk_size: Optional[int] = None
+    ) -> None:
         self._mod_norm_chunk_size = modulated_norm_chunk_size
 
     def forward(self, x, e):
@@ -815,7 +824,9 @@ class Head(nn.Module):
         else:
             e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
 
-        x = _chunked_modulated_norm(self.norm, x, e[1], e[0], chunk_size=self._mod_norm_chunk_size)
+        x = _chunked_modulated_norm(
+            self.norm, x, e[1], e[0], chunk_size=self._mod_norm_chunk_size
+        )
         x = self.head(x)
         return x
 

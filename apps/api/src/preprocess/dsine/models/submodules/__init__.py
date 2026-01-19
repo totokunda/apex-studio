@@ -4,7 +4,6 @@ import torch.nn.functional as F
 import os
 import timm
 
-
 INPUT_CHANNELS_DICT = {
     0: [1280, 112, 40, 24, 16],
     1: [1280, 112, 40, 24, 16],

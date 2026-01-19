@@ -16,29 +16,32 @@ from nlf.common.util import TRAIN
 
 @functools.lru_cache(512)
 def load_array(path):
-    return np.load(path, mmap_mode='r')
+    return np.load(path, mmap_mode="r")
 
 
 class MemMappedCSR:
     def __init__(self, path):
         self.path = path
-        self.indices = load_array(path + '.indices.npy')
-        self.indptr = load_array(path + '.indptr.npy')
-        self.data = load_array(path + '.data.npy')
-        self.shape = load_array(path + '.shape.npy')
+        self.indices = load_array(path + ".indices.npy")
+        self.indptr = load_array(path + ".indptr.npy")
+        self.data = load_array(path + ".data.npy")
+        self.shape = load_array(path + ".shape.npy")
 
     def __getitem__(self, row_slice):
         if not isinstance(row_slice, slice) or (
             row_slice.step != 1 and row_slice.step is not None
         ):
             raise NotImplementedError(
-                'MemMappedCSR must be indexed with a single slice with step 1.'
+                "MemMappedCSR must be indexed with a single slice with step 1."
             )
 
         data_slice = slice(self.indptr[row_slice.start], self.indptr[row_slice.stop])
         data = self.data[data_slice]
         indices = self.indices[data_slice]
-        indptr = self.indptr[row_slice.start : row_slice.stop + 1] - self.indptr[row_slice.start]
+        indptr = (
+            self.indptr[row_slice.start : row_slice.stop + 1]
+            - self.indptr[row_slice.start]
+        )
         shape = (row_slice.stop - row_slice.start, self.shape[1])
         return sps.csr_matrix((data, indices, indptr), shape=shape, copy=False)
 
@@ -49,19 +52,20 @@ def augment_background(
     has_realistic_background = any(
         x in ex.image_path.lower()
         for x in [
-            'sailvos',
-            'agora',
-            'spec-syn',
-            'hspace',
-            'bedlam',
-            'egobody',
-            'egohumans',
-            'rich',
+            "sailvos",
+            "agora",
+            "spec-syn",
+            "hspace",
+            "bedlam",
+            "egobody",
+            "egohumans",
+            "rich",
         ]
     )
 
     has_gray_background = any(
-        x in ex.image_path.lower() for x in ['hi4d_rerender', 'dfaust_render', 'thuman2_render']
+        x in ex.image_path.lower()
+        for x in ["hi4d_rerender", "dfaust_render", "thuman2_render"]
     )
 
     bg_aug_prob = (
@@ -129,9 +133,15 @@ def recolor_border(im, border_value=(127, 127, 127)):
 
     col_inds = np.arange(w)
     quantile = 1e-1
-    ransac_start = linear_model.QuantileRegressor(quantile=quantile, alpha=0, solver='highs')
-    ransac_end = linear_model.QuantileRegressor(quantile=1 - quantile, alpha=0, solver='highs')
-    fitted = ransac_end.fit(col_inds[:, np.newaxis], last_valid_index_per_col)  # .estimator_
+    ransac_start = linear_model.QuantileRegressor(
+        quantile=quantile, alpha=0, solver="highs"
+    )
+    ransac_end = linear_model.QuantileRegressor(
+        quantile=1 - quantile, alpha=0, solver="highs"
+    )
+    fitted = ransac_end.fit(
+        col_inds[:, np.newaxis], last_valid_index_per_col
+    )  # .estimator_
     offset = fitted.intercept_
     if offset < h - 1:
         offset -= 1
@@ -147,7 +157,9 @@ def recolor_border(im, border_value=(127, 127, 127)):
     # top:
     first_valid_index_per_col = np.argmax(is_valid_mask, axis=0)
     first_valid_index_per_col[~is_any_valid_per_col] = h
-    fitted = ransac_start.fit(col_inds[:, np.newaxis], first_valid_index_per_col)  # .estimator_
+    fitted = ransac_start.fit(
+        col_inds[:, np.newaxis], first_valid_index_per_col
+    )  # .estimator_
     offset = fitted.intercept_
     if offset > 0:
         offset += 1
@@ -165,7 +177,9 @@ def recolor_border(im, border_value=(127, 127, 127)):
     is_any_valid_per_row = np.any(is_valid_mask, axis=1)
     first_valid_index_per_row[~is_any_valid_per_row] = w
     row_inds = np.arange(h)
-    fitted = ransac_start.fit(row_inds[:, np.newaxis], first_valid_index_per_row)  # .estimator_
+    fitted = ransac_start.fit(
+        row_inds[:, np.newaxis], first_valid_index_per_row
+    )  # .estimator_
     offset = fitted.intercept_
     if offset > 0:
         offset += 1
@@ -180,7 +194,9 @@ def recolor_border(im, border_value=(127, 127, 127)):
     # right:
     last_valid_index_per_row = w - np.argmax(is_valid_mask[:, ::-1], axis=1)
     last_valid_index_per_row[~is_any_valid_per_row] = 0
-    fitted = ransac_end.fit(row_inds[:, np.newaxis], last_valid_index_per_row)  # .estimator_
+    fitted = ransac_end.fit(
+        row_inds[:, np.newaxis], last_valid_index_per_row
+    )  # .estimator_
     offset = fitted.intercept_
     if offset < w - 1:
         offset -= 1
@@ -212,6 +228,7 @@ def make_marker(size):
     cv2.line(img_np, (sm1, 0), (0, sm1), (0, 0, 255), 2)
     return img_np
 
+
 @functools.lru_cache()
 def make_marker_plus(size):
     s = size
@@ -226,7 +243,7 @@ def make_marker_plus(size):
     img_np = np.array(image)
 
     # Compute center coordinates for even size: two central pixels
-    centers = [s//2 - 1, s//2]
+    centers = [s // 2 - 1, s // 2]
 
     # Draw plus sign manually for perfect center alignment
     green_bgr = (0, 255, 0)

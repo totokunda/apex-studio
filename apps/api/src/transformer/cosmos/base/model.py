@@ -31,7 +31,6 @@ from torch.nn import RMSNorm
 from src.attention import attention_register
 from src.transformer.base import TRANSFORMERS_REGISTRY
 
-
 if is_torchvision_available():
     from torchvision import transforms
 

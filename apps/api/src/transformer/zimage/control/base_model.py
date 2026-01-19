@@ -43,7 +43,6 @@ from diffusers.utils import (
 )
 from src.attention import attention_register
 
-
 ADALN_EMBED_DIM = 256
 SEQ_MULTI_OF = 32
 

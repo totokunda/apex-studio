@@ -10,7 +10,6 @@ from loguru import logger
 # Ensure the dummy !include is registered on FullLoader so exploratory loads don't fail
 from src.utils.yaml import _dummy_include  # type: ignore  # noqa: F401
 
-
 _INDEX_CACHE: Dict[str, str] | None = None
 _LATEST_MAP: Dict[str, Tuple[int, int, int, str]] | None = None
 

@@ -119,8 +119,12 @@ class EngineWarmPool:
             enabled=_env_bool("APEX_WARM_POOL_ENABLED", True),
             max_entries=_env_int("APEX_WARM_POOL_MAX_ENGINES", 1),
             ttl_seconds=_env_int("APEX_WARM_POOL_TTL_SECONDS", 20 * 60),
-            min_free_vram_fraction=_env_float("APEX_WARM_POOL_MIN_FREE_VRAM_FRACTION", 0.12),
-            min_free_ram_fraction=_env_float("APEX_WARM_POOL_MIN_FREE_RAM_FRACTION", 0.10),
+            min_free_vram_fraction=_env_float(
+                "APEX_WARM_POOL_MIN_FREE_VRAM_FRACTION", 0.12
+            ),
+            min_free_ram_fraction=_env_float(
+                "APEX_WARM_POOL_MIN_FREE_RAM_FRACTION", 0.10
+            ),
         )
 
     def _now(self) -> float:
@@ -187,7 +191,9 @@ class EngineWarmPool:
         # VRAM/RAM pressure eviction (evict until we're above thresholds or no idle entries)
         if self._should_evict_for_vram() or self._should_evict_for_ram():
             for _ in range(max(1, len(self._entries))):
-                if (not self._should_evict_for_vram()) and (not self._should_evict_for_ram()):
+                if (not self._should_evict_for_vram()) and (
+                    not self._should_evict_for_ram()
+                ):
                     break
                 if not self._evict_one_locked():
                     break
@@ -218,7 +224,9 @@ class EngineWarmPool:
             # to avoid interfering with the in-use engine.
             if key in self._entries:
                 return eng, False
-            self._entries[key] = WarmPoolEntry(engine=eng, last_used_ts=self._now(), in_use=1)
+            self._entries[key] = WarmPoolEntry(
+                engine=eng, last_used_ts=self._now(), in_use=1
+            )
             self._evict_locked()
             # If we got evicted immediately (pressure/size), treat as non-pooled.
             if key not in self._entries:
@@ -286,5 +294,3 @@ class EngineWarmPool:
                 "entries": len(self._entries),
                 "keys": list(self._entries.keys())[:50],
             }
-
-

@@ -144,14 +144,11 @@ class WanSCAILEngine(WanShared):
             loaded_image, max_area=original_height * original_width, mod_value=32
         )
 
-        
-
         transformer_dtype = self.component_dtypes["transformer"]
 
         safe_emit_progress(progress_callback, 0.20, "Moving transformer to device")
         self.to_device(self.transformer)
         safe_emit_progress(progress_callback, 0.21, "Encoding image with CLIP")
-        
 
         safe_emit_progress(progress_callback, 0.22, "Moving embeddings to device")
         prompt_embeds = prompt_embeds.to(self.device, dtype=transformer_dtype)
@@ -251,16 +248,13 @@ class WanSCAILEngine(WanShared):
             if use_video_duration:
                 remainder = (num_target_frames - 1) % vae_scale_factor_temporal
                 if remainder != 0:
-                    num_target_frames = (
-                        num_target_frames
-                        + (vae_scale_factor_temporal - remainder)
+                    num_target_frames = num_target_frames + (
+                        vae_scale_factor_temporal - remainder
                     )
                     pose_video = _pad_video_frames(pose_video, num_target_frames)
             else:
                 num_target_frames = num_frames
                 pose_video = _pad_video_frames(pose_video, num_target_frames)
-
-        
 
         transformer_config = self.load_config_by_type("transformer")
 
@@ -295,27 +289,25 @@ class WanSCAILEngine(WanShared):
                 pose_frames = pose_video
 
             # update image_embeds and reference_latents to new segment
-            
+
             self.to_device(clip)
-            
+
             image_embeds = clip(loaded_image, hidden_states_layer=-2).to(
                 self.device, dtype=transformer_dtype
-                )
+            )
             if image_embeds.shape[0] == 1 and batch_size > 1:
                 image_embeds = image_embeds.expand(batch_size, -1, -1)
-                
-            
+
             if offload:
                 self._offload("clip", offload_type="cpu")
-                
+
             preprocessed_image = self.video_processor.preprocess(
                 loaded_image, height=height, width=width
             ).to(self.device, dtype=torch.float32)
-            
+
             if preprocessed_image.ndim == 4:
                 preprocessed_image = preprocessed_image.unsqueeze(2)
-                
-            
+
             reference_latents = self.vae_encode(
                 preprocessed_image,
                 offload=offload,
@@ -323,7 +315,7 @@ class WanSCAILEngine(WanShared):
                 normalize_latents_dtype=torch.float32,
                 offload_type="cpu",
             )
-            
+
             if reference_latents.shape[0] == 1 and batch_size > 1:
                 reference_latents = reference_latents.expand(batch_size, -1, -1, -1, -1)
 
@@ -364,7 +356,7 @@ class WanSCAILEngine(WanShared):
                 normalize_latents_dtype=latents.dtype,
                 offload_type="cpu" if do_segment else "discard",
             )
-            
+
             if pose_latents.shape[0] == 1 and batch_size > 1:
                 pose_latents = pose_latents.expand(batch_size, -1, -1, -1, -1)
 
@@ -378,12 +370,8 @@ class WanSCAILEngine(WanShared):
                     * transformer_config.get("patch_size", (1, 2, 2))[2]
                 )
             )
-            
-            
 
-            with torch.autocast(
-                device_type=self.device.type, dtype=transformer_dtype
-            ):
+            with torch.autocast(device_type=self.device.type, dtype=transformer_dtype):
                 latents = self.denoise(
                     timesteps=timesteps_segment,
                     latents=latents,
@@ -423,7 +411,7 @@ class WanSCAILEngine(WanShared):
                 out_frames = out_frames.detach().to("cpu")
             if do_segment and i > 0 and segment_overlap_frames > 0:
                 out_frames = out_frames[:, :, segment_overlap_frames:]
-            all_out_frames.append(out_frames) 
+            all_out_frames.append(out_frames)
             loaded_image = self._tensor_to_frames(out_frames)[0][0]
 
             if do_segment:
@@ -441,7 +429,5 @@ class WanSCAILEngine(WanShared):
         safe_emit_progress(progress_callback, 0.96, "Decoded latents")
         video = torch.cat(all_out_frames, dim=2)[:, :, :cond_video_frames]
         postprocessed_video = self._tensor_to_frames(video)
-        safe_emit_progress(
-            progress_callback, 1.0, "Completed image-to-video pipeline"
-        )
+        safe_emit_progress(progress_callback, 1.0, "Completed image-to-video pipeline")
         return postprocessed_video
