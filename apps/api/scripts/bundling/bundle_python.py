@@ -114,6 +114,65 @@ class PythonBundler:
             return bundle_dir / self.venv_name / "Scripts" / "python.exe"
         return bundle_dir / self.venv_name / "bin" / "python"
 
+    def _kernels_cache_dir(self, bundle_dir: Path) -> Path:
+        """
+        Directory inside the shipped bundle used for `kernels.get_kernel(...)` caching.
+
+        We keep this bundle-relative so:
+          - MPS bundles can ship pre-fetched kernel artifacts for offline use.
+          - the runtime does not depend on the user's home directory cache.
+        """
+        return Path(bundle_dir).resolve() / "kernels-cache"
+
+    def _prefetch_metal_flash_sdpa_kernel(self, *, bundle_dir: Path, gpu_type: str) -> None:
+        """
+        macOS/MPS: prefetch the Metal Flash-SDPA kernel bundle into the shipped artifact.
+
+        This ensures first-run is deterministic and works offline. The runtime launcher
+        scripts will prefer the bundle-local cache directory when present.
+        """
+        if self.platform_name != "darwin":
+            return
+        if str(gpu_type or "") != "mps":
+            return
+
+        py_path = self._smoke_py_path(bundle_dir)
+        if not py_path.exists():
+            raise RuntimeError(f"Kernel prefetch: bundle venv python not found: {py_path}")
+
+        cache_dir = self._kernels_cache_dir(bundle_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        env = self._bundle_python_path_env(bundle_dir, os.environ.copy())
+        env["KERNELS_CACHE"] = str(cache_dir)
+
+        print("\n--- Prefetching kernels-community/metal-flash-sdpa (MPS) ---")
+        print(f"KERNELS_CACHE={cache_dir}")
+        res = subprocess.run(
+            [
+                str(py_path),
+                "-c",
+                "from kernels import get_kernel; "
+                "k = get_kernel('kernels-community/metal-flash-sdpa'); "
+                "print('prefetched:', getattr(k, '__name__', type(k).__name__))",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(bundle_dir),
+        )
+        if res.stdout:
+            print(res.stdout)
+        if res.returncode != 0:
+            stderr = (res.stderr or "").strip()
+            raise RuntimeError(
+                "Failed to prefetch Metal Flash-SDPA kernel for MPS bundle. "
+                "Ensure network access during bundling and that the kernel is accessible. "
+                f"stderr:\n{stderr}"
+            )
+        print("--- Prefetch complete ---\n")
+
     def _run_smoke_tests(self, *, bundle_dir: Path, gpu_type: str) -> None:
         """
         Run smoke tests inside the *shipped* bundle venv.
@@ -134,6 +193,12 @@ class PythonBundler:
         env["APEX_BUNDLE_SMOKE_TEST"] = "1"
         env["APEX_BUNDLE_GPU_TYPE"] = str(gpu_type or "")
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        # Prefer bundle-local cache for kernels fetched via `kernels.get_kernel(...)`.
+        # This is especially important for MPS bundles where we ship pre-fetched kernels.
+        try:
+            env["KERNELS_CACHE"] = str(self._kernels_cache_dir(bundle_dir))
+        except Exception:
+            pass
 
         print("\n--- Running bundle smoke tests (inside shipped venv) ---")
         print(f"Bundle dir: {bundle_dir}")
@@ -1060,6 +1125,9 @@ set PYTHONPATH=%SCRIPT_DIR%
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR"
+if [ -d "$SCRIPT_DIR/kernels-cache" ]; then
+  export KERNELS_CACHE="$SCRIPT_DIR/kernels-cache"
+fi
 exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
 """
         launcher.write_text(content, encoding="utf-8")
@@ -1209,6 +1277,9 @@ set PATH=%SCRIPT_DIR%\\apex-studio\\Scripts;%PATH%
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR"
 export PATH="$SCRIPT_DIR/apex-studio/bin:$PATH"
+if [ -d "$SCRIPT_DIR/kernels-cache" ]; then
+  export KERNELS_CACHE="$SCRIPT_DIR/kernels-cache"
+fi
 exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
 """
 
@@ -1759,6 +1830,10 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
 
         # Build venv-based bundle (no PyInstaller)
         bundle_dir = self.create_venv_bundle(venv_dir)
+
+        # macOS/MPS: ship pre-fetched Metal Flash-SDPA kernel artifacts inside the bundle.
+        # Do this before smoke tests so the tests validate the offline path (cache hits).
+        self._prefetch_metal_flash_sdpa_kernel(bundle_dir=bundle_dir, gpu_type=gpu_type)
 
         # IMPORTANT: avoid doubling output size.
         # We build the venv under `<output>/<venv_name>/` and then copy it into the shipped bundle.

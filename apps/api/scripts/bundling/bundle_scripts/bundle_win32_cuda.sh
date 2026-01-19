@@ -5,8 +5,8 @@ if [[ -z "$PY312" ]]; then
 fi
 
 "$PY312" scripts/bundle_python.py \
-    --platform linux \
-    --cuda cuda126 \
+    --platform win32 \
+    --cuda cuda128 \
     --output ./dist \
     --python "$PY312" \
     --tar-zst \
