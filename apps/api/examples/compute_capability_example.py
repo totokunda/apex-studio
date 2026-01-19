@@ -112,8 +112,7 @@ def main():
     print("\nWhen you initialize an engine with a YAML manifest that includes")
     print("compute_requirements, the validation happens automatically.")
     print("\nExample YAML config:")
-    print(
-        """
+    print("""
 spec:
   engine: qwenimage
   model_type: t2i
@@ -130,8 +129,7 @@ spec:
     # allowed_cuda_architectures:
     # - sm_80  # A100
     # - sm_86  # RTX 3090
-"""
-    )
+""")
     print("\nIf requirements aren't met, initialization will fail with a")
     print("detailed error message showing what's required vs. what's available.")
 

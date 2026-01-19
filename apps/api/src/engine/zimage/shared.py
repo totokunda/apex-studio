@@ -161,7 +161,12 @@ class ZImageShared(BaseEngine):
 
         if latents is None:
             latents = torch.randn(
-                shape, generator=torch.Generator(device="cpu").manual_seed(generator.initial_seed()), device="cpu", dtype=dtype
+                shape,
+                generator=torch.Generator(device="cpu").manual_seed(
+                    generator.initial_seed()
+                ),
+                device="cpu",
+                dtype=dtype,
             )
             latents = latents.to(device)
         else:

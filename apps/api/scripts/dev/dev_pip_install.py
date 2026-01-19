@@ -24,7 +24,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 TORCH_INDEX = {
     "cpu": "https://download.pytorch.org/whl/cpu",
     "cu118": "https://download.pytorch.org/whl/cu118",
@@ -183,7 +182,9 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.build_isolation and args.no_build_isolation:
-        raise SystemExit("Choose at most one: --build-isolation or --no-build-isolation")
+        raise SystemExit(
+            "Choose at most one: --build-isolation or --no-build-isolation"
+        )
 
     # Select interpreter (current env or venv)
     if args.venv:
@@ -212,7 +213,9 @@ def main() -> int:
     #   PEP517 build isolation.
     # - On Windows, some sdists (notably `lmdb`/py-lmdb when a wheel isn't available) expect
     #   helper modules (e.g. `patch-ng`) to be available at build time.
-    auto_no_build_isolation = (sys.platform.startswith("linux") or sys.platform == "win32") and not args.build_isolation
+    auto_no_build_isolation = (
+        sys.platform.startswith("linux") or sys.platform == "win32"
+    ) and not args.build_isolation
     use_no_build_isolation = args.no_build_isolation or auto_no_build_isolation
 
     # 0) Install uv first (per request), then use `uv pip` for everything else.
@@ -256,11 +259,14 @@ def main() -> int:
         else:
             _install(py, ["torch", "torchvision", "torchaudio"])
     elif torch_backend == "rocm-win-direct":
-        _install(py, [
-            "torch @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torch-2.7.0a0+git3f903c3-cp312-cp312-win_amd64.whl",
-            "torchvision @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchvision-0.22.0+9eb57cd-cp312-cp312-win_amd64.whl",
-            "torchaudio @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl",
-        ])
+        _install(
+            py,
+            [
+                "torch @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torch-2.7.0a0+git3f903c3-cp312-cp312-win_amd64.whl",
+                "torchvision @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchvision-0.22.0+9eb57cd-cp312-cp312-win_amd64.whl",
+                "torchaudio @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl",
+            ],
+        )
     else:
         index = TORCH_INDEX[torch_backend]
         _install(py, ["--index-url", index, "torch", "torchvision", "torchaudio"])
@@ -283,7 +289,9 @@ def main() -> int:
             _run(
                 [
                     str(py),
-                    str(project_root / "scripts" / "deps" / "maybe_install_nunchaku.py"),
+                    str(
+                        project_root / "scripts" / "deps" / "maybe_install_nunchaku.py"
+                    ),
                     "--python",
                     str(py),
                     "--machine-entry-name",
@@ -320,5 +328,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

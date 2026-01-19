@@ -25,7 +25,6 @@ from src.preprocess.depth_anything_v2.dinov2_layers import (
     NestedTensorBlock as Block,
 )
 
-
 logger = logging.getLogger("dinov2")
 
 

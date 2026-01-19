@@ -20,7 +20,6 @@ from .preprocessor_registry import check_preprocessor_downloaded
 from .ray_resources import get_ray_resources
 from .ray_resources import get_best_gpu
 
-
 router = APIRouter(prefix="/download", tags=["download"])
 
 # In-memory mapping of request keys -> most recently created job_id.

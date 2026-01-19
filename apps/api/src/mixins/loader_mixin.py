@@ -20,12 +20,14 @@ from typing import List
 import tempfile
 from glob import glob
 from src.mixins.download_mixin import DownloadMixin
+
 # Import pretrained config from transformers
 from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
 from src.types import InputImage, InputVideo, InputAudio
 import types
 import numpy as np
 import mmap
+
 
 class _LazyModule(types.ModuleType):
     """
@@ -88,6 +90,7 @@ def _PretrainedConfig():
 
     return PretrainedConfig
 
+
 IMAGE_EXTS = [
     "jpg",
     "jpeg",
@@ -112,9 +115,10 @@ VIDEO_EXTS = [
     "m4v",
 ]
 
+
 class LoaderMixin(DownloadMixin):
     logger: Logger = logger
-    
+
     def _prewarm_model(
         self,
         filepath: str | os.PathLike[str],
@@ -139,7 +143,9 @@ class LoaderMixin(DownloadMixin):
             file_size = os.path.getsize(filepath)
         except OSError as e:
             if hasattr(self, "logger") and self.logger:
-                self.logger.warning(f"Prewarm skipped (stat failed) for {filepath}: {e}")
+                self.logger.warning(
+                    f"Prewarm skipped (stat failed) for {filepath}: {e}"
+                )
             return
 
         if file_size <= 0:
@@ -151,7 +157,9 @@ class LoaderMixin(DownloadMixin):
             with open(filepath, "rb") as f:
                 # Prefer mmap + page-touching (minimal Python memory).
                 try:
-                    with mmap.mmap(f.fileno(), length=target_size, access=mmap.ACCESS_READ) as mm:
+                    with mmap.mmap(
+                        f.fileno(), length=target_size, access=mmap.ACCESS_READ
+                    ) as mm:
                         # Hint the kernel, if supported (Linux/macOS).
                         if hasattr(mm, "madvise"):
                             try:
@@ -171,7 +179,9 @@ class LoaderMixin(DownloadMixin):
                 except (OSError, ValueError, BufferError) as e:
                     # Fall back to streaming reads if mmap isn't possible.
                     if hasattr(self, "logger") and self.logger:
-                        self.logger.debug(f"mmap prewarm failed for {filepath}; falling back to streaming: {e}")
+                        self.logger.debug(
+                            f"mmap prewarm failed for {filepath}; falling back to streaming: {e}"
+                        )
 
                 # Streaming fallback: read through the file (bounded by `target_size`).
                 remaining = target_size
@@ -229,18 +239,13 @@ class LoaderMixin(DownloadMixin):
                     mm_config = resolve_mm_cfg(component)
                 except Exception:
                     mm_config = None
-                    
-        
 
         model_base = component.get("base")
         model_path = component.get("model_path")
-        
-        
 
         if mm_config is not None:
             # Should be cpu often times since the model is loaded on the cpu
             load_device = "cpu"
-
 
         if getter_fn:
             model_class = getter_fn(model_base)
@@ -279,7 +284,7 @@ class LoaderMixin(DownloadMixin):
             converter = get_text_encoder_converter(model_base)
         else:
             converter = NoOpConverter()
-            
+
         if os.path.isdir(model_path) and not config_path:
             # look for a config.json file
             config_path = os.path.join(model_path, "config.json")
@@ -328,7 +333,7 @@ class LoaderMixin(DownloadMixin):
 
         if no_weights:
             return model
-        
+
         model_keys = list(model.state_dict().keys())
 
         files_to_load = []
@@ -423,7 +428,9 @@ class LoaderMixin(DownloadMixin):
                                 continue
                         if total_file_bytes > 0:
                             req = max(
-                                0, int(total_file_bytes * float(vram_mult)) + int(vram_extra)
+                                0,
+                                int(total_file_bytes * float(vram_mult))
+                                + int(vram_extra),
                             )
                             wm.evict_for_vram(
                                 reason="load_model_pre",
@@ -495,8 +502,7 @@ class LoaderMixin(DownloadMixin):
                             gguf.GGMLQuantizationType.F16,
                         }:
                             state_dict[key] = value.to(load_dtype)
-                            
-         
+
                 model.load_state_dict(state_dict, assign=True, strict=False)
                 try:
                     del state_dict
@@ -594,8 +600,6 @@ class LoaderMixin(DownloadMixin):
                 )
                 patched_for_fpscaled = True
             if hasattr(model, "load_state_dict"):
-                
-                
 
                 model.load_state_dict(
                     state_dict, strict=False, assign=True
@@ -755,8 +759,7 @@ class LoaderMixin(DownloadMixin):
             #
             # This is intentionally cheap (type checks + dtype inspection) and only
             # runs when weights are loaded.
- 
-       
+
             if not no_weights:
                 try:
                     import torch.nn as nn
@@ -883,7 +886,9 @@ class LoaderMixin(DownloadMixin):
                     or type(model).__name__
                 )
                 offloading_module = component.get("offloading_module", None)
-                ignore_offloading_modules = component.get("ignore_offloading_modules", None)
+                ignore_offloading_modules = component.get(
+                    "ignore_offloading_modules", None
+                )
                 block_modules = component.get("block_modules", None)
                 mm_config.ignore_modules = ignore_offloading_modules
                 mm_config.block_modules = block_modules
@@ -1436,7 +1441,7 @@ class LoaderMixin(DownloadMixin):
                 audio_array, sr = librosa.load(audio_path, sr=sample_rate)
                 if normalize:
                     audio_array = self._normalize_audio(audio_array, sr)
-            
+
             return audio_array
         finally:
             # Clean up any temporary file we created for remote inputs.

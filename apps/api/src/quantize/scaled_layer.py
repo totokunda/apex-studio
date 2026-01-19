@@ -353,8 +353,7 @@ def restore_fpscaled_parameters(
 
     for name, param in model.named_parameters():
         if (
-            param.dtype
-            in [torch.float8_e4m3fn, torch.float8_e5m2]
+            param.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]
             and ".weight" not in name
             and ".bias" not in name
             and ".scale_weight" not in name
@@ -523,10 +522,7 @@ class FPScaledLayer(nn.Module):
             and scale_weight is not None
         ):
             return fp8_activation_dequant(weight, scale_weight, target_dtype)
-        if (
-            physical_dtype in (torch.uint8)
-            and scale_weight is not None
-        ):
+        if physical_dtype in (torch.uint8) and scale_weight is not None:
             return dequantize_from_fp4(weight, scale_weight, target_dtype)
 
         # Dequantize / cast from FP8 (or any low-precision) to target_dtype.
@@ -1287,7 +1283,11 @@ def patch_fpscaled_model(
                 elif isinstance(child, nn.RMSNorm) or isinstance(child, RMSNorm):
                     # torch.nn.RMSNorm uses `normalized_shape` (tuple-like), not `.dim`
                     new_mod = cls(  # type: ignore[call-arg]
-                        child.normalized_shape if isinstance(child, nn.RMSNorm) else child.dim,
+                        (
+                            child.normalized_shape
+                            if isinstance(child, nn.RMSNorm)
+                            else child.dim
+                        ),
                         eps=child.eps,
                         elementwise_affine=child.elementwise_affine,
                         compute_dtype=default_compute_dtype,

@@ -26,8 +26,10 @@ def load_parametric(ex, n_points_surface, n_points_internal, learning_phase, rng
     ex = ex.load()
 
     # For these datasets we only use the skeleton, not the shape because surface is not accurate.
-    is_shape_valid = not ex.image_path.startswith(('genebody', 'egobody', 'humman'))
-    is_shape_perfect = ex.image_path.startswith(('agora', 'dfaust', 'bedlam', 'spec', 'surreal'))
+    is_shape_valid = not ex.image_path.startswith(("genebody", "egobody", "humman"))
+    is_shape_perfect = ex.image_path.startswith(
+        ("agora", "dfaust", "bedlam", "spec", "surreal")
+    )
 
     # Get the random number generators for the different augmentations to make it reproducibile
     point_sampling_rng = util.new_rng(rng)
@@ -36,11 +38,11 @@ def load_parametric(ex, n_points_surface, n_points_internal, learning_phase, rng
     geom_rng = util.new_rng(rng)
     partial_visi_rng = util.new_rng(rng)
 
-    if 'kid_factor' not in ex.parameters:
-        ex.parameters['kid_factor'] = np.array(0, np.float32)
+    if "kid_factor" not in ex.parameters:
+        ex.parameters["kid_factor"] = np.array(0, np.float32)
 
-    if 'scale' not in ex.parameters:
-        ex.parameters['scale'] = np.array(1, np.float32)
+    if "scale" not in ex.parameters:
+        ex.parameters["scale"] = np.array(1, np.float32)
 
     (
         canonical_joints,
@@ -57,7 +59,7 @@ def load_parametric(ex, n_points_surface, n_points_internal, learning_phase, rng
 
     n_sampled_surf = n_points_surface - (n_joints - n_joints // 2)
     n_sampled_internal = n_points_internal - n_joints // 2
-    if 'all_surf' in FLAGS.custom:
+    if "all_surf" in FLAGS.custom:
         n_sampled_surf += n_sampled_internal
         n_sampled_internal = 0
 
@@ -76,25 +78,25 @@ def load_parametric(ex, n_points_surface, n_points_internal, learning_phase, rng
     imshape = [FLAGS.proc_side, FLAGS.proc_side]
 
     orig_cam = ex.camera
-    if 'surreal' in ex.image_path.lower():
+    if "surreal" in ex.image_path.lower():
         orig_cam.intrinsic_matrix = np.array(
             [[600, 0, 159.5], [0, 600, 119.5], [0, 0, 1]], dtype=np.float32
         )
 
     is_single_person_example = ex.image_path.startswith(
         (
-            'rich',
-            'behave',
-            'surreal',
-            'moyo',
-            'arctic',
-            'intercap',
-            'genebody',
-            'humman',
-            'synbody_humannerf',
-            'thuman2',
-            'zjumocap',
-            'dfaust_render',
+            "rich",
+            "behave",
+            "surreal",
+            "moyo",
+            "arctic",
+            "intercap",
+            "genebody",
+            "humman",
+            "synbody_humannerf",
+            "thuman2",
+            "zjumocap",
+            "dfaust_render",
         )
     )
 
@@ -104,14 +106,19 @@ def load_parametric(ex, n_points_surface, n_points_internal, learning_phase, rng
         and partial_visi_rng.random() < FLAGS.partial_visibility_prob
         and is_single_person_example
     ):
-        bbox = boxlib.random_partial_subbox(boxlib.expand_to_square(bbox), partial_visi_rng)
+        bbox = boxlib.random_partial_subbox(
+            boxlib.expand_to_square(bbox), partial_visi_rng
+        )
 
     center_point = boxlib.center(bbox)
     if (learning_phase == TRAIN and FLAGS.geom_aug) or (
         learning_phase != TRAIN and FLAGS.test_aug and FLAGS.geom_aug
     ):
         center_point += (
-                util.random_uniform_disc(geom_rng) * FLAGS.shift_aug / 100 * np.max(bbox[2:])
+            util.random_uniform_disc(geom_rng)
+            * FLAGS.shift_aug
+            / 100
+            * np.max(bbox[2:])
         )
     bbox = boxlib.box_around(center_point, bbox[2:])
     cam = look_at_box(orig_cam, bbox, imshape)
@@ -138,8 +145,10 @@ def load_parametric(ex, n_points_surface, n_points_internal, learning_phase, rng
         if learning_phase == TRAIN
         else FLAGS.image_interpolation_test
     )
-    antialias = FLAGS.antialias_train if learning_phase == TRAIN else FLAGS.antialias_test
-    interp = getattr(cv2, 'INTER_' + interp_str.upper())
+    antialias = (
+        FLAGS.antialias_train if learning_phase == TRAIN else FLAGS.antialias_test
+    )
+    interp = getattr(cv2, "INTER_" + interp_str.upper())
     im = cameralib.reproject_image(
         im,
         orig_cam,
@@ -151,9 +160,17 @@ def load_parametric(ex, n_points_surface, n_points_internal, learning_phase, rng
     )
 
     # Background augmentation
-    if hasattr(ex, 'mask') and ex.mask is not None:
+    if hasattr(ex, "mask") and ex.mask is not None:
         im = augment_background(
-            ex, im, orig_cam, cam, imshape, learning_phase, antialias, interp, background_rng
+            ex,
+            im,
+            orig_cam,
+            cam,
+            imshape,
+            learning_phase,
+            antialias,
+            interp,
+            background_rng,
         )
 
     # Occlusion and color augmentation
@@ -162,14 +179,16 @@ def load_parametric(ex, n_points_surface, n_points_internal, learning_phase, rng
     )
     im = improc.normalize01(im)
 
-    bm = nlf.mmapped_smpl.get_cached_body_model(ex.parameters['type'], ex.parameters['gender'])
+    bm = nlf.mmapped_smpl.get_cached_body_model(
+        ex.parameters["type"], ex.parameters["gender"]
+    )
     pose_cam, trans_cam = bm.rototranslate(
         cam.R,
-        cam.t / 1000 / ex.parameters['scale'],
-        ex.parameters['pose'],
-        ex.parameters['shape'],
-        ex.parameters['trans'],
-        ex.parameters['kid_factor'],
+        cam.t / 1000 / ex.parameters["scale"],
+        ex.parameters["pose"],
+        ex.parameters["shape"],
+        ex.parameters["trans"],
+        ex.parameters["kid_factor"],
         post_translate=False,
     )
 
@@ -178,15 +197,17 @@ def load_parametric(ex, n_points_surface, n_points_internal, learning_phase, rng
 
     # Fix RICH params, where the expression coeffs have been mixed into the shape coeffs
     shape_betas = (
-        ex.parameters['shape'][:10] if ex.image_path.startswith('rich') else ex.parameters['shape']
+        ex.parameters["shape"][:10]
+        if ex.image_path.startswith("rich")
+        else ex.parameters["shape"]
     )
 
     n_betas = 128
     shape_betas = shape_betas[:n_betas]
     shape_betas = pad(shape_betas, n_betas)
     pose_cam = pad(pose_cam, 55 * 3)
-    kid_factor = np.float32(ex.parameters['kid_factor'])
-    scale = np.float32(ex.parameters['scale'])
+    kid_factor = np.float32(ex.parameters["kid_factor"])
+    scale = np.float32(ex.parameters["scale"])
     point_validity_mask = np.ones([FLAGS.num_points], bool)
     if not is_shape_valid:
         point_validity_mask[:-n_joints] = False
@@ -276,39 +297,51 @@ def sample_points_on_faces(canonical_points_surf_all, faces, n_points_surface, r
     ab = rng.uniform(0, 1, size=(n_points_surface, 2)).astype(np.float32)
     sqrt_a = np.sqrt(ab[:, :1])
     b = ab[:, 1:]
-    barycentric_coords = np.concatenate([(1 - sqrt_a), sqrt_a * (1 - b), sqrt_a * b], axis=1)
+    barycentric_coords = np.concatenate(
+        [(1 - sqrt_a), sqrt_a * (1 - b), sqrt_a * b], axis=1
+    )
     canonical_points_surf = np.einsum(
-        'fpc,fp->fc', canonical_points_surf_all[faces], barycentric_coords
+        "fpc,fp->fc", canonical_points_surf_all[faces], barycentric_coords
     )
     return barycentric_coords, canonical_points_surf
 
 
 def load_arrays(parameters):
-    canonical_points_intern_all = load_array(f'{PROJDIR}/canonical_internal_points_smpl.npy')
+    canonical_points_intern_all = load_array(
+        f"{PROJDIR}/canonical_internal_points_smpl.npy"
+    )
 
-    if parameters['type'] in ['smpl', 'smplh']:
-        faces_all = load_array(f'{PROJDIR}/smpl_faces.npy')
-        face_probs = load_array(f'{PROJDIR}/smpl_face_probs.npy')
-        canonical_points_surf_all = load_array(f'{PROJDIR}/canonical_vertices_smpl.npy')
+    if parameters["type"] in ["smpl", "smplh"]:
+        faces_all = load_array(f"{PROJDIR}/smpl_faces.npy")
+        face_probs = load_array(f"{PROJDIR}/smpl_face_probs.npy")
+        canonical_points_surf_all = load_array(f"{PROJDIR}/canonical_vertices_smpl.npy")
 
-        if parameters['type'] == 'smpl':
-            interp_weights_intern_all = MemMappedCSR(f'{PROJDIR}/internal_regressor_m.csr')
-            canonical_joints = load_array(f'{PROJDIR}/canonical_joints_m.npy')
+        if parameters["type"] == "smpl":
+            interp_weights_intern_all = MemMappedCSR(
+                f"{PROJDIR}/internal_regressor_m.csr"
+            )
+            canonical_joints = load_array(f"{PROJDIR}/canonical_joints_m.npy")
         else:
-            canonical_joints = load_array(f'{PROJDIR}/canonical_joints_smplh_f.npy')
+            canonical_joints = load_array(f"{PROJDIR}/canonical_joints_smplh_f.npy")
             # Add zeros for weighting of the extra joints for SMPL-H, as the regressor
             # was made by natinterp for SMPL
-            interp_weights_intern_all = MemMappedCSR(f'{PROJDIR}/internal_regressor_m.csr')
+            interp_weights_intern_all = MemMappedCSR(
+                f"{PROJDIR}/internal_regressor_m.csr"
+            )
             interp_weights_intern_all.shape = (
                 interp_weights_intern_all.shape[0],
                 interp_weights_intern_all.shape[1] - 24 + 52,
             )
-    elif parameters['type'].startswith('smplx'):
-        faces_all = load_array(f'{PROJDIR}/smplx_faces.npy')
-        canonical_points_surf_all = load_array(f'{PROJDIR}/canonical_vertices_smplx.npy')
-        interp_weights_intern_all = MemMappedCSR(f'{PROJDIR}/internal_regressor_smplx_n.csr')
-        canonical_joints = load_array(f'{PROJDIR}/canonical_joints_smplx_n.npy')
-        face_probs = load_array(f'{PROJDIR}/smplx_face_probs_new.npy')
+    elif parameters["type"].startswith("smplx"):
+        faces_all = load_array(f"{PROJDIR}/smplx_faces.npy")
+        canonical_points_surf_all = load_array(
+            f"{PROJDIR}/canonical_vertices_smplx.npy"
+        )
+        interp_weights_intern_all = MemMappedCSR(
+            f"{PROJDIR}/internal_regressor_smplx_n.csr"
+        )
+        canonical_joints = load_array(f"{PROJDIR}/canonical_joints_smplx_n.npy")
+        face_probs = load_array(f"{PROJDIR}/smplx_face_probs_new.npy")
     else:
         raise ValueError(f'Unknown type {parameters["type"]}')
 
@@ -336,7 +369,7 @@ def random_canonical_points(n_points_surface, n_points_internal, rng):
         face_probs,
         interp_weights_intern_all,
         faces_all,
-    ) = load_arrays(dict(gender='neutral', type='smplx'))
+    ) = load_arrays(dict(gender="neutral", type="smplx"))
     return get_points(
         canonical_points_surf_all,
         canonical_points_intern_all,

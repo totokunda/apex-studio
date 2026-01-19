@@ -26,7 +26,11 @@ from diffusers.utils.accelerate_utils import apply_forward_hook
 from diffusers.models.activations import get_activation
 from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.autoencoders.vae import AutoencoderMixin, DecoderOutput, DiagonalGaussianDistribution
+from diffusers.models.autoencoders.vae import (
+    AutoencoderMixin,
+    DecoderOutput,
+    DiagonalGaussianDistribution,
+)
 from src.attention.functions import attention_register
 from src.vae.tae.model import TAEHV
 from src.mixins.download_mixin import DownloadMixin
@@ -59,7 +63,11 @@ class HunyuanVideo15CausalConv3d(nn.Module):
     ) -> None:
         super().__init__()
 
-        kernel_size = (kernel_size, kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
+        kernel_size = (
+            (kernel_size, kernel_size, kernel_size)
+            if isinstance(kernel_size, int)
+            else kernel_size
+        )
 
         self.pad_mode = pad_mode
         self.time_causal_padding = (
@@ -71,10 +79,14 @@ class HunyuanVideo15CausalConv3d(nn.Module):
             0,
         )
 
-        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias=bias)
+        self.conv = nn.Conv3d(
+            in_channels, out_channels, kernel_size, stride, padding, dilation, bias=bias
+        )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = F.pad(hidden_states, self.time_causal_padding, mode=self.pad_mode)
+        hidden_states = F.pad(
+            hidden_states, self.time_causal_padding, mode=self.pad_mode
+        )
         return self.conv(hidden_states)
 
 
@@ -90,7 +102,13 @@ class HunyuanVideo15RMS_norm(nn.Module):
         bias (bool, optional): Whether to include a learnable bias term. Default is False.
     """
 
-    def __init__(self, dim: int, channel_first: bool = True, images: bool = True, bias: bool = False) -> None:
+    def __init__(
+        self,
+        dim: int,
+        channel_first: bool = True,
+        images: bool = True,
+        bias: bool = False,
+    ) -> None:
         super().__init__()
         broadcastable_dims = (1, 1, 1) if not images else (1, 1)
         shape = (dim, *broadcastable_dims) if channel_first else (dim,)
@@ -101,7 +119,12 @@ class HunyuanVideo15RMS_norm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.0
 
     def forward(self, x):
-        return F.normalize(x, dim=(1 if self.channel_first else -1)) * self.scale * self.gamma + self.bias
+        return (
+            F.normalize(x, dim=(1 if self.channel_first else -1))
+            * self.scale
+            * self.gamma
+            + self.bias
+        )
 
 
 class HunyuanVideo15AttnBlock(nn.Module):
@@ -117,7 +140,9 @@ class HunyuanVideo15AttnBlock(nn.Module):
         self.proj_out = nn.Conv3d(in_channels, in_channels, kernel_size=1)
 
     @staticmethod
-    def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_size: int = None):
+    def prepare_causal_attention_mask(
+        n_frame: int, n_hw: int, dtype, device, batch_size: int = None
+    ):
         """Prepare a causal attention mask for 3D videos.
 
         Args:
@@ -150,29 +175,54 @@ class HunyuanVideo15AttnBlock(nn.Module):
 
         batch_size, channels, frames, height, width = query.shape
 
-        query = query.reshape(batch_size, channels, frames * height * width).permute(0, 2, 1).unsqueeze(1).contiguous()
-        key = key.reshape(batch_size, channels, frames * height * width).permute(0, 2, 1).unsqueeze(1).contiguous()
-        value = value.reshape(batch_size, channels, frames * height * width).permute(0, 2, 1).unsqueeze(1).contiguous()
+        query = (
+            query.reshape(batch_size, channels, frames * height * width)
+            .permute(0, 2, 1)
+            .unsqueeze(1)
+            .contiguous()
+        )
+        key = (
+            key.reshape(batch_size, channels, frames * height * width)
+            .permute(0, 2, 1)
+            .unsqueeze(1)
+            .contiguous()
+        )
+        value = (
+            value.reshape(batch_size, channels, frames * height * width)
+            .permute(0, 2, 1)
+            .unsqueeze(1)
+            .contiguous()
+        )
 
         attention_mask = self.prepare_causal_attention_mask(
             frames, height * width, query.dtype, query.device, batch_size=batch_size
         )
 
-        x = attention_register.call(query, key, value, attn_mask=attention_mask, key="sdpa")
+        x = attention_register.call(
+            query, key, value, attn_mask=attention_mask, key="sdpa"
+        )
 
         # batch_size, 1, frames * height * width, channels
 
-        x = x.squeeze(1).reshape(batch_size, frames, height, width, channels).permute(0, 4, 1, 2, 3)
+        x = (
+            x.squeeze(1)
+            .reshape(batch_size, frames, height, width, channels)
+            .permute(0, 4, 1, 2, 3)
+        )
         x = self.proj_out(x)
 
         return x + identity
 
 
 class HunyuanVideo15Upsample(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, add_temporal_upsample: bool = True):
+    def __init__(
+        self, in_channels: int, out_channels: int, add_temporal_upsample: bool = True
+    ):
         super().__init__()
         factor = 2 * 2 * 2 if add_temporal_upsample else 1 * 2 * 2
-        self.conv = HunyuanVideo15CausalConv3d(in_channels, out_channels * factor, kernel_size=3)
+        self.conv = HunyuanVideo15CausalConv3d(
+            in_channels, out_channels * factor, kernel_size=3
+        )
 
         self.add_temporal_upsample = add_temporal_upsample
         self.repeats = factor * out_channels // in_channels
@@ -225,10 +275,14 @@ class HunyuanVideo15Upsample(nn.Module):
 
 
 class HunyuanVideo15Downsample(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, add_temporal_downsample: bool = True):
+    def __init__(
+        self, in_channels: int, out_channels: int, add_temporal_downsample: bool = True
+    ):
         super().__init__()
         factor = 2 * 2 * 2 if add_temporal_downsample else 1 * 2 * 2
-        self.conv = HunyuanVideo15CausalConv3d(in_channels, out_channels // factor, kernel_size=3)
+        self.conv = HunyuanVideo15CausalConv3d(
+            in_channels, out_channels // factor, kernel_size=3
+        )
 
         self.add_temporal_downsample = add_temporal_downsample
         self.group_size = factor * in_channels // out_channels
@@ -262,7 +316,9 @@ class HunyuanVideo15Downsample(nn.Module):
             x_first = x[:, :, :1, :, :]
             x_first = self._dcae_downsample_rearrange(x_first, r1=1, r2=2, r3=2)
             B, C, T, H, W = x_first.shape
-            x_first = x_first.view(B, h.shape[1], self.group_size // 2, T, H, W).mean(dim=2)
+            x_first = x_first.view(B, h.shape[1], self.group_size // 2, T, H, W).mean(
+                dim=2
+            )
             x_next = x[:, :, 1:, :, :]
             x_next = self._dcae_downsample_rearrange(x_next, r1=r1, r2=2, r3=2)
             B, C, T, H, W = x_next.shape
@@ -272,7 +328,9 @@ class HunyuanVideo15Downsample(nn.Module):
             h = self._dcae_downsample_rearrange(h, r1=r1, r2=2, r3=2)
             shortcut = self._dcae_downsample_rearrange(x, r1=r1, r2=2, r3=2)
             B, C, T, H, W = shortcut.shape
-            shortcut = shortcut.view(B, h.shape[1], self.group_size, T, H, W).mean(dim=2)
+            shortcut = shortcut.view(B, h.shape[1], self.group_size, T, H, W).mean(
+                dim=2
+            )
 
         return h + shortcut
 
@@ -290,14 +348,20 @@ class HunyuanVideo15ResnetBlock(nn.Module):
         self.nonlinearity = get_activation(non_linearity)
 
         self.norm1 = HunyuanVideo15RMS_norm(in_channels, images=False)
-        self.conv1 = HunyuanVideo15CausalConv3d(in_channels, out_channels, kernel_size=3)
+        self.conv1 = HunyuanVideo15CausalConv3d(
+            in_channels, out_channels, kernel_size=3
+        )
 
         self.norm2 = HunyuanVideo15RMS_norm(out_channels, images=False)
-        self.conv2 = HunyuanVideo15CausalConv3d(out_channels, out_channels, kernel_size=3)
+        self.conv2 = HunyuanVideo15CausalConv3d(
+            out_channels, out_channels, kernel_size=3
+        )
 
         self.conv_shortcut = None
         if in_channels != out_channels:
-            self.conv_shortcut = nn.Conv3d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+            self.conv_shortcut = nn.Conv3d(
+                in_channels, out_channels, kernel_size=1, stride=1, padding=0
+            )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         residual = hidden_states
@@ -489,7 +553,9 @@ class HunyuanVideo15Encoder3D(nn.Module):
         self.out_channels = out_channels
         self.group_size = block_out_channels[-1] // self.out_channels
 
-        self.conv_in = HunyuanVideo15CausalConv3d(in_channels, block_out_channels[0], kernel_size=3)
+        self.conv_in = HunyuanVideo15CausalConv3d(
+            in_channels, block_out_channels[0], kernel_size=3
+        )
         self.mid_block = None
         self.down_blocks = nn.ModuleList([])
 
@@ -507,8 +573,14 @@ class HunyuanVideo15Encoder3D(nn.Module):
                 )
                 input_channel = output_channel
             else:
-                add_temporal_downsample = i >= np.log2(spatial_compression_ratio // temporal_compression_ratio)
-                downsample_out_channels = block_out_channels[i + 1] if downsample_match_channel else output_channel
+                add_temporal_downsample = i >= np.log2(
+                    spatial_compression_ratio // temporal_compression_ratio
+                )
+                downsample_out_channels = (
+                    block_out_channels[i + 1]
+                    if downsample_match_channel
+                    else output_channel
+                )
                 down_block = HunyuanVideo15DownBlock3D(
                     num_layers=layers_per_block,
                     in_channels=input_channel,
@@ -524,7 +596,9 @@ class HunyuanVideo15Encoder3D(nn.Module):
 
         self.norm_out = HunyuanVideo15RMS_norm(block_out_channels[-1], images=False)
         self.conv_act = nn.SiLU()
-        self.conv_out = HunyuanVideo15CausalConv3d(block_out_channels[-1], out_channels, kernel_size=3)
+        self.conv_out = HunyuanVideo15CausalConv3d(
+            block_out_channels[-1], out_channels, kernel_size=3
+        )
 
         self.gradient_checkpointing = False
 
@@ -533,9 +607,13 @@ class HunyuanVideo15Encoder3D(nn.Module):
 
         if torch.is_grad_enabled() and self.gradient_checkpointing:
             for down_block in self.down_blocks:
-                hidden_states = self._gradient_checkpointing_func(down_block, hidden_states)
+                hidden_states = self._gradient_checkpointing_func(
+                    down_block, hidden_states
+                )
 
-            hidden_states = self._gradient_checkpointing_func(self.mid_block, hidden_states)
+            hidden_states = self._gradient_checkpointing_func(
+                self.mid_block, hidden_states
+            )
         else:
             for down_block in self.down_blocks:
                 hidden_states = down_block(hidden_states)
@@ -543,7 +621,9 @@ class HunyuanVideo15Encoder3D(nn.Module):
             hidden_states = self.mid_block(hidden_states)
 
         batch_size, _, frame, height, width = hidden_states.shape
-        short_cut = hidden_states.view(batch_size, -1, self.group_size, frame, height, width).mean(dim=2)
+        short_cut = hidden_states.view(
+            batch_size, -1, self.group_size, frame, height, width
+        ).mean(dim=2)
 
         hidden_states = self.norm_out(hidden_states)
         hidden_states = self.conv_act(hidden_states)
@@ -575,7 +655,9 @@ class HunyuanVideo15Decoder3D(nn.Module):
         self.out_channels = out_channels
         self.repeat = block_out_channels[0] // self.in_channels
 
-        self.conv_in = HunyuanVideo15CausalConv3d(self.in_channels, block_out_channels[0], kernel_size=3)
+        self.conv_in = HunyuanVideo15CausalConv3d(
+            self.in_channels, block_out_channels[0], kernel_size=3
+        )
         self.up_blocks = nn.ModuleList([])
 
         # mid
@@ -589,7 +671,11 @@ class HunyuanVideo15Decoder3D(nn.Module):
             add_spatial_upsample = i < np.log2(spatial_compression_ratio)
             add_temporal_upsample = i < np.log2(temporal_compression_ratio)
             if add_spatial_upsample or add_temporal_upsample:
-                upsample_out_channels = block_out_channels[i + 1] if upsample_match_channel else output_channel
+                upsample_out_channels = (
+                    block_out_channels[i + 1]
+                    if upsample_match_channel
+                    else output_channel
+                )
                 up_block = HunyuanVideo15UpBlock3D(
                     num_layers=self.layers_per_block + 1,
                     in_channels=input_channel,
@@ -613,18 +699,26 @@ class HunyuanVideo15Decoder3D(nn.Module):
         # out
         self.norm_out = HunyuanVideo15RMS_norm(block_out_channels[-1], images=False)
         self.conv_act = nn.SiLU()
-        self.conv_out = HunyuanVideo15CausalConv3d(block_out_channels[-1], out_channels, kernel_size=3)
+        self.conv_out = HunyuanVideo15CausalConv3d(
+            block_out_channels[-1], out_channels, kernel_size=3
+        )
 
         self.gradient_checkpointing = False
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.conv_in(hidden_states) + hidden_states.repeat_interleave(repeats=self.repeat, dim=1)
+        hidden_states = self.conv_in(hidden_states) + hidden_states.repeat_interleave(
+            repeats=self.repeat, dim=1
+        )
 
         if torch.is_grad_enabled() and self.gradient_checkpointing:
-            hidden_states = self._gradient_checkpointing_func(self.mid_block, hidden_states)
+            hidden_states = self._gradient_checkpointing_func(
+                self.mid_block, hidden_states
+            )
 
             for up_block in self.up_blocks:
-                hidden_states = self._gradient_checkpointing_func(up_block, hidden_states)
+                hidden_states = self._gradient_checkpointing_func(
+                    up_block, hidden_states
+                )
         else:
             hidden_states = self.mid_block(hidden_states)
 
@@ -704,10 +798,14 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         self.tile_sample_min_width = 128
 
         # The minimal tile height and width in latent space
-        self.tile_latent_min_height = self.tile_sample_min_height // spatial_compression_ratio
-        self.tile_latent_min_width = self.tile_sample_min_width // spatial_compression_ratio
+        self.tile_latent_min_height = (
+            self.tile_sample_min_height // spatial_compression_ratio
+        )
+        self.tile_latent_min_width = (
+            self.tile_sample_min_width // spatial_compression_ratio
+        )
         self.tile_overlap_factor = 0.25
-        
+
         # NOTE: this module is often constructed under `accelerate.init_empty_weights()`
         # (see `LoaderMixin`). In that mode, *all* Parameters are created on the meta
         # device. We must not download/load additional weights inside `__init__`, or
@@ -772,23 +870,29 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
             tile_latent_min_width (`int`, *optional*):
                 The minimum width required for a latent to be separated into tiles across the width dimension.
         """
-    
+
         self.use_tiling = True
-        self.tile_sample_min_height = tile_sample_min_height or self.tile_sample_min_height
+        self.tile_sample_min_height = (
+            tile_sample_min_height or self.tile_sample_min_height
+        )
         self.tile_sample_min_width = tile_sample_min_width or self.tile_sample_min_width
-        self.tile_latent_min_height = tile_latent_min_height or self.tile_latent_min_height
+        self.tile_latent_min_height = (
+            tile_latent_min_height or self.tile_latent_min_height
+        )
         self.tile_latent_min_width = tile_latent_min_width or self.tile_latent_min_width
         self.tile_overlap_factor = tile_overlap_factor or self.tile_overlap_factor
-        
+
         if self.light_vae is None:
             self.use_light_vae = use_light_vae
             if self.use_light_vae:
                 self._ensure_light_vae_loaded()
-        
+
     def _encode(self, x: torch.Tensor) -> torch.Tensor:
         _, _, _, height, width = x.shape
 
-        if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
+        if self.use_tiling and (
+            width > self.tile_sample_min_width or height > self.tile_sample_min_height
+        ):
             return self.tiled_encode(x)
 
         x = self.encoder(x)
@@ -825,7 +929,9 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
     def _decode(self, z: torch.Tensor) -> torch.Tensor:
         _, _, _, height, width = z.shape
 
-        if self.use_tiling and (width > self.tile_latent_min_width or height > self.tile_latent_min_height):
+        if self.use_tiling and (
+            width > self.tile_latent_min_width or height > self.tile_latent_min_height
+        ):
             return self.tiled_decode(z)
 
         dec = self.decoder(z)
@@ -833,7 +939,9 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         return dec
 
     @apply_forward_hook
-    def decode(self, z: torch.Tensor, return_dict: bool = True) -> Union[DecoderOutput, torch.Tensor]:
+    def decode(
+        self, z: torch.Tensor, return_dict: bool = True
+    ) -> Union[DecoderOutput, torch.Tensor]:
         r"""
         Decode a batch of images.
 
@@ -849,7 +957,9 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         """
         if self.use_light_vae:
             self._ensure_light_vae_loaded()
-            return self.light_vae.decode(z, parallel=False, show_progress_bar=True, skip_trim=False)
+            return self.light_vae.decode(
+                z, parallel=False, show_progress_bar=True, skip_trim=False
+            )
         if self.use_slicing and z.shape[0] > 1:
             decoded_slices = [self._decode(z_slice) for z_slice in z.split(1)]
             decoded = torch.cat(decoded_slices)
@@ -861,28 +971,34 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
 
         return DecoderOutput(sample=decoded)
 
-    def blend_v(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
+    def blend_v(
+        self, a: torch.Tensor, b: torch.Tensor, blend_extent: int
+    ) -> torch.Tensor:
         blend_extent = min(a.shape[-2], b.shape[-2], blend_extent)
         for y in range(blend_extent):
-            b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (1 - y / blend_extent) + b[:, :, :, y, :] * (
-                y / blend_extent
-            )
+            b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (
+                1 - y / blend_extent
+            ) + b[:, :, :, y, :] * (y / blend_extent)
         return b
 
-    def blend_h(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
+    def blend_h(
+        self, a: torch.Tensor, b: torch.Tensor, blend_extent: int
+    ) -> torch.Tensor:
         blend_extent = min(a.shape[-1], b.shape[-1], blend_extent)
         for x in range(blend_extent):
-            b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, :, x] * (
-                x / blend_extent
-            )
+            b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (
+                1 - x / blend_extent
+            ) + b[:, :, :, :, x] * (x / blend_extent)
         return b
 
-    def blend_t(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
+    def blend_t(
+        self, a: torch.Tensor, b: torch.Tensor, blend_extent: int
+    ) -> torch.Tensor:
         blend_extent = min(a.shape[-3], b.shape[-3], blend_extent)
         for x in range(blend_extent):
-            b[:, :, x, :, :] = a[:, :, -blend_extent + x, :, :] * (1 - x / blend_extent) + b[:, :, x, :, :] * (
-                x / blend_extent
-            )
+            b[:, :, x, :, :] = a[:, :, -blend_extent + x, :, :] * (
+                1 - x / blend_extent
+            ) + b[:, :, x, :, :] * (x / blend_extent)
         return b
 
     def tiled_encode(self, x: torch.Tensor) -> torch.Tensor:
@@ -897,10 +1013,18 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         """
         _, _, _, height, width = x.shape
 
-        overlap_height = int(self.tile_sample_min_height * (1 - self.tile_overlap_factor))  # 256 * (1 - 0.25) = 192
-        overlap_width = int(self.tile_sample_min_width * (1 - self.tile_overlap_factor))  # 256 * (1 - 0.25) = 192
-        blend_height = int(self.tile_latent_min_height * self.tile_overlap_factor)  # 8 * 0.25 = 2
-        blend_width = int(self.tile_latent_min_width * self.tile_overlap_factor)  # 8 * 0.25 = 2
+        overlap_height = int(
+            self.tile_sample_min_height * (1 - self.tile_overlap_factor)
+        )  # 256 * (1 - 0.25) = 192
+        overlap_width = int(
+            self.tile_sample_min_width * (1 - self.tile_overlap_factor)
+        )  # 256 * (1 - 0.25) = 192
+        blend_height = int(
+            self.tile_latent_min_height * self.tile_overlap_factor
+        )  # 8 * 0.25 = 2
+        blend_width = int(
+            self.tile_latent_min_width * self.tile_overlap_factor
+        )  # 8 * 0.25 = 2
         row_limit_height = self.tile_latent_min_height - blend_height  # 8 - 2 = 6
         row_limit_width = self.tile_latent_min_width - blend_width  # 8 - 2 = 6
 
@@ -950,10 +1074,18 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
 
         _, _, _, height, width = z.shape
 
-        overlap_height = int(self.tile_latent_min_height * (1 - self.tile_overlap_factor))  # 8 * (1 - 0.25) = 6
-        overlap_width = int(self.tile_latent_min_width * (1 - self.tile_overlap_factor))  # 8 * (1 - 0.25) = 6
-        blend_height = int(self.tile_sample_min_height * self.tile_overlap_factor)  # 256 * 0.25 = 64
-        blend_width = int(self.tile_sample_min_width * self.tile_overlap_factor)  # 256 * 0.25 = 64
+        overlap_height = int(
+            self.tile_latent_min_height * (1 - self.tile_overlap_factor)
+        )  # 8 * (1 - 0.25) = 6
+        overlap_width = int(
+            self.tile_latent_min_width * (1 - self.tile_overlap_factor)
+        )  # 8 * (1 - 0.25) = 6
+        blend_height = int(
+            self.tile_sample_min_height * self.tile_overlap_factor
+        )  # 256 * 0.25 = 64
+        blend_width = int(
+            self.tile_sample_min_width * self.tile_overlap_factor
+        )  # 256 * 0.25 = 64
         row_limit_height = self.tile_sample_min_height - blend_height  # 256 - 64 = 192
         row_limit_width = self.tile_sample_min_width - blend_width  # 256 - 64 = 192
 
@@ -1010,7 +1142,6 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
         dec = self.decode(z, return_dict=return_dict)
         return dec
 
-
     def denormalize_latents(self, latents: torch.Tensor):
         if hasattr(self.config, "shift_factor") and self.config.shift_factor:
             latents = latents / self.config.scaling_factor + self.config.shift_factor
@@ -1027,7 +1158,7 @@ class AutoencoderKLHunyuanVideo15(ModelMixin, AutoencoderMixin, ConfigMixin):
 
 
 class AutoencoderKLHunyuanVideo15Light(nn.Module):
-    
+
     def __init__(
         self,
         scaling_factor: float = 1.03682,
@@ -1070,11 +1201,15 @@ class AutoencoderKLHunyuanVideo15Light(nn.Module):
 
     def load_taehv_weights(self, taehv_checkpoint_path: str) -> None:
         download_mixin = DownloadMixin()
-        checkpoint_path = download_mixin.download(taehv_checkpoint_path, get_components_path())
+        checkpoint_path = download_mixin.download(
+            taehv_checkpoint_path, get_components_path()
+        )
 
         ckpt_str = str(checkpoint_path)
         if ckpt_str.lower().endswith(".pth"):
-            state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            state_dict = torch.load(
+                checkpoint_path, map_location="cpu", weights_only=True
+            )
         elif ckpt_str.lower().endswith(".safetensors"):
             from safetensors.torch import load_file
 
@@ -1090,5 +1225,10 @@ class AutoencoderKLHunyuanVideo15Light(nn.Module):
 
     def decode(self, latents, parallel=False, show_progress_bar=True, skip_trim=False):
         latents = latents / self.scaling_factor
-        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel, show_progress_bar).transpose(1, 2).unsqueeze(0)
-    
+        return (
+            self.taehv.decode_video(
+                latents.transpose(1, 2).to(self.dtype), parallel, show_progress_bar
+            )
+            .transpose(1, 2)
+            .unsqueeze(0)
+        )

@@ -3,10 +3,11 @@ import warnings
 import torch
 import torch.backends.mps
 
+
 def _has_mps_bf16() -> bool:
     if not torch.backends.mps.is_available():
         return False
-    
+
     try:
         # Try to create a dummy tensor and perform a simple operation
         device = torch.device("mps")
@@ -15,6 +16,7 @@ def _has_mps_bf16() -> bool:
         return True
     except Exception:
         return False
+
 
 def select_ideal_dtypes(
     *,

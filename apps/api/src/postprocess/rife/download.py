@@ -23,7 +23,9 @@ def download_rife_assets(
     *,
     save_path: str = DEFAULT_POSTPROCESSOR_SAVE_PATH,
     model_url: str = "https://drive.google.com/uc?id=1zlKblGuKNatulJNFf5jdB-emp9AqGK05",
-    progress_callback: Optional[Callable[[int, Optional[int], Optional[str]], None]] = None,
+    progress_callback: Optional[
+        Callable[[int, Optional[int], Optional[str]], None]
+    ] = None,
 ) -> str:
     """
     Download and extract the RIFE assets into `${save_path}/rife/`.
@@ -111,10 +113,10 @@ def _ensure_engine_root_on_syspath() -> None:
     Ensure engine root (parent of 'src') is available for 'src.*' imports.
     """
     try:
-        engine_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        engine_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..")
+        )
         if engine_root not in sys.path:
             sys.path.insert(0, engine_root)
     except Exception:
         pass
-
-

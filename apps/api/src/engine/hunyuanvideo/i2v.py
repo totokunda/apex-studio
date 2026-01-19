@@ -98,7 +98,7 @@ class HunyuanI2VEngine(HunyuanVideoShared):
                 num_videos_per_prompt=num_videos,
                 max_sequence_length=max_sequence_length,
                 **text_encoder_kwargs,
-            ) 
+            )
 
         if offload:
             self._offload("text_encoder")
@@ -144,7 +144,7 @@ class HunyuanI2VEngine(HunyuanVideoShared):
             normalize_latents_dtype=torch.float32,
             dtype=torch.float32,
         )
- 
+
         # Repeat for all frames
         num_frames = self._parse_num_frames(duration, fps)
         num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1

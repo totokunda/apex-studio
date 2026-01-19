@@ -28,7 +28,7 @@ class BodyFitter(nn.Module):
         self.n_betas = self.body_model.shapedirs.shape[2]
         self.enable_kid = enable_kid
 
-        self.default_mesh_tf = nn.Buffer(body_model.single()['vertices'])
+        self.default_mesh_tf = nn.Buffer(body_model.single()["vertices"])
 
         # Template for joints with shape adjustments
         self.J_template_ext = nn.Buffer(
@@ -45,10 +45,14 @@ class BodyFitter(nn.Module):
             i_parent = body_model.kintree_parents[i_joint]
             self.children_and_self[i_parent].append(i_joint)
 
-        self.descendants_and_self = [[i_joint] for i_joint in range(body_model.num_joints)]
+        self.descendants_and_self = [
+            [i_joint] for i_joint in range(body_model.num_joints)
+        ]
         for i_joint in range(body_model.num_joints - 1, 0, -1):
             i_parent = body_model.kintree_parents[i_joint]
-            self.descendants_and_self[i_parent].extend(self.descendants_and_self[i_joint])
+            self.descendants_and_self[i_parent].extend(
+                self.descendants_and_self[i_joint]
+            )
 
     @torch.jit.export
     def fit(
@@ -123,14 +127,16 @@ class BodyFitter(nn.Module):
         """
 
         if requested_keys is None:
-            requested_keys = ['pose_rotvecs']
+            requested_keys = ["pose_rotvecs"]
 
         # Subtract mean first for better numerical stability (and add it back later)
         if target_joints is None:
             target_mean = torch.mean(target_vertices, dim=1)
             target_vertices = target_vertices - target_mean[:, None]
         else:
-            target_mean = torch.mean(torch.cat([target_vertices, target_joints], dim=1), dim=1)
+            target_mean = torch.mean(
+                torch.cat([target_vertices, target_joints], dim=1), dim=1
+            )
             target_vertices = target_vertices - target_mean[:, None]
             target_joints = target_joints - target_mean[:, None]
 
@@ -140,8 +146,8 @@ class BodyFitter(nn.Module):
                 kid_factor=initial_kid_factor,
                 pose_rotvecs=initial_pose_rotvecs,
             )
-            initial_joints = initial_forw['joints']
-            initial_vertices = initial_forw['vertices']
+            initial_joints = initial_forw["joints"]
+            initial_vertices = initial_forw["vertices"]
             glob_rotmats = (
                 self._fit_global_rotations(
                     target_vertices,
@@ -151,7 +157,7 @@ class BodyFitter(nn.Module):
                     vertex_weights,
                     joint_weights,
                 )
-                @ initial_forw['orientations']
+                @ initial_forw["orientations"]
             )
         else:
             initial_joints = self.body_model.J_template[None]
@@ -186,11 +192,13 @@ class BodyFitter(nn.Module):
                 beta_regularizer_reference=initial_shape_betas,
                 kid_regularizer_reference=initial_kid_factor,
                 requested_keys=(
-                    ['vertices', 'joints'] if target_joints is not None else ['vertices']
+                    ["vertices", "joints"]
+                    if target_joints is not None
+                    else ["vertices"]
                 ),
             )
-            ref_verts = result['vertices']
-            ref_joints = result['joints'] if target_joints is not None else None
+            ref_verts = result["vertices"]
+            ref_joints = result["joints"] if target_joints is not None else None
             glob_rotmats = (
                 self._fit_global_rotations(
                     target_vertices,
@@ -220,17 +228,21 @@ class BodyFitter(nn.Module):
             beta_regularizer_reference=initial_shape_betas,
             kid_regularizer_reference=initial_kid_factor,
             requested_keys=(
-                ['vertices', 'joints']
+                ["vertices", "joints"]
                 if target_joints is not None or final_adjust_rots
-                else ['vertices']
+                else ["vertices"]
             ),
         )
-        ref_verts = result['vertices']
-        ref_joints = result['joints'] if target_joints is not None or final_adjust_rots else None
-        ref_shape = result['shape_betas']
-        ref_trans = result['trans']
-        ref_kid_factor = result['kid_factor'] if self.enable_kid else None
-        ref_scale_corr = result['scale_corr'][:, None, None] if scale_target or scale_fit else None
+        ref_verts = result["vertices"]
+        ref_joints = (
+            result["joints"] if target_joints is not None or final_adjust_rots else None
+        )
+        ref_shape = result["shape_betas"]
+        ref_trans = result["trans"]
+        ref_kid_factor = result["kid_factor"] if self.enable_kid else None
+        ref_scale_corr = (
+            result["scale_corr"][:, None, None] if scale_target or scale_fit else None
+        )
 
         if final_adjust_rots:
             assert ref_joints is not None
@@ -238,7 +250,11 @@ class BodyFitter(nn.Module):
                 assert ref_scale_corr is not None
                 glob_rotmats = self._fit_global_rotations_dependent(
                     target_vertices * ref_scale_corr,
-                    target_joints * ref_scale_corr if target_joints is not None else None,
+                    (
+                        target_joints * ref_scale_corr
+                        if target_joints is not None
+                        else None
+                    ),
                     ref_verts,
                     ref_joints,
                     vertex_weights,
@@ -254,8 +270,10 @@ class BodyFitter(nn.Module):
                 glob_rotmats = self._fit_global_rotations_dependent(
                     target_vertices,
                     target_joints,
-                    ref_scale_corr * ref_verts + (1 - ref_scale_corr) * ref_trans.unsqueeze(-2),
-                    ref_scale_corr * ref_joints + (1 - ref_scale_corr) * ref_trans.unsqueeze(-2),
+                    ref_scale_corr * ref_verts
+                    + (1 - ref_scale_corr) * ref_trans.unsqueeze(-2),
+                    ref_scale_corr * ref_joints
+                    + (1 - ref_scale_corr) * ref_trans.unsqueeze(-2),
                     vertex_weights,
                     joint_weights,
                     glob_rotmats,
@@ -280,11 +298,14 @@ class BodyFitter(nn.Module):
                 )
 
         # Add the mean back
-        result['trans'] = ref_trans + target_mean
-        result['orientations'] = glob_rotmats
+        result["trans"] = ref_trans + target_mean
+        result["orientations"] = glob_rotmats
 
         # Provide other requested rotation formats
-        if 'relative_orientations' in requested_keys or 'pose_rotvecs' in requested_keys:
+        if (
+            "relative_orientations" in requested_keys
+            or "pose_rotvecs" in requested_keys
+        ):
             parent_glob_rotmats = torch.cat(
                 [
                     torch.eye(3, device=device).expand(glob_rotmats.shape[0], 1, 3, 3),
@@ -292,20 +313,20 @@ class BodyFitter(nn.Module):
                 ],
                 dim=1,
             )
-            result['relative_orientations'] = torch.matmul(
+            result["relative_orientations"] = torch.matmul(
                 parent_glob_rotmats.transpose(-1, -2), glob_rotmats
             )
 
-        if 'pose_rotvecs' in requested_keys:
-            rel_ori = result['relative_orientations']
+        if "pose_rotvecs" in requested_keys:
+            rel_ori = result["relative_orientations"]
             assert rel_ori is not None
             rotvecs = mat2rotvec(rel_ori)
-            result['pose_rotvecs'] = rotvecs.view(rotvecs.shape[0], -1)
+            result["pose_rotvecs"] = rotvecs.view(rotvecs.shape[0], -1)
 
-        if 'vertices' in result:
-            result.pop('vertices')
-        if 'joints' in result:
-            result.pop('joints')
+        if "vertices" in result:
+            result.pop("vertices")
+        if "joints" in result:
+            result.pop("joints")
         result_non_none: dict[str, torch.Tensor] = {}
         for k, v in result.items():
             if v is not None:
@@ -374,7 +395,9 @@ class BodyFitter(nn.Module):
             target_mean = torch.mean(target_vertices, dim=1)
             target_vertices = target_vertices - target_mean[:, None]
         else:
-            target_mean = torch.mean(torch.cat([target_vertices, target_joints], dim=1), dim=1)
+            target_mean = torch.mean(
+                torch.cat([target_vertices, target_joints], dim=1), dim=1
+            )
             target_vertices = target_vertices - target_mean[:, None]
             target_joints = target_joints - target_mean[:, None]
 
@@ -409,9 +432,9 @@ class BodyFitter(nn.Module):
         # ref_scale_corr = result['scale_corr'][:, None, None] if scale_target or scale_fit else None
 
         # Add the mean back
-        result['trans'] = result['trans'] + target_mean
-        result.pop('vertices')
-        result.pop('joints')
+        result["trans"] = result["trans"] + target_mean
+        result.pop("vertices")
+        result.pop("joints")
         result_non_none: dict[str, torch.Tensor] = {}
         for k, v in result.items():
             if v is not None:
@@ -473,22 +496,26 @@ class BodyFitter(nn.Module):
         """
 
         if requested_keys is None:
-            requested_keys = ['pose_rotvecs']
+            requested_keys = ["pose_rotvecs"]
 
         # Subtract mean first for better numerical stability (and add it back later)
         if target_joints is None:
             target_mean = torch.mean(target_vertices, dim=1)
             target_vertices = target_vertices - target_mean[:, None]
         else:
-            target_mean = torch.mean(torch.cat([target_vertices, target_joints], dim=1), dim=1)
+            target_mean = torch.mean(
+                torch.cat([target_vertices, target_joints], dim=1), dim=1
+            )
             target_vertices = target_vertices - target_mean[:, None]
             target_joints = target_joints - target_mean[:, None]
 
         initial_forw = self.body_model(
-            shape_betas=shape_betas, kid_factor=kid_factor, pose_rotvecs=initial_pose_rotvecs
+            shape_betas=shape_betas,
+            kid_factor=kid_factor,
+            pose_rotvecs=initial_pose_rotvecs,
         )
-        initial_joints = initial_forw['joints']
-        initial_vertices = initial_forw['vertices']
+        initial_joints = initial_forw["joints"]
+        initial_vertices = initial_forw["vertices"]
 
         glob_rotmats = (
             self._fit_global_rotations(
@@ -499,17 +526,19 @@ class BodyFitter(nn.Module):
                 vertex_weights,
                 joint_weights,
             )
-            @ initial_forw['orientations']
+            @ initial_forw["orientations"]
         )
         device = self.body_model.v_template.device
         parent_indices = self.body_model.kintree_parents_tensor[1:].to(device)
 
         for i in range(num_iter - 1):
             result = self.body_model(
-                glob_rotmats=glob_rotmats, shape_betas=shape_betas, kid_factor=kid_factor
+                glob_rotmats=glob_rotmats,
+                shape_betas=shape_betas,
+                kid_factor=kid_factor,
             )
-            ref_verts = result['vertices']
-            ref_joints = result['joints'] if target_joints is not None else None
+            ref_verts = result["vertices"]
+            ref_joints = result["joints"] if target_joints is not None else None
             glob_rotmats = (
                 self._fit_global_rotations(
                     target_vertices,
@@ -525,8 +554,8 @@ class BodyFitter(nn.Module):
         result = self.body_model(
             glob_rotmats=glob_rotmats, shape_betas=shape_betas, kid_factor=kid_factor
         )
-        ref_verts = result['vertices']
-        ref_joints = result['joints']
+        ref_verts = result["vertices"]
+        ref_joints = result["joints"]
         ref_scale_corr, ref_trans = fit_scale_and_translation(
             target_vertices,
             ref_verts,
@@ -569,15 +598,18 @@ class BodyFitter(nn.Module):
                 )
 
         # Add the mean back
-        result['trans'] = ref_trans + target_mean
-        result['orientations'] = glob_rotmats
+        result["trans"] = ref_trans + target_mean
+        result["orientations"] = glob_rotmats
 
         if scale_fit:
             assert ref_scale_corr is not None
-            result['scale_corr'] = ref_scale_corr
+            result["scale_corr"] = ref_scale_corr
 
         # Provide other requested rotation formats
-        if 'relative_orientations' in requested_keys or 'pose_rotvecs' in requested_keys:
+        if (
+            "relative_orientations" in requested_keys
+            or "pose_rotvecs" in requested_keys
+        ):
             parent_glob_rotmats = torch.cat(
                 [
                     torch.eye(3, device=device).expand(glob_rotmats.shape[0], 1, 3, 3),
@@ -585,18 +617,18 @@ class BodyFitter(nn.Module):
                 ],
                 dim=1,
             )
-            result['relative_orientations'] = torch.matmul(
+            result["relative_orientations"] = torch.matmul(
                 parent_glob_rotmats.transpose(-1, -2), glob_rotmats
             )
 
-        if 'pose_rotvecs' in requested_keys:
-            rel_ori = result['relative_orientations']
+        if "pose_rotvecs" in requested_keys:
+            rel_ori = result["relative_orientations"]
             assert rel_ori is not None
             rotvecs = mat2rotvec(rel_ori)
-            result['pose_rotvecs'] = rotvecs.view(rotvecs.shape[0], -1)
+            result["pose_rotvecs"] = rotvecs.view(rotvecs.shape[0], -1)
 
-        result.pop('vertices')
-        result.pop('joints')
+        result.pop("vertices")
+        result.pop("joints")
         result_non_none: dict[str, torch.Tensor] = {}
         for k, v in result.items():
             if v is not None:
@@ -623,7 +655,9 @@ class BodyFitter(nn.Module):
         requested_keys: Optional[list[str]] = None,
     ) -> dict[str, torch.Tensor]:
         if scale_target and scale_fit:
-            raise ValueError("Only one of estim_scale_target and estim_scale_fit can be True")
+            raise ValueError(
+                "Only one of estim_scale_target and estim_scale_fit can be True"
+            )
         if requested_keys is None:
             requested_keys = []
 
@@ -643,26 +677,30 @@ class BodyFitter(nn.Module):
         rel_rotmats = torch.matmul(parent_glob_rot_mats.transpose(-1, -2), glob_rotmats)
 
         glob_positions_ext = [self.J_template_ext[None, 0].expand(batch_size, -1, -1)]
-        for i_joint, i_parent in enumerate(self.body_model.kintree_parents[1:], start=1):
+        for i_joint, i_parent in enumerate(
+            self.body_model.kintree_parents[1:], start=1
+        ):
             glob_positions_ext.append(
                 glob_positions_ext[i_parent]
                 + torch.einsum(
-                    'bCc,cs->bCs',
+                    "bCc,cs->bCs",
                     glob_rotmats[:, i_parent],
                     self.J_template_ext[i_joint] - self.J_template_ext[i_parent],
                 )
             )
         glob_positions_ext = torch.stack(glob_positions_ext, dim=1)
         translations_ext = glob_positions_ext - torch.einsum(
-            'bjCc,jcs->bjCs', glob_rotmats, self.J_template_ext
+            "bjCc,jcs->bjCs", glob_rotmats, self.J_template_ext
         )
 
-        rot_params = rel_rotmats[:, 1:].reshape(-1, (self.body_model.num_joints - 1) * 3 * 3)
+        rot_params = rel_rotmats[:, 1:].reshape(
+            -1, (self.body_model.num_joints - 1) * 3 * 3
+        )
         v_posed = self.body_model.v_template + torch.einsum(
-            'vcp,bp->bvc', self.body_model.posedirs, rot_params
+            "vcp,bp->bvc", self.body_model.posedirs, rot_params
         )
         v_rotated = torch.einsum(
-            'bjCc,vj,bvc->bvC', glob_rotmats, self.body_model.weights, v_posed
+            "bjCc,vj,bvc->bvC", glob_rotmats, self.body_model.weights, v_posed
         )
 
         shapedirs = (
@@ -677,12 +715,12 @@ class BodyFitter(nn.Module):
             else self.body_model.shapedirs
         )
         v_grad_rotated = torch.einsum(
-            'bjCc,lj,lcs->blCs', glob_rotmats, self.body_model.weights, shapedirs
+            "bjCc,lj,lcs->blCs", glob_rotmats, self.body_model.weights, shapedirs
         )
 
         v_rotated_ext = torch.cat([v_rotated.unsqueeze(-1), v_grad_rotated], dim=3)
         v_translations_ext = torch.einsum(
-            'vj,bjcs->bvcs', self.body_model.weights, translations_ext
+            "vj,bjcs->bvcs", self.body_model.weights, translations_ext
         )
         v_posed_posed_ext = v_translations_ext + v_rotated_ext
 
@@ -692,7 +730,9 @@ class BodyFitter(nn.Module):
             jac_pos_both = v_posed_posed_ext[..., 1:]
         else:
             target_both = torch.cat([target_vertices, target_joints], dim=1)
-            pos_both = torch.cat([v_posed_posed_ext[..., 0], glob_positions_ext[..., 0]], dim=1)
+            pos_both = torch.cat(
+                [v_posed_posed_ext[..., 0], glob_positions_ext[..., 0]], dim=1
+            )
             jac_pos_both = torch.cat(
                 [v_posed_posed_ext[..., 1:], glob_positions_ext[..., 1:]], dim=1
             )
@@ -710,7 +750,11 @@ class BodyFitter(nn.Module):
         # A = A - mean_A
         # b = b - mean_b
 
-        if target_joints is not None and vertex_weights is not None and joint_weights is not None:
+        if (
+            target_joints is not None
+            and vertex_weights is not None
+            and joint_weights is not None
+        ):
             weights = torch.cat([vertex_weights, joint_weights], dim=1)
         elif target_joints is None and vertex_weights is not None:
             weights = vertex_weights
@@ -718,7 +762,9 @@ class BodyFitter(nn.Module):
             weights = torch.ones(A.shape[:2], dtype=torch.float32, device=device)
 
         n_params = (
-            self.n_betas + (1 if self.enable_kid else 0) + (1 if scale_target or scale_fit else 0)
+            self.n_betas
+            + (1 if self.enable_kid else 0)
+            + (1 if scale_target or scale_fit else 0)
         )
 
         # print('A shape:', A.shape)
@@ -745,7 +791,9 @@ class BodyFitter(nn.Module):
             ]
         )
         if beta_regularizer_reference is None:
-            l2_regularizer_reference_all = torch.zeros([batch_size, self.n_betas], device=device)
+            l2_regularizer_reference_all = torch.zeros(
+                [batch_size, self.n_betas], device=device
+            )
         else:
             l2_regularizer_reference_all = beta_regularizer_reference
 
@@ -758,7 +806,11 @@ class BodyFitter(nn.Module):
                 [l2_regularizer_all, torch.tensor([kid_regularizer], device=device)]
             )
             l2_regularizer_reference_all = torch.cat(
-                [l2_regularizer_reference_all, kid_regularizer_reference[:, np.newaxis]], dim=1
+                [
+                    l2_regularizer_reference_all,
+                    kid_regularizer_reference[:, np.newaxis],
+                ],
+                dim=1,
             )
 
         if scale_target or scale_fit:
@@ -766,10 +818,16 @@ class BodyFitter(nn.Module):
                 [l2_regularizer_all, torch.tensor([scale_regularizer], device=device)]
             )
             l2_regularizer_reference_all = torch.cat(
-                [l2_regularizer_reference_all, torch.zeros([batch_size, 1], device=device)], dim=1
+                [
+                    l2_regularizer_reference_all,
+                    torch.zeros([batch_size, 1], device=device),
+                ],
+                dim=1,
             )
 
-        l2_regularizer_rhs = (l2_regularizer_all * l2_regularizer_reference_all).unsqueeze(-1)
+        l2_regularizer_rhs = (
+            l2_regularizer_all * l2_regularizer_reference_all
+        ).unsqueeze(-1)
 
         # l2_regularizer_all = torch.diag(l2_regularizer_all)
         # print('Loading penalty matrix')
@@ -790,19 +848,23 @@ class BodyFitter(nn.Module):
                 n_shared=self.n_betas + (1 if self.enable_kid else 0),
             )
         else:
-            x = lstsq(A, b, w, l2_regularizer_all, l2_regularizer_rhs=l2_regularizer_rhs)
+            x = lstsq(
+                A, b, w, l2_regularizer_all, l2_regularizer_rhs=l2_regularizer_rhs
+            )
 
         x = x.squeeze(-1)
-        new_trans = mean_b.squeeze(1) - torch.matmul(mean_A.squeeze(1), x.unsqueeze(-1)).squeeze(
-            -1
-        )
+        new_trans = mean_b.squeeze(1) - torch.matmul(
+            mean_A.squeeze(1), x.unsqueeze(-1)
+        ).squeeze(-1)
         new_shape = x[:, : self.n_betas]
 
-        result = dict(shape_betas=new_shape, trans=new_trans, relative_orientations=rel_rotmats)
+        result = dict(
+            shape_betas=new_shape, trans=new_trans, relative_orientations=rel_rotmats
+        )
 
         if self.enable_kid:
             new_kid_factor = x[:, self.n_betas]
-            result['kid_factor'] = new_kid_factor
+            result["kid_factor"] = new_kid_factor
         else:
             new_kid_factor = None
 
@@ -812,24 +874,24 @@ class BodyFitter(nn.Module):
                 new_shape /= new_scale_corr.unsqueeze(-1)
                 if new_kid_factor is not None:
                     new_kid_factor /= new_scale_corr
-            result['scale_corr'] = new_scale_corr
+            result["scale_corr"] = new_scale_corr
         else:
             new_scale_corr = None
 
         if self.enable_kid and new_kid_factor is not None:
             new_shape = torch.cat([new_shape, new_kid_factor.unsqueeze(-1)], dim=1)
 
-        if 'joints' in requested_keys:
-            result['joints'] = (
+        if "joints" in requested_keys:
+            result["joints"] = (
                 glob_positions_ext[..., 0]
-                + torch.einsum('bvcs,bs->bvc', glob_positions_ext[..., 1:], new_shape)
+                + torch.einsum("bvcs,bs->bvc", glob_positions_ext[..., 1:], new_shape)
                 + new_trans.unsqueeze(1)
             )
 
-        if 'vertices' in requested_keys:
-            result['vertices'] = (
+        if "vertices" in requested_keys:
+            result["vertices"] = (
                 v_posed_posed_ext[..., 0]
-                + torch.einsum('bvcs,bs->bvc', v_posed_posed_ext[..., 1:], new_shape)
+                + torch.einsum("bvcs,bs->bvc", v_posed_posed_ext[..., 1:], new_shape)
                 + new_trans.unsqueeze(1)
             )
         return result
@@ -949,12 +1011,14 @@ class BodyFitter(nn.Module):
         )
 
         j = self.body_model.J_template + torch.einsum(
-            'jcs,...s->...jc',
+            "jcs,...s->...jc",
             self.body_model.J_shapedirs,
             shape_betas[:, : self.n_betas],
         )
         if kid_factor is not None:
-            j += torch.einsum('jc,...->...jc', self.body_model.kid_J_shapedir, kid_factor)
+            j += torch.einsum(
+                "jc,...->...jc", self.body_model.kid_J_shapedir, kid_factor
+            )
 
         if scale_corr is not None:
             j *= scale_corr
@@ -1020,7 +1084,8 @@ class BodyFitter(nn.Module):
                 dim=1,
             )
             estim_points = torch.cat(
-                [(estim_body_part - reference_point), (estim_joints - reference_point)], dim=1
+                [(estim_body_part - reference_point), (estim_joints - reference_point)],
+                dim=1,
             )
             glob_rot = kabsch(estim_points, default_points) @ glob_rots_prev[:, i]
             glob_rots.append(glob_rot)
@@ -1064,14 +1129,20 @@ def fit_scale_and_translation(
     weights_both /= torch.sum(weights_both, dim=1, keepdim=True)
 
     weighted_mean_target = torch.sum(target_both * weights_both.unsqueeze(-1), dim=1)
-    weighted_mean_reference = torch.sum(reference_both * weights_both.unsqueeze(-1), dim=1)
+    weighted_mean_reference = torch.sum(
+        reference_both * weights_both.unsqueeze(-1), dim=1
+    )
 
     if scale:
         target_centered = target_both - weighted_mean_target[:, None]
         reference_centered = reference_both - weighted_mean_reference[:, None]
 
-        ssq_reference = torch.sum(reference_centered**2 * weights_both.unsqueeze(-1), dim=(1, 2))
-        ssq_target = torch.sum(target_centered**2 * weights_both.unsqueeze(-1), dim=(1, 2))
+        ssq_reference = torch.sum(
+            reference_centered**2 * weights_both.unsqueeze(-1), dim=(1, 2)
+        )
+        ssq_target = torch.sum(
+            target_centered**2 * weights_both.unsqueeze(-1), dim=(1, 2)
+        )
 
         # to make it unbiased, we could multiply by (1+2/(target_both.shape[1]))
         # but we are okay with the least squares solution

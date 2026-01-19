@@ -50,7 +50,6 @@ from src.transformer.wan.base.model import (
     _chunked_feed_forward,
 )
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
@@ -766,15 +765,22 @@ class WanS2VTransformerBlock(nn.Module):
         self._ff_chunk_dim: int = 1
 
         # Chunked norms (disabled by default). These mainly mitigate FP32LayerNorm fp32-copy spikes.
-        self._mod_norm_chunk_size: Optional[int] = None  # used for modulated norms (norm1/norm3 + modulation)
-        self._norm_chunk_size: Optional[int] = None  # used for plain norms (e.g., norm2)
+        self._mod_norm_chunk_size: Optional[int] = (
+            None  # used for modulated norms (norm1/norm3 + modulation)
+        )
+        self._norm_chunk_size: Optional[int] = (
+            None  # used for plain norms (e.g., norm2)
+        )
 
     def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
         self._ff_chunk_size = chunk_size
         self._ff_chunk_dim = dim
 
     def set_chunk_norms(
-        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
     ) -> None:
         """
         Enable/disable chunking for norm operations inside the block.
@@ -805,8 +811,10 @@ class WanS2VTransformerBlock(nn.Module):
         hs_dtype = hidden_states.dtype
         # temb: batch_size, 6, 2, inner_dim
         shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-            self.scale_shift_table.unsqueeze(2) + temb.float()
-        ).to(hs_dtype).chunk(6, dim=1)
+            (self.scale_shift_table.unsqueeze(2) + temb.float())
+            .to(hs_dtype)
+            .chunk(6, dim=1)
+        )
         # batch_size, 1, seq_len, inner_dim
         shift_msa = shift_msa.squeeze(1)
         scale_msa = scale_msa.squeeze(1)
@@ -1113,7 +1121,9 @@ class WanS2VTransformer3DModel(
 
         p = self._CHUNKING_PROFILES[profile_name]
         self._chunking_profile_name = profile_name
-        self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+        self._out_modulated_norm_chunk_size = p.get(
+            "out_modulated_norm_chunk_size", None
+        )
 
         # Apply to blocks.
         self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
@@ -1454,7 +1464,9 @@ class WanS2VTransformer3DModel(
         # 6. Output norm, projection & unpatchify
         # Compute scale/shift in fp32 for numerical stability, then cast to hidden_states dtype.
         hs_dtype = hidden_states.dtype
-        shift, scale = (self.scale_shift_table + temb.unsqueeze(1)).to(hs_dtype).chunk(2, dim=1)
+        shift, scale = (
+            (self.scale_shift_table + temb.unsqueeze(1)).to(hs_dtype).chunk(2, dim=1)
+        )
 
         # Move the shift and scale tensors to the same device as hidden_states.
         # When using multi-GPU inference via accelerate these will be on the

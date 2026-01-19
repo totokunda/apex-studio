@@ -57,18 +57,18 @@ def _chunked_modulated_norm(
 ) -> torch.Tensor:
     """
     Modulated layer norm with chunking to reduce peak memory.
-    
+
     FP32LayerNorm internally does inputs.float() which creates a full fp32 copy.
     By processing in chunks along the sequence dimension, we reduce peak memory
     from O(seq_len) to O(chunk_size).
-    
+
     Args:
         norm_layer: The layer norm module (FP32LayerNorm)
         hidden_states: [batch, seq_len, dim] in bf16/fp16
         scale: modulation scale, same shape or broadcastable
         shift: modulation shift, same shape or broadcastable
         chunk_size: max tokens to process at once (tune based on available VRAM)
-    
+
     Returns:
         Modulated normalized hidden_states in original dtype
     """
@@ -84,29 +84,29 @@ def _chunked_modulated_norm(
     if S <= chunk_size:
         out = norm_layer(hidden_states) * (1 + scale) + shift
         return out.to(in_dtype) if out.dtype != in_dtype else out
-    
+
     # Pre-allocate output to avoid holding all chunks in memory
     out = torch.empty_like(hidden_states)
-    
+
     # Check if scale/shift need per-token slicing
     scale_per_token = scale.dim() == 3 and scale.shape[1] == S
-    
+
     for i in range(0, S, chunk_size):
         end = min(i + chunk_size, S)
         hs_chunk = hidden_states[:, i:end, :]
-        
+
         if scale_per_token:
             scale_chunk = scale[:, i:end, :]
             shift_chunk = shift[:, i:end, :]
         else:
             scale_chunk = scale
             shift_chunk = shift
-        
+
         # Norm + modulate directly into pre-allocated output
         normed = norm_layer(hs_chunk)
         out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
         del normed  # Free fp32 intermediate immediately
-    
+
     return out
 
 
@@ -168,6 +168,7 @@ def _chunked_norm(
         end = min(i + chunk_size, S)
         out[:, i:end, :] = norm_layer(hidden_states[:, i:end, :])
     return out
+
 
 # Global variables for EasyCache
 WANTF_GLOBAL_CNT = 0
@@ -396,7 +397,9 @@ def easycache_forward_(
                 else None
             )
             if rotary_emb_chunk_size is None:
-                rotary_emb_chunk_size = getattr(self, "_rotary_emb_chunk_size_default", None)
+                rotary_emb_chunk_size = getattr(
+                    self, "_rotary_emb_chunk_size_default", None
+                )
 
             hidden_states = self._gradient_checkpointing_func(
                 block,
@@ -421,7 +424,9 @@ def easycache_forward_(
                 else None
             )
             if rotary_emb_chunk_size is None:
-                rotary_emb_chunk_size = getattr(self, "_rotary_emb_chunk_size_default", None)
+                rotary_emb_chunk_size = getattr(
+                    self, "_rotary_emb_chunk_size_default", None
+                )
 
             hidden_states = block(
                 hidden_states,
@@ -1048,15 +1053,22 @@ class WanTransformerBlock(nn.Module):
         self._ff_chunk_dim: int = 1
 
         # Chunked norms (disabled by default). These mainly mitigate FP32LayerNorm fp32-copy spikes.
-        self._mod_norm_chunk_size: Optional[int] = None  # used for modulated norms (norm1/norm3 + modulation)
-        self._norm_chunk_size: Optional[int] = None  # used for plain norms (e.g., norm2)
+        self._mod_norm_chunk_size: Optional[int] = (
+            None  # used for modulated norms (norm1/norm3 + modulation)
+        )
+        self._norm_chunk_size: Optional[int] = (
+            None  # used for plain norms (e.g., norm2)
+        )
 
     def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
         self._ff_chunk_size = chunk_size
         self._ff_chunk_dim = dim
 
     def set_chunk_norms(
-        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
     ) -> None:
         """
         Enable/disable chunking for norm operations inside the block.
@@ -1087,8 +1099,10 @@ class WanTransformerBlock(nn.Module):
         if temb.ndim == 4:
             # temb: batch_size, seq_len, 6, inner_dim (wan2.2 ti2v)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-                self.scale_shift_table.unsqueeze(0) + temb.float()
-            ).to(hs_dtype).chunk(6, dim=2)
+                (self.scale_shift_table.unsqueeze(0) + temb.float())
+                .to(hs_dtype)
+                .chunk(6, dim=2)
+            )
             # batch_size, seq_len, 1, inner_dim
             shift_msa = shift_msa.squeeze(2)
             scale_msa = scale_msa.squeeze(2)
@@ -1098,9 +1112,8 @@ class WanTransformerBlock(nn.Module):
             c_gate_msa = c_gate_msa.squeeze(2)
         else:
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-                self.scale_shift_table + temb.float()
-            ).to(hs_dtype).chunk(6, dim=1)
-        
+                (self.scale_shift_table + temb.float()).to(hs_dtype).chunk(6, dim=1)
+            )
 
         # 1. Self-attention
         # Use chunked modulated norm to avoid 2GB fp32 spike inside FP32LayerNorm
@@ -1121,7 +1134,11 @@ class WanTransformerBlock(nn.Module):
                 c_shift_msa_ip,
                 c_scale_msa_ip,
                 c_gate_msa_ip,
-            ) = (self.scale_shift_table + timestep_proj_ip.float()).to(ip_dtype).chunk(6, dim=1)
+            ) = (
+                (self.scale_shift_table + timestep_proj_ip.float())
+                .to(ip_dtype)
+                .chunk(6, dim=1)
+            )
 
             self.attn1.cond_size = hidden_states_ip.shape[1]
 
@@ -1137,13 +1154,12 @@ class WanTransformerBlock(nn.Module):
                 [norm_hidden_states, norm_hidden_states_ip], dim=1
             )
             self.attn1.kv_cache = None
-   
+
         attn_output = self.attn1(
             hidden_states=norm_hidden_states,
             rotary_emb=rotary_emb,
             rotary_emb_chunk_size=rotary_emb_chunk_size,
         )
-        
 
         if hidden_states_ip is not None:
             attn_output, attn_output_ip = (
@@ -1154,7 +1170,9 @@ class WanTransformerBlock(nn.Module):
         hidden_states = hidden_states + attn_output * gate_msa
 
         # 2. Cross-attention
-        norm_hidden_states = _chunked_norm(self.norm2, hidden_states, chunk_size=self._norm_chunk_size)
+        norm_hidden_states = _chunked_norm(
+            self.norm2, hidden_states, chunk_size=self._norm_chunk_size
+        )
 
         attn_output = self.attn2(
             hidden_states=norm_hidden_states,
@@ -1173,7 +1191,6 @@ class WanTransformerBlock(nn.Module):
             c_shift_msa,
             chunk_size=self._mod_norm_chunk_size,
         )
-
 
         if self._ff_chunk_size is not None:
             ff_output = _chunked_feed_forward(
@@ -1418,7 +1435,9 @@ class WanTransformer3DModel(
 
         # Defaults used by forward/easycache_forward_ when `attention_kwargs` doesn't specify a value.
         self._rotary_emb_chunk_size_default = p.get("rotary_emb_chunk_size", None)
-        self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+        self._out_modulated_norm_chunk_size = p.get(
+            "out_modulated_norm_chunk_size", None
+        )
 
         # Apply to blocks.
         self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
@@ -1534,7 +1553,7 @@ class WanTransformer3DModel(
             rotary_emb = torch.concat([rotary_emb, rotary_emb_ip], dim=2)
         else:
             hidden_states_ip = None
-    
+
         hidden_states = self.patch_embedding(hidden_states)
         hidden_states = hidden_states.flatten(2).transpose(1, 2)
 
@@ -1557,7 +1576,7 @@ class WanTransformer3DModel(
             ip_image_hidden_states,
             timestep_seq_len=ts_seq_len,
         )
-     
+
         if ts_seq_len is not None:
             # batch_size, seq_len, 6, inner_dim
             timestep_proj = timestep_proj.unflatten(2, (6, -1))
@@ -1582,7 +1601,9 @@ class WanTransformer3DModel(
                     else None
                 )
                 if rotary_emb_chunk_size is None:
-                    rotary_emb_chunk_size = getattr(self, "_rotary_emb_chunk_size_default", None)
+                    rotary_emb_chunk_size = getattr(
+                        self, "_rotary_emb_chunk_size_default", None
+                    )
 
                 hidden_states = self._gradient_checkpointing_func(
                     block,
@@ -1592,9 +1613,7 @@ class WanTransformer3DModel(
                     rotary_emb,
                     hidden_states_ip,
                     timestep_proj_ip,
-                    rotary_emb_chunk_size=(
-                        rotary_emb_chunk_size
-                    ),
+                    rotary_emb_chunk_size=(rotary_emb_chunk_size),
                 )
                 if hidden_states_ip is not None:
                     hidden_states, hidden_states_ip = (
@@ -1609,7 +1628,9 @@ class WanTransformer3DModel(
                     else None
                 )
                 if rotary_emb_chunk_size is None:
-                    rotary_emb_chunk_size = getattr(self, "_rotary_emb_chunk_size_default", None)
+                    rotary_emb_chunk_size = getattr(
+                        self, "_rotary_emb_chunk_size_default", None
+                    )
 
                 hidden_states = block(
                     hidden_states,
@@ -1618,9 +1639,7 @@ class WanTransformer3DModel(
                     rotary_emb,
                     hidden_states_ip,
                     timestep_proj_ip,
-                    rotary_emb_chunk_size=(
-                        rotary_emb_chunk_size
-                    ),
+                    rotary_emb_chunk_size=(rotary_emb_chunk_size),
                 )
                 if hidden_states_ip is not None:
                     hidden_states, hidden_states_ip = (

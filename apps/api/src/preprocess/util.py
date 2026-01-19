@@ -521,8 +521,6 @@ def custom_hf_download(
         )
         # strip trailing slash from downloaded_path
         downloaded_path = downloaded_path.rstrip("/")
-        
-        
 
     except Exception as e:
         warnings.warn(f"Download via DownloadMixin failed with error: {e}")

@@ -540,7 +540,7 @@ else:
         "OpenVINOExecutionProvider",
         "ROCMExecutionProvider",
         "CPUExecutionProvider",
-        "CoreMLExecutionProvider", 
+        "CoreMLExecutionProvider",
     ]
 
 

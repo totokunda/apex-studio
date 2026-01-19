@@ -86,5 +86,3 @@ class LTX2KeyframeInterpolationEngine(LTX2KeyframeVideoBaseEngine):
             return_latents=return_latents,
             upsample=upsample,
         )
-
-

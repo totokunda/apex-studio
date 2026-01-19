@@ -6,6 +6,7 @@ import re
 from src.converters.base_converter import BaseConverter
 from typing import List
 
+
 class TransformerConverter(BaseConverter):
     pass
 
@@ -34,11 +35,12 @@ class LTX2TransformerConverter(TransformerConverter):
             "av_ca_audio_scale_shift_adaln_single": "av_cross_attn_audio_scale_shift",
             "av_ca_a2v_gate_adaln_single": "av_cross_attn_video_a2v_gate",
             "av_ca_v2a_gate_adaln_single": "av_cross_attn_audio_v2a_gate",
-            "scale_shift_table_a2v_ca_audio" : "audio_a2v_cross_attn_scale_shift_table",
-            "scale_shift_table_a2v_ca_video" : "video_a2v_cross_attn_scale_shift_table",
+            "scale_shift_table_a2v_ca_audio": "audio_a2v_cross_attn_scale_shift_table",
+            "scale_shift_table_a2v_ca_video": "video_a2v_cross_attn_scale_shift_table",
             ".k_norm.": ".norm_k.",
             ".q_norm.": ".norm_q.",
         }
+
 
 class ZImageTransformerConverter(TransformerConverter):
     def __init__(self):
@@ -109,7 +111,11 @@ class ZImageTransformerConverter(TransformerConverter):
             state_dict[src_key.replace(".attention.qkv.", ".attention.to_v.")] = to_v
 
         # Handle the primary fused tensor.
-        if key.endswith(".weight") or key.endswith(".bias") or key.endswith(".scale_weight"):
+        if (
+            key.endswith(".weight")
+            or key.endswith(".bias")
+            or key.endswith(".scale_weight")
+        ):
             t = state_dict.pop(key, None)
             if t is None:
                 return
@@ -117,10 +123,13 @@ class ZImageTransformerConverter(TransformerConverter):
 
             # If we just split a fused weight/bias, also split/replicate a sibling scale_weight if present.
             if key.endswith(".weight") or key.endswith(".bias"):
-                scale_key = key.replace(".weight", ".scale_weight").replace(".bias", ".scale_weight")
+                scale_key = key.replace(".weight", ".scale_weight").replace(
+                    ".bias", ".scale_weight"
+                )
                 if scale_key in state_dict:
                     scale_t = state_dict.pop(scale_key)
                     _write_qkv(scale_key, scale_t)
+
 
 class WanTransformerConverter(TransformerConverter):
     def __init__(self):
@@ -170,7 +179,7 @@ class WanTransformerConverter(TransformerConverter):
             "cross_attn.v_img": "attn2.add_v_proj",
             "cross_attn.norm_k_img": "attn2.norm_added_k",
         }
-        
+
         self.special_keys_map = {}
         # Drop auxiliary diff-bias / diff vectors that don't have a counterpart in the target Wan model.
         # Example keys:
@@ -485,8 +494,6 @@ class SkyReelsTransformerConverter(WanTransformerConverter):
         )
 
 
-
-
 class WanMultiTalkTransformerConverter(TransformerConverter):
     def __init__(self):
         super().__init__()
@@ -724,6 +731,7 @@ class LTXTransformerConverter(TransformerConverter):
 class StepVideoTransformerConverter(TransformerConverter):
     pass
 
+
 class HunyuanVideoTransformerConverter(TransformerConverter):
     def __init__(self):
         self.rename_dict = {
@@ -920,12 +928,12 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
             "vision_in.proj.4": "image_embedder.norm_out",
             "txt_in.c_embedder.linear_1": "context_embedder.time_text_embed.text_embedder.linear_1",
             "txt_in.c_embedder.linear_2": "context_embedder.time_text_embed.text_embedder.linear_2",
-            "txt_in.input_embedder" :"context_embedder.proj_in",
+            "txt_in.input_embedder": "context_embedder.proj_in",
             "txt_in.t_embedder.mlp.0": "context_embedder.time_text_embed.timestep_embedder.linear_1",
             "txt_in.t_embedder.mlp.2": "context_embedder.time_text_embed.timestep_embedder.linear_2",
             "txt_in.individual_token_refiner.blocks.*.adaLN_modulation.1": "context_embedder.token_refiner.refiner_blocks.*.norm_out.linear",
-            "txt_in.individual_token_refiner.blocks.*.norm1":"context_embedder.token_refiner.refiner_blocks.*.norm1",
-            "txt_in.individual_token_refiner.blocks.*.norm2":"context_embedder.token_refiner.refiner_blocks.*.norm2",
+            "txt_in.individual_token_refiner.blocks.*.norm1": "context_embedder.token_refiner.refiner_blocks.*.norm1",
+            "txt_in.individual_token_refiner.blocks.*.norm2": "context_embedder.token_refiner.refiner_blocks.*.norm2",
             "txt_in.individual_token_refiner.blocks.*.mlp.fc1": "context_embedder.token_refiner.refiner_blocks.*.ff.net.0.proj",
             "txt_in.individual_token_refiner.blocks.*.mlp.fc2": "context_embedder.token_refiner.refiner_blocks.*.ff.net.2",
             "txt_in.individual_token_refiner.blocks.*.self_attn_proj": "context_embedder.token_refiner.refiner_blocks.*.attn.to_out.0",
@@ -940,7 +948,7 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
             ".txt_attn_k_norm.": ".attn.norm_added_k.",
             ".txt_attn_q.": ".attn.add_q_proj.",
             ".txt_attn_q_norm.": ".attn.norm_added_q.",
-            ".txt_attn_v.": ".attn.add_v_proj.",  
+            ".txt_attn_v.": ".attn.add_v_proj.",
             ".txt_attn_proj.": ".attn.to_add_out.",
             ".txt_mlp.fc1": ".ff_context.net.0.proj",
             ".txt_mlp.fc2": ".ff_context.net.2",
@@ -964,18 +972,22 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
             "self_attn_qkv": self.remap_self_attn_qkv_,
             "self_attn.qkv": self.remap_self_attn_qkv_,
         }
-        
+
     @staticmethod
     def remap_self_attn_qkv_(key, state_dict):
         """
         txt_in.individual_token_refiner.blocks.*.self_attn_qkv --> context_embedder.token_refiner.refiner_blocks.*.attn.{to_q,to_k,to_v}
         """
+
         # check if lora_down or lora_A is in the key
         def _is_lora_down(k: str) -> bool:
             return (".lora_down" in k) or (".lora_A" in k) or k.endswith(".alpha")
+
         if _is_lora_down(key):
             weight = state_dict.pop(key)
-            key_to_replace = "self_attn_qkv" if "self_attn_qkv" in key else "self_attn.qkv"
+            key_to_replace = (
+                "self_attn_qkv" if "self_attn_qkv" in key else "self_attn.qkv"
+            )
             state_dict[key.replace(key_to_replace, "attn.to_q")] = weight
             state_dict[key.replace(key_to_replace, "attn.to_k")] = weight
             state_dict[key.replace(key_to_replace, "attn.to_v")] = weight
@@ -991,7 +1003,6 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
             state_dict[key.replace("self_attn.qkv", "attn.to_q")] = to_q
             state_dict[key.replace("self_attn.qkv", "attn.to_k")] = to_k
             state_dict[key.replace("self_attn.qkv", "attn.to_v")] = to_v
-    
 
     @staticmethod
     def get_chunk_dim(weight: torch.Tensor):
@@ -1034,8 +1045,7 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
                 state_dict[key.replace(prefix_src, prefix_k)] = w
                 state_dict[key.replace(prefix_src, prefix_v)] = w
                 return
-            
-            
+
             # FP-scaled checkpoints sometimes store scale tensors as scalars (0-d)
             # or as length-1 vectors. Those should be shared across Q/K/V.
             try:
@@ -1055,10 +1065,21 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
                     f"Expected QKV fused dim divisible by 3 for key='{key}', shape={tuple(w.shape)}, chunk_dim={chunk_dim}"
                 )
             to_q, to_k, to_v = ggml_chunk(w, 3, dim=chunk_dim)
-            state_dict[key.replace(prefix_src, prefix_q).replace("double_blocks", "transformer_blocks")] = to_q
-            state_dict[key.replace(prefix_src, prefix_k).replace("double_blocks", "transformer_blocks")] = to_k
-            state_dict[key.replace(prefix_src, prefix_v).replace("double_blocks", "transformer_blocks")] = to_v
-            
+            state_dict[
+                key.replace(prefix_src, prefix_q).replace(
+                    "double_blocks", "transformer_blocks"
+                )
+            ] = to_q
+            state_dict[
+                key.replace(prefix_src, prefix_k).replace(
+                    "double_blocks", "transformer_blocks"
+                )
+            ] = to_k
+            state_dict[
+                key.replace(prefix_src, prefix_v).replace(
+                    "double_blocks", "transformer_blocks"
+                )
+            ] = to_v
 
         if "img_attn_qkv" in key:
             weight = state_dict.pop(key)
@@ -1070,11 +1091,23 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
 
         if "txt_attn_qkv" in key:
             weight = state_dict.pop(key)
-            _write_qkv("txt_attn_qkv", "attn.add_q_proj", "attn.add_k_proj", "attn.add_v_proj", weight)
+            _write_qkv(
+                "txt_attn_qkv",
+                "attn.add_q_proj",
+                "attn.add_k_proj",
+                "attn.add_v_proj",
+                weight,
+            )
 
         if "txt_attn.qkv" in key:
             weight = state_dict.pop(key)
-            _write_qkv("txt_attn.qkv", "attn.add_q_proj", "attn.add_k_proj", "attn.add_v_proj", weight)
+            _write_qkv(
+                "txt_attn.qkv",
+                "attn.add_q_proj",
+                "attn.add_k_proj",
+                "attn.add_v_proj",
+                weight,
+            )
 
 
 class MochiTransformerConverter(TransformerConverter):
@@ -1782,11 +1815,13 @@ class FluxTransformerConverter(TransformerConverter):
 class Chroma1HDTransformerConverter(FluxTransformerConverter):
     def __init__(self):
         super().__init__()
-        self.rename_dict.update({
-            ".in_layer": ".linear_1",
-            ".out_layer": ".linear_2",
-            "norms.*.scale": "norms.*.weight",
-        })
+        self.rename_dict.update(
+            {
+                ".in_layer": ".linear_1",
+                ".out_layer": ".linear_2",
+                "norms.*.scale": "norms.*.weight",
+            }
+        )
 
 
 class NoOpTransformerConverter(TransformerConverter):

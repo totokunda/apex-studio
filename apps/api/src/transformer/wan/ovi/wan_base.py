@@ -367,10 +367,10 @@ class WanT2VCrossAttention(WanSelfAttention):
 
         # compute attention
         x = attention_register.call(
-                q=q.transpose(1, 2),
-                k=k.transpose(1, 2),
-                v=v.transpose(1, 2),
-                k_lens=context_lens,
+            q=q.transpose(1, 2),
+            k=k.transpose(1, 2),
+            v=v.transpose(1, 2),
+            k_lens=context_lens,
         ).transpose(1, 2)
 
         # output
@@ -424,18 +424,18 @@ class WanI2VCrossAttention(WanSelfAttention):
         # [B, L, H/P, C/H]
         # k_img: [B, L, H, C/H]
         img_x = attention_register.call(
-                q=q.transpose(1, 2),
-                k=k_img.transpose(1, 2),
-                v=v_img.transpose(1, 2),
-                k_lens=None,
-            ).transpose(1, 2)
+            q=q.transpose(1, 2),
+            k=k_img.transpose(1, 2),
+            v=v_img.transpose(1, 2),
+            k_lens=None,
+        ).transpose(1, 2)
         # compute attention
         x = attention_register.call(
-                q=q.transpose(1, 2),
-                k=k.transpose(1, 2),
-                v=v.transpose(1, 2),
-                k_lens=context_lens,
-            ).transpose(1, 2)
+            q=q.transpose(1, 2),
+            k=k.transpose(1, 2),
+            v=v.transpose(1, 2),
+            k_lens=context_lens,
+        ).transpose(1, 2)
 
         # output
         x = x.flatten(2)
@@ -532,7 +532,10 @@ class WanAttentionBlock(nn.Module):
         self._ff_chunk_dim = dim
 
     def set_chunk_norms(
-        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
     ) -> None:
         self._mod_norm_chunk_size = modulated_norm_chunk_size
         self._norm_chunk_size = norm_chunk_size
@@ -583,8 +586,11 @@ class WanAttentionBlock(nn.Module):
             assert e_chunked[0].dtype == torch.bfloat16
 
             norm_x = _chunked_modulated_norm(
-                self.norm1, x, e_chunked[1].squeeze(2), e_chunked[0].squeeze(2),
-                chunk_size=self._mod_norm_chunk_size
+                self.norm1,
+                x,
+                e_chunked[1].squeeze(2),
+                e_chunked[0].squeeze(2),
+                chunk_size=self._mod_norm_chunk_size,
             )
             y = self.self_attn(norm_x.bfloat16(), seq_lens, grid_sizes, freqs)
             with amp.autocast("cuda", dtype=torch.bfloat16):
@@ -602,29 +608,29 @@ class WanAttentionBlock(nn.Module):
             if hasattr(self.cross_attn, "k_img"):
                 q, k, v, k_img, v_img = self.cross_attn.qkv_fn(
                     _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
-                    context
+                    context,
                 )
             else:
                 q, k, v = self.cross_attn.qkv_fn(
                     _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
-                    context
+                    context,
                 )
                 k_img = v_img = None
 
             attn_out = attention_register.call(
-                    q=q.transpose(1, 2),
-                    k=k.transpose(1, 2),
-                    v=v.transpose(1, 2),
-                    k_lens=context_lens,
-                ).transpose(1, 2)
+                q=q.transpose(1, 2),
+                k=k.transpose(1, 2),
+                v=v.transpose(1, 2),
+                k_lens=context_lens,
+            ).transpose(1, 2)
 
             if k_img is not None:
                 img_attn = attention_register.call(
-                        q=q.transpose(1, 2),
-                        k=k_img.transpose(1, 2),
-                        v=v_img.transpose(1, 2),
-                        k_lens=None,
-                    ).transpose(1, 2)
+                    q=q.transpose(1, 2),
+                    k=k_img.transpose(1, 2),
+                    v=v_img.transpose(1, 2),
+                    k_lens=None,
+                ).transpose(1, 2)
                 attn_out = attn_out + img_attn
 
             # Fusion cross-attention with target modality
@@ -638,19 +644,22 @@ class WanAttentionBlock(nn.Module):
             k_target_rope = rope_apply(k_target, target_grid_sizes, target_freqs)
 
             target_attn = attention_register.call(
-                    q=q_rope.transpose(1, 2),
-                    k=k_target_rope.transpose(1, 2),
-                    v=v_target.transpose(1, 2),
-                    k_lens=target_seq_lens,
-                ).transpose(1, 2)
+                q=q_rope.transpose(1, 2),
+                k=k_target_rope.transpose(1, 2),
+                v=v_target.transpose(1, 2),
+                k_lens=target_seq_lens,
+            ).transpose(1, 2)
 
             combined_attn = (attn_out + target_attn).flatten(2)
             x = x + self.cross_attn.o(combined_attn)
 
             # FFN
             ffn_x = _chunked_modulated_norm(
-                self.norm2, x, e_chunked[4].squeeze(2), e_chunked[3].squeeze(2),
-                chunk_size=self._mod_norm_chunk_size
+                self.norm2,
+                x,
+                e_chunked[4].squeeze(2),
+                e_chunked[3].squeeze(2),
+                chunk_size=self._mod_norm_chunk_size,
             )
             if self._ff_chunk_size is not None:
                 y = _chunked_feed_forward(
@@ -674,7 +683,11 @@ class WanAttentionBlock(nn.Module):
 
             # self-attention with chunked modulated norm
             norm_x = _chunked_modulated_norm(
-                self.norm1, x, e[1].squeeze(2), e[0].squeeze(2), chunk_size=self._mod_norm_chunk_size
+                self.norm1,
+                x,
+                e[1].squeeze(2),
+                e[0].squeeze(2),
+                chunk_size=self._mod_norm_chunk_size,
             )
             y = self.self_attn(norm_x.bfloat16(), seq_lens, grid_sizes, freqs)
             with amp.autocast("cuda", dtype=torch.bfloat16):
@@ -687,7 +700,11 @@ class WanAttentionBlock(nn.Module):
                 context_lens,
             )
             ffn_x = _chunked_modulated_norm(
-                self.norm2, x, e[4].squeeze(2), e[3].squeeze(2), chunk_size=self._mod_norm_chunk_size
+                self.norm2,
+                x,
+                e[4].squeeze(2),
+                e[3].squeeze(2),
+                chunk_size=self._mod_norm_chunk_size,
             )
             if self._ff_chunk_size is not None:
                 y = _chunked_feed_forward(
@@ -735,7 +752,11 @@ class Head(nn.Module):
                 2, dim=2
             )  # 1 1 2 D, B L 1 D -> B L 2 D -> 2 * (B L 1 D)
             norm_x = _chunked_modulated_norm(
-                self.norm, x, e[1].squeeze(2), e[0].squeeze(2), chunk_size=self._mod_norm_chunk_size
+                self.norm,
+                x,
+                e[1].squeeze(2),
+                e[0].squeeze(2),
+                chunk_size=self._mod_norm_chunk_size,
             )
             x = self.head(norm_x)
         return x
@@ -991,7 +1012,9 @@ class WanModel(ModelMixin, ConfigMixin):
 
         p = self._CHUNKING_PROFILES[profile_name]
         self._chunking_profile_name = profile_name
-        self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+        self._out_modulated_norm_chunk_size = p.get(
+            "out_modulated_norm_chunk_size", None
+        )
 
         self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
         for block in self.blocks:

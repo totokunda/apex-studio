@@ -3,6 +3,7 @@ from src.converters.utils import update_state_dict_
 from src.converters.transformer_converters import TransformerConverter
 from typing import List
 
+
 class VAEConverter(TransformerConverter):
     pass
 
@@ -179,5 +180,3 @@ class TinyWANVAEConverter(VAEConverter):
             "^decoder\.": "taehv.decoder.",
         }
         self.special_keys_map = {}
-
-

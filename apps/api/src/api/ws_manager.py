@@ -111,7 +111,9 @@ class RayWebSocketBridge:
         self._max_pending_per_job = int(
             os.environ.get("RAY_WS_MAX_PENDING_UPDATES_PER_JOB", "500")
         )
-        self._max_message_chars = int(os.environ.get("RAY_WS_MAX_MESSAGE_CHARS", "4096"))
+        self._max_message_chars = int(
+            os.environ.get("RAY_WS_MAX_MESSAGE_CHARS", "4096")
+        )
         self._max_metadata_chars = int(
             os.environ.get("RAY_WS_MAX_METADATA_CHARS", "20000")
         )
@@ -171,7 +173,9 @@ class RayWebSocketBridge:
                 if i >= 200:
                     out_list.append("__truncated__")
                     break
-                out_list.append(self._sanitize(item, depth=depth + 1, max_depth=max_depth))
+                out_list.append(
+                    self._sanitize(item, depth=depth + 1, max_depth=max_depth)
+                )
             return out_list
 
         # Numpy / torch tensors: represent compactly without importing heavy deps.
@@ -202,7 +206,15 @@ class RayWebSocketBridge:
                 return safe
             # If too big, keep only a few common keys and a note
             keep = {}
-            for k in ("status", "preview_path", "type", "index", "stage", "input_id", "error"):
+            for k in (
+                "status",
+                "preview_path",
+                "type",
+                "index",
+                "stage",
+                "input_id",
+                "error",
+            ):
                 if k in safe:
                     keep[k] = safe[k]
             keep["__metadata_truncated__"] = True
@@ -236,17 +248,26 @@ class RayWebSocketBridge:
         update = {
             "progress": progress,
             "message": safe_message,
-            "status": status if isinstance(status, (str, int, float, bool)) else str(status),
+            "status": (
+                status if isinstance(status, (str, int, float, bool)) else str(status)
+            ),
             "metadata": safe_metadata,
         }
 
         q = self.updates[job_id]
         # Coalesce noisy progress updates (keep latest), but preserve preview/error updates.
-        is_preview = isinstance(safe_metadata, dict) and ("preview_path" in safe_metadata)
+        is_preview = isinstance(safe_metadata, dict) and (
+            "preview_path" in safe_metadata
+        )
         is_error = isinstance(safe_metadata, dict) and (
             safe_metadata.get("status") == "error" or "error" in safe_metadata
         )
-        if q and not is_preview and not is_error and update.get("status") == "processing":
+        if (
+            q
+            and not is_preview
+            and not is_error
+            and update.get("status") == "processing"
+        ):
             try:
                 q[-1] = update
             except Exception:

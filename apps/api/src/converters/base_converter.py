@@ -67,7 +67,9 @@ class BaseConverter:
         return False
 
     @classmethod
-    def _model_key_overlap_score(cls, keys: Iterable[str], model_keys: List[str]) -> int:
+    def _model_key_overlap_score(
+        cls, keys: Iterable[str], model_keys: List[str]
+    ) -> int:
         """
         Count how many keys appear to correspond to `model_keys`, allowing:
         - exact matches
@@ -89,7 +91,9 @@ class BaseConverter:
         return score
 
     @staticmethod
-    def _common_prefix_token_candidates(keys: List[str], max_tokens: int = 8) -> List[str]:
+    def _common_prefix_token_candidates(
+        keys: List[str], max_tokens: int = 8
+    ) -> List[str]:
         """
         Generate dotted-prefix candidates from the unanimous common token prefix of `keys`.
 
@@ -308,7 +312,9 @@ class BaseConverter:
         # Prefer dotted/underscored fragments; otherwise require sufficient length.
         return ("." in s) or ("_" in s) or (len(s) >= 8)
 
-    def _already_converted(self, state_dict: Dict[str, Any], model_keys: List[str] = None) -> bool:
+    def _already_converted(
+        self, state_dict: Dict[str, Any], model_keys: List[str] = None
+    ) -> bool:
         """
         Best-effort heuristic to detect whether `state_dict` appears to already be in
         the *target* key format for this converter.
@@ -318,7 +324,7 @@ class BaseConverter:
         - Requires *absence* of source markers that strongly suggest an unconverted ckpt
         - Refuses to early-exit if we'd otherwise drop keys via pre/special handlers
         """
-        
+
         if not state_dict:
             return True
 
@@ -644,15 +650,13 @@ class BaseConverter:
             new_key = self._apply_rename_dict(key)
             update_state_dict_(state_dict, key, new_key)
 
-
         for key in list(state_dict.keys()):
             for special_key, handler_fn_inplace in self.special_keys_map.items():
                 if special_key not in key:
                     continue
-                
+
                 handler_fn_inplace(key, state_dict)
-                
-        
+
         self._strip_known_prefixes_inplace(state_dict, model_keys=model_keys)
 
         return state_dict

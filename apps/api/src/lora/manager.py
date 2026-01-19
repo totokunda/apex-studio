@@ -3,9 +3,7 @@ import re
 import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-from src.converters.convert import (
-    get_transformer_converter_by_model_name
-)
+from src.converters.convert import get_transformer_converter_by_model_name
 from src.lora.lora_converter import LoraConverter
 import torch
 from loguru import logger
@@ -142,9 +140,17 @@ class LoraManager(DownloadMixin):
             resource_type=str(resource_type).strip().lower(),
             source=str(source).strip().lower(),
             rid=rid,
-            version=version.strip() if isinstance(version, str) and version.strip() else None,
+            version=(
+                version.strip()
+                if isinstance(version, str) and version.strip()
+                else None
+            ),
             layer=layer.strip() if isinstance(layer, str) and layer.strip() else None,
-            format=urn_format.strip().lower() if isinstance(urn_format, str) and urn_format.strip() else None,
+            format=(
+                urn_format.strip().lower()
+                if isinstance(urn_format, str) and urn_format.strip()
+                else None
+            ),
         )
 
     def resolve(
@@ -193,7 +199,11 @@ class LoraManager(DownloadMixin):
                 # it's commonly an HTML/error page. Delete it so retries don't get stuck
                 # skipping a bad cached artifact.
                 try:
-                    if not paths and os.path.isfile(local_path) and not self._is_lora_file(local_path):
+                    if (
+                        not paths
+                        and os.path.isfile(local_path)
+                        and not self._is_lora_file(local_path)
+                    ):
                         try:
                             os.remove(local_path)
                         except FileNotFoundError:
@@ -254,7 +264,11 @@ class LoraManager(DownloadMixin):
                 )
             paths = self._collect_lora_files(local_path)
             try:
-                if not paths and os.path.isfile(local_path) and not self._is_lora_file(local_path):
+                if (
+                    not paths
+                    and os.path.isfile(local_path)
+                    and not self._is_lora_file(local_path)
+                ):
                     try:
                         os.remove(local_path)
                     except FileNotFoundError:
@@ -277,7 +291,11 @@ class LoraManager(DownloadMixin):
         )
         paths = self._collect_lora_files(local_path)
         try:
-            if not paths and os.path.isfile(local_path) and not self._is_lora_file(local_path):
+            if (
+                not paths
+                and os.path.isfile(local_path)
+                and not self._is_lora_file(local_path)
+            ):
                 try:
                     os.remove(local_path)
                 except FileNotFoundError:
@@ -524,8 +542,6 @@ class LoraManager(DownloadMixin):
                     local_path_state_dict = self.maybe_convert_state_dict(
                         local_path, class_name, model_keys
                     )
-                    
-
 
                     # Normalize keys that include an embedded adapter name, e.g.:
                     # "vace_blocks.0.attn2.to_k.lora_B.default.weight"
@@ -534,7 +550,6 @@ class LoraManager(DownloadMixin):
                     local_path_state_dict = self._strip_adapter_name_from_keys(
                         local_path_state_dict
                     )
-
 
                     # Embedding LoRA uses lora_embedding_* keys (no ".weight") and swaps A/B roles.
                     local_path_state_dict = remap_embedding_lora_keys(
@@ -548,11 +563,10 @@ class LoraManager(DownloadMixin):
                     metadata = self._build_lora_config_metadata_from_state_dict(
                         local_path_state_dict
                     )
-                    
+
                     if metadata is not None and prefix is not None:
                         # diffusers filters metadata keys by prefix and strips it, so prefix these keys to keep them.
                         metadata = {f"{prefix}.{k}": v for k, v in metadata.items()}
-
 
                     model.load_lora_adapter(
                         local_path_state_dict,
@@ -587,17 +601,19 @@ class LoraManager(DownloadMixin):
 
         return loaded_resolved
 
-    def maybe_convert_state_dict(self, local_path: str, model_name: str, model_keys: List[str] = None):
+    def maybe_convert_state_dict(
+        self, local_path: str, model_name: str, model_keys: List[str] = None
+    ):
         state_dict = self.load_file(local_path)
         converter = get_transformer_converter_by_model_name(model_name)
         lora_converter = LoraConverter()
         lora_converter.convert(state_dict, model_keys)
- 
+
         if converter is not None:
             converter.convert(state_dict, model_keys)
-        
+
         lora_converter._strip_known_prefixes_inplace(state_dict, model_keys=model_keys)
-        
+
         return state_dict
 
     def _format_to_extension(self, format: str) -> str:
@@ -659,9 +675,7 @@ class LoraManager(DownloadMixin):
             if fmt in ("safetensors", "pt"):
                 url_params["type"] = "Model"
                 url_params["format"] = (
-                    "SafeTensor"
-                    if fmt == "safetensors"
-                    else "PickleTensor"
+                    "SafeTensor" if fmt == "safetensors" else "PickleTensor"
                 )
             api_key = os.getenv("CIVITAI_API_KEY", None)
             if api_key:
@@ -694,7 +708,9 @@ class LoraManager(DownloadMixin):
         if "@" in model_id:
             model_id, version_id = model_id.split("@", 1)
             model_id = model_id.strip()
-            version_id = version_id.strip() if version_id and version_id.strip() else None
+            version_id = (
+                version_id.strip() if version_id and version_id.strip() else None
+            )
 
         meta_url = f"https://civitai.com/api/v1/models/{model_id}"
         # Metadata fetch is typically small; no need to wire byte-level progress here.
@@ -740,7 +756,9 @@ class LoraManager(DownloadMixin):
         for f in files:
             fname = f.get("name") or ""
             meta_fmt = (f.get("metadata", {}) or {}).get("format", "")
-            meta_fmt = self._format_to_extension(str(meta_fmt).lower()) if meta_fmt else None
+            meta_fmt = (
+                self._format_to_extension(str(meta_fmt).lower()) if meta_fmt else None
+            )
             ext = meta_fmt or _file_ext(fname)
             if ext:
                 available_exts.append(ext)

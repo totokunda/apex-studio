@@ -117,19 +117,17 @@ class ZImageT2IEngine(ZImageShared):
                 progress_callback=encode_progress_callback,
             )
             safe_emit_progress(progress_callback, 0.18, "Prompts ready")
-            
-        
+
         if offload:
             self._offload("text_encoder")
             safe_emit_progress(progress_callback, 0.20, "Text encoder offloaded")
-            
-        
+
         if not self.transformer:
             safe_emit_progress(progress_callback, 0.21, "Loading transformer")
             self.load_component_by_type("transformer")
             safe_emit_progress(progress_callback, 0.23, "Transformer loaded")
             safe_emit_progress(progress_callback, 0.24, "Moving transformer to device")
-            
+
         self.to_device(self.transformer)
         safe_emit_progress(progress_callback, 0.25, "Transformer on device")
 
@@ -148,7 +146,7 @@ class ZImageT2IEngine(ZImageShared):
             generator,
             latents,
         )
-  
+
         safe_emit_progress(progress_callback, 0.32, "Initialized latent noise")
 
         # Repeat prompt_embeds for num_images_per_prompt
@@ -203,10 +201,9 @@ class ZImageT2IEngine(ZImageShared):
         self._num_timesteps = len(timesteps)
 
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.40, 0.92)
-        
+
         # get the model dtype
         model_dtype = self.transformer.dtype
-        
 
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -253,8 +250,6 @@ class ZImageT2IEngine(ZImageShared):
                     prompt_embeds_model_input,
                     return_dict=False,
                 )[0]
-                
-           
 
                 if apply_cfg:
                     # Perform CFG
@@ -293,7 +288,7 @@ class ZImageT2IEngine(ZImageShared):
                     noise_pred.to(torch.float32), t, latents, return_dict=False
                 )[0]
                 assert latents.dtype == torch.float32
-                
+
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or (
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
@@ -308,7 +303,7 @@ class ZImageT2IEngine(ZImageShared):
                         )
                     except Exception:
                         pass
-        
+
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")
 
         if offload:

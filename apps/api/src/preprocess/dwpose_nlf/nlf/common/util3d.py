@@ -1,4 +1,5 @@
 import numpy as np
+
 # noinspection PyUnresolvedReferences
 from mpl_toolkits.mplot3d import Axes3D
 
@@ -6,8 +7,14 @@ from nlf.common import procrustes
 from simplepyutils import logger
 
 
-def rigid_align(coords_pred, coords_true, *, joint_validity_mask=None, scale_align=False,
-                reflection_align=False):
+def rigid_align(
+    coords_pred,
+    coords_true,
+    *,
+    joint_validity_mask=None,
+    scale_align=False,
+    reflection_align=False
+):
     """Returns the predicted coordinates after rigid alignment to the ground truth."""
 
     if joint_validity_mask is None:
@@ -17,29 +24,44 @@ def rigid_align(coords_pred, coords_true, *, joint_validity_mask=None, scale_ali
     valid_coords_true = coords_true[joint_validity_mask]
     try:
         d, Z, tform = procrustes.procrustes(
-            valid_coords_true, valid_coords_pred, scaling=scale_align,
-            reflection='best' if reflection_align else False)
+            valid_coords_true,
+            valid_coords_pred,
+            scaling=scale_align,
+            reflection="best" if reflection_align else False,
+        )
     except np.linalg.LinAlgError:
-        logger.error('Cannot do Procrustes alignment, returning original prediction.')
+        logger.error("Cannot do Procrustes alignment, returning original prediction.")
         return coords_pred
 
-    T = tform['rotation']
-    b = tform['scale']
-    c = tform['translation']
+    T = tform["rotation"]
+    b = tform["scale"]
+    c = tform["translation"]
     return b * coords_pred @ T + c
 
 
 def rigid_align_many(
-        coords_pred, coords_true, *, joint_validity_mask=None, scale_align=False,
-        reflection_align=False):
+    coords_pred,
+    coords_true,
+    *,
+    joint_validity_mask=None,
+    scale_align=False,
+    reflection_align=False
+):
     if joint_validity_mask is None:
         joint_validity_mask = np.ones_like(coords_pred[..., 0], dtype=bool)
 
-    return np.stack([
-        rigid_align(p, t, joint_validity_mask=jv, scale_align=scale_align,
-                    reflection_align=reflection_align)
-        for p, t, jv in zip(coords_pred, coords_true, joint_validity_mask)])
-
+    return np.stack(
+        [
+            rigid_align(
+                p,
+                t,
+                joint_validity_mask=jv,
+                scale_align=scale_align,
+                reflection_align=reflection_align,
+            )
+            for p, t, jv in zip(coords_pred, coords_true, joint_validity_mask)
+        ]
+    )
 
 
 def scale_align(poses):

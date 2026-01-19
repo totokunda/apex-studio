@@ -14,22 +14,24 @@ if TYPE_CHECKING:
 
 
 class NLFTrainer(florch.ModelTrainer):
-    def __init__(self, model: 'NLFModel', **kwargs):
+    def __init__(self, model: "NLFModel", **kwargs):
         super().__init__(model, **kwargs)
         self.model: NLFModel
         self.body_models = nn.ModuleDict(
             {
-                f'{n}_{g[0]}': smplfitter.pt.BodyModel(model_name=n, gender=g, num_betas=128)
+                f"{n}_{g[0]}": smplfitter.pt.BodyModel(
+                    model_name=n, gender=g, num_betas=128
+                )
                 for n, g in [
-                    ('smpl', 'female'),
-                    ('smpl', 'male'),
-                    ('smpl', 'neutral'),
-                    ('smplh', 'female'),
-                    ('smplh', 'male'),
-                    ('smplx', 'female'),
-                    ('smplx', 'male'),
-                    ('smplx', 'neutral'),
-                    ('smplxmoyo', 'female'),
+                    ("smpl", "female"),
+                    ("smpl", "male"),
+                    ("smpl", "neutral"),
+                    ("smplh", "female"),
+                    ("smplh", "male"),
+                    ("smplx", "female"),
+                    ("smplx", "male"),
+                    ("smplx", "neutral"),
+                    ("smplxmoyo", "female"),
                 ]
             }
         )
@@ -44,7 +46,8 @@ class NLFTrainer(florch.ModelTrainer):
         # These selectors contain the indices where a certain body model appears in the batch
         # e.g. body_model_selectors['smpl', 'neutral'] == [0, 2, 5, 7, ...]
         body_model_selectors = {
-            k: [i for i, t in enumerate(inps.param.body_model) if t == k] for k in bm_kinds
+            k: [i for i, t in enumerate(inps.param.body_model) if t == k]
+            for k in bm_kinds
         }
         # The permutation is the one needed to sort the batch so that all body models of the same
         # kind are grouped together.
@@ -54,7 +57,9 @@ class NLFTrainer(florch.ModelTrainer):
         # The sizes tensor contains how many of each body model type we have in the batch
         # sizes = [len(body_model_selectors[k]) for k in bm_kinds]
 
-        invperm = list(np.argsort(np.concatenate([body_model_selectors[k] for k in bm_kinds])))
+        invperm = list(
+            np.argsort(np.concatenate([body_model_selectors[k] for k in bm_kinds]))
+        )
 
         # This function is similar to tf.dynamic_partition
         def permute_and_split(x):
@@ -69,20 +74,23 @@ class NLFTrainer(florch.ModelTrainer):
         kid_factor = permute_and_split(inps.param.kid_factor)
         scale = permute_and_split(inps.param.scale)
         interp_weights = {
-            k: [inps.param.interp_weights[i] for i in body_model_selectors[k]] for k in bm_kinds
+            k: [inps.param.interp_weights[i] for i in body_model_selectors[k]]
+            for k in bm_kinds
         }
 
         # Now we determine the GT points for each body model type
         def decode_points_for_body_model(k):
             bm = self.body_models[k]
             # We first forward the corresponding body model to get the vertices and joints
-            result = bm(pose[k][:, : bm.num_joints * 3], shape[k], trans[k], kid_factor[k])
+            result = bm(
+                pose[k][:, : bm.num_joints * 3], shape[k], trans[k], kid_factor[k]
+            )
             # We concatenate the vertices and joints
             # (and scale them, which is not part of the body model definition, but some datasets
             # specify a scale factor for their fits, so we have to use it. AGORA's kid factor
             # is probably a better way.)
             verts_and_joints = (
-                torch.cat([result['vertices'], result['joints']], dim=1)
+                torch.cat([result["vertices"], result["joints"]], dim=1)
                 * scale[k][:, torch.newaxis, torch.newaxis]
             )
 
@@ -102,7 +110,9 @@ class NLFTrainer(florch.ModelTrainer):
         # We now put the GT points of the different body model kinds back together
         # in the original order before we sorted them according to body model type.
         # For this we use the inverse permutation.
-        gt_points = torch.cat([decode_points_for_body_model(k) for k in bm_kinds], dim=0)
+        gt_points = torch.cat(
+            [decode_points_for_body_model(k) for k in bm_kinds], dim=0
+        )
         inps.param.coords3d_true = gt_points[invperm]
 
         # LOOK UP CANONICAL POINTS
@@ -136,7 +146,8 @@ class NLFTrainer(florch.ModelTrainer):
         # For efficient handling, e.g. passing though the backbone network, we have to concat
         # them all.
         inps.image = torch.cat(
-            [inps.param.image, inps.kp3d.image, inps.dense.image, inps.kp2d.image], dim=0
+            [inps.param.image, inps.kp3d.image, inps.dense.image, inps.kp2d.image],
+            dim=0,
         )
         inps.intrinsics = torch.cat(
             [
@@ -182,7 +193,9 @@ class NLFTrainer(florch.ModelTrainer):
             ],
             dim=0,
         )
-        inps.canonical_points_tensor = nested_to_tensor_and_mask(inps.canonical_points)[0]
+        inps.canonical_points_tensor = nested_to_tensor_and_mask(inps.canonical_points)[
+            0
+        ]
 
         inps.coords2d_true = torch.cat(
             [
@@ -228,9 +241,13 @@ class NLFTrainer(florch.ModelTrainer):
 
     @torch.jit.export
     def forward_train(self, inps):
-        preds = EasyDict(param=EasyDict(), kp3d=EasyDict(), dense=EasyDict(), kp2d=EasyDict())
+        preds = EasyDict(
+            param=EasyDict(), kp3d=EasyDict(), dense=EasyDict(), kp2d=EasyDict()
+        )
 
-        x_mirror_tensor = torch.tensor([-1, 1, 1], dtype=torch.float32, device=inps.image.device)
+        x_mirror_tensor = torch.tensor(
+            [-1, 1, 1], dtype=torch.float32, device=inps.image.device
+        )
 
         def backbone_and_head(image, canonical_points):
             # We perform horizontal flipping augmentation here.
@@ -239,7 +256,9 @@ class NLFTrainer(florch.ModelTrainer):
             # 2) the canonical points' x coord is flipped (canonical_points * [-1, 1, 1]).
             # At the end the predictions will also be flipped back accordingly.
             flip_mask = torch.rand([image.shape[0], 1, 1], device=image.device) > 0.5
-            image = torch.where(flip_mask[..., torch.newaxis], torch.flip(image, dims=[3]), image)
+            image = torch.where(
+                flip_mask[..., torch.newaxis], torch.flip(image, dims=[3]), image
+            )
 
             canonical_points = torch.where(
                 flip_mask,
@@ -248,35 +267,39 @@ class NLFTrainer(florch.ModelTrainer):
             )
 
             dtype = dict(
-                float32=torch.float32,
-                float16=torch.float16,
-                bfloat16=torch.bfloat16
+                float32=torch.float32, float16=torch.float16, bfloat16=torch.bfloat16
             )[FLAGS.dtype]
 
             # Flipped or not, the image is passed through the backbone network.
-            with torch.amp.autocast(device_type='cuda', dtype=dtype):
+            with torch.amp.autocast(device_type="cuda", dtype=dtype):
                 features = self.model.backbone(image.to(dtype=dtype))
-                assert torch.isfinite(features).all(), 'Nonfinite features!'
+                assert torch.isfinite(features).all(), "Nonfinite features!"
                 assert (
                     features.dtype == dtype
-                ), f'Features not {dtype} but {features.dtype}'
+                ), f"Features not {dtype} but {features.dtype}"
                 assert canonical_points.dtype == torch.float32
 
                 # The heatmap head (which contains the localizer field that dynamically constructs
                 # the weights) now outputs the 2D and 3D predictions, as well as the uncertainties.
-                head2d, head3d, uncertainties = self.model.heatmap_head(features, canonical_points)
+                head2d, head3d, uncertainties = self.model.heatmap_head(
+                    features, canonical_points
+                )
 
             # The results need to be flipped back if they were flipped for the input at the start
             # of this function.
             head3d = torch.where(flip_mask, head3d * x_mirror_tensor, head3d)
             head2d = torch.where(
                 flip_mask,
-                torch.cat([FLAGS.proc_side - 1 - head2d[..., :1], head2d[..., 1:]], dim=-1),
+                torch.cat(
+                    [FLAGS.proc_side - 1 - head2d[..., :1], head2d[..., 1:]], dim=-1
+                ),
                 head2d,
             )
             return head2d, head3d, uncertainties
 
-        head2d, head3d, uncertainties = backbone_and_head(inps.image, inps.canonical_points_tensor)
+        head2d, head3d, uncertainties = backbone_and_head(
+            inps.image, inps.canonical_points_tensor
+        )
 
         # Now we perform the reconstruction of the absolute 3D coordinates.
         # We have 2D coords in pixel space and 3D coords at metric scale but up to unknown
@@ -299,11 +322,14 @@ class NLFTrainer(florch.ModelTrainer):
             # then we also pick only those points where the uncertainty is below a certain
             # threshold.
             is_early = torch.tensor(
-                self.adjusted_train_counter < 0.1 * FLAGS.training_steps, device=validity.device
+                self.adjusted_train_counter < 0.1 * FLAGS.training_steps,
+                device=validity.device,
             )
-            validity = torch.logical_and(validity, torch.logical_or(is_early, uncertainties < 0.3))
+            validity = torch.logical_and(
+                validity, torch.logical_or(is_early, uncertainties < 0.3)
+            )
 
-        if 'validrecons' in FLAGS.custom:
+        if "validrecons" in FLAGS.custom:
             validity = torch.logical_and(validity, inps.point_validity_mask)
 
         preds.coords3d_abs = self.reconstruct_absolute(
@@ -324,8 +350,8 @@ class NLFTrainer(florch.ModelTrainer):
             preds.kp2d.coords3d_abs,
         ) = torch.split(preds.coords3d_abs, batch_sizes, dim=0)
 
-        preds.param.uncert, preds.kp3d.uncert, preds.dense.uncert, preds.kp2d.uncert = torch.split(
-            uncertainties, batch_sizes, dim=0
+        preds.param.uncert, preds.kp3d.uncert, preds.dense.uncert, preds.kp2d.uncert = (
+            torch.split(uncertainties, batch_sizes, dim=0)
         )
 
         return preds
@@ -345,7 +371,9 @@ class NLFTrainer(florch.ModelTrainer):
         losses.loss_px_param = losses_parambatch.loss2d
 
         # 3D keypoints
-        losses_kpbatch, losses.loss_kpbatch = self.compute_loss_with_3d_gt(inps.kp3d, preds.kp3d)
+        losses_kpbatch, losses.loss_kpbatch = self.compute_loss_with_3d_gt(
+            inps.kp3d, preds.kp3d
+        )
         losses.loss_abs_kp = losses_kpbatch.loss3d_abs
         losses.loss_rel_kp = losses_kpbatch.loss3d
         losses.loss_px_kp = losses_kpbatch.loss2d
@@ -357,7 +385,9 @@ class NLFTrainer(florch.ModelTrainer):
         losses.loss_2dbatch = self.compute_loss_with_2d_gt(inps.kp2d, preds.kp2d)
 
         # REGULARIZATION
-        losses.eigval_regul = self.model.heatmap_head.weight_field.first_layer_regularization()
+        losses.eigval_regul = (
+            self.model.heatmap_head.weight_field.first_layer_regularization()
+        )
 
         # AGGREGATE
         # The final loss is a weighted sum of the losses computed on the four different
@@ -372,7 +402,7 @@ class NLFTrainer(florch.ModelTrainer):
 
         for name, value in losses.items():
             if not torch.isfinite(value).all():
-                print(f'Nonfinite {name}!, {value}')
+                print(f"Nonfinite {name}!, {value}")
 
         return losses
 
@@ -381,7 +411,9 @@ class NLFTrainer(florch.ModelTrainer):
         losses = EasyDict()
 
         if inps.point_validity is None:
-            inps.point_validity = torch.ones_like(preds.coords3d_abs[..., 0], dtype=torch.bool)
+            inps.point_validity = torch.ones_like(
+                preds.coords3d_abs[..., 0], dtype=torch.bool
+            )
 
         diff = inps.coords3d_true - preds.coords3d_abs
 
@@ -405,7 +437,9 @@ class NLFTrainer(florch.ModelTrainer):
         # Some elements of the batch do not have a root joint, which is marked as -1 as root_index.
         # For these elements we use the mean-relative error.
         center_relative_diff = torch.where(
-            inps.root_index[:, torch.newaxis, torch.newaxis] == -1, meanrel_diff, rootrel_diff
+            inps.root_index[:, torch.newaxis, torch.newaxis] == -1,
+            meanrel_diff,
+            rootrel_diff,
         )
 
         losses.loss3d = ptu.reduce_mean_masked(
@@ -417,7 +451,9 @@ class NLFTrainer(florch.ModelTrainer):
 
         # Since the depth error will naturally scale linearly with distance, we scale the z-error
         # down to the level that we would get if the person was 5 m away.
-        scale_factor_for_far = torch.clamp_max(5.0 / torch.abs(inps.coords3d_true[..., 2:]), 1.0)
+        scale_factor_for_far = torch.clamp_max(
+            5.0 / torch.abs(inps.coords3d_true[..., 2:]), 1.0
+        )
         absdiff_scaled = torch.cat(
             [absdiff[..., :2], absdiff[..., 2:] * scale_factor_for_far], dim=-1
         )
@@ -474,7 +510,7 @@ class NLFTrainer(florch.ModelTrainer):
             inps.coords3d_true[..., 2] > 0.001,
         )
 
-        if 'fovtrueonly' in FLAGS.custom:
+        if "fovtrueonly" in FLAGS.custom:
             is_near_fov = is_near_fov_true
         else:
             is_near_fov = torch.logical_and(is_near_fov_true, is_in_fov_pred)
@@ -511,7 +547,7 @@ class NLFTrainer(florch.ModelTrainer):
             proc_side=FLAGS.proc_side,
         )
 
-        if 'fovtrueonly' in FLAGS.custom:
+        if "fovtrueonly" in FLAGS.custom:
             is_near_fov = is_near_fov_true2d
         else:
             is_near_fov = torch.logical_and(is_near_fov_true2d, is_in_fov_pred2d)
@@ -528,19 +564,23 @@ class NLFTrainer(florch.ModelTrainer):
         if not self.training:
             return metrics_parambatch
 
-        metrics_kp = self.compute_metrics_with_3d_gt(inps.kp3d, preds.kp3d, '_kp')
-        metrics_dense = self.compute_metrics_with_2d_gt(inps.dense, preds.dense, '_dense')
-        metrics_2d = self.compute_metrics_with_2d_gt(inps.kp2d, preds.kp2d, '_2d')
+        metrics_kp = self.compute_metrics_with_3d_gt(inps.kp3d, preds.kp3d, "_kp")
+        metrics_dense = self.compute_metrics_with_2d_gt(
+            inps.dense, preds.dense, "_dense"
+        )
+        metrics_2d = self.compute_metrics_with_2d_gt(inps.kp2d, preds.kp2d, "_2d")
 
-        metrics.update(**metrics_parambatch, **metrics_kp, **metrics_dense, **metrics_2d)
+        metrics.update(
+            **metrics_parambatch, **metrics_kp, **metrics_dense, **metrics_2d
+        )
         return metrics
 
-    def compute_metrics_with_3d_gt(self, inps, preds, suffix: str = ''):
+    def compute_metrics_with_3d_gt(self, inps, preds, suffix: str = ""):
         metrics = EasyDict()
         diff = inps.coords3d_true - preds.coords3d_abs
 
         # ABSOLUTE
-        metrics['mean_error_abs' + suffix] = (
+        metrics["mean_error_abs" + suffix] = (
             ptu.reduce_mean_masked(torch.norm(diff, dim=-1), inps.point_validity) * 1000
         )
 
@@ -551,13 +591,19 @@ class NLFTrainer(florch.ModelTrainer):
             )
         )
         dist = torch.norm(meanrel_absdiff, dim=-1)
-        metrics['mean_error' + suffix] = ptu.reduce_mean_masked(dist, inps.point_validity) * 1000
+        metrics["mean_error" + suffix] = (
+            ptu.reduce_mean_masked(dist, inps.point_validity) * 1000
+        )
 
         # PCK/AUC
         auc_score = ptu.auc(dist, 0.0, 0.1)
-        metrics['auc' + suffix] = ptu.reduce_mean_masked(auc_score, inps.point_validity) * 100
+        metrics["auc" + suffix] = (
+            ptu.reduce_mean_masked(auc_score, inps.point_validity) * 100
+        )
         is_correct = (dist <= 0.1).float()
-        metrics['pck' + suffix] = ptu.reduce_mean_masked(is_correct, inps.point_validity) * 100
+        metrics["pck" + suffix] = (
+            ptu.reduce_mean_masked(is_correct, inps.point_validity) * 100
+        )
 
         # PROCRUSTES
         coords3d_pred_procrustes = ptu3d.rigid_align(
@@ -566,8 +612,10 @@ class NLFTrainer(florch.ModelTrainer):
             joint_validity_mask=inps.point_validity,
             scale_align=True,
         )
-        dist_procrustes = torch.norm(coords3d_pred_procrustes - inps.coords3d_true, dim=-1)
-        metrics['mean_error_procrustes' + suffix] = (
+        dist_procrustes = torch.norm(
+            coords3d_pred_procrustes - inps.coords3d_true, dim=-1
+        )
+        metrics["mean_error_procrustes" + suffix] = (
             ptu.reduce_mean_masked(dist_procrustes, inps.point_validity) * 1000
         )
 
@@ -575,18 +623,20 @@ class NLFTrainer(florch.ModelTrainer):
         coords2d_pred = ptu3d.project_pose(preds.coords3d_abs, inps.intrinsics)
         coords2d_true = ptu3d.project_pose(inps.coords3d_true, inps.intrinsics)
         scale = 256 / FLAGS.proc_side
-        metrics['mean_error_px' + suffix] = ptu.reduce_mean_masked(
-            torch.norm((coords2d_true - coords2d_pred) * scale, dim=-1), inps.point_validity
+        metrics["mean_error_px" + suffix] = ptu.reduce_mean_masked(
+            torch.norm((coords2d_true - coords2d_pred) * scale, dim=-1),
+            inps.point_validity,
         )
 
         return metrics
 
-    def compute_metrics_with_2d_gt(self, inps, preds, suffix: str = ''):
+    def compute_metrics_with_2d_gt(self, inps, preds, suffix: str = ""):
         metrics = EasyDict()
         scale = 256 / FLAGS.proc_side
         coords2d_pred = ptu3d.project_pose(preds.coords3d_abs, inps.intrinsics)
-        metrics['mean_error_px' + suffix] = ptu.reduce_mean_masked(
-            torch.norm((inps.coords2d_true - coords2d_pred) * scale, dim=-1), inps.point_validity
+        metrics["mean_error_px" + suffix] = ptu.reduce_mean_masked(
+            torch.norm((inps.coords2d_true - coords2d_pred) * scale, dim=-1),
+            inps.point_validity,
         )
         return metrics
 
@@ -599,7 +649,10 @@ class NLFTrainer(florch.ModelTrainer):
         point_validity_mask: Optional[torch.Tensor] = None,
     ):
         full_perspective_start_step = 500 if FLAGS.dual_finetune_lr else 5000
-        if FLAGS.weak_perspective or self.adjusted_train_counter < full_perspective_start_step:
+        if (
+            FLAGS.weak_perspective
+            or self.adjusted_train_counter < full_perspective_start_step
+        ):
             return ptu3d.reconstruct_absolute(
                 head2d,
                 head3d,
@@ -655,14 +708,18 @@ def custom_norm(x: torch.Tensor, uncert: Optional[torch.Tensor] = None):
 
         factor = torch.rsqrt(dim) if FLAGS.fix_uncert_factor else torch.sqrt(dim)
         return (
-            ptu.charbonnier(x / torch.unsqueeze(uncert, -1), epsilon=FLAGS.charb_eps, dim=-1)
+            ptu.charbonnier(
+                x / torch.unsqueeze(uncert, -1), epsilon=FLAGS.charb_eps, dim=-1
+            )
             + factor * torch.log(uncert)
         ) * beta_comp_factor
     else:
         return ptu.charbonnier(x, epsilon=FLAGS.charb_eps, dim=-1)
 
 
-def interpolate_sparse(source_points: torch.Tensor, sparse_mats: Sequence[torch.Tensor]):
+def interpolate_sparse(
+    source_points: torch.Tensor, sparse_mats: Sequence[torch.Tensor]
+):
     if source_points.shape[0] == 0:
         return torch.zeros((0, FLAGS.num_points, 3), device=source_points.device)
     return (block_diag_csr(sparse_mats) @ source_points.reshape(-1, 3)).reshape(
@@ -677,17 +734,24 @@ def block_diag_csr(csr_mats: Sequence[torch.Tensor]):
     col_dtype = csr_mats[0].col_indices().dtype
 
     row_offsets = torch.tensor(
-        [0] + [csr.col_indices().shape[0] for csr in csr_mats], dtype=crow_dtype, device=device
+        [0] + [csr.col_indices().shape[0] for csr in csr_mats],
+        dtype=crow_dtype,
+        device=device,
     ).cumsum(0, dtype=crow_dtype)
     col_offsets = torch.tensor(
         [0] + [csr.shape[1] for csr in csr_mats], dtype=col_dtype, device=device
     ).cumsum(0, dtype=col_dtype)
     return torch.sparse_csr_tensor(
         torch.cat(
-            [csr.crow_indices()[:-1] + offset for csr, offset in zip(csr_mats, row_offsets)]
+            [
+                csr.crow_indices()[:-1] + offset
+                for csr, offset in zip(csr_mats, row_offsets)
+            ]
             + [row_offsets[-1:]]
         ),
-        torch.cat([csr.col_indices() + offset for csr, offset in zip(csr_mats, col_offsets)]),
+        torch.cat(
+            [csr.col_indices() + offset for csr, offset in zip(csr_mats, col_offsets)]
+        ),
         torch.cat([csr.values() for csr in csr_mats]),
         (sum(c.shape[0] for c in csr_mats), sum(c.shape[1] for c in csr_mats)),
     )
@@ -700,10 +764,14 @@ def nested_cat(a: torch.Tensor, b: torch.Tensor):
 
 
 def index_select_with_nested_indices(tensor: torch.Tensor, index: torch.Tensor):
-    return torch.nested.nested_tensor([torch.index_select(tensor, 0, i) for i in index.unbind(0)])
+    return torch.nested.nested_tensor(
+        [torch.index_select(tensor, 0, i) for i in index.unbind(0)]
+    )
 
 
 def nested_to_tensor_and_mask(x: torch.Tensor):
-    padded = x.to_padded_tensor(float('nan'), output_size=(x.size(0), FLAGS.num_points, x.size(2)))
+    padded = x.to_padded_tensor(
+        float("nan"), output_size=(x.size(0), FLAGS.num_points, x.size(2))
+    )
     mask = torch.isfinite(padded).all(dim=-1)
     return padded.nan_to_num(0.0), mask

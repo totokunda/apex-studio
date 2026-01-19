@@ -354,7 +354,7 @@ class MagiDenoise:
     ) -> torch.Tensor:
         """Forward method for transformer"""
         if cfg_number == 3:
-            (out_cond_pre_and_text, out_cond_pre, out_uncond, denoise_width) = (
+            out_cond_pre_and_text, out_cond_pre, out_uncond, denoise_width = (
                 self.forward_3cfg(
                     hidden_states,
                     timestep,

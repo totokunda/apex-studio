@@ -401,7 +401,10 @@ class WanTransformerBlock(nn.Module):
         self._ff_chunk_dim = dim
 
     def set_chunk_norms(
-        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
     ) -> None:
         self._mod_norm_chunk_size = modulated_norm_chunk_size
         self._norm_chunk_size = norm_chunk_size
@@ -420,7 +423,11 @@ class WanTransformerBlock(nn.Module):
 
         # 1. Self-attention with chunked modulated norm
         norm_hidden_states = _chunked_modulated_norm(
-            self.norm1, hidden_states, scale_msa, shift_msa, chunk_size=self._mod_norm_chunk_size
+            self.norm1,
+            hidden_states,
+            scale_msa,
+            shift_msa,
+            chunk_size=self._mod_norm_chunk_size,
         ).type_as(hidden_states)
 
         attn_output = self.attn1(
@@ -444,7 +451,11 @@ class WanTransformerBlock(nn.Module):
 
         # 3. Feed-forward
         norm_hidden_states = _chunked_modulated_norm(
-            self.norm3, hidden_states, c_scale_msa, c_shift_msa, chunk_size=self._mod_norm_chunk_size
+            self.norm3,
+            hidden_states,
+            c_scale_msa,
+            c_shift_msa,
+            chunk_size=self._mod_norm_chunk_size,
         ).type_as(hidden_states)
         if self._ff_chunk_size is not None:
             ff_output = _chunked_feed_forward(
@@ -665,7 +676,9 @@ class WanFunTransformer3DModel(
 
         p = self._CHUNKING_PROFILES[profile_name]
         self._chunking_profile_name = profile_name
-        self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+        self._out_modulated_norm_chunk_size = p.get(
+            "out_modulated_norm_chunk_size", None
+        )
 
         self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
         for block in self.blocks:
@@ -836,8 +849,11 @@ class WanFunTransformer3DModel(
         scale = scale.to(hidden_states.device)
 
         hidden_states = _chunked_modulated_norm(
-            self.norm_out, hidden_states, scale, shift,
-            chunk_size=getattr(self, "_out_modulated_norm_chunk_size", None)
+            self.norm_out,
+            hidden_states,
+            scale,
+            shift,
+            chunk_size=getattr(self, "_out_modulated_norm_chunk_size", None),
         ).type_as(hidden_states)
         hidden_states = self.proj_out(hidden_states)
 

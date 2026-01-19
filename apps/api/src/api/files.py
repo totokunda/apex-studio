@@ -14,6 +14,7 @@ router = APIRouter(prefix="/files", tags=["files"])
 # Keep this reasonably sized to avoid memory spikes under heavy concurrency.
 DOWNLOAD_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB
 
+
 class TunedFileResponse(FileResponse):
     # Starlette's default is typically 64KiB; larger chunks often improve throughput on remote clients.
     chunk_size = DOWNLOAD_CHUNK_SIZE
@@ -109,8 +110,7 @@ def get_file(request: Request, scope: str, path: str):
         # Remove 'range' from the raw ASGI scope headers so Starlette ignores it
         # and serves a 200 OK with the full new file.
         request.scope["headers"] = [
-            (k, v) for k, v in request.scope["headers"]
-            if k.lower() != b"range"
+            (k, v) for k, v in request.scope["headers"] if k.lower() != b"range"
         ]
 
     content_type, _ = mimetypes.guess_type(str(target))
@@ -129,11 +129,13 @@ def get_file(request: Request, scope: str, path: str):
         },
     )
 
+
 @router.get("/exists")
 def exists_file(scope: str, path: str):
     base = _base_for_scope(scope)
     target = _safe_join(base, path)
     return {"exists": target.exists()}
+
 
 @router.get("/match")
 def match_file(scope: str, path: str, sha256: str, size: Optional[int] = None):

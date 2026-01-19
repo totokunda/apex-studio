@@ -13,8 +13,19 @@ DEFAULT_EXTRINSIC_MATRIX = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 
 DEFAULT_DISTORTION = (0, 0, 0, 0, 0)
 DEFAULT_WORLD_UP = (0, -1, 0)
 
+
 class MultipersonNLF(torch.nn.Module):
-    def __init__(self, crop_model, detector, pad_white_pixels=True, smpl_config=None, smplx_config=None, fitter_smpl_config=None, fitter_smplx_config=None, num_betas=10):
+    def __init__(
+        self,
+        crop_model,
+        detector,
+        pad_white_pixels=True,
+        smpl_config=None,
+        smplx_config=None,
+        fitter_smpl_config=None,
+        fitter_smplx_config=None,
+        num_betas=10,
+    ):
         super().__init__()
 
         self.crop_model = crop_model
@@ -23,26 +34,35 @@ class MultipersonNLF(torch.nn.Module):
 
         self.body_models = torch.nn.ModuleDict(
             dict(
-                smpl=BodyModel(model_name='smpl', num_betas=num_betas, model_config=smpl_config),
-                smplx=BodyModel(model_name='smplx', num_betas=num_betas, model_config=smplx_config),
+                smpl=BodyModel(
+                    model_name="smpl", num_betas=num_betas, model_config=smpl_config
+                ),
+                smplx=BodyModel(
+                    model_name="smplx", num_betas=num_betas, model_config=smplx_config
+                ),
             )
         )
 
         body_models_partial = {
-            k: BodyModel(model_name=k, num_betas=num_betas, vertex_subset_size=1024, model_config=fitter_smpl_config if k == 'smpl' else fitter_smplx_config)
+            k: BodyModel(
+                model_name=k,
+                num_betas=num_betas,
+                vertex_subset_size=1024,
+                model_config=fitter_smpl_config if k == "smpl" else fitter_smplx_config,
+            )
             for k in self.body_models
         }
-        
+
         self.cano_all = {}
         for k in self.body_models:
             buffer = torch.zeros(
-                self.body_models[k].model_config['cano_all'],
+                self.body_models[k].model_config["cano_all"],
                 dtype=torch.float32,
                 device=device,
             )
-            self.register_buffer(f'cano_all_{k}', buffer, persistent=True)
+            self.register_buffer(f"cano_all_{k}", buffer, persistent=True)
             self.cano_all[k] = buffer
-        
+
         nothing = torch.zeros([], device=device, dtype=torch.float32)
 
         # This is not initialized here to save disk space. It will be computed on first use.
@@ -56,14 +76,14 @@ class MultipersonNLF(torch.nn.Module):
             )
             for k in self.body_models
         }
-        
+
         self.fitters = torch.nn.ModuleDict(
-            dict( 
-                smpl=smplfitter.pt.BodyFitter(body_models_partial['smpl']),
-                smplx=smplfitter.pt.BodyFitter(body_models_partial['smplx']),
+            dict(
+                smpl=smplfitter.pt.BodyFitter(body_models_partial["smpl"]),
+                smplx=smplfitter.pt.BodyFitter(body_models_partial["smplx"]),
             )
         )
-       
+
         self.pad_white_pixels = pad_white_pixels
 
     def _apply(self, fn):
@@ -71,9 +91,9 @@ class MultipersonNLF(torch.nn.Module):
         # Any extra Python references (like entries inside dicts) will still point to the
         # old tensors unless we refresh them after the move.
         ret = super()._apply(fn)
-        if hasattr(self, 'cano_all') and hasattr(self, 'body_models'):
+        if hasattr(self, "cano_all") and hasattr(self, "body_models"):
             for k in self.body_models:
-                name = f'cano_all_{k}'
+                name = f"cano_all_{k}"
                 if hasattr(self, name):
                     self.cano_all[k] = getattr(self, name)
         return ret
@@ -99,7 +119,7 @@ class MultipersonNLF(torch.nn.Module):
         suppress_implausible_poses: bool = True,
         beta_regularizer: float = 10.0,
         beta_regularizer2: float = 0.0,
-        model_name: str = 'smpl',
+        model_name: str = "smpl",
         extra_boxes: Optional[List[torch.Tensor]] = None,
     ):
         images = im_to_linear(images)
@@ -149,7 +169,7 @@ class MultipersonNLF(torch.nn.Module):
         rot_aug_max_degrees: float = 25.0,
         beta_regularizer: float = 10.0,
         beta_regularizer2: float = 0.0,
-        model_name: str = 'smpl',
+        model_name: str = "smpl",
     ):
         return self._estimate_parametric_batched(
             images,
@@ -188,14 +208,14 @@ class MultipersonNLF(torch.nn.Module):
         suppress_implausible_poses: bool = True,
         beta_regularizer: float = 10.0,
         beta_regularizer2: float = 0.0,
-        model_name: str = 'smpl',
+        model_name: str = "smpl",
     ):
         if model_name not in self.body_models:
             raise ValueError(
-                f'Unknown model name {model_name}, use one of {self.body_models.keys()}'
+                f"Unknown model name {model_name}, use one of {self.body_models.keys()}"
             )
 
-        if self.weights[model_name]['w_tensor'].ndim == 0:
+        if self.weights[model_name]["w_tensor"].ndim == 0:
             self.weights[model_name] = self.get_weights_for_canonical_points(
                 self.cano_all[model_name]
             )
@@ -215,20 +235,22 @@ class MultipersonNLF(torch.nn.Module):
             rot_aug_max_degrees,
             suppress_implausible_poses=suppress_implausible_poses,
         )
-        boxes = result['boxes']
+        boxes = result["boxes"]
         n_pose_per_image_list = [len(b) for b in boxes]
         if sum(n_pose_per_image_list) == 0:
             return self._predict_empty_parametric(images, model_name)
 
-        poses3d_flat = torch.cat(result['poses3d'], dim=0)
+        poses3d_flat = torch.cat(result["poses3d"], dim=0)
         mean_poses = torch.mean(poses3d_flat, dim=-2, keepdim=True)
         poses3d_flat = poses3d_flat - mean_poses
-        poses2d_flat = torch.cat(result['poses2d'], dim=0)
-        uncertainties_flat = torch.cat(result['uncertainties'], dim=0)
+        poses2d_flat = torch.cat(result["poses2d"], dim=0)
+        uncertainties_flat = torch.cat(result["uncertainties"], dim=0)
 
-        fitter = self.fitters['smpl'] if model_name == 'smpl' else self.fitters['smplx']
+        fitter = self.fitters["smpl"] if model_name == "smpl" else self.fitters["smplx"]
         vertices_flat, joints_flat = torch.split(
-            poses3d_flat, [fitter.body_model.num_vertices, fitter.body_model.num_joints], dim=-2
+            poses3d_flat,
+            [fitter.body_model.num_vertices, fitter.body_model.num_joints],
+            dim=-2,
         )
         vertex_uncertainties_flat, joint_uncertainties_flat = torch.split(
             uncertainties_flat,
@@ -237,7 +259,9 @@ class MultipersonNLF(torch.nn.Module):
         )
 
         vertex_weights = vertex_uncertainties_flat**-1.5
-        vertex_weights = vertex_weights / torch.mean(vertex_weights, dim=-1, keepdim=True)
+        vertex_weights = vertex_weights / torch.mean(
+            vertex_weights, dim=-1, keepdim=True
+        )
         joint_weights = joint_uncertainties_flat**-1.5
         joint_weights = joint_weights / torch.mean(joint_weights, dim=-1, keepdim=True)
 
@@ -250,64 +274,72 @@ class MultipersonNLF(torch.nn.Module):
             beta_regularizer=beta_regularizer,
             beta_regularizer2=beta_regularizer2,
             final_adjust_rots=True,
-            requested_keys=['pose_rotvecs', 'shape_betas', 'trans'],
+            requested_keys=["pose_rotvecs", "shape_betas", "trans"],
         )
 
-        result['pose'] = torch.split(fit['pose_rotvecs'], n_pose_per_image_list)
-        result['betas'] = torch.split(fit['shape_betas'], n_pose_per_image_list)
-        result['trans'] = torch.split(
-            fit['trans'] + mean_poses.squeeze(-2) / 1000, n_pose_per_image_list
+        result["pose"] = torch.split(fit["pose_rotvecs"], n_pose_per_image_list)
+        result["betas"] = torch.split(fit["shape_betas"], n_pose_per_image_list)
+        result["trans"] = torch.split(
+            fit["trans"] + mean_poses.squeeze(-2) / 1000, n_pose_per_image_list
         )
 
         body_model: smplfitter.pt.BodyModel = (
-            self.body_models['smpl'] if model_name == 'smpl' else self.body_models['smplx']
+            self.body_models["smpl"]
+            if model_name == "smpl"
+            else self.body_models["smplx"]
         )
         fit_res = body_model.forward(
-            fit['pose_rotvecs'], fit['shape_betas'], fit['trans'] + mean_poses.squeeze(-2) / 1000
+            fit["pose_rotvecs"],
+            fit["shape_betas"],
+            fit["trans"] + mean_poses.squeeze(-2) / 1000,
         )
-        fit_vertices_flat = fit_res['vertices'] * 1000
-        fit_joints_flat = fit_res['joints'] * 1000
-        result['vertices3d'] = torch.split(fit_vertices_flat, n_pose_per_image_list)
-        result['joints3d'] = torch.split(fit_joints_flat, n_pose_per_image_list)
+        fit_vertices_flat = fit_res["vertices"] * 1000
+        fit_joints_flat = fit_res["joints"] * 1000
+        result["vertices3d"] = torch.split(fit_vertices_flat, n_pose_per_image_list)
+        result["joints3d"] = torch.split(fit_joints_flat, n_pose_per_image_list)
 
-        result['vertices2d'] = project_ragged(
+        result["vertices2d"] = project_ragged(
             images,
-            [x for x in result['vertices3d']],
+            [x for x in result["vertices3d"]],
             extrinsic_matrix,
             intrinsic_matrix,
             distortion_coeffs,
             default_fov_degrees,
         )
-        result['joints2d'] = project_ragged(
+        result["joints2d"] = project_ragged(
             images,
-            [x for x in result['joints3d']],
+            [x for x in result["joints3d"]],
             extrinsic_matrix,
             intrinsic_matrix,
             distortion_coeffs,
             default_fov_degrees,
         )
 
-        result['vertices3d_nonparam'] = torch.split(
+        result["vertices3d_nonparam"] = torch.split(
             vertices_flat + mean_poses, n_pose_per_image_list
         )
-        result['joints3d_nonparam'] = torch.split(joints_flat + mean_poses, n_pose_per_image_list)
+        result["joints3d_nonparam"] = torch.split(
+            joints_flat + mean_poses, n_pose_per_image_list
+        )
         vertices2d, joints2d = torch.split(
-            poses2d_flat, [fitter.body_model.num_vertices, fitter.body_model.num_joints], dim=-2
+            poses2d_flat,
+            [fitter.body_model.num_vertices, fitter.body_model.num_joints],
+            dim=-2,
         )
 
-        result['vertices2d_nonparam'] = torch.split(vertices2d, n_pose_per_image_list)
-        result['joints2d_nonparam'] = torch.split(joints2d, n_pose_per_image_list)
+        result["vertices2d_nonparam"] = torch.split(vertices2d, n_pose_per_image_list)
+        result["joints2d_nonparam"] = torch.split(joints2d, n_pose_per_image_list)
 
-        result['vertex_uncertainties'] = torch.split(
+        result["vertex_uncertainties"] = torch.split(
             vertex_uncertainties_flat * 1000, n_pose_per_image_list
         )
-        result['joint_uncertainties'] = torch.split(
+        result["joint_uncertainties"] = torch.split(
             joint_uncertainties_flat * 1000, n_pose_per_image_list
         )
 
-        del result['poses3d']
-        del result['poses2d']
-        del result['uncertainties']
+        del result["poses3d"]
+        del result["poses2d"]
+        del result["uncertainties"]
         return result
 
     @torch.jit.export
@@ -395,7 +427,7 @@ class MultipersonNLF(torch.nn.Module):
             rot_aug_max_degrees,
             suppress_implausible_poses=False,
         )
-        del pred['boxes']
+        del pred["boxes"]
         return pred
 
     def _estimate_poses_batched(
@@ -430,31 +462,45 @@ class MultipersonNLF(torch.nn.Module):
 
         if len(intrinsic_matrix) == 1:
             # If intrinsic_matrix is not given, fill it in based on field of view
-            intrinsic_matrix = torch.repeat_interleave(intrinsic_matrix, n_images, dim=0)
+            intrinsic_matrix = torch.repeat_interleave(
+                intrinsic_matrix, n_images, dim=0
+            )
 
         if distortion_coeffs is None:
             distortion_coeffs = torch.zeros((n_images, 5), device=device)
         # If one distortion coeff/extrinsic matrix is given, repeat it for all images
         if len(distortion_coeffs) == 1:
-            distortion_coeffs = torch.repeat_interleave(distortion_coeffs, n_images, dim=0)
+            distortion_coeffs = torch.repeat_interleave(
+                distortion_coeffs, n_images, dim=0
+            )
 
         if extrinsic_matrix is None:
             extrinsic_matrix = torch.eye(4, device=device).unsqueeze(0)
         if len(extrinsic_matrix) == 1:
-            extrinsic_matrix = torch.repeat_interleave(extrinsic_matrix, n_images, dim=0)
+            extrinsic_matrix = torch.repeat_interleave(
+                extrinsic_matrix, n_images, dim=0
+            )
 
         # Now repeat these camera params for each box
         n_box_per_image_list = [len(b) for b in boxes]
         n_box_per_image = torch.tensor([len(b) for b in boxes], device=device)
 
-        intrinsic_matrix = torch.repeat_interleave(intrinsic_matrix, n_box_per_image, dim=0)
-        distortion_coeffs = torch.repeat_interleave(distortion_coeffs, n_box_per_image, dim=0)
+        intrinsic_matrix = torch.repeat_interleave(
+            intrinsic_matrix, n_box_per_image, dim=0
+        )
+        distortion_coeffs = torch.repeat_interleave(
+            distortion_coeffs, n_box_per_image, dim=0
+        )
 
         # Up-vector in camera-space
         if world_up_vector is None:
-            world_up_vector = torch.tensor([0, -1, 0], device=device, dtype=torch.float32)
+            world_up_vector = torch.tensor(
+                [0, -1, 0], device=device, dtype=torch.float32
+            )
 
-        camspace_up = torch.einsum('c,bCc->bC', world_up_vector, extrinsic_matrix[..., :3, :3])
+        camspace_up = torch.einsum(
+            "c,bCc->bC", world_up_vector, extrinsic_matrix[..., :3, :3]
+        )
         camspace_up = torch.repeat_interleave(camspace_up, n_box_per_image, dim=0)
 
         # Set up the test-time augmentation parameters
@@ -462,7 +508,11 @@ class MultipersonNLF(torch.nn.Module):
 
         aug_angle_range = rot_aug_max_degrees * (torch.pi / 180.0)
         aug_angles = ptu.linspace(
-            -aug_angle_range, aug_angle_range, num_aug, dtype=torch.float32, device=device
+            -aug_angle_range,
+            aug_angle_range,
+            num_aug,
+            dtype=torch.float32,
+            device=device,
         )
 
         if num_aug == 1:
@@ -471,15 +521,26 @@ class MultipersonNLF(torch.nn.Module):
             aug_scales = torch.cat(
                 [
                     ptu.linspace(
-                        0.8, 1.0, num_aug // 2, endpoint=False, dtype=torch.float32, device=device
+                        0.8,
+                        1.0,
+                        num_aug // 2,
+                        endpoint=False,
+                        dtype=torch.float32,
+                        device=device,
                     ),
                     torch.linspace(
-                        1.0, 1.1, num_aug - num_aug // 2, dtype=torch.float32, device=device
+                        1.0,
+                        1.1,
+                        num_aug - num_aug // 2,
+                        dtype=torch.float32,
+                        device=device,
                     ),
                 ],
                 dim=0,
             )
-        aug_should_flip = (torch.arange(0, num_aug, device=device) - num_aug // 2) % 2 != 0
+        aug_should_flip = (
+            torch.arange(0, num_aug, device=device) - num_aug // 2
+        ) % 2 != 0
         aug_flipmat = torch.tensor(
             [[-1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=torch.float32, device=device
         )
@@ -488,7 +549,7 @@ class MultipersonNLF(torch.nn.Module):
             aug_flipmat,
             torch.eye(3, device=device),
         )
-        aug_rotmat = ptu3d.rotation_mat(-aug_angles, rot_axis='z')
+        aug_rotmat = ptu3d.rotation_mat(-aug_angles, rot_axis="z")
         aug_rotflipmat = aug_maybe_flipmat @ aug_rotmat
 
         # crops_flat, poses3d_flat = self._predict_in_batches(
@@ -513,7 +574,7 @@ class MultipersonNLF(torch.nn.Module):
             poses3d_flat_submean, uncert_flat**-1.5, dim=-3, n_iter=10, eps=50.0
         )
         # MPS doesn't support double precision, so use float32 for MPS devices
-        is_mps = poses3d_flat.device.type == 'mps'
+        is_mps = poses3d_flat.device.type == "mps"
         if is_mps:
             poses3d_flat = poses3d_flat_submean.float() + mean.squeeze(1).float()
         else:
@@ -523,10 +584,12 @@ class MultipersonNLF(torch.nn.Module):
 
         # Project the 3D poses to get the 2D poses
         poses2d_flat_normalized = ptu3d.to_homogeneous(
-            warping.distort_points(ptu3d.project(poses3d_flat.float()), distortion_coeffs)
+            warping.distort_points(
+                ptu3d.project(poses3d_flat.float()), distortion_coeffs
+            )
         )
         poses2d_flat = torch.einsum(
-            'bnk,bjk->bnj', poses2d_flat_normalized, intrinsic_matrix[:, :2, :]
+            "bnk,bjk->bnj", poses2d_flat_normalized, intrinsic_matrix[:, :2, :]
         )
 
         # Arrange the results back into ragged tensors
@@ -536,7 +599,9 @@ class MultipersonNLF(torch.nn.Module):
 
         if suppress_implausible_poses:
             # Filter the resulting poses for individual plausibility to reduce false positives
-            boxes, poses3d, poses2d, uncert = self._filter_poses(boxes, poses3d, poses2d, uncert)
+            boxes, poses3d, poses2d, uncert = self._filter_poses(
+                boxes, poses3d, poses2d, uncert
+            )
 
         n_box_per_image_list = [len(b) for b in boxes]
 
@@ -546,7 +611,7 @@ class MultipersonNLF(torch.nn.Module):
         n_box_per_image = torch.tensor(n_box_per_image_list, device=device)
         # Convert to world coordinates
         # MPS doesn't support double precision, so use float32 for MPS devices
-        is_mps = device.type == 'mps'
+        is_mps = device.type == "mps"
         if is_mps:
             extrinsic_matrix_dtype = extrinsic_matrix.float()
         else:
@@ -555,13 +620,15 @@ class MultipersonNLF(torch.nn.Module):
             torch.linalg.inv(extrinsic_matrix_dtype), n_box_per_image, dim=0
         )
         poses3d_flat = torch.einsum(
-            'bnk,bjk->bnj',
+            "bnk,bjk->bnj",
             ptu3d.to_homogeneous(torch.cat(poses3d)),
             inv_extrinsic_matrix[:, :3, :],
         )
         poses3d = torch.split(poses3d_flat.float(), n_box_per_image_list)
 
-        result = dict(boxes=boxes, poses3d=poses3d, poses2d=poses2d, uncertainties=uncert)
+        result = dict(
+            boxes=boxes, poses3d=poses3d, poses2d=poses2d, uncertainties=uncert
+        )
         return result
 
     def _filter_poses(
@@ -697,7 +764,7 @@ class MultipersonNLF(torch.nn.Module):
             crops_flat, new_intrinsic_matrix_flat, weights, aug_should_flip_flat
         )
         # MPS doesn't support double precision, so use float32 for MPS devices
-        is_mps = poses_flat.device.type == 'mps'
+        is_mps = poses_flat.device.type == "mps"
         if is_mps:
             poses_flat = poses_flat.float()
             R_dtype = R.float()
@@ -750,7 +817,10 @@ class MultipersonNLF(torch.nn.Module):
                         * crop_scales[:, :, torch.newaxis, torch.newaxis],
                         # Principal point is the middle of the new image size
                         torch.full(
-                            (num_aug, num_box, 2, 1), res / 2, dtype=torch.float32, device=device
+                            (num_aug, num_box, 2, 1),
+                            res / 2,
+                            dtype=torch.float32,
+                            device=device,
                         ),
                     ],
                     dim=3,
@@ -758,8 +828,12 @@ class MultipersonNLF(torch.nn.Module):
                 torch.cat(
                     [
                         # [0, 0, 1] as the last row of the intrinsic matrix:
-                        torch.zeros((num_aug, num_box, 1, 2), dtype=torch.float32, device=device),
-                        torch.ones((num_aug, num_box, 1, 1), dtype=torch.float32, device=device),
+                        torch.zeros(
+                            (num_aug, num_box, 1, 2), dtype=torch.float32, device=device
+                        ),
+                        torch.ones(
+                            (num_aug, num_box, 1, 1), dtype=torch.float32, device=device
+                        ),
                     ],
                     dim=3,
                 ),
@@ -812,7 +886,9 @@ class MultipersonNLF(torch.nn.Module):
         crops **= torch.reshape(aug_gammas.to(crops.dtype) / 2.2, [-1, 1, 1, 1, 1])
         return crops, new_intrinsic_matrix, R
 
-    def _get_new_rotation_and_scale(self, intrinsic_matrix, distortion_coeffs, camspace_up, boxes):
+    def _get_new_rotation_and_scale(
+        self, intrinsic_matrix, distortion_coeffs, camspace_up, boxes
+    ):
         # Transform five points on each box: the center and the midpoints of the four sides
         x, y, w, h = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
         boxpoints_homog = ptu3d.to_homogeneous(
@@ -829,7 +905,7 @@ class MultipersonNLF(torch.nn.Module):
         )
 
         boxpoints_camspace = torch.einsum(
-            'bpc,bCc->bpC', boxpoints_homog, torch.linalg.inv(intrinsic_matrix)
+            "bpc,bCc->bpC", boxpoints_homog, torch.linalg.inv(intrinsic_matrix)
         )
         boxpoints_camspace = ptu3d.to_homogeneous(
             warping.undistort_points(boxpoints_camspace[:, :, :2], distortion_coeffs)
@@ -837,28 +913,37 @@ class MultipersonNLF(torch.nn.Module):
         # Create a rotation matrix that will put the box center to the principal point
         # and apply the augmentation rotation and flip, to get the new coordinate frame
         box_center_camspace = boxpoints_camspace[:, 0]
-        R_noaug = ptu3d.lookat_matrix(forward_vector=box_center_camspace, up_vector=camspace_up)
+        R_noaug = ptu3d.lookat_matrix(
+            forward_vector=box_center_camspace, up_vector=camspace_up
+        )
 
         # Transform the side midpoints of the box to the new coordinate frame
         sidepoints_camspace = boxpoints_camspace[:, 1:5]
         sidepoints_new = ptu3d.project(
-            torch.einsum('bpc,bCc->bpC', sidepoints_camspace, intrinsic_matrix @ R_noaug)
+            torch.einsum(
+                "bpc,bCc->bpC", sidepoints_camspace, intrinsic_matrix @ R_noaug
+            )
         )
 
         # Measure the size of the reprojected boxes
-        vertical_size = torch.linalg.norm(sidepoints_new[:, 0] - sidepoints_new[:, 2], dim=-1)
-        horiz_size = torch.linalg.norm(sidepoints_new[:, 1] - sidepoints_new[:, 3], dim=-1)
+        vertical_size = torch.linalg.norm(
+            sidepoints_new[:, 0] - sidepoints_new[:, 2], dim=-1
+        )
+        horiz_size = torch.linalg.norm(
+            sidepoints_new[:, 1] - sidepoints_new[:, 3], dim=-1
+        )
         box_size_new = torch.maximum(vertical_size, horiz_size)
 
         # How much we need to scale (zoom) to have the boxes fill out the final crop
         box_scales = (
-            torch.tensor(self.crop_model.input_resolution, dtype=box_size_new.dtype) / box_size_new
+            torch.tensor(self.crop_model.input_resolution, dtype=box_size_new.dtype)
+            / box_size_new
         )
         return R_noaug, box_scales
 
     def _predict_empty(self, image: torch.Tensor, weights: Dict[str, torch.Tensor]):
         device = image.device
-        n_joints = weights['w_tensor'].shape[0]
+        n_joints = weights["w_tensor"].shape[0]
         poses3d = torch.zeros((0, n_joints, 3), dtype=torch.float32, device=device)
         poses2d = torch.zeros((0, n_joints, 2), dtype=torch.float32, device=device)
         uncert = torch.zeros((0, n_joints), dtype=torch.float32, device=device)
@@ -875,22 +960,36 @@ class MultipersonNLF(torch.nn.Module):
 
     def _predict_empty_parametric(self, image: torch.Tensor, model_name: str):
         device = image.device
-        fitter = self.fitters['smpl'] if model_name == 'smpl' else self.fitters['smplx']
+        fitter = self.fitters["smpl"] if model_name == "smpl" else self.fitters["smplx"]
         n_joints = fitter.body_model.num_joints
         n_verts = fitter.body_model.num_vertices
         pose = torch.zeros((0, n_joints, 3), dtype=torch.float32, device=device)
-        betas = torch.zeros((0, fitter.body_model.num_betas), dtype=torch.float32, device=device)
+        betas = torch.zeros(
+            (0, fitter.body_model.num_betas), dtype=torch.float32, device=device
+        )
         trans = torch.zeros((0, 3), dtype=torch.float32, device=device)
         vertices3d = torch.zeros((0, n_verts, 3), dtype=torch.float32, device=device)
         joints3d = torch.zeros((0, n_joints, 3), dtype=torch.float32, device=device)
         vertices2d = torch.zeros((0, n_verts, 2), dtype=torch.float32, device=device)
         joints2d = torch.zeros((0, n_joints, 2), dtype=torch.float32, device=device)
-        vertices3d_nonparam = torch.zeros((0, n_verts, 3), dtype=torch.float32, device=device)
-        joints3d_nonparam = torch.zeros((0, n_joints, 3), dtype=torch.float32, device=device)
-        vertices2d_nonparam = torch.zeros((0, n_verts, 2), dtype=torch.float32, device=device)
-        joints2d_nonparam = torch.zeros((0, n_joints, 2), dtype=torch.float32, device=device)
-        vertex_uncertainties = torch.zeros((0, n_verts), dtype=torch.float32, device=device)
-        joint_uncertainties = torch.zeros((0, n_joints), dtype=torch.float32, device=device)
+        vertices3d_nonparam = torch.zeros(
+            (0, n_verts, 3), dtype=torch.float32, device=device
+        )
+        joints3d_nonparam = torch.zeros(
+            (0, n_joints, 3), dtype=torch.float32, device=device
+        )
+        vertices2d_nonparam = torch.zeros(
+            (0, n_verts, 2), dtype=torch.float32, device=device
+        )
+        joints2d_nonparam = torch.zeros(
+            (0, n_joints, 2), dtype=torch.float32, device=device
+        )
+        vertex_uncertainties = torch.zeros(
+            (0, n_verts), dtype=torch.float32, device=device
+        )
+        joint_uncertainties = torch.zeros(
+            (0, n_joints), dtype=torch.float32, device=device
+        )
         n_images = image.shape[0]
         result = dict(
             pose=[pose] * n_images,
@@ -1020,7 +1119,12 @@ def im_to_linear(im: torch.Tensor):
     if im.dtype == torch.uint8:
         return im.to(dtype=torch.float16).mul_(1.0 / 255.0).pow_(2.2)
     elif im.dtype == torch.uint16:
-        return im.to(dtype=torch.float16).mul_(1.0 / 65504.0).nan_to_num_(posinf=1.0).pow_(2.2)
+        return (
+            im.to(dtype=torch.float16)
+            .mul_(1.0 / 65504.0)
+            .nan_to_num_(posinf=1.0)
+            .pow_(2.2)
+        )
         # return im.to(dtype=torch.float16).nan_to_num_(posinf=65504.0).div_(65504.0).pow_(2.2)
     elif im.dtype == torch.float16:
         return im**2.2
@@ -1063,20 +1167,28 @@ def project_ragged(
     if extrinsic_matrix.shape[0] == 1:
         extrinsic_matrix = torch.repeat_interleave(extrinsic_matrix, n_images, dim=0)
 
-    intrinsic_matrix_rep = torch.repeat_interleave(intrinsic_matrix, n_box_per_image, dim=0)
-    distortion_coeffs_rep = torch.repeat_interleave(distortion_coeffs, n_box_per_image, dim=0)
-    extrinsic_matrix_rep = torch.repeat_interleave(extrinsic_matrix, n_box_per_image, dim=0)
+    intrinsic_matrix_rep = torch.repeat_interleave(
+        intrinsic_matrix, n_box_per_image, dim=0
+    )
+    distortion_coeffs_rep = torch.repeat_interleave(
+        distortion_coeffs, n_box_per_image, dim=0
+    )
+    extrinsic_matrix_rep = torch.repeat_interleave(
+        extrinsic_matrix, n_box_per_image, dim=0
+    )
 
     poses3d_flat = torch.cat(poses3d, dim=0)
     poses3d_flat = torch.einsum(
-        'bnk,bjk->bnj', ptu3d.to_homogeneous(poses3d_flat), extrinsic_matrix_rep[:, :3, :]
+        "bnk,bjk->bnj",
+        ptu3d.to_homogeneous(poses3d_flat),
+        extrinsic_matrix_rep[:, :3, :],
     )
 
     poses2d_flat_normalized = ptu3d.to_homogeneous(
         warping.distort_points(ptu3d.project(poses3d_flat), distortion_coeffs_rep)
     )
     poses2d_flat = torch.einsum(
-        'bnk,bjk->bnj', poses2d_flat_normalized, intrinsic_matrix_rep[:, :2, :]
+        "bnk,bjk->bnj", poses2d_flat_normalized, intrinsic_matrix_rep[:, :2, :]
     )
     poses2d = torch.split(poses2d_flat, n_box_per_image_list)
     return poses2d
@@ -1111,5 +1223,7 @@ def weighted_geometric_median(
     return y, new_weights.squeeze(-1)
 
 
-def weighted_mean(x: torch.Tensor, w: torch.Tensor, dim: int = -2, keepdim: bool = False):
+def weighted_mean(
+    x: torch.Tensor, w: torch.Tensor, dim: int = -2, keepdim: bool = False
+):
     return (x * w).sum(dim=dim, keepdim=keepdim) / w.sum(dim=dim, keepdim=keepdim)

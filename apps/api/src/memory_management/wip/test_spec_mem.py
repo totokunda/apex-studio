@@ -59,6 +59,7 @@ blocks: List[torch.nn.Module] = list(transformer.transformer_blocks)
 block0 = blocks[0]
 spec = analyze_block_to_flat_spec(block0)
 
+
 def _set_tensor_by_dotted_name(
     root: torch.nn.Module,
     dotted_name: str,
@@ -138,7 +139,9 @@ print(
     f"[sanity] transformer _apex_group_offloading_enabled="
     f"{getattr(transformer, '_apex_group_offloading_enabled', False)}"
 )
-print(f"[sanity] block0 spec: entries={len(spec.entries):,} total_bytes={spec.total_bytes:,}")
+print(
+    f"[sanity] block0 spec: entries={len(spec.entries):,} total_bytes={spec.total_bytes:,}"
+)
 print(
     f"[sanity] blocks={len(blocks)} total_packed_bytes={spec.total_bytes * len(blocks):,} "
     f"({(spec.total_bytes * len(blocks)) / (1024**3):.2f} GiB)"
@@ -152,6 +155,7 @@ packed_blocks_cpu: List[torch.Tensor] = [
 ]
 for i, b in enumerate(blocks):
     pack_block_to_flat(b, packed_blocks_cpu[i], spec)
+
 
 class _BlockStreamer:
     """
@@ -215,7 +219,9 @@ class _BlockStreamer:
             )
         self.slot: List[torch.nn.Module] = []
         for i in range(self.n_buffers):
-            b = make_streaming_slot_template_block(template_blocks_cpu[i], spec=self.spec).to(device)
+            b = make_streaming_slot_template_block(
+                template_blocks_cpu[i], spec=self.spec
+            ).to(device)
             b.eval()
             b.requires_grad_(False)
             self.slot.append(b)
@@ -263,7 +269,9 @@ class _BlockStreamer:
             self.max_group_len = new_max_group_len
             self.max_group_bytes = new_max_group_bytes
             self.flat_gpu = [
-                torch.empty((self.max_group_bytes,), device=self.device, dtype=torch.uint8)
+                torch.empty(
+                    (self.max_group_bytes,), device=self.device, dtype=torch.uint8
+                )
                 for _ in range(self.n_buffers)
             ]
 
@@ -330,10 +338,10 @@ class _BlockStreamer:
         """Schedule loading group `group_idx` into its assigned buffer."""
         if group_idx < 0 or group_idx >= self.num_groups:
             return
-        
+
         # Round-robin mapping
         buf = group_idx % self.n_buffers
-        
+
         # Optimization: If already loaded, do nothing.
         if self.loaded_group[buf] == group_idx:
             return
@@ -358,7 +366,9 @@ class _BlockStreamer:
                 pos = bisect.bisect_left(self.stream_indices, idx + 1)
                 if pos < len(self.stream_indices):
                     next_streamed_idx = self.stream_indices[pos]
-                    next_stream_pos = self.stream_pos_by_idx.get(next_streamed_idx, None)
+                    next_stream_pos = self.stream_pos_by_idx.get(
+                        next_streamed_idx, None
+                    )
                     if next_stream_pos is not None:
                         next_group = next_stream_pos // self.group_size
                         self.prefetch(next_group)
@@ -380,10 +390,10 @@ class _BlockStreamer:
             )
 
         buf = group_idx % self.n_buffers
-        
+
         # 1. Ensure current block is scheduled
         self.prefetch(group_idx)
-        
+
         # 2. Aggressively prefetch future blocks to fill the pipeline
         #    (Look ahead up to n_buffers - 1 steps)
         for step in range(1, self.n_buffers):
@@ -418,6 +428,7 @@ class _StreamingBlock(torch.nn.Module):
     def forward(self, *args, **kwargs):
         return self.streamer.run(self.idx, *args, **kwargs)
 
+
 # Build streamer + swap transformer blocks with streaming proxies.
 streamer = _BlockStreamer(
     blocks_cpu=blocks,
@@ -443,6 +454,7 @@ transformer.transformer_blocks = torch.nn.ModuleList(
 
 inputs = torch.load("transformer_input.pt")
 
+
 def _to_device(x, device):
     if torch.is_tensor(x):
         return x.to(device)
@@ -451,6 +463,7 @@ def _to_device(x, device):
     if isinstance(x, (list, tuple)):
         return type(x)(_to_device(v, device) for v in x)
     return x
+
 
 inputs = _to_device(inputs, cuda)
 
@@ -476,6 +489,7 @@ with torch.no_grad():
 
     t0 = time.perf_counter()
     from tqdm import tqdm
+
     for i in tqdm(range(10)):
         out = transformer(**inputs)[0]
     torch.cuda.synchronize()

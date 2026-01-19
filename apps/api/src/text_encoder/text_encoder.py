@@ -99,7 +99,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             extra_kwargs=self.config.get("extra_kwargs", {}),
             load_device=self.device,
         )
-        
+
         if override_kwargs is not None:
             input_kwargs.update(override_kwargs)
         model = self._load_model(**input_kwargs)
@@ -198,7 +198,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         ] = "hidden_states",
         lower_case: bool = False,
         hidden_states_idx: int = -1,
-        hidden_states_all_stack_dim: int = 0
+        hidden_states_all_stack_dim: int = 0,
     ):
         if isinstance(text, str):
             text = [text]
@@ -210,7 +210,6 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
                 dtype = getattr(torch, dtype.lstrip("torch."))
 
         batch_size = len(text)
-        
 
         kwargs = {
             "text": text,
@@ -231,11 +230,10 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             "lower_case": lower_case,
             "model_path": self.model_path,
             "hidden_states_idx": hidden_states_idx,
-            "hidden_states_all_stack_dim": hidden_states_all_stack_dim
+            "hidden_states_all_stack_dim": hidden_states_all_stack_dim,
         }
 
         prompt_hash = self.hash(kwargs)
-
 
         if self.enable_cache:
             cached = self.load_cached(prompt_hash)
@@ -257,9 +255,9 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
 
         if not self.model_loaded:
             self.model = self.load_model(no_weights=False)
-            
+
             self.model_loaded = True
-            
+
         encode_device = device or self.device
         if encode_device is None:
             encode_device = getattr(self.model, "device", None)
@@ -319,7 +317,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
                 setattr(self, "_nan_hook_registered", True)
             except Exception:
                 pass
-        
+
         result = self.model(
             **inputs,
             output_hidden_states=(

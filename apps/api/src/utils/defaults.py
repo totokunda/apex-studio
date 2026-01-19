@@ -1,8 +1,8 @@
-
 import os
 import json
 from pathlib import Path
 from urllib.parse import urlparse
+
 HOME_DIR = Path(os.getenv("APEX_HOME_DIR", Path.home()))
 
 CONFIG_STORE_PATH = HOME_DIR / "apex-diffusion" / "apex-config.json"
@@ -43,6 +43,7 @@ DEFAULT_TORCH_COMPILE_PATH = os.getenv(
 )
 
 os.environ["TORCHINDUCTOR_CACHE_DIR"] = DEFAULT_TORCH_COMPILE_PATH
+
 
 def _load_persisted_config() -> dict:
     try:
@@ -111,7 +112,9 @@ _IN_RAY_WORKER = os.environ.get("RAY_WORKER_NAME") or "ray::" in os.environ.get(
 # NOTE: Do not import torch at module import time.
 # Many lightweight flows (setup/install, packaging) only need paths/config and should not
 # pay the torch import cost. Device selection is therefore lazily computed.
-DEFAULT_DEVICE = None  # populated on first call to get_torch_device()/set_torch_device()
+DEFAULT_DEVICE = (
+    None  # populated on first call to get_torch_device()/set_torch_device()
+)
 _DEFAULT_DEVICE_COMPUTED = False
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -210,6 +213,7 @@ def get_default_headers(url: str) -> dict:
         }
     return DEFAULT_HEADERS
 
+
 def set_torch_device(device) -> None:
     global DEFAULT_DEVICE
     global _DEFAULT_DEVICE_COMPUTED
@@ -234,6 +238,7 @@ def set_torch_device(device) -> None:
 
 def get_torch_device():
     import torch
+
     global DEFAULT_DEVICE
     global _DEFAULT_DEVICE_COMPUTED
 
@@ -268,17 +273,23 @@ def get_torch_device():
 def get_cache_path() -> str:
     return DEFAULT_CACHE_PATH
 
+
 def get_engine_results_path() -> str:
     os.makedirs(os.path.join(DEFAULT_CACHE_PATH, "engine_results"), exist_ok=True)
     return os.path.join(DEFAULT_CACHE_PATH, "engine_results")
+
 
 def get_preprocessor_results_path() -> str:
     os.makedirs(os.path.join(DEFAULT_CACHE_PATH, "preprocessor_results"), exist_ok=True)
     return os.path.join(DEFAULT_CACHE_PATH, "preprocessor_results")
 
+
 def get_postprocessor_results_path() -> str:
-    os.makedirs(os.path.join(DEFAULT_CACHE_PATH, "postprocessor_results"), exist_ok=True)
+    os.makedirs(
+        os.path.join(DEFAULT_CACHE_PATH, "postprocessor_results"), exist_ok=True
+    )
     return os.path.join(DEFAULT_CACHE_PATH, "postprocessor_results")
+
 
 def set_cache_path(path: str) -> None:
     global DEFAULT_CACHE_PATH
@@ -327,8 +338,10 @@ def set_preprocessor_path(path: str | None = None) -> None:
 def get_postprocessor_path() -> str:
     return DEFAULT_POSTPROCESSOR_SAVE_PATH
 
+
 def get_config_store_path() -> str:
     return CONFIG_STORE_PATH
+
 
 def set_postprocessor_path(path: str | None = None) -> None:
     global DEFAULT_POSTPROCESSOR_SAVE_PATH

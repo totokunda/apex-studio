@@ -20,8 +20,8 @@ def augment_border(im, border_value, rng):
     if rng.uniform(0, 1) < p:
         alpha = random_angle()
         d = rng.uniform(0, h * size)
-        y1 = - np.tan(alpha) * h / 2 + d
-        y2 = + np.tan(alpha) * h / 2 + d
+        y1 = -np.tan(alpha) * h / 2 + d
+        y2 = +np.tan(alpha) * h / 2 + d
         y3 = min(0, y1)
         y4 = min(0, y2)
         points = np.array([[0, y1], [w, y2], [w, y3], [0, y4]], np.int32)
@@ -42,8 +42,8 @@ def augment_border(im, border_value, rng):
     if rng.uniform(0, 1) < p:
         alpha = random_angle()
         d = rng.uniform(0, w * size)
-        x1 = - np.tan(alpha) * w / 2 + d
-        x2 = + np.tan(alpha) * w / 2 + d
+        x1 = -np.tan(alpha) * w / 2 + d
+        x2 = +np.tan(alpha) * w / 2 + d
         x3 = min(0, x1)
         x4 = min(0, x2)
         points = np.array([[x1, 0], [x2, h], [x3, h], [x4, 0]], np.int32)

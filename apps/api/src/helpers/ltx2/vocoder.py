@@ -26,14 +26,28 @@ class ResBlock(nn.Module):
 
         self.convs1 = nn.ModuleList(
             [
-                nn.Conv1d(channels, channels, kernel_size, stride=stride, dilation=dilation, padding=padding_mode)
+                nn.Conv1d(
+                    channels,
+                    channels,
+                    kernel_size,
+                    stride=stride,
+                    dilation=dilation,
+                    padding=padding_mode,
+                )
                 for dilation in dilations
             ]
         )
 
         self.convs2 = nn.ModuleList(
             [
-                nn.Conv1d(channels, channels, kernel_size, stride=stride, dilation=1, padding=padding_mode)
+                nn.Conv1d(
+                    channels,
+                    channels,
+                    kernel_size,
+                    stride=stride,
+                    dilation=1,
+                    padding=padding_mode,
+                )
                 for _ in range(len(dilations))
             ]
         )
@@ -86,12 +100,16 @@ class LTX2Vocoder(ModelMixin, ConfigMixin):
                 f" {len(self.resnets_per_upsample)} and {len(resnet_dilations)}, respectively."
             )
 
-        self.conv_in = nn.Conv1d(in_channels, hidden_channels, kernel_size=7, stride=1, padding=3)
+        self.conv_in = nn.Conv1d(
+            in_channels, hidden_channels, kernel_size=7, stride=1, padding=3
+        )
 
         self.upsamplers = nn.ModuleList()
         self.resnets = nn.ModuleList()
         input_channels = hidden_channels
-        for i, (stride, kernel_size) in enumerate(zip(upsample_factors, upsample_kernel_sizes)):
+        for i, (stride, kernel_size) in enumerate(
+            zip(upsample_factors, upsample_kernel_sizes)
+        ):
             output_channels = input_channels // 2
             self.upsamplers.append(
                 nn.ConvTranspose1d(
@@ -116,7 +134,9 @@ class LTX2Vocoder(ModelMixin, ConfigMixin):
 
         self.conv_out = nn.Conv1d(output_channels, out_channels, 7, stride=1, padding=3)
 
-    def forward(self, hidden_states: torch.Tensor, time_last: bool = False) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, time_last: bool = False
+    ) -> torch.Tensor:
         r"""
         Forward pass of the vocoder.
 
@@ -142,13 +162,17 @@ class LTX2Vocoder(ModelMixin, ConfigMixin):
         hidden_states = self.conv_in(hidden_states)
 
         for i in range(self.num_upsample_layers):
-            hidden_states = F.leaky_relu(hidden_states, negative_slope=self.negative_slope)
+            hidden_states = F.leaky_relu(
+                hidden_states, negative_slope=self.negative_slope
+            )
             hidden_states = self.upsamplers[i](hidden_states)
 
             # Run all resnets in parallel on hidden_states
             start = i * self.resnets_per_upsample
             end = (i + 1) * self.resnets_per_upsample
-            resnet_outputs = torch.stack([self.resnets[j](hidden_states) for j in range(start, end)], dim=0)
+            resnet_outputs = torch.stack(
+                [self.resnets[j](hidden_states) for j in range(start, end)], dim=0
+            )
 
             hidden_states = torch.mean(resnet_outputs, dim=0)
 

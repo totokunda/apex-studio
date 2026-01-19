@@ -119,11 +119,15 @@ class BaseWanAttentionBlock(WanAttentionBlock):
 
 
 class FunVACETransformer3DModel(WanTransformer3DModel):
-    _group_offload_block_modules = ["vace_blocks", "blocks"]  # optional if you set in manifest
+    _group_offload_block_modules = [
+        "vace_blocks",
+        "blocks",
+    ]  # optional if you set in manifest
     # Keys to ignore when group offloading moves inputs/outputs between devices.
     # These are large intermediates that this model intentionally keeps on CPU and
     # moves to CUDA only in small slices.
     _skip_keys = ["hints", "c"]
+
     @register_to_config
     def __init__(
         self,

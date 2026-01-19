@@ -15,7 +15,6 @@ from .ray_resources import get_best_gpu, get_ray_resources
 from .job_store import register_job
 from .ws_manager import get_ray_ws_bridge
 
-
 router = APIRouter(prefix="/postprocessor", tags=["postprocessor"])
 
 

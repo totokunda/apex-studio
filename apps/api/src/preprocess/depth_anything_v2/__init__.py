@@ -16,7 +16,6 @@ from src.utils.defaults import get_torch_device
 from src.types import InputImage, OutputImage
 from src.preprocess.base_preprocessor import BasePreprocessor
 
-
 # https://github.com/DepthAnything/Depth-Anything-V2/blob/main/app.py
 model_configs = {
     "depth_anything_v2_vits.pth": {

@@ -452,7 +452,7 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
         out_rgb = np.zeros((H, W, 3), dtype=np.float32)  # 0..1
         out_a = np.zeros((H, W), dtype=np.float32)  # 0..1
 
-        for (s, e, c) in specs:
+        for s, e, c in specs:
             s = np.asarray(s, dtype=np.float32)
             e = np.asarray(e, dtype=np.float32)
             c = np.asarray(c, dtype=np.float32)
@@ -468,7 +468,9 @@ def render_whole(specs_list, H=480, W=640, fx=500, fy=500, cx=240, cy=320, radiu
             if x1 <= x0 or y1 <= y0:
                 continue
 
-            t_hit, va, seg_len, a = _capsule_intersect_t_roi(s, e, radius, x0, x1, y0, y1)
+            t_hit, va, seg_len, a = _capsule_intersect_t_roi(
+                s, e, radius, x0, x1, y0, y1
+            )
             if not np.isfinite(t_hit).any():
                 continue
 

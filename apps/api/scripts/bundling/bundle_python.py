@@ -26,6 +26,7 @@ import zipfile
 from pathlib import Path
 from typing import Optional, Set, List, Tuple
 
+
 class PythonBundler:
     """Bundles Python API for distribution (venv-based, no PyInstaller)."""
 
@@ -140,7 +141,9 @@ class PythonBundler:
 
         smoke_runner = bundle_dir / "scripts" / "smoke_tests" / "run_all.py"
         if not smoke_runner.exists():
-            raise RuntimeError(f"Smoke tests runner not found in bundle: {smoke_runner}")
+            raise RuntimeError(
+                f"Smoke tests runner not found in bundle: {smoke_runner}"
+            )
 
         args = [
             str(py_path),
@@ -165,14 +168,20 @@ class PythonBundler:
             print(res.stdout)
         if res.returncode != 0:
             stderr = (res.stderr or "").strip()
-            raise RuntimeError(f"Bundle smoke tests failed (exit {res.returncode}). stderr:\n{stderr}")
+            raise RuntimeError(
+                f"Bundle smoke tests failed (exit {res.returncode}). stderr:\n{stderr}"
+            )
 
         # If building a CUDA bundle but CUDA isn't available on the build machine, optionally fail fast.
         if self.smoke_tests_strict and str(gpu_type or "").startswith("cuda"):
             # The in-venv harness will report cuda_available=False; enforce here for clarity.
             try:
                 probe = subprocess.run(
-                    [str(py_path), "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 2)"],
+                    [
+                        str(py_path),
+                        "-c",
+                        "import torch; raise SystemExit(0 if torch.cuda.is_available() else 2)",
+                    ],
                     check=False,
                     capture_output=True,
                     text=True,
@@ -205,7 +214,9 @@ class PythonBundler:
         bundler's selected interpreter environment (the host interpreter running this script).
         """
         try:
-            subprocess.run(["uv", "--version"], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["uv", "--version"], check=True, capture_output=True, text=True
+            )
             return "uv"
         except Exception:
             # Bootstrap uv using the selected interpreter (network access is already assumed for dependency installs).
@@ -276,9 +287,13 @@ class PythonBundler:
         if base_prefix and py_mm:
             # Conda often reports LDLIBRARY as a static archive (.a). We want the dylib.
             candidates.append(Path(base_prefix) / "lib" / f"libpython{py_mm}.dylib")
-            candidates.extend(sorted((Path(base_prefix) / "lib").glob(f"libpython{py_mm}*.dylib")))
+            candidates.extend(
+                sorted((Path(base_prefix) / "lib").glob(f"libpython{py_mm}*.dylib"))
+            )
         if base_prefix:
-            candidates.extend(sorted((Path(base_prefix) / "lib").glob("libpython*.dylib")))
+            candidates.extend(
+                sorted((Path(base_prefix) / "lib").glob("libpython*.dylib"))
+            )
 
         src = next((p for p in candidates if p.exists() and p.suffix == ".dylib"), None)
         if src is None:
@@ -386,7 +401,9 @@ class PythonBundler:
         # Final fallback
         return req_root / "cpu" / "requirements.txt"
 
-    def _read_requirements_file(self, path: Path, visited: Optional[Set[Path]] = None) -> List[str]:
+    def _read_requirements_file(
+        self, path: Path, visited: Optional[Set[Path]] = None
+    ) -> List[str]:
         """
         Read a requirements file and recursively expand `-r` includes.
         Returns raw requirement lines (including markers / direct URLs), excluding comments/empties.
@@ -444,19 +461,25 @@ class PythonBundler:
                         ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
                     )
                 else:
-                    requirements.extend(["torch==2.6.0", "torchvision==0.21.0", "torchaudio==2.6.0"])
+                    requirements.extend(
+                        ["torch==2.6.0", "torchvision==0.21.0", "torchaudio==2.6.0"]
+                    )
             elif gpu_type == "rocm":
                 # ROCm 6.5 Windows (TheRock)
-                requirements.extend([
-                    "torch @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torch-2.7.0a0+git3f903c3-cp312-cp312-win_amd64.whl",
-                    "torchvision @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchvision-0.22.0+9eb57cd-cp312-cp312-win_amd64.whl",
-                    "torchaudio @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl",
-                ])
+                requirements.extend(
+                    [
+                        "torch @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torch-2.7.0a0+git3f903c3-cp312-cp312-win_amd64.whl",
+                        "torchvision @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchvision-0.22.0+9eb57cd-cp312-cp312-win_amd64.whl",
+                        "torchaudio @ https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl",
+                    ]
+                )
             else:
                 requirements.extend(["torch", "torchvision", "torchaudio"])
         elif self.platform_name == "darwin":
             # MPS requires Torch 2.7.1+
-            requirements.extend(["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"])
+            requirements.extend(
+                ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
+            )
         else:
             requirements.extend(["torch", "torchvision", "torchaudio"])
 
@@ -465,7 +488,11 @@ class PythonBundler:
         for line in machine_lines:
             # Skip any torch packages (we add them above, with correct index/pins)
             lower = line.lower()
-            if lower.startswith("torch") or lower.startswith("torchvision") or lower.startswith("torchaudio"):
+            if (
+                lower.startswith("torch")
+                or lower.startswith("torchvision")
+                or lower.startswith("torchaudio")
+            ):
                 continue
             requirements.append(line)
 
@@ -566,7 +593,7 @@ class PythonBundler:
             [uv, "venv", str(venv_dir), "--python", str(self.python_executable)],
             check=True,
         )
-        
+
         # Get python path within the venv
         if self.platform_name == "win32":
             py_path = venv_dir / "Scripts" / "python.exe"
@@ -637,7 +664,11 @@ class PythonBundler:
             torch_specs: list[str] = []
             for ln in req_lines:
                 lower = ln.lower()
-                if lower.startswith("torch") or lower.startswith("torchvision") or lower.startswith("torchaudio"):
+                if (
+                    lower.startswith("torch")
+                    or lower.startswith("torchvision")
+                    or lower.startswith("torchaudio")
+                ):
                     # Exclude stray option lines, which also start with '-' in requirements.
                     if ln.startswith("--"):
                         continue
@@ -662,7 +693,7 @@ class PythonBundler:
         except Exception:
             # Best-effort: don't fail bundling solely due to this preinstall step.
             pass
-        
+
         # Build & install Rust wheels (apex_download_rs) into the venv so they are
         # included in the final bundle.
         if not getattr(self, "skip_rust", False):
@@ -690,11 +721,18 @@ class PythonBundler:
         # This prevents resolver churn from nunchaku's dependency metadata while still
         # enabling nunchaku-backed models on supported platforms.
         try:
-            if self.last_machine_entry and str(self.last_machine_entry).replace("\\", "/").endswith("/requirements/cuda/linux.txt"):
+            if self.last_machine_entry and str(self.last_machine_entry).replace(
+                "\\", "/"
+            ).endswith("/requirements/cuda/linux.txt"):
                 subprocess.run(
                     [
                         str(py_path),
-                        str(self.project_root / "scripts" / "deps" / "maybe_install_nunchaku.py"),
+                        str(
+                            self.project_root
+                            / "scripts"
+                            / "deps"
+                            / "maybe_install_nunchaku.py"
+                        ),
                         "--python",
                         str(py_path),
                         "--machine-entry-name",
@@ -703,11 +741,18 @@ class PythonBundler:
                     ],
                     check=False,
                 )
-            elif self.last_machine_entry and str(self.last_machine_entry).replace("\\", "/").endswith("/requirements/cuda/windows.txt"):
+            elif self.last_machine_entry and str(self.last_machine_entry).replace(
+                "\\", "/"
+            ).endswith("/requirements/cuda/windows.txt"):
                 subprocess.run(
                     [
                         str(py_path),
-                        str(self.project_root / "scripts" / "deps" / "maybe_install_nunchaku.py"),
+                        str(
+                            self.project_root
+                            / "scripts"
+                            / "deps"
+                            / "maybe_install_nunchaku.py"
+                        ),
                         "--python",
                         str(py_path),
                         "--machine-entry-name",
@@ -731,9 +776,11 @@ class PythonBundler:
             if wd.exists():
                 for whl in wd.glob("*.whl"):
                     local_wheels.append(whl)
-        
+
         if local_wheels:
-            print(f"Installing local universal wheels: {[w.name for w in local_wheels]}")
+            print(
+                f"Installing local universal wheels: {[w.name for w in local_wheels]}"
+            )
             subprocess.run(
                 [
                     str(uv_path),
@@ -751,7 +798,14 @@ class PythonBundler:
         # Install the project itself (so the venv has the `apex-engine` console script),
         # but we still ship `src/` alongside the venv and run `python -m src ...` in production.
         subprocess.run(
-            [str(uv_path), "pip", "install", "--python", str(py_path), str(self.project_root)],
+            [
+                str(uv_path),
+                "pip",
+                "install",
+                "--python",
+                str(py_path),
+                str(self.project_root),
+            ],
             check=True,
         )
 
@@ -768,7 +822,9 @@ class PythonBundler:
         try:
             removed_files, removed_dirs = self._cleanup_bundle_tree(venv_dir)
             if removed_files or removed_dirs:
-                print(f"Cleaned venv artifacts: removed_files={removed_files}, removed_dirs={removed_dirs}")
+                print(
+                    f"Cleaned venv artifacts: removed_files={removed_files}, removed_dirs={removed_dirs}"
+                )
         except Exception:
             pass
 
@@ -813,7 +869,11 @@ class PythonBundler:
                     if not p.is_file():
                         continue
                     name = p.name
-                    if name == ".DS_Store" or name.startswith("._") or name.endswith((".pyc", ".pyo")):
+                    if (
+                        name == ".DS_Store"
+                        or name.startswith("._")
+                        or name.endswith((".pyc", ".pyo"))
+                    ):
                         try:
                             p.unlink(missing_ok=True)  # py3.8+
                         except TypeError:
@@ -871,7 +931,15 @@ class PythonBundler:
 
         # Run the shared patcher in the target venv so bundling and dev installs stay consistent.
         subprocess.run(
-            [str(py_path), str(self.project_root / "scripts" / "updates" / "patch_diffusers_peft.py")],
+            [
+                str(py_path),
+                str(
+                    self.project_root
+                    / "scripts"
+                    / "updates"
+                    / "patch_diffusers_peft.py"
+                ),
+            ],
             check=True,
         )
 
@@ -883,8 +951,12 @@ class PythonBundler:
 
         # Ensure toolchain exists
         try:
-            subprocess.run(["cargo", "--version"], check=True, capture_output=True, text=True)
-            subprocess.run(["rustc", "--version"], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["cargo", "--version"], check=True, capture_output=True, text=True
+            )
+            subprocess.run(
+                ["rustc", "--version"], check=True, capture_output=True, text=True
+            )
         except Exception as e:
             raise SystemExit(
                 "Rust toolchain (cargo/rustc) is required to build apex_download_rs. "
@@ -896,7 +968,11 @@ class PythonBundler:
         # incompatible stale wheel from a previous run.
         try:
             probe = subprocess.run(
-                [str(py_path), "-c", "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')"],
+                [
+                    str(py_path),
+                    "-c",
+                    "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')",
+                ],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -917,7 +993,14 @@ class PythonBundler:
 
         # Install maturin into the venv (pyproject build backend is maturin).
         subprocess.run(
-            [str(uv_path), "pip", "install", "--python", str(py_path), "maturin>=1.6,<2.0"],
+            [
+                str(uv_path),
+                "pip",
+                "install",
+                "--python",
+                str(py_path),
+                "maturin>=1.6,<2.0",
+            ],
             check=True,
         )
 
@@ -1017,7 +1100,6 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
           - apex-studio/        # venv (shipped)
           - src/               # API code
           - assets/, manifest/, transformer_configs/, vae_configs/
-          - gunicorn.conf.py
           - apex-engine        # launcher that runs venv python -m src ...
         """
         bundle_dir = self.dist_dir / "apex-engine"
@@ -1064,9 +1146,6 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
             if src.exists():
                 shutil.copytree(src, bundle_dir / folder, ignore=ignore_junk)
 
-        # Copy gunicorn config
-        shutil.copy(self.project_root / "gunicorn.conf.py", bundle_dir)
-
         # Copy maintenance/update scripts into the bundle so installs can self-update without
         # needing access to the repo checkout.
         scripts_dir = bundle_dir / "scripts"
@@ -1076,7 +1155,10 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
         # IMPORTANT: the repo keeps compatibility wrappers at scripts/*.py, but bundles must
         # ship the real implementations (so they work standalone after extraction).
         helper_scripts: list[tuple[Path, str]] = [
-            (self.project_root / "scripts" / "updates" / "apply_code_update.py", "apply_code_update.py"),
+            (
+                self.project_root / "scripts" / "updates" / "apply_code_update.py",
+                "apply_code_update.py",
+            ),
             (self.project_root / "scripts" / "setup" / "setup.py", "setup.py"),
         ]
         for src, dest_name in helper_scripts:
@@ -1256,9 +1338,15 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         version = self._safe_filename_component(str(m.get("version", "0.0.0")))
         plat = self._safe_filename_component(str(m.get("platform", self.platform_name)))
         arch = self._safe_filename_component(str(m.get("arch", platform.machine())))
-        gpu = self._safe_filename_component(str(m.get("gpu_support", self.last_gpu_type or "unknown")))
+        gpu = self._safe_filename_component(
+            str(m.get("gpu_support", self.last_gpu_type or "unknown"))
+        )
         py_tag = self._safe_filename_component(
-            str(m.get("python_tag", f"cp{sys.version_info.major}{sys.version_info.minor}"))
+            str(
+                m.get(
+                    "python_tag", f"cp{sys.version_info.major}{sys.version_info.minor}"
+                )
+            )
         )
 
         extras: List[str] = []
@@ -1270,7 +1358,9 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         extra = ("-" + "-".join(extras)) if extras else ""
         return f"{prefix}-{version}-{plat}-{arch}-{gpu}-{py_tag}{extra}.zip"
 
-    def _write_code_update_manifest(self, bundle_dir: Path, gpu_type: str, requirements_file: Path) -> dict:
+    def _write_code_update_manifest(
+        self, bundle_dir: Path, gpu_type: str, requirements_file: Path
+    ) -> dict:
         """
         Create a small manifest describing the code-only update bundle.
 
@@ -1282,7 +1372,9 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         import hashlib
 
         py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
-        req_bytes = requirements_file.read_bytes() if requirements_file.exists() else b""
+        req_bytes = (
+            requirements_file.read_bytes() if requirements_file.exists() else b""
+        )
         req_sha256 = hashlib.sha256(req_bytes).hexdigest() if req_bytes else ""
 
         lock_file = self.output_dir / "requirements.lock"
@@ -1327,7 +1419,6 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         Layout (code_bundle_dir):
           - src/               # API code
           - assets/, manifest/ # small static assets/configs
-          - gunicorn.conf.py
           - requirements-bundle.txt (or whichever file was generated)
           - apex-code-update-manifest.json
 
@@ -1361,19 +1452,16 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             if src.exists():
                 shutil.copytree(src, bundle_dir / folder, ignore=ignore_junk)
 
-        # Copy gunicorn config
-        try:
-            shutil.copy(self.project_root / "gunicorn.conf.py", bundle_dir)
-        except Exception:
-            pass
-
         # Copy maintenance/update scripts (no venv in this bundle, but we want the updater/setup scripts
         # available alongside the updated code when extracted).
         try:
             scripts_dir = bundle_dir / "scripts"
             scripts_dir.mkdir(parents=True, exist_ok=True)
             helper_scripts: list[tuple[Path, str]] = [
-                (self.project_root / "scripts" / "updates" / "apply_code_update.py", "apply_code_update.py"),
+                (
+                    self.project_root / "scripts" / "updates" / "apply_code_update.py",
+                    "apply_code_update.py",
+                ),
                 (self.project_root / "scripts" / "setup" / "setup.py", "setup.py"),
             ]
             for src, dest_name in helper_scripts:
@@ -1406,7 +1494,11 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             pass
 
         # Create a small manifest that includes a hash of the requirements spec.
-        self._write_code_update_manifest(bundle_dir=bundle_dir, gpu_type=gpu_type, requirements_file=requirements_file)
+        self._write_code_update_manifest(
+            bundle_dir=bundle_dir,
+            gpu_type=gpu_type,
+            requirements_file=requirements_file,
+        )
 
         # Defensive cleanup (code-only bundles should also be free of cache/artifact files).
         try:
@@ -1537,7 +1629,7 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             "--exclude=._*",
             "--exclude=*/._*",
         ]
-        
+
         env = os.environ.copy()
         env["COPYFILE_DISABLE"] = "1"
 
@@ -1573,7 +1665,9 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         ]
 
         print(f"Creating tar.zst: {out_path.name} (from {src_dir})")
-        p1 = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        p1 = subprocess.Popen(
+            tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+        )
         try:
             p2 = subprocess.run(
                 zstd_cmd,
@@ -1593,7 +1687,11 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         tar_stderr = ""
         try:
             _, tar_stderr = p1.communicate(timeout=120)
-            tar_stderr = (tar_stderr or b"").decode("utf-8", errors="replace") if isinstance(tar_stderr, (bytes, bytearray)) else (tar_stderr or "")
+            tar_stderr = (
+                (tar_stderr or b"").decode("utf-8", errors="replace")
+                if isinstance(tar_stderr, (bytes, bytearray))
+                else (tar_stderr or "")
+            )
         except Exception:
             # If tar hangs for any reason, terminate best-effort.
             try:
@@ -1602,9 +1700,13 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
                 pass
 
         if p1.returncode not in (0, None):
-            raise RuntimeError(f"`tar` failed (exit {p1.returncode}). stderr:\n{tar_stderr}")
+            raise RuntimeError(
+                f"`tar` failed (exit {p1.returncode}). stderr:\n{tar_stderr}"
+            )
         if p2.returncode != 0:
-            raise RuntimeError(f"`zstd` failed (exit {p2.returncode}). stderr:\n{p2.stderr}")
+            raise RuntimeError(
+                f"`zstd` failed (exit {p2.returncode}). stderr:\n{p2.stderr}"
+            )
 
         print(f"Created tar.zst: {out_path}")
         return out_path
@@ -1638,7 +1740,12 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         subprocess.run(
             [
                 str(py_path),
-                str(self.project_root / "scripts" / "updates" / "patch_xformers_flash3.py"),
+                str(
+                    self.project_root
+                    / "scripts"
+                    / "updates"
+                    / "patch_xformers_flash3.py"
+                ),
             ],
             check=True,
         )
@@ -1649,7 +1756,7 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             self.create_lockfile(requirements_file=req_file, venv_dir=venv_dir)
         except Exception as e:
             print(f"Warning: failed to create requirements.lock: {e}")
-        
+
         # Build venv-based bundle (no PyInstaller)
         bundle_dir = self.create_venv_bundle(venv_dir)
 
@@ -1666,7 +1773,10 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
 
         # Smoke test the shipped bundle (strongly recommended).
         smoke_env = os.environ.get("APEX_BUNDLE_SMOKE_TESTS")
-        if self.run_smoke_tests and (smoke_env is None or str(smoke_env).strip().lower() not in ("0", "false", "no", "off")):
+        if self.run_smoke_tests and (
+            smoke_env is None
+            or str(smoke_env).strip().lower() not in ("0", "false", "no", "off")
+        ):
             self._run_smoke_tests(bundle_dir=bundle_dir, gpu_type=gpu_type)
 
         # Sign the bundle
@@ -1702,7 +1812,16 @@ def main():
     )
     parser.add_argument(
         "--cuda",
-        choices=["cuda128", "cuda126", "cuda124", "cuda121", "cuda118", "cpu", "rocm", "auto"],
+        choices=[
+            "cuda128",
+            "cuda126",
+            "cuda124",
+            "cuda121",
+            "cuda118",
+            "cpu",
+            "rocm",
+            "auto",
+        ],
         default="auto",
         help="CUDA version to bundle (default: auto-detect)",
     )
@@ -1843,11 +1962,13 @@ def main():
 
     # Auto-detect CUDA
     cuda_version = args.cuda if args.cuda != "auto" else None
- 
+
     py_exe = args.python_executable or sys.executable
     # If the caller didn't specify a venv interpreter, prefer Python 3.12 when available.
     # Many binary deps in our stack (e.g. ray) do not provide cp313 wheels yet.
-    if args.python_executable is None and not (sys.version_info.major == 3 and sys.version_info.minor == 12):
+    if args.python_executable is None and not (
+        sys.version_info.major == 3 and sys.version_info.minor == 12
+    ):
         py312 = shutil.which("python3.12")
         if py312:
             py_exe = py312
@@ -1869,7 +1990,9 @@ def main():
     # Resolve bundle version (CLI > env > pyproject).
     bundle_version = (args.bundle_version or "").strip() or None
     if not bundle_version:
-        bundle_version = (os.environ.get("APEX_BUNDLE_VERSION", "") or "").strip() or None
+        bundle_version = (
+            os.environ.get("APEX_BUNDLE_VERSION", "") or ""
+        ).strip() or None
     if not bundle_version:
         bundle_version = _read_project_version_from_pyproject(
             Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
@@ -1906,7 +2029,9 @@ def main():
         if args.zip_scope == "python-api" and bundler.code_dist_dir.exists():
             code_zip_name = bundler.default_zip_name("python-code")
             code_zip_path = bundler.output_dir / code_zip_name
-            bundler._zip_dir(bundler.code_dist_dir, code_zip_path, include_root_dir=True)
+            bundler._zip_dir(
+                bundler.code_dist_dir, code_zip_path, include_root_dir=True
+            )
 
     if args.tar_zst:
         if args.tar_zst_scope == "bundle":
@@ -1916,16 +2041,27 @@ def main():
         else:
             tar_src = bundler.dist_dir
 
-        default_name = bundler.default_zip_name(args.tar_zst_scope).replace(".zip", ".tar.zst")
+        default_name = bundler.default_zip_name(args.tar_zst_scope).replace(
+            ".zip", ".tar.zst"
+        )
         tar_name = args.tar_zst_name or default_name
         tar_path = args.tar_zst_output or (bundler.output_dir / tar_name)
-        bundler._tar_zst_dir(tar_src, tar_path, include_root_dir=True, level=args.tar_zst_level)
+        bundler._tar_zst_dir(
+            tar_src, tar_path, include_root_dir=True, level=args.tar_zst_level
+        )
 
         # If the caller created the full python-api tar.zst artifact, also emit a code-only tar.zst by default.
         if args.tar_zst_scope == "python-api" and bundler.code_dist_dir.exists():
-            code_tar_name = bundler.default_zip_name("python-code").replace(".zip", ".tar.zst")
+            code_tar_name = bundler.default_zip_name("python-code").replace(
+                ".zip", ".tar.zst"
+            )
             code_tar_path = bundler.output_dir / code_tar_name
-            bundler._tar_zst_dir(bundler.code_dist_dir, code_tar_path, include_root_dir=True, level=args.tar_zst_level)
+            bundler._tar_zst_dir(
+                bundler.code_dist_dir,
+                code_tar_path,
+                include_root_dir=True,
+                level=args.tar_zst_level,
+            )
 
     print(f"\nBundle complete: {bundle_dir}")
     if platform_name == "win32":

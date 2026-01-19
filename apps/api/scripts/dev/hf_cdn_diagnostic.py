@@ -23,9 +23,13 @@ from huggingface_hub import hf_hub_url
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--repo", required=True, help="HF repo id, e.g. gpt2")
-    p.add_argument("--file", required=True, help="Filename in repo, e.g. pytorch_model.bin")
+    p.add_argument(
+        "--file", required=True, help="Filename in repo, e.g. pytorch_model.bin"
+    )
     p.add_argument("--rev", default="main", help="Revision, default: main")
-    p.add_argument("--bytes", type=int, default=1024, help="How many bytes to fetch via Range")
+    p.add_argument(
+        "--bytes", type=int, default=1024, help="How many bytes to fetch via Range"
+    )
     p.add_argument("--connect-timeout", type=float, default=10.0)
     p.add_argument("--read-timeout", type=float, default=180.0)
     p.add_argument(
@@ -59,7 +63,9 @@ def main() -> int:
     headers = {"Range": f"bytes=0-{n-1}"}
     print(f"\nGET Range 0-{n-1} (trust_env={sess.trust_env})")
     t0 = time.time()
-    resp = sess.get(signed_url, stream=True, allow_redirects=True, timeout=timeout, headers=headers)
+    resp = sess.get(
+        signed_url, stream=True, allow_redirects=True, timeout=timeout, headers=headers
+    )
     print("  status:", resp.status_code)
     print("  final_url:", resp.url)
     print("  content-range:", resp.headers.get("content-range"))
@@ -83,4 +89,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

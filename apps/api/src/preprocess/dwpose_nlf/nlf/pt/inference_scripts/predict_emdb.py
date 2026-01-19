@@ -29,14 +29,14 @@ from nlf.paths import DATA_ROOT, PROJDIR
 
 def initialize():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-path', type=str, required=True)
-    parser.add_argument('--output-path', type=str, required=True)
-    parser.add_argument('--out-video-dir', type=str)
-    parser.add_argument('--num-aug', type=int, default=1)
-    parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--internal-batch-size', type=int, default=0)
-    parser.add_argument('--viz', action=spu.argparse.BoolAction)
-    parser.add_argument('--clahe', action=spu.argparse.BoolAction)
+    parser.add_argument("--model-path", type=str, required=True)
+    parser.add_argument("--output-path", type=str, required=True)
+    parser.add_argument("--out-video-dir", type=str)
+    parser.add_argument("--num-aug", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--internal-batch-size", type=int, default=0)
+    parser.add_argument("--viz", action=spu.argparse.BoolAction)
+    parser.add_argument("--clahe", action=spu.argparse.BoolAction)
     spu.argparse.initialize(parser)
 
 
@@ -44,14 +44,14 @@ def main():
     initialize()
     model = torch.jit.load(FLAGS.model_path)
 
-    ji3d = get_joint_info(model, 'smpl_24')
-    faces = np.load(f'{PROJDIR}/smpl_faces.npy')
+    ji3d = get_joint_info(model, "smpl_24")
+    faces = np.load(f"{PROJDIR}/smpl_faces.npy")
 
-    cano_verts = np.load(f'{PROJDIR}/canonical_verts/smpl.npy')
-    cano_joints = np.load(f'{PROJDIR}/canonical_joints/smpl.npy')
-    cano_all = torch.cat([torch.as_tensor(cano_verts), torch.as_tensor(cano_joints)], dim=0).to(
-        dtype=torch.float32, device='cuda'
-    )
+    cano_verts = np.load(f"{PROJDIR}/canonical_verts/smpl.npy")
+    cano_joints = np.load(f"{PROJDIR}/canonical_joints/smpl.npy")
+    cano_all = torch.cat(
+        [torch.as_tensor(cano_verts), torch.as_tensor(cano_joints)], dim=0
+    ).to(dtype=torch.float32, device="cuda")
 
     predict_fn = functools.partial(
         model.estimate_poses_batched,
@@ -77,37 +77,38 @@ def main():
         else None
     )
 
-    all_emdb_pkl_paths = spu.sorted_recursive_glob(f'{DATA_ROOT}/emdb/**/*_data.pkl')
+    all_emdb_pkl_paths = spu.sorted_recursive_glob(f"{DATA_ROOT}/emdb/**/*_data.pkl")
     emdb1_sequence_roots = [
-        osp.dirname(p) for p in all_emdb_pkl_paths if spu.load_pickle(p)['emdb1']
+        osp.dirname(p) for p in all_emdb_pkl_paths if spu.load_pickle(p)["emdb1"]
     ]
 
     results_all = collections.defaultdict(list)
 
     for seq_root in emdb1_sequence_roots:
         seq_name = osp.basename(seq_root)
-        logger.info(f'Predicting {seq_name}...')
-        subj = seq_root.split('/')[-2]
-        seq_data = spu.load_pickle(f'{seq_root}/{subj}_{seq_name}_data.pkl')
+        logger.info(f"Predicting {seq_name}...")
+        subj = seq_root.split("/")[-2]
+        seq_data = spu.load_pickle(f"{seq_root}/{subj}_{seq_name}_data.pkl")
         frame_paths = [
-            f'{seq_root}/images/{i_frame:05d}.jpg' for i_frame in range(seq_data['n_frames'])
+            f"{seq_root}/images/{i_frame:05d}.jpg"
+            for i_frame in range(seq_data["n_frames"])
         ]
-        bboxes = seq_data['bboxes']['bboxes']
-        bboxes = np.concatenate([bboxes[:, :2], bboxes[:, 2:] - bboxes[:, :2]], axis=1).astype(
-            np.float32
-        )
+        bboxes = seq_data["bboxes"]["bboxes"]
+        bboxes = np.concatenate(
+            [bboxes[:, :2], bboxes[:, 2:] - bboxes[:, :2]], axis=1
+        ).astype(np.float32)
 
         frames_cpu_gpu = precuda(iter_frame_batches(frame_paths, FLAGS.batch_size))
 
         if FLAGS.viz:
             viz.reinit_camera_view()
             if FLAGS.out_video_dir:
-                viz.new_sequence_output(f'{FLAGS.out_video_dir}/{seq_name}.mp4', fps=30)
+                viz.new_sequence_output(f"{FLAGS.out_video_dir}/{seq_name}.mp4", fps=30)
 
         results_seq = predict_sequence(
             predict_fn, detect_fn, frames_cpu_gpu, bboxes, len(frame_paths), viz
         )
-        results_all[f'{subj}_{seq_name}'] = results_seq
+        results_all[f"{subj}_{seq_name}"] = results_seq
 
     spu.dump_pickle(results_all, FLAGS.output_path)
 
@@ -126,7 +127,8 @@ def predict_sequence(predict_fn, detect_fn, frames_cpu_gpu, bboxes, n_frames, vi
     box_batches = more_itertools.chunked(bboxes, FLAGS.batch_size)
 
     for box_b, (frames_b_cpu, frames_b) in zip(
-        spu.progressbar(box_batches, total=n_frames, step=FLAGS.batch_size), frames_cpu_gpu
+        spu.progressbar(box_batches, total=n_frames, step=FLAGS.batch_size),
+        frames_cpu_gpu,
     ):
         boxes_det = detect_fn(frames_b)
         boxes_det = [x[..., :4].cpu().numpy() for x in boxes_det]
@@ -134,17 +136,17 @@ def predict_sequence(predict_fn, detect_fn, frames_cpu_gpu, bboxes, n_frames, vi
         boxes_b = [torch.from_numpy(b[torch.newaxis]).cuda() for b in boxes_selected]
         pred = predict_fn(frames_b, boxes_b)
 
-        pred['poses3d'] = ragged_concat(
-            [x[0, ...] for x in pred['poses3d']],
-            [x[0, :, torch.newaxis] for x in pred['uncertainties']],
+        pred["poses3d"] = ragged_concat(
+            [x[0, ...] for x in pred["poses3d"]],
+            [x[0, :, torch.newaxis] for x in pred["uncertainties"]],
             dim=-1,
         )
-        vertices_b, joints_b = ragged_split(pred['poses3d'], [6890, 24], dim=-2)
+        vertices_b, joints_b = ragged_split(pred["poses3d"], [6890, 24], dim=-2)
         vertices_b = to_np(vertices_b)
         joints_b = to_np(joints_b)
 
-        result_batches['vertices'].append(vertices_b)
-        result_batches['joints'].append(joints_b)
+        result_batches["vertices"].append(vertices_b)
+        result_batches["joints"].append(joints_b)
 
         if FLAGS.viz:
             for frame, box, vertices, joints in zip(
@@ -177,6 +179,6 @@ def select_boxes(boxes_gt_batch, boxes_det_batch):
     return np.array(result)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     with torch.inference_mode():
         main()

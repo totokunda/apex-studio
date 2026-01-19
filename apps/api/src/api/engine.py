@@ -149,7 +149,9 @@ def warmup_engine(request: WarmupEngineRequest):
     # - Disk-only warmup doesn't need a GPU.
     # - Engine warmup must target a GPU worker to be useful.
     if mode == "disk":
-        resources = get_ray_resources(device_index=None, device_type="cpu", load_profile="light")
+        resources = get_ray_resources(
+            device_index=None, device_type="cpu", load_profile="light"
+        )
     else:
         device_index, device_type = get_best_gpu()
         resources = get_ray_resources(device_index, device_type, load_profile="light")
@@ -162,8 +164,12 @@ def warmup_engine(request: WarmupEngineRequest):
             request.selected_components or {},
             mode=mode,
         )
-        register_job(job_id, ref, "engine_warmup", {"manifest_path": manifest_path, "mode": mode})
-        return JobResponse(job_id=job_id, status="queued", message=f"Warmup queued (mode={mode})")
+        register_job(
+            job_id, ref, "engine_warmup", {"manifest_path": manifest_path, "mode": mode}
+        )
+        return JobResponse(
+            job_id=job_id, status="queued", message=f"Warmup queued (mode={mode})"
+        )
     except Exception as e:
         logger.error(f"Failed to submit engine warmup: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to submit: {e}")

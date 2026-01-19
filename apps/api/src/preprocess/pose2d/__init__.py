@@ -1,4 +1,5 @@
 import os
+
 os.environ["APEX_USE_RUST_DOWNLOAD"] = "0"
 from .pose2d import Pose2d
 from src.preprocess.base_preprocessor import BasePreprocessor

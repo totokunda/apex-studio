@@ -209,9 +209,15 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
 
             # Name/label best-effort (avoid showing entire URN in UI)
             lora_basename = os.path.basename(remote_source)
-            lora_name = lora_basename.split(".")[0] if "." in lora_basename else lora_basename
+            lora_name = (
+                lora_basename.split(".")[0] if "." in lora_basename else lora_basename
+            )
             try:
-                if remote_source.startswith("urn:air:") or remote_source.startswith("civitai:") or remote_source.startswith("civitai-file:"):
+                if (
+                    remote_source.startswith("urn:air:")
+                    or remote_source.startswith("civitai:")
+                    or remote_source.startswith("civitai-file:")
+                ):
                     tail = remote_source.rsplit(":", 1)[-1]
                     tail = tail.split("@", 1)[0]
                     tail = tail.split(".", 1)[0]
@@ -220,7 +226,12 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
             except Exception:
                 pass
 
-            out_lora = {"label": lora_name, "name": lora_name, "scale": 1.0, "remote_source": remote_source}
+            out_lora = {
+                "label": lora_name,
+                "name": lora_name,
+                "scale": 1.0,
+                "remote_source": remote_source,
+            }
             if local_paths:
                 out_lora["is_downloaded"] = True
                 out_lora["source"] = local_paths[0]
@@ -234,16 +245,26 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
         elif isinstance(lora, dict):
             out_lora = dict(lora)
             # If previous enrichments ran, `source` may already be a local path. Prefer `remote_source` if present.
-            remote_source = out_lora.get("remote_source") or out_lora.get("source") or out_lora.get("path") or out_lora.get("url") or out_lora.get("remote")
+            remote_source = (
+                out_lora.get("remote_source")
+                or out_lora.get("source")
+                or out_lora.get("path")
+                or out_lora.get("url")
+                or out_lora.get("remote")
+            )
             remote_source = remote_source if isinstance(remote_source, str) else ""
             try:
                 from src.utils.lora_resolution import resolve_lora_local_paths
 
-                local_paths = resolve_lora_local_paths(remote_source) if remote_source else []
+                local_paths = (
+                    resolve_lora_local_paths(remote_source) if remote_source else []
+                )
             except Exception:
                 local_paths = []
 
-            out_lora["remote_source"] = remote_source or out_lora.get("remote_source") or out_lora.get("source")
+            out_lora["remote_source"] = (
+                remote_source or out_lora.get("remote_source") or out_lora.get("source")
+            )
             if local_paths:
                 out_lora["is_downloaded"] = True
                 out_lora["source"] = local_paths[0]
@@ -628,7 +649,10 @@ def _build_attention_options(
     """
     # Local import to avoid import cycles at startup
     try:
-        from src.attention.functions import attention_register, verify_attention_backends
+        from src.attention.functions import (
+            attention_register,
+            verify_attention_backends,
+        )
     except Exception as e:
         # If attention stack cannot be imported, return an empty list gracefully
         return []

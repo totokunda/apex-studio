@@ -703,7 +703,6 @@ class WanAnimateEngine(WanShared):
             )
             self._num_timesteps = len(timesteps)
 
-
             latents = self.denoise(
                 timesteps=timesteps,
                 latents=latents,

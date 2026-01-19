@@ -23,7 +23,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
-
 NUNCHAKU_VERSION = "1.0.2"
 NUNCHAKU_RELEASE_TAG = f"v{NUNCHAKU_VERSION}"
 NUNCHAKU_RELEASE_BASE_URL = f"https://github.com/nunchaku-tech/nunchaku/releases/download/{NUNCHAKU_RELEASE_TAG}"
@@ -59,7 +58,9 @@ class Decision:
     wheel_url: Optional[str] = None
 
 
-def _run(cmd: list[str], *, timeout: int | float | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    cmd: list[str], *, timeout: int | float | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
         capture_output=True,
@@ -67,8 +68,6 @@ def _run(cmd: list[str], *, timeout: int | float | None = None) -> subprocess.Co
         timeout=timeout,
         check=False,
     )
-
-
 
 
 def detect_cuda_compute_capability() -> Optional[str]:
@@ -214,7 +213,6 @@ def decide_nunchaku_install(
             nunchaku_version=WIN_PINNED_NUNCHAKU_VERSION,
         )
 
-
     if platform_name == "linux":
         if torch_mm not in SUPPORTED_LINUX_TORCH_MM:
             return Decision(
@@ -260,7 +258,9 @@ def decide_nunchaku_install(
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Decide and optionally install the matching Nunchaku wheel.")
+    p = argparse.ArgumentParser(
+        description="Decide and optionally install the matching Nunchaku wheel."
+    )
     p.add_argument(
         "--python",
         dest="python_path",
@@ -283,8 +283,17 @@ def main() -> int:
         default=None,
         help="Optional: machine requirements entry name (e.g. 'cuda-sm90-hopper.txt') to apply SM90 skip rule",
     )
-    p.add_argument("--install", action="store_true", help="Actually install via `uv pip install --python ... URL`")
-    p.add_argument("--json", dest="as_json", action="store_true", help="Emit JSON decision payload to stdout")
+    p.add_argument(
+        "--install",
+        action="store_true",
+        help="Actually install via `uv pip install --python ... URL`",
+    )
+    p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit JSON decision payload to stdout",
+    )
     args = p.parse_args()
 
     py_path = Path(args.python_path)
@@ -318,10 +327,14 @@ def main() -> int:
         return 0
 
     # Default to no-deps (nunchaku is optional and we don't want to risk resolver upgrades/downgrades).
-    env_with_deps = (os.environ.get("APEX_NUNCHAKU_WITH_DEPS", "") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+    env_with_deps = (
+        os.environ.get("APEX_NUNCHAKU_WITH_DEPS", "") or ""
+    ).strip().lower() in {"1", "true", "yes", "y", "on"}
     use_deps = bool(args.with_deps or env_with_deps)
 
-    print(f"Attempting Nunchaku install: {d.wheel_filename} ({'with-deps' if use_deps else 'no-deps'})")
+    print(
+        f"Attempting Nunchaku install: {d.wheel_filename} ({'with-deps' if use_deps else 'no-deps'})"
+    )
 
     # Prefer uv if present (either as an executable or as a module), with a pip fallback.
     uv_exe = (uv or "").strip()
@@ -352,5 +365,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

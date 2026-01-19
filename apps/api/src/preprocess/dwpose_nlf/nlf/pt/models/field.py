@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 
 
-
 def build_field(config):
     layer_dims = [config["field_hidden_size"]] * config["field_hidden_layers"] + [
         (config["backbone_link_dim"] + 1) * (config["depth"] + 2)
@@ -35,9 +34,7 @@ class GPSField(nn.Module):
             self.pred_mlp.append(nn.GELU())
         self.pred_mlp.append(nn.Linear(layer_dims[-2], layer_dims[-1]))
         self.r_sqrt_eigva = nn.Buffer(
-            torch.rsqrt(
-                torch.ones(config["field_posenc_dim"], dtype=torch.float32)
-            ),
+            torch.rsqrt(torch.ones(config["field_posenc_dim"], dtype=torch.float32)),
             # This buffer is trained/serialized (present in checkpoints as
             # "heatmap_head.weight_field.r_sqrt_eigva") so it must be persistent.
             persistent=True,
@@ -56,21 +53,23 @@ class GPSNet(nn.Module):
         pos_enc_dim=512,
         hidden_dim=2048,
         output_dim=1024,
-        norm_mode: str = 'dynamic',
+        norm_mode: str = "dynamic",
         mini=None,
         maxi=None,
         eps: float = 1e-6,
     ):
         super().__init__()
         self.factor = 1 / np.sqrt(np.float32(pos_enc_dim))
-        if norm_mode not in ('static', 'dynamic'):
-            raise ValueError(f'norm_mode must be "static" or "dynamic", got: {norm_mode!r}')
+        if norm_mode not in ("static", "dynamic"):
+            raise ValueError(
+                f'norm_mode must be "static" or "dynamic", got: {norm_mode!r}'
+            )
         self.norm_mode = norm_mode
         self.eps = float(eps)
 
         # Static bounds are optional unless norm_mode="static"
         if mini is None or maxi is None:
-            if self.norm_mode == 'static':
+            if self.norm_mode == "static":
                 raise ValueError(
                     'GPSNet norm_mode="static" requires `mini` and `maxi` (3 floats each). '
                     'Set them via config: gps_mini/gps_maxi, or use gps_norm_mode="dynamic".'
@@ -95,7 +94,7 @@ class GPSNet(nn.Module):
         )
 
     def forward(self, inp):
-        if self.norm_mode == 'dynamic':
+        if self.norm_mode == "dynamic":
             mini = torch.amin(inp, dim=0)
             maxi = torch.amax(inp, dim=0)
             center = (mini + maxi) / 2
@@ -112,7 +111,7 @@ class LearnableFourierFeatures(nn.Module):
     def __init__(self, in_features, out_features):
         super().__init__()
         if out_features % 2 != 0:
-            raise ValueError('out_features must be even (sin and cos in pairs)')
+            raise ValueError("out_features must be even (sin and cos in pairs)")
         self.linear = nn.Linear(in_features, out_features // 2, bias=False)
         self.reset_parameters()
 
