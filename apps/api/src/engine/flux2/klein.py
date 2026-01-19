@@ -32,8 +32,7 @@ class Flux2KleinEngine(Flux2Shared):
     @property
     def interrupt(self):
         return self._interrupt
-    
-    
+
     def _get_qwen3_prompt_embeds(
         self,
         prompt: Union[str, List[str]],
@@ -44,15 +43,15 @@ class Flux2KleinEngine(Flux2Shared):
     ):
         device = device or self.device
         dtype = dtype or self.component_dtypes["text_encoder"]
-        
+
         if not self.text_encoder:
             self.load_component_by_type("text_encoder")
         self.to_device(self.text_encoder)
-        
+
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
         texts = []
-        
+
         for single_prompt in prompt:
             messages = [{"role": "user", "content": single_prompt}]
             text = self.text_encoder.tokenizer.apply_chat_template(
@@ -62,7 +61,7 @@ class Flux2KleinEngine(Flux2Shared):
                 enable_thinking=False,
             )
             texts.append(text)
-        
+
         hidden_states = self.text_encoder.encode(
             texts,
             max_sequence_length=max_sequence_length,
@@ -79,11 +78,12 @@ class Flux2KleinEngine(Flux2Shared):
         out = out.to(dtype=dtype, device=device)
 
         batch_size, num_channels, seq_len, hidden_dim = out.shape
-        prompt_embeds = out.permute(0, 2, 1, 3).reshape(batch_size, seq_len, num_channels * hidden_dim)
-        
+        prompt_embeds = out.permute(0, 2, 1, 3).reshape(
+            batch_size, seq_len, num_channels * hidden_dim
+        )
 
         return prompt_embeds
-    
+
     def encode_prompt(
         self,
         prompt: Union[str, List[str]],
@@ -110,12 +110,13 @@ class Flux2KleinEngine(Flux2Shared):
 
         batch_size, seq_len, _ = prompt_embeds.shape
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+        prompt_embeds = prompt_embeds.view(
+            batch_size * num_images_per_prompt, seq_len, -1
+        )
 
         text_ids = self._prepare_text_ids(prompt_embeds)
         text_ids = text_ids.to(device)
         return prompt_embeds, text_ids
-
 
     def run(
         self,

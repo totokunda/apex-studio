@@ -40,7 +40,6 @@ from transformers.utils import (
     logging,
 )
 
-
 try:
     import flashinfer
 except Exception as e:

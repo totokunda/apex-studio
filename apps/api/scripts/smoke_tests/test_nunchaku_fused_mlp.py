@@ -50,7 +50,7 @@ def run(ctx: SmokeContext) -> None:
         torch_dtype=dtype,
         device=device,
     )
-    
+
     fc2 = SVDQW4A4Linear(
         in_features=C_hidden,
         out_features=C_out,
@@ -82,7 +82,7 @@ def run(ctx: SmokeContext) -> None:
     y = fused_gelu_mlp(x, fc1, fc2)
     torch.cuda.synchronize()
     if not hasattr(y, "shape") or tuple(y.shape) != (1, 1, C_out):
-        fail(f"nunchaku fused_gelu_mlp returned unexpected shape: {getattr(y, 'shape', None)}")
+        fail(
+            f"nunchaku fused_gelu_mlp returned unexpected shape: {getattr(y, 'shape', None)}"
+        )
     log("[smoke] nunchaku fused_gelu_mlp ok")
-
-

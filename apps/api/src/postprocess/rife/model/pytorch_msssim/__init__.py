@@ -62,7 +62,7 @@ def ssim(
         L = val_range
 
     padd = 0
-    (_, channel, height, width) = img1.size()
+    _, channel, height, width = img1.size()
     if window is None:
         real_size = min(window_size, height, width)
         window = create_window(real_size, channel=channel).to(img1.device)
@@ -158,7 +158,7 @@ def ssim_matlab(
         L = val_range
 
     padd = 0
-    (_, _, height, width) = img1.size()
+    _, _, height, width = img1.size()
     if window is None:
         real_size = min(window_size, height, width)
         window = create_window_3d(real_size, channel=1).to(img1.device)
@@ -282,7 +282,7 @@ class SSIM(torch.nn.Module):
         self.window = create_window(window_size, channel=self.channel)
 
     def forward(self, img1, img2):
-        (_, channel, _, _) = img1.size()
+        _, channel, _, _ = img1.size()
 
         if channel == self.channel and self.window.dtype == img1.dtype:
             window = self.window

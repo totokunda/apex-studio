@@ -10,6 +10,7 @@ from diffusers.models.modeling_utils import ModelMixin
 from src.transformer.ltx2.base.model import LTX2Attention, LTX2AudioVideoAttnProcessor
 from src.helpers.helpers import helpers as helper_registry
 
+
 class LTX2RotaryPosEmbed1d(nn.Module):
     """
     1D rotary positional embeddings (RoPE) for the LTX 2.0 text encoder connectors.
@@ -26,7 +27,9 @@ class LTX2RotaryPosEmbed1d(nn.Module):
     ):
         super().__init__()
         if rope_type not in ["interleaved", "split"]:
-            raise ValueError(f"{rope_type=} not supported. Choose between 'interleaved' and 'split'.")
+            raise ValueError(
+                f"{rope_type=} not supported. Choose between 'interleaved' and 'split'."
+            )
 
         self.dim = dim
         self.base_seq_len = base_seq_len
@@ -52,7 +55,13 @@ class LTX2RotaryPosEmbed1d(nn.Module):
         freqs_dtype = torch.float64 if self.double_precision else torch.float32
         pow_indices = torch.pow(
             self.theta,
-            torch.linspace(start=0.0, end=1.0, steps=self.dim // num_rope_elems, dtype=freqs_dtype, device=device),
+            torch.linspace(
+                start=0.0,
+                end=1.0,
+                steps=self.dim // num_rope_elems,
+                dtype=freqs_dtype,
+                device=device,
+            ),
         )
         freqs = (pow_indices * torch.pi / 2.0).to(dtype=torch.float32)
 
@@ -66,8 +75,12 @@ class LTX2RotaryPosEmbed1d(nn.Module):
             sin_freqs = freqs.sin().repeat_interleave(2, dim=-1)
 
             if self.dim % num_rope_elems != 0:
-                cos_padding = torch.ones_like(cos_freqs[:, :, : self.dim % num_rope_elems])
-                sin_padding = torch.zeros_like(sin_freqs[:, :, : self.dim % num_rope_elems])
+                cos_padding = torch.ones_like(
+                    cos_freqs[:, :, : self.dim % num_rope_elems]
+                )
+                sin_padding = torch.zeros_like(
+                    sin_freqs[:, :, : self.dim % num_rope_elems]
+                )
                 cos_freqs = torch.cat([cos_padding, cos_freqs], dim=-1)
                 sin_freqs = torch.cat([sin_padding, sin_freqs], dim=-1)
 
@@ -130,7 +143,11 @@ class LTX2TransformerBlock1d(nn.Module):
         rotary_emb: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         norm_hidden_states = self.norm1(hidden_states)
-        attn_hidden_states = self.attn1(norm_hidden_states, attention_mask=attention_mask, query_rotary_emb=rotary_emb)
+        attn_hidden_states = self.attn1(
+            norm_hidden_states,
+            attention_mask=attention_mask,
+            query_rotary_emb=rotary_emb,
+        )
         hidden_states = hidden_states + attn_hidden_states
 
         norm_hidden_states = self.norm2(hidden_states)
@@ -170,7 +187,9 @@ class LTX2ConnectorTransformer1d(nn.Module):
         self.num_learnable_registers = num_learnable_registers
         self.learnable_registers = None
         if num_learnable_registers is not None:
-            init_registers = torch.rand(num_learnable_registers, self.inner_dim) * 2.0 - 1.0
+            init_registers = (
+                torch.rand(num_learnable_registers, self.inner_dim) * 2.0 - 1.0
+            )
             self.learnable_registers = torch.nn.Parameter(init_registers)
 
         self.rope = LTX2RotaryPosEmbed1d(
@@ -194,7 +213,9 @@ class LTX2ConnectorTransformer1d(nn.Module):
             ]
         )
 
-        self.norm_out = torch.nn.RMSNorm(self.inner_dim, eps=eps, elementwise_affine=False)
+        self.norm_out = torch.nn.RMSNorm(
+            self.inner_dim, eps=eps, elementwise_affine=False
+        )
 
         self.gradient_checkpointing = False
 
@@ -217,22 +238,36 @@ class LTX2ConnectorTransformer1d(nn.Module):
                 )
 
             num_register_repeats = seq_len // self.num_learnable_registers
-            registers = torch.tile(self.learnable_registers, (num_register_repeats, 1))  # [seq_len, inner_dim]
+            registers = torch.tile(
+                self.learnable_registers, (num_register_repeats, 1)
+            )  # [seq_len, inner_dim]
 
             binary_attn_mask = (attention_mask >= attn_mask_binarize_threshold).int()
             if binary_attn_mask.ndim == 4:
-                binary_attn_mask = binary_attn_mask.squeeze(1).squeeze(1)  # [B, 1, 1, L] --> [B, L]
+                binary_attn_mask = binary_attn_mask.squeeze(1).squeeze(
+                    1
+                )  # [B, 1, 1, L] --> [B, L]
 
-            hidden_states_non_padded = [hidden_states[i, binary_attn_mask[i].bool(), :] for i in range(batch_size)]
+            hidden_states_non_padded = [
+                hidden_states[i, binary_attn_mask[i].bool(), :]
+                for i in range(batch_size)
+            ]
             valid_seq_lens = [x.shape[0] for x in hidden_states_non_padded]
             pad_lengths = [seq_len - valid_seq_len for valid_seq_len in valid_seq_lens]
             padded_hidden_states = [
-                F.pad(x, pad=(0, 0, 0, p), value=0) for x, p in zip(hidden_states_non_padded, pad_lengths)
+                F.pad(x, pad=(0, 0, 0, p), value=0)
+                for x, p in zip(hidden_states_non_padded, pad_lengths)
             ]
-            padded_hidden_states = torch.cat([x.unsqueeze(0) for x in padded_hidden_states], dim=0)  # [B, L, D]
+            padded_hidden_states = torch.cat(
+                [x.unsqueeze(0) for x in padded_hidden_states], dim=0
+            )  # [B, L, D]
 
-            flipped_mask = torch.flip(binary_attn_mask, dims=[1]).unsqueeze(-1)  # [B, L, 1]
-            hidden_states = flipped_mask * padded_hidden_states + (1 - flipped_mask) * registers
+            flipped_mask = torch.flip(binary_attn_mask, dims=[1]).unsqueeze(
+                -1
+            )  # [B, L, 1]
+            hidden_states = (
+                flipped_mask * padded_hidden_states + (1 - flipped_mask) * registers
+            )
 
             # Overwrite attention_mask with an all-zeros mask if using registers.
             attention_mask = torch.zeros_like(attention_mask)
@@ -243,9 +278,13 @@ class LTX2ConnectorTransformer1d(nn.Module):
         # 3. Run 1D transformer blocks
         for block in self.transformer_blocks:
             if torch.is_grad_enabled() and self.gradient_checkpointing:
-                hidden_states = self._gradient_checkpointing_func(block, hidden_states, attention_mask, rotary_emb)
+                hidden_states = self._gradient_checkpointing_func(
+                    block, hidden_states, attention_mask, rotary_emb
+                )
             else:
-                hidden_states = block(hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb)
+                hidden_states = block(
+                    hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb
+                )
 
         hidden_states = self.norm_out(hidden_states)
 
@@ -279,8 +318,10 @@ class LTX2TextConnectors(ModelMixin, ConfigMixin):
         rope_type: str = "interleaved",
     ):
         super().__init__()
-        
-        self.text_proj_in = nn.Linear(caption_channels * text_proj_in_factor, caption_channels, bias=False)
+
+        self.text_proj_in = nn.Linear(
+            caption_channels * text_proj_in_factor, caption_channels, bias=False
+        )
         self.video_connector = LTX2ConnectorTransformer1d(
             num_attention_heads=video_connector_num_attention_heads,
             attention_head_dim=video_connector_attention_head_dim,
@@ -303,27 +344,36 @@ class LTX2TextConnectors(ModelMixin, ConfigMixin):
             causal_temporal_positioning=causal_temporal_positioning,
             rope_type=rope_type,
         )
-        
 
     def forward(
-        self, text_encoder_hidden_states: torch.Tensor, attention_mask: torch.Tensor, additive_mask: bool = False
+        self,
+        text_encoder_hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        additive_mask: bool = False,
     ):
         # Convert to additive attention mask, if necessary
         if not additive_mask:
             text_dtype = text_encoder_hidden_states.dtype
-            attention_mask = (attention_mask - 1).reshape(attention_mask.shape[0], 1, -1, attention_mask.shape[-1])
+            attention_mask = (attention_mask - 1).reshape(
+                attention_mask.shape[0], 1, -1, attention_mask.shape[-1]
+            )
             attention_mask = attention_mask.to(text_dtype) * torch.finfo(text_dtype).max
 
-        
         text_encoder_hidden_states = self.text_proj_in(text_encoder_hidden_states)
 
-        video_text_embedding, new_attn_mask = self.video_connector(text_encoder_hidden_states, attention_mask)
+        video_text_embedding, new_attn_mask = self.video_connector(
+            text_encoder_hidden_states, attention_mask
+        )
 
         attn_mask = (new_attn_mask < 1e-6).to(torch.int64)
-        attn_mask = attn_mask.reshape(video_text_embedding.shape[0], video_text_embedding.shape[1], 1)
+        attn_mask = attn_mask.reshape(
+            video_text_embedding.shape[0], video_text_embedding.shape[1], 1
+        )
         video_text_embedding = video_text_embedding * attn_mask
         new_attn_mask = attn_mask.squeeze(-1)
 
-        audio_text_embedding, _ = self.audio_connector(text_encoder_hidden_states, attention_mask)
+        audio_text_embedding, _ = self.audio_connector(
+            text_encoder_hidden_states, attention_mask
+        )
 
         return video_text_embedding, audio_text_embedding, new_attn_mask

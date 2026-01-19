@@ -62,7 +62,7 @@ def _chunked_modulated_norm(
 ) -> torch.Tensor:
     """
     Modulated layer norm with chunking to reduce peak memory.
-    
+
     FP32LayerNorm internally does inputs.float() which creates a full fp32 copy.
     By processing in chunks along the sequence dimension, we reduce peak memory
     from O(seq_len) to O(chunk_size).
@@ -79,29 +79,29 @@ def _chunked_modulated_norm(
     if S <= chunk_size:
         out = norm_layer(hidden_states) * (1 + scale) + shift
         return out.to(in_dtype) if out.dtype != in_dtype else out
-    
+
     # Pre-allocate output to avoid holding all chunks in memory
     out = torch.empty_like(hidden_states)
-    
+
     # Check if scale/shift need per-token slicing
     scale_per_token = scale.dim() == 3 and scale.shape[1] == S
-    
+
     for i in range(0, S, chunk_size):
         end = min(i + chunk_size, S)
         hs_chunk = hidden_states[:, i:end, :]
-        
+
         if scale_per_token:
             scale_chunk = scale[:, i:end, :]
             shift_chunk = shift[:, i:end, :]
         else:
             scale_chunk = scale
             shift_chunk = shift
-        
+
         # Norm + modulate directly into pre-allocated output
         normed = norm_layer(hs_chunk)
         out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
         del normed  # Free fp32 intermediate immediately
-    
+
     return out
 
 
@@ -759,15 +759,22 @@ class WanMultiTalkTransformerBlock(nn.Module):
         self._ff_chunk_dim: int = 1
 
         # Chunked norms (disabled by default). These mainly mitigate FP32LayerNorm fp32-copy spikes.
-        self._mod_norm_chunk_size: Optional[int] = None  # used for modulated norms (norm1/norm3 + modulation)
-        self._norm_chunk_size: Optional[int] = None  # used for plain norms (e.g., norm2)
+        self._mod_norm_chunk_size: Optional[int] = (
+            None  # used for modulated norms (norm1/norm3 + modulation)
+        )
+        self._norm_chunk_size: Optional[int] = (
+            None  # used for plain norms (e.g., norm2)
+        )
 
     def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
         self._ff_chunk_size = chunk_size
         self._ff_chunk_dim = dim
 
     def set_chunk_norms(
-        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
     ) -> None:
         """
         Enable/disable chunking for norm operations inside the block.
@@ -789,8 +796,8 @@ class WanMultiTalkTransformerBlock(nn.Module):
 
         hs_dtype = hidden_states.dtype
         shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-            self.scale_shift_table + temb.float()
-        ).to(hs_dtype).chunk(6, dim=1)
+            (self.scale_shift_table + temb.float()).to(hs_dtype).chunk(6, dim=1)
+        )
 
         # 1. Self-attention
         norm_hidden_states = _chunked_modulated_norm(
@@ -811,7 +818,9 @@ class WanMultiTalkTransformerBlock(nn.Module):
         hidden_states = hidden_states + attn_output * gate_msa
 
         # 2. Cross-attention for text/image
-        norm_hidden_states = _chunked_norm(self.norm2, hidden_states, chunk_size=self._norm_chunk_size)
+        norm_hidden_states = _chunked_norm(
+            self.norm2, hidden_states, chunk_size=self._norm_chunk_size
+        )
         attn_output = self.attn2(
             hidden_states=norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states,
@@ -1085,7 +1094,9 @@ class WanMultiTalkTransformer3DModel(
         p = self._CHUNKING_PROFILES[profile_name]
         self._chunking_profile_name = profile_name
 
-        self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+        self._out_modulated_norm_chunk_size = p.get(
+            "out_modulated_norm_chunk_size", None
+        )
 
         # Defaults for attention-map chunking (used by MultiTalkWanAttnProcessor2_0).
         # These are applied to each block's self-attention processor.
@@ -1104,7 +1115,9 @@ class WanMultiTalkTransformer3DModel(
             # Apply attention-map chunking defaults if the processor supports it.
             try:
                 processor = getattr(block.attn1, "processor", None)
-                if processor is not None and hasattr(processor, "set_x_ref_attn_chunking"):
+                if processor is not None and hasattr(
+                    processor, "set_x_ref_attn_chunking"
+                ):
                     processor.set_x_ref_attn_chunking(
                         use_chunks=x_ref_use_chunks,
                         chunk_size_x=x_ref_chunk_size_x,

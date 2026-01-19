@@ -3,7 +3,6 @@ import gguf
 import torch
 from tqdm import tqdm
 
-
 TORCH_COMPATIBLE_QTYPES = (
     None,
     gguf.GGMLQuantizationType.F32,

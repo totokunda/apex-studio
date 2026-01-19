@@ -234,7 +234,6 @@ class LynxEngine(WanShared):
                 if seed is not None
                 else None
             )
-            
 
             ref_buffer = helper.encode_reference_buffer(
                 self,

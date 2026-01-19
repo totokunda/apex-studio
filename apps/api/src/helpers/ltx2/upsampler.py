@@ -23,8 +23,11 @@ from typing import Tuple
 import math
 import torch.nn.functional as F
 
+
 class ResBlock(torch.nn.Module):
-    def __init__(self, channels: int, mid_channels: Optional[int] = None, dims: int = 3):
+    def __init__(
+        self, channels: int, mid_channels: Optional[int] = None, dims: int = 3
+    ):
         super().__init__()
         if mid_channels is None:
             mid_channels = channels
@@ -71,21 +74,27 @@ class PixelShuffleND(torch.nn.Module):
         elif self.dims == 2:
             # spatial: b (c p1 p2) h w -> b c (h p1) (w p2)
             return (
-                x.unflatten(1, (-1, *self.upscale_factors[:2])).permute(0, 1, 4, 2, 5, 3).flatten(4, 5).flatten(2, 3)
+                x.unflatten(1, (-1, *self.upscale_factors[:2]))
+                .permute(0, 1, 4, 2, 5, 3)
+                .flatten(4, 5)
+                .flatten(2, 3)
             )
         elif self.dims == 1:
             # temporal: b (c p1) f h w -> b c (f p1) h w
-            return x.unflatten(1, (-1, *self.upscale_factors[:1])).permute(0, 1, 3, 2, 4, 5).flatten(2, 3)
-        
-        
+            return (
+                x.unflatten(1, (-1, *self.upscale_factors[:1]))
+                .permute(0, 1, 3, 2, 4, 5)
+                .flatten(2, 3)
+            )
 
 
 def _rational_for_scale(scale: float) -> Tuple[int, int]:
     mapping = {0.75: (3, 4), 1.5: (3, 2), 2.0: (2, 1), 4.0: (4, 1)}
     if float(scale) not in mapping:
-        raise ValueError(f"Unsupported scale {scale}. Choose from {list(mapping.keys())}")
+        raise ValueError(
+            f"Unsupported scale {scale}. Choose from {list(mapping.keys())}"
+        )
     return mapping[float(scale)]
-
 
 
 class BlurDownsample(torch.nn.Module):
@@ -112,7 +121,9 @@ class BlurDownsample(torch.nn.Module):
         k = torch.tensor([math.comb(kernel_size - 1, k) for k in range(kernel_size)])
         k2d = k[:, None] @ k[None, :]
         k2d = (k2d / k2d.sum()).float()  # shape (kernel_size, kernel_size)
-        self.register_buffer("kernel", k2d[None, None, :, :])  # (1, 1, kernel_size, kernel_size)
+        self.register_buffer(
+            "kernel", k2d[None, None, :, :]
+        )  # (1, 1, kernel_size, kernel_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.stride == 1:
@@ -131,8 +142,17 @@ class BlurDownsample(torch.nn.Module):
 
     def _apply_2d(self, x2d: torch.Tensor) -> torch.Tensor:
         c = x2d.shape[1]
-        weight = self.kernel.expand(c, 1, self.kernel_size, self.kernel_size)  # depthwise
-        x2d = F.conv2d(x2d, weight=weight, bias=None, stride=self.stride, padding=self.kernel_size // 2, groups=c)
+        weight = self.kernel.expand(
+            c, 1, self.kernel_size, self.kernel_size
+        )  # depthwise
+        x2d = F.conv2d(
+            x2d,
+            weight=weight,
+            bias=None,
+            stride=self.stride,
+            padding=self.kernel_size // 2,
+            groups=c,
+        )
         return x2d
 
 
@@ -155,7 +175,9 @@ class SpatialRationalResampler(torch.nn.Module):
         super().__init__()
         self.scale = float(scale)
         self.num, self.den = _rational_for_scale(self.scale)
-        self.conv = torch.nn.Conv2d(mid_channels, (self.num**2) * mid_channels, kernel_size=3, padding=1)
+        self.conv = torch.nn.Conv2d(
+            mid_channels, (self.num**2) * mid_channels, kernel_size=3, padding=1
+        )
         self.pixel_shuffle = PixelShuffleND(2, upscale_factors=(self.num, self.num))
         self.blur_down = BlurDownsample(dims=2, stride=self.den)
 
@@ -218,28 +240,40 @@ class LTXLatentUpsamplerModel(ModelMixin, ConfigMixin):
         self.initial_norm = torch.nn.GroupNorm(32, mid_channels)
         self.initial_activation = torch.nn.SiLU()
 
-        self.res_blocks = torch.nn.ModuleList([ResBlock(mid_channels, dims=dims) for _ in range(num_blocks_per_stage)])
+        self.res_blocks = torch.nn.ModuleList(
+            [ResBlock(mid_channels, dims=dims) for _ in range(num_blocks_per_stage)]
+        )
 
         if spatial_upsample and temporal_upsample:
             self.upsampler = torch.nn.Sequential(
-                torch.nn.Conv3d(mid_channels, 8 * mid_channels, kernel_size=3, padding=1),
+                torch.nn.Conv3d(
+                    mid_channels, 8 * mid_channels, kernel_size=3, padding=1
+                ),
                 PixelShuffleND(3),
             )
         elif spatial_upsample:
             if rational_resampler:
-                self.upsampler = SpatialRationalResampler(mid_channels=mid_channels, scale=self.spatial_scale)
+                self.upsampler = SpatialRationalResampler(
+                    mid_channels=mid_channels, scale=self.spatial_scale
+                )
             else:
                 self.upsampler = torch.nn.Sequential(
-                    torch.nn.Conv2d(mid_channels, 4 * mid_channels, kernel_size=3, padding=1),
+                    torch.nn.Conv2d(
+                        mid_channels, 4 * mid_channels, kernel_size=3, padding=1
+                    ),
                     PixelShuffleND(2),
                 )
         elif temporal_upsample:
             self.upsampler = torch.nn.Sequential(
-                torch.nn.Conv3d(mid_channels, 2 * mid_channels, kernel_size=3, padding=1),
+                torch.nn.Conv3d(
+                    mid_channels, 2 * mid_channels, kernel_size=3, padding=1
+                ),
                 PixelShuffleND(1),
             )
         else:
-            raise ValueError("Either spatial_upsample or temporal_upsample must be True")
+            raise ValueError(
+                "Either spatial_upsample or temporal_upsample must be True"
+            )
 
         self.post_upsample_res_blocks = torch.nn.ModuleList(
             [ResBlock(mid_channels, dims=dims) for _ in range(num_blocks_per_stage)]
@@ -292,10 +326,13 @@ class LTXLatentUpsamplerModel(ModelMixin, ConfigMixin):
             x = self.final_conv(x)
 
         return x
-    
-    
 
-def upsample_video(video: torch.Tensor, video_vae: AutoencoderKLLTX2Video, upsampler: LTXLatentUpsamplerModel) -> torch.Tensor:
+
+def upsample_video(
+    video: torch.Tensor,
+    video_vae: AutoencoderKLLTX2Video,
+    upsampler: LTXLatentUpsamplerModel,
+) -> torch.Tensor:
     video = video_vae.denormalize_latents(video)
     video = video.to(upsampler.dtype)
     video = upsampler(video)

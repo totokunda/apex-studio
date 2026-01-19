@@ -32,7 +32,6 @@ load_dotenv()
 
 from huggingface_hub import HfApi
 
-
 DEFAULT_REPO_ID = "totokunda/attention"
 _API_DIR = Path(__file__).resolve().parents[2]  # .../apps/api
 DEFAULT_BASE_DIR = _API_DIR / "flash-attention" / "wheelhouse"
@@ -191,7 +190,9 @@ def main() -> int:
 
     path_prefix = str(args.path_prefix).strip().strip("/")
     if not path_prefix:
-        raise SystemExit("--path-prefix must be a non-empty folder name, e.g. flash-attention")
+        raise SystemExit(
+            "--path-prefix must be a non-empty folder name, e.g. flash-attention"
+        )
 
     api = HfApi(token=token)
 
@@ -214,7 +215,9 @@ def main() -> int:
 
     for local_dir, path_in_repo in uploads:
         _require_dir(local_dir)
-        print(f"Uploading {local_dir} -> {args.repo_id}:{path_in_repo} (repo_type={repo_type})")
+        print(
+            f"Uploading {local_dir} -> {args.repo_id}:{path_in_repo} (repo_type={repo_type})"
+        )
         api.upload_folder(
             repo_id=args.repo_id,
             repo_type=repo_type,
@@ -230,4 +233,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

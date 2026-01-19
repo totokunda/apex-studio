@@ -13,7 +13,6 @@ from torchvision.models._api import WeightsEnum, Weights
 from torchvision.models._meta import _IMAGENET_CATEGORIES
 from torchvision.models._utils import _ovewrite_named_param
 
-
 __all__ = [
     "SwinTransformer",
     "Swin_T_Weights",

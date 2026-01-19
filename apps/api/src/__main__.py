@@ -1,14 +1,19 @@
 from __future__ import annotations
 import os, subprocess, signal, psutil, sys, shlex, importlib.util, time
+
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
 from pathlib import Path
 import typer
 import torch
 import multiprocessing
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional dependency for local/dev convenience
+    load_dotenv = None  # type: ignore[assignment]
 
-load_dotenv()
+if load_dotenv is not None:
+    load_dotenv()
 
 
 def _num_gpus():
@@ -20,16 +25,27 @@ def _num_gpus():
 
 def create_procfile(procfile: Path, mode="dev"):
     # Ray manages workers internally, so we only need the API server
+    host = os.getenv("APEX_HOST", "127.0.0.1")
+    port = os.getenv("APEX_PORT", "8765")
+    workers = os.getenv("APEX_UVICORN_WORKERS", "4")
+    loglevel = os.getenv("APEX_LOG_LEVEL", "info")
     if mode == "dev":
         # Default to loopback so the desktop app can connect without extra config.
         # Users who need LAN access can set APEX_HOST=0.0.0.0 or pass --host.
-        host = os.getenv("APEX_HOST", "127.0.0.1")
-        port = os.getenv("APEX_PORT", "8765")
+
         start = (
             "api: uvicorn src.api.main:app " f"--host {host} --port {port} --reload\n"
         )
-    elif mode == "prod":
-        start = "api: gunicorn src.api.main:app --config gunicorn.conf.py\n"
+    else:
+        # Procfiles are parsed line-by-line as "<name>: <command>". Avoid using shell-specific
+        # line continuations (like Windows '^') and always include the process name.
+        start = (
+            "api: uvicorn src.api.main:app "
+            f"--host {host} --port {port} "
+            f"--workers {workers} "
+            '--proxy-headers --forwarded-allow-ips="*" '
+            f"--timeout-keep-alive 5 --log-level {loglevel}\n"
+        )
     with open(procfile, "w") as f:
         f.write(start)
 
@@ -89,7 +105,7 @@ def _proc_cmd_from_procfile(procfile_path: Path, name: str = "api") -> list[str]
         # not a Python interpreter. So `sys.executable -m uvicorn ...` would become:
         #   apex-engine -m uvicorn ...
         # which Typer then treats as CLI flags and errors ("No such option: -m").
-        if parts and parts[0] in {"uvicorn", "gunicorn"}:
+        if parts and parts[0] in {"uvicorn"}:
             if _is_frozen():
                 # We only need to support the API server start; use our internal serve command.
                 # We ignore most Procfile flags and rely on APEX_HOST/APEX_PORT.
@@ -186,9 +202,13 @@ def start(
 
     # Helpful connection hint: 0.0.0.0 is a *bind address* (server-side), not a client URL.
     # Most users should connect via 127.0.0.1 (or localhost).
-    effective_host = os.getenv("APEX_HOST") or ("127.0.0.1" if mode in {"dev", "prod"} else "127.0.0.1")
+    effective_host = os.getenv("APEX_HOST") or (
+        "127.0.0.1" if mode in {"dev", "prod"} else "127.0.0.1"
+    )
     effective_port = os.getenv("APEX_PORT", "8765")
-    client_host = "127.0.0.1" if effective_host in {"0.0.0.0", "::", "[::]"} else effective_host
+    client_host = (
+        "127.0.0.1" if effective_host in {"0.0.0.0", "::", "[::]"} else effective_host
+    )
     print(f"API should be reachable at: http://{client_host}:{effective_port}")
 
     log_path = (cwd / "apex-engine-start.log") if daemon else None
@@ -243,7 +263,7 @@ def internal_serve(
     if port is None:
         port = int(os.getenv("APEX_PORT", "8765"))
 
-    # Mirror key production defaults from `apps/api/gunicorn.conf.py`, but for uvicorn.
+    # Mirror key production defaults, but for uvicorn.
     backlog = 2048
     keepalive = 2
     # Desktop/local stability: do NOT terminate the server after N requests by default.
@@ -265,11 +285,15 @@ def internal_serve(
 
     binds = _binds_for(host)
     if enable_dual_stack:
-        print(f"Dual-stack enabled; binding to: {', '.join(f'{b}:{port}' for b in binds)}")
+        print(
+            f"Dual-stack enabled; binding to: {', '.join(f'{b}:{port}' for b in binds)}"
+        )
 
-    # Worker count + loglevel follow `gunicorn.conf.py` semantics.
+    # Worker count + loglevel follow semantics.
     env = os.getenv("ENVIRONMENT")
-    workers = int(os.getenv("APEX_UVICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1")
+    workers = int(
+        os.getenv("APEX_UVICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1"
+    )
     loglevel = "info"
     reload = False
     if env == "development":
@@ -284,7 +308,9 @@ def internal_serve(
         )
         loglevel = "warning"
     elif env == "production":
-        workers = int(os.getenv("APEX_UVICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1")
+        workers = int(
+            os.getenv("APEX_UVICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1"
+        )
         loglevel = "error"
 
     def _uvicorn_cmd(h: str) -> list[str]:

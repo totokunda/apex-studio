@@ -11,7 +11,6 @@ from torchvision.models._api import WeightsEnum, Weights
 from torchvision.models._meta import _IMAGENET_CATEGORIES
 from torchvision.models._utils import handle_legacy_interface, _ovewrite_named_param
 
-
 __all__ = [
     "ResNet",
     "ResNet18_Weights",
@@ -988,7 +987,6 @@ def wide_resnet101_2(
 
 # The dictionary below is internal implementation detail and will be removed in v0.15
 from torchvision.models._utils import _ModelURLs
-
 
 model_urls = _ModelURLs(
     {

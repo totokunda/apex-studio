@@ -10,8 +10,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 from pathlib import Path
 
+
 def _update_persisted_config(updates: dict, config_store_path: Path) -> None:
     import json
+
     """
     Persist config-related values (paths, hf_token, etc.) so they survive backend restarts.
     """
@@ -147,7 +149,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Required environment for defaults/config paths
     os.environ["APEX_HOME_DIR"] = args.apex_home_dir
 
-    from src.utils.defaults import get_preprocessor_path, get_postprocessor_path, get_config_store_path
+    from src.utils.defaults import (
+        get_preprocessor_path,
+        get_postprocessor_path,
+        get_config_store_path,
+    )
     from src.mixins import LoaderMixin
 
     preprocessor_path = get_preprocessor_path()
@@ -206,8 +212,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         prev_file = prev.get("filename")
 
         filename = md.get("filename")
-        cur_b = md.get("current_bytes") if isinstance(md.get("current_bytes"), int) else None
-        tot_b = md.get("total_bytes") if isinstance(md.get("total_bytes"), int) else None
+        cur_b = (
+            md.get("current_bytes")
+            if isinstance(md.get("current_bytes"), int)
+            else None
+        )
+        tot_b = (
+            md.get("total_bytes") if isinstance(md.get("total_bytes"), int) else None
+        )
 
         # Emit if:
         # - status changes (complete/error)
@@ -246,7 +258,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             _terminal_state[key] = {"t": now, "p": progress, "filename": filename}
 
-    def emit(task: str, p_task: Optional[float], message: str, metadata: Dict[str, Any]):
+    def emit(
+        task: str, p_task: Optional[float], message: str, metadata: Dict[str, Any]
+    ):
         # Map per-task progress into an overall [0,1] best-effort progress
         if task in completed and isinstance(p_task, (int, float)):
             completed[task] = max(0.0, min(1.0, float(p_task)))
@@ -258,9 +272,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                 overall += weight * float(completed.get(t, 0.0))
             overall = max(0.0, min(1.0, overall))
 
-        send_update(task=task, progress=overall, message=message, metadata=metadata, status="processing")
+        send_update(
+            task=task,
+            progress=overall,
+            message=message,
+            metadata=metadata,
+            status="processing",
+        )
 
-    def emit_config_step(p_task: float, message: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    def emit_config_step(
+        p_task: float, message: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
         """
         Emit progress for config toggles. This shows up as task='config' so the frontend can map it
         into the update_configs phase while still using the same overall progress mapping.
@@ -268,7 +290,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         md: Dict[str, Any] = metadata or {}
         emit("config", max(0.0, min(1.0, float(p_task))), message, md)
 
-    def mask_progress_cb(current: int, total: Optional[int], label: Optional[str] = None):
+    def mask_progress_cb(
+        current: int, total: Optional[int], label: Optional[str] = None
+    ):
         if "mask" not in trackers:
             return
         frac, md = trackers["mask"].update(current, total, label)
@@ -279,7 +303,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             md,
         )
 
-    def rife_progress_cb(current: int, total: Optional[int], label: Optional[str] = None):
+    def rife_progress_cb(
+        current: int, total: Optional[int], label: Optional[str] = None
+    ):
         if "rife" not in trackers:
             return
         frac, md = trackers["rife"].update(current, total, label)
@@ -293,6 +319,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     def download_mask_model(model_type):
         # Lazy import: SAM mask stack is heavy and unnecessary for other setup tasks.
         from src.mask.mask import ModelType, MODEL_WEIGHTS
+
         model_type = ModelType(model_type)
         model_weight = MODEL_WEIGHTS[model_type]
         send_update(
@@ -303,7 +330,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             status="processing",
         )
         loader = LoaderMixin()
-        loader._download(model_weight, save_path=preprocessor_path, progress_callback=mask_progress_cb)
+        loader._download(
+            model_weight,
+            save_path=preprocessor_path,
+            progress_callback=mask_progress_cb,
+        )
         completed["mask"] = 1.0
         send_update(
             task="mask",
@@ -325,7 +356,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             metadata={},
             status="processing",
         )
-        download_rife_assets(save_path=postprocessor_path, progress_callback=rife_progress_cb)
+        download_rife_assets(
+            save_path=postprocessor_path, progress_callback=rife_progress_cb
+        )
         completed["rife"] = 1.0
         send_update(
             task="rife",
@@ -349,11 +382,23 @@ def main(argv: Optional[list[str]] = None) -> int:
             # Best-effort: show config progress even if we only toggle one setting.
             emit_config_step(0.0, "Updating config…", {"status": "processing"})
             if args.enable_image_render_steps:
-                emit_config_step(0.2, "Enabling image render steps…", {"key": "ENABLE_IMAGE_RENDER_STEP"})
-                _update_persisted_config({"ENABLE_IMAGE_RENDER_STEP": "true"}, config_store_path)   
+                emit_config_step(
+                    0.2,
+                    "Enabling image render steps…",
+                    {"key": "ENABLE_IMAGE_RENDER_STEP"},
+                )
+                _update_persisted_config(
+                    {"ENABLE_IMAGE_RENDER_STEP": "true"}, config_store_path
+                )
             if args.enable_video_render_steps:
-                emit_config_step(0.6, "Enabling video render steps…", {"key": "ENABLE_VIDEO_RENDER_STEP"})
-                _update_persisted_config({"ENABLE_VIDEO_RENDER_STEP": "true"}, config_store_path)
+                emit_config_step(
+                    0.6,
+                    "Enabling video render steps…",
+                    {"key": "ENABLE_VIDEO_RENDER_STEP"},
+                )
+                _update_persisted_config(
+                    {"ENABLE_VIDEO_RENDER_STEP": "true"}, config_store_path
+                )
             completed["config"] = 1.0
             send_update(
                 task="config",

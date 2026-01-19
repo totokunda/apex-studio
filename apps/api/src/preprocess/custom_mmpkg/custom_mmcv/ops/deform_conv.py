@@ -68,10 +68,8 @@ class DeformConv2dFunction(Function):
         im2col_step=32,
     ):
         if input is not None and input.dim() != 4:
-            raise ValueError(
-                f"Expected 4D tensor as input, got {input.dim()}D tensor \
-                  instead."
-            )
+            raise ValueError(f"Expected 4D tensor as input, got {input.dim()}D tensor \
+                  instead.")
         assert bias is False, "Only support bias is False."
         ctx.stride = _pair(stride)
         ctx.padding = _pair(padding)

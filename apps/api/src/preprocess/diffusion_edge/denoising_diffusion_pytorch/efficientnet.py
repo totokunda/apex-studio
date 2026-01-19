@@ -20,7 +20,6 @@ from torchvision.models._utils import (
     _make_divisible,
 )
 
-
 __all__ = [
     "EfficientNet",
     "EfficientNet_B0_Weights",
@@ -1263,7 +1262,6 @@ def efficientnet_v2_l(
 
 # The dictionary below is internal implementation detail and will be removed in v0.15
 from torchvision.models._utils import _ModelURLs
-
 
 model_urls = _ModelURLs(
     {

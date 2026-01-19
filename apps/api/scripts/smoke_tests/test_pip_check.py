@@ -7,8 +7,9 @@ import sys
 
 from .common import log, fail, SmokeContext
 
-
-_MEDIAPIPE_UNSUPPORTED_RE = re.compile(r"^mediapipe\s+\S+\s+is not supported on this platform$")
+_MEDIAPIPE_UNSUPPORTED_RE = re.compile(
+    r"^mediapipe\s+\S+\s+is not supported on this platform$"
+)
 
 
 def _can_ignore_mediapipe_unsupported() -> bool:
@@ -67,5 +68,3 @@ def run(ctx: SmokeContext) -> None:
                     log(f"[smoke]   {ln}")
             return
         fail(f"`pip check` failed (exit {res.returncode}). stderr:\n{filtered.strip()}")
-
-

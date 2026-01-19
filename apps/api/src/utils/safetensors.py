@@ -30,12 +30,16 @@ def _validate_safetensors_header(file_path: Union[str, os.PathLike]) -> None:
 
     # Need at least 8 bytes for the header length prefix.
     if size < 8:
-        raise RuntimeError(f"Invalid safetensors file (too small): {path} ({size} bytes)")
+        raise RuntimeError(
+            f"Invalid safetensors file (too small): {path} ({size} bytes)"
+        )
 
     with open(path, "rb") as fp:
         header_len_bytes = fp.read(8)
         if len(header_len_bytes) != 8:
-            raise RuntimeError(f"Invalid safetensors file (missing header length): {path}")
+            raise RuntimeError(
+                f"Invalid safetensors file (missing header length): {path}"
+            )
 
         header_len = int.from_bytes(header_len_bytes, byteorder="little", signed=False)
         # Heuristic cap to avoid trying to allocate absurd header sizes on corrupted files.
@@ -66,7 +70,9 @@ def _validate_safetensors_header(file_path: Union[str, os.PathLike]) -> None:
         if key == "__metadata__":
             continue
         if not isinstance(meta, dict):
-            raise RuntimeError(f"Invalid safetensors entry metadata for {key!r}: {path}")
+            raise RuntimeError(
+                f"Invalid safetensors entry metadata for {key!r}: {path}"
+            )
         offsets = meta.get("data_offsets")
         if (
             not isinstance(offsets, (list, tuple))

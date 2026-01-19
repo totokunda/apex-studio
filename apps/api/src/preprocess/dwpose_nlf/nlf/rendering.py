@@ -6,32 +6,42 @@ import cameralib
 
 class MeshViewer:
     def __init__(self, imshape, camera, color=None):
-        self.scene = pyrender.Scene(bg_color=[1, 1, 1, 0], ambient_light=(0.5, 0.5, 0.5))
+        self.scene = pyrender.Scene(
+            bg_color=[1, 1, 1, 0], ambient_light=(0.5, 0.5, 0.5)
+        )
         self.color = (160 / 255, 170 / 255, 205 / 255, 1.0) if color is None else color
         self.pyrender_camera = WrappedCamera(camera)
-        self.camera_node = self.scene.add(self.pyrender_camera, name='pc-camera')
+        self.camera_node = self.scene.add(self.pyrender_camera, name="pc-camera")
         self.scene.set_pose(self.camera_node, pose=self.get_extrinsics(camera))
         self.viewer = pyrender.OffscreenRenderer(imshape[1], imshape[0])
         self.add_raymond_light(intensity=1)
         self.material = pyrender.MetallicRoughnessMaterial(
-            metallicFactor=0.3, roughnessFactor=0.5, alphaMode='OPAQUE', baseColorFactor=self.color,
-            doubleSided=True)
+            metallicFactor=0.3,
+            roughnessFactor=0.5,
+            alphaMode="OPAQUE",
+            baseColorFactor=self.color,
+            doubleSided=True,
+        )
 
     def remove_meshes(self):
-        for node in self.scene.get_nodes(name='mesh'):
+        for node in self.scene.get_nodes(name="mesh"):
             self.scene.remove_node(node)
 
     def add_mesh(self, mesh, color=None, material=None):
         if material is None and color is not None:
             material = pyrender.MetallicRoughnessMaterial(
-                metallicFactor=0.3, roughnessFactor=0.8, alphaMode='BLEND',
-                baseColorFactor=color, doubleSided=True)
+                metallicFactor=0.3,
+                roughnessFactor=0.8,
+                alphaMode="BLEND",
+                baseColorFactor=color,
+                doubleSided=True,
+            )
 
         if material is None and color is None:
             material = self.material
 
         mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
-        self.scene.add(mesh, 'mesh')
+        self.scene.add(mesh, "mesh")
 
     def set_mesh(self, mesh, color=None, material=None):
         self.remove_meshes()
@@ -44,9 +54,7 @@ class MeshViewer:
     @staticmethod
     def get_extrinsics(camera):
         t = -camera.R @ np.expand_dims(camera.R @ camera.t * [-1, 1, 1], -1)
-        return np.block(
-            [[camera.R, t],
-             [0, 0, 0, 1]]).astype(np.float32)
+        return np.block([[camera.R, t], [0, 0, 0, 1]]).astype(np.float32)
 
     def add_raymond_light(self, intensity):
         theta = np.pi * np.array([1 / 6, 1 / 6, 1 / 6], np.float32)
@@ -65,9 +73,14 @@ class MeshViewer:
             y_ = np.cross(z_, x_)
             matrix = np.eye(4)
             matrix[:3, :3] = np.c_[x_, y_, z_]
-            self.scene.add_node(pyrender.node.Node(
-                light=pyrender.light.DirectionalLight(color=np.ones(3), intensity=intensity),
-                matrix=matrix))
+            self.scene.add_node(
+                pyrender.node.Node(
+                    light=pyrender.light.DirectionalLight(
+                        color=np.ones(3), intensity=intensity
+                    ),
+                    matrix=matrix,
+                )
+            )
 
     def render(self, render_wireframe=False, RGBA=False):
         flags = pyrender.constants.RenderFlags.SHADOWS_DIRECTIONAL
@@ -80,7 +93,11 @@ class MeshViewer:
 
     def render_seg(self):
         return np.uint8(
-            self.viewer.render(self.scene, flags=pyrender.constants.RenderFlags.DEPTH_ONLY) > 0)
+            self.viewer.render(
+                self.scene, flags=pyrender.constants.RenderFlags.DEPTH_ONLY
+            )
+            > 0
+        )
 
 
 class WrappedCamera(pyrender.camera.Camera):
@@ -109,12 +126,16 @@ def render(vertices, faces, camera, wireframe=False, colors=None, imshape=(800, 
     images = []
     depth_images = []
     if colors is None:
-        colors = np.repeat(np.array([.6, .6, .6])[np.newaxis], n_verts, axis=0).reshape(-1)
+        colors = np.repeat(
+            np.array([0.6, 0.6, 0.6])[np.newaxis], n_verts, axis=0
+        ).reshape(-1)
 
     for vertices_single in vertices:
         mesh = trimesh.Trimesh(
-            vertices_single * np.array([1, -1, -1], dtype=np.float32), faces,
-            vertex_colors=colors)
+            vertices_single * np.array([1, -1, -1], dtype=np.float32),
+            faces,
+            vertex_colors=colors,
+        )
         viewer.set_mesh(mesh)
         color_image, depth_image = viewer.render(render_wireframe=wireframe)
         images.append(color_image)
@@ -126,15 +147,23 @@ def render(vertices, faces, camera, wireframe=False, colors=None, imshape=(800, 
 class Renderer2:
     def __init__(self):
         self.viewer = MeshViewer(
-            imshape=(10, 10), camera=cameralib.Camera.from_fov(40, (10, 10)))
+            imshape=(10, 10), camera=cameralib.Camera.from_fov(40, (10, 10))
+        )
 
     def set_image_shape(self, imshape):
         self.viewer.viewer.viewport_height = imshape[0]
         self.viewer.viewer.viewport_width = imshape[1]
 
     def render_meshes(
-            self, trimeshes, materials, camera, RGBA=False, wireframe=False, imshape=None,
-            return_depth=False):
+        self,
+        trimeshes,
+        materials,
+        camera,
+        RGBA=False,
+        wireframe=False,
+        imshape=None,
+        return_depth=False,
+    ):
         self.set_image_shape(imshape)
         self.viewer.remove_meshes()
         for tmesh, material in zip(trimeshes, materials):
@@ -143,7 +172,9 @@ class Renderer2:
             self.viewer.add_mesh(mesh, material=material)
 
         self.viewer.set_camera(camera)
-        color_image, depth_image = self.viewer.render(render_wireframe=wireframe, RGBA=RGBA)
+        color_image, depth_image = self.viewer.render(
+            render_wireframe=wireframe, RGBA=RGBA
+        )
         if return_depth:
             return color_image, depth_image
         else:
@@ -151,13 +182,21 @@ class Renderer2:
 
 
 class Renderer:
-    def __init__(self, imshape=None, faces=None, wireframe=False, return_depth=False, color=None,
-                 vertex_colors=None):
+    def __init__(
+        self,
+        imshape=None,
+        faces=None,
+        wireframe=False,
+        return_depth=False,
+        color=None,
+        vertex_colors=None,
+    ):
         if imshape is None:
             imshape = (10, 10)
 
         self.viewer = MeshViewer(
-            imshape=imshape, camera=cameralib.Camera.from_fov(40, imshape), color=color)
+            imshape=imshape, camera=cameralib.Camera.from_fov(40, imshape), color=color
+        )
         self.faces = faces
         self.wireframe = wireframe
         self.return_depth = return_depth
@@ -168,7 +207,14 @@ class Renderer:
         self.viewer.viewer.viewport_width = imshape[1]
 
     def render_meshes(
-            self, trimeshes, camera, RGBA=False, wireframe=False, imshape=None, return_depth=False):
+        self,
+        trimeshes,
+        camera,
+        RGBA=False,
+        wireframe=False,
+        imshape=None,
+        return_depth=False,
+    ):
         self.viewer.remove_meshes()
         if imshape is not None:
             self.set_image_shape(imshape)
@@ -176,7 +222,9 @@ class Renderer:
             self.viewer.add_mesh(mesh)
         self.viewer.set_camera(camera)
 
-        color_image, depth_image = self.viewer.render(render_wireframe=wireframe, RGBA=RGBA)
+        color_image, depth_image = self.viewer.render(
+            render_wireframe=wireframe, RGBA=RGBA
+        )
         if return_depth:
             return color_image, depth_image
         else:
@@ -186,7 +234,9 @@ class Renderer:
         verts_transformed = vertices * np.array([1, -1, -1], dtype=np.float32)
         if faces is None:
             faces = self.faces
-        mesh = trimesh.Trimesh(verts_transformed, faces, vertex_colors=self.vertex_colors)
+        mesh = trimesh.Trimesh(
+            verts_transformed, faces, vertex_colors=self.vertex_colors
+        )
         if imshape is not None:
             self.set_image_shape(imshape)
 
@@ -196,7 +246,9 @@ class Renderer:
         if seg:
             return self.viewer.render_seg()
 
-        color_image, depth_image = self.viewer.render(render_wireframe=self.wireframe, RGBA=RGBA)
+        color_image, depth_image = self.viewer.render(
+            render_wireframe=self.wireframe, RGBA=RGBA
+        )
         if self.return_depth:
             return color_image, depth_image
         else:

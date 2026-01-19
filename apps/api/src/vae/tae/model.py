@@ -29,8 +29,16 @@ class Clamp(nn.Module):
 class MemBlock(nn.Module):
     def __init__(self, n_in, n_out, act_func):
         super().__init__()
-        self.conv = nn.Sequential(conv(n_in * 2, n_out), act_func, conv(n_out, n_out), act_func, conv(n_out, n_out))
-        self.skip = nn.Conv2d(n_in, n_out, 1, bias=False) if n_in != n_out else nn.Identity()
+        self.conv = nn.Sequential(
+            conv(n_in * 2, n_out),
+            act_func,
+            conv(n_out, n_out),
+            act_func,
+            conv(n_out, n_out),
+        )
+        self.skip = (
+            nn.Conv2d(n_in, n_out, 1, bias=False) if n_in != n_out else nn.Identity()
+        )
         self.act = act_func
 
     def forward(self, x, past):
@@ -82,7 +90,9 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
                 NT, C, H, W = x.shape
                 T = NT // N
                 _x = x.reshape(N, T, C, H, W)
-                mem = F.pad(_x, (0, 0, 0, 0, 0, 0, 1, 0), value=0)[:, :T].reshape(x.shape)
+                mem = F.pad(_x, (0, 0, 0, 0, 0, 0, 1, 0), value=0)[:, :T].reshape(
+                    x.shape
+                )
                 x = b(x, mem)
             else:
                 x = b(x)
@@ -96,7 +106,10 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
         # iterate over input timesteps and also iterate over blocks.
         # because of the cursed TPool/TGrow blocks, this is not a nested loop,
         # it's actually a ***graph traversal*** problem! so let's make a queue
-        work_queue = [TWorkItem(xt, 0) for t, xt in enumerate(x.reshape(N, T * C, H, W).chunk(T, dim=1))]
+        work_queue = [
+            TWorkItem(xt, 0)
+            for t, xt in enumerate(x.reshape(N, T * C, H, W).chunk(T, dim=1))
+        ]
         # in addition to manually managing our queue, we also need to manually manage our progressbar.
         # we'll update it for every source node that we consume.
         progress_bar = tqdm(range(T), disable=not show_progress_bar)
@@ -120,7 +133,9 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
                         mem[i] = xt
                     else:
                         xt_new = b(xt, mem[i])
-                        mem[i].copy_(xt)  # inplace might reduce mysterious pytorch memory allocations? doesn't help though
+                        mem[i].copy_(
+                            xt
+                        )  # inplace might reduce mysterious pytorch memory allocations? doesn't help though
                     # add successor to work queue
                     work_queue.insert(0, TWorkItem(xt_new, i + 1))
                 elif isinstance(b, TPool):
@@ -146,7 +161,9 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
                     xt = b(xt)
                     NT, C, H, W = xt.shape
                     # each tgrow has multiple successor nodes
-                    for xt_next in reversed(xt.view(N, b.stride * C, H, W).chunk(b.stride, 1)):
+                    for xt_next in reversed(
+                        xt.view(N, b.stride * C, H, W).chunk(b.stride, 1)
+                    ):
                         # add successor to work queue
                         work_queue.insert(0, TWorkItem(xt_next, i + 1))
                 else:
@@ -160,7 +177,15 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
 
 
 class TAEHV(nn.Module):
-    def __init__(self, checkpoint_path="taehv.pth", decoder_time_upscale=(True, True), decoder_space_upscale=(True, True, True), patch_size=1, latent_channels=32, model_type="wan21"):
+    def __init__(
+        self,
+        checkpoint_path="taehv.pth",
+        decoder_time_upscale=(True, True),
+        decoder_space_upscale=(True, True, True),
+        patch_size=1,
+        latent_channels=32,
+        model_type="wan21",
+    ):
         """Initialize pretrained TAEHV from the given checkpoint.
 
         Arg:
@@ -236,11 +261,15 @@ class TAEHV(nn.Module):
             ext = os.path.splitext(checkpoint_path)[1].lower()
 
             if ext == ".pth":
-                state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+                state_dict = torch.load(
+                    checkpoint_path, map_location="cpu", weights_only=True
+                )
             elif ext == ".safetensors":
                 state_dict = load_file(checkpoint_path, device="cpu")
             else:
-                raise ValueError(f"Unsupported checkpoint format: {ext}. Supported formats: .pth, .safetensors")
+                raise ValueError(
+                    f"Unsupported checkpoint format: {ext}. Supported formats: .pth, .safetensors"
+                )
 
             self.load_state_dict(self.patch_tgrow_layers(state_dict))
 

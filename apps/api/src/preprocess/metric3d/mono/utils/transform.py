@@ -9,7 +9,6 @@ import torch
 import matplotlib
 import matplotlib.cm
 
-
 """
 Provides a set of Pytorch transforms that use OpenCV instead of PIL (Pytorch default)
 for image manipulation.

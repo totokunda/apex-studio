@@ -5,7 +5,6 @@ from pathlib import Path
 import traceback
 import argparse
 
-
 # Add apps/api to sys.path to ensure imports work
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -98,10 +97,22 @@ PREPROCESSORS = [
     Face2dDetector,
 ]
 
+
 def main():
     parser = argparse.ArgumentParser(description="Test preprocessors.")
-    parser.add_argument("--file", "-f", type=str, required=True, help="Path to video file to use for testing.")
-    parser.add_argument("--model", "-m", type=str, help="Filter to run only models containing this string (case-insensitive).")
+    parser.add_argument(
+        "--file",
+        "-f",
+        type=str,
+        required=True,
+        help="Path to video file to use for testing.",
+    )
+    parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        help="Filter to run only models containing this string (case-insensitive).",
+    )
     args = parser.parse_args()
 
     # Verify custom file exists
@@ -115,8 +126,7 @@ def main():
     models_to_test = PREPROCESSORS
     if args.model:
         models_to_test = [
-            cls for cls in PREPROCESSORS 
-            if args.model.lower() in cls.__name__.lower()
+            cls for cls in PREPROCESSORS if args.model.lower() in cls.__name__.lower()
         ]
         if not models_to_test:
             print(f"No models found matching '{args.model}'")
@@ -129,38 +139,38 @@ def main():
     for PreprocessorClass in models_to_test:
         print(f"\n{'='*50}")
         print(f"Testing {PreprocessorClass.__name__} on {video_path}...")
-        
+
         try:
             print(f"  Loading model...")
             # Instantiate using from_pretrained
             model = PreprocessorClass.from_pretrained()
-            
+
             print(f"  Processing video...")
             # Run on a few frames to test
             # process_video yields frames
-            
+
             # Create a generator by calling the model instance with the video path
             # This triggers __call__ -> process_video
             generator = model(str(video_path))
-            
+
             # Consume a few frames to ensure it's working
             count = 0
             for frame in generator:
                 count += 1
-                if count >= 3: # Test 3 frames
+                if count >= 3:  # Test 3 frames
                     break
-            
+
             print(f"  SUCCESS: Processed {count} frames.")
             success_count += 1
-            
+
         except Exception as e:
             print(f"  FAILED: {e}")
             traceback.print_exc()
             fail_count += 1
             failed_models.append(PreprocessorClass.__name__)
-        
+
         # Clean up to save memory
-        if 'model' in locals():
+        if "model" in locals():
             del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -170,11 +180,12 @@ def main():
     print(f"Total tested: {len(models_to_test)}")
     print(f"Passed: {success_count}")
     print(f"Failed: {fail_count}")
-    
+
     if fail_count > 0:
         print("\nFailed models:")
         for name in failed_models:
             print(f"- {name}")
+
 
 if __name__ == "__main__":
     main()

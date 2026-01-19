@@ -7,7 +7,6 @@ which contains (at minimum):
   - python-code/apex-engine/src/
   - python-code/apex-engine/assets/ (optional)
   - python-code/apex-engine/manifest/ (optional)
-  - python-code/apex-engine/gunicorn.conf.py (optional)
   - python-code/apex-engine/requirements-bundle.txt (optional)
   - python-code/apex-engine/apex-code-update-manifest.json (optional)
 
@@ -34,14 +33,12 @@ import uuid
 from pathlib import Path
 from typing import Iterable, Optional
 
-
 ALLOWLIST_TOP_LEVEL = [
     "src",
     "assets",
     "manifest",
     "transformer_configs",
     "vae_configs",
-    "gunicorn.conf.py",
     "requirements-bundle.txt",
     "requirements.lock",
     "apex-code-update-manifest.json",
@@ -182,7 +179,9 @@ def _find_update_payload_root(extracted_root: Path) -> Path:
                 candidates.append(p.parent)
 
     if not candidates:
-        raise RuntimeError("Could not locate update payload root (expected apex-engine/ with src/ inside the archive).")
+        raise RuntimeError(
+            "Could not locate update payload root (expected apex-engine/ with src/ inside the archive)."
+        )
 
     # Prefer the shallowest path (closest to extracted root)
     candidates.sort(key=lambda x: len(x.parts))
@@ -196,6 +195,7 @@ def _copy_to_staging(src: Path, staging_dest: Path) -> None:
         staging_dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, staging_dest)
 
+
 def _venv_python_path(venv_dir: Path) -> Path | None:
     if os.name == "nt":
         p = venv_dir / "Scripts" / "python.exe"
@@ -207,7 +207,9 @@ def _venv_python_path(venv_dir: Path) -> Path | None:
 def _run_uv_pip_sync(*, python: Path, lockfile: Path, quiet: bool) -> None:
     uv = shutil.which("uv")
     if not uv:
-        raise RuntimeError("`uv` not found on PATH; required for lockfile sync. Install uv or add it to PATH.")
+        raise RuntimeError(
+            "`uv` not found on PATH; required for lockfile sync. Install uv or add it to PATH."
+        )
 
     cmd = [uv, "pip", "sync", "-p", str(python), "--strict"]
     if quiet:
@@ -218,7 +220,9 @@ def _run_uv_pip_sync(*, python: Path, lockfile: Path, quiet: bool) -> None:
     proc = subprocess.run(cmd, capture_output=quiet, text=True)
     if proc.returncode != 0:
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-        raise RuntimeError(f"uv pip sync failed (exit {proc.returncode}). Output:\n{out.strip()}")
+        raise RuntimeError(
+            f"uv pip sync failed (exit {proc.returncode}). Output:\n{out.strip()}"
+        )
 
 
 def _smoke_test_imports(python: Path, *, quiet: bool) -> None:
@@ -226,18 +230,30 @@ def _smoke_test_imports(python: Path, *, quiet: bool) -> None:
     Best-effort post-sync validation. Controlled via env var:
       APEX_CODE_UPDATE_SMOKE_IMPORTS="fastapi,uvicorn"
     """
-    raw = os.environ.get("APEX_CODE_UPDATE_SMOKE_IMPORTS", "fastapi,uvicorn,torch").strip()
+    raw = os.environ.get(
+        "APEX_CODE_UPDATE_SMOKE_IMPORTS", "fastapi,uvicorn,torch"
+    ).strip()
     mods = [m.strip() for m in raw.split(",") if m.strip()]
     if not mods:
         return
-    code = "import importlib; " + "; ".join([f"importlib.import_module('{m}')" for m in mods]) + "; print('ok')"
+    code = (
+        "import importlib; "
+        + "; ".join([f"importlib.import_module('{m}')" for m in mods])
+        + "; print('ok')"
+    )
     proc = subprocess.run([str(python), "-c", code], capture_output=quiet, text=True)
     if proc.returncode != 0:
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
         raise RuntimeError(f"Smoke test imports failed. Output:\n{out.strip()}")
 
 
-def apply_update(code_archive: Path, target_dir: Path, *, keep_backup: bool = False, verbose: bool = True) -> None:
+def apply_update(
+    code_archive: Path,
+    target_dir: Path,
+    *,
+    keep_backup: bool = False,
+    verbose: bool = True,
+) -> None:
     code_archive = code_archive.resolve()
     target_dir = target_dir.resolve()
     if not code_archive.exists():
@@ -252,7 +268,11 @@ def apply_update(code_archive: Path, target_dir: Path, *, keep_backup: bool = Fa
     extracted_root = tmp_root / "extracted"
     staging_root = target_dir.parent / f".apex-code-update-staging-{uuid.uuid4().hex}"
     # Backups are required for rollback during the update. By default we delete them after success.
-    backup_root = target_dir.parent / ".apex-code-update-backups" / f"{_now_tag()}-{uuid.uuid4().hex}"
+    backup_root = (
+        target_dir.parent
+        / ".apex-code-update-backups"
+        / f"{_now_tag()}-{uuid.uuid4().hex}"
+    )
 
     replaced: list[str] = []
     replaced_venv: bool = False
@@ -291,7 +311,9 @@ def apply_update(code_archive: Path, target_dir: Path, *, keep_backup: bool = Fa
                 to_update.append(name)
 
         if "src" not in to_update:
-            raise RuntimeError("Update payload does not include `src/` - refusing to apply.")
+            raise RuntimeError(
+                "Update payload does not include `src/` - refusing to apply."
+            )
 
         if verbose:
             print(f"[update] entries to update: {', '.join(to_update)}")
@@ -307,7 +329,9 @@ def apply_update(code_archive: Path, target_dir: Path, *, keep_backup: bool = Fa
         if lock_in_payload.exists() and venv_py is not None:
             try:
                 payload_bytes = lock_in_payload.read_bytes()
-                existing_bytes = existing_lock.read_bytes() if existing_lock.exists() else b""
+                existing_bytes = (
+                    existing_lock.read_bytes() if existing_lock.exists() else b""
+                )
                 env_sync_planned = payload_bytes != existing_bytes
             except Exception:
                 env_sync_planned = True
@@ -329,7 +353,9 @@ def apply_update(code_archive: Path, target_dir: Path, *, keep_backup: bool = Fa
             if new_venv_dir.exists():
                 shutil.rmtree(new_venv_dir)
             if verbose:
-                print(f"[update] copying venv to staging: {new_venv_dir.name} (this may take a while)")
+                print(
+                    f"[update] copying venv to staging: {new_venv_dir.name} (this may take a while)"
+                )
 
             shutil.copytree(venv_dir, new_venv_dir, symlinks=False)
             new_py = _venv_python_path(new_venv_dir)
@@ -442,7 +468,9 @@ def apply_update(code_archive: Path, target_dir: Path, *, keep_backup: bool = Fa
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Apply a python-code tar.zst update bundle atomically.")
+    parser = argparse.ArgumentParser(
+        description="Apply a python-code tar.zst update bundle atomically."
+    )
     parser.add_argument(
         "--code-archive",
         required=True,
@@ -485,5 +513,3 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

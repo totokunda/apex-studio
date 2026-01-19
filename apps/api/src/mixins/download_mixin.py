@@ -1719,7 +1719,9 @@ class DownloadMixin:
         #
         # Use separate connect/read timeouts, configurable via env vars.
         try:
-            connect_timeout = float(os.environ.get("APEX_DOWNLOAD_CONNECT_TIMEOUT", "10"))
+            connect_timeout = float(
+                os.environ.get("APEX_DOWNLOAD_CONNECT_TIMEOUT", "10")
+            )
         except Exception:
             connect_timeout = 10.0
         try:
@@ -1732,7 +1734,6 @@ class DownloadMixin:
         relative_path_from_url = parsed_url.path.lstrip("/")
         # Build base headers (may be extended for specific providers like CivitAI)
         base_headers = dict(get_default_headers(url))
-
 
         # Compute deterministic destination
         if dest_path:
@@ -1875,6 +1876,7 @@ class DownloadMixin:
                 return None
 
         try:
+
             def _looks_like_html_file(p: str) -> bool:
                 try:
                     if not os.path.isfile(p):
@@ -1884,9 +1886,11 @@ class DownloadMixin:
                     if not head:
                         return False
                     lowered = head.lstrip().lower()
-                    return lowered.startswith(b"<!doctype html") or lowered.startswith(
-                        b"<html"
-                    ) or (b"<html" in lowered[:512] or b"</html" in lowered[:512])
+                    return (
+                        lowered.startswith(b"<!doctype html")
+                        or lowered.startswith(b"<html")
+                        or (b"<html" in lowered[:512] or b"</html" in lowered[:512])
+                    )
                 except Exception:
                     return False
 
@@ -1897,6 +1901,7 @@ class DownloadMixin:
                 """
                 try:
                     import json as _json
+
                     if not str(p).lower().endswith(".safetensors"):
                         return False
                     if not os.path.isfile(p):
@@ -1908,7 +1913,9 @@ class DownloadMixin:
                         header_len_raw = f.read(8)
                         if len(header_len_raw) != 8:
                             return True
-                        header_len = int.from_bytes(header_len_raw, "little", signed=False)
+                        header_len = int.from_bytes(
+                            header_len_raw, "little", signed=False
+                        )
                         # Guardrails: header must fit and be sane.
                         if header_len <= 1 or header_len > min(10_000_000, size - 8):
                             return True
@@ -1927,7 +1934,11 @@ class DownloadMixin:
                 except Exception:
                     is_empty = False
 
-                if is_empty or _looks_like_html_file(file_path) or _looks_like_invalid_safetensors(file_path):
+                if (
+                    is_empty
+                    or _looks_like_html_file(file_path)
+                    or _looks_like_invalid_safetensors(file_path)
+                ):
                     try:
                         self.logger.warning(
                             f"Existing file {file_path} looks invalid (empty/HTML); deleting and re-downloading."

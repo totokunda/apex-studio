@@ -21,6 +21,7 @@ except ImportError:
     block_sparse_attn_func = None
     try:
         from .sparse_sage import sparse_sageattn
+
         SUPPORTS_SPARSE_ATTN = True
     except ImportError:
         sparse_sageattn = None

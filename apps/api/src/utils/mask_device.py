@@ -29,10 +29,12 @@ def resolve_mask_device(*, model_family: str = "sam2") -> torch.device:
 
     # Default: avoid MPS for SAM2 unless explicitly allowed.
     if model_family.lower() in {"sam2"} and device.type == "mps":
-        allow_mps = os.getenv("MASK_ALLOW_MPS", "").strip().lower() in {"1", "true", "yes"}
+        allow_mps = os.getenv("MASK_ALLOW_MPS", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
         if not allow_mps:
             return torch.device("cpu")
 
     return device
-
-

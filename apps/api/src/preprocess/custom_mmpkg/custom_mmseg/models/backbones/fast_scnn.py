@@ -330,15 +330,11 @@ class FastSCNN(nn.Module):
 
         super(FastSCNN, self).__init__()
         if global_in_channels != higher_in_channels:
-            raise AssertionError(
-                "Global Input Channels must be the same \
-                                 with Higher Input Channels!"
-            )
+            raise AssertionError("Global Input Channels must be the same \
+                                 with Higher Input Channels!")
         elif global_out_channels != lower_in_channels:
-            raise AssertionError(
-                "Global Output Channels must be the same \
-                                with Lower Input Channels!"
-            )
+            raise AssertionError("Global Output Channels must be the same \
+                                with Lower Input Channels!")
 
         self.in_channels = in_channels
         self.downsample_dw_channels1 = downsample_dw_channels[0]

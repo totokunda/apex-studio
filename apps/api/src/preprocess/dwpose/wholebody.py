@@ -54,6 +54,7 @@ class Wholebody:
         elif self.det_model_type == "ort":
             try:
                 import onnxruntime as ort
+
                 self.det = ort.InferenceSession(det_model_path, providers=ort_providers)
             except:
                 print(

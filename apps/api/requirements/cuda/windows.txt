@@ -11,7 +11,7 @@ sageattention @ https://huggingface.co/datasets/totoku/attention/resolve/main/sa
 flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.6/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-win_amd64.whl
 
 # FlashAttention 3
-flash_attn_3 @ https://huggingface.co/datasets/totoku/attention/resolve/main/flash-attention-3/universal/flash_attn_3-3.0.0b1-cp39-abi3-win_amd64.whl
+# flash_attn_3 @ https://huggingface.co/datasets/totoku/attention/resolve/main/flash-attention-3/universal/flash_attn_3-3.0.0b1-cp39-abi3-win_amd64.whl
 
 # Nunchaku
 # Install separately via `python scripts/deps/maybe_install_nunchaku.py --install` (defaults to --no-deps)

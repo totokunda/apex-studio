@@ -13,37 +13,37 @@ import pickle
 
 def sanitize_path_for_filename(path: str) -> str:
     """Sanitize a file path to be safe for use in a filename.
-    
+
     Replaces path separators and invalid filename characters with underscores.
     Handles Windows drive letters and UNC paths properly.
     """
     if not path:
         return "unknown"
-    
+
     # Replace both forward and back slashes
     sanitized = path.replace("\\", "_").replace("/", "_")
-    
+
     # Remove Windows drive letter colon if present (e.g., "C:" -> "C")
     # This handles cases where the path starts with a drive letter
     if len(sanitized) >= 2 and sanitized[1] == ":":
         sanitized = sanitized[0] + sanitized[2:]
-    
+
     # Remove or replace other invalid filename characters
     # Windows: < > : " | ? * \
     # Unix: / (already handled above)
     invalid_chars = '<>:"|?*'
     for char in invalid_chars:
         sanitized = sanitized.replace(char, "_")
-    
+
     # Remove leading/trailing dots and spaces (Windows doesn't allow these)
     sanitized = sanitized.strip(". ")
-    
+
     # Collapse multiple consecutive underscores
     sanitized = re.sub(r"_+", "_", sanitized)
-    
+
     # Remove leading/trailing underscores
     sanitized = sanitized.strip("_")
-    
+
     return sanitized if sanitized else "unknown"
 
 
@@ -87,7 +87,9 @@ def normalize_cache_file_path(cache_file: str) -> str:
     base = os.path.basename(cache_file)
     if re.search(r'[<>:"|?*]', base):
         safe_base = sanitize_path_for_filename(base)
-        if not safe_base.lower().endswith(".safetensors") and base.lower().endswith(".safetensors"):
+        if not safe_base.lower().endswith(".safetensors") and base.lower().endswith(
+            ".safetensors"
+        ):
             safe_base = f"{safe_base}.safetensors"
         return os.path.join(os.path.dirname(cache_file), safe_base)
 

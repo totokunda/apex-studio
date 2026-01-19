@@ -361,7 +361,7 @@ class OviModel(ModelMixin, ConfigMixin):
             y=y,
             first_frame_is_clean=first_frame_is_clean,
         )
-        
+
         # NOTE: avoid per-step prints in production; this can severely slow generation.
         # Use logging at DEBUG level if needed.
 
@@ -376,7 +376,7 @@ class OviModel(ModelMixin, ConfigMixin):
                 first_frame_is_clean=False,
             )
         )
-        
+
         # NOTE: avoid per-step prints in production; this can severely slow generation.
         # Use logging at DEBUG level if needed.
 

@@ -12,8 +12,10 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from huggingface_hub import HfApi
@@ -22,13 +24,9 @@ DEFAULT_REPO_ID = "totoku/apex-studio-server"
 DEFAULT_REPO_TYPE = "model"
 DEFAULT_VERSION_FOLDER = "v0.1.0"
 
-DEFAULT_API_TAR = (
-    "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/dist/python-api-0.1.0-darwin-arm64-cpu-cp312.tar.zst"
-)
+DEFAULT_API_TAR = "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/dist/python-api-0.1.0-darwin-arm64-cpu-cp312.tar.zst"
 
-DEFAULT_CODE_TAR = (
-    "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/dist/python-code-0.1.0-darwin-arm64-cpu-cp312.tar.zst"
-)
+DEFAULT_CODE_TAR = "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/dist/python-code-0.1.0-darwin-arm64-cpu-cp312.tar.zst"
 
 
 def _require_file(path: Path) -> None:
@@ -127,5 +125,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

@@ -19,7 +19,10 @@ import sys
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.models.attention_processor import Attention, SpatialNorm
-from diffusers.models.autoencoders.vae import DecoderOutput, DiagonalGaussianDistribution
+from diffusers.models.autoencoders.vae import (
+    DecoderOutput,
+    DiagonalGaussianDistribution,
+)
 from diffusers.models.downsampling import Downsample2D
 from diffusers.models.lora import LoRACompatibleConv
 from diffusers.models.modeling_outputs import AutoencoderKLOutput
@@ -29,7 +32,10 @@ from diffusers.models.upsampling import Upsample2D
 from diffusers.utils import is_torch_version
 from diffusers.utils.accelerate_utils import apply_forward_hook
 from einops import rearrange
-from src.vae.seedvr.modules.half_precision_fixes import safe_pad_operation, safe_interpolate_operation
+from src.vae.seedvr.modules.half_precision_fixes import (
+    safe_pad_operation,
+    safe_interpolate_operation,
+)
 
 from src.vae.seedvr.modules.causal_inflation_lib import (
     InflatedCausalConv3d,
@@ -129,12 +135,15 @@ class Upsample3D(Upsample2D):
         if self.slicing:
             split_size = hidden_states.size(2) // 2
             hidden_states = list(
-                hidden_states.split([split_size, hidden_states.size(2) - split_size], dim=2)
+                hidden_states.split(
+                    [split_size, hidden_states.size(2) - split_size], dim=2
+                )
             )
         else:
             hidden_states = [hidden_states]
 
         for i in range(len(hidden_states)):
+
             def upscale_and_rearrange():
                 temp = self.upscale_conv(hidden_states[i])
                 return rearrange(
@@ -144,11 +153,11 @@ class Upsample3D(Upsample2D):
                     y=self.spatial_ratio,
                     z=self.temporal_ratio,
                 )
-            
+
             hidden_states[i] = retry_on_oom(
                 upscale_and_rearrange,
-                debug=getattr(self, 'debug', None),
-                operation_name="Upsample3D.upscale_conv"
+                debug=getattr(self, "debug", None),
+                operation_name="Upsample3D.upscale_conv",
             )
 
         # [Overridden] For causal temporal conv
@@ -159,16 +168,17 @@ class Upsample3D(Upsample2D):
             hidden_states = hidden_states[0]
 
         if self.use_conv:
+
             def apply_conv():
                 if self.name == "conv":
                     return self.conv(hidden_states, memory_state=memory_state)
                 else:
                     return self.Conv2d_0(hidden_states, memory_state=memory_state)
-            
+
             hidden_states = retry_on_oom(
                 apply_conv,
-                debug=getattr(self, 'debug', None),
-                operation_name="Upsample3D.conv"
+                debug=getattr(self, "debug", None),
+                operation_name="Upsample3D.conv",
             )
 
         if not self.slicing:
@@ -205,7 +215,11 @@ class Downsample3D(Downsample2D):
             conv = init_causal_conv3d(
                 self.channels,
                 self.out_channels,
-                kernel_size=(self.temporal_kernel, self.spatial_kernel, self.spatial_kernel),
+                kernel_size=(
+                    self.temporal_kernel,
+                    self.spatial_kernel,
+                    self.spatial_kernel,
+                ),
                 stride=(self.temporal_ratio, self.spatial_ratio, self.spatial_ratio),
                 padding=(
                     1 if self.temporal_down else 0,
@@ -217,7 +231,11 @@ class Downsample3D(Downsample2D):
         elif type(conv) is nn.AvgPool2d:
             assert self.channels == self.out_channels
             conv = nn.AvgPool3d(
-                kernel_size=(self.temporal_ratio, self.spatial_ratio, self.spatial_ratio),
+                kernel_size=(
+                    self.temporal_ratio,
+                    self.spatial_ratio,
+                    self.spatial_ratio,
+                ),
                 stride=(self.temporal_ratio, self.spatial_ratio, self.spatial_ratio),
             )
         else:
@@ -244,7 +262,9 @@ class Downsample3D(Downsample2D):
 
         if self.use_conv and self.padding == 0 and self.spatial_down:
             pad = (0, 1, 0, 1)
-            hidden_states = safe_pad_operation(hidden_states, pad, mode="constant", value=0)
+            hidden_states = safe_pad_operation(
+                hidden_states, pad, mode="constant", value=0
+            )
 
         assert hidden_states.shape[1] == self.channels
 
@@ -310,9 +330,12 @@ class ResnetBlock3D(ResnetBlock2D):
                 inflation_mode=inflation_mode,
             )
 
-
     def forward(
-        self, input_tensor, temb, memory_state: MemoryState = MemoryState.DISABLED, **kwargs
+        self,
+        input_tensor,
+        temb,
+        memory_state: MemoryState = MemoryState.DISABLED,
+        **kwargs,
     ):
         hidden_states = input_tensor
 
@@ -320,8 +343,8 @@ class ResnetBlock3D(ResnetBlock2D):
         hidden_states = retry_on_oom(
             self.nonlinearity,
             hidden_states,
-            debug=getattr(self, 'debug', None),
-            operation_name="ResnetBlock3D.nonlinearity"
+            debug=getattr(self, "debug", None),
+            operation_name="ResnetBlock3D.nonlinearity",
         )
 
         if self.upsample is not None:
@@ -582,7 +605,9 @@ class UNetMidBlock3D(nn.Module):
         time_receptive_field: _receptive_field_t = "half",
     ):
         super().__init__()
-        resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+        resnet_groups = (
+            resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+        )
         self.add_attention = add_attention
 
         # there is always at least one resnet
@@ -622,10 +647,14 @@ class UNetMidBlock3D(nn.Module):
                         rescale_output_factor=output_scale_factor,
                         eps=resnet_eps,
                         norm_num_groups=(
-                            resnet_groups if resnet_time_scale_shift == "default" else None
+                            resnet_groups
+                            if resnet_time_scale_shift == "default"
+                            else None
                         ),
                         spatial_norm_dim=(
-                            temb_channels if resnet_time_scale_shift == "spatial" else None
+                            temb_channels
+                            if resnet_time_scale_shift == "spatial"
+                            else None
                         ),
                         residual_connection=True,
                         bias=True,
@@ -656,7 +685,9 @@ class UNetMidBlock3D(nn.Module):
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
-    def forward(self, hidden_states, temb=None, memory_state: MemoryState = MemoryState.DISABLED):
+    def forward(
+        self, hidden_states, temb=None, memory_state: MemoryState = MemoryState.DISABLED
+    ):
         video_length, frame_height, frame_width = hidden_states.size()[-3:]
         hidden_states = self.resnets[0](hidden_states, temb, memory_state=memory_state)
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
@@ -744,7 +775,9 @@ class Encoder3D(nn.Module):
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
             # [Override] to support temporal down block design
-            is_temporal_down_block = i >= len(block_out_channels) - self.temporal_down_num - 1
+            is_temporal_down_block = (
+                i >= len(block_out_channels) - self.temporal_down_num - 1
+            )
             # Note: take the last ones
 
             assert down_block_type == "DownEncoderBlock3D"
@@ -774,7 +807,13 @@ class Encoder3D(nn.Module):
 
             self.conv_extra_cond.append(
                 zero_module(
-                    nn.Conv3d(extra_cond_dim, output_channel, kernel_size=1, stride=1, padding=0)
+                    nn.Conv3d(
+                        extra_cond_dim,
+                        output_channel,
+                        kernel_size=1,
+                        stride=1,
+                        padding=0,
+                    )
                 )
                 if self.extra_cond_dim is not None and self.extra_cond_dim > 0
                 else None
@@ -803,7 +842,11 @@ class Encoder3D(nn.Module):
 
         conv_out_channels = 2 * out_channels if double_z else out_channels
         self.conv_out = init_causal_conv3d(
-            block_out_channels[-1], conv_out_channels, 3, padding=1, inflation_mode=inflation_mode
+            block_out_channels[-1],
+            conv_out_channels,
+            3,
+            padding=1,
+            inflation_mode=inflation_mode,
         )
 
         self.gradient_checkpointing = gradient_checkpoint
@@ -828,10 +871,15 @@ class Encoder3D(nn.Module):
             # [Override] add extra block and extra cond
             for down_block, extra_block in zip(self.down_blocks, self.conv_extra_cond):
                 sample = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(down_block), sample, memory_state, use_reentrant=False
+                    create_custom_forward(down_block),
+                    sample,
+                    memory_state,
+                    use_reentrant=False,
                 )
                 if extra_block is not None:
-                    sample = sample + safe_interpolate_operation(extra_block(extra_cond), size=sample.shape[2:])
+                    sample = sample + safe_interpolate_operation(
+                        extra_block(extra_cond), size=sample.shape[2:]
+                    )
 
             # middle
             sample = self.mid_block(sample, memory_state=memory_state)
@@ -846,7 +894,9 @@ class Encoder3D(nn.Module):
             for down_block, extra_block in zip(self.down_blocks, self.conv_extra_cond):
                 sample = down_block(sample, memory_state=memory_state)
                 if extra_block is not None:
-                    sample = sample + safe_interpolate_operation(extra_block(extra_cond), size=sample.shape[2:])
+                    sample = sample + safe_interpolate_operation(
+                        extra_block(extra_cond), size=sample.shape[2:]
+                    )
 
             # middle
             sample = self.mid_block(sample, memory_state=memory_state)
@@ -939,7 +989,7 @@ class Decoder3D(nn.Module):
         # up
         reversed_block_out_channels = list(reversed(block_out_channels))
         output_channel = reversed_block_out_channels[0]
-        #print(f"slicing_up_num: {slicing_up_num}")
+        # print(f"slicing_up_num: {slicing_up_num}")
         for i, up_block_type in enumerate(up_block_types):
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
@@ -977,7 +1027,11 @@ class Decoder3D(nn.Module):
             )
         self.conv_act = nn.SiLU()
         self.conv_out = init_causal_conv3d(
-            block_out_channels[0], out_channels, 3, padding=1, inflation_mode=inflation_mode
+            block_out_channels[0],
+            out_channels,
+            3,
+            padding=1,
+            inflation_mode=inflation_mode,
         )
 
         self.gradient_checkpointing = gradient_checkpoint
@@ -1002,7 +1056,9 @@ class Decoder3D(nn.Module):
                 return custom_forward
 
             if is_torch_version(">=", "1.11.0"):
-                sample = self.mid_block(sample, latent_embeds, memory_state=memory_state)
+                sample = self.mid_block(
+                    sample, latent_embeds, memory_state=memory_state
+                )
 
                 # up
                 for up_block in self.up_blocks:
@@ -1015,12 +1071,17 @@ class Decoder3D(nn.Module):
                     )
             else:
                 # middle
-                sample = self.mid_block(sample, latent_embeds, memory_state=memory_state)
+                sample = self.mid_block(
+                    sample, latent_embeds, memory_state=memory_state
+                )
 
                 # up
                 for up_block in self.up_blocks:
                     sample = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(up_block), sample, latent_embeds, memory_state
+                        create_custom_forward(up_block),
+                        sample,
+                        latent_embeds,
+                        memory_state,
                     )
         else:
             # middle
@@ -1042,15 +1103,15 @@ class Decoder3D(nn.Module):
 #     """
 #     We simply inherit the model code from diffusers
 #     """
-# 
+#
 #     def __init__(self, attention: bool = True, *args, **kwargs):
 #         super().__init__(*args, **kwargs)
-# 
+#
 #         # A hacky way to remove attention.
 #         if not attention:
 #             self.encoder.mid_block.attentions = torch.nn.ModuleList([None])
 #             self.decoder.mid_block.attentions = torch.nn.ModuleList([None])
-# 
+#
 #     def load_state_dict(self, state_dict, strict=True, assign=False):
 #         # Newer version of diffusers changed the model keys,
 #         # causing incompatibility with old checkpoints.
@@ -1093,16 +1154,23 @@ class SeedVR2AutoencoderKL(nn.Module):
         use_post_quant_conv: bool = True,
         **kwargs,
     ):
-        extra_cond_dim = kwargs.pop("extra_cond_dim") if "extra_cond_dim" in kwargs else None
+        extra_cond_dim = (
+            kwargs.pop("extra_cond_dim") if "extra_cond_dim" in kwargs else None
+        )
         self.slicing_sample_min_size = slicing_sample_min_size
-        self.slicing_latent_min_size = max(1, slicing_sample_min_size // (2**temporal_scale_num))
+        self.slicing_latent_min_size = max(
+            1, slicing_sample_min_size // (2**temporal_scale_num)
+        )
 
         super().__init__(
             in_channels=in_channels,
             out_channels=out_channels,
             # [Override] make sure it can be normally initialized
             down_block_types=tuple(
-                [down_block_type.replace("3D", "2D") for down_block_type in down_block_types]
+                [
+                    down_block_type.replace("3D", "2D")
+                    for down_block_type in down_block_types
+                ]
             ),
             up_block_types=tuple(
                 [up_block_type.replace("3D", "2D") for up_block_type in up_block_types]
@@ -1178,13 +1246,18 @@ class SeedVR2AutoencoderKL(nn.Module):
         if not attention:
             self.encoder.mid_block.attentions = torch.nn.ModuleList([None])
             self.decoder.mid_block.attentions = torch.nn.ModuleList([None])
-        
+
         self.debug = False
 
     @apply_forward_hook
-    def encode(self, x: torch.FloatTensor, return_dict: bool = True, 
-               tiled: bool = False, tile_size: Tuple[int, int] = (512, 512), 
-               tile_overlap: Tuple[int, int] = (64, 64)) -> AutoencoderKLOutput:
+    def encode(
+        self,
+        x: torch.FloatTensor,
+        return_dict: bool = True,
+        tiled: bool = False,
+        tile_size: Tuple[int, int] = (512, 512),
+        tile_overlap: Tuple[int, int] = (64, 64),
+    ) -> AutoencoderKLOutput:
         if tiled:
             h = self.tiled_encode(x, tile_size=tile_size, tile_overlap=tile_overlap)
         else:
@@ -1198,12 +1271,19 @@ class SeedVR2AutoencoderKL(nn.Module):
         return AutoencoderKLOutput(latent_dist=posterior)
 
     @apply_forward_hook
-    def decode(self, z: torch.Tensor, return_dict: bool = True, 
-               tiled: bool = False, tile_size: Tuple[int, int] = (512, 512), 
-               tile_overlap: Tuple[int, int] = (64, 64)) -> Union[DecoderOutput, torch.Tensor]:
+    def decode(
+        self,
+        z: torch.Tensor,
+        return_dict: bool = True,
+        tiled: bool = False,
+        tile_size: Tuple[int, int] = (512, 512),
+        tile_overlap: Tuple[int, int] = (64, 64),
+    ) -> Union[DecoderOutput, torch.Tensor]:
 
         if tiled:
-            decoded = self.tiled_decode(z, tile_size=tile_size, tile_overlap=tile_overlap)
+            decoded = self.tiled_decode(
+                z, tile_size=tile_size, tile_overlap=tile_overlap
+            )
         else:
             decoded = self.slicing_decode(z)
 
@@ -1213,51 +1293,62 @@ class SeedVR2AutoencoderKL(nn.Module):
         return DecoderOutput(sample=decoded)
 
     def _encode(
-        self, x: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED) -> torch.Tensor:
+        self, x: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED
+    ) -> torch.Tensor:
         # Only transfer if not already on correct device
         _x = x if x.device == self.device else x.to(self.device)
-        
-        _x = causal_conv_slice_inputs(_x, self.slicing_sample_min_size, memory_state=memory_state)
+
+        _x = causal_conv_slice_inputs(
+            _x, self.slicing_sample_min_size, memory_state=memory_state
+        )
         h = self.encoder(_x, memory_state=memory_state)
-        
+
         if self.quant_conv is not None:
             output = self.quant_conv(h, memory_state=memory_state)
         else:
             output = h
-        
+
         output = causal_conv_gather_outputs(output)
-        
+
         # MPS memory leak workaround (pytorch/pytorch#155060)
-        if self.device.type == 'mps':
+        if self.device.type == "mps":
             torch.mps.empty_cache()
-        
+
         # Only transfer back if needed
         return output if output.device == x.device else output.to(x.device)
 
     def _decode(
-        self, z: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED) -> torch.Tensor:
+        self, z: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED
+    ) -> torch.Tensor:
         # Only transfer if not already on correct device
         _z = z if z.device == self.device else z.to(self.device)
-        
-        _z = causal_conv_slice_inputs(_z, self.slicing_latent_min_size, memory_state=memory_state)
-        
+
+        _z = causal_conv_slice_inputs(
+            _z, self.slicing_latent_min_size, memory_state=memory_state
+        )
+
         if self.post_quant_conv is not None:
             _z = self.post_quant_conv(_z, memory_state=memory_state)
-        
+
         output = self.decoder(_z, memory_state=memory_state)
         output = causal_conv_gather_outputs(output)
-        
+
         # MPS memory leak workaround (pytorch/pytorch#155060)
-        if self.device.type == 'mps':
+        if self.device.type == "mps":
             torch.mps.empty_cache()
-        
+
         # Only transfer back if needed
         return output if output.device == z.device else output.to(z.device)
 
     def slicing_encode(self, x: torch.Tensor) -> torch.Tensor:
         sp_size = 1
-        if self.use_slicing and (x.shape[2] - 1) > self.slicing_sample_min_size * sp_size:
-            x_slices = x[:, :, 1:].split(split_size=self.slicing_sample_min_size * sp_size, dim=2)
+        if (
+            self.use_slicing
+            and (x.shape[2] - 1) > self.slicing_sample_min_size * sp_size
+        ):
+            x_slices = x[:, :, 1:].split(
+                split_size=self.slicing_sample_min_size * sp_size, dim=2
+            )
             encoded_slices = [
                 self._encode(
                     torch.cat((x[:, :, :1], x_slices[0]), dim=2),
@@ -1270,8 +1361,11 @@ class SeedVR2AutoencoderKL(nn.Module):
                 )
             out = torch.cat(encoded_slices, dim=2)
             # Clear memory efficiently
-            modules_with_memory = [m for m in self.modules() 
-                                if isinstance(m, InflatedCausalConv3d) and m.memory is not None]
+            modules_with_memory = [
+                m
+                for m in self.modules()
+                if isinstance(m, InflatedCausalConv3d) and m.memory is not None
+            ]
             for m in modules_with_memory:
                 m.memory = None
             return out
@@ -1280,12 +1374,17 @@ class SeedVR2AutoencoderKL(nn.Module):
 
     def slicing_decode(self, z: torch.Tensor) -> torch.Tensor:
         sp_size = 1
-        if self.use_slicing and (z.shape[2] - 1) > self.slicing_latent_min_size * sp_size:
-            z_slices = z[:, :, 1:].split(split_size=self.slicing_latent_min_size * sp_size, dim=2)
+        if (
+            self.use_slicing
+            and (z.shape[2] - 1) > self.slicing_latent_min_size * sp_size
+        ):
+            z_slices = z[:, :, 1:].split(
+                split_size=self.slicing_latent_min_size * sp_size, dim=2
+            )
             decoded_slices = [
                 self._decode(
                     torch.cat((z[:, :, :1], z_slices[0]), dim=2),
-                    memory_state=MemoryState.INITIALIZING
+                    memory_state=MemoryState.INITIALIZING,
                 )
             ]
             for z_idx in range(1, len(z_slices)):
@@ -1294,16 +1393,23 @@ class SeedVR2AutoencoderKL(nn.Module):
                 )
             out = torch.cat(decoded_slices, dim=2)
             # Clear memory efficiently
-            modules_with_memory = [m for m in self.modules() 
-                                if isinstance(m, InflatedCausalConv3d) and m.memory is not None]
+            modules_with_memory = [
+                m
+                for m in self.modules()
+                if isinstance(m, InflatedCausalConv3d) and m.memory is not None
+            ]
             for m in modules_with_memory:
                 m.memory = None
             return out
         else:
             return self._decode(z)
 
-    def tiled_encode(self, x: torch.Tensor, tile_size: Tuple[int, int] = (512, 512), 
-                     tile_overlap: Tuple[int, int] = (64, 64)) -> torch.Tensor:
+    def tiled_encode(
+        self,
+        x: torch.Tensor,
+        tile_size: Tuple[int, int] = (512, 512),
+        tile_overlap: Tuple[int, int] = (64, 64),
+    ) -> torch.Tensor:
         r"""
         Encodes an input tensor `x` by splitting it into spatial tiles in latent space. Temporal is handled by `slicing_encode`.
         `tile_size` and `tile_overlap` are interpreted in output-space pixels and converted to latent-space.
@@ -1314,13 +1420,18 @@ class SeedVR2AutoencoderKL(nn.Module):
 
         b, c, f, H, W = x.shape
         tile_h, tile_w = tile_size
-        
+
         # Only tile if input resolution requires multiple tiles
         if H <= tile_h and W <= tile_w:
             return self.slicing_encode(x)
         else:
             if self.debug:
-                self.debug.log(f"Using VAE tiled encoding (Tile: {tile_size}, Overlap: {tile_overlap})", category="vae", force=True, indent_level=1)
+                self.debug.log(
+                    f"Using VAE tiled encoding (Tile: {tile_size}, Overlap: {tile_overlap})",
+                    category="vae",
+                    force=True,
+                    indent_level=1,
+                )
 
         # Spatial scale factor (output/latent)
         scale_factor = self.spatial_downsample_factor
@@ -1328,7 +1439,7 @@ class SeedVR2AutoencoderKL(nn.Module):
         # Convert output-space tiling params to latent-space
         tile_h, tile_w = tile_size
         overlap_h, overlap_w = tile_overlap
-        
+
         latent_tile_h = max(1, tile_h // scale_factor)
         latent_tile_w = max(1, tile_w // scale_factor)
         latent_overlap_h = max(0, min((overlap_h // scale_factor), latent_tile_h - 1))
@@ -1343,8 +1454,9 @@ class SeedVR2AutoencoderKL(nn.Module):
         result = None
         count = None
 
-        num_tiles = ((max(H_lat_total - latent_overlap_h, 1) + stride_h - 1) // stride_h) \
-                  * ((max(W_lat_total - latent_overlap_w, 1) + stride_w - 1) // stride_w)
+        num_tiles = (
+            (max(H_lat_total - latent_overlap_h, 1) + stride_h - 1) // stride_h
+        ) * ((max(W_lat_total - latent_overlap_w, 1) + stride_w - 1) // stride_w)
 
         # Log once at start instead of per-tile
         if self.debug:
@@ -1356,11 +1468,15 @@ class SeedVR2AutoencoderKL(nn.Module):
         # Pre-compute common ramp values
         ramp_cache = {}
         if latent_overlap_h > 0:
-            t_h = torch.linspace(0, 1, steps=latent_overlap_h, device=x.device, dtype=x.dtype)
-            ramp_cache['h'] = 0.5 - 0.5 * torch.cos(t_h * torch.pi)
+            t_h = torch.linspace(
+                0, 1, steps=latent_overlap_h, device=x.device, dtype=x.dtype
+            )
+            ramp_cache["h"] = 0.5 - 0.5 * torch.cos(t_h * torch.pi)
         if latent_overlap_w > 0:
-            t_w = torch.linspace(0, 1, steps=latent_overlap_w, device=x.device, dtype=x.dtype)
-            ramp_cache['w'] = 0.5 - 0.5 * torch.cos(t_w * torch.pi)
+            t_w = torch.linspace(
+                0, 1, steps=latent_overlap_w, device=x.device, dtype=x.dtype
+            )
+            ramp_cache["w"] = 0.5 - 0.5 * torch.cos(t_w * torch.pi)
 
         tile_id = 0
         for y_lat in range(0, H_lat_total, stride_h):
@@ -1369,8 +1485,9 @@ class SeedVR2AutoencoderKL(nn.Module):
                 x_lat_end = min(x_lat + latent_tile_w, W_lat_total)
 
                 # Skip if fully within overlap of previous tiles
-                if (y_lat > 0 and (y_lat_end - y_lat) <= latent_overlap_h) or \
-                   (x_lat > 0 and (x_lat_end - x_lat) <= latent_overlap_w):
+                if (y_lat > 0 and (y_lat_end - y_lat) <= latent_overlap_h) or (
+                    x_lat > 0 and (x_lat_end - x_lat) <= latent_overlap_w
+                ):
                     continue
 
                 # Map latent tile to output-space crop
@@ -1382,14 +1499,16 @@ class SeedVR2AutoencoderKL(nn.Module):
                 tile_id += 1
 
                 # Store tile boundary info for debug visualization
-                if self.debug and hasattr(self.debug, 'encode_tile_boundaries'):
-                    self.debug.encode_tile_boundaries.append({
-                        'id': tile_id,
-                        'y': y_out,
-                        'x': x_out,
-                        'h': y_out_end - y_out,
-                        'w': x_out_end - x_out
-                    })
+                if self.debug and hasattr(self.debug, "encode_tile_boundaries"):
+                    self.debug.encode_tile_boundaries.append(
+                        {
+                            "id": tile_id,
+                            "y": y_out,
+                            "x": x_out,
+                            "h": y_out_end - y_out,
+                            "w": x_out_end - x_out,
+                        }
+                    )
 
                 tile_sample = x[:, :, :, y_out:y_out_end, x_out:x_out_end]
 
@@ -1398,52 +1517,74 @@ class SeedVR2AutoencoderKL(nn.Module):
                     if tile_id == num_tiles:
                         # Only log final tile if not covered by previous range
                         if (tile_id - 1) % 5 == 0:
-                            self.debug.log(f"Encoding tile {tile_id} / {num_tiles}", category="vae", indent_level=1)
+                            self.debug.log(
+                                f"Encoding tile {tile_id} / {num_tiles}",
+                                category="vae",
+                                indent_level=1,
+                            )
                     else:
                         end_tile = min(tile_id + 4, num_tiles)
-                        self.debug.log(f"Encoding tiles {tile_id}-{end_tile} / {num_tiles}", category="vae", indent_level=1)
+                        self.debug.log(
+                            f"Encoding tiles {tile_id}-{end_tile} / {num_tiles}",
+                            category="vae",
+                            indent_level=1,
+                        )
 
                 encoded_tile = self.slicing_encode(tile_sample)
 
                 # Initialize output size using first encoded tile
                 if result is None:
                     b_out, c_out, f_lat, _, _ = encoded_tile.shape
-                    
+
                     # Accumulate on offload device if specified and different, else on inference device
-                    device = getattr(self, 'tensor_offload_device', None)
+                    device = getattr(self, "tensor_offload_device", None)
                     if device is None or device == encoded_tile.device:
                         device = encoded_tile.device
-                    
+
                     result = torch.zeros(
                         (b_out, c_out, f_lat, H_lat_total, W_lat_total),
                         device=device,
                         dtype=encoded_tile.dtype,
                     )
-                    count = torch.zeros((1, 1, 1, H_lat_total, W_lat_total), device=device, dtype=encoded_tile.dtype)
+                    count = torch.zeros(
+                        (1, 1, 1, H_lat_total, W_lat_total),
+                        device=device,
+                        dtype=encoded_tile.dtype,
+                    )
 
-                eff_h_lat = min(y_lat_end - y_lat, encoded_tile.shape[3], result.shape[3] - y_lat)
-                eff_w_lat = min(x_lat_end - x_lat, encoded_tile.shape[4], result.shape[4] - x_lat)
+                eff_h_lat = min(
+                    y_lat_end - y_lat, encoded_tile.shape[3], result.shape[3] - y_lat
+                )
+                eff_w_lat = min(
+                    x_lat_end - x_lat, encoded_tile.shape[4], result.shape[4] - x_lat
+                )
 
-                encoded_tile = encoded_tile[:, :, : result.shape[2], :eff_h_lat, :eff_w_lat]
+                encoded_tile = encoded_tile[
+                    :, :, : result.shape[2], :eff_h_lat, :eff_w_lat
+                ]
 
                 # Build faded masks
                 ov_h = max(0, min(latent_overlap_h, eff_h_lat - 1))
                 ov_w = max(0, min(latent_overlap_w, eff_w_lat - 1))
-                
-                weight_h = torch.ones((eff_h_lat,), device=encoded_tile.device, dtype=encoded_tile.dtype)
-                weight_w = torch.ones((eff_w_lat,), device=encoded_tile.device, dtype=encoded_tile.dtype)
+
+                weight_h = torch.ones(
+                    (eff_h_lat,), device=encoded_tile.device, dtype=encoded_tile.dtype
+                )
+                weight_w = torch.ones(
+                    (eff_w_lat,), device=encoded_tile.device, dtype=encoded_tile.dtype
+                )
 
                 # Apply fades only on interior edges using cached ramps (avoid fading on outer image borders)
                 if ov_h > 0:
                     if y_lat > 0:  # Not top edge
-                        weight_h[:ov_h] = ramp_cache['h'][:ov_h]
+                        weight_h[:ov_h] = ramp_cache["h"][:ov_h]
                     if y_lat_end < H_lat_total:  # Not bottom edge
-                        weight_h[-ov_h:] = 1 - ramp_cache['h'][:ov_h]
+                        weight_h[-ov_h:] = 1 - ramp_cache["h"][:ov_h]
                 if ov_w > 0:
                     if x_lat > 0:  # Not left edge
-                        weight_w[:ov_w] = ramp_cache['w'][:ov_w]
+                        weight_w[:ov_w] = ramp_cache["w"][:ov_w]
                     if x_lat_end < W_lat_total:  # Not right edge
-                        weight_w[-ov_w:] = 1 - ramp_cache['w'][:ov_w]
+                        weight_w[-ov_w:] = 1 - ramp_cache["w"][:ov_w]
 
                 # Separable application (no 2D mask to save memory)
                 weight_h_5d = weight_h.view(1, 1, 1, eff_h_lat, 1)
@@ -1455,9 +1596,17 @@ class SeedVR2AutoencoderKL(nn.Module):
                     encoded_tile = encoded_tile.to(result.device)
                     weight_h_5d = weight_h_5d.to(result.device)
                     weight_w_5d = weight_w_5d.to(result.device)
-                
-                result[:, :, : encoded_tile.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += encoded_tile
-                count[:, :, :, y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat].addcmul_(weight_h_5d, weight_w_5d)
+
+                result[
+                    :,
+                    :,
+                    : encoded_tile.shape[2],
+                    y_lat : y_lat + eff_h_lat,
+                    x_lat : x_lat + eff_w_lat,
+                ] += encoded_tile
+                count[
+                    :, :, :, y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat
+                ].addcmul_(weight_h_5d, weight_w_5d)
 
         # Move result back to inference device if needed and normalize
         if result.device != x.device:
@@ -1470,7 +1619,12 @@ class SeedVR2AutoencoderKL(nn.Module):
 
         return result
 
-    def tiled_decode(self, z: torch.Tensor, tile_size: Tuple[int, int] = (512, 512), tile_overlap: Tuple[int, int] = (64, 64)) -> torch.Tensor:
+    def tiled_decode(
+        self,
+        z: torch.Tensor,
+        tile_size: Tuple[int, int] = (512, 512),
+        tile_overlap: Tuple[int, int] = (64, 64),
+    ) -> torch.Tensor:
         r"""
         Decodes a latent tensor `z` by splitting it into spatial tiles only. Temporal is handled by `slicing_decode`.
         """
@@ -1485,17 +1639,22 @@ class SeedVR2AutoencoderKL(nn.Module):
         # Convert output-space tiling params to latent-space for spatial tiling
         tile_h, tile_w = tile_size
         overlap_h, overlap_w = tile_overlap
-        
+
         latent_tile_h = max(1, tile_h // scale_factor)
         latent_tile_w = max(1, tile_w // scale_factor)
-        
+
         # Only tile if latent resolution requires multiple tiles
         if H <= latent_tile_h and W <= latent_tile_w:
             return self.slicing_decode(z)
         else:
             if self.debug:
-                self.debug.log(f"Using VAE tiled decoding (Tile: {tile_size}, Overlap: {tile_overlap})", category="vae", force=True, indent_level=1)
-        
+                self.debug.log(
+                    f"Using VAE tiled decoding (Tile: {tile_size}, Overlap: {tile_overlap})",
+                    category="vae",
+                    force=True,
+                    indent_level=1,
+                )
+
         latent_overlap_h = max(0, min((overlap_h // scale_factor), latent_tile_h - 1))
         latent_overlap_w = max(0, min((overlap_w // scale_factor), latent_tile_w - 1))
 
@@ -1506,8 +1665,9 @@ class SeedVR2AutoencoderKL(nn.Module):
         result = None
         count = None
 
-        num_tiles = ((max(H - latent_overlap_h, 1) + stride_h - 1) // stride_h) \
-                  * ((max(W - latent_overlap_w, 1) + stride_w - 1) // stride_w)
+        num_tiles = ((max(H - latent_overlap_h, 1) + stride_h - 1) // stride_h) * (
+            (max(W - latent_overlap_w, 1) + stride_w - 1) // stride_w
+        )
 
         # Log once at start instead of per-tile
         if self.debug:
@@ -1520,10 +1680,10 @@ class SeedVR2AutoencoderKL(nn.Module):
         ramp_cache = {}
         if overlap_h > 0:
             t_h = torch.linspace(0, 1, steps=overlap_h, device=z.device, dtype=z.dtype)
-            ramp_cache['h'] = 0.5 - 0.5 * torch.cos(t_h * torch.pi)
+            ramp_cache["h"] = 0.5 - 0.5 * torch.cos(t_h * torch.pi)
         if overlap_w > 0:
             t_w = torch.linspace(0, 1, steps=overlap_w, device=z.device, dtype=z.dtype)
-            ramp_cache['w'] = 0.5 - 0.5 * torch.cos(t_w * torch.pi)
+            ramp_cache["w"] = 0.5 - 0.5 * torch.cos(t_w * torch.pi)
 
         tile_id = 0
         for y_lat in range(0, H, stride_h):
@@ -1532,27 +1692,30 @@ class SeedVR2AutoencoderKL(nn.Module):
                 x_lat_end = min(x_lat + latent_tile_w, W)
 
                 # Skip if fully within overlap of previous tiles
-                if (y_lat > 0 and (y_lat_end - y_lat) <= latent_overlap_h) or \
-                   (x_lat > 0 and (x_lat_end - x_lat) <= latent_overlap_w):
+                if (y_lat > 0 and (y_lat_end - y_lat) <= latent_overlap_h) or (
+                    x_lat > 0 and (x_lat_end - x_lat) <= latent_overlap_w
+                ):
                     continue
 
                 tile_id += 1
-                
+
                 # Store tile boundary info for debug visualization
-                if self.debug and hasattr(self.debug, 'decode_tile_boundaries'):
+                if self.debug and hasattr(self.debug, "decode_tile_boundaries"):
                     # Map to output space
                     y_out = y_lat * scale_factor
                     x_out = x_lat * scale_factor
                     y_out_end = y_lat_end * scale_factor
                     x_out_end = x_lat_end * scale_factor
-                    self.debug.decode_tile_boundaries.append({
-                        'id': tile_id,
-                        'y': y_out,
-                        'x': x_out,
-                        'h': y_out_end - y_out,
-                        'w': x_out_end - x_out
-                    })
-                
+                    self.debug.decode_tile_boundaries.append(
+                        {
+                            "id": tile_id,
+                            "y": y_out,
+                            "x": x_out,
+                            "h": y_out_end - y_out,
+                            "w": x_out_end - x_out,
+                        }
+                    )
+
                 tile_latent = z[:, :, :, y_lat:y_lat_end, x_lat:x_lat_end]
 
                 # Log progress periodically instead of every tile (at 1, 6, 11, 16, ...)
@@ -1560,10 +1723,18 @@ class SeedVR2AutoencoderKL(nn.Module):
                     if tile_id == num_tiles:
                         # Only log final tile if not covered by previous range
                         if (tile_id - 1) % 5 == 0:
-                            self.debug.log(f"Decoding tile {tile_id} / {num_tiles}", category="vae", indent_level=1)
+                            self.debug.log(
+                                f"Decoding tile {tile_id} / {num_tiles}",
+                                category="vae",
+                                indent_level=1,
+                            )
                     else:
                         end_tile = min(tile_id + 4, num_tiles)
-                        self.debug.log(f"Decoding tiles {tile_id}-{end_tile} / {num_tiles}", category="vae", indent_level=1)
+                        self.debug.log(
+                            f"Decoding tiles {tile_id}-{end_tile} / {num_tiles}",
+                            category="vae",
+                            indent_level=1,
+                        )
 
                 decoded_tile = self.slicing_decode(tile_latent)
 
@@ -1572,14 +1743,22 @@ class SeedVR2AutoencoderKL(nn.Module):
                     b_out, c_out, out_f_tile, _, _ = decoded_tile.shape
                     output_h = H * scale_factor
                     output_w = W * scale_factor
-                    
+
                     # Accumulate on offload device if specified and different, else on inference device
-                    device = getattr(self, 'tensor_offload_device', None)
+                    device = getattr(self, "tensor_offload_device", None)
                     if device is None or device == decoded_tile.device:
                         device = decoded_tile.device
-                    
-                    result = torch.zeros((b_out, c_out, out_f_tile, output_h, output_w), device=device, dtype=decoded_tile.dtype)
-                    count = torch.zeros((1, 1, 1, output_h, output_w), device=device, dtype=decoded_tile.dtype)
+
+                    result = torch.zeros(
+                        (b_out, c_out, out_f_tile, output_h, output_w),
+                        device=device,
+                        dtype=decoded_tile.dtype,
+                    )
+                    count = torch.zeros(
+                        (1, 1, 1, output_h, output_w),
+                        device=device,
+                        dtype=decoded_tile.dtype,
+                    )
 
                 # Corresponding output-space placement
                 y_out, y_out_end = y_lat * scale_factor, y_lat_end * scale_factor
@@ -1591,21 +1770,25 @@ class SeedVR2AutoencoderKL(nn.Module):
                 # Build faded masks
                 ov_h_out = max(0, min(overlap_h, h_out - 1))
                 ov_w_out = max(0, min(overlap_w, w_out - 1))
-                
-                weight_h = torch.ones((h_out,), device=decoded_tile.device, dtype=decoded_tile.dtype)
-                weight_w = torch.ones((w_out,), device=decoded_tile.device, dtype=decoded_tile.dtype)
+
+                weight_h = torch.ones(
+                    (h_out,), device=decoded_tile.device, dtype=decoded_tile.dtype
+                )
+                weight_w = torch.ones(
+                    (w_out,), device=decoded_tile.device, dtype=decoded_tile.dtype
+                )
 
                 # Apply fades only on interior edges using cached ramps (avoid fading on outer image borders)
                 if ov_h_out > 0:
                     if y_lat > 0:  # Not top edge
-                        weight_h[:ov_h_out] = ramp_cache['h'][:ov_h_out]
+                        weight_h[:ov_h_out] = ramp_cache["h"][:ov_h_out]
                     if y_lat_end < H:  # Not bottom edge
-                        weight_h[-ov_h_out:] = 1 - ramp_cache['h'][:ov_h_out]
+                        weight_h[-ov_h_out:] = 1 - ramp_cache["h"][:ov_h_out]
                 if ov_w_out > 0:
                     if x_lat > 0:  # Not left edge
-                        weight_w[:ov_w_out] = ramp_cache['w'][:ov_w_out]
+                        weight_w[:ov_w_out] = ramp_cache["w"][:ov_w_out]
                     if x_lat_end < W:  # Not right edge
-                        weight_w[-ov_w_out:] = 1 - ramp_cache['w'][:ov_w_out]
+                        weight_w[-ov_w_out:] = 1 - ramp_cache["w"][:ov_w_out]
 
                 # Separable application (no 2D mask to save memory)
                 weight_h_5d = weight_h.view(1, 1, 1, h_out, 1)
@@ -1617,15 +1800,19 @@ class SeedVR2AutoencoderKL(nn.Module):
                     decoded_tile = decoded_tile.to(result.device)
                     weight_h_5d = weight_h_5d.to(result.device)
                     weight_w_5d = weight_w_5d.to(result.device)
-                
-                result[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += decoded_tile
-                count[:, :, :, y_out:y_out_end, x_out:x_out_end].addcmul_(weight_h_5d, weight_w_5d)
+
+                result[
+                    :, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end
+                ] += decoded_tile
+                count[:, :, :, y_out:y_out_end, x_out:x_out_end].addcmul_(
+                    weight_h_5d, weight_w_5d
+                )
 
         # Move result back to inference device if needed and normalize
         if result.device != z.device:
             result = result.to(z.device)
             count = count.to(z.device)
-        result.div_(count.clamp(min=1e-6)) # In-place normalize
+        result.div_(count.clamp(min=1e-6))  # In-place normalize
 
         if z.shape[2] == 1:  # single frame
             result = result.squeeze(2)
@@ -1633,7 +1820,10 @@ class SeedVR2AutoencoderKL(nn.Module):
         return result
 
     def forward(
-        self, x: torch.FloatTensor, mode: Literal["encode", "decode", "all"] = "all", **kwargs
+        self,
+        x: torch.FloatTensor,
+        mode: Literal["encode", "decode", "all"] = "all",
+        **kwargs,
     ):
         # x: [b c t h w]
         if mode == "encode":
@@ -1728,24 +1918,52 @@ class SeedVR2AutoencoderKLWrapper(SeedVR2AutoencoderKL, diffusers.AutoencoderKL)
         x = self.decode(z).sample
         return CausalAutoencoderOutput(x, z, p)
 
-    def encode(self, x: torch.FloatTensor, return_dict: bool = True, 
-               tiled: bool = False, tile_size: Tuple[int, int] = (512, 512), 
-               tile_overlap: Tuple[int, int] = (64, 64)) -> CausalEncoderOutput:
+    def encode(
+        self,
+        x: torch.FloatTensor,
+        return_dict: bool = True,
+        tiled: bool = False,
+        tile_size: Tuple[int, int] = (512, 512),
+        tile_overlap: Tuple[int, int] = (64, 64),
+    ) -> CausalEncoderOutput:
         if x.ndim == 4:
             x = x.unsqueeze(2)
-        p = super().encode(x, return_dict=return_dict, tiled=self.tiling_enabled, tile_size=self.tiling_tile_size,
-                          tile_overlap=self.tiling_tile_overlap).latent_dist
+        p = (
+            super()
+            .encode(
+                x,
+                return_dict=return_dict,
+                tiled=self.tiling_enabled,
+                tile_size=self.tiling_tile_size,
+                tile_overlap=self.tiling_tile_overlap,
+            )
+            .latent_dist
+        )
         # Use deterministic mode for tiled encoding to avoid artifacts
         z = p.mode().squeeze(2)
         return CausalEncoderOutput(z, p)
 
-    def decode(self, z: torch.Tensor, return_dict: bool = True, 
-               tiled: bool = False, tile_size: Tuple[int, int] = (512, 512), 
-               tile_overlap: Tuple[int, int] = (64, 64)) -> CausalDecoderOutput:
+    def decode(
+        self,
+        z: torch.Tensor,
+        return_dict: bool = True,
+        tiled: bool = False,
+        tile_size: Tuple[int, int] = (512, 512),
+        tile_overlap: Tuple[int, int] = (64, 64),
+    ) -> CausalDecoderOutput:
         if z.ndim == 4:
             z = z.unsqueeze(2)
-        x = super().decode(z, return_dict=return_dict, tiled=self.tiling_enabled, tile_size=self.tiling_tile_size,
-                          tile_overlap=self.tiling_tile_overlap).sample.squeeze(2)
+        x = (
+            super()
+            .decode(
+                z,
+                return_dict=return_dict,
+                tiled=self.tiling_enabled,
+                tile_size=self.tiling_tile_size,
+                tile_overlap=self.tiling_tile_overlap,
+            )
+            .sample.squeeze(2)
+        )
         return CausalDecoderOutput(x)
 
     def preprocess(self, x: torch.Tensor):
@@ -1769,21 +1987,30 @@ class SeedVR2AutoencoderKLWrapper(SeedVR2AutoencoderKL, diffusers.AutoencoderKL)
         if split_size is not None:
             self.enable_slicing()
             self.slicing_sample_min_size = split_size
-            self.slicing_latent_min_size = max(1, split_size // self.temporal_downsample_factor)
+            self.slicing_latent_min_size = max(
+                1, split_size // self.temporal_downsample_factor
+            )
         else:
             self.disable_slicing()
         for module in self.modules():
             if isinstance(module, InflatedCausalConv3d):
                 module.set_memory_device(memory_device)
 
-    def set_memory_limit(self, conv_max_mem: Optional[float], norm_max_mem: Optional[float]):
+    def set_memory_limit(
+        self, conv_max_mem: Optional[float], norm_max_mem: Optional[float]
+    ):
         set_norm_limit(norm_max_mem)
         for m in self.modules():
             if isinstance(m, InflatedCausalConv3d):
-                m.set_memory_limit(conv_max_mem if conv_max_mem is not None else float("inf"))
-                
-    def enable_tiling(self, tile_size: Tuple[int, int] = (512, 512), tile_overlap: Tuple[int, int] = (64, 64)):
+                m.set_memory_limit(
+                    conv_max_mem if conv_max_mem is not None else float("inf")
+                )
+
+    def enable_tiling(
+        self,
+        tile_size: Tuple[int, int] = (512, 512),
+        tile_overlap: Tuple[int, int] = (64, 64),
+    ):
         self.tiling_tile_size = tile_size
         self.tiling_tile_overlap = tile_overlap
         self.tiling_enabled = True
-                

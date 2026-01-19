@@ -27,7 +27,7 @@ def get_build_fn(config):
         resnet=build_resnet,
         mobilenet=build_mobilenet,
         dinov2=build_dinov2,
-        #siglip2=build_siglip2,
+        # siglip2=build_siglip2,
     )
     for prefix, build_fn in prefix_to_build_fn.items():
         if config["backbone"].startswith(prefix):
@@ -41,10 +41,10 @@ def build_resnet(bn):
 
 
 def build_effnetv2(bn, config):
-    effnet_size = config["backbone"].rpartition('-')[2]
-    weights = getattr(effnet, f'EfficientNet_V2_{effnet_size.upper()}_Weights').DEFAULT
-    backbone_raw = getattr(effnet, f'efficientnet_v2_{effnet_size}')(config=config,
-        norm_layer=bn, weights=weights
+    effnet_size = config["backbone"].rpartition("-")[2]
+    weights = getattr(effnet, f"EfficientNet_V2_{effnet_size.upper()}_Weights").DEFAULT
+    backbone_raw = getattr(effnet, f"efficientnet_v2_{effnet_size}")(
+        config=config, norm_layer=bn, weights=weights
     )
     backbone = backbone_raw.features
     return backbone, 0.5, 0.5, 1280
@@ -84,18 +84,18 @@ def get_normalizer(config):
 class DinoV2(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.model = getattr(dinov2_backbones, config["backbone"].replace('-', '_'))()
+        self.model = getattr(dinov2_backbones, config["backbone"].replace("-", "_"))()
         self.num_features = self.model.num_features
         self.feat_side = config["proc_side"] // self.model.patch_size
 
     def forward(self, x):
-        raw_feat: torch.Tensor = self.model.forward_features(x)['x_norm_patchtokens']
+        raw_feat: torch.Tensor = self.model.forward_features(x)["x_norm_patchtokens"]
         return (
-            raw_feat
-            .unflatten(1, (self.feat_side, self.feat_side))
+            raw_feat.unflatten(1, (self.feat_side, self.feat_side))
             .permute(0, 3, 1, 2)
             .to(x.dtype)
         )
+
 
 #
 # class SigLIP2(nn.Module):
@@ -138,7 +138,6 @@ def build_dinov2(bn, config):
     mean = (0.485, 0.456, 0.406)
     std = (0.229, 0.224, 0.225)
     return bbone, mean, std, bbone.num_features
-
 
 
 def torch_preproc(x, mean_rgb=(0.485, 0.456, 0.406), stdev_rgb=(0.229, 0.224, 0.225)):
@@ -260,9 +259,9 @@ class GroupNormSameDtype(nn.Module):
             init.zeros_(self.bias)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return F.group_norm(input, self.num_groups, self.weight, self.bias, self.eps).to(
-            input.dtype
-        )
+        return F.group_norm(
+            input, self.num_groups, self.weight, self.bias, self.eps
+        ).to(input.dtype)
 
     def extra_repr(self) -> str:
         return "{num_groups}, {num_channels}, eps={eps}, " "affine={affine}".format(

@@ -17,7 +17,6 @@ import numbers
 from functools import partial
 from typing import Callable, List, Optional, Tuple, Dict, Any
 
-
 try:
     import flashinfer
     from flashinfer.gemm import bmm_fp8

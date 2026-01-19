@@ -101,7 +101,9 @@ def calculate_x_ref_attn_map(
             m = m_new
 
         # Probability mass on masked tokens, averaged over mask size.
-        prob = (num / s.unsqueeze(0)) / mask_counts[:, None, None, None]  # (C,B,H,x_blk)
+        prob = (num / s.unsqueeze(0)) / mask_counts[
+            :, None, None, None
+        ]  # (C,B,H,x_blk)
 
         # Reduce over heads.
         prob = prob.permute(0, 1, 3, 2)  # (C,B,x_blk,H)
@@ -152,7 +154,9 @@ def get_attn_map_with_target(
         eff_chunk_size_x = seq_lens
         eff_chunk_size_ref = ref_k.shape[1]
     else:
-        eff_chunk_size_x = x_ref_attn_chunk_size_x if x_ref_attn_chunk_size_x is not None else 1024
+        eff_chunk_size_x = (
+            x_ref_attn_chunk_size_x if x_ref_attn_chunk_size_x is not None else 1024
+        )
         eff_chunk_size_ref = (
             x_ref_attn_chunk_size_ref if x_ref_attn_chunk_size_ref is not None else 1024
         )

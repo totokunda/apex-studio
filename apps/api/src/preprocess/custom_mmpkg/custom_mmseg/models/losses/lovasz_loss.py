@@ -272,9 +272,7 @@ class LovaszLoss(nn.Module):
             self.cls_criterion = lovasz_softmax
         assert classes in ("all", "present") or mmcv.is_list_of(classes, int)
         if not per_image:
-            assert (
-                reduction == "none"
-            ), "reduction should be 'none' when \
+            assert reduction == "none", "reduction should be 'none' when \
                                                         per_image is False."
 
         self.classes = classes

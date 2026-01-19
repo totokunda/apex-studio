@@ -60,10 +60,8 @@ class ModulatedDeformConv2dFunction(Function):
         deform_groups=1,
     ):
         if input is not None and input.dim() != 4:
-            raise ValueError(
-                f"Expected 4D tensor as input, got {input.dim()}D tensor \
-                  instead."
-            )
+            raise ValueError(f"Expected 4D tensor as input, got {input.dim()}D tensor \
+                  instead.")
         ctx.stride = _pair(stride)
         ctx.padding = _pair(padding)
         ctx.dilation = _pair(dilation)

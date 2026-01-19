@@ -82,7 +82,7 @@ def is_suppressed_http_path(path: str) -> bool:
 
 def _path_from_access_log_record(record: logging.LogRecord) -> Optional[str]:
     """
-    Try to extract the request path from common access log records (uvicorn/gunicorn).
+    Try to extract the request path from common access log records (uvicorn).
     Returns None if we can't confidently parse.
     """
     args = getattr(record, "args", None)
@@ -122,7 +122,7 @@ _INSTALLED = False
 
 
 def install_http_log_suppression(
-    logger_names: Iterable[str] = ("uvicorn.access", "gunicorn.access")
+    logger_names: Iterable[str] = ("uvicorn.access"),
 ) -> None:
     """
     Attach a filter to common access loggers so polling endpoints don't spam logs.
@@ -140,4 +140,3 @@ def install_http_log_suppression(
             # Best-effort: never break app startup due to logging tweaks.
             pass
     _INSTALLED = True
-

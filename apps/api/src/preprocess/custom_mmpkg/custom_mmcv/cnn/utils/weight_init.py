@@ -146,17 +146,13 @@ class BaseInit(object):
 
         if bias_prob is not None:
             if not isinstance(bias_prob, float):
-                raise TypeError(
-                    f"bias_prob type must be float, \
-                    but got {type(bias_prob)}"
-                )
+                raise TypeError(f"bias_prob type must be float, \
+                    but got {type(bias_prob)}")
 
         if layer is not None:
             if not isinstance(layer, (str, list)):
-                raise TypeError(
-                    f"layer must be a str or a list of str, \
-                    but got a {type(layer)}"
-                )
+                raise TypeError(f"layer must be a str or a list of str, \
+                    but got a {type(layer)}")
         else:
             layer = []
 
@@ -551,10 +547,8 @@ def _initialize(module, cfg, wholemodule=False):
 
 def _initialize_override(module, override, cfg):
     if not isinstance(override, (dict, list)):
-        raise TypeError(
-            f"override must be a dict or a list of dict, \
-                but got {type(override)}"
-        )
+        raise TypeError(f"override must be a dict or a list of dict, \
+                but got {type(override)}")
 
     override = [override] if isinstance(override, dict) else override
 
@@ -632,10 +626,8 @@ def initialize(module, init_cfg):
                 checkpoint=url, prefix='backbone.')
     """
     if not isinstance(init_cfg, (dict, list)):
-        raise TypeError(
-            f"init_cfg must be a dict or a list of dict, \
-                but got {type(init_cfg)}"
-        )
+        raise TypeError(f"init_cfg must be a dict or a list of dict, \
+                but got {type(init_cfg)}")
 
     if isinstance(init_cfg, dict):
         init_cfg = [init_cfg]

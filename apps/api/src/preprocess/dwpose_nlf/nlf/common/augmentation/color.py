@@ -18,11 +18,11 @@ def augment_color(im, rng, out_dtype=None):
     ]
     rng.shuffle(augmentation_functions)
 
-    colorspace = 'rgb'
+    colorspace = "rgb"
     for fn in augmentation_functions:
         colorspace = fn(im, colorspace, rng)
 
-    if colorspace != 'rgb':
+    if colorspace != "rgb":
         cv2.cvtColor(im, cv2.COLOR_HSV2RGB, dst=im)
 
     np.clip(im, 0, 1, out=im)
@@ -34,21 +34,21 @@ def augment_color(im, rng, out_dtype=None):
 
 
 def augment_brightness(im, in_colorspace, rng):
-    if in_colorspace != 'rgb':
+    if in_colorspace != "rgb":
         cv2.cvtColor(im, cv2.COLOR_HSV2RGB, dst=im)
 
     im += rng.uniform(-0.125, 0.125)
-    return 'rgb'
+    return "rgb"
 
 
 def augment_contrast(im, in_colorspace, rng):
-    if in_colorspace != 'rgb':
+    if in_colorspace != "rgb":
         cv2.cvtColor(im, cv2.COLOR_HSV2RGB, dst=im)
     # im -= 0.5
     # im *= rng.uniform(0.5, 1.5)
     # im += 0.5
     _augment_contrast_nb(im, rng.uniform(0.5, 1.5))
-    return 'rgb'
+    return "rgb"
 
 
 @numba.njit(cache=True)
@@ -61,7 +61,7 @@ def _augment_contrast_nb(im, factor):
 
 
 def augment_hue(im, in_colorspace, rng):
-    if in_colorspace != 'hsv':
+    if in_colorspace != "hsv":
         np.clip(im, 0, 1, out=im)
         cv2.cvtColor(im, cv2.COLOR_RGB2HSV, dst=im)
     # hue = im[:, :, 0]
@@ -69,7 +69,7 @@ def augment_hue(im, in_colorspace, rng):
     # hue[hue < 0] += 360
     # hue[hue > 360] -= 360
     _augment_hue_nb(im, rng.uniform(-72, 72))
-    return 'hsv'
+    return "hsv"
 
 
 @numba.njit(cache=True)
@@ -84,7 +84,7 @@ def _augment_hue_nb(im, offset):
 
 
 def augment_saturation(im, in_colorspace, rng):
-    if in_colorspace != 'hsv':
+    if in_colorspace != "hsv":
         np.clip(im, 0, 1, out=im)
         cv2.cvtColor(im, cv2.COLOR_RGB2HSV, dst=im)
 
@@ -92,7 +92,7 @@ def augment_saturation(im, in_colorspace, rng):
     # saturation *= rng.uniform(0.5, 1.5)
     # saturation[saturation > 1] = 1
     _augment_saturation_nb(im, rng.uniform(0.5, 1.5))
-    return 'hsv'
+    return "hsv"
 
 
 @numba.njit(cache=True)

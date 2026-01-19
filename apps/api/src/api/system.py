@@ -16,7 +16,6 @@ from .ray_resources import (
 import subprocess
 import re
 
-
 router = APIRouter(prefix="/system", tags=["system"])
 
 
@@ -87,6 +86,7 @@ class FreeMemoryRequest(BaseModel):
     active: Optional[str] = None
     target: Literal["cpu", "disk"] = "disk"
 
+
 @router.post("/free-memory")
 async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
     """
@@ -120,7 +120,11 @@ async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
     # Backward-friendly: keep `offloaded` as a flat module_id -> location mapping.
     # Also include per-engine details for debugging.
     aggregated: Dict[str, Any] = {}
-    by_engine = (worker_result or {}).get("offloaded", {}) if isinstance(worker_result, dict) else {}
+    by_engine = (
+        (worker_result or {}).get("offloaded", {})
+        if isinstance(worker_result, dict)
+        else {}
+    )
     if isinstance(by_engine, dict):
         for _key, mapping in by_engine.items():
             if isinstance(mapping, dict):
@@ -129,9 +133,21 @@ async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
     return {
         "offloaded": aggregated,
         "by_engine": by_engine,
-        "errors": (worker_result or {}).get("errors", {}) if isinstance(worker_result, dict) else {},
-        "skipped_in_use": (worker_result or {}).get("skipped_in_use", []) if isinstance(worker_result, dict) else [],
-        "pool": (worker_result or {}).get("pool", {}) if isinstance(worker_result, dict) else {},
+        "errors": (
+            (worker_result or {}).get("errors", {})
+            if isinstance(worker_result, dict)
+            else {}
+        ),
+        "skipped_in_use": (
+            (worker_result or {}).get("skipped_in_use", [])
+            if isinstance(worker_result, dict)
+            else []
+        ),
+        "pool": (
+            (worker_result or {}).get("pool", {})
+            if isinstance(worker_result, dict)
+            else {}
+        ),
         "target": request.target,
     }
 

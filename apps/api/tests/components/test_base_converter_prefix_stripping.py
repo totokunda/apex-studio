@@ -20,7 +20,6 @@ def test_strip_prefix_uses_model_keys_to_avoid_overstripping_model_token():
     ]
 
     converter._strip_known_prefixes_inplace(sd, model_keys=model_keys)
-    
 
     assert set(sd.keys()) == set(model_keys)
 
@@ -32,7 +31,9 @@ def test_strip_prefix_can_strip_all_the_way_to_blocks_when_model_keys_do_not_use
     """
     converter = BaseConverter()
     sd = {
-        "diffusion_model.transformer_blocks.39.attn2.to_out.0.lora_A.weight": torch.zeros(1),
+        "diffusion_model.transformer_blocks.39.attn2.to_out.0.lora_A.weight": torch.zeros(
+            1
+        ),
         "diffusion_model.transformer_blocks.42.ff.net.2.lora_A.weight": torch.zeros(1),
     }
     model_keys = [
@@ -65,6 +66,7 @@ def test_strip_prefix_scoring_handles_lora_A_lora_B_against_base_model_keys():
     assert "model.blocks.0.attn.to_q.lora_B.weight" in sd
     assert not any(k.startswith("base_model.") for k in sd.keys())
 
+
 def test_strip_prefix_can_strip_diffusion_model_for_subset_when_mixed_keys_present():
     """
     Some LoRA exports include a mix of wrapped and unwrapped keys, e.g.:
@@ -78,8 +80,12 @@ def test_strip_prefix_can_strip_diffusion_model_for_subset_when_mixed_keys_prese
     converter = BaseConverter()
     sd = {
         "proj_in.weight": torch.zeros(1),
-        "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_A.weight": torch.zeros(1),
-        "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_B.weight": torch.zeros(1),
+        "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_A.weight": torch.zeros(
+            1
+        ),
+        "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_B.weight": torch.zeros(
+            1
+        ),
     }
     model_keys = [
         "proj_in.weight",
@@ -93,7 +99,6 @@ def test_strip_prefix_can_strip_diffusion_model_for_subset_when_mixed_keys_prese
     assert "adaln_single.emb.timestep_embedder.linear_1.lora_A.weight" in sd
     assert "adaln_single.emb.timestep_embedder.linear_1.lora_B.weight" in sd
     assert not any(k.startswith("diffusion_model.") for k in sd.keys())
-
 
 
 if __name__ == "__main__":

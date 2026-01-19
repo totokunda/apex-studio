@@ -7,22 +7,37 @@ import torch.nn.functional as F
 from pt import ptu, ptu3d
 from pt.models import util as model_util
 
+
 class NLFModel(nn.Module):
-    def __init__(self, config, backbone, weight_field, normalizer, backbone_channels=1280, permutation=867, i_left_joints=360, i_center_joints=147):
+    def __init__(
+        self,
+        config,
+        backbone,
+        weight_field,
+        normalizer,
+        backbone_channels=1280,
+        permutation=867,
+        i_left_joints=360,
+        i_center_joints=147,
+    ):
         super().__init__()
         self.backbone = backbone
-        self.heatmap_head = LocalizerHead(config, weight_field, normalizer, in_channels=backbone_channels)
+        self.heatmap_head = LocalizerHead(
+            config, weight_field, normalizer, in_channels=backbone_channels
+        )
         self.input_resolution = config["proc_side"]
-        
+
         # These buffers are part of the trained model and are expected to be present in checkpoints.
         # Keep them persistent so they round-trip through state_dict (no missing/unexpected keys).
         self.inv_permutation = nn.Buffer(torch.ones(permutation), persistent=True)
-        
+
         self.canonical_lefts = nn.Parameter(
-            torch.zeros(i_left_joints, 3, dtype=torch.float32), requires_grad=False)
-        
+            torch.zeros(i_left_joints, 3, dtype=torch.float32), requires_grad=False
+        )
+
         self.canonical_centers = nn.Parameter(
-            torch.zeros(i_center_joints, 2, dtype=torch.float32), requires_grad=False)
+            torch.zeros(i_center_joints, 2, dtype=torch.float32), requires_grad=False
+        )
 
         self.canonical_locs_init = nn.Buffer(
             torch.ones(permutation, 3, dtype=torch.float32),
@@ -39,9 +54,12 @@ class NLFModel(nn.Module):
             [-self.canonical_lefts[:, :1], self.canonical_lefts[:, 1:]], dim=1
         )
         canonical_centers = torch.cat(
-            [torch.zeros_like(self.canonical_centers[:, :1]), self.canonical_centers], dim=1
+            [torch.zeros_like(self.canonical_centers[:, :1]), self.canonical_centers],
+            dim=1,
         )
-        permuted = torch.cat([self.canonical_lefts, canonical_rights, canonical_centers], dim=0)
+        permuted = torch.cat(
+            [self.canonical_lefts, canonical_rights, canonical_centers], dim=0
+        )
         return (
             permuted.index_select(0, self.inv_permutation)
             * self.canonical_delta_mask[:, torch.newaxis]
@@ -50,15 +68,21 @@ class NLFModel(nn.Module):
 
     @torch.jit.export
     def predict_multi_same_canonicals(
-        self, image: torch.Tensor, intrinsic_matrix: torch.Tensor, canonical_points: torch.Tensor
+        self,
+        image: torch.Tensor,
+        intrinsic_matrix: torch.Tensor,
+        canonical_points: torch.Tensor,
     ):  # , flip_canonicals_per_image=()):
         features = self.backbone(image)
         coords2d, coords3d, uncertainties = self.heatmap_head.predict_same_canonicals(
             features, canonical_points
         )
-        with torch.amp.autocast('cuda', enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             return self.heatmap_head.reconstruct_absolute(
-                coords2d.float(), coords3d.float(), uncertainties.float(), intrinsic_matrix.float()
+                coords2d.float(),
+                coords3d.float(),
+                uncertainties.float(),
+                intrinsic_matrix.float(),
             )
 
     @torch.jit.export
@@ -75,13 +99,18 @@ class NLFModel(nn.Module):
         flip_canonicals_per_image: torch.Tensor,
     ):
         features_processed = self.get_features(image)
-        coords2d, coords3d, uncertainties = self.heatmap_head.decode_features_multi_same_weights(
-            features_processed, weights, flip_canonicals_per_image
+        coords2d, coords3d, uncertainties = (
+            self.heatmap_head.decode_features_multi_same_weights(
+                features_processed, weights, flip_canonicals_per_image
+            )
         )
 
-        with torch.amp.autocast('cuda', enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             return self.heatmap_head.reconstruct_absolute(
-                coords2d.float(), coords3d.float(), uncertainties.float(), intrinsic_matrix.float()
+                coords2d.float(),
+                coords3d.float(),
+                uncertainties.float(),
+                intrinsic_matrix.float(),
             )
 
     @torch.jit.export
@@ -111,7 +140,9 @@ class LocalizerHead(nn.Module):
         )
 
     @torch.jit.export
-    def forward(self, features: torch.Tensor, canonical_positions: Optional[torch.Tensor] = None):
+    def forward(
+        self, features: torch.Tensor, canonical_positions: Optional[torch.Tensor] = None
+    ):
         assert canonical_positions is not None
         weights = self.weight_field(canonical_positions)  # NP[C(c+1)]
         return self.call_with_weights(features, weights)
@@ -135,12 +166,14 @@ class LocalizerHead(nn.Module):
         return coords2d_pred, coords3d_rel_pred, uncertainties
 
     @torch.jit.export
-    def predict_same_canonicals(self, features: torch.Tensor, canonical_positions: torch.Tensor):
+    def predict_same_canonicals(
+        self, features: torch.Tensor, canonical_positions: torch.Tensor
+    ):
         weights = self.weight_field(canonical_positions)  # NP[C(c+1)]
         features_processed = self.layer(features)  # NcHW
 
-        coords2d, coords3d_rel_pred, uncertainties = self.apply_weights3d_same_canonicals(
-            features_processed, weights
+        coords2d, coords3d_rel_pred, uncertainties = (
+            self.apply_weights3d_same_canonicals(features_processed, weights)
         )
         coords2d_pred = model_util.heatmap_to_image(
             coords2d, self.proc_side, self.stride_test, self.centered_stride
@@ -155,7 +188,9 @@ class LocalizerHead(nn.Module):
         return coords2d_pred, coords3d_rel_pred, uncertainties
 
     @torch.jit.export
-    def apply_weights3d(self, features: torch.Tensor, weights: torch.Tensor, n_out_channels: int):
+    def apply_weights3d(
+        self, features: torch.Tensor, weights: torch.Tensor, n_out_channels: int
+    ):
         # features: NcHW 128,1280,8,8
         # weights:  NP[(c+1)C] 128,768,10*1281
         weights = weights.to(features.dtype)
@@ -166,7 +201,7 @@ class LocalizerHead(nn.Module):
         b_tensor = weights_resh[..., -1, :]  # NPC
         # TODO: check if a different einsum order would be faster
         logits = (
-            torch.einsum('nchw,npcC->npChw', features, w_tensor)
+            torch.einsum("nchw,npcC->npChw", features, w_tensor)
             + b_tensor[:, :, :, torch.newaxis, torch.newaxis]
         ).float()
         # This is an alternative to the einsum above (perhaps faster, perhaps not; because
@@ -186,7 +221,9 @@ class LocalizerHead(nn.Module):
         heatmap2d = torch.sum(heatmap25d, dim=2)
 
         # earlier slower version: torch.sum(uncertainty_map * heatmap2d.detach(), dim=[3, 2])
-        uncertainties = torch.einsum('nphw,nphw->np', uncertainty_map, heatmap2d.detach())
+        uncertainties = torch.einsum(
+            "nphw,nphw->np", uncertainty_map, heatmap2d.detach()
+        )
         uncertainties = F.softplus(uncertainties + self.uncert_bias) + self.uncert_bias2
         coords25d = ptu.decode_heatmap(heatmap25d, dim=[4, 3, 2])
         coords2d = coords25d[..., :2]
@@ -196,7 +233,9 @@ class LocalizerHead(nn.Module):
     @torch.jit.export
     def transpose_weights(self, weights: torch.Tensor, n_in_channels: int):
         n_out_channels = 2 + self.depth
-        weights_resh = torch.unflatten(weights, -1, (n_in_channels + 1, n_out_channels))  # P(c+1)C
+        weights_resh = torch.unflatten(
+            weights, -1, (n_in_channels + 1, n_out_channels)
+        )  # P(c+1)C
         w_tensor = weights_resh[..., :-1, :]  # PcC
         b_tensor = weights_resh[..., -1, :]  # PC
         # old: w_tensor = w_tensor.permute(1, 0, 2)  # PcC-> cPC
@@ -204,10 +243,14 @@ class LocalizerHead(nn.Module):
         return w_tensor.contiguous(), b_tensor.contiguous()
 
     @torch.jit.export
-    def apply_weights3d_same_canonicals(self, features: torch.Tensor, weights: torch.Tensor):
+    def apply_weights3d_same_canonicals(
+        self, features: torch.Tensor, weights: torch.Tensor
+    ):
         # features: NcHW 128,1280,8,8
         # weights:  P[(c+1)C] 768,1281*10
-        w_tensor, b_tensor = self.transpose_weights(weights.to(features.dtype), features.shape[1])
+        w_tensor, b_tensor = self.transpose_weights(
+            weights.to(features.dtype), features.shape[1]
+        )
         return self.apply_weights3d_same_canonicals_impl(features, w_tensor, b_tensor)
 
     @torch.jit.export
@@ -222,7 +265,9 @@ class LocalizerHead(nn.Module):
         # w_tensor = w_tensor.contiguous()  # (pC)c11
 
         # new:
-        w_tensor = torch.flatten(w_tensor, start_dim=0, end_dim=1).unsqueeze(-1).unsqueeze(-1)
+        w_tensor = (
+            torch.flatten(w_tensor, start_dim=0, end_dim=1).unsqueeze(-1).unsqueeze(-1)
+        )
         b_tensor = b_tensor.reshape(-1)
         #
 
@@ -235,7 +280,9 @@ class LocalizerHead(nn.Module):
         heatmap2d = torch.sum(heatmap25d, dim=2)
 
         # old slower: uncertainties = torch.sum(uncertainty_map * heatmap2d.detach(), dim=[3, 2])
-        uncertainties = torch.einsum('nphw,nphw->np', uncertainty_map, heatmap2d.detach())
+        uncertainties = torch.einsum(
+            "nphw,nphw->np", uncertainty_map, heatmap2d.detach()
+        )
         uncertainties = F.softplus(uncertainties + self.uncert_bias) + self.uncert_bias2
         coords25d = ptu.decode_heatmap(heatmap25d, dim=[4, 3, 2])
         coords2d = coords25d[..., :2]
@@ -245,12 +292,18 @@ class LocalizerHead(nn.Module):
     @torch.jit.export
     def get_weights_for_canonical_points(self, canonical_points: torch.Tensor):
         weights = self.weight_field(canonical_points)
-        w_tensor, b_tensor = self.transpose_weights(weights.half(), self.backbone_link_dim)
+        w_tensor, b_tensor = self.transpose_weights(
+            weights.half(), self.backbone_link_dim
+        )
         weights_fl = self.weight_field(
             canonical_points
-            * torch.tensor([-1, 1, 1], dtype=torch.float32, device=canonical_points.device)
+            * torch.tensor(
+                [-1, 1, 1], dtype=torch.float32, device=canonical_points.device
+            )
         )
-        w_tensor_fl, b_tensor_fl = self.transpose_weights(weights_fl.half(), self.backbone_link_dim)
+        w_tensor_fl, b_tensor_fl = self.transpose_weights(
+            weights_fl.half(), self.backbone_link_dim
+        )
         return dict(
             w_tensor=w_tensor,
             b_tensor=b_tensor,
@@ -272,15 +325,23 @@ class LocalizerHead(nn.Module):
             features_processed, flip_canonicals_per_image_ind, 2
         )
         partitioned_indices = ptu.dynamic_partition(
-            torch.arange(features_processed.shape[0], device=flip_canonicals_per_image_ind.device),
+            torch.arange(
+                features_processed.shape[0], device=flip_canonicals_per_image_ind.device
+            ),
             flip_canonicals_per_image_ind,
             2,
         )
-        nfl_coords2d, nfl_coords3d, nfl_uncertainties = self.apply_weights3d_same_canonicals_impl(
-            nfl_features_processed, weights['w_tensor'], weights['b_tensor']
+        nfl_coords2d, nfl_coords3d, nfl_uncertainties = (
+            self.apply_weights3d_same_canonicals_impl(
+                nfl_features_processed, weights["w_tensor"], weights["b_tensor"]
+            )
         )
-        fl_coords2d, fl_coords3d, fl_uncertainties = self.apply_weights3d_same_canonicals_impl(
-            fl_features_processed, weights['w_tensor_flipped'], weights['b_tensor_flipped']
+        fl_coords2d, fl_coords3d, fl_uncertainties = (
+            self.apply_weights3d_same_canonicals_impl(
+                fl_features_processed,
+                weights["w_tensor_flipped"],
+                weights["b_tensor_flipped"],
+            )
         )
         coords2d = ptu.dynamic_stitch(partitioned_indices, [nfl_coords2d, fl_coords2d])
         coords3d = ptu.dynamic_stitch(partitioned_indices, [nfl_coords3d, fl_coords3d])
@@ -330,8 +391,8 @@ class LocalizerHead(nn.Module):
 
 
 def is_hand_joint(name):
-    n = name.partition('_')[0]
-    if any(x in n for x in ['thumb', 'index', 'middle', 'ring', 'pinky']):
+    n = name.partition("_")[0]
+    if any(x in n for x in ["thumb", "index", "middle", "ring", "pinky"]):
         return True
 
-    return n.startswith(('lhan', 'rhan')) and len(n) > 4
+    return n.startswith(("lhan", "rhan")) and len(n) > 4

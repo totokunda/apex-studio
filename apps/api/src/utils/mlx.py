@@ -69,9 +69,7 @@ def to_torch(a) -> torch.Tensor:
         return torch.from_numpy(np.array(a, copy=False)).to(torch_dtype)
 
 
-def check_mlx_convolutional_weights(
-    state_dict: Dict[str, Any], model: Any
-) -> bool:
+def check_mlx_convolutional_weights(state_dict: Dict[str, Any], model: Any) -> bool:
     _require_mlx()
     # Go through model and find all the conv3d and conv2d layers and check that weights are in the same shape, as mlx has them backwrads compatible
     for name, param in model.named_modules():

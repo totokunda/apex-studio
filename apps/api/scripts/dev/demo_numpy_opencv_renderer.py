@@ -78,7 +78,9 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     H, W = 512, 512
-    bg = np.ones((H, W, 3), dtype=np.float32) * np.array([0.05, 0.05, 0.05], dtype=np.float32)
+    bg = np.ones((H, W, 3), dtype=np.float32) * np.array(
+        [0.05, 0.05, 0.05], dtype=np.float32
+    )
 
     vertices, faces = _make_cube()
     r = Renderer(width=W, height=H, faces=faces)
@@ -103,4 +105,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
