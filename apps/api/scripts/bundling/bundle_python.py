@@ -32,6 +32,15 @@ class PythonBundler:
 
     SUPPORTED_PLATFORMS = ["darwin", "linux", "win32"]
 
+    # Default Torch stack version (non-macOS bundles).
+    #
+    # We intentionally pin torch/torchvision/torchaudio together to avoid ABI mismatches.
+    # For Linux CUDA/CPU wheels, PyTorch uses local version suffixes (e.g. +cu128, +cpu)
+    # on the official wheel indices, so pins for those platforms must include the suffix.
+    TORCH_VERSION = "2.9.1"
+    TORCHVISION_VERSION = "0.24.1"
+    TORCHAUDIO_VERSION = "2.9.1"
+
     # PyTorch wheel indices for different platforms
     TORCH_INDICES = {
         "cuda126": "https://download.pytorch.org/whl/cu126",
@@ -432,6 +441,65 @@ class PythonBundler:
         else:
             return self.TORCH_INDICES["cpu"]
 
+    def _torch_local_suffix_for_gpu(self, gpu_type: str) -> Optional[str]:
+        """
+        Return the local version suffix for official PyTorch wheels for this gpu_type.
+
+        Examples:
+          - cpu -> "cpu"
+          - cuda128 -> "cu128"
+          - rocm -> "rocm6.4" (matches TORCH_INDICES["rocm"])
+        """
+        if gpu_type == "cpu":
+            return "cpu"
+        if gpu_type.startswith("cuda"):
+            # gpu_type is like "cuda128" -> suffix is "cu128"
+            return "cu" + gpu_type.removeprefix("cuda")
+        if gpu_type == "rocm":
+            # Keep in sync with TORCH_INDICES["rocm"]
+            return "rocm6.4"
+        return None
+
+    def _torch_specs_for_bundle(self, gpu_type: str) -> list[str]:
+        """
+        Produce torch/torchvision/torchaudio requirement specs for the bundle.
+
+        Requirement: use torch 2.9.1 everywhere except macOS.
+        """
+        # macOS (MPS): keep the existing pin (some stacks lag the CUDA/Linux cadence).
+        if self.platform_name == "darwin":
+            return ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
+
+        # Windows ROCm is a special-case (direct TheRock wheels) handled elsewhere.
+        if self.platform_name == "win32" and gpu_type == "rocm":
+            return []
+
+        # Linux/Windows CPU: on Windows, CPU wheels are typically plain versions on PyPI;
+        # on Linux, CPU wheels come from the CPU index and are published with +cpu.
+        suffix = self._torch_local_suffix_for_gpu(gpu_type)
+        if self.platform_name == "linux" and suffix:
+            return [
+                f"torch=={self.TORCH_VERSION}+{suffix}",
+                f"torchvision=={self.TORCHVISION_VERSION}+{suffix}",
+                f"torchaudio=={self.TORCHAUDIO_VERSION}+{suffix}",
+            ]
+
+        # Windows CUDA wheels also typically use local suffixes on the PyTorch indices.
+        if self.platform_name == "win32" and gpu_type.startswith("cuda") and suffix:
+            return [
+                f"torch=={self.TORCH_VERSION}+{suffix}",
+                f"torchvision=={self.TORCHVISION_VERSION}+{suffix}",
+                f"torchaudio=={self.TORCHAUDIO_VERSION}+{suffix}",
+            ]
+
+        # Default: plain pins (works for Windows CPU; also fine if a platform publishes
+        # non-suffixed wheels on the configured extra index).
+        return [
+            f"torch=={self.TORCH_VERSION}",
+            f"torchvision=={self.TORCHVISION_VERSION}",
+            f"torchaudio=={self.TORCHAUDIO_VERSION}",
+        ]
+
     def choose_machine_requirements_entrypoint(self, gpu_type: str) -> Path:
         """
         Choose an entrypoint under requirements/{cpu,mps,cuda} based on platform + GPU/arch.
@@ -507,28 +575,25 @@ class PythonBundler:
         machine_entry = self.choose_machine_requirements_entrypoint(gpu_type)
         self.last_machine_entry = machine_entry
 
-        # Add torch with appropriate backend
+        # Add torch with appropriate backend.
+        #
+        # IMPORTANT: for CPU bundles on Linux/Windows, we MUST ensure the PyTorch CPU
+        # wheel index is available; otherwise `torch` can resolve to a CUDA wheel
+        # depending on resolver/index behavior.
         torch_index = self.get_torch_index(gpu_type)
-        if gpu_type == "rocm" and self.platform_name == "win32":
-            # Windows ROCm: Use specific community wheels (TheRock)
-            pass  # We append the direct URLs below
-        elif gpu_type != "cpu" and self.platform_name != "darwin":
-            requirements.append(f"--extra-index-url {torch_index}")
+        if self.platform_name != "darwin":
+            if gpu_type == "rocm" and self.platform_name == "win32":
+                # Windows ROCm: Use specific community wheels (TheRock). We append
+                # direct URLs below, so no index is needed here.
+                pass
+            else:
+                requirements.append(f"--extra-index-url {torch_index}")
 
         # Windows wheel stacks: pin torch to match the wheel ABI expectations.
         # (FlashAttention wheel: cu126 + torch2.6.0 + cp312; cu128 stacks vary by machine entry.)
         if self.platform_name == "win32":
             if gpu_type.startswith("cuda"):
-                if gpu_type == "cuda128":
-                    # Unified Stack: CUDA 12.8 + Torch 2.7.1
-                    # This covers Ampere, Ada, Hopper, Blackwell with FA2/FA3 support.
-                    requirements.extend(
-                        ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
-                    )
-                else:
-                    requirements.extend(
-                        ["torch==2.6.0", "torchvision==0.21.0", "torchaudio==2.6.0"]
-                    )
+                requirements.extend(self._torch_specs_for_bundle(gpu_type))
             elif gpu_type == "rocm":
                 # ROCm 6.5 Windows (TheRock)
                 requirements.extend(
@@ -539,14 +604,13 @@ class PythonBundler:
                     ]
                 )
             else:
-                requirements.extend(["torch", "torchvision", "torchaudio"])
+                requirements.extend(self._torch_specs_for_bundle(gpu_type))
         elif self.platform_name == "darwin":
             # MPS requires Torch 2.7.1+
-            requirements.extend(
-                ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
-            )
+            requirements.extend(self._torch_specs_for_bundle(gpu_type))
         else:
-            requirements.extend(["torch", "torchvision", "torchaudio"])
+            # Linux: always pin to the requested global Torch stack version.
+            requirements.extend(self._torch_specs_for_bundle(gpu_type))
 
         # Add machine-specific requirements (expanded entrypoint)
         machine_lines = self._read_requirements_file(machine_entry)
