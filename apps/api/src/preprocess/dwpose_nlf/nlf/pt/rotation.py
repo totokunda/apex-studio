@@ -36,7 +36,9 @@ def rotvec2mat(rotvec):
 
 
 def mat2rotvec(rotmat):
-    r00, r01, r02, r10, r11, r12, r20, r21, r22 = torch.unbind(rotmat.flatten(-2, -1), dim=-1)
+    r00, r01, r02, r10, r11, r12, r20, r21, r22 = torch.unbind(
+        rotmat.flatten(-2, -1), dim=-1
+    )
     p10p01 = r10 + r01
     p10m01 = r10 - r01
     p02p20 = r02 + r20
@@ -58,7 +60,9 @@ def mat2rotvec(rotmat):
     d00_large = torch.logical_and(r00 > r11, r00 > r22).unsqueeze(-1)
     d11_large = (r11 > r22).unsqueeze(-1)
     q = torch.where(
-        trace_pos, cond0, torch.where(d00_large, cond1, torch.where(d11_large, cond2, cond3))
+        trace_pos,
+        cond0,
+        torch.where(d00_large, cond1, torch.where(d11_large, cond2, cond3)),
     )
 
     xyz, w = torch.split(q, (3, 1), dim=-1)

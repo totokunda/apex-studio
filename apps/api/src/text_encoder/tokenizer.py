@@ -6,6 +6,7 @@ import json
 import transformers
 from src.utils.module import find_class_recursive
 
+
 def fetch_and_save_tokenizer_from_config(
     model_path: str,
     config_path: str | None = None,
@@ -72,9 +73,10 @@ def fetch_and_save_tokenizer_from_config(
 
         def _load_tokenizer_with_fallbacks(_tokenizer_cls, name_or_path: str):
             # If caller already supplied auth kwargs, respect them.
-            if tokenizer_kwargs.get("token") is not None or tokenizer_kwargs.get(
-                "use_auth_token"
-            ) is not None:
+            if (
+                tokenizer_kwargs.get("token") is not None
+                or tokenizer_kwargs.get("use_auth_token") is not None
+            ):
                 return _tokenizer_cls.from_pretrained(name_or_path, **tokenizer_kwargs)
 
             if token is None:

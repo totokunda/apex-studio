@@ -11,7 +11,6 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.loaders import PeftAdapterMixin, FromOriginalModelMixin
 from src.attention import attention_register
 
-
 __all__ = ["SCAILModel"]
 
 
@@ -108,6 +107,7 @@ def _chunked_norm(
         out[:, i:end, :] = norm_layer(hidden_states[:, i:end, :])
     return out
 
+
 T5_CONTEXT_TOKEN_NUMBER = 512
 FIRST_LAST_FRAME_CONTEXT_TOKEN_NUMBER = 257 * 2
 
@@ -180,7 +180,9 @@ def _rope_apply_3d_chunked(
 
     if downsample_hw_by_2:
         if h % 2 != 0 or w % 2 != 0:
-            raise ValueError(f"Expected even H/W for downsampled RoPE, got H={h}, W={w}")
+            raise ValueError(
+                f"Expected even H/W for downsampled RoPE, got H={h}, W={w}"
+            )
         seq_len = f * (h // 2) * (w // 2)
     else:
         seq_len = f * h * w
@@ -190,7 +192,9 @@ def _rope_apply_3d_chunked(
 
     # Basic range checks (helps catch misconfigured shifts early).
     if shift_f < 0 or shift_h < 0 or shift_w < 0:
-        raise ValueError(f"Negative RoPE shift not supported: {shift_f=}, {shift_h=}, {shift_w=}")
+        raise ValueError(
+            f"Negative RoPE shift not supported: {shift_f=}, {shift_h=}, {shift_w=}"
+        )
     if shift_f + f > freqs_t.size(0):
         raise AssertionError(f"{shift_f + f} > {freqs_t.size(0)}")
     if shift_h + h > freqs_h.size(0):
@@ -568,7 +572,10 @@ class WanAttentionBlock(nn.Module):
         self._ff_chunk_dim = dim
 
     def set_chunk_norms(
-        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
     ) -> None:
         self._mod_norm_chunk_size = modulated_norm_chunk_size
         self._norm_chunk_size = norm_chunk_size
@@ -598,7 +605,7 @@ class WanAttentionBlock(nn.Module):
             self.norm1, x, e[1], e[0], chunk_size=self._mod_norm_chunk_size
         )
         y = self.self_attn(norm_x.float(), seq_lens, **kwargs)
-        
+
         with amp.autocast(dtype=torch.float32):
             x = x + y * e[2]
 
@@ -900,7 +907,9 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
 
         p = self._CHUNKING_PROFILES[profile_name]
         self._chunking_profile_name = profile_name
-        self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+        self._out_modulated_norm_chunk_size = p.get(
+            "out_modulated_norm_chunk_size", None
+        )
         self._rope_chunk_size = p.get("rope_chunk_size", None)
 
         self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)

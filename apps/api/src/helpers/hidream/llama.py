@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 from typing import List
 
+
 @helpers("hidream.llama")
 class HidreamLlama(CacheMixin, LoaderMixin, OffloadMixin, ToMixin, nn.Module):
     def __init__(
@@ -56,8 +57,6 @@ class HidreamLlama(CacheMixin, LoaderMixin, OffloadMixin, ToMixin, nn.Module):
             load_dtype=dtype,
         )
         self.to_device(model, device=device)
-        
-        
 
         return model
 

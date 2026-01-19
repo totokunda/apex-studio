@@ -440,13 +440,12 @@ class HuMoEngine(WanShared):
             safe_emit_progress(
                 progress_callback, 0.10, "No audio provided; using zeros"
             )
-        
 
         if offload and audio_processor is not None:
             del audio_processor
             self._offload("wan.humo_audio_processor")
             safe_emit_progress(progress_callback, 0.11, "Audio processor offloaded")
-            
+
         if use_audio_length:
             frame_num = audio_length
         else:
@@ -502,7 +501,6 @@ class HuMoEngine(WanShared):
             f"Encoding prompts (CFG: {'on' if use_cfg_guidance else 'off'})",
         )
 
-
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,
             negative_prompt=negative_prompt,
@@ -538,7 +536,7 @@ class HuMoEngine(WanShared):
         if not self.transformer:
             safe_emit_progress(progress_callback, 0.42, "Loading transformer")
             self.load_component_by_type("transformer")
-            
+
         self.to_device(self.transformer)
         if chunking_profile != "none":
             self.transformer.set_chunking_profile(chunking_profile)
@@ -548,7 +546,7 @@ class HuMoEngine(WanShared):
         # Use a threshold safely between them so this is True only for the 1.7B model.
         num_params = self.get_num_weights()
         small_model = self.transformer.config.dim < 5120
-        
+
         safe_emit_progress(
             progress_callback,
             0.46,

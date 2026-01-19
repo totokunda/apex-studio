@@ -48,7 +48,11 @@ def lstsq_partial_share(
     # we only need to implement the unregularized case,
     # and regularization is just adding more rows to the matrix.
     matrix = torch.cat(
-        [matrix, torch.eye(n_params, device=matrix.device).expand(matrix.shape[0], -1, -1)], dim=1
+        [
+            matrix,
+            torch.eye(n_params, device=matrix.device).expand(matrix.shape[0], -1, -1),
+        ],
+        dim=1,
     )
 
     if l2_regularizer_rhs is not None:

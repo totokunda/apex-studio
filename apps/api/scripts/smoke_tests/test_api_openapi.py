@@ -15,5 +15,3 @@ def run(ctx: SmokeContext) -> None:
         log("[smoke] api openapi ok")
     except Exception as e:
         fail(f"API import/openapi failed: {e}")
-
-

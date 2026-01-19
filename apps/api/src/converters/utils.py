@@ -1,4 +1,3 @@
-
 from typing import Dict, Any, Optional
 from accelerate import init_empty_weights
 import importlib
@@ -9,9 +8,6 @@ from src.quantize.ggml_ops import ggml_cat, ggml_chunk
 from diffusers import ModelMixin
 from transformers import PreTrainedModel, PretrainedConfig
 import inspect
-
-
-
 
 
 def get_model_class(
@@ -246,7 +242,9 @@ def strip_common_prefix(
 
     for p in candidates:
         s = score(p)
-        if s > best_score or (s == best_score and best_prefix and len(p) < len(best_prefix)):
+        if s > best_score or (
+            s == best_score and best_prefix and len(p) < len(best_prefix)
+        ):
             best_prefix = p
             best_score = s
 

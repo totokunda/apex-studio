@@ -55,7 +55,7 @@ class LongCatRefineEngine(LongCatShared):
 
         dit_dtype = self.component_dtypes["transformer"]
 
-        (prompt_embeds, prompt_attention_mask, _, _) = self.encode_prompt(
+        prompt_embeds, prompt_attention_mask, _, _ = self.encode_prompt(
             prompt=prompt,
             do_classifier_free_guidance=self.do_classifier_free_guidance,
             num_videos_per_prompt=num_videos_per_prompt,

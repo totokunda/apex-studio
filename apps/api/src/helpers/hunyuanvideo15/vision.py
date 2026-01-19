@@ -14,7 +14,6 @@ from transformers import SiglipImageProcessor, SiglipVisionModel
 from transformers.utils import ModelOutput
 import numpy as np
 
-
 PRECISION_TO_TYPE = {
     "fp32": torch.float32,
     "fp16": torch.float16,

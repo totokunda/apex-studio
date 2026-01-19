@@ -18,7 +18,6 @@ ftfy==6.3.1
 fvcore==0.1.5.post20221221
 gdown==5.2.0
 gguf==0.17.1
-gunicorn==22.0.0
 huggingface_hub==0.34.0
 imageio==2.37.0
 iopath==0.1.10

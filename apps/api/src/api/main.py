@@ -23,7 +23,11 @@ import time
 from .stability import install_stability_middleware
 from .log_suppression import install_http_log_suppression
 from fastapi.staticfiles import StaticFiles
-from src.utils.defaults import get_engine_results_path, get_preprocessor_results_path, get_postprocessor_results_path
+from src.utils.defaults import (
+    get_engine_results_path,
+    get_preprocessor_results_path,
+    get_postprocessor_results_path,
+)
 
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
@@ -95,6 +99,7 @@ async def _start_background_services() -> None:
 async def lifespan(app: FastAPI):
     # Verify attention backends synchronously at startup
     from src.attention.functions import verify_attention_backends
+
     verify_attention_backends()
 
     _start_parent_watchdog()
@@ -153,9 +158,21 @@ app.include_router(files_router)
 app.include_router(download_router)
 app.include_router(ray_router)
 
-app.mount("/files/engine_results", StaticFiles(directory=get_engine_results_path()), name="engine_results")
-app.mount("/files/preprocessor_results", StaticFiles(directory=get_preprocessor_results_path()), name="preprocessor_results")
-app.mount("/files/postprocessor_results", StaticFiles(directory=get_postprocessor_results_path()), name="postprocessor_results")
+app.mount(
+    "/files/engine_results",
+    StaticFiles(directory=get_engine_results_path()),
+    name="engine_results",
+)
+app.mount(
+    "/files/preprocessor_results",
+    StaticFiles(directory=get_preprocessor_results_path()),
+    name="preprocessor_results",
+)
+app.mount(
+    "/files/postprocessor_results",
+    StaticFiles(directory=get_postprocessor_results_path()),
+    name="postprocessor_results",
+)
 
 app.add_middleware(
     CORSMiddleware,

@@ -137,7 +137,7 @@ QWEN_VL_VISION_SD_MAP = {
     ".ffn_gate": ".mlp.gate_proj",
     ".ln1.": ".norm1.",
     ".ln2.": ".norm2.",
-    "v.post_ln": "visual.merger.ln_q"
+    "v.post_ln": "visual.merger.ln_q",
 }
 
 GEMMA3_SD_MAP = {
@@ -177,7 +177,10 @@ GEMMA3_VISION_SD_MAP = {
 }
 
 
-def remap_key(key: str, key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3"] = "t5"):
+def remap_key(
+    key: str,
+    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3"] = "t5",
+):
 
     if key_map == "t5":
         key_map = T5_SD_MAP
@@ -190,9 +193,17 @@ def remap_key(key: str, key_map: Literal["t5", "llama", "step", "mistral", "qwen
         # Vision keys are prefixed with "v." and use different HF-style submodule names.
         key_map = MISTRAL_VISION_SD_MAP if key.startswith("v.") else MISTRAL_SD_MAP
     elif key_map == "qwen_vl":
-        key_map = QWEN_VL_VISION_SD_MAP if (key.startswith("v.") or key.startswith("mm.")) else QWEN_VL_SD_MAP
+        key_map = (
+            QWEN_VL_VISION_SD_MAP
+            if (key.startswith("v.") or key.startswith("mm."))
+            else QWEN_VL_SD_MAP
+        )
     elif key_map == "gemma3":
-        key_map = GEMMA3_VISION_SD_MAP if (key.startswith("v.") or key.startswith("mm.")) else GEMMA3_SD_MAP
+        key_map = (
+            GEMMA3_VISION_SD_MAP
+            if (key.startswith("v.") or key.startswith("mm."))
+            else GEMMA3_SD_MAP
+        )
     else:
         raise ValueError(f"Invalid key map: {key_map}")
 

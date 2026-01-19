@@ -13,7 +13,6 @@ import logging
 from torch import Tensor
 from torch import nn
 
-
 logger = logging.getLogger("dinov2")
 
 
@@ -80,7 +79,9 @@ class MemEffAttention(Attention):
         try:
             x = memory_efficient_attention(q, k, v, attn_bias=attn_bias)
         except Exception as e:
-            logger.warning(f"xFormers memory_efficient_attention failed: {e}. Falling back to standard attention.")
+            logger.warning(
+                f"xFormers memory_efficient_attention failed: {e}. Falling back to standard attention."
+            )
             return super().forward(x)
         x = x.reshape([B, N, C])
 

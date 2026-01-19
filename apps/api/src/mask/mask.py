@@ -13,7 +13,9 @@ import traceback
 from datetime import datetime
 import gc
 import time
-from src.preprocess.custom_mmpkg.custom_mmcv.video.io import VideoReader as MMCVVideoReader
+from src.preprocess.custom_mmpkg.custom_mmcv.video.io import (
+    VideoReader as MMCVVideoReader,
+)
 
 # get the default device
 from src.utils.defaults import DEFAULT_PREPROCESSOR_SAVE_PATH
@@ -1225,7 +1227,9 @@ class UnifiedSAM2Predictor:
         the process (SIGABRT) inside MPSGraph and cannot be caught by Python.
         """
         if self.device.type != "cuda":
-            self.logger.info(f"Skipping warmup on device={self.device} (warmup is CUDA-only).")
+            self.logger.info(
+                f"Skipping warmup on device={self.device} (warmup is CUDA-only)."
+            )
             return
         try:
             self.logger.info("Warming up model...")

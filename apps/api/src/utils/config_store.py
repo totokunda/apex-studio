@@ -22,7 +22,9 @@ class ConfigStoreLockTimeout(RuntimeError):
 
 
 @contextmanager
-def config_store_lock(config_store_path: Path, timeout_s: float = 10.0) -> Iterator[None]:
+def config_store_lock(
+    config_store_path: Path, timeout_s: float = 10.0
+) -> Iterator[None]:
     """
     Cross-thread + cross-process lock for the persisted config store JSON.
 
@@ -46,7 +48,9 @@ def config_store_lock(config_store_path: Path, timeout_s: float = 10.0) -> Itera
                     fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
-                    if timeout_s is not None and (time.time() - start) >= float(timeout_s):
+                    if timeout_s is not None and (time.time() - start) >= float(
+                        timeout_s
+                    ):
                         raise ConfigStoreLockTimeout(
                             f"Timed out waiting for config-store lock: {lock_path}"
                         )
@@ -86,7 +90,9 @@ def write_json_dict_atomic(path: Path, data: dict, *, indent: int = 2) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Unique-ish temp file name to avoid collisions.
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}.{int(time.time() * 1000)}")
+    tmp = path.with_suffix(
+        path.suffix + f".tmp.{os.getpid()}.{int(time.time() * 1000)}"
+    )
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=indent)
         f.flush()
@@ -97,5 +103,3 @@ def write_json_dict_atomic(path: Path, data: dict, *, indent: int = 2) -> None:
             pass
 
     os.replace(str(tmp), str(path))
-
-

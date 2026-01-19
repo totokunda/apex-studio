@@ -18,7 +18,7 @@ class RenderPredictionCallback(florch.callbacks.Callback):
         super().__init__()
 
         if image_dir is None:
-            image_dir = f'{DATA_ROOT}/wild_crops/'
+            image_dir = f"{DATA_ROOT}/wild_crops/"
 
         self.image_dir = image_dir
         self.start_step = start_step
@@ -31,10 +31,12 @@ class RenderPredictionCallback(florch.callbacks.Callback):
         self.renderer_process = None
 
     def on_train_begin(self, initial_step):
-        image_paths = spu.sorted_recursive_glob(f'{self.image_dir}/*.*')
+        image_paths = spu.sorted_recursive_glob(f"{self.image_dir}/*.*")
         self.image_stack_np = np.stack(
             [
-                cv2.resize(imageio.imread(p)[..., :3], (FLAGS.proc_side, FLAGS.proc_side))
+                cv2.resize(
+                    imageio.imread(p)[..., :3], (FLAGS.proc_side, FLAGS.proc_side)
+                )
                 for p in image_paths
             ],
             axis=0,
@@ -52,11 +54,11 @@ class RenderPredictionCallback(florch.callbacks.Callback):
                 .repeat(len(image_paths), 1, 1)
             )
             self.canonical_points = torch.tensor(
-                np.load(f'{PROJDIR}/canonical_vertices_smplx.npy'), dtype=torch.float32
+                np.load(f"{PROJDIR}/canonical_vertices_smplx.npy"), dtype=torch.float32
             )
 
         self.camera.scale_output(512 / FLAGS.proc_side)
-        self.faces = np.load(f'{PROJDIR}/smplx_faces.npy')
+        self.faces = np.load(f"{PROJDIR}/smplx_faces.npy")
         self.q = multiprocessing.JoinableQueue(10)
         self.renderer_process = multiprocessing.Process(
             target=smpl_render_loop,
@@ -68,11 +70,13 @@ class RenderPredictionCallback(florch.callbacks.Callback):
     def on_train_batch_end(self, step, logs):
         if step % self.interval == 0 and step >= self.start_step:
             with torch.inference_mode(), torch.amp.autocast(
-                'cuda', dtype=torch.float16
+                "cuda", dtype=torch.float16
             ), self.device:
                 self.trainer.eval()
-                pred_vertices, uncerts = self.trainer.model.predict_multi_same_canonicals(
-                    self.image_stack_torch, self.intrinsics, self.canonical_points
+                pred_vertices, uncerts = (
+                    self.trainer.model.predict_multi_same_canonicals(
+                        self.image_stack_torch, self.intrinsics, self.canonical_points
+                    )
                 )
                 pred_vertices = pred_vertices.cpu().numpy() / 1000
             self.q.put((step, pred_vertices))
@@ -92,7 +96,10 @@ def smpl_render_loop(q, image_stack, camera, faces, logdir):
     spu.terminate_on_parent_death()  # maybe not needed with daemon=True
     renderer = Renderer(imshape=(512, 512), faces=faces)
     image_stack = np.array(
-        [cv2.resize(im, (512, 512), interpolation=cv2.INTER_CUBIC) for im in image_stack]
+        [
+            cv2.resize(im, (512, 512), interpolation=cv2.INTER_CUBIC)
+            for im in image_stack
+        ]
     )
 
     while True:
@@ -111,7 +118,7 @@ def smpl_render_loop(q, image_stack, camera, faces, logdir):
                 ],
                 axis=0,
             )
-            path = f'{logdir}/pred_{batch:07d}.jpg'
+            path = f"{logdir}/pred_{batch:07d}.jpg"
             imageio.imwrite(path, grid, quality=93)
 
         q.task_done()

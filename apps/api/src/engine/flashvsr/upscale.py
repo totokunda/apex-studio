@@ -500,5 +500,11 @@ class FlashVSRUpscaleEngine(FlashVSRShared):
         else:
             return super().vae_decode(latents, offload=offload)
 
-    def _render_step(self, latents: torch.Tensor, render_on_step_callback: Callable, timestep: Optional[torch.Tensor] = None, image: Optional[bool] = False):
+    def _render_step(
+        self,
+        latents: torch.Tensor,
+        render_on_step_callback: Callable,
+        timestep: Optional[torch.Tensor] = None,
+        image: Optional[bool] = False,
+    ):
         self.logger.warning("Rendering step not supported for FlashVSR upscale")

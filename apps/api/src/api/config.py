@@ -22,7 +22,11 @@ from src.utils.defaults import (
     set_postprocessor_path,
     get_config_store_path,
 )
-from src.utils.config_store import config_store_lock, read_json_dict, write_json_dict_atomic
+from src.utils.config_store import (
+    config_store_lock,
+    read_json_dict,
+    write_json_dict_atomic,
+)
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -259,6 +263,7 @@ def get_device():
 def set_device(request: TorchDeviceRequest):
     """Set the torch device (cpu, cuda, mps, cuda:0, etc.)"""
     import torch
+
     try:
         valid_devices = ["cpu", "cuda", "mps"]
         device_str = request.device.lower()
@@ -431,7 +436,9 @@ def get_path_sizes_api():
         config_path_bytes=_compute_path_size_bytes(str(get_config_path())),
         lora_path_bytes=_compute_path_size_bytes(str(get_lora_path())),
         preprocessor_path_bytes=_compute_path_size_bytes(str(get_preprocessor_path())),
-        postprocessor_path_bytes=_compute_path_size_bytes(str(get_postprocessor_path())),
+        postprocessor_path_bytes=_compute_path_size_bytes(
+            str(get_postprocessor_path())
+        ),
     )
 
 
@@ -676,12 +683,13 @@ def get_auto_update_config_api():
         repo_owner=repo_owner,
         repo_name=repo_name,
         include_prerelease=include_prerelease,
-            status=status,
-        )
+        status=status,
+    )
 
 
 def _memory_env_defaults() -> dict:
     persisted = _read_persisted_config_raw()
+
     def _float(name: str, default: float) -> float:
         try:
             raw = persisted.get(name, None)
@@ -712,10 +720,18 @@ def _memory_env_defaults() -> dict:
 
     return {
         "APEX_LOAD_MODEL_VRAM_MULT": _float("APEX_LOAD_MODEL_VRAM_MULT", 1.20),
-        "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES": _int("APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2),
-        "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES": _int("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3),
-        "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12),
-        "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10),
+        "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES": _int(
+            "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
+        ),
+        "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES": _int(
+            "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3
+        ),
+        "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION": _float(
+            "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12
+        ),
+        "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION": _float(
+            "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10
+        ),
     }
 
 
@@ -776,7 +792,9 @@ def set_auto_update_config_api(request: AutoUpdateConfigRequest):
         if request.interval_hours is not None:
             interval = float(request.interval_hours)
             if interval <= 0:
-                raise HTTPException(status_code=400, detail="interval_hours must be > 0")
+                raise HTTPException(
+                    status_code=400, detail="interval_hours must be > 0"
+                )
             updates["auto_update_interval_hours"] = interval
         if request.repo_owner is not None:
             updates["auto_update_repo_owner"] = str(request.repo_owner).strip()
@@ -791,7 +809,9 @@ def set_auto_update_config_api(request: AutoUpdateConfigRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to set auto-update config: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Failed to set auto-update config: {e}"
+        )
 
 
 class HostnameResponse(BaseModel):

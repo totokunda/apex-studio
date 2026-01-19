@@ -135,7 +135,7 @@ class MobileNetV3(nn.Module):
 
         layer_setting = self.arch_settings[self.arch]
         for i, params in enumerate(layer_setting):
-            (kernel_size, mid_channels, out_channels, with_se, act, stride) = params
+            kernel_size, mid_channels, out_channels, with_se, act, stride = params
 
             if self.arch == "large" and i >= 12 or self.arch == "small" and i >= 8:
                 mid_channels = mid_channels // self.reduction_factor

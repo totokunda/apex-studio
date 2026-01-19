@@ -66,5 +66,3 @@ def iter_manifest_files(manifest_dir: Path) -> Iterable[Path]:
         return []
     files = list(manifest_dir.rglob("*.yml")) + list(manifest_dir.rglob("*.yaml"))
     return sorted(files)
-
-

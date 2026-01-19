@@ -23,7 +23,8 @@ def warp_images_with_pyramid(
         image_levels.append(F.avg_pool2d(image_levels[-1], 2, 2))
 
     intrinsic_matrix_levels = [
-        corner_aligned_scale_mat(1 / 2**i_level, device=intrinsic_matrix.device) @ intrinsic_matrix
+        corner_aligned_scale_mat(1 / 2**i_level, device=intrinsic_matrix.device)
+        @ intrinsic_matrix
         for i_level in range(n_pyramid_levels)
     ]
 
@@ -80,24 +81,28 @@ def warp_single_image(
         torch.meshgrid(
             torch.arange(output_shape[1], device=device),
             torch.arange(output_shape[0], device=device),
-            indexing='xy',
+            indexing="xy",
         ),
         dim=-1,
     ).float()
     new_coords_homog = ptu3d.to_homogeneous(new_coords)
-    old_coords_homog = torch.einsum('hwc,Cc->hwC', new_coords_homog, new_invprojmat)
+    old_coords_homog = torch.einsum("hwc,Cc->hwC", new_coords_homog, new_invprojmat)
     old_coords_homog = ptu3d.to_homogeneous(
         distort_points(ptu3d.project(old_coords_homog), distortion_coeffs)
     )
-    old_coords = torch.einsum('hwc,Cc->hwC', old_coords_homog, intrinsic_matrix)[..., :2]
-    size = torch.tensor([image.shape[2], image.shape[1]], dtype=old_coords.dtype, device=device)
+    old_coords = torch.einsum("hwc,Cc->hwC", old_coords_homog, intrinsic_matrix)[
+        ..., :2
+    ]
+    size = torch.tensor(
+        [image.shape[2], image.shape[1]], dtype=old_coords.dtype, device=device
+    )
     old_coords_normalized = old_coords.mul_(2.0 / (size - 1)).sub_(1.0)
     return F.grid_sample(
         image.unsqueeze(0),
         old_coords_normalized.unsqueeze(0).to(image.dtype),
         align_corners=True,
-        mode='bilinear',
-        padding_mode='zeros',
+        mode="bilinear",
+        padding_mode="zeros",
     ).squeeze(0)
 
 
@@ -132,19 +137,25 @@ def distortion_formula_parts_simple(
         + [1] * (undist_points2d.ndim - distortion_coeffs.ndim)
         + [5]
     )
-    distortion_coeffs = torch.reshape(distortion_coeffs, distortion_coeffs_broadcast_shape)
+    distortion_coeffs = torch.reshape(
+        distortion_coeffs, distortion_coeffs_broadcast_shape
+    )
 
     r2 = torch.sum(torch.square(undist_points2d), dim=-1, keepdim=True)
     a = (
         (distortion_coeffs[..., 4:5] * r2 + distortion_coeffs[..., 1:2]) * r2
         + distortion_coeffs[..., 0:1]
     ) * r2 + 1
-    b = 2 * torch.sum(undist_points2d * distortion_coeffs[..., 3:1:-1], dim=-1, keepdim=True)
+    b = 2 * torch.sum(
+        undist_points2d * distortion_coeffs[..., 3:1:-1], dim=-1, keepdim=True
+    )
     c = r2 * distortion_coeffs[..., 3:1:-1]
     return a, b, c
 
 
-def distortion_formula_parts(undist_points2d: torch.Tensor, distortion_coeffs: torch.Tensor):
+def distortion_formula_parts(
+    undist_points2d: torch.Tensor, distortion_coeffs: torch.Tensor
+):
     # (k1, k2, p1, p2, k3, k4, k5, k6, s1, s2, s3, s4)
     # Pad the distortion coefficients with zeros, to have 12 elements.
     d = pad_axis_to_size(distortion_coeffs, 12, -1)
@@ -196,7 +207,9 @@ def distort_points_fisheye(
         t = torch.atan(r)
         t2 = torch.square(t)
         t_d = (
-            (((d[..., 3:4] * t2 + d[..., 2:3]) * t2 + d[..., 1:2]) * t2 + d[..., 0:1]) * t2 + 1
+            (((d[..., 3:4] * t2 + d[..., 2:3]) * t2 + d[..., 1:2]) * t2 + d[..., 0:1])
+            * t2
+            + 1
         ) * t
         return undist_points2d * torch.nan_to_num(t_d / r)
 
@@ -234,7 +247,10 @@ def undistort_points_fisheye(
     undist_points2d = dist_points2d * torch.nan_to_num(torch.tan(t) / t_d)
     return undist_points2d
 
-def corner_aligned_scale_mat(factor: float, device: Optional[torch.device] = None) -> torch.Tensor:
+
+def corner_aligned_scale_mat(
+    factor: float, device: Optional[torch.device] = None
+) -> torch.Tensor:
     shift = (factor - 1.0) / 2.0
     return torch.tensor(
         [[factor, 0.0, shift], [0.0, factor, shift], [0.0, 0.0, 1.0]],

@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException
 from .job_store import job_store as unified_job_store
 from .ws_manager import websocket_manager
 
-
 router = APIRouter(prefix="/ray", tags=["ray"])
 
 

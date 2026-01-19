@@ -109,13 +109,19 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
         )
         if self.do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-            prompt_attention_mask = torch.cat([negative_prompt_attention_mask, prompt_attention_mask], dim=0)
+            prompt_attention_mask = torch.cat(
+                [negative_prompt_attention_mask, prompt_attention_mask], dim=0
+            )
 
         connectors = self.helpers["connectors"]
-        additive_attention_mask = (1 - prompt_attention_mask.to(prompt_embeds.dtype)) * -1000000.0
-        connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask = connectors(
-            prompt_embeds, additive_attention_mask, additive_mask=True
-        )
+        additive_attention_mask = (
+            1 - prompt_attention_mask.to(prompt_embeds.dtype)
+        ) * -1000000.0
+        (
+            connector_prompt_embeds,
+            connector_audio_prompt_embeds,
+            connector_attention_mask,
+        ) = connectors(prompt_embeds, additive_attention_mask, additive_mask=True)
 
         # 4. Prepare latent variables / shapes
         latent_num_frames = (num_frames - 1) // self.vae_temporal_compression_ratio + 1
@@ -140,12 +146,18 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
 
             # Choose conditioning spatial size once (based on first keyframe image)
             max_area = height * width
-            first_img, cond_h, cond_w = self._aspect_ratio_resize(pil_images[0], max_area=max_area, mod_value=32)
+            first_img, cond_h, cond_w = self._aspect_ratio_resize(
+                pil_images[0], max_area=max_area, mod_value=32
+            )
             height, width = cond_h, cond_w
 
-            cond_items.append(self.video_processor.preprocess(first_img, height=height, width=width))
+            cond_items.append(
+                self.video_processor.preprocess(first_img, height=height, width=width)
+            )
             for img in pil_images[1:]:
-                cond_items.append(self.video_processor.preprocess(img, height=height, width=width))
+                cond_items.append(
+                    self.video_processor.preprocess(img, height=height, width=width)
+                )
 
             # Normalize strengths/indices to list form for the keyframe conditionings
             if image_strengths is None:
@@ -172,13 +184,17 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
 
         # 4b. Optional conditioning video (IC-LoRA style): append as keyframe tokens too
         if conditioning_video is not None:
-            frames = self._load_video(conditioning_video, fps=int(fps), num_frames=num_frames)
+            frames = self._load_video(
+                conditioning_video, fps=int(fps), num_frames=num_frames
+            )
             # Resize to the same conditioning spatial size (height/width computed above if images provided,
             # otherwise use generation height/width).
             video_tensors = []
             for fr in frames:
                 fr = self._load_image(fr)  # ensure RGB
-                video_tensors.append(self.video_processor.preprocess(fr, height=height, width=width))
+                video_tensors.append(
+                    self.video_processor.preprocess(fr, height=height, width=width)
+                )
             # [F, 3, H, W] -> [1, 3, F, H, W]
             vid = torch.cat(video_tensors, dim=0).permute(1, 0, 2, 3).unsqueeze(0)
             cond_items.append(vid)
@@ -204,17 +220,25 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
                 base_latents=latents,
                 cond_latent_inputs=cond_items,
                 cond_strengths=cond_strengths if len(cond_strengths) > 0 else None,
-                cond_pixel_frame_indices=cond_pixel_indices if len(cond_pixel_indices) > 0 else None,
+                cond_pixel_frame_indices=(
+                    cond_pixel_indices if len(cond_pixel_indices) > 0 else None
+                ),
                 offload=offload,
             )
         )
 
         # 4d. Prepare audio latents
-        num_mel_bins = self.audio_vae.config.mel_bins if getattr(self, "audio_vae", None) is not None else 64
+        num_mel_bins = (
+            self.audio_vae.config.mel_bins
+            if getattr(self, "audio_vae", None) is not None
+            else 64
+        )
         latent_mel_bins = num_mel_bins // self.audio_vae_mel_compression_ratio
 
         num_channels_latents_audio = (
-            self.audio_vae.config.latent_channels if getattr(self, "audio_vae", None) is not None else 8
+            self.audio_vae.config.latent_channels
+            if getattr(self, "audio_vae", None) is not None
+            else 8
         )
         audio_latents, audio_num_frames, _, _ = self.prepare_audio_latents(
             audio=None,
@@ -270,7 +294,9 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
             sigmas=sigmas,
             mu=mu,
         )
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+        num_warmup_steps = max(
+            len(timesteps) - num_inference_steps * self.scheduler.order, 0
+        )
         self._num_timesteps = len(timesteps)
 
         # 6. Prepare micro-conditions (coords)
@@ -298,16 +324,28 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
 
                 self._current_timestep = t
 
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                latent_model_input = (
+                    torch.cat([latents] * 2)
+                    if self.do_classifier_free_guidance
+                    else latents
+                )
                 latent_model_input = latent_model_input.to(prompt_embeds.dtype)
                 audio_latent_model_input = (
-                    torch.cat([audio_latents] * 2) if self.do_classifier_free_guidance else audio_latents
+                    torch.cat([audio_latents] * 2)
+                    if self.do_classifier_free_guidance
+                    else audio_latents
                 )
-                audio_latent_model_input = audio_latent_model_input.to(prompt_embeds.dtype)
+                audio_latent_model_input = audio_latent_model_input.to(
+                    prompt_embeds.dtype
+                )
 
                 timestep = t.expand(latent_model_input.shape[0])
                 # Masked timesteps: tokens with denoise_mask=0 get timestep 0.
-                video_timestep = timestep.unsqueeze(-1) * denoise_mask_model if denoise_mask_model is not None else timestep
+                video_timestep = (
+                    timestep.unsqueeze(-1) * denoise_mask_model
+                    if denoise_mask_model is not None
+                    else timestep
+                )
 
                 with self.transformer.cache_context("cond_uncond"):
                     noise_pred_video, noise_pred_audio = self.transformer(
@@ -334,34 +372,49 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
                 noise_pred_audio = noise_pred_audio.float()
 
                 if self.do_classifier_free_guidance:
-                    noise_pred_video_uncond, noise_pred_video_text = noise_pred_video.chunk(2)
+                    noise_pred_video_uncond, noise_pred_video_text = (
+                        noise_pred_video.chunk(2)
+                    )
                     noise_pred_video = noise_pred_video_uncond + self.guidance_scale * (
                         noise_pred_video_text - noise_pred_video_uncond
                     )
 
-                    noise_pred_audio_uncond, noise_pred_audio_text = noise_pred_audio.chunk(2)
+                    noise_pred_audio_uncond, noise_pred_audio_text = (
+                        noise_pred_audio.chunk(2)
+                    )
                     noise_pred_audio = noise_pred_audio_uncond + self.guidance_scale * (
                         noise_pred_audio_text - noise_pred_audio_uncond
                     )
 
                     if self.guidance_rescale > 0:
                         noise_pred_video = self.rescale_noise_cfg(
-                            noise_pred_video, noise_pred_video_text, guidance_rescale=self.guidance_rescale
+                            noise_pred_video,
+                            noise_pred_video_text,
+                            guidance_rescale=self.guidance_rescale,
                         )
                         noise_pred_audio = self.rescale_noise_cfg(
-                            noise_pred_audio, noise_pred_audio_text, guidance_rescale=self.guidance_rescale
+                            noise_pred_audio,
+                            noise_pred_audio_text,
+                            guidance_rescale=self.guidance_rescale,
                         )
 
-                latents = self.scheduler.step(noise_pred_video, t, latents, return_dict=False)[0]
-                audio_latents = audio_scheduler.step(noise_pred_audio, t, audio_latents, return_dict=False)[0]
+                latents = self.scheduler.step(
+                    noise_pred_video, t, latents, return_dict=False
+                )[0]
+                audio_latents = audio_scheduler.step(
+                    noise_pred_audio, t, audio_latents, return_dict=False
+                )[0]
 
                 # Re-impose conditioning based on denoise mask (closer to ltx-core `post_process_latent` behavior).
                 if denoise_mask is not None:
-                    latents = (latents * denoise_mask.unsqueeze(-1) + clean_latents.float() * (1 - denoise_mask.unsqueeze(-1))).to(
-                        latents.dtype
-                    )
+                    latents = (
+                        latents * denoise_mask.unsqueeze(-1)
+                        + clean_latents.float() * (1 - denoise_mask.unsqueeze(-1))
+                    ).to(latents.dtype)
 
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                if i == len(timesteps) - 1 or (
+                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+                ):
                     progress_bar.update()
 
         # 8. Upsample stage (spatial) then re-run stage-2 refinement
@@ -392,7 +445,9 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
                 self._offload("video_vae")
 
             up_tokens = self._pack_latents(
-                up_grid, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+                up_grid,
+                self.transformer_spatial_patch_size,
+                self.transformer_temporal_patch_size,
             )
 
             video, audio = self.run(
@@ -449,16 +504,27 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
         if not self.vae.config.timestep_conditioning:
             timestep = None
         else:
-            noise = randn_tensor(base_grid.shape, generator=generator, device=device, dtype=base_grid.dtype)
+            noise = randn_tensor(
+                base_grid.shape,
+                generator=generator,
+                device=device,
+                dtype=base_grid.dtype,
+            )
             if not isinstance(decode_timestep, list):
                 decode_timestep = [decode_timestep] * batch_size
             if decode_noise_scale is None:
                 decode_noise_scale = decode_timestep
             elif not isinstance(decode_noise_scale, list):
                 decode_noise_scale = [decode_noise_scale] * batch_size
-            timestep = torch.tensor(decode_timestep, device=device, dtype=base_grid.dtype)
-            decode_noise_scale = torch.tensor(decode_noise_scale, device=device, dtype=base_grid.dtype)[:, None, None, None, None]
-            base_grid = (1 - decode_noise_scale) * base_grid + decode_noise_scale * noise
+            timestep = torch.tensor(
+                decode_timestep, device=device, dtype=base_grid.dtype
+            )
+            decode_noise_scale = torch.tensor(
+                decode_noise_scale, device=device, dtype=base_grid.dtype
+            )[:, None, None, None, None]
+            base_grid = (
+                1 - decode_noise_scale
+            ) * base_grid + decode_noise_scale * noise
 
         base_grid = base_grid.to(self.vae.dtype)
         video = self.vae.decode(base_grid, timestep, return_dict=False)[0]
@@ -473,8 +539,12 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
 
         audio_latents = audio_latents.to(self.audio_vae.dtype)
         audio_latents = self.audio_vae.denormalize_latents(audio_latents)
-        audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
-        generated_mel_spectrograms = self.audio_vae.decode(audio_latents, return_dict=False)[0]
+        audio_latents = self._unpack_audio_latents(
+            audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins
+        )
+        generated_mel_spectrograms = self.audio_vae.decode(
+            audio_latents, return_dict=False
+        )[0]
 
         if offload:
             self._offload("audio_vae")
@@ -486,5 +556,3 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
             self._offload("vocoder")
 
         return video, audio
-
-

@@ -6,7 +6,6 @@ from typing import Callable, Optional
 from tqdm import tqdm
 import time
 
-
 # Global callback that can be set by tasks
 DOWNLOAD_PROGRESS_CALLBACK: Optional[Callable] = None
 

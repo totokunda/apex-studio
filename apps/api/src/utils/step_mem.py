@@ -57,8 +57,14 @@ def _collect_cpu_mem() -> Dict[str, Any]:
         vm = psutil.virtual_memory()
         vm_total = int(vm.total)
         vm_avail = int(vm.available)
-        vm_used = max(vm_total - vm_avail, 0) if vm_total is not None and vm_avail is not None else None
-        vm_percent = (vm_used / vm_total * 100.0) if (vm_total and vm_used is not None) else None
+        vm_used = (
+            max(vm_total - vm_avail, 0)
+            if vm_total is not None and vm_avail is not None
+            else None
+        )
+        vm_percent = (
+            (vm_used / vm_total * 100.0) if (vm_total and vm_used is not None) else None
+        )
     except Exception:
         pass
 
@@ -71,7 +77,9 @@ def _collect_cpu_mem() -> Dict[str, Any]:
     }
 
 
-def _collect_cuda_mem(device: Optional[int] = None, sync: bool = True) -> Optional[Dict[str, Any]]:
+def _collect_cuda_mem(
+    device: Optional[int] = None, sync: bool = True
+) -> Optional[Dict[str, Any]]:
     """
     Return CUDA memory stats when torch+cuda is available, otherwise None.
 
@@ -122,7 +130,9 @@ def _collect_cuda_mem(device: Optional[int] = None, sync: bool = True) -> Option
         "name": name,
         "free": free_b,
         "total": total_b,
-        "used": (total_b - free_b) if (total_b is not None and free_b is not None) else None,
+        "used": (
+            (total_b - free_b) if (total_b is not None and free_b is not None) else None
+        ),
         "torch_allocated": allocated,
         "torch_reserved": reserved,
         "torch_max_allocated": max_allocated,
@@ -207,7 +217,9 @@ def _collect_live_tensors(
 
             storage_ptr, storage_nbytes = _safe_storage_info(t)
 
-            totals_by_device[device_str] = totals_by_device.get(device_str, 0) + tensor_bytes
+            totals_by_device[device_str] = (
+                totals_by_device.get(device_str, 0) + tensor_bytes
+            )
             if storage_ptr is not None and storage_nbytes is not None:
                 dev_storages = storages_by_device.setdefault(device_str, {})
                 # keep max nbytes for this ptr (should be stable; defensive for races)
@@ -225,8 +237,14 @@ def _collect_live_tensors(
             rows.append(
                 {
                     "tensor_bytes": tensor_bytes,
-                    "storage_bytes": int(storage_nbytes) if storage_nbytes is not None else None,
-                    "shape": tuple(int(x) for x in t.shape) if getattr(t, "shape", None) is not None else None,
+                    "storage_bytes": (
+                        int(storage_nbytes) if storage_nbytes is not None else None
+                    ),
+                    "shape": (
+                        tuple(int(x) for x in t.shape)
+                        if getattr(t, "shape", None) is not None
+                        else None
+                    ),
                     "dtype": str(getattr(t, "dtype", None)),
                     "device": device_str,
                     "requires_grad": bool(getattr(t, "requires_grad", False)),
@@ -274,7 +292,13 @@ def step_mem(
     - `reset_peak=True` resets PyTorch CUDA peak stats for the selected device.
     - `log_tensors=True` walks Python GC to list live torch tensors (can be slow/noisy).
     """
-    if os.environ.get("APEX_STEP_MEM_DISABLE", "").strip() not in ("", "0", "false", "False", "FALSE"):
+    if os.environ.get("APEX_STEP_MEM_DISABLE", "").strip() not in (
+        "",
+        "0",
+        "false",
+        "False",
+        "FALSE",
+    ):
         return
 
     out = stream or sys.stderr
@@ -344,7 +368,12 @@ def step_mem(
             else:
                 suffix = f" (filter={tensors_device})" if tensors_device else ""
                 print(f"  TENSORS{suffix}:", file=out, flush=True)
-                for dev in sorted(set(list(totals_by_device.keys()) + list(unique_storage_by_device.keys()))):
+                for dev in sorted(
+                    set(
+                        list(totals_by_device.keys())
+                        + list(unique_storage_by_device.keys())
+                    )
+                ):
                     total = totals_by_device.get(dev)
                     uniq = unique_storage_by_device.get(dev)
                     print(
@@ -354,7 +383,11 @@ def step_mem(
                     )
                 rows = inv.get("rows") or []
                 if rows:
-                    print(f"    top_k={len(rows)} (by tensor_bytes):", file=out, flush=True)
+                    print(
+                        f"    top_k={len(rows)} (by tensor_bytes):",
+                        file=out,
+                        flush=True,
+                    )
                     for i, r in enumerate(rows, start=1):
                         print(
                             "      "
@@ -365,7 +398,11 @@ def step_mem(
                             f" shape={r.get('shape')}"
                             f" req_grad={r.get('requires_grad')}"
                             f" leaf={r.get('is_leaf')}"
-                            + (f" grad_fn={r.get('grad_fn')}" if r.get("grad_fn") else ""),
+                            + (
+                                f" grad_fn={r.get('grad_fn')}"
+                                if r.get("grad_fn")
+                                else ""
+                            ),
                             file=out,
                             flush=True,
                         )
@@ -378,4 +415,3 @@ def step_mem(
         except EOFError:
             # Non-interactive runner or stdin closed; don't block.
             pass
-

@@ -27,36 +27,36 @@ from nlf.rendering import Renderer
 
 def initialize():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-path', type=str, required=True)
-    parser.add_argument('--output-path', type=str, required=True)
-    parser.add_argument('--out-video-dir', type=str)
-    parser.add_argument('--default-fov', type=float, default=55)
-    parser.add_argument('--num-aug', type=int, default=5)
-    parser.add_argument('--real-intrinsics', action=spu.argparse.BoolAction)
-    parser.add_argument('--gtassoc', action=spu.argparse.BoolAction)
-    parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--internal-batch-size', type=int, default=64)
-    parser.add_argument('--antialias-factor', type=int, default=2)
-    parser.add_argument('--testset-only', action=spu.argparse.BoolAction)
-    parser.add_argument('--viz', action=spu.argparse.BoolAction)
-    parser.add_argument('--clahe', action=spu.argparse.BoolAction)
+    parser.add_argument("--model-path", type=str, required=True)
+    parser.add_argument("--output-path", type=str, required=True)
+    parser.add_argument("--out-video-dir", type=str)
+    parser.add_argument("--default-fov", type=float, default=55)
+    parser.add_argument("--num-aug", type=int, default=5)
+    parser.add_argument("--real-intrinsics", action=spu.argparse.BoolAction)
+    parser.add_argument("--gtassoc", action=spu.argparse.BoolAction)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--internal-batch-size", type=int, default=64)
+    parser.add_argument("--antialias-factor", type=int, default=2)
+    parser.add_argument("--testset-only", action=spu.argparse.BoolAction)
+    parser.add_argument("--viz", action=spu.argparse.BoolAction)
+    parser.add_argument("--clahe", action=spu.argparse.BoolAction)
     spu.argparse.initialize(parser)
 
 
 def main():
     initialize()
-    logger.info('Loading model...')
+    logger.info("Loading model...")
     model = torch.jit.load(FLAGS.model_path)
-    logger.info('Model loaded.')
+    logger.info("Model loaded.")
 
-    ji3d = get_joint_info(model, 'smpl_24')
-    faces = np.load(f'{PROJDIR}/smpl_faces.npy')
+    ji3d = get_joint_info(model, "smpl_24")
+    faces = np.load(f"{PROJDIR}/smpl_faces.npy")
 
-    cano_verts = np.load(f'{PROJDIR}/canonical_verts/smpl.npy')
-    cano_joints = np.load(f'{PROJDIR}/canonical_joints/smpl.npy')
-    cano_all = torch.cat([torch.as_tensor(cano_verts), torch.as_tensor(cano_joints)], dim=0).to(
-        dtype=torch.float32, device='cuda'
-    )
+    cano_verts = np.load(f"{PROJDIR}/canonical_verts/smpl.npy")
+    cano_joints = np.load(f"{PROJDIR}/canonical_joints/smpl.npy")
+    cano_all = torch.cat(
+        [torch.as_tensor(cano_verts), torch.as_tensor(cano_joints)], dim=0
+    ).to(dtype=torch.float32, device="cuda")
 
     predict_fn = functools.partial(
         model.detect_poses_batched,
@@ -71,45 +71,52 @@ def main():
         weights=model.get_weights_for_canonical_points(cano_all),
     )
 
-    seq_filepaths = spu.sorted_recursive_glob(f'{DATA_ROOT}/3dpw/sequenceFiles/*/*.pkl')
+    seq_filepaths = spu.sorted_recursive_glob(f"{DATA_ROOT}/3dpw/sequenceFiles/*/*.pkl")
     if FLAGS.testset_only:
-        seq_filepaths = [p for p in seq_filepaths if spu.split_path(p)[-2] == 'test']
-    seq_names = [osp.basename(p).split('.')[0] for p in seq_filepaths]
+        seq_filepaths = [p for p in seq_filepaths if spu.split_path(p)[-2] == "test"]
+    seq_names = [osp.basename(p).split(".")[0] for p in seq_filepaths]
 
     ji2d = JointInfo(
-        'nose,neck,rsho,relb,rwri,lsho,lelb,lwri,rhip,rkne,rank,lhip,lkne,lank,reye,leye,lear,rear',
-        'lsho-lelb-lwri,rsho-relb-rwri,lhip-lkne-lank,rhip-rkne-rank,lear-leye-nose-reye-rear',
+        "nose,neck,rsho,relb,rwri,lsho,lelb,lwri,rhip,rkne,rank,lhip,lkne,lank,reye,leye,lear,rear",
+        "lsho-lelb-lwri,rsho-relb-rwri,lhip-lkne-lank,rhip-rkne-rank,lear-leye-nose-reye-rear",
     )
     viz = (
         poseviz.PoseViz(
-            ji3d.names, ji3d.stick_figure_edges, body_model_faces=faces, resolution=(1920, 1080)
+            ji3d.names,
+            ji3d.stick_figure_edges,
+            body_model_faces=faces,
+            resolution=(1920, 1080),
         )
         if FLAGS.viz
         else None
     )
 
-    for pbar, (seq_name, seq_filepath) in spu.zip_progressbar(zip(seq_names, seq_filepaths)):
+    for pbar, (seq_name, seq_filepath) in spu.zip_progressbar(
+        zip(seq_names, seq_filepaths)
+    ):
         pbar.set_description(seq_name)
         if FLAGS.viz:
             viz.reinit_camera_view()
             if FLAGS.out_video_dir:
-                viz.new_sequence_output(f'{FLAGS.out_video_dir}/{seq_name}.mp4', fps=25)
+                viz.new_sequence_output(f"{FLAGS.out_video_dir}/{seq_name}.mp4", fps=25)
 
-        already_done_files = glob.glob(f'{FLAGS.output_path}/*/*.pkl')
+        already_done_files = glob.glob(f"{FLAGS.output_path}/*/*.pkl")
         if any(seq_name in p for p in already_done_files):
-            logger.info(f'{seq_name} has been processed already.')
+            logger.info(f"{seq_name} has been processed already.")
             continue
-        logger.info(f'Predicting {seq_name}...')
+        logger.info(f"Predicting {seq_name}...")
         frame_paths = spu.sorted_recursive_glob(
-            f'{DATA_ROOT}/3dpw/imageFiles/{seq_name}/image_*.jpg'
+            f"{DATA_ROOT}/3dpw/imageFiles/{seq_name}/image_*.jpg"
         )
         n_frames = len(frame_paths)
         poses2d_true = get_poses_3dpw(seq_name)
         frames_cpu_gpu = precuda(iter_frame_batches(frame_paths, FLAGS.batch_size))
         camera = get_3dpw_camera(seq_filepath) if FLAGS.real_intrinsics else None
-        cameras = itertools.repeat(camera, times=n_frames) if camera is not None else None
+        cameras = (
+            itertools.repeat(camera, times=n_frames) if camera is not None else None
+        )
         if not FLAGS.gtassoc:
-            masks = spu.load_pickle(f'{DATA_ROOT}/3dpw-more/stcn-pred/{seq_name}.pkl')
+            masks = spu.load_pickle(f"{DATA_ROOT}/3dpw-more/stcn-pred/{seq_name}.pkl")
         else:
             masks = None
 
@@ -150,13 +157,17 @@ def predict_sequence(
         camera_batches = itertools.repeat(None)
     progbar = spu.progressbar(total=n_frames)
     i_frame = 0
-    for (frames_cpu, frames_gpu), camera_batch in zip(frame_batches_cpu_gpu, camera_batches):
+    for (frames_cpu, frames_gpu), camera_batch in zip(
+        frame_batches_cpu_gpu, camera_batches
+    ):
         if camera_batch is not None:
             extr = torch.as_tensor(
                 np.stack([c.intrinsic_matrix for c in camera_batch], dtype=np.float32)
             )
             intr = torch.as_tensor(
-                np.stack([c.get_extrinsic_matrix() for c in camera_batch], dtype=np.float32)
+                np.stack(
+                    [c.get_extrinsic_matrix() for c in camera_batch], dtype=np.float32
+                )
             )
 
             pred = predict_fn(frames_gpu, extrinsic_matrix=extr, intrinsic_matrix=intr)
@@ -164,13 +175,15 @@ def predict_sequence(
             camera_batch = itertools.repeat(None)
             pred = predict_fn(frames_gpu)
 
-        pred['poses3d'] = ragged_concat(
-            pred['poses3d'], [x[..., torch.newaxis] for x in pred['uncertainties']], dim=-1
+        pred["poses3d"] = ragged_concat(
+            pred["poses3d"],
+            [x[..., torch.newaxis] for x in pred["uncertainties"]],
+            dim=-1,
         )
         pred = to_np(pred)
 
         for frame, boxes, poses3d, poses2d, camera in zip(
-            frames_cpu, pred['boxes'], pred['poses3d'], pred['poses2d'], camera_batch
+            frames_cpu, pred["boxes"], pred["poses3d"], pred["poses2d"], camera_batch
         ):
             if FLAGS.gtassoc:
                 poses3d_ordered, prev_poses2d_pred_ordered = associate_predictions(
@@ -198,7 +211,7 @@ def predict_sequence(
                 # draw the frame number onto the frame image
                 frame = cv2.putText(
                     frame,
-                    f'{i_frame}',
+                    f"{i_frame}",
                     (10, 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.5,
@@ -220,32 +233,45 @@ def predict_sequence(
 
 
 def get_3dpw_camera(seq_filepath):
-    intr = spu.load_pickle(seq_filepath)['cam_intrinsics']
+    intr = spu.load_pickle(seq_filepath)["cam_intrinsics"]
     return cameralib.Camera(intrinsic_matrix=intr, world_up=[0, -1, 0])
 
 
 def get_poses_3dpw(seq_name):
-    seq_filepaths = glob.glob(f'{DATA_ROOT}/3dpw/sequenceFiles/*/*.pkl')
-    filepath = next(p for p in seq_filepaths if osp.basename(p) == f'{seq_name}.pkl')
+    seq_filepaths = glob.glob(f"{DATA_ROOT}/3dpw/sequenceFiles/*/*.pkl")
+    filepath = next(p for p in seq_filepaths if osp.basename(p) == f"{seq_name}.pkl")
     seq = spu.load_pickle(filepath)
-    return np.transpose(np.array(seq['poses2d']), [1, 0, 3, 2])  # [Frame, Track, Joint, Coord]
+    return np.transpose(
+        np.array(seq["poses2d"]), [1, 0, 3, 2]
+    )  # [Frame, Track, Joint, Coord]
 
 
 def pose2d_auc(pose2d_pred, pose2d_true, prev_pose2d_pred, joint_info3d, joint_info2d):
     pose2d_true = pose2d_true.copy()
     pose2d_true[pose2d_true[:, 2] < 0.2] = np.nan
-    selected_joints = 'lsho,rsho,lelb,relb,lhip,rhip,lkne,rkne'.split(',')
+    selected_joints = "lsho,rsho,lelb,relb,lhip,rhip,lkne,rkne".split(",")
     indices_true = [joint_info2d.ids[name] for name in selected_joints]
     indices_pred = [joint_info3d.ids[name] for name in selected_joints]
-    size = np.linalg.norm(pose2d_pred[joint_info3d.ids.rsho] - pose2d_pred[joint_info3d.ids.lhip])
-    dist = np.linalg.norm(pose2d_true[indices_true, :2] - pose2d_pred[indices_pred], axis=-1)
+    size = np.linalg.norm(
+        pose2d_pred[joint_info3d.ids.rsho] - pose2d_pred[joint_info3d.ids.lhip]
+    )
+    dist = np.linalg.norm(
+        pose2d_true[indices_true, :2] - pose2d_pred[indices_pred], axis=-1
+    )
     if np.count_nonzero(~np.isnan(dist)) < 5:
-        dist = np.linalg.norm(prev_pose2d_pred[indices_pred] - pose2d_pred[indices_pred], axis=-1)
+        dist = np.linalg.norm(
+            prev_pose2d_pred[indices_pred] - pose2d_pred[indices_pred], axis=-1
+        )
     return np.nanmean(np.maximum(0, 1 - dist / size))
 
 
 def associate_predictions(
-    poses3d_pred, poses2d_pred, poses2d_true, prev_poses2d_pred_ordered, joint_info3d, joint_info2d
+    poses3d_pred,
+    poses2d_pred,
+    poses2d_true,
+    prev_poses2d_pred_ordered,
+    joint_info3d,
+    joint_info2d,
 ):
     auc_matrix = np.array(
         [
@@ -284,28 +310,38 @@ def get_renderer_cached():
 
 
 def render(verts, faces, camera, seg, imshape):
-    return get_renderer_cached().render(verts, camera, faces=faces, seg=seg, imshape=imshape)
+    return get_renderer_cached().render(
+        verts, camera, faces=faces, seg=seg, imshape=imshape
+    )
 
 
 @functools.lru_cache(1)
 def get_render_fn_parallel(n_verts):
-    vertex_subset = np.load(f'{DATA_ROOT}/body_models/smpl/vertex_subset_{n_verts}.npz')
-    i_verts = vertex_subset['i_verts']
-    faces = vertex_subset['faces']
+    vertex_subset = np.load(f"{DATA_ROOT}/body_models/smpl/vertex_subset_{n_verts}.npz")
+    i_verts = vertex_subset["i_verts"]
+    faces = vertex_subset["faces"]
     pool = multiprocessing.Pool(8)
 
     def _render(verts, camera, imshape):
         if len(verts) == 0:
             return np.zeros([0, *imshape[:2]], dtype=np.uint8)
         verts = verts[:, i_verts] / 1000
-        results = pool.starmap(render, [(v, faces, camera, True, imshape) for v in verts])
+        results = pool.starmap(
+            render, [(v, faces, camera, True, imshape) for v in verts]
+        )
         return np.stack(results)
 
     return _render
 
 
 def associate_predictions_to_masks_mesh(
-    poses3d_pred, frame_shape, masks, camera, n_points=6890 + 24, n_coords=4, iou_threshold=0
+    poses3d_pred,
+    frame_shape,
+    masks,
+    camera,
+    n_points=6890 + 24,
+    n_coords=4,
+    iou_threshold=0,
 ):
     masks = np.array([rlemasklib.decode(m) for m in masks])
     mask_shape = masks.shape[1:3]
@@ -344,11 +380,11 @@ def complete_track(track, n_frames):
 
 
 def save_result_file(seq_name, pred_dir, tracks):
-    seq_filepaths = glob.glob(f'{DATA_ROOT}/3dpw/sequenceFiles/*/*.pkl')
-    seq_path = next(p for p in seq_filepaths if osp.basename(p) == f'{seq_name}.pkl')
-    rel_path = '/'.join(spu.split_path(seq_path)[-2:])
-    out_path = f'{pred_dir}/{rel_path}'
-    n_frames = len(glob.glob(f'{DATA_ROOT}/3dpw/imageFiles/{seq_name}/image_*.jpg'))
+    seq_filepaths = glob.glob(f"{DATA_ROOT}/3dpw/sequenceFiles/*/*.pkl")
+    seq_path = next(p for p in seq_filepaths if osp.basename(p) == f"{seq_name}.pkl")
+    rel_path = "/".join(spu.split_path(seq_path)[-2:])
+    out_path = f"{pred_dir}/{rel_path}"
+    n_frames = len(glob.glob(f"{DATA_ROOT}/3dpw/imageFiles/{seq_name}/image_*.jpg"))
     coords3d = np.array([complete_track(track, n_frames) for track in tracks]) / 1000
     coords3d = coords3d.astype(np.float32)
     verts, joints = np.split(coords3d, [6890], axis=-2)
@@ -368,9 +404,13 @@ def iter_frame_batches(frame_paths, batch_size):
 
 def precuda(cpu_batches):
     for cur_cpu_batch in cpu_batches:
-        cur_gpu_batch = torch.from_numpy(cur_cpu_batch).cuda(non_blocking=True).permute(0, 3, 1, 2)
+        cur_gpu_batch = (
+            torch.from_numpy(cur_cpu_batch).cuda(non_blocking=True).permute(0, 3, 1, 2)
+        )
         if cur_gpu_batch.dtype == torch.uint16:
-            cur_gpu_batch = cur_gpu_batch.half().mul_(1.0 / 65536.0).nan_to_num_(posinf=1.0)
+            cur_gpu_batch = (
+                cur_gpu_batch.half().mul_(1.0 / 65536.0).nan_to_num_(posinf=1.0)
+            )
             cur_cpu_batch = cur_cpu_batch.view(torch.uint8)[..., 1::2]
             if FLAGS.viz:
                 cur_cpu_batch = cur_cpu_batch.contiguous()
@@ -379,6 +419,7 @@ def precuda(cpu_batches):
 
         if FLAGS.clahe:
             import kornia
+
             yuv = kornia.color.rgb_to_yuv(cur_gpu_batch)
             y_clahe = kornia.enhance.equalization.equalize_clahe(
                 yuv[:, 0], clip_limit=2.5, grid_size=(12, 12)
@@ -417,6 +458,6 @@ def nested_map(fn, xs):
     return fn(xs)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     with torch.inference_mode():
         main()

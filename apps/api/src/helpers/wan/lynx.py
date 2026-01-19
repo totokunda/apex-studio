@@ -65,7 +65,7 @@ def flash_attention(query, key, value, q_lens, kv_lens, causal=False):
 
     max_seqlen_q = int(q_lens_tensor.max().item())
     max_seqlen_k = int(kv_lens_tensor.max().item())
-    
+
     if attention_register.is_available("flash_varlen"):
         key = "flash_varlen"
     elif attention_register.is_available("metal_flash_varlen"):
@@ -1075,7 +1075,7 @@ class WanLynxHelper(BaseHelper):
         batch_ref_image = torch.tensor(ref_array, device=device, dtype=dtype)
         batch_ref_image = batch_ref_image / 255.0 * 2 - 1
         batch_ref_image = batch_ref_image.permute(2, 0, 1).unsqueeze(0).unsqueeze(2)
-        # offload transformer to cpu 
+        # offload transformer to cpu
         if offload:
             engine._offload("transformer", offload_type="cpu")
 
@@ -1084,16 +1084,21 @@ class WanLynxHelper(BaseHelper):
         if not engine.vae:
             engine.load_component_by_type("vae")
         engine.to_device(engine.vae)
-        vae_feat = engine.vae_encode(batch_ref_image, offload=offload, sample_mode="sample", sample_generator=generator)
+        vae_feat = engine.vae_encode(
+            batch_ref_image,
+            offload=offload,
+            sample_mode="sample",
+            sample_generator=generator,
+        )
         vae_feat_list = [vae_feat]
-        
+
         if offload:
             engine._offload("vae")
 
         ref_prompt_list = ["image of a face"]
         if not engine.text_encoder:
             engine.load_component_by_type("text_encoder")
-            
+
         engine.to_device(engine.text_encoder)
         ref_text_embeds = engine.text_encoder.encode(
             ref_prompt_list,
@@ -1104,8 +1109,7 @@ class WanLynxHelper(BaseHelper):
         ref_text_embeds_list = [ref_text_embeds]
         if offload:
             engine._offload("text_encoder")
-            
-        
+
         if not engine.transformer:
             engine.load_component_by_type("transformer")
         engine.to_device(engine.transformer)

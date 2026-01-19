@@ -340,10 +340,8 @@ class VisionTransformer(nn.Module):
 
             if "pos_embed" in state_dict.keys():
                 if self.pos_embed.shape != state_dict["pos_embed"].shape:
-                    logger.info(
-                        msg=f'Resize the pos_embed shape from \
-{state_dict["pos_embed"].shape} to {self.pos_embed.shape}'
-                    )
+                    logger.info(msg=f'Resize the pos_embed shape from \
+{state_dict["pos_embed"].shape} to {self.pos_embed.shape}')
                     h, w = self.img_size
                     pos_size = int(math.sqrt(state_dict["pos_embed"].shape[1] - 1))
                     state_dict["pos_embed"] = self.resize_pos_embed(
