@@ -5,4 +5,4 @@
 mlx
 rembg[cpu]
 onnxruntime==1.20.1
-kernels
+metal-flash-sdpa

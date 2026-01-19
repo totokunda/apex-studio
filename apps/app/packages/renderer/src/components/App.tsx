@@ -24,12 +24,14 @@ import { useProjectsStore } from "@/lib/projects";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/react-query/queryClient";
 import { useContextMenuStore } from "@/lib/context-menu";
+import { useUpdateToasts } from "@/hooks/use-update-toasts";
 
 type ManifestWithType = ManifestDocument & {
   type: "model";
 };
 
 const App: React.FC = () => {
+  useUpdateToasts();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useLayoutConfigStore((s) => s.layout);
   const { ghostInStage, clips} = useClipStore();
