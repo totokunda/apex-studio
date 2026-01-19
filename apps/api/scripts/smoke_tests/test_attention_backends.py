@@ -58,6 +58,14 @@ def _subprocess_env(bundle_root: Path) -> dict[str, str]:
     )
     # Also ensure `import src...` resolves against the bundle root.
     env["APEX_BUNDLE_ROOT"] = str(bundle_root)
+    # If the bundle ships a `kernels` cache, prefer it automatically so MPS backends
+    # can run offline and without depending on user-level HF caches.
+    try:
+        cache_dir = Path(bundle_root).resolve() / "kernels-cache"
+        if cache_dir.exists() and cache_dir.is_dir() and not env.get("KERNELS_CACHE"):
+            env["KERNELS_CACHE"] = str(cache_dir)
+    except Exception:
+        pass
     return env
 
 
@@ -191,6 +199,11 @@ def _run_one_backend_inprocess(ctx: SmokeContext, key: str) -> None:
         fail(f"Failed to import attention registry: {e}")
 
     cuda_ok = bool(getattr(torch, "cuda", None) and torch.cuda.is_available())
+    mps_ok = bool(
+        hasattr(torch, "backends")
+        and hasattr(torch.backends, "mps")
+        and torch.backends.mps.is_available()
+    )
 
     cuda_only = {
         "flash",
@@ -202,19 +215,56 @@ def _run_one_backend_inprocess(ctx: SmokeContext, key: str) -> None:
         "flex",
         "flex-block-attn",
     }
+    mps_only = {"metal_flash", "metal_flash_varlen"}
 
     fn = attention_register.get(key)
-    gold = attention_register.get("sdpa")
-    device = torch.device("cuda" if cuda_ok else "cpu")
+    if fn is None:
+        fail(f"attention backend not found in registry: {key}")
+
+    device = torch.device("cuda" if cuda_ok else ("mps" if mps_ok else "cpu"))
     if device.type != "cuda" and key in cuda_only:
         log(f"[smoke] attention skip (cuda-only): {key}")
         return
+    if device.type != "mps" and key in mps_only:
+        log(f"[smoke] attention skip (mps-only): {key}")
+        return
 
     B, H, S, D = 1, 2, 16, 64
-    dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-    q = torch.randn((B, H, S, D), device=device, dtype=dtype)
-    k = torch.randn((B, H, S, D), device=device, dtype=dtype)
-    v = torch.randn((B, H, S, D), device=device, dtype=dtype)
+    if device.type == "cuda":
+        dtype = torch.bfloat16
+    elif device.type == "mps":
+        # Metal Flash-SDPA expects fp16 inputs; keep baseline in fp16 too.
+        dtype = torch.bfloat16
+    else:
+        dtype = torch.float32
+
+    # Build inputs.
+    # Most backends accept padded inputs (B, H, S, D). `metal_flash_varlen` expects packed (T, H, D).
+    if key == "metal_flash_varlen":
+        # 2 sequences packed back-to-back.
+        Bp = 2
+        lens = [S // 2, S // 2]  # total T = S
+        T = sum(lens)
+        q = torch.randn((T, H, D), device=device, dtype=dtype)
+        k = torch.randn((T, H, D), device=device, dtype=dtype)
+        v = torch.randn((T, H, D), device=device, dtype=dtype)
+        cu = torch.tensor([0, lens[0], T], device=device, dtype=torch.int32)
+        cu_seqlens_q = cu
+        cu_seqlens_k = cu
+        max_seqlen_q = max(lens)
+        max_seqlen_k = max(lens)
+        gold = attention_register.get("sdpa_varlen") or attention_register.get("sdpa")
+    else:
+        q = torch.randn((B, H, S, D), device=device, dtype=dtype)
+        k = torch.randn((B, H, S, D), device=device, dtype=dtype)
+        v = torch.randn((B, H, S, D), device=device, dtype=dtype)
+        cu_seqlens_q = None
+        cu_seqlens_k = None
+        max_seqlen_q = None
+        max_seqlen_k = None
+        gold = attention_register.get("sdpa")
+    if gold is None:
+        fail("attention baseline backend not found in registry (sdpa/sdpa_varlen)")
 
     kwargs: dict[str, Any] = {
         "attn_mask": None,
@@ -227,28 +277,64 @@ def _run_one_backend_inprocess(ctx: SmokeContext, key: str) -> None:
 
     # Gold baseline: SDPA.
     try:
-        gold_out = gold(q, k, v, **kwargs)
+        gold_out = gold(
+            q,
+            k,
+            v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            **kwargs,
+        )
     except TypeError:
         sig = inspect.signature(gold)
-        filtered = {kk: vv for kk, vv in kwargs.items() if kk in sig.parameters}
+        merged = dict(kwargs)
+        merged.update(
+            {
+                "cu_seqlens_q": cu_seqlens_q,
+                "cu_seqlens_k": cu_seqlens_k,
+                "max_seqlen_q": max_seqlen_q,
+                "max_seqlen_k": max_seqlen_k,
+            }
+        )
+        filtered = {kk: vv for kk, vv in merged.items() if kk in sig.parameters}
         gold_out = gold(q, k, v, **filtered)
 
     try:
-        out = fn(q, k, v, **kwargs)
+        out = fn(
+            q,
+            k,
+            v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            **kwargs,
+        )
     except TypeError:
         sig = inspect.signature(fn)
-        filtered = {kk: vv for kk, vv in kwargs.items() if kk in sig.parameters}
+        merged = dict(kwargs)
+        merged.update(
+            {
+                "cu_seqlens_q": cu_seqlens_q,
+                "cu_seqlens_k": cu_seqlens_k,
+                "max_seqlen_q": max_seqlen_q,
+                "max_seqlen_k": max_seqlen_k,
+            }
+        )
+        filtered = {kk: vv for kk, vv in merged.items() if kk in sig.parameters}
         out = fn(q, k, v, **filtered)
 
     if out is None:
         fail(f"attention backend returned None: {key}")
-    if key not in {"flash_varlen"} and hasattr(out, "shape"):
+    if hasattr(out, "shape"):
         if out.shape[-1] != D:
             fail(f"attention backend bad output shape for {key}: {tuple(out.shape)}")
 
     # Correctness check: compare to SDPA. Skip known mismatches / special APIs.
     if (
-        key not in {"flash_varlen"}
+        True
         and hasattr(out, "shape")
         and hasattr(gold_out, "shape")
     ):
@@ -282,9 +368,11 @@ def _run_one_backend_inprocess(ctx: SmokeContext, key: str) -> None:
                 torch.cuda.synchronize()
             return
 
-        # Loose tolerances on GPU low-precision; tighter on CPU fp32.
+        # Loose tolerances on low-precision GPU; tighter on CPU fp32.
         if device.type == "cuda":
             atol, rtol = 2e-2, 2e-2
+        elif device.type == "mps":
+            atol, rtol = 5e-2, 5e-2
         else:
             atol, rtol = 1e-4, 1e-4
 
@@ -299,6 +387,11 @@ def _run_one_backend_inprocess(ctx: SmokeContext, key: str) -> None:
 
     if device.type == "cuda":
         torch.cuda.synchronize()
+    if device.type == "mps" and hasattr(torch, "mps"):
+        try:
+            torch.mps.synchronize()
+        except Exception:
+            pass
 
 
 def _run_list_inprocess(ctx: SmokeContext) -> list[str]:
@@ -320,7 +413,7 @@ def _run_list_inprocess(ctx: SmokeContext) -> list[str]:
     # an isolated process once, caches the working set, and marks failing backends
     # unavailable. The smoke test should only attempt backends from that verified set.
     candidates = sorted(attention_register.all_available().keys())
-    working = verify_attention_backends()
+    working = verify_attention_backends(force_refresh=True)
     working_set = set(working)
     available = sorted([k for k in candidates if k in working_set])
     return available
