@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
-import os from "node:os";
 import { basename, extname, join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ipcRenderer } from "electron";
@@ -100,14 +99,6 @@ function decodeGeneratedMediaCursor(encoded: string): GeneratedMediaCursor | nul
       return null;
     }
   }
-}
-
-function compareGeneratedDesc(
-  a: Pick<ConvertedMediaItem, "dateAddedMs" | "absPath">,
-  b: Pick<ConvertedMediaItem, "dateAddedMs" | "absPath">,
-): number {
-  if (a.dateAddedMs !== b.dateAddedMs) return b.dateAddedMs - a.dateAddedMs;
-  return b.absPath.localeCompare(a.absPath);
 }
 
 
