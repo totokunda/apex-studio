@@ -7,6 +7,7 @@ This is used by:
   - the bundling pipeline (to patch dependencies inside the bundled venv)
 
 Patches:
+  - diffusers: scripts/updates/patch_diffusers_torch_xpu.py
   - diffusers: scripts/updates/patch_diffusers_peft.py
   - xformers:  scripts/updates/patch_xformers_flash3.py
 """
@@ -27,6 +28,7 @@ def main() -> int:
     project_root = Path(__file__).resolve().parent.parent.parent  # apps/api
     updates_dir = project_root / "scripts" / "updates"
 
+    _run(updates_dir / "patch_diffusers_torch_xpu.py")
     _run(updates_dir / "patch_diffusers_peft.py")
     _run(updates_dir / "patch_xformers_flash3.py")
     print("Patches applied successfully.")
