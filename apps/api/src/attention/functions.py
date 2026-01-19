@@ -18,6 +18,7 @@ import math
 import numpy as np
 import importlib.util
 import os
+from einops import rearrange
 
 _flash3_import_error: Exception | None = None
 try:
@@ -82,35 +83,10 @@ except ImportError:
 
 attention_register = FunctionRegister()
 
-_HAS_KERNELS = importlib.util.find_spec("kernels") is not None
-_HAS_MPS = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-_metal_flash_sdpa = None
-_metal_flash_sdpa_load_error = None
-
-
-def _get_metal_flash_sdpa():
-    """
-    Lazy-load the Metal Flash-SDPA kernel bundle.
-
-    We keep this optional: if the `kernels` package (kernel registry/loader) isn't
-    available in the runtime, callers can still use other attention backends.
-    """
-    global _metal_flash_sdpa, _metal_flash_sdpa_load_error
-    if _metal_flash_sdpa is not None:
-        return _metal_flash_sdpa
-    if _metal_flash_sdpa_load_error is not None:
-        return None
-
-    try:
-        from kernels import get_kernel  # type: ignore
-
-        # NOTE: repo id uses hyphens (not underscores).
-        _metal_flash_sdpa = get_kernel("kernels-community/metal-flash-sdpa")
-        return _metal_flash_sdpa
-    except Exception as e:
-        _metal_flash_sdpa_load_error = e
-        _metal_flash_sdpa = None
-        return None
+try:
+    from metal_flash_sdpa import flash_attn_varlen_func as metal_flash_sdpa_varlen_func
+except ImportError:
+    metal_flash_sdpa_varlen_func = None
 
 
 def _create_cu_seqlens(seq_lengths, *, device):
@@ -401,7 +377,7 @@ def sdpa(
         )
 
 
-@attention_register("metal_flash", available=_HAS_KERNELS and _HAS_MPS)
+@attention_register("metal_flash", available=metal_flash_sdpa_varlen_func is not None)
 def metal_flash(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -426,13 +402,6 @@ def metal_flash(
     Supports cross-attention (Sq != Sk) and GQA/MQA (Hk may differ from Hq),
     matching the Metal Flash SDPA API capabilities.
     """
-    kernel = _get_metal_flash_sdpa()
-    if kernel is None:
-        raise ImportError(
-            "Metal Flash SDPA kernel not available. "
-            "Ensure the `kernels` package is installed and "
-            "`kernels-community/metal-flash-sdpa` is accessible."
-        )
 
     if q.device.type != "mps":
         raise ValueError("metal_flash backend requires MPS tensors.")
@@ -477,14 +446,12 @@ def metal_flash(
         softmax_scale = 1.0 / math.sqrt(Dq)
 
     # Flatten to varlen format expected by the kernel wrapper: (total_tokens, H, D)
-    q_flat = q.permute(0, 2, 1, 3).reshape(Bq * Sq, Hq, Dq)
-    k_flat = k.permute(0, 2, 1, 3).reshape(Bk * Sk, Hk, Dq)
-    v_flat = v.permute(0, 2, 1, 3).reshape(Bk * Sk, Hk, Dq)
+    
+    q_flat = rearrange(q, "b h s d -> (b s) h d").contiguous()
+    k_flat = rearrange(k, "b h s d -> (b s) h d").contiguous()
+    v_flat = rearrange(v, "b h s d -> (b s) h d").contiguous()
 
-    # MPS stability: sync is opt-in/heuristic (Metal aborts cannot be caught).
-    # torch.mps.synchronize()
-
-    out_flat = kernel.flash_attn_varlen_func(
+    out_flat = metal_flash_sdpa_varlen_func(
         q=q_flat,
         k=k_flat,
         v=v_flat,
@@ -504,12 +471,12 @@ def metal_flash(
     if not torch.is_tensor(out_flat):
         out_flat = out_flat[0]
 
-    out = out_flat.reshape(Bq, Sq, Hq, Dq).permute(0, 2, 1, 3).contiguous()
+    out = rearrange(out_flat, "(b s) h d -> b h s d", b=Bq, s=Sq, h=Hq, d=Dq)
 
     return out
 
 
-@attention_register("metal_flash_varlen", available=_HAS_KERNELS and _HAS_MPS)
+@attention_register("metal_flash_varlen", available=metal_flash_sdpa_varlen_func is not None)
 def metal_flash_varlen(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -533,13 +500,6 @@ def metal_flash_varlen(
 
     If cu_seqlens_* are omitted, we treat the packed tensors as a single sequence (B=1).
     """
-    kernel = _get_metal_flash_sdpa()
-    if kernel is None:
-        raise ImportError(
-            "Metal Flash SDPA kernel not available. "
-            "Ensure the `kernels` package is installed and "
-            "`kernels-community/metal-flash-sdpa` is accessible."
-        )
 
     if q.device.type != "mps":
         raise ValueError("metal_flash-varlen backend requires MPS tensors.")
@@ -595,11 +555,7 @@ def metal_flash_varlen(
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(Dq)
 
-    # MPS stability: optional sync guards. This can reduce performance, so keep it opt-in.
-
-    torch.mps.synchronize()
-
-    out = kernel.flash_attn_varlen_func(
+    out = metal_flash_sdpa_varlen_func(
         q=q.contiguous(),
         k=k.contiguous(),
         v=v.contiguous(),

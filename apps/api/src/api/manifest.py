@@ -5,7 +5,7 @@ import anyio
 import yaml
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from src.mixins.download_mixin import DownloadMixin
 from src.utils.defaults import get_components_path, get_config_path, get_lora_path
@@ -21,6 +21,17 @@ router = APIRouter(prefix="/manifest", tags=["manifest"])
 
 # Base path to manifest directory
 MANIFEST_BASE_PATH = Path(__file__).parent.parent.parent / "manifest"
+
+# Allow short-lived caching for manifest enumeration endpoints.
+# These results can be relatively expensive to compute and are safe to reuse briefly.
+_MANIFEST_ENUM_CACHE_MAX_AGE_SECONDS = 300
+
+
+def _set_manifest_enum_cache_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = (
+        f"public, max-age={_MANIFEST_ENUM_CACHE_MAX_AGE_SECONDS}"
+    )
+
 
 # Cache the system's compute capability (it doesn't change during runtime)
 _SYSTEM_COMPUTE_CAPABILITY: Optional[ComputeCapability] = None
@@ -771,8 +782,9 @@ def _list_model_types_sync() -> List[ModelTypeInfo]:
 
 
 @router.get("/types", response_model=List[ModelTypeInfo])
-async def list_model_types() -> List[ModelTypeInfo]:
+async def list_model_types(response: Response) -> List[ModelTypeInfo]:
     """Async wrapper for list_model_types; runs blocking work off the event loop."""
+    _set_manifest_enum_cache_headers(response)
     return await _run_blocking(_list_model_types_sync)
 
 
@@ -815,8 +827,9 @@ def _list_all_manifests_sync(include_incompatible: bool = False):
 
 
 @router.get("/list")
-async def list_all_manifests(include_incompatible: bool = False):
+async def list_all_manifests(response: Response, include_incompatible: bool = False):
     """List all available manifests (async; runs blocking work off the event loop)."""
+    _set_manifest_enum_cache_headers(response)
     return await _run_blocking(_list_all_manifests_sync, include_incompatible)
 
 

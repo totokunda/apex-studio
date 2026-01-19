@@ -24,8 +24,13 @@ rtree
 
 # Models / external repos
 git+https://github.com/xinyu1205/recognize-anything.git
-git+https://github.com/totokunda/sam2.git
-git+https://github.com/isarandi/simplepyutils.git
+# SAM2 currently requires torch>=2.5.1, but Intel macOS (x86_64) tops out at torch==2.2.x.
+# Exclude SAM2 on Intel mac so the rest of the stack can install and run.
+git+https://github.com/totokunda/sam2.git ; sys_platform != "darwin" or platform_machine != "x86_64"
+# simplepyutils:
+# - Intel macOS (x86_64): use totokunda fork for compatibility
+# - Everything else: use the stable PyPI release
+git+https://github.com/totokunda/simplepyutils.git
 git+https://github.com/totokunda/florch.git
 git+https://github.com/isarandi/smplfitter.git
 

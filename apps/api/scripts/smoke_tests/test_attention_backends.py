@@ -229,7 +229,9 @@ def _run_one_backend_inprocess(ctx: SmokeContext, key: str) -> None:
         log(f"[smoke] attention skip (mps-only): {key}")
         return
 
-    B, H, S, D = 1, 2, 16, 64
+    B, H, S, D = 1, 32, 1024, 128
+    seed = 42
+    torch.manual_seed(seed)
     if device.type == "cuda":
         dtype = torch.bfloat16
     elif device.type == "mps":

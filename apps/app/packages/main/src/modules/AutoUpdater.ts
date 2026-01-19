@@ -64,9 +64,6 @@ export class AutoUpdater implements AppModule {
 
   async enable(): Promise<void> {
     // Skip auto-updater in development; it's only meaningful in production
-    if (!import.meta.env.PROD) {
-      return;
-    }
 
     try {
       this.registerIpc();

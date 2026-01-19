@@ -5,7 +5,6 @@ import { pathToFileURL } from "node:url";
 import { ipcRenderer } from "electron";
 import { spawn } from "node:child_process";
 import { resolveFfmpegCommand } from "./ffmpegBin.js";
-import { getMediaRootAbsolute } from "./root.js";
 import { symlinksDir, proxyDir } from "./paths.js";
 import {
   AUDIO_EXTS,
@@ -128,7 +127,8 @@ async function removeIfBrokenSymlink(absPath: string): Promise<boolean> {
 
 async function loadProxyIndex(): Promise<ProxyIndex> {
   try {
-    const root = getMediaRootAbsolute();
+    const userDataDir = (await getUserDataPath())?.data?.user_data ?? "";
+    const root = join(userDataDir, "media");
     const indexPath = join(root, ".proxy-index.json");
     const content = await fsp.readFile(indexPath, "utf8");
     return JSON.parse(content);
@@ -138,7 +138,8 @@ async function loadProxyIndex(): Promise<ProxyIndex> {
 }
 
 async function saveProxyIndex(index: ProxyIndex): Promise<void> {
-  const root = getMediaRootAbsolute();
+  const userDataDir = (await getUserDataPath())?.data?.user_data ?? "";
+  const root = join(userDataDir, "media");
   const indexPath = join(root, ".proxy-index.json");
   await fsp.writeFile(indexPath, JSON.stringify(index, null, 2), "utf8");
 }
@@ -148,7 +149,8 @@ async function ensureMediaDirs(): Promise<{
   symlinksAbs: string;
   proxyAbs: string;
 }> {
-  const root = getMediaRootAbsolute();
+  const userDataDir = (await getUserDataPath())?.data?.user_data ?? "";
+  const root = join(userDataDir, "media");
   const symlinksAbs = symlinksDir(root);
   const proxyAbs = proxyDir(root);
   if (!fs.existsSync(symlinksAbs))
@@ -162,7 +164,8 @@ async function renameMediaPair(
   convertedNewName: string,
   folderUuid?: string,
 ): Promise<any> {
-  const baseRoot = getMediaRootAbsolute();
+  const userDataDir = (await getUserDataPath())?.data?.user_data ?? "";
+  const baseRoot = join(userDataDir, "media");
   const mediaRootAbs =
     typeof folderUuid === "string" && folderUuid.length > 0
       ? join(baseRoot, folderUuid)
@@ -174,7 +177,8 @@ async function deleteMediaPair(
   convertedName: string,
   folderUuid?: string,
 ): Promise<any> {
-  const baseRoot = getMediaRootAbsolute();
+  const userDataDir = (await getUserDataPath())?.data?.user_data ?? "";
+  const baseRoot = join(userDataDir, "media");
   const mediaRootAbs =
     typeof folderUuid === "string" && folderUuid.length > 0
       ? join(baseRoot, folderUuid)

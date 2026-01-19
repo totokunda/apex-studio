@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Compatibility entrypoint.
+Entrypoint for bundling the Python API.
 
 The implementation lives under `scripts/bundling/bundle_python.py`.
-Keep this file so callers can continue to run: `python scripts/bundle_python.py ...`
+
+Example:
+    python scripts/bundle_python.py --platform auto --gpu auto --output ./dist --tar-zst --tar-zst-level 12 --sign
 """
 
 from __future__ import annotations

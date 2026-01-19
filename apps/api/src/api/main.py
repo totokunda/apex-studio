@@ -97,10 +97,6 @@ async def _start_background_services() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Verify attention backends synchronously at startup
-    from src.attention.functions import verify_attention_backends
-
-    verify_attention_backends()
 
     _start_parent_watchdog()
     # Startup: initialize Ray and related services in the background (non-blocking)
@@ -110,28 +106,19 @@ async def lifespan(app: FastAPI):
     from .preprocessor import poll_ray_updates
 
     poll_task = asyncio.create_task(poll_ray_updates())
-
-    # Start background task for automatic code updates (non-blocking)
-    from .auto_update import auto_update_loop
-
-    auto_update_task = asyncio.create_task(auto_update_loop())
-
+    
     yield
 
     # Shutdown: Cancel polling task and close Ray
     startup_task.cancel()
     poll_task.cancel()
-    auto_update_task.cancel()
+
     try:
         await startup_task
     except asyncio.CancelledError:
         pass
     try:
         await poll_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await auto_update_task
     except asyncio.CancelledError:
         pass
     shutdown_ray()
