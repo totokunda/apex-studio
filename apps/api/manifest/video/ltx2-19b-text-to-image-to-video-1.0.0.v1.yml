@@ -42,7 +42,7 @@ spec:
     label: LTX2 19B Distilled LoRA 384
     verified: true
     scale: 1.0
-    required: true
+    required: false
   components:
   - type: scheduler
     label: Scheduler
