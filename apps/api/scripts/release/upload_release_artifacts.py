@@ -3,14 +3,16 @@
 Upload release artifacts to a Hugging Face Hub repo under a versioned folder.
 
 Example:
-  export HF_TOKEN=...  # or HUGGINGFACE_TOKEN
-  python3 apps/api/scripts/upload_release_artifacts.py --version v0.1.0
+  export HF_TOKEN=...  # or HUGGINGFACE_HUB_TOKEN
+  python3 apps/api/scripts/release/upload_release_artifacts.py --version v0.1.0 --dist-dir ./dist
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
+import sys
 from pathlib import Path
 
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
@@ -22,12 +24,6 @@ from huggingface_hub import HfApi
 
 DEFAULT_REPO_ID = "totoku/apex-studio-server"
 DEFAULT_REPO_TYPE = "model"
-DEFAULT_VERSION_FOLDER = "v0.1.0"
-
-DEFAULT_API_TAR = "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/dist/python-api-0.1.0-darwin-arm64-cpu-cp312.tar.zst"
-
-DEFAULT_CODE_TAR = "/Users/tosinkuye/apex-workspace/apex-studio/apps/api/dist/python-code-0.1.0-darwin-arm64-cpu-cp312.tar.zst"
-
 
 def _require_file(path: Path) -> None:
     if not path.exists():
@@ -42,9 +38,41 @@ def _require_file(path: Path) -> None:
 def _token_from_env() -> str | None:
     return (
         os.getenv("HF_TOKEN")
-        or os.getenv("HUGGINGFACE_TOKEN")
-        or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+        or os.getenv("HUGGINGFACE_HUB_TOKEN")
+        or os.getenv("HUGGINGFACE_TOKEN")  # legacy
+        or os.getenv("HUGGINGFACEHUB_API_TOKEN")  # legacy
     )
+
+
+def _prompt_for_token() -> str:
+    """
+    Prompt interactively for a Hugging Face *write* token.
+    """
+    if not sys.stdin.isatty():
+        raise SystemExit(
+            "Missing Hugging Face token. Set HF_TOKEN or HUGGINGFACE_HUB_TOKEN in the environment."
+        )
+    token = getpass.getpass(
+        "Enter Hugging Face *write* token (won't echo). You can also set HF_TOKEN or HUGGINGFACE_HUB_TOKEN: "
+    ).strip()
+    if not token:
+        raise SystemExit("No token provided; aborting upload.")
+    return token
+
+
+def _resolve_latest_tar(dist_dir: Path, prefix: str) -> Path:
+    """
+    Find the newest tarball under dist_dir matching <prefix>-*.tar.zst.
+    """
+    dist_dir = dist_dir.expanduser().resolve()
+    if not dist_dir.exists() or not dist_dir.is_dir():
+        raise SystemExit(f"dist dir not found: {dist_dir}")
+    matches = sorted(dist_dir.glob(f"{prefix}-*.tar.zst"), key=lambda p: p.stat().st_mtime)
+    if not matches:
+        raise SystemExit(
+            f"No {prefix} tarball found under {dist_dir}. Expected: {prefix}-*.tar.zst"
+        )
+    return matches[-1]
 
 
 def main() -> int:
@@ -64,18 +92,23 @@ def main() -> int:
     )
     parser.add_argument(
         "--version",
-        default=DEFAULT_VERSION_FOLDER,
-        help=f"Folder in repo to upload into, default: {DEFAULT_VERSION_FOLDER}",
+        required=True,
+        help="Folder in repo to upload into (required), e.g. v0.1.0",
+    )
+    parser.add_argument(
+        "--dist-dir",
+        default="dist",
+        help="Directory to search for tarballs when --api-tar/--code-tar are omitted (default: ./dist)",
     )
     parser.add_argument(
         "--api-tar",
-        default=DEFAULT_API_TAR,
-        help="Path to python-api tarball (.tar.zst)",
+        default=None,
+        help="Path to python-api tarball (.tar.zst). If omitted, picks the newest python-api-*.tar.zst under --dist-dir.",
     )
     parser.add_argument(
         "--code-tar",
-        default=DEFAULT_CODE_TAR,
-        help="Path to python-code tarball (.tar.zst)",
+        default=None,
+        help="Path to python-code tarball (.tar.zst). If omitted, picks the newest python-code-*.tar.zst under --dist-dir.",
     )
     parser.add_argument(
         "--commit-message",
@@ -89,12 +122,19 @@ def main() -> int:
 
     token = _token_from_env()
     if not token:
-        raise SystemExit(
-            "Missing Hugging Face token. Set HF_TOKEN (preferred) or HUGGINGFACE_TOKEN."
-        )
+        token = _prompt_for_token()
 
-    api_tar = Path(args.api_tar).expanduser().resolve()
-    code_tar = Path(args.code_tar).expanduser().resolve()
+    dist_dir = Path(args.dist_dir)
+    api_tar = (
+        Path(args.api_tar).expanduser().resolve()
+        if args.api_tar
+        else _resolve_latest_tar(dist_dir, "python-api")
+    )
+    code_tar = (
+        Path(args.code_tar).expanduser().resolve()
+        if args.code_tar
+        else _resolve_latest_tar(dist_dir, "python-code")
+    )
     _require_file(api_tar)
     _require_file(code_tar)
 

@@ -33,6 +33,9 @@ moviepy==1.0.3
 # NOTE: numpy 2.x currently breaks a number of compiled deps (e.g. numba/llvmlite
 # pulled in by librosa) on some platforms, especially when bundling.
 numpy==1.26.4
+# macOS: keep numba/llvmlite on wheel-backed versions (avoid LLVM-from-source builds).
+numba==0.62.1; sys_platform == "darwin"
+llvmlite==0.45.1; sys_platform == "darwin"
 omegaconf==2.3.0
 # Prefer headless OpenCV. Keep this modern enough for albumentations.
 # (RetinaFace is installed from source in `processors.requirements.txt` to avoid
@@ -51,7 +54,6 @@ psutil==7.2.1
 pydantic==2.12.5
 pydash==8.0.5
 pyloudnorm==0.1.1
-pynvml==13.0.1
 python-dotenv==1.2.1
 # NOTE: Ray Windows support is limited; on Windows (Py3.12) we install the
 # prebuilt wheel from Ray's "latest" wheel bucket.
@@ -85,6 +87,6 @@ urllib3==2.6.2
 webcolors==25.10.0
 websocket_client==1.8.0
 wsproto==1.2.0
-xfuser==0.4.5
+xfuser==0.4.5; sys_platform != "darwin" or platform_machine != "x86_64"
 yacs==0.1.8
 yapf==0.40.2

@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PiRocketLaunchFill } from "react-icons/pi";
+import { Toaster } from "@/components/ui/sonner";
+import { useUpdateToasts } from "@/hooks/use-update-toasts";
 import {
   launchMainWindow,
   listProjects,
@@ -246,6 +248,7 @@ const ProjectCard: React.FC<{ project: ProjectSettings }> = ({ project }) => {
 };
 
 const Launcher: React.FC = () => {
+  useUpdateToasts();
   const [isLaunching, setIsLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState(true);
@@ -557,7 +560,7 @@ const Launcher: React.FC = () => {
         <div className="pointer-events-none absolute inset-0">
           <div className="absolute -top-24 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-brand-accent-two-shade/15 blur-3xl" />
           <div className="absolute -bottom-32 right-[-120px] h-[520px] w-[520px] rounded-full bg-brand-accent-shade/10 blur-3xl" />
-          <div className="absolute inset-0 bg-gradient-to-b from-black via-black to-brand-background-dark/60" />
+          <div className="absolute inset-0 bg-linear-to-b from-black via-black to-brand-background-dark/60" />
         </div>
 
         <div className="relative w-full max-w-[720px] mx-auto px-6 flex-1 flex flex-col justify-center">
@@ -638,7 +641,7 @@ const Launcher: React.FC = () => {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-[12px] font-semibold text-red-200">Something needs attention</div>
-                      <div className="mt-1 text-[12px] leading-relaxed text-red-200/80 break-words">
+                      <div className="mt-1 text-[12px] leading-relaxed text-red-200/80 wrap-break-word">
                         {error}
                       </div>
                     </div>
@@ -813,6 +816,7 @@ const Launcher: React.FC = () => {
           </div>
         )}
       </div>
+      <Toaster />
 
       <Dialog
         open={createOpen}

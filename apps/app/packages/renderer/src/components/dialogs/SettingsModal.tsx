@@ -8,9 +8,23 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { pickMediaPaths } from "@app/preload";
 import {
+  type ApiUpdateEvent,
+  type ApiUpdateState,
+  applyApiUpdate,
+  checkForApiUpdates,
+  getApiUpdateState,
+  onApiUpdateEvent,
+  setApiAllowNightlyUpdates,
+  type AppUpdateEvent,
+  type AppUpdateState,
+  checkForAppUpdates,
+  downloadAppUpdate,
   getBackendIsRemote,
   getBackendPathSizes,
+  getAppUpdateState,
   getMemorySettings,
+  installAppUpdate,
+  onAppUpdateEvent,
   previewBackendUrl,
   verifyBackendUrlAndFetchSettings,
   setMemorySettings,
@@ -137,6 +151,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
   const [isBackendRemote, setIsBackendRemote] = useState<boolean>(false);
 
+  const [appUpdateState, setAppUpdateState] = useState<AppUpdateState | null>(
+    null,
+  );
+  const [apiUpdateState, setApiUpdateState] = useState<ApiUpdateState | null>(
+    null,
+  );
+  const [isCheckingAppUpdate, setIsCheckingAppUpdate] =
+    useState<boolean>(false);
+  const [isCheckingApiUpdate, setIsCheckingApiUpdate] =
+    useState<boolean>(false);
+  const [isDownloadingAppUpdate, setIsDownloadingAppUpdate] =
+    useState<boolean>(false);
+  const [isInstallingAppUpdate, setIsInstallingAppUpdate] =
+    useState<boolean>(false);
+  const [isApplyingApiUpdate, setIsApplyingApiUpdate] =
+    useState<boolean>(false);
+
   const [memoryKnobs, setMemoryKnobs] = useState<Record<string, any> | null>(null);
   const [isLoadingMemoryKnobs, setIsLoadingMemoryKnobs] = useState<boolean>(false);
   const [isSavingMemoryKnobs, setIsSavingMemoryKnobs] = useState<boolean>(false);
@@ -152,6 +183,111 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const backendUrlRequiresVerify = backendUrlChanged && !!normalizedBackendUrl;
   const saveDisabled =
     isVerifyingBackendUrl || (backendUrlRequiresVerify && !backendUrlIsVerified);
+
+  const refreshAppUpdate = async () => {
+    try {
+      const st = await getAppUpdateState();
+      setAppUpdateState(st);
+    } catch {
+      // ignore
+    }
+  };
+
+  const refreshApiUpdate = async () => {
+    try {
+      const st = await getApiUpdateState();
+      setApiUpdateState(st);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCheckAppUpdate = async () => {
+    setIsCheckingAppUpdate(true);
+    try {
+      await checkForAppUpdates();
+      await refreshAppUpdate();
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : "Failed to check for app updates.",
+      );
+    } finally {
+      setIsCheckingAppUpdate(false);
+    }
+  };
+
+  const handleDownloadAppUpdate = async () => {
+    setIsDownloadingAppUpdate(true);
+    try {
+      await downloadAppUpdate();
+      await refreshAppUpdate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to download update.");
+    } finally {
+      setIsDownloadingAppUpdate(false);
+    }
+  };
+
+  const handleInstallAppUpdate = async () => {
+    setIsInstallingAppUpdate(true);
+    try {
+      await installAppUpdate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to restart and install.");
+      setIsInstallingAppUpdate(false);
+    }
+  };
+
+  const handleCheckApiUpdate = async () => {
+    setIsCheckingApiUpdate(true);
+    try {
+      await checkForApiUpdates();
+      await refreshApiUpdate();
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : "Failed to check for engine updates.",
+      );
+    } finally {
+      setIsCheckingApiUpdate(false);
+    }
+  };
+
+  const handleApplyApiUpdate = async () => {
+    setIsApplyingApiUpdate(true);
+    try {
+      const res = await applyApiUpdate();
+      if (!res?.ok) {
+        toast.error(res?.message || "Failed to update engine.");
+      } else {
+        toast.success("Engine updated. Restarting engine...");
+      }
+      await refreshApiUpdate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update engine.");
+    } finally {
+      setIsApplyingApiUpdate(false);
+    }
+  };
+
+  const handleToggleApiNightly = async (checked: boolean) => {
+    try {
+      await setApiAllowNightlyUpdates(Boolean(checked));
+      await refreshApiUpdate();
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : "Failed to update nightly setting.",
+      );
+    }
+  };
+
+  const updateStatusLabel = (lastCheckedAt?: number) => {
+    if (!lastCheckedAt) return null;
+    try {
+      return new Date(lastCheckedAt).toLocaleString();
+    } catch {
+      return null;
+    }
+  };
 
   const inferRemoteFromUrl = (url: string): boolean => {
     try {
@@ -368,6 +504,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [open, backendUrlGlobal]);
 
   useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const offApp = onAppUpdateEvent((_ev: AppUpdateEvent) => {
+      if (cancelled) return;
+      void refreshAppUpdate();
+    });
+    const offApi = onApiUpdateEvent((_ev: ApiUpdateEvent) => {
+      if (cancelled) return;
+      void refreshApiUpdate();
+    });
+
+    void refreshAppUpdate();
+    void refreshApiUpdate();
+
+    return () => {
+      cancelled = true;
+      try {
+        offApp();
+      } catch {}
+      try {
+        offApi();
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useEffect(() => {
     // If the user edits the URL after verifying, require re-verify.
     const candidate = normalizeUrl(backendUrl);
     if (!candidate) {
@@ -581,6 +744,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               value="tokens"
             >
              API Tokens
+            </TabsTrigger>
+            <TabsTrigger
+              className="data-[state=active]:bg-brand-light/10 data-[state=active]:text-brand-light text-[11px] rounded-[6px] px-2 py-1 w-full!"
+              value="updates"
+            >
+              Updates
             </TabsTrigger>
            
           </TabsList>
@@ -887,26 +1056,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 />
               </div>
 
-              <div className="flex items-start justify-between gap-3">
-                <label
-                  htmlFor="api-auto-update"
-                  className={fieldLabelClass + " flex-1 cursor-pointer"}
-                >
-                  <span>Automatic API Updates</span>
-                  <span className="text-[10px] text-brand-light/60 font-normal">
-                    Check for and apply backend updates automatically (default:
-                    every 4 hours).
-                  </span>
-                </label>
-                <Checkbox
-                  id="api-auto-update"
-                  checked={autoUpdateEnabled}
-                  onCheckedChange={(checked) =>
-                    setAutoUpdateEnabled(Boolean(checked))
-                  }
-                  className="mt-1"
-                />
-              </div>
             </div>
           </TabsContent>
           <TabsContent value="memory">
@@ -1033,6 +1182,153 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   step={0.01}
                   toFixed={2}
                 />
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="updates">
+            <div className="flex flex-col gap-5 font-poppins text-brand-light h-full">
+              <div className="flex flex-col gap-2 rounded-lg border border-brand-light/10 bg-brand-light/5 p-3">
+                <div className="text-[11px] text-brand-light/80 font-medium">
+                  App update (Apex Studio)
+                </div>
+                <div className="text-[10px] text-brand-light/60">
+                  Status:{" "}
+                  <span className="text-brand-light/85">
+                    {appUpdateState?.status || "unknown"}
+                  </span>
+                  {appUpdateState?.lastCheckedAt ? (
+                    <span className="text-brand-light/40">
+                      {" "}
+                      • Last checked:{" "}
+                      {updateStatusLabel(appUpdateState.lastCheckedAt) || "—"}
+                    </span>
+                  ) : null}
+                </div>
+                {appUpdateState?.errorMessage ? (
+                  <div className="text-[10px] text-red-400">
+                    {appUpdateState.errorMessage}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px] flex items-center gap-1.5"
+                    onClick={() => void handleCheckAppUpdate()}
+                    disabled={isCheckingAppUpdate}
+                  >
+                    {isCheckingAppUpdate ? (
+                      <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
+                    ) : null}
+                    Check
+                  </Button>
+
+                  {appUpdateState?.status === "available" && (
+                    <Button
+                      type="button"
+                      className="h-7.5 px-3 text-[10.5px] font-medium bg-brand-accent hover:bg-brand-accent-two-shade text-brand-light rounded-[6px] flex items-center gap-1.5"
+                      onClick={() => void handleDownloadAppUpdate()}
+                      disabled={isDownloadingAppUpdate}
+                    >
+                      {isDownloadingAppUpdate ? (
+                        <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
+                      ) : null}
+                      Download
+                    </Button>
+                  )}
+
+                  {appUpdateState?.status === "downloaded" && (
+                    <Button
+                      type="button"
+                      className="h-7.5 px-3 text-[10.5px] font-medium bg-brand-accent hover:bg-brand-accent-two-shade text-brand-light rounded-[6px] flex items-center gap-1.5"
+                      onClick={() => void handleInstallAppUpdate()}
+                      disabled={isInstallingAppUpdate}
+                    >
+                      {isInstallingAppUpdate ? (
+                        <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
+                      ) : null}
+                      Restart to install
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 rounded-lg border border-brand-light/10 bg-brand-light/5 p-3">
+                <div className="text-[11px] text-brand-light/80 font-medium">
+                  Engine update (Apex Engine)
+                </div>
+                <div className="text-[10px] text-brand-light/60">
+                  Status:{" "}
+                  <span className="text-brand-light/85">
+                    {apiUpdateState?.status || "unknown"}
+                  </span>
+                  {apiUpdateState?.lastCheckedAt ? (
+                    <span className="text-brand-light/40">
+                      {" "}
+                      • Last checked:{" "}
+                      {updateStatusLabel(apiUpdateState.lastCheckedAt) || "—"}
+                    </span>
+                  ) : null}
+                </div>
+                {apiUpdateState?.errorMessage ? (
+                  <div className="text-[10px] text-red-400">
+                    {apiUpdateState.errorMessage}
+                  </div>
+                ) : null}
+
+                <div className="flex items-start justify-between gap-3">
+                  <label
+                    htmlFor="api-nightly-updates"
+                    className={fieldLabelClass + " flex-1 cursor-pointer"}
+                  >
+                    <span>Nightly updates</span>
+                    <span className="text-[10px] text-brand-light/60 font-normal">
+                      Opt in to nightly/prerelease engine update artifacts.
+                    </span>
+                  </label>
+                  <Checkbox
+                    id="api-nightly-updates"
+                    checked={Boolean(apiUpdateState?.allowNightly)}
+                    onCheckedChange={(checked) =>
+                      void handleToggleApiNightly(Boolean(checked))
+                    }
+                    className="mt-1"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px] flex items-center gap-1.5"
+                    onClick={() => void handleCheckApiUpdate()}
+                    disabled={isCheckingApiUpdate}
+                  >
+                    {isCheckingApiUpdate ? (
+                      <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
+                    ) : null}
+                    Check
+                  </Button>
+
+                  {apiUpdateState?.status === "available" && (
+                    <Button
+                      type="button"
+                      className="h-7.5 px-3 text-[10.5px] font-medium bg-brand-accent hover:bg-brand-accent-two-shade text-brand-light rounded-[6px] flex items-center gap-1.5"
+                      onClick={() => void handleApplyApiUpdate()}
+                      disabled={isApplyingApiUpdate}
+                    >
+                      {isApplyingApiUpdate ? (
+                        <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
+                      ) : null}
+                      Update & restart engine
+                    </Button>
+                  )}
+                </div>
+
+                <div className="text-[10px] text-brand-light/55">
+                  Applying an engine update will stop the backend process, update it, then start it again.
+                </div>
               </div>
             </div>
           </TabsContent>

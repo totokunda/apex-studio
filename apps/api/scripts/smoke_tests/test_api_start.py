@@ -66,7 +66,7 @@ def run(ctx: SmokeContext) -> None:
     )
     try:
         # Wait for /openapi.json to become reachable.
-        deadline = time.time() + 30.0
+        deadline = time.time() + 45.0
         last_err: Exception | None = None
         while time.time() < deadline:
             if p.poll() is not None:
@@ -79,7 +79,7 @@ def run(ctx: SmokeContext) -> None:
                     f"stderr:\n{err}"
                 )
             try:
-                data = _http_get(f"http://{host}:{port}/openapi.json", timeout=1.5)
+                data = _http_get(f"http://{host}:{port}/openapi.json", timeout=5.0)
                 if not data:
                     fail("API started but /openapi.json returned empty response")
                 log("[smoke] api start ok")

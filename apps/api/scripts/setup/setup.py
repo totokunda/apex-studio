@@ -73,6 +73,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Persist ENABLE_VIDEO_RENDER_STEP=true in config.",
     )
 
+    parser.add_argument(
+        "--skip_attention_verification",
+        action="store_true",
+        help="Skip attention backend verification (not recommended; installer normally runs this).",
+    )
+
     # Optional job id for structured progress consumers (e.g. Electron installer)
     parser.add_argument(
         "--job_id",
@@ -167,6 +173,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         tasks.append("mask")
     if args.install_rife:
         tasks.append("rife")
+    # Attention verification should run during install so users can see what backends work.
+    # It is opt-out for dev/CI via --skip_attention_verification.
+    if not args.skip_attention_verification:
+        tasks.append("attention")
     # Config updates (render-step toggles) should also show progress in the UI.
     if args.enable_image_render_steps or args.enable_video_render_steps:
         tasks.append("config")
@@ -276,8 +286,120 @@ def main(argv: Optional[list[str]] = None) -> int:
             task=task,
             progress=overall,
             message=message,
-            metadata=metadata,
+            metadata={
+                **metadata,
+                # Prefer phase-specific progress in the UI. `progress` is overall across tasks.
+                "task_progress": (
+                    max(0.0, min(1.0, float(p_task)))
+                    if isinstance(p_task, (int, float))
+                    else None
+                ),
+            },
             status="processing",
+        )
+
+    def verify_attention_backends_with_progress() -> None:
+        """
+        Verify attention backends (best-effort) and stream per-backend progress.
+
+        Important goals:
+        - keep failures isolated (some backends can crash/segfault). This is handled by
+          `src.attention.functions.verify_attention_backends()` which verifies in separate processes.
+        - do NOT fail the entire installer if optional backends fail; we just report and continue
+        - populate the attention cache via `verify_attention_backends(force_refresh=True)`
+        """
+        if "attention" not in completed:
+            return
+
+        # In the installer we run setup.py with cwd=bundleRoot. Keep that as bundle_root.
+        bundle_root = Path(os.environ.get("APEX_BUNDLE_ROOT") or os.getcwd()).resolve()
+        # Make bundle root visible to any subprocesses spawned by verification.
+        os.environ["APEX_BUNDLE_ROOT"] = str(bundle_root)
+
+        emit(
+            "attention",
+            0.0,
+            "Verifying attention backends…",
+            {"phase": "start", "bundle_root": str(bundle_root)},
+        )
+
+        # NOTE: We intentionally avoid `smoke_tests.*` here. Smoke tests are not bundled
+        # into production releases, while `src.attention.functions` is.
+        try:
+            from src.attention.functions import attention_register, verify_attention_backends
+        except Exception as e:
+            completed["attention"] = 1.0
+            send_update(
+                task="attention",
+                progress=None,
+                message=f"Attention verification skipped (unable to import verifier): {e}",
+                metadata={"phase": "done", "status": "skipped", "task_progress": 1.0},
+                status="processing",
+            )
+            return
+
+        # 1) Enumerate candidate backends from the runtime registry.
+        try:
+            available = sorted([str(k) for k in attention_register.all_available().keys()])
+        except Exception:
+            available = []
+
+        emit(
+            "attention",
+            0.05,
+            f"Discovered {len(available) or 0} attention backend(s) to check…",
+            {"phase": "list", "available_count": len(available)},
+        )
+
+        total = len(available)
+        if total == 0:
+            completed["attention"] = 1.0
+            send_update(
+                task="attention",
+                progress=None,
+                message="Attention verification skipped (no candidates discovered).",
+                metadata={"phase": "done", "status": "skipped", "task_progress": 1.0},
+                status="processing",
+            )
+            return
+
+        emit(
+            "attention",
+            0.1,
+            "Running backend verification (this may take a moment)…",
+            {"phase": "check", "total": total},
+        )
+
+        ok: list[str] = []
+        failed: list[dict[str, Any]] = []
+        try:
+            ok = sorted([str(x) for x in (verify_attention_backends(force_refresh=True) or [])])
+        except Exception as e:
+            # Best-effort: do not fail installer; report and continue.
+            ok = []
+            failed = [{"backend": "*", "reason": f"verification failed: {e}"}]
+
+        ok_set = set(ok)
+        for key in available:
+            if key not in ok_set:
+                failed.append({"backend": key, "reason": "failed verification"})
+
+        completed["attention"] = 1.0
+        summary = (
+            f"Attention verification complete ({len(ok)} ok, {len(failed)} failed)"
+        )
+        send_update(
+            task="attention",
+            progress=None,
+            message=summary,
+            metadata={
+                "phase": "done",
+                "ok": ok,
+                "failed": failed,
+                "task_progress": 1.0,
+                "status": "complete",
+            },
+            status="complete",
         )
 
     def emit_config_step(
@@ -375,6 +497,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         if args.mask_model_type:
             download_mask_model(args.mask_model_type)
+
+        if not args.skip_attention_verification:
+            verify_attention_backends_with_progress()
 
         # Config toggles (render-step flags)
         if args.enable_image_render_steps or args.enable_video_render_steps:

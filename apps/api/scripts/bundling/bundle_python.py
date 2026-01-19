@@ -32,7 +32,7 @@ class PythonBundler:
 
     SUPPORTED_PLATFORMS = ["darwin", "linux", "win32"]
 
-    # Default Torch stack version (non-macOS bundles).
+    # Default Torch stack version (most bundles).
     #
     # We intentionally pin torch/torchvision/torchaudio together to avoid ABI mismatches.
     # For Linux CUDA/CPU wheels, PyTorch uses local version suffixes (e.g. +cu128, +cpu)
@@ -41,13 +41,16 @@ class PythonBundler:
     TORCHVISION_VERSION = "0.24.1"
     TORCHAUDIO_VERSION = "2.9.1"
 
+    # Intel macOS (x86_64): latest supported PyTorch stack.
+    # These wheels are installed from PyPI (no +cpu suffix on macOS).
+    TORCH_VERSION_MACOS_INTEL = "2.2.2"
+    TORCHVISION_VERSION_MACOS_INTEL = "0.17.2"
+    TORCHAUDIO_VERSION_MACOS_INTEL = "2.2.2"
+
     # PyTorch wheel indices for different platforms
     TORCH_INDICES = {
-        "cuda126": "https://download.pytorch.org/whl/cu126",
-        "cuda124": "https://download.pytorch.org/whl/cu124",
-        "cuda121": "https://download.pytorch.org/whl/cu121",
-        "cuda118": "https://download.pytorch.org/whl/cu118",
-        "cuda128": "https://download.pytorch.org/whl/cu128",
+        "cuda": "https://download.pytorch.org/whl/cu128",
+        "mps": "https://download.pytorch.org/whl/cpu",
         "cpu": "https://download.pytorch.org/whl/cpu",
         "rocm": "https://download.pytorch.org/whl/rocm6.4",
     }
@@ -57,7 +60,6 @@ class PythonBundler:
         platform_name: str,
         output_dir: Path,
         cuda_version: Optional[str] = None,
-        sign: bool = False,
         python_executable: Optional[str] = None,
         prefer_python_312: bool = True,
         bundle_version: Optional[str] = None,
@@ -67,7 +69,6 @@ class PythonBundler:
         # still can find the venv interpreter and other bundle files reliably.
         self.output_dir = Path(output_dir).resolve()
         self.cuda_version = cuda_version
-        self.sign = sign
         self.python_executable = python_executable or sys.executable
         self.prefer_python_312 = prefer_python_312
         self.bundle_version = (bundle_version or "").strip() or None
@@ -101,6 +102,42 @@ class PythonBundler:
         # due to missing CUDA at build time.
         self.smoke_tests_strict: bool = False
 
+        # Populated after we create the venv (this is the Python version that ships).
+        self.venv_python_tag: Optional[str] = None
+        self.venv_python_version: Optional[str] = None
+
+    def _probe_python_info(self, python_exe: Path) -> tuple[Optional[str], Optional[str]]:
+        """
+        Return (python_tag, python_version) for the given interpreter.
+
+        - python_tag: like "cp312"
+        - python_version: like "3.12.6"
+        """
+        python_exe = Path(python_exe).resolve()
+        try:
+            res = subprocess.run(
+                [
+                    str(python_exe),
+                    "-c",
+                    (
+                        "import sys; "
+                        "print(f'cp{sys.version_info.major}{sys.version_info.minor}'); "
+                        "print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"
+                    ),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            lines = [ln.strip() for ln in (res.stdout or "").splitlines() if ln.strip()]
+            tag = lines[0] if len(lines) >= 1 else None
+            ver = lines[1] if len(lines) >= 2 else None
+            if tag and not re.fullmatch(r"cp\d{2,3}", tag, flags=re.IGNORECASE):
+                tag = None
+            return (tag, ver)
+        except Exception:
+            return (None, None)
+
     def _bundle_python_path_env(self, bundle_dir: Path, env: dict) -> dict:
         """
         Ensure the bundle root is on PYTHONPATH, matching runtime launch behavior.
@@ -123,64 +160,7 @@ class PythonBundler:
             return bundle_dir / self.venv_name / "Scripts" / "python.exe"
         return bundle_dir / self.venv_name / "bin" / "python"
 
-    def _kernels_cache_dir(self, bundle_dir: Path) -> Path:
-        """
-        Directory inside the shipped bundle used for `kernels.get_kernel(...)` caching.
 
-        We keep this bundle-relative so:
-          - MPS bundles can ship pre-fetched kernel artifacts for offline use.
-          - the runtime does not depend on the user's home directory cache.
-        """
-        return Path(bundle_dir).resolve() / "kernels-cache"
-
-    def _prefetch_metal_flash_sdpa_kernel(self, *, bundle_dir: Path, gpu_type: str) -> None:
-        """
-        macOS/MPS: prefetch the Metal Flash-SDPA kernel bundle into the shipped artifact.
-
-        This ensures first-run is deterministic and works offline. The runtime launcher
-        scripts will prefer the bundle-local cache directory when present.
-        """
-        if self.platform_name != "darwin":
-            return
-        if str(gpu_type or "") != "mps":
-            return
-
-        py_path = self._smoke_py_path(bundle_dir)
-        if not py_path.exists():
-            raise RuntimeError(f"Kernel prefetch: bundle venv python not found: {py_path}")
-
-        cache_dir = self._kernels_cache_dir(bundle_dir)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        env = self._bundle_python_path_env(bundle_dir, os.environ.copy())
-        env["KERNELS_CACHE"] = str(cache_dir)
-
-        print("\n--- Prefetching kernels-community/metal-flash-sdpa (MPS) ---")
-        print(f"KERNELS_CACHE={cache_dir}")
-        res = subprocess.run(
-            [
-                str(py_path),
-                "-c",
-                "from kernels import get_kernel; "
-                "k = get_kernel('kernels-community/metal-flash-sdpa'); "
-                "print('prefetched:', getattr(k, '__name__', type(k).__name__))",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            env=env,
-            cwd=str(bundle_dir),
-        )
-        if res.stdout:
-            print(res.stdout)
-        if res.returncode != 0:
-            stderr = (res.stderr or "").strip()
-            raise RuntimeError(
-                "Failed to prefetch Metal Flash-SDPA kernel for MPS bundle. "
-                "Ensure network access during bundling and that the kernel is accessible. "
-                f"stderr:\n{stderr}"
-            )
-        print("--- Prefetch complete ---\n")
 
     def _run_smoke_tests(self, *, bundle_dir: Path, gpu_type: str) -> None:
         """
@@ -202,12 +182,10 @@ class PythonBundler:
         env["APEX_BUNDLE_SMOKE_TEST"] = "1"
         env["APEX_BUNDLE_GPU_TYPE"] = str(gpu_type or "")
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        # Ensure smoke test runner logs stream immediately (avoid Python stdio buffering).
+        env["PYTHONUNBUFFERED"] = "1"
         # Prefer bundle-local cache for kernels fetched via `kernels.get_kernel(...)`.
         # This is especially important for MPS bundles where we ship pre-fetched kernels.
-        try:
-            env["KERNELS_CACHE"] = str(self._kernels_cache_dir(bundle_dir))
-        except Exception:
-            pass
 
         print("\n--- Running bundle smoke tests (inside shipped venv) ---")
         print(f"Bundle dir: {bundle_dir}")
@@ -230,20 +208,34 @@ class PythonBundler:
         if self.smoke_tests_strict:
             args.append("--strict-gpu")
 
-        res = subprocess.run(
+        # Stream output as it is produced. We merge stderr into stdout so we can stream a
+        # single ordered log, while still capturing enough output for error reporting.
+        proc = subprocess.Popen(
             args,
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             text=True,
             env=env,
             cwd=str(bundle_dir),
+            bufsize=1,
         )
-        if res.stdout:
-            print(res.stdout)
-        if res.returncode != 0:
-            stderr = (res.stderr or "").strip()
+        assert proc.stdout is not None
+
+        output_lines: List[str] = []
+        for line in proc.stdout:
+            # Preserve the child process' newlines, and flush so logs show up immediately.
+            print(line, end="", flush=True)
+            output_lines.append(line)
+        proc.wait()
+
+        if proc.returncode != 0:
+            output = ("".join(output_lines) or "").strip()
+            # Cap error context so exceptions stay readable.
+            if len(output) > 20000:
+                output = output[-20000:]
             raise RuntimeError(
-                f"Bundle smoke tests failed (exit {res.returncode}). stderr:\n{stderr}"
+                f"Bundle smoke tests failed (exit {proc.returncode}). output:\n{output}"
             )
 
         # If building a CUDA bundle but CUDA isn't available on the build machine, optionally fail fast.
@@ -384,7 +376,15 @@ class PythonBundler:
     def detect_gpu_support(self) -> str:
         """Detect available GPU support"""
         if self.platform_name == "darwin":
-            # macOS uses MPS (Metal Performance Shaders)
+            # macOS:
+            # - Apple Silicon can use MPS (Metal Performance Shaders)
+            # - Intel macOS (x86_64) cannot use MPS; treat as CPU-only
+            try:
+                arch = (platform.machine() or "").lower()
+            except Exception:
+                arch = ""
+            if arch in {"x86_64", "amd64", "i386", "i686"} or arch.startswith("x86"):
+                return "cpu"
             return "mps"
 
         # Check for NVIDIA GPU
@@ -393,14 +393,9 @@ class PythonBundler:
                 ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"]
             )
             if result.returncode == 0:
-                # NVIDIA GPU found, detect CUDA version
-                cuda_result = self._run(
-                    ["nvidia-smi", "--query-gpu=cuda_version", "--format=csv,noheader"]
-                )
-                if cuda_result.returncode == 0:
-                    cuda_ver = cuda_result.stdout.strip().split("\n")[0]
-                    major, minor = cuda_ver.split(".")[:2]
-                    return f"cuda{major}{minor}"
+                # NVIDIA GPU found: we intentionally bundle a single CUDA wheel stack.
+                # Keep this stable as "cuda" so requirement pins and indices stay consistent.
+                return "cuda"
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
@@ -431,13 +426,15 @@ class PythonBundler:
         """Get the appropriate PyTorch wheel index URL"""
         if gpu_type.startswith("cuda"):
             # Try to find matching CUDA version
-            for key in ["cuda128", "cuda126", "cuda124", "cuda121", "cuda118"]:
+            for key in ["cuda"]:
                 if key in gpu_type or gpu_type == key:
                     return self.TORCH_INDICES[key]
             # Default to latest CUDA
-            return self.TORCH_INDICES["cuda126"]
+            return self.TORCH_INDICES["cuda"]
         elif gpu_type == "rocm":
             return self.TORCH_INDICES["rocm"]
+        elif gpu_type == "mps":
+            return self.TORCH_INDICES["mps"]
         else:
             return self.TORCH_INDICES["cpu"]
 
@@ -447,28 +444,44 @@ class PythonBundler:
 
         Examples:
           - cpu -> "cpu"
-          - cuda128 -> "cu128"
+          - cuda -> "cu128"
+          - mps -> "cpu"
           - rocm -> "rocm6.4" (matches TORCH_INDICES["rocm"])
         """
         if gpu_type == "cpu":
             return "cpu"
         if gpu_type.startswith("cuda"):
-            # gpu_type is like "cuda128" -> suffix is "cu128"
-            return "cu" + gpu_type.removeprefix("cuda")
+            # We intentionally ship a single CUDA wheel stack.
+            # Even if a caller passes something like "cuda124", keep the suffix stable.
+            return "cu128"
         if gpu_type == "rocm":
             # Keep in sync with TORCH_INDICES["rocm"]
             return "rocm6.4"
+        if gpu_type == "mps":
+            return "cpu"
         return None
 
     def _torch_specs_for_bundle(self, gpu_type: str) -> list[str]:
         """
         Produce torch/torchvision/torchaudio requirement specs for the bundle.
 
-        Requirement: use torch 2.9.1 everywhere except macOS.
+        Requirement:
+          - macOS Intel (x86_64): torch==2.2.2 (latest supported)
+          - everything else: torch==2.9.1
         """
-        # macOS (MPS): keep the existing pin (some stacks lag the CUDA/Linux cadence).
+        # macOS: Apple Silicon uses MPS, Intel uses CPU-only.
         if self.platform_name == "darwin":
-            return ["torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1"]
+            if self._is_intel_macos():
+                return [
+                    f"torch=={self.TORCH_VERSION_MACOS_INTEL}",
+                    f"torchvision=={self.TORCHVISION_VERSION_MACOS_INTEL}",
+                    f"torchaudio=={self.TORCHAUDIO_VERSION_MACOS_INTEL}",
+                ]
+            return [
+                f"torch=={self.TORCH_VERSION}",
+                f"torchvision=={self.TORCHVISION_VERSION}",
+                f"torchaudio=={self.TORCHAUDIO_VERSION}",
+            ]
 
         # Windows ROCm is a special-case (direct TheRock wheels) handled elsewhere.
         if self.platform_name == "win32" and gpu_type == "rocm":
@@ -500,14 +513,42 @@ class PythonBundler:
             f"torchaudio=={self.TORCHAUDIO_VERSION}",
         ]
 
+    def _is_intel_macos(self) -> bool:
+        """
+        Best-effort check for Intel macOS (x86_64).
+
+        Note: On Apple Silicon, running an x86_64 interpreter under Rosetta will
+        report platform.machine() == "x86_64", which is exactly what we want when
+        building/testing an Intel-targeted bundle.
+        """
+        if self.platform_name != "darwin":
+            return False
+        try:
+            arch = (platform.machine() or "").lower()
+        except Exception:
+            arch = ""
+        return arch in {"x86_64", "amd64", "i386", "i686"} or arch.startswith("x86")
+
+    def _setuptools_spec_for_venv(self) -> str:
+        # Pin setuptools on Intel macOS for older torch stacks.
+        return "setuptools>=61,<70" if self._is_intel_macos() else "setuptools"
+
     def choose_machine_requirements_entrypoint(self, gpu_type: str) -> Path:
         """
         Choose an entrypoint under requirements/{cpu,mps,cuda} based on platform + GPU/arch.
         """
         req_root = self.project_root / "requirements"
 
-        # macOS / Apple Silicon
+        # macOS:
+        # - Apple Silicon should use MPS requirements
+        # - Intel macOS (x86_64) should use CPU requirements (no MPS)
         if self.platform_name == "darwin":
+            try:
+                arch = (platform.machine() or "").lower()
+            except Exception:
+                arch = ""
+            if arch in {"x86_64", "amd64", "i386", "i686"} or arch.startswith("x86"):
+                return req_root / "cpu" / "requirements.txt"
             return req_root / "mps" / "requirements.txt"
 
         # ROCm
@@ -589,8 +630,7 @@ class PythonBundler:
             else:
                 requirements.append(f"--extra-index-url {torch_index}")
 
-        # Windows wheel stacks: pin torch to match the wheel ABI expectations.
-        # (FlashAttention wheel: cu126 + torch2.6.0 + cp312; cu128 stacks vary by machine entry.)
+        # Windows wheel stacks: pin torch to match wheel ABI expectations.
         if self.platform_name == "win32":
             if gpu_type.startswith("cuda"):
                 requirements.extend(self._torch_specs_for_bundle(gpu_type))
@@ -729,6 +769,12 @@ class PythonBundler:
         else:
             py_path = venv_dir / "bin" / "python"
 
+        # Record the *shipped* Python tag/version based on the venv interpreter, not the
+        # bundler's own interpreter (which may differ when using --runner-python).
+        tag, ver = self._probe_python_info(py_path)
+        self.venv_python_tag = tag
+        self.venv_python_version = ver
+
         # Install with uv into the venv we just created.
         uv_path = uv
 
@@ -743,7 +789,7 @@ class PythonBundler:
                 str(py_path),
                 "--upgrade",
                 "pip",
-                "setuptools",
+                self._setuptools_spec_for_venv(),
                 "wheel",
             ],
             check=True,
@@ -1058,6 +1104,22 @@ class PythonBundler:
         else:
             py_path = venv_dir / "bin" / "python"
 
+        # Patch diffusers first so it can be imported by subsequent patchers.
+        # Some diffusers versions reference `torch.xpu` at import time; our Intel macOS
+        # torch stack (torch==2.2.2) does not provide `torch.xpu`, so imports can crash.
+        subprocess.run(
+            [
+                str(py_path),
+                str(
+                    self.project_root
+                    / "scripts"
+                    / "updates"
+                    / "patch_diffusers_torch_xpu.py"
+                ),
+            ],
+            check=True,
+        )
+
         # Run the shared patcher in the target venv so bundling and dev installs stay consistent.
         subprocess.run(
             [
@@ -1133,24 +1195,50 @@ class PythonBundler:
             check=True,
         )
 
-        # Build wheel for the exact interpreter we're bundling (typically Python 3.12)
+        # Build wheel for the exact interpreter we're bundling.
+        #
+        # IMPORTANT (macOS Apple Silicon): even when bundling an Intel (x86_64) Python
+        # under Rosetta, a universal/arm64 `cargo` may default to building arm64 wheels
+        # unless we explicitly pass a target. We therefore derive the Rust target from
+        # the selected Python interpreter, not from the host machine.
         print(f"Building Rust wheel (maturin): {rust_project}")
-        subprocess.run(
-            [
-                str(py_path),
-                "-m",
-                "maturin",
-                "build",
-                "--release",
-                "--strip",
-                "--interpreter",
-                str(py_path),
-                "--out",
-                str(wheels_dir),
-            ],
-            cwd=str(rust_project),
-            check=True,
-        )
+        target: Optional[str] = None
+        env: Optional[dict[str, str]] = None
+        if self.platform_name == "darwin":
+            try:
+                probe = subprocess.run(
+                    [str(py_path), "-c", "import platform; print(platform.machine())"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                py_machine = (probe.stdout or "").strip().lower()
+            except Exception:
+                py_machine = ""
+
+            if py_machine in {"x86_64", "amd64"}:
+                target = "x86_64-apple-darwin"
+            elif py_machine in {"arm64", "aarch64"}:
+                target = "aarch64-apple-darwin"
+
+        cmd = [
+            str(py_path),
+            "-m",
+            "maturin",
+            "build",
+            "--release",
+            "--strip",
+            "--interpreter",
+            str(py_path),
+            "--out",
+            str(wheels_dir),
+        ]
+        if target:
+            cmd += ["--target", target]
+            env = dict(os.environ)
+            env["CARGO_BUILD_TARGET"] = target
+
+        subprocess.run(cmd, cwd=str(rust_project), check=True, env=env)
 
         built_wheels = sorted(wheels_dir.glob("*.whl"), key=lambda p: p.stat().st_mtime)
         if not built_wheels:
@@ -1189,13 +1277,32 @@ set PYTHONPATH=%SCRIPT_DIR%
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR"
-if [ -d "$SCRIPT_DIR/kernels-cache" ]; then
-  export KERNELS_CACHE="$SCRIPT_DIR/kernels-cache"
-fi
 exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
 """
         launcher.write_text(content, encoding="utf-8")
         os.chmod(launcher, 0o755)
+
+        # Also override the venv-installed console script.
+        #
+        # The Electron updater resolves `apex-engine` as a sibling of the bundled Python
+        # (i.e. <bundleRoot>/apex-studio/bin/apex-engine on mac/linux). Pip-generated
+        # console scripts embed an absolute build-time interpreter path in the shebang,
+        # which breaks after extraction/move.
+        venv_launcher = bundle_dir / self.venv_name / "bin" / "apex-engine"
+        try:
+            venv_launcher.parent.mkdir(parents=True, exist_ok=True)
+            venv_content = """#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUNDLE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+export PYTHONPATH="$BUNDLE_ROOT"
+exec "$BUNDLE_ROOT/apex-studio/bin/python" -m src "$@"
+"""
+            venv_launcher.write_text(venv_content, encoding="utf-8")
+            os.chmod(venv_launcher, 0o755)
+        except Exception:
+            # Best-effort: do not fail bundling if this step can't be applied.
+            pass
 
     def _choose_venv_libdir_to_ignore(self, venv_dir: Path) -> Optional[str]:
         """
@@ -1341,9 +1448,6 @@ set PATH=%SCRIPT_DIR%\\apex-studio\\Scripts;%PATH%
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR"
 export PATH="$SCRIPT_DIR/apex-studio/bin:$PATH"
-if [ -d "$SCRIPT_DIR/kernels-cache" ]; then
-  export KERNELS_CACHE="$SCRIPT_DIR/kernels-cache"
-fi
 exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
 """
 
@@ -1353,70 +1457,11 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         if self.platform_name != "win32":
             os.chmod(launcher, 0o755)
 
-    def sign_bundle(self, bundle_dir: Path):
-        """Sign the bundle for distribution"""
-        if not self.sign:
-            return
-
-        if self.platform_name == "darwin":
-            identity = os.environ.get("APPLE_IDENTITY")
-            if not identity:
-                print("Warning: APPLE_IDENTITY not set, skipping code signing")
-                return
-
-            # Sign all .dylib and .so files
-            for ext in ["*.dylib", "*.so", "*.app"]:
-                for f in bundle_dir.rglob(ext):
-                    print(f"Signing: {f}")
-                    subprocess.run(
-                        [
-                            "codesign",
-                            "--force",
-                            "--deep",
-                            "--sign",
-                            identity,
-                            "--options",
-                            "runtime",
-                            "--entitlements",
-                            str(self.project_root / "entitlements.plist"),
-                            str(f),
-                        ],
-                        check=True,
-                    )
-
-        elif self.platform_name == "win32":
-            # Windows code signing
-            cert_file = os.environ.get("WINDOWS_CERT_FILE")
-            cert_pass = os.environ.get("WINDOWS_CERT_PASSWORD")
-
-            if not cert_file:
-                print("Warning: WINDOWS_CERT_FILE not set, skipping code signing")
-                return
-
-            for exe in bundle_dir.rglob("*.exe"):
-                print(f"Signing: {exe}")
-                subprocess.run(
-                    [
-                        "signtool",
-                        "sign",
-                        "/f",
-                        cert_file,
-                        "/p",
-                        cert_pass,
-                        "/tr",
-                        "http://timestamp.digicert.com",
-                        "/td",
-                        "sha256",
-                        "/fd",
-                        "sha256",
-                        str(exe),
-                    ],
-                    check=True,
-                )
 
     def create_manifest(self, bundle_dir: Path, gpu_type: str) -> dict:
         """Create a manifest file with bundle information"""
-        py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        py_tag = self.venv_python_tag or f"cp{sys.version_info.major}{sys.version_info.minor}"
+        py_ver = self.venv_python_version or f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         version = self.bundle_version or "0.0.0"
         manifest = {
             "version": version,
@@ -1424,12 +1469,11 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             "arch": platform.machine(),
             "gpu_support": gpu_type,
             "python_tag": py_tag,
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "python_version": py_ver,
             "bundle_type": "venv",
             "venv_dirname": self.venv_name,
             "rust_wheels": not getattr(self, "skip_rust", False),
-            "created_at": __import__("datetime").datetime.utcnow().isoformat(),
-            "signed": self.sign,
+            "created_at": __import__("datetime").datetime.utcnow().isoformat()
         }
 
         manifest_file = bundle_dir / "apex-engine-manifest.json"
@@ -1485,8 +1529,6 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         )
 
         extras: List[str] = []
-        if m.get("signed"):
-            extras.append("signed")
         if not m.get("rust_wheels", True):
             extras.append("norust")
 
@@ -1506,7 +1548,9 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         """
         import hashlib
 
-        py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        # Code-only bundles should still be tagged with the Python ABI expected by the
+        # installed runtime env, which is the venv we bundle in the full artifact.
+        py_tag = self.venv_python_tag or f"cp{sys.version_info.major}{sys.version_info.minor}"
         req_bytes = (
             requirements_file.read_bytes() if requirements_file.exists() else b""
         )
@@ -1895,10 +1939,6 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         # Build venv-based bundle (no PyInstaller)
         bundle_dir = self.create_venv_bundle(venv_dir)
 
-        # macOS/MPS: ship pre-fetched Metal Flash-SDPA kernel artifacts inside the bundle.
-        # Do this before smoke tests so the tests validate the offline path (cache hits).
-        self._prefetch_metal_flash_sdpa_kernel(bundle_dir=bundle_dir, gpu_type=gpu_type)
-
         # IMPORTANT: avoid doubling output size.
         # We build the venv under `<output>/<venv_name>/` and then copy it into the shipped bundle.
         # If we keep both, release zips (or any packaging of the whole output dir) will include Python twice.
@@ -1918,9 +1958,7 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         ):
             self._run_smoke_tests(bundle_dir=bundle_dir, gpu_type=gpu_type)
 
-        # Sign the bundle
-        self.sign_bundle(bundle_dir)
-
+ 
         # Create manifest
         self.create_manifest(bundle_dir, gpu_type=gpu_type)
 
@@ -1950,19 +1988,20 @@ def main():
         help="Output directory for the bundle",
     )
     parser.add_argument(
-        "--cuda",
+        "--gpu",
         choices=[
-            "cuda128",
-            "cuda126",
-            "cuda124",
-            "cuda121",
-            "cuda118",
+            "cuda",
             "cpu",
+            "mps",
             "rocm",
             "auto",
         ],
         default="auto",
-        help="CUDA version to bundle (default: auto-detect)",
+        help=(
+            "GPU backend to bundle. "
+            "Use 'auto' to detect this machine; use 'cuda' for NVIDIA, 'rocm' for AMD, or 'cpu'. "
+            "Use 'mps' for Apple Silicon."
+        ),
     )
     parser.add_argument(
         "--python",
@@ -1983,9 +2022,7 @@ def main():
         action="store_true",
         help="Fail fast if the selected interpreter is not Python 3.12.x",
     )
-    parser.add_argument(
-        "--sign", action="store_true", help="Sign the bundle for distribution"
-    )
+
     parser.add_argument(
         "--skip-rust",
         action="store_true",
@@ -1999,7 +2036,7 @@ def main():
     parser.add_argument(
         "--smoke-tests-strict",
         action="store_true",
-        help="Fail if building a CUDA bundle but CUDA is not available to run GPU kernel smoke tests.",
+        help="Fail if building a CUDA GPU bundle but CUDA is not available to run GPU kernel smoke tests.",
     )
     parser.add_argument(
         "--keep-build-venv",
@@ -2099,8 +2136,17 @@ def main():
     if platform_name == "auto":
         platform_name = sys.platform
 
-    # Auto-detect CUDA
-    cuda_version = args.cuda if args.cuda != "auto" else None
+    # Auto-detect GPU backend
+    gpu = str(getattr(args, "gpu", "auto") or "auto")
+    if gpu == "auto":
+        gpu_version = None
+    elif gpu == "cuda":
+        # Treat generic "cuda" as "latest supported" CUDA stack for bundling.
+        gpu_version = "cuda"
+    elif gpu == "mps":
+        gpu_version = "mps"
+    else:
+        gpu_version = gpu
 
     py_exe = args.python_executable or sys.executable
     # If the caller didn't specify a venv interpreter, prefer Python 3.12 when available.
@@ -2140,8 +2186,7 @@ def main():
     bundler = PythonBundler(
         platform_name=platform_name,
         output_dir=args.output,
-        cuda_version=cuda_version,
-        sign=args.sign,
+        cuda_version=gpu_version,
         python_executable=py_exe,
         bundle_version=bundle_version,
     )

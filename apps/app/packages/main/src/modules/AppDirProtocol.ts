@@ -90,27 +90,66 @@ function enforceExpectedByteLength(
 ): ReadableStream<Uint8Array> {
   let seen = 0;
   const reader = upstream.getReader();
+  let finalized = false;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        if (seen !== expectedBytes) {
-          controller.error(
-            new Error(
-              `Incomplete proxied stream: expected ${expectedBytes} bytes, got ${seen}`,
-            ),
-          );
-          return;
+      if (finalized) return;
+      let res: ReadableStreamReadResult<Uint8Array>;
+      try {
+        res = await reader.read();
+      } catch (e) {
+        // If the consumer cancelled while a pull was in-flight, undici may surface
+        // "Invalid state: ReadableStream is already closed". Treat this as terminal.
+        finalized = true;
+        try {
+          controller.error(e instanceof Error ? e : new Error(String(e)));
+        } catch {
+          // ignore
         }
-        controller.close();
         return;
       }
+
+      const { done, value } = res;
+      if (done) {
+        if (seen !== expectedBytes) {
+          finalized = true;
+          try {
+            controller.error(
+              new Error(
+                `Incomplete proxied stream: expected ${expectedBytes} bytes, got ${seen}`,
+              ),
+            );
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        finalized = true;
+        try {
+          controller.close();
+        } catch {
+          // ignore (can happen if consumer cancelled)
+        }
+        return;
+      }
+
       if (value) {
         seen += value.byteLength;
-        controller.enqueue(value);
+        try {
+          controller.enqueue(value);
+        } catch {
+          // If the consumer cancelled while we were enqueuing, don't crash the process.
+          finalized = true;
+          try {
+            void reader.cancel();
+          } catch {
+            // ignore
+          }
+        }
       }
     },
     cancel(reason) {
+      finalized = true;
       try {
         void reader.cancel(reason);
       } catch {
@@ -192,6 +231,20 @@ class AppDirProtocol implements AppModule {
     return `${savePath}.meta.json`;
   }
 
+  private async hasVerifiedServerCache(savePath: string): Promise<boolean> {
+    const metaPath = this.getServerMetaPath(savePath);
+    try {
+      const [stat, raw] = await Promise.all([
+        fsp.stat(savePath),
+        fsp.readFile(metaPath, "utf8"),
+      ]);
+      const meta = JSON.parse(raw) as { size?: number };
+      return typeof meta?.size === "number" && meta.size === stat.size;
+    } catch {
+      return false;
+    }
+  }
+
   private getServerSavePath(serverDetails: ServerDetails): string | null {
     const userDataDir = this.electronApp?.getPath("userData") ?? "";
     const folderUuid = serverDetails.folderUuid ?? "";
@@ -262,16 +315,30 @@ class AppDirProtocol implements AppModule {
     this.backendUrl = newUrl;
   }
 
-  private async fetchRemoteFileIfExists(serverDetails: ServerDetails, requestHeaders: Headers): Promise<Response> {
+  private async fetchRemoteFileIfExists(
+    serverDetails: ServerDetails,
+    requestHeaders: Headers,
+    method: string = "GET",
+  ): Promise<Response> {
     let url = `${this.backendUrl}/files`;
     if (serverDetails.type === "engine_results") {
       url += `/engine_results/${serverDetails.folderUuid}/${serverDetails.folderName}/${serverDetails.fileName}`;
     } else {
       url += `/${serverDetails.type}/${serverDetails.folderName}/${serverDetails.fileName}`;
     }
-    const response = await fetch(url, { headers: hopHeaders(requestHeaders) });
+    const response = await fetch(url, {
+      method: method === "HEAD" ? "HEAD" : "GET",
+      headers: hopHeaders(requestHeaders),
+    });
     return response;
 
+  }
+
+  private async saveLocalFileToServer(filePath: string, savePath: string): Promise<void> {
+    // ensure the directory exists
+    await fsp.mkdir(path.dirname(savePath), { recursive: true });
+    // copy the file to the save path
+    await fsp.copyFile(filePath, savePath);
   }
 
   private async returnResponseFromLocalFile(request: Request): Promise<Response> {
@@ -289,14 +356,29 @@ class AppDirProtocol implements AppModule {
         filePath = getCoverPath(filePath, userDataDir);
       }
 
+ 
       if (isServerPath(filePath)) {
         // check if the file exists locally 
+        
+        const { folderUuid, folderName, fileName, localType, type  } = this.parseServerDetails(filePath, folderUuidFromUrl);
+
         if (!await exists(filePath)) {
-          const { folderUuid, folderName, fileName, localType  } = this.parseServerDetails(filePath, folderUuidFromUrl);
+          
           if (folderUuid && folderName && fileName) {
             filePath = path.join(userDataDir, "media", folderUuid, "server", localType, folderName, fileName);
           } else {
             return new Response(null, { status: 404 });
+          }
+        }
+
+        // create symlinks to the original file in the media directory
+        let savePath = this.getServerSavePath({ folderUuid, folderName, fileName, localType, type });
+        if (savePath && !(await exists(savePath))) {
+          try { 
+            // copy the file to the save path
+            void this.saveLocalFileToServer(filePath, savePath);
+          } catch {
+            // ignore
           }
         }
       }
@@ -342,6 +424,11 @@ class AppDirProtocol implements AppModule {
           "Accept-Ranges": "bytes",
           "Cache-Control": "public, max-age=31536000, immutable",
         });
+        // HEAD must not include a body; serving a body here can lead to mid-stream
+        // cancellations that trigger undici stream state errors.
+        if (request.method === "HEAD") {
+          return new Response(null, { status: 200, headers });
+        }
         return new Response(fs.createReadStream(filePath) as any, { status: 200, headers });
       }
     
@@ -355,7 +442,10 @@ class AppDirProtocol implements AppModule {
         "Accept-Ranges": "bytes",
         "Cache-Control": "public, max-age=31536000, immutable",
       });
-    
+
+      if (request.method === "HEAD") {
+        return new Response(null, { status: 206, headers });
+      }
       return new Response(fs.createReadStream(filePath, { start, end }) as any, { status: 206, headers });
    
   }
@@ -517,33 +607,34 @@ class AppDirProtocol implements AppModule {
       folderUuid = this.activeFolderUuid;
     }
     const serverDetails = this.parseServerDetails(filePath, folderUuid);
-    const response = await this.fetchRemoteFileIfExists(serverDetails, request.headers);
+    const response = await this.fetchRemoteFileIfExists(serverDetails, request.headers, request.method);
 
     // Background caching:
     // - Never persist Range/206 responses as complete files.
-    // - For Range requests, best-effort kick off a *full* fetch (no Range/conditionals) to populate disk cache.
-    if (isServerPath(filePath)) {
+    // - Avoid Response.clone()/tee to prevent undici stream state crashes when the renderer cancels mid-stream.
+    // - Instead, kick off a separate local fetch (localhost) when we don't already have a verified cache entry.
+    if (isServerPath(filePath) && request.method === "GET") {
+      const savePath = this.getServerSavePath(serverDetails);
+      const shouldFetchForCache =
+        savePath ? !(await this.hasVerifiedServerCache(savePath)) : true;
       const isRangeReq = Boolean(request.headers.get("range"));
-      if (!isRangeReq && response.ok && response.status === 200) {
-        // The Response body can only be consumed once; clone for background caching.
-        try {
-          const clone = response.clone();
-          this.queueSaveRemoteFileToLocalFile(clone, serverDetails);
-        } catch {
-          // Some bodies can't be cloned/teed; skip caching in that case.
-        }
-      } else if (isRangeReq) {
-        // Fire-and-forget: fetch the whole file (no Range/conditionals) and persist if verifiable.
-        const p = async () => {
+      if (shouldFetchForCache && (isRangeReq || (response.ok && response.status === 200))) {
+        void (async () => {
           try {
-            const full = await this.fetchRemoteFileIfExists(serverDetails, new Headers());
+            const full = await this.fetchRemoteFileIfExists(serverDetails, new Headers(), "GET");
             this.queueSaveRemoteFileToLocalFile(full, serverDetails);
-          } catch (e) {
+          } catch {
             // ignore
           }
-        };
-        void p();
+        })();
       }
+    }
+
+    if (request.method === "HEAD") {
+      return new Response(null, {
+        status: response?.status ?? 404,
+        headers: response?.headers ?? new Headers(),
+      });
     }
 
     const upstream = response?.body ? (response.body as ReadableStream<Uint8Array>) : null;
@@ -598,7 +689,11 @@ class AppDirProtocol implements AppModule {
             filePath = path.join(userDataDir, "media", folderUuid, "server", localType, folderName, fileName);
           }
           if (!await exists(filePath)) {
-            const response = await this.fetchRemoteFileIfExists({ folderUuid, folderName, fileName, localType, type }, new Headers());
+            const response = await this.fetchRemoteFileIfExists(
+              { folderUuid, folderName, fileName, localType, type },
+              new Headers(),
+              "GET",
+            );
             if (response.ok) {
               await this.saveRemoteFileToLocalFile(response, { folderUuid, folderName, fileName, localType, type });
               // file path should now exist
@@ -606,7 +701,6 @@ class AppDirProtocol implements AppModule {
           }
         }
       }
-
 
       return filePath;
     });
@@ -617,6 +711,11 @@ class AppDirProtocol implements AppModule {
 
        if (request.method === "OPTIONS") {
          return new Response(null, { status: 204, headers: this.corsHeadersFor(request) });
+       }
+       if (request.method !== "GET" && request.method !== "HEAD") {
+         const headers = this.corsHeadersFor(request);
+         headers["Allow"] = "GET, HEAD, OPTIONS";
+         return new Response(null, { status: 405, headers });
        }
        try {
         const r = await this.returnResponseFromLocalFile(request);

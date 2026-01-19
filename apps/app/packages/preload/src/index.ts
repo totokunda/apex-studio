@@ -12,6 +12,9 @@ export * from "./installer.js";
 // App updates (Electron auto-updater)
 export * from "./appUpdates.js";
 
+// Engine/API updates (apex-engine self-update)
+export * from "./apiUpdates.js";
+
 // Media processing primitives
 export { processMediaTo24 } from "./media/process.js";
 export { getMediaRootAbsolute } from "./media/root.js";
